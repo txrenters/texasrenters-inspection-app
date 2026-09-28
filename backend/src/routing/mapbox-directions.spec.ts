@@ -1,4 +1,9 @@
-import { chunkForRequests, stitch, MAX_COORDINATES } from './mapbox-directions.client';
+import {
+  chunkForRequests,
+  parseMatrixResponse,
+  stitch,
+  MAX_COORDINATES,
+} from './mapbox-directions.client';
 import type { OsrmRoute } from './osrm.client';
 
 /**
@@ -104,5 +109,81 @@ describe('joining the parts back into one drive', () => {
 
   it('is nothing at all when there is nothing to join', () => {
     expect(stitch([])).toBeNull();
+  });
+});
+
+/**
+ * The matrix the quarter planner orders a day with.
+ *
+ * Until this existed the planner had nothing to ask once Google's billing
+ * lapsed, so every day was laid out and measured on a straight-line estimate
+ * and recorded itself as HAVERSINE.
+ */
+describe('reading a duration matrix', () => {
+  const ok = {
+    code: 'Ok',
+    durations: [
+      [0, 420],
+      [400, 0],
+    ],
+    distances: [
+      [0, 6000],
+      [5800, 0],
+    ],
+  };
+
+  it('reads the seconds and the metres between every pair', () => {
+    expect(parseMatrixResponse(ok)).toEqual({
+      durations: [
+        [0, 420],
+        [400, 0],
+      ],
+      distances: [
+        [0, 6000],
+        [5800, 0],
+      ],
+    });
+  });
+
+  /**
+   * A pair Mapbox cannot connect -- an island, a gated estate, a coordinate off
+   * the road network -- comes back null. Infinity keeps it comparable while
+   * making it never chosen, which is what "unreachable" should mean to a
+   * solver. A zero would make it look like the best stop of all.
+   */
+  it('makes an unreachable pair unreachable rather than free', () => {
+    const parsed = parseMatrixResponse({
+      code: 'Ok',
+      durations: [
+        [0, null],
+        [null, 0],
+      ],
+    });
+
+    expect(parsed?.durations[0]?.[1]).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  /**
+   * Distances are the softer half: the planner uses them to report how far a
+   * day drives, and a matrix without them is still one it can order a day
+   * with. Refusing the whole answer would trade a measured day for an
+   * estimated one.
+   */
+  it('still answers when only the distances are missing', () => {
+    const parsed = parseMatrixResponse({ code: 'Ok', durations: [[0, 420], [400, 0]] });
+
+    expect(parsed?.durations[0]?.[1]).toBe(420);
+    expect(parsed?.distances).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
+  });
+
+  it('refuses anything that is not a matrix', () => {
+    expect(parseMatrixResponse(null)).toBeNull();
+    expect(parseMatrixResponse({ code: 'NoRoute' })).toBeNull();
+    expect(parseMatrixResponse({ code: 'Ok' })).toBeNull();
+    expect(parseMatrixResponse({ code: 'Ok', durations: [] })).toBeNull();
+    expect(parseMatrixResponse({ code: 'Ok', durations: ['nope'] })).toBeNull();
   });
 });

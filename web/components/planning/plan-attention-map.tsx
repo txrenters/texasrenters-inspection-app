@@ -1,13 +1,9 @@
 'use client';
 
-import 'mapbox-gl/dist/mapbox-gl.css';
-
-import { useTheme } from 'next-themes';
 import { memo, useEffect, useMemo } from 'react';
-import Map, { Marker, NavigationControl, useMap } from 'react-map-gl/mapbox';
+import { Marker, useMap } from 'react-map-gl/mapbox';
 
-import { useMapFailure } from '@/components/map-error';
-import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
+import { ConsoleMap } from '@/components/console-map';
 import { attentionText, type AttentionKind } from '@/lib/planning';
 
 /**
@@ -20,7 +16,10 @@ import { attentionText, type AttentionKind } from '@/lib/planning';
  * see which day each one is near. A pin opens the visit, where the day and the
  * technician are set.
  *
- * Mapbox, as the rest of the console's maps now are.
+ * Drawn on `ConsoleMap`, like every other map here, so the map type, the tilt
+ * and the grouping radius are the same on this page as on any other -- and the
+ * radius is worth having here in particular, since the question these pins
+ * raise is which day each of them is near enough to join.
  *
  * Must be loaded with `ssr: false`, like the day's map: Mapbox GL touches
  * `window` and measures its container.
@@ -112,14 +111,6 @@ function FitAll({ points }: { points: readonly (readonly [number, number])[] }) 
   return null;
 }
 
-function Unavailable({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
-      <p>{children}</p>
-    </div>
-  );
-}
-
 export function PlanAttentionMap({
   stops,
   planned = [],
@@ -131,10 +122,6 @@ export function PlanAttentionMap({
   planned?: readonly AttentionMapStop[];
   onSelectStop?: (stopId: string) => void;
 }) {
-  const { resolvedTheme } = useTheme();
-  const dark = resolvedTheme === 'dark';
-  const [failure, onError] = useMapFailure();
-
   const needing = useMemo(() => placedOnly(stops), [stops]);
   const behind = useMemo(() => placedOnly(planned), [planned]);
   // The frame follows the visits that need attention: the plan behind them is
@@ -144,18 +131,8 @@ export function PlanAttentionMap({
     [needing],
   );
 
-  const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
-  if (tokenProblem) return <Unavailable>{tokenProblem}</Unavailable>;
-  if (failure) return <Unavailable>{failure}</Unavailable>;
-
   return (
-    <Map
-      initialViewState={FALLBACK_VIEW}
-      mapStyle={dark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/streets-v12'}
-      mapboxAccessToken={MAPBOX_TOKEN}
-      onError={onError}
-      style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
-    >
+    <ConsoleMap initialView={FALLBACK_VIEW} radiusPoints={needing}>
       <FitAll points={points} />
       {behind.map((stop) => (
         <Marker
@@ -195,7 +172,6 @@ export function PlanAttentionMap({
           </span>
         </Marker>
       ))}
-      <NavigationControl position="top-right" />
-    </Map>
+    </ConsoleMap>
   );
 }

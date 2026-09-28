@@ -232,7 +232,7 @@ export default function PlanningPage() {
     const id = `plan-build-${choice.key}`;
     toast.loading(`Building ${choice.label}`, {
       id,
-      description: 'Drive times come from Google at a steady pace, so this takes a few minutes. Keep this page open.',
+      description: 'Drive times are measured on the road, so this takes a few minutes. Keep this page open.',
     });
     mutations.build.mutate(
       { year: choice.year, quarter: choice.quarter, ...picked },

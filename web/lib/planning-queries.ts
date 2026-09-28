@@ -148,7 +148,7 @@ export interface PlanDay {
   homeDriveMeters: number | null;
   /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
   originKind: string;
-  durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
+  durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'MAPBOX_FREE_FLOW' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
   stops: PlanDayStop[];
   /**
@@ -276,6 +276,16 @@ export interface PlanBuildInput {
   technicianIds?: string[];
   /** `YYYY-MM-DD`, up to fifteen days either side of the quarter's first day. */
   startsOn?: string;
+  /**
+   * Lay published visits out again too, moving their booked dates.
+   *
+   * Off by default, and that is the safe reading: a published visit is a date
+   * the office has already told Jobber about. On, a rebuild is free to move
+   * them, and the visits are rescheduled where they land -- which is what the
+   * office means by rebuilding a quarter properly rather than only filling in
+   * the gaps around what is already out.
+   */
+  movePublishedVisits?: boolean;
 }
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */

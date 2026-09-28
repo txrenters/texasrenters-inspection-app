@@ -1,10 +1,10 @@
 'use client';
 
-import 'mapbox-gl/dist/mapbox-gl.css';
-
 import { useMemo } from 'react';
-import Map, { Layer, Marker, Source, type LayerProps } from 'react-map-gl/mapbox';
+import { Layer, Marker, Source, type LayerProps } from 'react-map-gl/mapbox';
 import { useTheme } from 'next-themes';
+
+import { ConsoleMap } from '@/components/console-map';
 
 import { circlePolygon, planGroups, type GroupableStop } from './plan-groups';
 import { presenceOf, type TechnicianPosition } from '@texasrenters/shared';
@@ -18,31 +18,15 @@ import { presenceOf, type TechnicianPosition } from '@texasrenters/shared';
  * across the county; where two overlap, those days are covering the same
  * ground and could be one.
  *
- * Mapbox rather than Google, and that is not only a preference: the console's
- * Google maps go blank the moment that account's billing lapses, which is the
- * state they were in when this was written.
+ * Drawn on `ConsoleMap`, like every other map here, so the reader's map type,
+ * the tilt and the grouping radius come with it. The radius is worth having on
+ * this page above all others: these circles are one per *day*, and the radius
+ * is one per *property*, so the two together show both how a day is spread and
+ * which properties were close enough to have shared one.
  */
-
-/**
- * The browser token.
- *
- * Public by design, like every `pk.` token: it ships inside the bundle and
- * anyone reading the page can see it. Mapbox's answer is a URL restriction on
- * the token, not secrecy. Inlined at build time like every NEXT_PUBLIC_* value,
- * so it is a property of the image rather than something a restart can change.
- */
-const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 
 /** Houston, for the moment before the plan has been measured. */
 const FALLBACK = { longitude: -95.5, latitude: 29.8, zoom: 8.5 };
-
-function Unavailable({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
-      <p>{children}</p>
-    </div>
-  );
-}
 
 export function PlanGroupsMap({
   stops,
@@ -93,6 +77,18 @@ export function PlanGroupsMap({
     [groups, selectedDate],
   );
 
+  /**
+   * What the shared grouping-radius overlay draws around.
+   *
+   * The day circles above are one per day; these are one per property. Read
+   * together they answer the question the office actually asks of this page --
+   * whether two days that look separate were ever close enough to be one.
+   */
+  const radiusPoints = useMemo(
+    () => groups.flatMap((group) => group.stops.map((stop) => ({ latitude: stop.latitude, longitude: stop.longitude }))),
+    [groups],
+  );
+
   const properties = useMemo(
     () => ({
       type: 'FeatureCollection' as const,
@@ -106,11 +102,6 @@ export function PlanGroupsMap({
     }),
     [groups],
   );
-
-  if (!TOKEN)
-    return <Unavailable>The map needs a Mapbox token (NEXT_PUBLIC_MAPBOX_TOKEN).</Unavailable>;
-  if (!groups.length)
-    return <Unavailable>No visit in this quarter has a day yet, so there are no groups to draw.</Unavailable>;
 
   const dark = resolvedTheme === 'dark';
   const fill: LayerProps = {
@@ -134,11 +125,14 @@ export function PlanGroupsMap({
   };
 
   return (
-    <Map
-      initialViewState={FALLBACK}
-      mapStyle={dark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/streets-v12'}
-      mapboxAccessToken={TOKEN}
-      style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
+    <ConsoleMap
+      initialView={FALLBACK}
+      radiusPoints={radiusPoints}
+      unavailable={
+        groups.length
+          ? undefined
+          : 'No visit in this quarter has a day yet, so there are no groups to draw.'
+      }
     >
       <Source data={circles} id="groups" type="geojson">
         <Layer {...fill} />
@@ -219,6 +213,6 @@ export function PlanGroupsMap({
           </span>
         </Marker>
       ))}
-    </Map>
+    </ConsoleMap>
   );
 }

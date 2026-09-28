@@ -49,6 +49,7 @@ import { PrismaService } from '../common/prisma.service';
 import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
 import type { GeoPoint } from '../routing/osrm.client';
+import { MapboxDirectionsClient } from '../routing/mapbox-directions.client';
 import { OsrmClient } from '../routing/osrm.client';
 
 /**
@@ -269,6 +270,7 @@ export class QuarterPlannerService {
     @Inject(TechnicianSkillsService) private readonly skills: TechnicianSkillsService,
     @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
     @Inject(OsrmClient) private readonly osrm: OsrmClient,
+    @Inject(MapboxDirectionsClient) private readonly mapbox: MapboxDirectionsClient,
   ) {}
 
   /**
@@ -1044,31 +1046,47 @@ export class QuarterPlannerService {
     const points: GeoPoint[] = home ? [home, ...stops] : stops;
     const offset = home ? 1 : 0;
     /**
-     * Road times are asked for only when the office wants them.
+     * Mapbox measures the day, and it needs no flag to turn it on.
      *
-     * They asked for an average worked out from the distance rather than live
-     * traffic, and the numbers back it: on the Q4 2026 plan the straight-line
-     * estimate read 7.5 minutes a leg against Google's 7.8. What it buys is a
-     * quarter that can still be rebuilt when the Google account's billing has
-     * lapsed -- which is exactly where they were when this changed, with every
-     * map blank and every drive time gone.
+     * The office asked for drive times worked out from the road rather than
+     * from live traffic, and this is exactly that: `driving` rather than
+     * `driving-traffic`, so the road at its speed limits and not whatever the
+     * afternoon of the build happened to look like. A quarter rebuilt twice
+     * comes back the same, which a traffic-aware one does not.
      *
-     * `PLANNING_ROAD_DRIVE_TIMES=true` puts Google and OSRM back in front.
+     * It also needs no billing relationship beyond the one already paying for
+     * the maps. That is what made the straight-line estimate the ordinary path
+     * here in the first place: Google's account lapsed and took every drive
+     * time with it, and a quarter that cannot be rebuilt is worse than one
+     * measured a few per cent out.
+     *
+     * `PLANNING_ROAD_DRIVE_TIMES=true` still puts Google's traffic-aware times
+     * in front, for a quarter somebody wants measured against a real morning.
      */
+    const mapbox = await this.mapbox.matrix(points);
     const roadTimes = process.env.PLANNING_ROAD_DRIVE_TIMES === 'true';
-    const google = roadTimes ? await this.google.matrix(points, businessInstant(crew.date, DAY_STARTS_AT)) : null;
-    const durations = google?.durations ?? (roadTimes ? await this.osrm.durations(points) : null);
+    const google =
+      mapbox || !roadTimes
+        ? null
+        : await this.google.matrix(points, businessInstant(crew.date, DAY_STARTS_AT));
+    const measured = mapbox ?? google;
+    const durations =
+      measured?.durations ?? (roadTimes ? await this.osrm.durations(points) : null);
     if (durations) {
       const matrix: DayMatrix = {
         durations,
-        distances: google?.distances ?? null,
+        distances: measured?.distances ?? null,
         index: new Map(stops.map((stop, position) => [stop.stopId, position + offset])),
         homeIndex: home ? 0 : null,
       };
       return {
         ...base,
         ...inMatrixOrder(stops, matrix, home, maxLegSeconds),
-        durationSource: google ? DriveTimeSource.GOOGLE_TRAFFIC_AWARE : DriveTimeSource.OSRM_FREE_FLOW,
+        durationSource: google
+          ? DriveTimeSource.GOOGLE_TRAFFIC_AWARE
+          : mapbox
+            ? DriveTimeSource.MAPBOX_FREE_FLOW
+            : DriveTimeSource.OSRM_FREE_FLOW,
       };
     }
 

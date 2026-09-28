@@ -1,22 +1,11 @@
 'use client';
 
-import 'mapbox-gl/dist/mapbox-gl.css';
-
-import { useTheme } from 'next-themes';
 import { memo, useEffect, useMemo } from 'react';
-import Map, {
-  Layer,
-  Marker,
-  NavigationControl,
-  Source,
-  useMap,
-  type LayerProps,
-} from 'react-map-gl/mapbox';
+import { Layer, Marker, Source, useMap, type LayerProps } from 'react-map-gl/mapbox';
 
+import { ConsoleMap } from '@/components/console-map';
 import { useMapStroke } from '@/components/map-colors';
-import { useMapFailure } from '@/components/map-error';
 import { featureCollection, lineFeature } from '@/components/map-geometry';
-import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 
 /** A stop on the day's map: a visit, or a move-out or move-in the day is built around. */
 export interface DayMapStop {
@@ -35,10 +24,11 @@ const isBooked = (kind: DayMapStop['kind']) => kind === 'MOVE_OUT' || kind === '
  * One planned technician-day on the map: the technician's home, the day's stops
  * in driving order, and the road between them.
  *
- * Mapbox, as the rest of the console's maps now are. This one was the last
- * Google map the office actually used, and it was the one that mattered: it is
- * what a quarter is rebuilt against, and it was showing "This page can't load
- * Google Maps correctly" over the day being read.
+ * Drawn on `ConsoleMap`, like every other map here, so the reader's map type,
+ * the 3D tilt and the **grouping radius** are the same on this page as on the
+ * technician map. The office asked for that specifically: the radius was built
+ * on the technician map and they went looking for it here, on the plan they
+ * actually rebuild a quarter against, and it did not exist.
  *
  * Must be loaded with `ssr: false`: Mapbox GL touches `window` and measures its
  * container, neither of which exists on a server.
@@ -143,14 +133,6 @@ function FitStops({ dayKey, points }: { dayKey: string; points: readonly LatLng[
   return null;
 }
 
-function Unavailable({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
-      <p>{children}</p>
-    </div>
-  );
-}
-
 export function PlanDayMap({
   dayKey,
   stops,
@@ -170,13 +152,9 @@ export function PlanDayMap({
   /** A stop's pin was clicked: open its details. */
   onSelectStop?: (stopId: string) => void;
 }) {
-  const { resolvedTheme } = useTheme();
-  const dark = resolvedTheme === 'dark';
   const routeColor = useMapStroke('map-route-line');
   const doneColor = useMapStroke('map-route-done-line');
   const casingColor = useMapStroke('map-route-casing');
-
-  const [failure, onError] = useMapFailure();
 
   const placed = useMemo(
     () =>
@@ -194,6 +172,17 @@ export function PlanDayMap({
     ],
     [home, placed],
   );
+  /**
+   * The grouping circles go around the day's properties, and not the home.
+   *
+   * The question they answer is which properties are near enough to share a
+   * day; a circle around where the technician sleeps answers nothing.
+   */
+  const radiusPoints = useMemo(
+    () => placed.map((stop) => ({ latitude: stop.latitude, longitude: stop.longitude })),
+    [placed],
+  );
+
   const straight = geometry.length < 2;
   const path = useMemo<LatLng[]>(
     () => (straight ? placed.map((stop) => [stop.latitude, stop.longitude] as const) : [...geometry]),
@@ -227,23 +216,13 @@ export function PlanDayMap({
     [homePath, homeStraight, path, straight],
   );
 
-  const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
-  if (tokenProblem) return <Unavailable>{tokenProblem}</Unavailable>;
-  if (failure) return <Unavailable>{failure}</Unavailable>;
-
   const color: LayerProps['paint'] = {
     'line-color': ['case', ['==', ['get', 'tone'], 'done'], doneColor, routeColor],
     'line-width': ['get', 'w'],
   };
 
   return (
-    <Map
-      initialViewState={FALLBACK_VIEW}
-      mapStyle={dark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/streets-v12'}
-      mapboxAccessToken={MAPBOX_TOKEN}
-      onError={onError}
-      style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
-    >
+    <ConsoleMap initialView={FALLBACK_VIEW} radiusPoints={radiusPoints}>
       <FitStops dayKey={dayKey} points={points} />
 
       <Source data={lines} id="day-route" type="geojson">
@@ -313,8 +292,6 @@ export function PlanDayMap({
           </Marker>
         );
       })}
-
-      <NavigationControl position="top-right" />
-    </Map>
+    </ConsoleMap>
   );
 }

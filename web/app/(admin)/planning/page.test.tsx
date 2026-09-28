@@ -258,7 +258,13 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      { year: 2026, quarter: 4, technicianIds: ['tech-1', 'tech-2', 'tech-4'], startsOn: '2026-10-01' },
+      {
+        year: 2026,
+        quarter: 4,
+        technicianIds: ['tech-1', 'tech-2', 'tech-4'],
+        startsOn: '2026-10-01',
+        movePublishedVisits: false,
+      },
       expect.anything(),
     );
   });
@@ -285,10 +291,54 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 2 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      { year: 2026, quarter: 4, technicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21' },
+      {
+        year: 2026,
+        quarter: 4,
+        technicianIds: ['tech-1', 'tech-2'],
+        startsOn: '2026-09-21',
+        // Off unless the box is ticked: a published visit is a date Jobber has
+        // already been told about.
+        movePublishedVisits: false,
+      },
       expect.anything(),
     );
     expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
+  });
+
+  /**
+   * Rebuilding a published quarter properly, rather than only filling the gaps
+   * around what is already out.
+   *
+   * Q4 2026 was published across 56 days measured in straight lines. Laying it
+   * out again on real road times only reshapes it if the published visits are
+   * allowed to move -- otherwise every one of them is pinned where it is and
+   * the rebuild works around them.
+   */
+  it('lays published visits out again when the office asks it to', () => {
+    mount({ plans: [{ ...PLAN, crewTechnicianIds: ['tech-1'], startsOn: '2026-09-21T00:00:00.000Z' }] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+    const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Lay published visits out again/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 1 technician' }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ movePublishedVisits: true }),
+      expect.anything(),
+    );
+  });
+
+  /** There is nothing published to move on a quarter that has never been built. */
+  it('does not offer to move published visits on a first build', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+
+    expect(
+      within(screen.getByRole('dialog')).queryByRole('checkbox', {
+        name: /Lay published visits out again/,
+      }),
+    ).toBeNull();
   });
 
   /** The office (2026-09-19): "the +-15 days if we will apply the +15 or -15 or on time quarter schedule". */
@@ -301,7 +351,13 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      { year: 2026, quarter: 4, technicianIds: ['tech-1', 'tech-2', 'tech-3'], startsOn: '2026-09-16' },
+      {
+        year: 2026,
+        quarter: 4,
+        technicianIds: ['tech-1', 'tech-2', 'tech-3'],
+        startsOn: '2026-09-16',
+        movePublishedVisits: false,
+      },
       expect.anything(),
     );
   });

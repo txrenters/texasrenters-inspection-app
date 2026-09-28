@@ -4,6 +4,7 @@ import { plannedVisitDaysOfQuarter, workingDaysOfQuarter } from '@texasrenters/s
 import type { TechnicianSkillsService } from '../src/admin/technician-skills.service';
 import type { PrismaService } from '../src/common/prisma.service';
 import type { GoogleRoutesClient } from '../src/routing/google-routes.client';
+import type { MapboxDirectionsClient } from '../src/routing/mapbox-directions.client';
 import type { OsrmClient } from '../src/routing/osrm.client';
 import { QuarterPlannerService, routingSettings } from '../src/planning/quarter-planner.service';
 
@@ -126,6 +127,13 @@ const build = (
     /** Seconds between two points, as Google would say. Null: Google is not configured. */
     googleSeconds?: ((from: Point, to: Point) => number) | null;
     osrmDurations?: number[][] | null;
+    /**
+     * Seconds between two points, as Mapbox would say. Null -- the default --
+     * is a deployment with no Mapbox token, which is what every case written
+     * before it needs: Mapbox is asked first, so one that answered would
+     * quietly take the measurement away from the router under test.
+     */
+    mapboxSeconds?: ((from: Point, to: Point) => number) | null;
   } = {},
 ) => {
   const technicians = options.technicians ?? [{ technicianId: 'tech-1', isPlannable: true }];
@@ -272,9 +280,20 @@ const build = (
   const osrm = {
     durations: jest.fn().mockResolvedValue(options.osrmDurations ?? null),
   } as unknown as OsrmClient;
+  const mapboxSeconds = options.mapboxSeconds ?? null;
+  const mapbox = {
+    matrix: jest.fn(async (points: Point[]) =>
+      mapboxSeconds
+        ? {
+            durations: points.map((from) => points.map((to) => mapboxSeconds(from, to))),
+            distances: points.map((from) => points.map((to) => mapboxSeconds(from, to) * 15)),
+          }
+        : null,
+    ),
+  } as unknown as MapboxDirectionsClient;
 
   return {
-    service: new QuarterPlannerService(prisma, skills, google, osrm),
+    service: new QuarterPlannerService(prisma, skills, google, osrm, mapbox),
     dayCreate,
     dayUpsert,
     stopFindMany: client.tbpQuarterPlanStop.findMany,
@@ -461,6 +480,32 @@ describe('routing a draft quarter', () => {
     const day = dayCreate.mock.calls[0][0].data;
     expect(day.totalDriveSeconds).toBe(600);
     expect(day.originKind).toBe(PlanOriginKind.FIRST_STOP);
+  });
+
+  /**
+   * The quarter is measured on real roads again, and without a Google account.
+   *
+   * The office was rebuilding Q4 against straight-line estimates, because the
+   * Google billing had lapsed and the planner had nothing else to ask. Mapbox
+   * is asked first now and needs no flag: it is free-flow road time, which is
+   * what the office asked for, and it is reproducible -- a quarter rebuilt
+   * twice comes back the same, where a traffic-aware one depends on which
+   * afternoon it happened to be built.
+   */
+  it('measures on Mapbox roads, and says the numbers are free-flow', async () => {
+    const { service, dayCreate, google } = build([stop('s1', 1), stop('s2', 2, 1)], {
+      mapboxSeconds: (from, to) => (from === to ? 0 : 420),
+    });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.durationSource).toBe(DriveTimeSource.MAPBOX_FREE_FLOW);
+    expect(day.totalDriveSeconds).toBe(420);
+    // The matrix carries distances as well, which OSRM's `/table` does not.
+    expect(day.totalDriveMeters).not.toBeNull();
+    // Asked first and answered, so the billable one was never troubled.
+    expect(google.matrix as jest.Mock).not.toHaveBeenCalled();
   });
 
   it('falls back to OSRM, and says the numbers are free-flow', async () => {

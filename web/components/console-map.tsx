@@ -1,0 +1,169 @@
+'use client';
+
+import 'mapbox-gl/dist/mapbox-gl.css';
+
+import { useEffect, type ReactNode } from 'react';
+import Map, { FullscreenControl, NavigationControl, useMap } from 'react-map-gl/mapbox';
+import { useTheme } from 'next-themes';
+
+import { useMapFailure } from '@/components/map-error';
+import { GroupingRadiusLayer, type MapPoint } from '@/components/map-layers';
+import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
+import { MapSettings, useMapPreferences, type MapTypeKey } from '@/components/map-settings';
+
+/**
+ * One map, for every map in this console.
+ *
+ * The office asked for this twice. The technician map and the quarter's maps
+ * were built separately, so a feature added to one simply did not exist on the
+ * other — the grouping radius went onto the technician map, and the office then
+ * went looking for it on the plan they actually rebuild a quarter against.
+ * "Create the unified map so we can use it everywhere."
+ *
+ * So the shell lives here: the token, the basemap and its dark variant, the
+ * reader's remembered map type and tilt, the grouping radius, the zoom and
+ * fullscreen controls, and the one error that is worth taking a map away for.
+ * What each page puts *on* the map — pins, routes, rings, circles — is its own,
+ * and arrives as children.
+ *
+ * Must be loaded with `ssr: false` by every page that uses it. Mapbox GL
+ * touches `window` and measures its container, neither of which exists on a
+ * server.
+ */
+
+/**
+ * The map each of the reader's choices draws on.
+ *
+ * Only the roadmap has a dark variant. Satellite imagery is neither light nor
+ * dark — it is a photograph — and swapping it for something darker at night
+ * would be changing the data to match the furniture.
+ */
+const MAP_STYLES: Record<MapTypeKey, { light: string; dark: string }> = {
+  roadmap: {
+    light: 'mapbox://styles/mapbox/streets-v12',
+    dark: 'mapbox://styles/mapbox/dark-v11',
+  },
+  terrain: {
+    light: 'mapbox://styles/mapbox/outdoors-v12',
+    dark: 'mapbox://styles/mapbox/outdoors-v12',
+  },
+  satellite: {
+    light: 'mapbox://styles/mapbox/satellite-v9',
+    dark: 'mapbox://styles/mapbox/satellite-v9',
+  },
+  hybrid: {
+    light: 'mapbox://styles/mapbox/satellite-streets-v12',
+    dark: 'mapbox://styles/mapbox/satellite-streets-v12',
+  },
+};
+
+/** Said plainly, rather than rendering a grey rectangle nobody can diagnose. */
+export function MapUnavailable({ children }: { children: ReactNode }) {
+  return (
+    <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
+      <p>{children}</p>
+    </div>
+  );
+}
+
+/**
+ * Tilt, applied to the live camera rather than through a controlled prop.
+ *
+ * Making `pitch` a prop of `<Map>` puts the camera under React's control, and
+ * then every fly-to and follow has to round-trip through state to survive a
+ * render. This leaves the camera where it belongs — with the map — and only
+ * nudges the angle when the reader asks for a different one.
+ *
+ * `easeTo` carries no `originalEvent`, so this does not read as the reader
+ * taking the camera.
+ */
+function MapPitch({ degrees }: { degrees: number }) {
+  const { current: map } = useMap();
+
+  useEffect(() => {
+    if (!map) return;
+    map.easeTo({ pitch: degrees, duration: 300 });
+  }, [map, degrees]);
+
+  return null;
+}
+
+export function ConsoleMap({
+  children,
+  initialView,
+  radiusPoints = [],
+  settingsSlot = true,
+  unavailable,
+}: {
+  children?: ReactNode;
+  /** Where the map opens, before anything has been framed. */
+  initialView: { longitude: number; latitude: number; zoom: number };
+  /**
+   * What the grouping-radius overlay draws around, when the reader turns it on.
+   *
+   * Empty is a map that simply has nothing to group — the control still
+   * appears, because it is a property of the console's map rather than of one
+   * page, and a control that comes and goes between pages is one nobody
+   * remembers exists.
+   */
+  radiusPoints?: readonly MapPoint[];
+  /** The map-type and radius control. Off for a map that is a thumbnail. */
+  settingsSlot?: boolean;
+  /**
+   * Something to say instead of a map, decided by the page — "no visit in this
+   * quarter has a day yet", and the like. The token and a refused map are
+   * handled here, because those are the same on every page.
+   */
+  unavailable?: ReactNode;
+}) {
+  const { resolvedTheme } = useTheme();
+  const dark = resolvedTheme === 'dark';
+  const [preferences, setPreferences] = useMapPreferences();
+  const [failure, onError] = useMapFailure();
+
+  const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
+  if (tokenProblem) return <MapUnavailable>{tokenProblem}</MapUnavailable>;
+  if (failure) return <MapUnavailable>{failure}</MapUnavailable>;
+  if (unavailable) return <MapUnavailable>{unavailable}</MapUnavailable>;
+
+  const style = MAP_STYLES[preferences.mapType];
+
+  return (
+    <div className="relative h-full w-full">
+      <Map
+        initialViewState={initialView}
+        mapStyle={dark ? style.dark : style.light}
+        mapboxAccessToken={MAPBOX_TOKEN}
+        onError={onError}
+        /* One world. Mapbox repeats the map horizontally when zoomed out, so
+           without this a technician can appear in two places at once and the
+           properties are drawn three times over. */
+        renderWorldCopies={false}
+        style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
+      >
+        {/* 45° is the angle a vector basemap has buildings modelled for. */}
+        <MapPitch degrees={preferences.tilted ? 45 : 0} />
+
+        {/* Before the children, so the circles sit under whatever the page
+            draws on top of them. Layer order is mount order. */}
+        <GroupingRadiusLayer
+          points={radiusPoints}
+          radiusMeters={preferences.groupingRadiusMeters}
+        />
+
+        {children}
+
+        <NavigationControl position="top-right" showCompass visualizePitch />
+        <FullscreenControl position="top-right" />
+      </Map>
+
+      {/* Outside the map on purpose: the settings still open, and still
+          remember, when the map itself will not load. */}
+      {settingsSlot ? (
+        <div className="absolute top-3 left-3 z-10">
+          <MapSettings onChange={setPreferences} preferences={preferences} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
