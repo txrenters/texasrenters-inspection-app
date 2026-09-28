@@ -8,7 +8,7 @@ import type {
   TechnicianRoute,
 } from '@texasrenters/shared';
 import { ONLINE_WITHIN_MS, splitRouteAtPosition } from '@texasrenters/shared';
-import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Marker, Popup, Source, useMap, type LayerProps } from 'react-map-gl/mapbox';
 
 import { CameraDirector, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from '@/components/map-camera';
@@ -616,6 +616,8 @@ const PropertyLayer = memo(function PropertyLayer({
   const { current: map } = useMap();
   const { zoom, box } = useSettledView();
   const [openKey, setOpenKey] = useState<string | null>(null);
+  /** The selection this layer last acted on, so churn is not mistaken for a change. */
+  const lastSelected = useRef<string | null>(selectedPropertyId);
 
   const clusters = useMemo(() => clusterByGrid(properties, zoom), [properties, zoom]);
 
@@ -681,10 +683,29 @@ const PropertyLayer = memo(function PropertyLayer({
    * coordinates. "It is here, with another" beats a click that looks lost.
    */
   useEffect(() => {
-    if (!selectedPropertyId) {
-      setOpenKey(null);
+    const letGo = selectedPropertyId === null;
+    const changed = selectedPropertyId !== lastSelected.current;
+    lastSelected.current = selectedPropertyId;
+
+    /**
+     * **A window opened by clicking is not this effect's to close.**
+     *
+     * This ran on `clusters` as well as the selection and closed the window
+     * whenever nothing was selected -- so a click on a pin opened its details
+     * and the next refetch, which rebuilds the property list and with it the
+     * clusters, closed them again. On the technician map that is every few
+     * seconds, and the window was gone before it could be read. Reported as
+     * markers that cannot be clicked at all, because that is what it looked
+     * like.
+     *
+     * Only *letting go* of a selected property closes its window now; the
+     * clusters changing underneath an open one leaves it alone.
+     */
+    if (letGo) {
+      if (changed) setOpenKey(null);
       return;
     }
+
     const own = clusters.find(
       (cluster) => cluster.members.length === 1 && cluster.members[0].id === selectedPropertyId,
     );

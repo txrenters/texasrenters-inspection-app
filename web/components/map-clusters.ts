@@ -184,8 +184,40 @@ export function clusterByGrid<T extends Clusterable>(
   }
 
   return [...cells.entries()].map(([cell, members]) => {
-    const latitude = members.reduce((sum, member) => sum + member.latitude, 0) / members.length;
-    const longitude = members.reduce((sum, member) => sum + member.longitude, 0) / members.length;
+    /**
+     * A badge stands on one of its own properties, not in the middle of them.
+     *
+     * It used to be the mean of the members' coordinates, and the office
+     * reported the consequence exactly: "every time I zoom in and zoom out the
+     * markers reposition, it doesn't stay on the exact address". Both halves
+     * were true. The grid is in screen pixels, so zooming regroups the members;
+     * a different set of members is a different average; and the average of
+     * several addresses is in general **no address at all** -- a spot in a
+     * field, a junction, the middle of a bayou.
+     *
+     * On satellite imagery, where the office reads rooftops, that is plainly
+     * wrong. So the badge takes the coordinates of whichever member sits
+     * nearest that average: it lands where the group is, but it lands *on a
+     * building*, and a marker never claims a place nothing stands.
+     *
+     * Longitude is scaled by the cosine of the latitude before comparing, so
+     * "nearest" means nearest on the ground. Without it a degree of longitude
+     * would count for as much as a degree of latitude, which at Houston it is
+     * not -- it is about 0.87 of one -- and a group spread east-west would pick
+     * the wrong member to stand on.
+     */
+    const meanLatitude = members.reduce((sum, member) => sum + member.latitude, 0) / members.length;
+    const meanLongitude =
+      members.reduce((sum, member) => sum + member.longitude, 0) / members.length;
+    const eastWest = Math.cos((meanLatitude * Math.PI) / 180);
+    const fromMean = (member: T) =>
+      (member.latitude - meanLatitude) ** 2 +
+      ((member.longitude - meanLongitude) * eastWest) ** 2;
+    const anchor = members.reduce(
+      (nearest, member) => (fromMean(member) < fromMean(nearest) ? member : nearest),
+      members[0]!,
+    );
+    const { latitude, longitude } = anchor;
     const only = members.length === 1 ? members[0] : undefined;
     return {
       // A property on its own is keyed by itself, so it keeps its marker from

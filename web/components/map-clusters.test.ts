@@ -322,3 +322,62 @@ describe('drawing a geofence to scale', () => {
     expect(ringIsLegible(6, HOUSTON, 19)).toBe(true);
   });
 });
+
+/**
+ * A marker stands on a building.
+ *
+ * The office, reading satellite imagery (2026-09-28): "every time I zoom in and
+ * zoom out the markers reposition, it doesn't stay on the exact address".
+ *
+ * Both halves were true, and the cause was one line. A badge was drawn at the
+ * *mean* of its members' coordinates. The grid is in screen pixels, so zooming
+ * regroups the members; a different set of members is a different mean; and the
+ * mean of several addresses is in general no address at all.
+ */
+describe('where a badge stands', () => {
+  it('is on one of its own properties, never between them', () => {
+    const [cluster] = clusterByGrid(HOUSTON_77044, 10);
+
+    expect(
+      HOUSTON_77044.some(
+        (property) =>
+          property.latitude === cluster?.latitude && property.longitude === cluster?.longitude,
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * The one nearest the middle of the group, so the badge still reads as
+   * theirs rather than as an arbitrary pick. Copper Hollow sits closest to the
+   * mean of the three; Solitude Way is the far corner.
+   */
+  it('is the property nearest the middle of the group', () => {
+    const [cluster] = clusterByGrid(HOUSTON_77044, 10);
+
+    expect(cluster?.latitude).toBe(29.8657);
+    expect(cluster?.longitude).toBe(-95.2028);
+  });
+
+  it('is exactly the property itself when it stands alone', () => {
+    const [cluster] = clusterByGrid([HOUSTON_77044[0]!], 10);
+
+    expect(cluster?.latitude).toBe(29.8657);
+    expect(cluster?.longitude).toBe(-95.2028);
+  });
+
+  /**
+   * The reported symptom, as arithmetic: whatever the zoom, and however the
+   * members regroup, every badge sits on a real address.
+   */
+  it('stays on a real address at every zoom', () => {
+    const exact = new Set(
+      HOUSTON_77044.map((property) => `${property.latitude},${property.longitude}`),
+    );
+
+    for (const zoom of [8, 10, 12, 14, 16, 18, 20]) {
+      for (const cluster of clusterByGrid(HOUSTON_77044, zoom)) {
+        expect(exact.has(`${cluster.latitude},${cluster.longitude}`)).toBe(true);
+      }
+    }
+  });
+});
