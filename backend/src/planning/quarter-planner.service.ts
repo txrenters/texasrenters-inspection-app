@@ -100,6 +100,14 @@ export interface PlanRoutingSettings {
    * on the day (the office, 2026-09-17).
    */
   maxDriveMinutes?: number;
+  /**
+   * Zones left out of this build, by number.
+   *
+   * The office works zones 1 to 4 and arranges zone 5 by hand. A stop in an
+   * excluded zone is held back and marked as such rather than dropped: "we
+   * left this for you" is a different thing from "this could not be placed".
+   */
+  excludedZones?: string[];
   /** The visits the planner groups into a day: nine (2026-09-19). */
   minStopsPerDay?: number;
   /** The most a day may hold, with the visits the office adds by hand: twelve. */
@@ -336,6 +344,7 @@ export class QuarterPlannerService {
         maxStopsPerDay: true,
         maxLegMinutes: true,
         holidays: true,
+        excludedZones: true,
         startsOn: true,
         crewTechnicianIds: true,
       },
@@ -524,6 +533,7 @@ export class QuarterPlannerService {
         quarterNumber: true,
         maxDriveMinutes: true,
         holidays: true,
+        excludedZones: true,
         startsOn: true,
         crewTechnicianIds: true,
       },
@@ -813,7 +823,22 @@ export class QuarterPlannerService {
     // Placed by hand: a coordinator chose both the day and the technician.
     const pins = new Map<string, Pin>();
     const unplaceable: string[] = [];
+    /**
+     * Zones the office asked to leave out of this build.
+     *
+     * Held back rather than dropped: a stop in an excluded zone is marked so
+     * the quarter says out loud that it was left for the office to arrange,
+     * which is a different thing from a visit the planner could not place.
+     */
+    const excludedZones = new Set(
+      (settings.excludedZones ?? []).map((zone) => zoneNumberOf(zone)).filter(Boolean),
+    );
+    const excluded: string[] = [];
     for (const row of rows) {
+      if (excludedZones.size && excludedZones.has(zoneNumberOf(row.zone))) {
+        excluded.push(row.id);
+        continue;
+      }
       const latitude = row.propertywareBuilding?.latitude;
       const longitude = row.propertywareBuilding?.longitude;
       if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
@@ -869,6 +894,16 @@ export class QuarterPlannerService {
           status: TbpStopStatus.BLOCKED,
           blockedCode: 'NO_COORDINATES',
           blockedMessage: 'This property has not been geocoded, so it cannot be routed.',
+        },
+      });
+
+    if (excluded.length > 0)
+      await this.prisma.tbpQuarterPlanStop.updateMany({
+        where: { id: { in: excluded } },
+        data: {
+          status: TbpStopStatus.BLOCKED,
+          blockedCode: 'ZONE_EXCLUDED',
+          blockedMessage: 'This zone was left out of the build, so the office arranges these visits.',
         },
       });
 
@@ -1374,6 +1409,7 @@ function planSettings(plan: {
   maxStopsPerDay: number;
   maxLegMinutes: number;
   holidays: string[];
+  excludedZones: string[];
   startsOn: Date | null;
   crewTechnicianIds: string[];
 }): Required<PlanRoutingSettings> {
@@ -1386,6 +1422,7 @@ function planSettings(plan: {
     maxStopsPerDay: plan.maxStopsPerDay,
     maxLegMinutes: plan.maxLegMinutes,
     holidays: plan.holidays,
+    excludedZones: plan.excludedZones,
     startsOn: plan.startsOn ? isoDay(plan.startsOn) : null,
     technicianIds: plan.crewTechnicianIds,
   };
@@ -1403,7 +1440,10 @@ function planColumns({ startsOn, technicianIds, ...rest }: Required<PlanRoutingS
 /** A `DATE` column's day, `YYYY-MM-DD`. */
 const isoDay = (value: Date) => value.toISOString().slice(0, 10);
 
-type NumericSetting = keyof Omit<PlanRoutingSettings, 'holidays' | 'startsOn' | 'technicianIds'>;
+type NumericSetting = keyof Omit<
+  PlanRoutingSettings,
+  'holidays' | 'excludedZones' | 'startsOn' | 'technicianIds'
+>;
 
 /**
  * The plan's settings with a request's changes applied, checked.
@@ -1448,6 +1488,21 @@ export function routingSettings(
         `${quarterLabel(quarter)} can start from ${earliest} to ${latest}: fifteen days either side of the quarter’s first day.`,
       );
   }
+  /**
+   * Zone numbers, and nothing that would leave the quarter with no work.
+   *
+   * Refused rather than clamped, like every other setting here: excluding
+   * every zone is a mistake, and a quarter built on it would look like a plan
+   * with nothing in it rather than like the error it is.
+   */
+  const excludedZones = input.excludedZones ?? current.excludedZones;
+  if (
+    !Array.isArray(excludedZones) ||
+    excludedZones.length > 20 ||
+    excludedZones.some((zone) => typeof zone !== 'string' || !/^\d{1,3}$/.test(zone.trim()))
+  )
+    throw new ApplicationError(422, 'INVALID_PLAN_SETTINGS', 'Zones to leave out must be zone numbers.');
+
   const technicianIds = input.technicianIds ?? current.technicianIds;
   if (!Array.isArray(technicianIds) || technicianIds.length > MAX_PLAN_TECHNICIANS || technicianIds.some((id) => typeof id !== 'string'))
     throw new ApplicationError(422, 'INVALID_PLAN_SETTINGS', 'Choose the technicians to send out on the plan.');
@@ -1460,6 +1515,7 @@ export function routingSettings(
     maxStopsPerDay,
     maxLegMinutes: within('maxLegMinutes', 5, 120),
     holidays: [...new Set(holidays)].sort(),
+    excludedZones: [...new Set(excludedZones.map((zone) => zone.trim()))].sort(byZoneNumber),
     startsOn: startsOn === quarterFirstDay(quarter) ? null : startsOn,
     technicianIds: [...new Set(technicianIds)],
   };

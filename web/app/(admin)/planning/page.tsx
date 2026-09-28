@@ -234,8 +234,17 @@ export default function PlanningPage() {
       id,
       description: 'Drive times are measured on the road, so this takes a few minutes. Keep this page open.',
     });
+    const { stopsPerDay, ...rest } = picked;
     mutations.build.mutate(
-      { year: choice.year, quarter: choice.quarter, ...picked },
+      {
+        year: choice.year,
+        quarter: choice.quarter,
+        ...rest,
+        // Both ends, so the planner fills to the number asked for rather than
+        // stopping at its own nine and treating the rest as a ceiling.
+        minStopsPerDay: stopsPerDay,
+        maxStopsPerDay: Math.max(stopsPerDay, 12),
+      },
       {
         onSuccess: (result) => {
           toast.success(`${choice.label} is planned`, {

@@ -37,6 +37,19 @@ export class PlanRoutingSettingsDto {
    */
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(480) maxDriveMinutes?: number;
   /** The visits the planner groups into a day: nine is the office's rule (2026-09-19). */
+  /**
+   * Zones to leave out of this build entirely, by number.
+   *
+   * The office works zones 1 to 4 and leaves 5 to be arranged by hand. Left in,
+   * its 34 visits take four days of the quarter and pull a technician across
+   * the county for them; left out, they are held back and said so rather than
+   * quietly dropped.
+   *
+   * Strings because a zone is a string everywhere else here -- `zoneNumberOf`
+   * reduces "Zone 3" and "3" to the same thing, and this is compared after it.
+   */
+  @IsOptional() @IsArray() @IsString({ each: true }) @MaxLength(8, { each: true })
+  excludedZones?: string[];
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) minStopsPerDay?: number;
   /** The most a day may hold, with the visits the office adds by hand: twelve is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) maxStopsPerDay?: number;
