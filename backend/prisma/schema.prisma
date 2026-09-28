@@ -3075,7 +3075,7 @@ model TbpQuarterPlan {
   /// The visits the planner groups into a day (2026-09-19): nine.
   /// Zones this quarter is built without, by number. The office works 1 to 4
   /// and arranges 5 by hand; recorded so a rebuild keeps the same rule.
-  excludedZones      String[]
+  excludedZones      String[] @default([])
 
   minStopsPerDay       Int      @default(9)
   /// The most a day may hold: ten (2026-09-20). Past its nine a day only

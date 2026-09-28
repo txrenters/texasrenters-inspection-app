@@ -8,4 +8,4 @@
 
 -- AlterTable
 ALTER TABLE "TbpQuarterPlan"
-  ADD COLUMN IF NOT EXISTS "excludedZones" TEXT[] NOT NULL DEFAULT '{}';
+  ADD COLUMN IF NOT EXISTS "excludedZones" TEXT[] DEFAULT ARRAY[]::TEXT[];
