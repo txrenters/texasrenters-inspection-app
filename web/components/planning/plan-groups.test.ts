@@ -141,3 +141,30 @@ describe('the circle it draws', () => {
     expect(ring[0]).toEqual(ring.at(-1));
   });
 });
+
+/**
+ * The crew shown over the quarter they are working.
+ *
+ * One map rather than two was the ask, and it brings a privacy question with
+ * it: where a named person was at a given minute is a fact about them, not
+ * about the quarter. The plan page therefore asks for their positions with
+ * `technicians:locate` — the technician map's key — and not with the planning
+ * grant, which everybody who reads a schedule holds.
+ *
+ * Pinned by reading the page, because the alternative is standing the whole
+ * planning screen up in jsdom to assert one permission string.
+ */
+describe('showing the crew on the plan', () => {
+  it('asks for positions with the locate grant, not the planning one', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const page = readFileSync(
+      join(__dirname, '..', '..', 'app', '(admin)', 'planning', 'page.tsx'),
+      'utf8',
+    );
+
+    expect(page).toContain("useTechnicianLocations(has('technicians:locate'))");
+    expect(page).not.toContain("useTechnicianLocations(has('planning:read'))");
+    expect(page).not.toContain("useTechnicianLocations(has('technicians:read'))");
+  });
+});

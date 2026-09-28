@@ -36,6 +36,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
+import { useTechnicianLocations } from '@/lib/queries';
 import { formatRelative } from '@/lib/format';
 import {
   attentionOf,
@@ -129,6 +130,20 @@ export default function PlanningPage() {
    * so the office can follow one while comparing it against its neighbours.
    */
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  /**
+   * Where the crew are, shown over the quarter they are working.
+   *
+   * The office asked for one map rather than two: the technician map and this
+   * one showed different worlds, so asking "is anybody near today's group"
+   * meant opening another page.
+   *
+   * `technicians:locate`, the same key the technician map opens with and not
+   * the planning one. Where a named person was at a given minute is a fact
+   * about them rather than about the quarter, and putting it behind a
+   * scheduling grant would hand it to everybody who can read a plan.
+   */
+  const crew = useTechnicianLocations(has('technicians:locate'));
   // What AI made of the quarter, and the moves it offered (2026-09-20).
   const [advising, setAdvising] = useState(false);
   const [advice, setAdvice] = useState<PlanAdvice | null>(null);
@@ -598,6 +613,7 @@ export default function PlanningPage() {
                   <PlanGroupsMap
                     onSelectDay={setSelectedDate}
                     selectedDate={selectedDate}
+                    technicians={crew.data ?? []}
                     stops={(stops.data ?? []).map((stop) => ({
                       id: stop.id,
                       latitude: stop.latitude ?? Number.NaN,
