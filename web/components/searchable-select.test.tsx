@@ -240,3 +240,82 @@ describe('SearchableSelect selected-option visibility', () => {
     expect(screen.getAllByRole('option')).toHaveLength(options.length);
   });
 });
+
+/**
+ * A badge qualifies an option rather than naming it.
+ *
+ * The case it exists for is a demo property in the inspection form's property
+ * picker: booking a visit there sends a technician to an address that does not
+ * exist, and it is offered in the same list as 570 real homes.
+ */
+describe('an option carrying a badge', () => {
+  const badged = [
+    { value: 'real', label: '4412 Wicklow Bend' },
+    { value: 'demo', label: 'Demo Property 1', badge: 'Demo' },
+  ];
+
+  it('shows it in the list, on that option only', () => {
+    render(
+      createElement(SearchableSelect, {
+        id: 'property',
+        value: '',
+        options: badged,
+        placeholder: 'Select property',
+        onChange: vi.fn(),
+      }),
+    );
+
+    openMenu();
+    expect(screen.getAllByText('Demo')).toHaveLength(1);
+  });
+
+  it('keeps it on the trigger after the option is chosen', () => {
+    // The trigger is what the reader sees while they submit the form. A
+    // qualifier that vanished at the moment of choosing would be worse than
+    // never showing it.
+    render(
+      createElement(SearchableSelect, {
+        id: 'property',
+        value: 'demo',
+        options: badged,
+        placeholder: 'Select property',
+        onChange: vi.fn(),
+      }),
+    );
+
+    const trigger = screen.getByRole('combobox');
+    expect(within(trigger).getByText('Demo Property 1')).toBeTruthy();
+    expect(within(trigger).getByText('Demo')).toBeTruthy();
+  });
+
+  it('leaves the trigger clean for an option without one', () => {
+    render(
+      createElement(SearchableSelect, {
+        id: 'property',
+        value: 'real',
+        options: badged,
+        placeholder: 'Select property',
+        onChange: vi.fn(),
+      }),
+    );
+
+    expect(within(screen.getByRole('combobox')).queryByText('Demo')).toBeNull();
+  });
+
+  it('still selects it — marked, not disabled', () => {
+    const onChange = vi.fn();
+    render(
+      createElement(SearchableSelect, {
+        id: 'property',
+        value: '',
+        options: badged,
+        placeholder: 'Select property',
+        onChange,
+      }),
+    );
+
+    openMenu();
+    fireEvent.click(screen.getByText('Demo Property 1'));
+    expect(onChange).toHaveBeenCalledWith('demo');
+  });
+});

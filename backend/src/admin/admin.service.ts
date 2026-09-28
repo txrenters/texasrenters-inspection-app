@@ -50,6 +50,12 @@ import {
   resolveInspectionPlan,
 } from './inspection-creation';
 import { assignmentPropertySearch } from './assignment-search';
+import {
+  DEMO_PROPERTY_LIMIT,
+  DEMO_SOURCE_SYSTEM,
+  demoPropertyFixture,
+  nextDemoSequence,
+} from './demo-property';
 import { inspectionEvidenceTimes, inspectionSpan } from './inspection-timing';
 import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
@@ -691,6 +697,11 @@ export class AdminService {
           state: true,
           postalCode: true,
           sourceStatus: true,
+          // Which system the row came from, so the console can label a demo
+          // property as one. Everything on this page is a real house somebody
+          // lives in apart from these, and the difference has to be visible
+          // rather than inferred from a name somebody could rename.
+          sourceSystem: true,
           isActive: true,
           lastSyncedAt: true,
           updatedAt: true,
@@ -721,6 +732,321 @@ export class AdminService {
       leaseSummary: this.leaseSummary(units, leases),
     }));
     return this.page(shaped, total, query);
+  }
+
+  /**
+   * Creates one demo property for this organization.
+   *
+   * The only write path into `propertyware_buildings` outside the Propertyware
+   * sync, and it exists so the office can demonstrate the app — the console and
+   * the phone, end to end — without booking a visit at a real tenant's home and
+   * leaving the evidence in the portfolio afterwards. `demo-property.ts` carries
+   * the reasoning and the fixture; the isolation is `sourceSystem`, which no
+   * sync query matches.
+   *
+   * Written outside a transaction on purpose: there is one row to write, and
+   * the audit entry that follows is a record of something that already happened
+   * — rolling the property back because the log failed would leave the office
+   * with neither. The audit write is awaited rather than fired and forgotten, so
+   * a failure to record who did this surfaces as a failed request instead of
+   * silently leaving an unattributed property in the portfolio.
+   */
+  async createDemoProperty(user: AuthenticatedUser) {
+    /**
+     * Every demo property this organization holds, active or not — the unique
+     * key on `externalId` ignores `isActive`, so a deactivated one still owns
+     * its number.
+     *
+     * Read as rows rather than a count because the next number comes from the
+     * highest one used, not from how many there are; `nextDemoSequence` carries
+     * why. At ten rows maximum this is a trivially small read.
+     */
+    const existing = await this.prisma.propertywareBuilding.findMany({
+      where: { organizationId: user.organizationId, sourceSystem: DEMO_SOURCE_SYSTEM },
+      select: { externalId: true },
+    });
+    if (existing.length >= DEMO_PROPERTY_LIMIT)
+      throw new ApplicationError(
+        409,
+        'DEMO_PROPERTY_LIMIT_REACHED',
+        `This organization already holds ${DEMO_PROPERTY_LIMIT} demo properties. Delete one before adding another.`,
+      );
+
+    const fixture = demoPropertyFixture(
+      nextDemoSequence(existing.map((property) => property.externalId)),
+    );
+    const created = await this.prisma.propertywareBuilding
+      .create({
+        data: { organizationId: user.organizationId, ...fixture },
+        select: {
+          id: true,
+          externalId: true,
+          name: true,
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          state: true,
+          postalCode: true,
+          sourceStatus: true,
+          sourceSystem: true,
+          isActive: true,
+          lastSyncedAt: true,
+          updatedAt: true,
+          totalArea: true,
+          areaUnits: true,
+          category: true,
+          manualTotalArea: true,
+          manualAreaUnit: true,
+          portfolio: { select: { id: true, name: true, externalId: true } },
+          _count: { select: { units: true, inspections: true } },
+        },
+      })
+      .catch((error: unknown) => {
+        /**
+         * Two clicks on the button, or two coordinators at once. Both requests
+         * read the same count and compose the same `externalId`, and the unique
+         * key on `(organizationId, sourceSystem, externalId)` rejects the
+         * second — which is the behaviour we want, because the alternative is
+         * two identical demo properties. Reported as a conflict rather than a
+         * 500, so the console can say something true about it.
+         */
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        )
+          throw new ApplicationError(
+            409,
+            'DEMO_PROPERTY_EXISTS',
+            'That demo property already exists. Refresh the list to see it.',
+          );
+        throw error;
+      });
+
+    await this.audit(
+      this.prisma,
+      user,
+      'demo_property.created',
+      created.id,
+      { name: created.name, externalId: created.externalId, sourceSystem: created.sourceSystem },
+      'PropertywareBuilding',
+    );
+
+    /**
+     * The properties list is cached per organization, and the search results
+     * under a second namespace, so both have to be bumped or the new property
+     * is invisible until the entry expires. `dashboard` carries the property
+     * count on the landing page and would disagree with the list beside it.
+     */
+    await Promise.all([
+      this.cacheInvalidation?.bump('properties', user.organizationId),
+      this.cacheInvalidation?.bump('propertySearch', user.organizationId),
+      this.cacheInvalidation?.bump('dashboard', user.organizationId),
+    ]);
+
+    /**
+     * The same shape a list row has, so nothing downstream needs a second case
+     * for a property that arrived this way — the console names it in a toast and
+     * refetches, but a script or a later caller reading `totalArea` off it gets
+     * the field where it expects it. A new demo property has no units and no
+     * leases, and `leaseSummary` of nothing is the honest answer to that rather
+     * than an absent field.
+     */
+    return {
+      ...created,
+      totalArea: this.buildingTotalArea(created),
+      leaseSummary: this.leaseSummary([], []),
+    };
+  }
+
+  /**
+   * Removes one demo property, and the demonstration it holds.
+   *
+   * ── WHAT IT WILL AND WILL NOT TOUCH ──────────────────────────────────────
+   *
+   * `sourceSystem: DEMO_SOURCE_SYSTEM` is in the lookup, not checked after it.
+   * A Propertyware property is therefore not "refused" by this endpoint — it is
+   * *not found* by it, which is the difference between a rule somebody could
+   * argue with and a row this code cannot reach. There is no flag, body field or
+   * query parameter that widens it.
+   *
+   * ── THE INSPECTIONS ──────────────────────────────────────────────────────
+   *
+   * A demo property that has been demonstrated at has an inspection, and the
+   * foreign key from `Inspection` is `Restrict` — so deleting the building means
+   * deleting the inspection, which means deleting recordings out of Cloudflare
+   * Stream. That is exactly what `inspections:delete` gates, and it stays
+   * gating it: holding `properties:manage` alone gets a refusal naming the
+   * count, never a quiet cascade. Otherwise this endpoint would be a way around
+   * a permission the office deliberately grants to almost nobody.
+   *
+   * The erasing itself is `eraseInspection`, unchanged and unwrapped. Its delete
+   * order spans a dozen tables, is not derivable from `schema.prisma`, and broke
+   * in production twice; a second implementation of it here would be the worst
+   * thing this feature could add. Each runs in its own transaction, sequentially,
+   * for the reason `deleteInspections` documents — one outer transaction over
+   * several inspections' media is the shape the remote pooler drops at five
+   * seconds.
+   *
+   * ── THE `Property` SHADOW ────────────────────────────────────────────────
+   *
+   * `ensureStandardLayout` upserts a `Property` row carrying *the same id* as the
+   * building, because `PropertyArea.propertyId` keys to `Property` rather than to
+   * `PropertywareBuilding`. Nothing relates the two tables, so deleting the
+   * building alone would leave that row and its fifteen areas behind — and
+   * `Property` has its own geocoding pass, so the orphan would go on being
+   * looked up nightly for an address nobody manages. It goes too.
+   */
+  async deleteDemoProperty(user: AuthenticatedUser, id: string) {
+    const property = await this.prisma.propertywareBuilding.findFirst({
+      where: { id, organizationId: user.organizationId, sourceSystem: DEMO_SOURCE_SYSTEM },
+      select: { id: true, name: true, externalId: true },
+    });
+    /**
+     * 404 rather than 403, and the same 404 for "no such property" as for "that
+     * is a real one". A reader who cannot delete it has no business learning
+     * which of the two it was, and the message is the same either way.
+     */
+    if (!property)
+      throw new ApplicationError(
+        404,
+        'DEMO_PROPERTY_NOT_FOUND',
+        'No demo property with that id. Only demo properties can be deleted here.',
+      );
+
+    const inspections = await this.prisma.inspection.findMany({
+      where: { organizationId: user.organizationId, propertywareBuildingId: id },
+      select: { id: true },
+    });
+    if (inspections.length && !user.permissions.includes('inspections:delete'))
+      throw new ApplicationError(
+        409,
+        'DEMO_PROPERTY_HAS_INSPECTIONS',
+        `${property.name} still has ${inspections.length} ${
+          inspections.length === 1 ? 'inspection' : 'inspections'
+        }. Deleting it would delete ${
+          inspections.length === 1 ? 'that inspection' : 'those inspections'
+        } and ${
+          inspections.length === 1 ? 'its' : 'their'
+        } recordings, which needs the inspections:delete permission.`,
+      );
+
+    let orphanedStorageObjects = 0;
+    for (const inspection of inspections) {
+      const result = await this.eraseInspection(user, inspection.id);
+      orphanedStorageObjects += result.orphanedStorageObjects;
+    }
+
+    await this.eraseDemoPropertyRecord(user.organizationId, id);
+
+    await this.audit(
+      this.prisma,
+      user,
+      'demo_property.deleted',
+      id,
+      {
+        name: property.name,
+        externalId: property.externalId,
+        sourceSystem: DEMO_SOURCE_SYSTEM,
+        inspectionsErased: inspections.length,
+      },
+      'PropertywareBuilding',
+    );
+
+    await Promise.all([
+      this.cacheInvalidation?.bump('properties', user.organizationId),
+      this.cacheInvalidation?.bump('propertySearch', user.organizationId),
+      this.cacheInvalidation?.bump('propertyDetails', user.organizationId),
+      this.cacheInvalidation?.bump('dashboard', user.organizationId),
+    ]);
+    // The inspections list every open console is showing lost rows too.
+    if (inspections.length)
+      await this.cacheInvalidation?.publish({
+        type: 'inspection.changed',
+        organizationId: user.organizationId,
+      });
+
+    return {
+      deleted: true,
+      id,
+      name: property.name,
+      inspectionsErased: inspections.length,
+      orphanedStorageObjects,
+    };
+  }
+
+  /**
+   * The building row, its `Property` shadow, and everything keyed to either.
+   *
+   * One transaction, so a foreign key nobody anticipated rolls the whole thing
+   * back rather than leaving a half-deleted property — a building gone with its
+   * areas still present, or the reverse, is worse than not having deleted it.
+   *
+   * The order is dictated by the schema and nothing else; every step below is a
+   * `Restrict` that would otherwise refuse. `AreaChecklistItem` and
+   * `PropertyAreaAlias` are absent because they cascade from `PropertyArea`, and
+   * `PropertyGeofence` and `PropertywareInspectionDocument` because they cascade
+   * from the building. `PropertywareTenant` and `TbpQuarterPlanStop` are absent
+   * because they are `SetNull` — a tenancy outlives the property it pointed at,
+   * which is correct here: a demo property should never have had one.
+   *
+   * Units, leases and Jobber links are deleted although the fixture creates
+   * none. They are what a demo property would accumulate if somebody ever links
+   * one or the fixture grows, and a `deleteMany` that matches nothing costs a
+   * statement.
+   */
+  private async eraseDemoPropertyRecord(organizationId: string, id: string) {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // The baseline chain, deepest first. A demo move-in leaves one of these.
+        await tx.baselineMedia.deleteMany({
+          where: { baselineAreaCondition: { baselineInspection: { propertyId: id } } },
+        });
+        await tx.baselineAreaCondition.deleteMany({
+          where: { baselineInspection: { propertyId: id } },
+        });
+        await tx.baselineInspection.deleteMany({ where: { propertyId: id } });
+
+        // Floor plans before the areas that cite them as their source.
+        await tx.floorPlanExtractionJob.deleteMany({
+          where: { floorPlan: { propertyId: id } },
+        });
+        await tx.propertyFloorPlan.deleteMany({ where: { propertyId: id } });
+
+        // Areas before floors and units: `PropertyArea.floorId` and `.unitId`
+        // both point outward and both restrict.
+        await tx.propertyArea.deleteMany({ where: { propertyId: id } });
+        await tx.propertyFloor.deleteMany({ where: { propertyId: id } });
+
+        // Scoped by organization as well as id, because this one is keyed on a
+        // plain uuid that happens to equal the building's rather than on a
+        // relation the tenant policy already covers.
+        await tx.property.deleteMany({ where: { id, organizationId } });
+
+        await tx.propertywareLease.deleteMany({ where: { buildingId: id } });
+        await tx.jobberPropertyLink.deleteMany({ where: { propertywareBuildingId: id } });
+        await tx.propertywareUnit.deleteMany({ where: { buildingId: id } });
+        await tx.propertywareBuilding.delete({ where: { id } });
+      });
+    } catch (error) {
+      /**
+       * A foreign key this order does not account for.
+       *
+       * Reported as a refusal naming nothing deleted, rather than a 500: the
+       * transaction has already rolled back, so the honest thing to say is that
+       * the property is still there and why. `P2003` is the foreign-key
+       * violation; `P2014` is Prisma's own required-relation guard.
+       */
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2003' || error.code === 'P2014')
+      )
+        throw new ApplicationError(
+          409,
+          'DEMO_PROPERTY_STILL_REFERENCED',
+          'Something still references this demo property, so nothing was deleted. Remove it and try again.',
+        );
+      throw error;
+    }
   }
 
   // Normalizes a Propertyware area unit label to a compact display form.
@@ -865,6 +1191,9 @@ export class AdminService {
         state: true,
         postalCode: true,
         sourceStatus: true,
+        // Read here as well as in the list, so the badge does not disappear the
+        // moment somebody clicks through from one to the other.
+        sourceSystem: true,
         isActive: true,
         lastSyncedAt: true,
         updatedAt: true,

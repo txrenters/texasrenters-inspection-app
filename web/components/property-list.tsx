@@ -3,6 +3,7 @@
 import type { PropertyPosition } from '@texasrenters/shared';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 
 /**
@@ -150,7 +151,17 @@ export const PropertyList = memo(function PropertyList({
                     onClick={() => onSelect(selected ? null : property.id)}
                     type="button"
                   >
-                    <span className="w-full truncate text-sm font-medium">{property.name}</span>
+                    <span className="flex w-full min-w-0 items-center gap-1.5 text-sm font-medium">
+                      <span className="min-w-0 truncate">{property.name}</span>
+                      {/* Not a column and not a colour on the pin: this list is
+                          how somebody actually arrives at one property, so the
+                          word belongs where they read the name. */}
+                      {property.isDemo ? (
+                        <Badge className="shrink-0" variant="warning">
+                          Demo
+                        </Badge>
+                      ) : null}
+                    </span>
                     <span className="text-muted-foreground w-full truncate text-xs">
                       {property.addressLine1}
                       {property.city ? `, ${property.city}` : null}

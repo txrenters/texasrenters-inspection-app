@@ -4,6 +4,7 @@ import {
   type GeocodePrecision,
   geocodableAddress,
   geofenceRadiusProblem,
+  isDemoProperty,
   isWorthReplacing,
   needsGeocoding,
   type PropertyPosition,
@@ -397,6 +398,10 @@ export class PropertyGeocodingService {
         latitude: true,
         longitude: true,
         geocodePrecision: true,
+        // Which system this property came from, so the map can mark a demo one.
+        // Its address is fictional and its pin sits in the middle of the service
+        // area, so an unmarked one is a property somebody will route to.
+        sourceSystem: true,
         // The office's own answer for this property, where it has given one.
         geofence: {
           select: { latitude: true, longitude: true, enterRadiusMeters: true, exitRadiusMeters: true },
@@ -434,6 +439,7 @@ export class PropertyGeocodingService {
         enterRadiusMeters: row.geofence?.enterRadiusMeters ?? SEGMENT_DEFAULTS.enterRadiusMeters,
         exitRadiusMeters: row.geofence?.exitRadiusMeters ?? SEGMENT_DEFAULTS.exitRadiusMeters,
         geofenceMoved: moved,
+        isDemo: isDemoProperty(row),
       };
     });
   }
