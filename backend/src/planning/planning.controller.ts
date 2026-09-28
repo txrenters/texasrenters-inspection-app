@@ -580,7 +580,13 @@ export class PlanningController {
       ? quarterLabel({ year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] })
       : 'quarter';
     return this.builds.run(organizationId, label, async () => {
-      const routed = await this.planner.route(organizationId, planId, body, { today: businessDate() });
+      const routed = await this.planner.route(organizationId, planId, body, {
+        today: businessDate(),
+        // Asked for explicitly, never assumed: this is what lets a rebuild
+        // move a visit somebody has already been booked to attend.
+        movePublishedVisits: body.movePublishedVisits === true,
+        actorId: request.user.id,
+      });
       await this.auditBuild(request, planId, routed);
       return routed;
     });
