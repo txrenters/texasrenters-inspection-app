@@ -174,6 +174,7 @@ export class PlanningController {
           holidays: true,
           startsOn: true,
           crewTechnicianIds: true,
+          jobberUnassigned: true,
           officeDetailsImportedAt: true,
         },
       }),

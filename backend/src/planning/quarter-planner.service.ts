@@ -120,6 +120,19 @@ export interface PlanRoutingSettings {
    */
   startsOn?: string | null;
   /**
+   * Send this plan's visits to Jobber with nobody on them, so they arrive in
+   * Jobber's Unassigned list for the office to hand out there.
+   *
+   * A setting on the plan rather than an argument to publish, because a visit
+   * reaches Jobber long after the plan is published — the outbound queue drains
+   * twenty-five every five minutes — and this is a fact about the plan.
+   *
+   * It changes nothing about who the visit belongs to *here*. The plan still
+   * routes days per technician and the inspection still carries its assignment,
+   * because that is what the phone and the console's calendar read.
+   */
+  jobberUnassigned?: boolean;
+  /**
    * Who is sent out on the plan's days, chosen each time it is built
    * (2026-09-19). Empty: the benefit-package crew on the planning profiles.
    */
@@ -338,6 +351,7 @@ export class QuarterPlannerService {
         holidays: true,
         startsOn: true,
         crewTechnicianIds: true,
+        jobberUnassigned: true,
       },
     });
     if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
@@ -526,6 +540,7 @@ export class QuarterPlannerService {
         holidays: true,
         startsOn: true,
         crewTechnicianIds: true,
+        jobberUnassigned: true,
       },
     });
     if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
@@ -1178,6 +1193,12 @@ export class QuarterPlannerService {
    * A technician change is a second thing and is sent as one: Jobber's visit
    * and its assignment are separate, and a reschedule that silently reassigned
    * would leave the old technician's calendar wrong.
+   *
+   * On a plan the office chose to publish unassigned, the technician half is not
+   * sent at all. The assignment still moves *here* — the phone and the console's
+   * calendar read it — but pushing it would write a name onto a Jobber visit the
+   * office deliberately left blank, and a rebuild would silently undo the choice
+   * they made in the build dialog.
    */
   private async rebookMovedVisits(
     organizationId: string,
@@ -1186,10 +1207,16 @@ export class QuarterPlannerService {
     actorId: string | null,
   ) {
     if (!before.size) return 0;
-    const after = await this.prisma.tbpQuarterPlanStop.findMany({
-      where: { id: { in: [...before.keys()] } },
-      select: { id: true, scheduledOn: true, assignedTechnicianId: true },
-    });
+    const [plan, after] = await Promise.all([
+      this.prisma.tbpQuarterPlan.findUnique({
+        where: { id: planId },
+        select: { jobberUnassigned: true },
+      }),
+      this.prisma.tbpQuarterPlanStop.findMany({
+        where: { id: { in: [...before.keys()] } },
+        select: { id: true, scheduledOn: true, assignedTechnicianId: true },
+      }),
+    ]);
 
     let moved = 0;
     for (const row of after) {
@@ -1243,7 +1270,8 @@ export class QuarterPlannerService {
             kind: JobberOutboundKind.VISIT_RESCHEDULE,
             requestedById: actorId,
           });
-        if (technicianChanged)
+        // Not on a plan published unassigned: see the note on this method.
+        if (technicianChanged && !plan?.jobberUnassigned)
           await requestVisitPush(tx, {
             organizationId,
             inspectionId: was.inspectionId,
@@ -1376,8 +1404,10 @@ function planSettings(plan: {
   holidays: string[];
   startsOn: Date | null;
   crewTechnicianIds: string[];
+  jobberUnassigned: boolean;
 }): Required<PlanRoutingSettings> {
   return {
+    jobberUnassigned: plan.jobberUnassigned,
     occupiedVisitMinutes: plan.occupiedVisitMinutes,
     hvacVisitMinutes: plan.hvacVisitMinutes,
     maxOnSiteMinutes: plan.maxOnSiteMinutes,
@@ -1403,7 +1433,10 @@ function planColumns({ startsOn, technicianIds, ...rest }: Required<PlanRoutingS
 /** A `DATE` column's day, `YYYY-MM-DD`. */
 const isoDay = (value: Date) => value.toISOString().slice(0, 10);
 
-type NumericSetting = keyof Omit<PlanRoutingSettings, 'holidays' | 'startsOn' | 'technicianIds'>;
+type NumericSetting = keyof Omit<
+  PlanRoutingSettings,
+  'holidays' | 'startsOn' | 'technicianIds' | 'jobberUnassigned'
+>;
 
 /**
  * The plan's settings with a request's changes applied, checked.
@@ -1451,7 +1484,27 @@ export function routingSettings(
   const technicianIds = input.technicianIds ?? current.technicianIds;
   if (!Array.isArray(technicianIds) || technicianIds.length > MAX_PLAN_TECHNICIANS || technicianIds.some((id) => typeof id !== 'string'))
     throw new ApplicationError(422, 'INVALID_PLAN_SETTINGS', 'Choose the technicians to send out on the plan.');
+  /**
+   * What the caller asked for is checked; what the plan holds is trusted.
+   *
+   * The column is `NOT NULL DEFAULT false`, so a plan always has an answer — and
+   * validating the *current* value as well would turn a caller's mistake and a
+   * stored row into the same refusal, which is a worse message and a worse test.
+   * `?? false` is for a caller that assembles the settings by hand rather than
+   * reading a plan.
+   *
+   * `??` and not a truthiness check on the input: `false` is an answer, so
+   * unticking the box on a rebuild has to beat the `true` the plan already says.
+   */
+  if (input.jobberUnassigned !== undefined && typeof input.jobberUnassigned !== 'boolean')
+    throw new ApplicationError(
+      422,
+      'INVALID_PLAN_SETTINGS',
+      'Whether Jobber visits go out unassigned must be true or false.',
+    );
+  const jobberUnassigned = input.jobberUnassigned ?? current.jobberUnassigned ?? false;
   return {
+    jobberUnassigned,
     occupiedVisitMinutes: within('occupiedVisitMinutes', 5, 240),
     hvacVisitMinutes: within('hvacVisitMinutes', 5, 240),
     maxOnSiteMinutes: within('maxOnSiteMinutes', 30, 720),

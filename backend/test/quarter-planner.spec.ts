@@ -69,6 +69,8 @@ const PLAN = {
   holidays: [] as string[],
   startsOn: null as Date | null,
   crewTechnicianIds: [] as string[],
+  // `NOT NULL DEFAULT false` in the database, so a plan always has an answer.
+  jobberUnassigned: false,
 };
 
 /** The plan's settings as routing takes them. */
@@ -83,6 +85,7 @@ const SETTINGS = {
   holidays: [] as string[],
   startsOn: null as string | null,
   technicianIds: [] as string[],
+  jobberUnassigned: false,
 };
 
 const Q4 = { year: 2026, quarter: 4 as const };
@@ -890,6 +893,9 @@ describe('the office’s limits on a planned day', () => {
         holidays: ['2026-11-26'],
         startsOn: null,
         crewTechnicianIds: [],
+        // Written back on every route, so the plan's answer survives a re-layout
+        // that does not mention it.
+        jobberUnassigned: false,
       },
     });
     expect(summary.settings.hvacVisitMinutes).toBe(60);
