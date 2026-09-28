@@ -1,6 +1,10 @@
+import { DEMO_PROPERTY_SOURCE_SYSTEM } from '@texasrenters/shared';
+
+import { PROPERTYWARE_SOURCE_SYSTEM } from '../src/integrations/propertyware/propertyware.constants';
 import {
   DEACTIVATION_SHARE_FLOOR,
   MAX_DEACTIVATION_SHARE,
+  PrismaPropertywareSyncStore,
   deactivationRefusal,
 } from '../src/workers/propertyware-sync/propertyware-sync.store';
 
@@ -73,6 +77,67 @@ describe('the share floor', () => {
     // small one, which is the whole reason this is a proportion.
     expect(deactivationRefusal(994, 6, 1_000)).toBeUndefined();
     expect(deactivationRefusal(4, 6, 10)).toBe('TOO_MANY');
+  });
+});
+
+/**
+ * The sweep reaches only the rows the sync owns.
+ *
+ * A Propertyware fetch cannot return a record it was never given, so a row of
+ * any other origin is *always* unseen — and this sweep would read that as
+ * "no longer managed". The demo properties the console creates are exactly that
+ * case, and the guard above would not have saved them: one or two doomed rows
+ * sits under the share floor, so the proportion is never consulted and the
+ * sweep proceeds. Nothing reactivates a row a later fetch still does not
+ * mention, so the demo property created on a Tuesday would be gone by Wednesday
+ * with nothing to say why.
+ *
+ * Every other query in this store is already scoped this way — `getRecordCache`
+ * reads `sourceSystem`, `touchRecords` writes it. This was the one that was not.
+ */
+describe('which rows a reconciliation sweep may reach', () => {
+  const ORG = '00000000-0000-4000-8000-000000000002';
+
+  function build() {
+    const count = jest.fn().mockResolvedValue(1);
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const prisma = { propertywareBuilding: { count, updateMany } };
+    return { store: new PrismaPropertywareSyncStore(prisma as never), count, updateMany };
+  }
+
+  /** Enough seen ids that the size guards step aside and the sweep runs. */
+  const seen = new Set(Array.from({ length: 500 }, (_, index) => `pw-${index}`));
+
+  it('deactivates only what Propertyware itself supplied', async () => {
+    const { store, updateMany } = build();
+    await store.deactivateUnseen(ORG, 'buildings', seen, new Date());
+
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    const where = updateMany.mock.calls[0][0].where;
+    expect(where.sourceSystem).toBe(PROPERTYWARE_SOURCE_SYSTEM);
+    expect(where.sourceSystem).not.toBe(DEMO_PROPERTY_SOURCE_SYSTEM);
+    expect(where.organizationId).toBe(ORG);
+  });
+
+  it('measures the share against the synced portfolio, not every active row', async () => {
+    // `activeBefore` is the denominator of "what share of the portfolio is this
+    // proposing to remove". Counting rows the sweep cannot touch would make the
+    // share look smaller than it is, and quietly loosen the guard.
+    const { store, count } = build();
+    await store.deactivateUnseen(ORG, 'buildings', seen, new Date());
+
+    expect(count).toHaveBeenCalledTimes(2);
+    for (const call of count.mock.calls)
+      expect(call[0].where.sourceSystem).toBe(PROPERTYWARE_SOURCE_SYSTEM);
+  });
+
+  it('writes nothing at all when the guard refuses', async () => {
+    // Belt and braces on the ordering: an empty fetch must not reach the
+    // `updateMany` even though the where clause is now narrower.
+    const { store, updateMany } = build();
+    await store.deactivateUnseen(ORG, 'buildings', new Set(), new Date());
+
+    expect(updateMany).not.toHaveBeenCalled();
   });
 });
 

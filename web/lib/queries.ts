@@ -38,6 +38,7 @@ import type {
   AdminRoleSummary,
   AdminTechnician,
   AdminUnit,
+  DeletedDemoProperty,
   ComparisonReport,
   AdminUser,
   AdminUserDetail,
@@ -1711,6 +1712,51 @@ export function useAdminMutations() {
       onSuccess: (data, variables) => {
         mergeAuthoritativeEntity(client, keys.all, data);
         refreshFloorPlan(variables.propertyId);
+      },
+    }),
+    /**
+     * A property to demonstrate the app with, instead of somebody's real home.
+     *
+     * No body: the fixture is fixed on the server, so there is nothing for the
+     * console to get wrong and nothing to keep in step with it.
+     *
+     * The list is invalidated rather than patched. The server sorts properties
+     * by name and pages them twenty at a time, so where a new one belongs is
+     * the server's answer, not one this can compute — inserting it into the open
+     * page would put it at a position it does not hold, and it would move on the
+     * next fetch.
+     */
+    createDemoProperty: useMutation({
+      mutationFn: () =>
+        api<AdminProperty>('/api/v1/admin/properties/demo', { method: 'POST' }),
+      onSuccess: () => {
+        void verifyAffectedQueries(client, [keys.propertiesRoot, keys.dashboard]);
+      },
+    }),
+    /**
+     * Removes a demo property, and whatever was demonstrated at it.
+     *
+     * The inspections list is invalidated as well, because deleting a demo
+     * property that was walked deletes its inspections too — leaving that list
+     * showing rows whose records are gone.
+     *
+     * The detail query is removed rather than invalidated. Invalidating would
+     * refetch a property that no longer exists and put a 404 in the cache; the
+     * reader is on their way back to the list, and there is nothing to refresh.
+     */
+    deleteDemoProperty: useMutation({
+      mutationFn: (propertyId: string) =>
+        api<DeletedDemoProperty>(`/api/v1/admin/properties/${propertyId}/demo`, {
+          method: 'DELETE',
+        }),
+      onSuccess: (_data, propertyId) => {
+        client.removeQueries({ queryKey: keys.property(propertyId) });
+        void verifyAffectedQueries(client, [
+          keys.propertiesRoot,
+          keys.inspectionsRoot,
+          keys.assignmentsRoot,
+          keys.dashboard,
+        ]);
       },
     }),
     createTechnician: useMutation({

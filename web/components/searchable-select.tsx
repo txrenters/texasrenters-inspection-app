@@ -11,6 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
@@ -18,6 +19,16 @@ export type SearchableSelectOption = {
   value: string;
   label: string;
   searchText?: string;
+  /**
+   * A short word shown beside the label, in the list and on the trigger.
+   *
+   * For a fact that qualifies the option rather than names it — "Demo" on a
+   * property that is not a real home. On the trigger as well as in the list
+   * because the trigger is what the reader sees while they submit the form, and
+   * a qualifier that vanished at the moment of choosing would be worse than
+   * never showing it.
+   */
+  badge?: string;
 };
 
 /**
@@ -160,7 +171,14 @@ export function SearchableSelect({
           {/* min-w-0 is what makes `truncate` actually take effect: without it
               the flex item cannot shrink below its content width. */}
           <span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
-          <ChevronsUpDownIcon aria-hidden className="size-4 shrink-0 opacity-50" />
+          {selected?.badge ? (
+            <Badge className="shrink-0" variant="warning">
+              {selected.badge}
+            </Badge>
+          ) : null}
+          {/* `ml-auto` so the chevron stays at the right edge once a badge sits
+              between it and the label. */}
+          <ChevronsUpDownIcon aria-hidden className="ml-auto size-4 shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
@@ -183,6 +201,11 @@ export function SearchableSelect({
                     className={cn('size-4', option.value === value ? 'opacity-100' : 'opacity-0')}
                   />
                   <span className="min-w-0 truncate">{option.label}</span>
+                  {option.badge ? (
+                    <Badge className="shrink-0" variant="warning">
+                      {option.badge}
+                    </Badge>
+                  ) : null}
                 </CommandItem>
               ))}
             </CommandGroup>

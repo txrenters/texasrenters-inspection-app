@@ -198,6 +198,41 @@ export class AdminController {
   properties(@Req() request: AuthenticatedRequest, @Query() query: PropertyListQueryDto) {
     return this.service.properties(request.user, query);
   }
+  /**
+   * Creates one demo property, for demonstrating the app.
+   *
+   * `properties:manage` rather than `properties:read`, because it writes into
+   * the table every other surface reads from — see `demo-property.ts` for what
+   * keeps it out of the Propertyware sync's way. No body: the fixture is fixed,
+   * so there is nothing for a caller to get wrong.
+   *
+   * Declared before `properties/:propertyId` for readability only; the two are
+   * different methods and Nest never confuses them.
+   */
+  @Post('properties/demo')
+  @RequirePermissions('properties:manage')
+  createDemoProperty(@Req() request: AuthenticatedRequest) {
+    return this.service.createDemoProperty(request.user);
+  }
+  /**
+   * Deletes one demo property, permanently.
+   *
+   * `properties:manage` is the gate on the property. It is **not** the gate on
+   * its inspections: a demo property that has been demonstrated at holds
+   * recordings in Cloudflare Stream, and the service refuses unless the caller
+   * also holds `inspections:delete` — the key that exists to gate exactly that.
+   * Declaring both here instead would make a clean demo property undeletable by
+   * the person who created it, which is the ordinary case.
+   *
+   * `demo` is the last segment rather than a bare `DELETE properties/:id`, so
+   * there is no route on this controller that could ever be pointed at a real
+   * property by changing one path parameter.
+   */
+  @Delete('properties/:propertyId/demo')
+  @RequirePermissions('properties:manage')
+  deleteDemoProperty(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
+    return this.service.deleteDemoProperty(request.user, id);
+  }
   @Get('properties/:propertyId')
   @RequirePermissions('properties:read')
   property(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {

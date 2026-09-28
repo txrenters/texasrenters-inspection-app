@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import type { JobberAssignee } from '@texasrenters/shared';
+import { isDemoProperty, type JobberAssignee } from '@texasrenters/shared';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { JobberSyncStatus } from '@/components/jobber-sync-status';
@@ -588,7 +588,18 @@ function LinkDialog({
                       selectedBuilding === property.id ? 'border-primary bg-accent' : 'border-border'
                     }`}
                   >
-                    <div className="font-medium">{property.name}</div>
+                    <div className="flex items-center gap-1.5 font-medium">
+                      <span className="min-w-0 truncate">{property.name}</span>
+                      {/* Linking a Jobber property to a demo one is almost
+                          certainly a mistake, and this list is where it would be
+                          made. Marked rather than filtered out: hiding it would
+                          be a rule nobody could see. */}
+                      {isDemoProperty(property) ? (
+                        <Badge className="shrink-0" variant="warning">
+                          Demo
+                        </Badge>
+                      ) : null}
+                    </div>
                     <div className="text-muted-foreground text-xs">
                       {[property.addressLine1, property.city, property.postalCode]
                         .filter(Boolean)
