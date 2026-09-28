@@ -1022,7 +1022,7 @@ export function TechnicianMap({
   const now = Date.now();
 
   return (
-    <ConsoleMap initialView={FALLBACK_VIEW} radiusPoints={properties}>
+    <ConsoleMap initialView={FALLBACK_VIEW} propertyDots radiusPoints={properties}>
       <CameraDirector
         fallback={selectedStops}
         fitKey={fitKey}

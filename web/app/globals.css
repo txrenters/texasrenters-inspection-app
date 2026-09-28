@@ -424,6 +424,14 @@
   stroke: var(--map-grouping);
 }
 
+/* Every property, drawn where it actually is at any zoom -- see
+ * `PropertyDotsLayer`. The same blue as the property pin, because it is the
+ * same thing: the pin is the one you can click, the dot is the other six
+ * hundred that a badge is standing in for. */
+.map-property-dot {
+  stroke: var(--map-property);
+}
+
 /* Mapbox's popup, made to follow the theme.
 
  * The bubble, its tail and its close button are Mapbox's own elements, painted
