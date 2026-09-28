@@ -29,7 +29,6 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@tanstack/react-query": "^5.90.0",
     "@texasrenters/shared": "*",
-    "@vis.gl/react-google-maps": "^1.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

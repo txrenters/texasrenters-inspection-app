@@ -1,18 +1,21 @@
 'use client';
 
-import {
-  AdvancedMarker,
-  APIProvider,
-  APILoadingStatus,
-  ColorScheme,
-  Map as GoogleMap,
-  useApiLoadingStatus,
-  useMap,
-} from '@vis.gl/react-google-maps';
-import { useTheme } from 'next-themes';
-import { memo, useEffect, useMemo } from 'react';
+import 'mapbox-gl/dist/mapbox-gl.css';
 
-import { strokeFrom } from '@/components/technician-map';
+import { useTheme } from 'next-themes';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import Map, {
+  Layer,
+  Marker,
+  NavigationControl,
+  Source,
+  useMap,
+  type LayerProps,
+} from 'react-map-gl/mapbox';
+
+import { useMapStroke } from '@/components/map-colors';
+import { featureCollection, lineFeature } from '@/components/map-geometry';
+import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 
 /** A stop on the day's map: a visit, or a move-out or move-in the day is built around. */
 export interface DayMapStop {
@@ -31,13 +34,20 @@ const isBooked = (kind: DayMapStop['kind']) => kind === 'MOVE_OUT' || kind === '
  * One planned technician-day on the map: the technician's home, the day's stops
  * in driving order, and the road between them.
  *
- * Must be loaded with `ssr: false`, like the technician map: the Maps script
- * touches `window` and measures its container.
+ * Mapbox, as the rest of the console's maps now are. This one was the last
+ * Google map the office actually used, and it was the one that mattered: it is
+ * what a quarter is rebuilt against, and it was showing "This page can't load
+ * Google Maps correctly" over the day being read.
+ *
+ * Must be loaded with `ssr: false`: Mapbox GL touches `window` and measures its
+ * container, neither of which exists on a server.
  */
 
-const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
-const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
-const FALLBACK_CENTER = { lat: 29.76, lng: -95.37 };
+/** Houston, for the moment before a day has been framed. */
+const FALLBACK_VIEW = { longitude: -95.37, latitude: 29.76, zoom: 10 };
+
+/** A fitted day stops here, so a single stop does not dive to the rooftops. */
+const FIT_MAX_ZOOM = 15;
 
 type LatLng = readonly [number, number];
 
@@ -96,73 +106,35 @@ const HomePin = memo(function HomePin() {
   );
 });
 
-/** A colour a CSS rule gives, read once: Google takes a colour string, not a `var()`. */
-function strokeOf(className: string) {
-  const probe = document.createElement('span');
-  probe.className = className;
-  probe.style.display = 'none';
-  document.body.append(probe);
-  const color = strokeFrom(getComputedStyle(probe));
-  probe.remove();
-  return color;
-}
-
 /**
- * A line on the map: a white casing under the colour, as the technician map
- * draws a route. Straight segments are dashed, so nobody reads them as roads.
+ * Frames the day whenever a different day is shown.
+ *
+ * Under Google this was two steps — fit, then wait for the map to settle and
+ * pull the zoom back if it had dived too far. Mapbox takes `maxZoom` with the
+ * fit, so the second step and the listener it needed are gone.
  */
-function RouteLine({
-  path,
-  straight,
-  colorClass = 'map-route-line',
-  weight = 4,
-}: {
-  path: readonly LatLng[];
-  straight: boolean;
-  colorClass?: string;
-  weight?: number;
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!map || path.length < 2) return;
-    const color = strokeOf(colorClass);
-    const points = path.map(([lat, lng]) => ({ lat, lng }));
-    const casing = new google.maps.Polyline({ map, path: points, strokeColor: '#fff', strokeOpacity: 0.9, strokeWeight: weight + 3, zIndex: 1 });
-    const line = new google.maps.Polyline({
-      map,
-      path: points,
-      strokeColor: color,
-      strokeOpacity: straight ? 0 : 1,
-      strokeWeight: weight,
-      zIndex: 2,
-      ...(straight
-        ? { icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeWeight: 3, scale: 3 }, offset: '0', repeat: '14px' }] }
-        : {}),
-    });
-    return () => {
-      casing.setMap(null);
-      line.setMap(null);
-    };
-  }, [map, path, straight, colorClass, weight]);
-
-  return null;
-}
-
-/** Frames the day whenever a different day is shown. */
-function FitStops({ dayKey, points }: { dayKey: string; points: readonly { lat: number; lng: number }[] }) {
-  const map = useMap();
+function FitStops({ dayKey, points }: { dayKey: string; points: readonly LatLng[] }) {
+  const { current: map } = useMap();
 
   useEffect(() => {
     if (!map || !points.length) return;
-    const bounds = new google.maps.LatLngBounds();
-    for (const point of points) bounds.extend(point);
-    map.fitBounds(bounds, 56);
-    const listener = google.maps.event.addListenerOnce(map, 'idle', () => {
-      const zoom = map.getZoom();
-      if (zoom !== undefined && zoom > 15) map.setZoom(15);
-    });
-    return () => listener.remove();
+    let west = points[0]![1];
+    let east = points[0]![1];
+    let south = points[0]![0];
+    let north = points[0]![0];
+    for (const [lat, lng] of points) {
+      west = Math.min(west, lng);
+      east = Math.max(east, lng);
+      south = Math.min(south, lat);
+      north = Math.max(north, lat);
+    }
+    map.fitBounds(
+      [
+        [west, south],
+        [east, north],
+      ],
+      { padding: 56, maxZoom: FIT_MAX_ZOOM, duration: 0 },
+    );
     // The points are memoised on the day's stops, so this re-frames when a
     // different day is shown or the day's stops change -- not on every render.
   }, [map, dayKey, points]);
@@ -176,16 +148,6 @@ function Unavailable({ children }: { children: React.ReactNode }) {
       <p>{children}</p>
     </div>
   );
-}
-
-/** The map, or the reason there is not one -- a rejected key must not take the day's list with it. */
-function MapOrReason({ children }: { children: React.ReactNode }) {
-  const status = useApiLoadingStatus();
-  if (status === APILoadingStatus.AUTH_FAILURE)
-    return <Unavailable>Google rejected this key for this site, so the map cannot be drawn.</Unavailable>;
-  if (status === APILoadingStatus.FAILED)
-    return <Unavailable>Google Maps could not be loaded. Reloading usually clears it.</Unavailable>;
-  return <>{children}</>;
 }
 
 export function PlanDayMap({
@@ -208,6 +170,14 @@ export function PlanDayMap({
   onSelectStop?: (stopId: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  const dark = resolvedTheme === 'dark';
+  const routeColor = useMapStroke('map-route-line');
+  const doneColor = useMapStroke('map-route-done-line');
+  const casingColor = useMapStroke('map-route-casing');
+
+  const [failed, setFailed] = useState(false);
+  const onError = useCallback(() => setFailed(true), []);
+
   const placed = useMemo(
     () =>
       stops.filter(
@@ -217,10 +187,10 @@ export function PlanDayMap({
     [stops],
   );
   // Home in the frame too: the drive from it is part of the day as driven.
-  const points = useMemo(
+  const points = useMemo<LatLng[]>(
     () => [
-      ...(home ? [{ lat: home.latitude, lng: home.longitude }] : []),
-      ...placed.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })),
+      ...(home ? [[home.latitude, home.longitude] as LatLng] : []),
+      ...placed.map((stop) => [stop.latitude, stop.longitude] as LatLng),
     ],
     [home, placed],
   );
@@ -235,54 +205,122 @@ export function PlanDayMap({
     return homeStraight ? [[home.latitude, home.longitude], [placed[0]!.latitude, placed[0]!.longitude]] : [...homeGeometry];
   }, [home, homeGeometry, homeStraight, placed]);
 
-  if (!API_KEY) return <Unavailable>The map needs a Google Maps browser key (NEXT_PUBLIC_GOOGLE_MAPS_API_KEY).</Unavailable>;
+  /**
+   * Both lines in one source.
+   *
+   * Mapbox draws layers in the order they were added, so two separately mounted
+   * lines would stack by whichever happened to mount first. One source with a
+   * casing layer under a colour layer is the road-map idiom these were always
+   * drawn in, and it makes the order a fact rather than an accident.
+   *
+   * The drive from home is shown apart from the day's driving between its
+   * properties, so it is drawn in the grey of a finished leg.
+   */
+  const lines = useMemo(
+    () =>
+      featureCollection([
+        ...(homePath.length > 1
+          ? [lineFeature(homePath, { tone: 'done', w: 3, dash: homeStraight ? 1 : 0 })]
+          : []),
+        ...(path.length > 1 ? [lineFeature(path, { tone: 'route', w: 4, dash: straight ? 1 : 0 })] : []),
+      ]),
+    [homePath, homeStraight, path, straight],
+  );
+
+  const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
+  if (tokenProblem) return <Unavailable>{tokenProblem}</Unavailable>;
+  if (failed)
+    return (
+      <Unavailable>
+        Mapbox would not load this map. If it keeps happening, check that the token is still valid
+        and that this site is allowed on it.
+      </Unavailable>
+    );
+
+  const color: LayerProps['paint'] = {
+    'line-color': ['case', ['==', ['get', 'tone'], 'done'], doneColor, routeColor],
+    'line-width': ['get', 'w'],
+  };
 
   return (
-    <APIProvider apiKey={API_KEY}>
-      <MapOrReason>
-        <GoogleMap
-          className="h-full w-full rounded-lg"
-          colorScheme={resolvedTheme === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT}
-          defaultCenter={FALLBACK_CENTER}
-          defaultZoom={10}
-          gestureHandling="greedy"
-          mapId={MAP_ID}
-          mapTypeControl={false}
-          streetViewControl={false}
-        >
-          <FitStops dayKey={dayKey} points={points} />
-          {/* The drive from home is shown apart from the day's driving between
-              its properties, so it is drawn in the grey of a finished leg, from
-              the "From" pin to the first property, under the day's route. */}
-          <RouteLine colorClass="map-route-done-line" path={homePath} straight={homeStraight} weight={3} />
-          <RouteLine path={path} straight={straight} />
-          {home ? (
-            <AdvancedMarker
-              position={{ lat: home.latitude, lng: home.longitude }}
-              title={`From: ${home.address ?? 'the technician’s home'}`}
-              zIndex={5}
+    <Map
+      initialViewState={FALLBACK_VIEW}
+      mapStyle={dark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/streets-v12'}
+      mapboxAccessToken={MAPBOX_TOKEN}
+      onError={onError}
+      style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
+    >
+      <FitStops dayKey={dayKey} points={points} />
+
+      <Source data={lines} id="day-route" type="geojson">
+        {/* A pale casing under the colour: a single stroke the width of a
+            street vanishes into the street it follows. */}
+        <Layer
+          id="day-route-casing"
+          layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+          paint={{
+            'line-color': casingColor,
+            'line-width': ['+', ['get', 'w'], 3],
+            'line-opacity': 0.9,
+          }}
+          type="line"
+        />
+        {/* Straight segments are dashed, so nobody reads them as roads. Two
+            layers rather than one, because `line-dasharray` is a property of
+            the layer and cannot be read from the shape being drawn. */}
+        <Layer
+          filter={['==', ['get', 'dash'], 0]}
+          id="day-route-line"
+          layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+          paint={color}
+          type="line"
+        />
+        <Layer
+          filter={['==', ['get', 'dash'], 1]}
+          id="day-route-straight"
+          layout={{ 'line-cap': 'butt', 'line-join': 'round' }}
+          paint={{ ...color, 'line-dasharray': [1.4, 1.2] }}
+          type="line"
+        />
+      </Source>
+
+      {home ? (
+        <Marker anchor="bottom" latitude={home.latitude} longitude={home.longitude} style={{ zIndex: 5 }}>
+          <span title={`From: ${home.address ?? 'the technician’s home'}`}>
+            <HomePin />
+          </span>
+        </Marker>
+      ) : null}
+
+      {placed.map((stop, index) => {
+        // A move-out or move-in is its own inspection, not one of the plan's visits: nothing to open here.
+        const opens = Boolean(onSelectStop) && !isBooked(stop.kind);
+        return (
+          <Marker
+            anchor="bottom"
+            key={stop.id}
+            latitude={stop.latitude}
+            longitude={stop.longitude}
+            onClick={
+              opens
+                ? (event) => {
+                    event.originalEvent.stopPropagation();
+                    onSelectStop?.(stop.id);
+                  }
+                : undefined
+            }
+            style={{ zIndex: 10 + index }}
+          >
+            <span
+              title={`${stop.positionInDay ?? index + 1}. ${stop.kind === 'MOVE_OUT' ? 'Move-out: ' : stop.kind === 'MOVE_IN' ? 'Move-in: ' : ''}${stop.address ?? 'Unknown address'}${opens ? ' (open its details)' : ''}`}
             >
-              <HomePin />
-            </AdvancedMarker>
-          ) : null}
-          {placed.map((stop, index) => {
-            // A move-out or move-in is its own inspection, not one of the plan's visits: nothing to open here.
-            const opens = Boolean(onSelectStop) && !isBooked(stop.kind);
-            return (
-              <AdvancedMarker
-                clickable={opens}
-                key={stop.id}
-                onClick={opens ? () => onSelectStop?.(stop.id) : undefined}
-                position={{ lat: stop.latitude, lng: stop.longitude }}
-                title={`${stop.positionInDay ?? index + 1}. ${stop.kind === 'MOVE_OUT' ? 'Move-out: ' : stop.kind === 'MOVE_IN' ? 'Move-in: ' : ''}${stop.address ?? 'Unknown address'}${opens ? ' (open its details)' : ''}`}
-                zIndex={10 + index}
-              >
-                <StopPin kind={stop.kind} order={stop.positionInDay ?? index + 1} />
-              </AdvancedMarker>
-            );
-          })}
-        </GoogleMap>
-      </MapOrReason>
-    </APIProvider>
+              <StopPin kind={stop.kind} order={stop.positionInDay ?? index + 1} />
+            </span>
+          </Marker>
+        );
+      })}
+
+      <NavigationControl position="top-right" />
+    </Map>
   );
 }

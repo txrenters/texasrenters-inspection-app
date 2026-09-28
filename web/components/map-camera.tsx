@@ -3,7 +3,7 @@
 import type { PropertyPosition } from '@texasrenters/shared';
 import { useMap } from 'react-map-gl/mapbox';
 import type { MapRef } from 'react-map-gl/mapbox';
-import { useCallback, useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 /**
  * Who moves the map: the reader, or the map itself.
@@ -43,22 +43,6 @@ const PROPERTY_ZOOM = 18;
  * here.
  */
 const FIT_MAX_ZOOM = 15;
-
-/**
- * How long after the map moves itself a camera change is still its own.
- *
- * Google animates a pan, and `center_changed` fires on every frame of it. A
- * reader who happens to click during those frames has not moved anything.
- */
-const AUTOMATIC_MOVE_MS = 1_500;
-
-/**
- * How long after the reader touches the map a camera change counts as theirs.
- *
- * Long enough to cover a click on Google's own zoom buttons -- the zoom lands on
- * the click, after the pointer is already up -- and a double-click.
- */
-const GESTURE_WINDOW_MS = 800;
 
 /**
  * Marks this console's own controls inside the map: Re-center and the panel
@@ -117,16 +101,13 @@ function fitTo(map: MapRef, points: readonly [number, number][], padding: number
  *
  * Mapbox says. Every camera event carries `originalEvent` when a person caused
  * it and nothing when the map moved itself, so the question is answered rather
- * than inferred, and the window, the arming and the automatic clock all go.
- *
- * `automaticUntil` stays in the signature and is deliberately unused: the
- * caller still marks its own moves, and taking that apart is a change to the
- * camera's behaviour rather than to how it is drawn.
+ * than inferred — and the gesture window, the arming, and the clock that marked
+ * the map's own moves are all gone with it. A fly-to can no longer be mistaken
+ * for a drag, and a reader who clicks during one no longer loses their view.
  */
 export function useReaderMovesCamera(
   map: MapRef | null | undefined,
   onReaderMoved: () => void,
-  _automaticUntil: RefObject<number>,
 ) {
   useEffect(() => {
     if (!map) return;
@@ -197,7 +178,6 @@ export function CameraDirector({
    * trade.
    */
   const { current: map } = useMap();
-  const automaticUntil = useRef(0);
   const readerHasMoved = useRef(readerMoved);
   readerHasMoved.current = readerMoved;
   const latest = useRef({ fallback, fitKey, followed, points, properties });
@@ -205,19 +185,14 @@ export function CameraDirector({
   /** The `fitKey` the overview was last framed for. */
   const framedFor = useRef<string | null>(null);
 
-  const markAutomatic = useCallback(() => {
-    automaticUntil.current = Date.now() + AUTOMATIC_MOVE_MS;
-  }, []);
-
-  useReaderMovesCamera(map, onReaderMoved, automaticUntil);
+  useReaderMovesCamera(map, onReaderMoved);
 
   const frameOverview = useCallback(() => {
     const { fitKey: key, points: framed } = latest.current;
     if (!map || !framed.length) return;
     framedFor.current = key;
-    markAutomatic();
     fitTo(map, framed, 48);
-  }, [map, markAutomatic]);
+  }, [map]);
 
   const key = focusKey(focus);
 
@@ -228,12 +203,10 @@ export function CameraDirector({
 
     if (focus.kind === 'TECHNICIAN') {
       if (position) {
-        markAutomatic();
         map.easeTo({ center: literal(position), zoom: FOLLOW_ZOOM });
       } else if (stops.length) {
         // Not reporting yet, but they have work: framing it answers "where is
         // this person working" when "where are they" has no answer.
-        markAutomatic();
         fitTo(map, stops, 64);
       }
       return;
@@ -242,7 +215,6 @@ export function CameraDirector({
     if (focus.kind === 'PROPERTY') {
       const building = buildings.find((entry) => entry.id === focus.propertyId);
       if (!building) return;
-      markAutomatic();
       map.easeTo({ center: literal(building), zoom: PROPERTY_ZOOM });
       return;
     }
@@ -252,7 +224,7 @@ export function CameraDirector({
     if (!readerHasMoved.current) frameOverview();
     // `focus` itself is a new object on every selection render; `key` is its
     // identity, and the honest trigger.
-  }, [map, key, recenterRequest, markAutomatic, frameOverview]);
+  }, [map, key, recenterRequest, frameOverview]);
 
   // The overview again when who or what is on the map changes -- somebody came
   // on shift, the properties arrived -- and never when anybody merely moved.
@@ -268,12 +240,11 @@ export function CameraDirector({
   useEffect(() => {
     const position = latest.current.followed;
     if (!map || focus.kind !== 'TECHNICIAN' || readerHasMoved.current || !position) return;
-    markAutomatic();
     // Pans without touching the zoom, which is the reader's.
     map.easeTo({ center: literal(position) });
     // On where they are, as a string: the position object is rebuilt on every
     // refetch whether or not the technician moved.
-  }, [map, followedAt, markAutomatic]);
+  }, [map, followedAt]);
 
   return null;
 }

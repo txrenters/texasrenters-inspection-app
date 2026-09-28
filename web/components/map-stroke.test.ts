@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { strokeFrom } from './technician-map';
+import { strokeFrom } from './map-colors';
 
 /**
  * Why the route line was black no matter what the token said.

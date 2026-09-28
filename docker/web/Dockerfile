@@ -42,25 +42,17 @@ ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
 ARG NEXT_PUBLIC_APP_VERSION
 ENV NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION
 ARG NEXT_PUBLIC_ENABLE_DEMO_DATA=false
-# The Google Maps browser key and the styled map it draws on.
+# Mapbox, which draws every map in this console.
 #
-# Public by nature: both are inlined into the bundle and visible to anyone who
-# reads the page, which is true of every Maps browser key. Google's answer is
-# HTTP referrer restrictions rather than secrecy -- restrict the key to this
-# console's hosts, because an unrestricted one is a key anybody can spend.
+# A `pk.` token is public by design -- it ships inside the JavaScript bundle and
+# anyone reading the page can see it -- so the protection is a URL restriction
+# in the Mapbox account, not secrecy.
 #
-# No fallback. A wrong key draws a grey rectangle with an error only the
-# browser console shows; an absent one makes the map say what is missing.
-ARG NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
-ENV NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
-ARG NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
-ENV NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=$NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
-
-# Mapbox, which draws the plan's day groups.
+# **It has to be the `pk.` one.** An `sk.` token is a secret key: browsers
+# refuse it, so every map draws as an empty rectangle, and putting it here
+# publishes it to every visitor. That happened once and cost a revoked key.
 #
-# A `pk.` token is public by design -- it ships in the bundle like the Maps key
-# above -- so the protection is a URL restriction in the Mapbox account, not
-# secrecy. Baked in here because a NEXT_PUBLIC_* value is frozen at build: it
+# No fallback. Baked in because a NEXT_PUBLIC_* value is frozen at build: it
 # cannot be corrected later over ssh, only by building again.
 ARG NEXT_PUBLIC_MAPBOX_TOKEN
 ENV NEXT_PUBLIC_MAPBOX_TOKEN=$NEXT_PUBLIC_MAPBOX_TOKEN
