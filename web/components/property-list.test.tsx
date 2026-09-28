@@ -28,6 +28,7 @@ function makeProperties(count: number): PropertyPosition[] {
     enterRadiusMeters: 40,
     exitRadiusMeters: 60,
     geofenceMoved: false,
+    isDemo: false,
   }));
 }
 
@@ -148,5 +149,48 @@ describe('selecting', () => {
     rerender(<PropertyList onSelect={onSelect} properties={ALL.slice(0, 3)} selectedId="p0" />);
     fireEvent.click(screen.getByText('Property 0000'));
     expect(onSelect).toHaveBeenLastCalledWith(null);
+  });
+});
+
+/**
+ * A demo property's address is fictional and its pin sits in the middle of the
+ * service area. This list is how somebody arrives at one property, so it is
+ * where an unmarked demo property would become a technician's wasted drive.
+ */
+describe('marking a demo property', () => {
+  const withDemo = () => {
+    const rows = makeProperties(3);
+    return [{ ...rows[0]!, name: 'Demo Property 1', isDemo: true }, rows[1]!, rows[2]!];
+  };
+
+  it('badges it', () => {
+    stubObserver();
+    render(<PropertyList onSelect={() => {}} properties={withDemo()} selectedId={null} />);
+    expect(screen.getByText('Demo')).toBeInTheDocument();
+  });
+
+  it('badges only the demo row', () => {
+    // The badge has to mean something: a list where every row said Demo would be
+    // no better than one where none did.
+    stubObserver();
+    render(<PropertyList onSelect={() => {}} properties={withDemo()} selectedId={null} />);
+    expect(screen.getAllByText('Demo')).toHaveLength(1);
+  });
+
+  it('leaves a list of real properties unmarked', () => {
+    stubObserver();
+    render(<PropertyList onSelect={() => {}} properties={makeProperties(3)} selectedId={null} />);
+    expect(screen.queryByText('Demo')).toBeNull();
+  });
+
+  it('keeps the row selectable, and still reports its id', () => {
+    // Marked, not disabled — the point of a demo property is that somebody can
+    // use it.
+    stubObserver();
+    const onSelect = vi.fn();
+    render(<PropertyList onSelect={onSelect} properties={withDemo()} selectedId={null} />);
+
+    fireEvent.click(screen.getByText('Demo Property 1'));
+    expect(onSelect).toHaveBeenCalledWith('p0');
   });
 });

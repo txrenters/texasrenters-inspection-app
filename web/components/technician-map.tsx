@@ -28,6 +28,7 @@ import { useMapFailure } from '@/components/map-error';
 import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { circleFeature, featureCollection, lineFeature } from '@/components/map-geometry';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
+import { Badge } from '@/components/ui/badge';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
 import {
   clusterByGrid,
@@ -870,6 +871,16 @@ const PropertyLayer = memo(function PropertyLayer({
                 {single ? (
                   <>
                     <span className="font-medium">{single.name}</span>
+                    {/* Said on the pin as well as in the list, because a reader
+                     * who arrived by clicking the map never saw the list. The
+                     * address is fictional and sits in the middle of the service
+                     * area, so an unmarked pin is one somebody routes to. */}
+                    {single.isDemo ? (
+                      <>
+                        {' '}
+                        <Badge variant="warning">Demo</Badge>
+                      </>
+                    ) : null}
                     <br />
                     {single.addressLine1}
                     {single.city ? `, ${single.city}` : null}

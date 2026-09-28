@@ -8,6 +8,7 @@ import {
   booksAnyService,
   inspectionSeedsStandardLayout,
   isBookableInspectionType,
+  isDemoProperty,
   layoutAreasFor,
   visitServicesProblems,
   type AdminProperty,
@@ -217,6 +218,15 @@ function CreateInspectionForm() {
           searchText: [item.addressLine1, item.addressLine2, item.city, item.state, item.postalCode]
             .filter(Boolean)
             .join(' '),
+          /**
+           * This is the form the badge matters most on.
+           *
+           * Booking a visit at a demo property sends a technician to an address
+           * that does not exist, and the picker offers it in the same list as
+           * 570 real homes. The badge stays on the trigger after the choice is
+           * made, so it is still on screen at the moment somebody submits.
+           */
+          badge: isDemoProperty(item) ? 'Demo' : undefined,
         };
       }),
     [propertyRecords],
