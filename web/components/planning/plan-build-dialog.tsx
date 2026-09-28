@@ -26,6 +26,8 @@ export interface PlanBuildChoice {
   technicianIds: string[];
   /** `YYYY-MM-DD`: fifteen days early, on time, or fifteen days late. */
   startsOn: string;
+  /** Lay the visits already published out again, moving their booked dates. */
+  movePublishedVisits: boolean;
 }
 
 /**
@@ -70,6 +72,10 @@ export function PlanBuildDialog({
   // What the coordinator changed; until then, the plan's choice or the crew.
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const [start, setStart] = useState<PlanStartOption['value'] | null>(null);
+  // Off unless asked for. Moving a published visit changes a date the office
+  // has already told Jobber about, which is not something a rebuild should do
+  // because somebody clicked the usual button.
+  const [movePublished, setMovePublished] = useState(false);
 
   const listed = useMemo(() => technicians.data ?? [], [technicians.data]);
   const initial = useMemo(() => {
@@ -83,6 +89,7 @@ export function PlanBuildDialog({
     if (!next) {
       setPicked(null);
       setStart(null);
+      setMovePublished(false);
     }
     onOpenChange(next);
   };
@@ -97,9 +104,11 @@ export function PlanBuildDialog({
       // In the list's order -- the crew's, then by name -- which is the order the zones go round.
       technicianIds: listed.filter((technician) => selected.has(technician.id)).map((technician) => technician.id),
       startsOn: chosenStart.date,
+      movePublishedVisits: rebuild && movePublished,
     });
     setPicked(null);
     setStart(null);
+    setMovePublished(false);
   };
   const count = listed.filter((technician) => selected.has(technician.id)).length;
 
@@ -181,6 +190,32 @@ export function PlanBuildDialog({
             Days before the quarter take its first month’s visits. The second and third months keep their own.
           </FieldDescription>
         </fieldset>
+
+        {/* Only on a rebuild. On a first build there is nothing published to
+            move, and an option that can never do anything is a question the
+            reader has to answer for no reason. */}
+        {rebuild ? (
+          <fieldset className="grid min-w-0 gap-2">
+            <legend className="mb-2 text-sm font-medium">Visits already published</legend>
+            <label className="hover:bg-accent/60 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2">
+              <Checkbox
+                checked={movePublished}
+                className="mt-0.5"
+                onCheckedChange={(checked) => setMovePublished(checked === true)}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">Lay published visits out again</span>
+                <span className="text-muted-foreground block text-xs">
+                  Their dates move with the rest of the quarter, and each one is rescheduled in Jobber. Left
+                  off, they stay on the day they were published and the rebuild works around them.
+                </span>
+              </span>
+            </label>
+            <FieldDescription>
+              A visit already inspected is never moved, whichever way this is set.
+            </FieldDescription>
+          </fieldset>
+        ) : null}
 
         <DialogFooter>
           <Button onClick={() => close(false)} type="button" variant="outline">
