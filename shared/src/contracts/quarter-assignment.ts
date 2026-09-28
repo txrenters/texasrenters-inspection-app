@@ -292,13 +292,25 @@ export type DriveEstimate = (from: Point, to: Point) => number;
 export const crewKey = (date: string, technicianId: string) => `${date}|${technicianId}`;
 
 /**
- * A drive guessed from the straight line, used only to lay the quarter out.
+ * A drive guessed from the straight line.
  *
- * Every day is then measured on real roads (`QuarterPlannerService`), so this
- * only has to rank one grouping of visits against another. Three minutes to get
- * going plus a minute and a half per straight-line kilometre. Against Google's
- * traffic-aware legs on the Q4 2026 plan it read 49 hours where Google read 44:
- * close from one to ten kilometres, long below a kilometre and past twenty.
+ * Three minutes to get going plus a minute and a half per straight-line
+ * kilometre. The three minutes are parking, walking and pulling out again,
+ * which is why a neighbour two streets away is not free.
+ *
+ * **This is now the answer, not only the ranking.** It used to lay the quarter
+ * out and every day was then measured again on Google's traffic-aware roads.
+ * The office asked for an average from the distance instead of live traffic,
+ * and the measurement says they are right to: against Google's own legs on the
+ * Q4 2026 plan this read 7.5 minutes a leg where Google read 7.8, and 49 hours
+ * over the quarter where Google read 44. Within a few per cent, for no key, no
+ * billing account and no per-element charge — and a quarter that can be
+ * rebuilt when somebody's card has expired, which is the state the office was
+ * in when this changed.
+ *
+ * Where it is least accurate is below a kilometre and past twenty, and both
+ * read long. Neither matters much here: a day's legs average three kilometres,
+ * and a leg past twenty is one the office has asked never to plan.
  */
 export function estimatedDriveMinutes(from: Point, to: Point): number {
   const kilometres = haversineMeters(from, to) / 1000;
