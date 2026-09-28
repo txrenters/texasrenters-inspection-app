@@ -130,7 +130,7 @@ describe('redrawing a route', () => {
   it('draws once for a day that has not changed', async () => {
     const { prisma } = day(['a', 'b']);
     const { client, calls } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await service.planDay('org', 'tech', DAY);
     await service.planDay('org', 'tech', DAY);
@@ -144,7 +144,7 @@ describe('redrawing a route', () => {
   it('draws again when a stop is finished', async () => {
     const { prisma, state } = day(['a', 'b']);
     const { client, calls } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await service.planDay('org', 'tech', DAY);
     state.stops = ['b'];
@@ -161,7 +161,7 @@ describe('redrawing a route', () => {
      */
     const { prisma } = day(['a', 'b']);
     const { client, calls } = google('fail');
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await service.planDay('org', 'tech', DAY);
     await service.planDay('org', 'tech', DAY);
@@ -172,7 +172,7 @@ describe('redrawing a route', () => {
   it('keeps separate days separate', async () => {
     const { prisma } = day(['a', 'b']);
     const { client, calls } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await service.planDay('org', 'tech', DAY);
     await service.planDay('org', 'tech', new Date(NOW + DAY_MS));
@@ -183,7 +183,7 @@ describe('redrawing a route', () => {
   it('starts from home and says so', async () => {
     const { prisma } = day(['a']);
     const { client } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     const route = await service.planDay('org', 'tech', DAY);
 
@@ -198,7 +198,7 @@ describe('redrawing a route', () => {
      */
     const { prisma, state } = day(['a', 'b']);
     const { client, calls } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     state.ping = { ...HOME, recordedAt: new Date(NOW - MINUTE) };
     expect((await service.planDay('org', 'tech', DAY)).originKind).toBe('LIVE');
@@ -215,7 +215,7 @@ describe('which day a route belongs to', () => {
   it('does not start an earlier day from where somebody is now', async () => {
     const { prisma, state } = day(['a', 'b']);
     const { client } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
     state.ping = { latitude: 29.7, longitude: -95.3, recordedAt: new Date(NOW - MINUTE) };
 
     const today = await service.planDay('org', 'tech', DAY);
@@ -233,7 +233,7 @@ describe('two callers at once', () => {
     // coincide on a day needing a redraw, that must still be one request.
     const { prisma } = day(['a', 'b']);
     const { client, calls } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await Promise.all([
       service.planDay('org', 'tech', DAY),
@@ -263,7 +263,7 @@ describe('two callers at once', () => {
       await gate;
       return matrix(points);
     };
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     const first = service.planDay('org', 'tech', DAY);
     await started;
@@ -282,7 +282,7 @@ describe('how much is kept', () => {
   it('forgets the longest-untouched day rather than every day ever opened', async () => {
     const { prisma } = day(['a', 'b']);
     const { client, calls } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
     const dayNumber = (n: number) => new Date(NOW + n * DAY_MS);
 
     for (let n = 1; n <= MAX_DRAWN_ROUTES + 1; n += 1)

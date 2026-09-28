@@ -105,7 +105,7 @@ describe('a day with finished stops', () => {
   it('never routes back to a finished stop', async () => {
     const { prisma } = day(THE_DAY);
     const { client } = google();
-    const route = await new RouteService(prisma as never, osrmUnused, client as never).planDay(
+    const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
       'org',
       'tech',
       DAY,
@@ -117,7 +117,7 @@ describe('a day with finished stops', () => {
   it('keeps them as the day so far, in the order they were handed in', async () => {
     const { prisma } = day(THE_DAY);
     const { client } = google();
-    const route = await new RouteService(prisma as never, osrmUnused, client as never).planDay(
+    const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
       'org',
       'tech',
       DAY,
@@ -132,7 +132,7 @@ describe('a day with finished stops', () => {
   it('draws the drive already done from home, through them in that order', async () => {
     const { prisma } = day(THE_DAY);
     const { client, draws } = google();
-    const route = await new RouteService(prisma as never, osrmUnused, client as never).planDay(
+    const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
       'org',
       'tech',
       DAY,
@@ -145,7 +145,7 @@ describe('a day with finished stops', () => {
   it('does not ask Google for the history again while nothing new is finished', async () => {
     const { prisma } = day(THE_DAY);
     const { client, draws } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await service.planDay('org', 'tech', DAY);
     await service.planDay('org', 'tech', DAY);
@@ -159,7 +159,7 @@ describe('a day with finished stops', () => {
     // No home and one stop: nothing to join.
     const { prisma } = day(THE_DAY.slice(0, 2), null);
     const { client } = google();
-    const route = await new RouteService(prisma as never, osrmUnused, client as never).planDay(
+    const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
       'org',
       'tech',
       DAY,
@@ -172,7 +172,7 @@ describe('a day with finished stops', () => {
   it('still returns the history when the whole day is done', async () => {
     const { prisma } = day(THE_DAY.slice(1));
     const { client } = google();
-    const route = await new RouteService(prisma as never, osrmUnused, client as never).planDay(
+    const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
       'org',
       'tech',
       DAY,
@@ -190,7 +190,7 @@ describe("the map's list of the day", () => {
       { id: 'done', status: 'TECHNICIAN_SUBMITTED', submittedAt: '2026-09-14T15:05:00Z', latitude: 29.91 },
     ]);
     const { client } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     const [technician] = await service.assignmentsByTechnician('org', DAY);
 
