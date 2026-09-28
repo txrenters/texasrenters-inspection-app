@@ -1043,8 +1043,21 @@ export class QuarterPlannerService {
     // The home first, so row and column zero are the drives from and to it.
     const points: GeoPoint[] = home ? [home, ...stops] : stops;
     const offset = home ? 1 : 0;
-    const google = await this.google.matrix(points, businessInstant(crew.date, DAY_STARTS_AT));
-    const durations = google?.durations ?? (await this.osrm.durations(points));
+    /**
+     * Road times are asked for only when the office wants them.
+     *
+     * They asked for an average worked out from the distance rather than live
+     * traffic, and the numbers back it: on the Q4 2026 plan the straight-line
+     * estimate read 7.5 minutes a leg against Google's 7.8. What it buys is a
+     * quarter that can still be rebuilt when the Google account's billing has
+     * lapsed -- which is exactly where they were when this changed, with every
+     * map blank and every drive time gone.
+     *
+     * `PLANNING_ROAD_DRIVE_TIMES=true` puts Google and OSRM back in front.
+     */
+    const roadTimes = process.env.PLANNING_ROAD_DRIVE_TIMES === 'true';
+    const google = roadTimes ? await this.google.matrix(points, businessInstant(crew.date, DAY_STARTS_AT)) : null;
+    const durations = google?.durations ?? (roadTimes ? await this.osrm.durations(points) : null);
     if (durations) {
       const matrix: DayMatrix = {
         durations,
@@ -1059,19 +1072,38 @@ export class QuarterPlannerService {
       };
     }
 
-    // Straight-line: a real distance, and deliberately no seconds. We know how
-    // far apart the stops are; we do not know how long the drive takes.
+    /**
+     * Straight-line, and now with seconds on it.
+     *
+     * This used to return the distance and no time at all -- honest, and
+     * useless: a day with no drive time is a day the console cannot show, the
+     * capacity check cannot weigh and the office cannot compare. It was the
+     * fallback for an outage, so nobody minded; it is the ordinary path now,
+     * and a plan with no times would be no plan.
+     *
+     * The seconds come from `estimatedDriveMinutes`, which is the same
+     * function that laid the day out. That is deliberate: measuring with a
+     * different rule than the one that chose the grouping is how a day comes
+     * back over its own limit the moment it is measured.
+     */
     const metres = points.map((from) => points.map((to) => haversineMeters(from, to)));
+    const seconds = (from: GeoPoint, to: GeoPoint) => Math.round(estimatedDriveMinutes(from, to) * 60);
     const between = stops.map((_, from) => stops.map((__, to) => metres[from + offset]![to + offset]!));
     const order = dayOrder(between, home ? stops.map((_, to) => metres[0]![to + offset]!) : null, stops, home);
     const homeLeg = home && order.length ? metres[0]![order[0]! + offset]! : null;
+    const ordered = order.map((index) => stops[index]!);
+    // The first stop's leg is the drive from home, which is not counted
+    // against the day -- the same rule the road-time path follows.
+    const legs = ordered.map((stop, position) =>
+      position === 0 ? null : seconds(ordered[position - 1]!, stop),
+    );
     return {
       ...base,
-      stops: order.map((index) => stops[index]!),
-      legSeconds: order.map(() => null),
-      totalDriveSeconds: null,
+      stops: ordered,
+      legSeconds: legs,
+      totalDriveSeconds: legs.reduce((sum: number, leg) => sum + (leg ?? 0), 0),
       totalDriveMeters: pathCost(between, order),
-      homeDriveSeconds: null,
+      homeDriveSeconds: home && ordered.length ? seconds(home, ordered[0]!) : null,
       homeDriveMeters: homeLeg,
       durationSource: DriveTimeSource.HAVERSINE,
     };

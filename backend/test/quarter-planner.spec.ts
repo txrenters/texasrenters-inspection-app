@@ -86,6 +86,19 @@ const SETTINGS = {
 
 const Q4 = { year: 2026, quarter: 4 as const };
 
+/**
+ * Road times are opt-in now, and every test below this line was written when
+ * they were the default. Turning them on here keeps each one asking what it
+ * was written to ask; the ordinary estimate path gets its own block at the end.
+ */
+beforeEach(() => {
+  process.env.PLANNING_ROAD_DRIVE_TIMES = 'true';
+});
+
+afterEach(() => {
+  delete process.env.PLANNING_ROAD_DRIVE_TIMES;
+});
+
 const build = (
   stops: StopRow[],
   options: {
@@ -468,18 +481,25 @@ describe('routing a draft quarter', () => {
   });
 
   /**
-   * The important one. With no routing at all we know how far apart the stops
-   * are and *not* how long the drive takes — so the distance is real and the
-   * duration is null. A made-up duration is worse than an absent one.
+   * This asserted no duration at all, on the principle that a made-up one is
+   * worse than an absent one. That was right while straight-line was an outage
+   * path — and wrong once it became the ordinary one, because a day with no
+   * drive time is a day the console cannot show, the capacity check cannot
+   * weigh and the office cannot compare.
+   *
+   * What replaces it is not a guess: the estimate reads 7.5 minutes a leg
+   * against Google's 7.8 on the office's own Q4 plan. And `durationSource`
+   * still says HAVERSINE, so nothing downstream mistakes it for a road
+   * measurement — that part of the old principle is the part worth keeping.
    */
-  it('reports a distance but no duration when nothing can route', async () => {
+  it('estimates a duration from the distance when nothing can route, and says so', async () => {
     const { service, dayCreate } = build([stop('s1', 1), stop('s2', 2, 1)]);
 
     const summary = await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
 
     const day = dayCreate.mock.calls[0][0].data;
     expect(day.durationSource).toBe(DriveTimeSource.HAVERSINE);
-    expect(day.totalDriveSeconds).toBeNull();
+    expect(day.totalDriveSeconds).toBeGreaterThan(0);
     expect(day.totalDriveMeters).toBeGreaterThan(0);
     expect(summary.durationSource).toBe(DriveTimeSource.HAVERSINE);
   });
@@ -1372,5 +1392,82 @@ describe('a day routed from the technician’s home', () => {
     const day = dayCreate.mock.calls[0][0].data;
     expect(day.originKind).toBe(PlanOriginKind.FIRST_STOP);
     expect(day.homeDriveSeconds).toBeNull();
+  });
+});
+
+/**
+ * The ordinary path: an average worked out from the distance.
+ *
+ * The office asked for this rather than live traffic, and the measurement
+ * backs them — on their own Q4 plan the straight-line estimate read 7.5
+ * minutes a leg where Google read 7.8, and 49 hours over the quarter where
+ * Google read 44. What it buys is a quarter that can still be laid out and
+ * measured when the Google account's billing has lapsed, which is where the
+ * office was when this changed: every map blank and every drive time gone.
+ */
+describe('drive times worked out from the distance', () => {
+  beforeEach(() => {
+    // The default. The block above turns road times on; this is life without.
+    delete process.env.PLANNING_ROAD_DRIVE_TIMES;
+  });
+
+  it('asks neither Google nor OSRM', async () => {
+    const { service, google, osrm } = build([stop('s1', 1), stop('s2', 2, 1)], {
+      googleSeconds: fiveMinutes,
+      osrmDurations: [
+        [0, 300],
+        [300, 0],
+      ],
+    });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect(google.matrix).not.toHaveBeenCalled();
+    expect(osrm.durations).not.toHaveBeenCalled();
+  });
+
+  /** A day with no drive time is a day nothing downstream can use. */
+  it('still gives the day a duration, and marks where it came from', async () => {
+    const { service, dayCreate } = build([stop('s1', 1), stop('s2', 2, 1)], { googleSeconds: fiveMinutes });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.totalDriveSeconds).toBeGreaterThan(0);
+    expect(day.totalDriveMeters).toBeGreaterThan(0);
+    expect(day.durationSource).toBe(DriveTimeSource.HAVERSINE);
+    expect(summary.durationSource).toBe(DriveTimeSource.HAVERSINE);
+  });
+
+  /**
+   * Measured with the same function that laid the day out.
+   *
+   * Measuring by a different rule than the one that chose the grouping is how
+   * a day comes back over its own leg limit the moment it is measured — the
+   * office would see a plan that breaks a rule the planner had just applied.
+   */
+  it('measures with the rule that chose the grouping', async () => {
+    const { service, dayCreate } = build([stop('s1', 1), stop('s2', 2, 1)], { googleSeconds: fiveMinutes });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    const day = dayCreate.mock.calls[0][0].data;
+    // Three minutes of getting going plus a minute and a half a kilometre: a
+    // leg is never free, and never the five minutes Google was stubbed to say.
+    expect(day.totalDriveSeconds).toBeGreaterThanOrEqual(3 * 60);
+    expect(day.totalDriveSeconds).not.toBe(300);
+  });
+
+  /** Turning it back on is one variable, for a quarter worth the money. */
+  it('goes back to the roads when the office asks for them', async () => {
+    process.env.PLANNING_ROAD_DRIVE_TIMES = 'true';
+    const { service, google, dayCreate } = build([stop('s1', 1), stop('s2', 2, 1)], {
+      googleSeconds: fiveMinutes,
+    });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect(google.matrix).toHaveBeenCalled();
+    expect(dayCreate.mock.calls[0][0].data.durationSource).toBe(DriveTimeSource.GOOGLE_TRAFFIC_AWARE);
   });
 });
