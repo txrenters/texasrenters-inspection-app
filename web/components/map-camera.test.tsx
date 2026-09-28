@@ -12,9 +12,15 @@ import { CameraDirector, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from './map-c
  * that flies to the selected technician, and with nobody selected every
  * refetch re-fitted the whole patch -- so nobody could look at a street, or a
  * property, while a technician was driving.
+ *
+ * Written against Mapbox since the console left Google. The behaviour under
+ * test did not change; how the map is asked and what it reports back did.
+ * Mapbox takes a centre as `[longitude, latitude]` -- the other way round from
+ * Google -- and says whether a person caused a camera move, which the Google
+ * version had to infer from pointer and wheel events inside a time window.
  */
 
-type Handler = () => void;
+type Handler = (event: unknown) => void;
 
 function fakeMap() {
   const container = document.createElement('div');
@@ -22,28 +28,31 @@ function fakeMap() {
   const handlers = new Map<string, Set<Handler>>();
   return {
     container,
-    getDiv: () => container,
-    panTo: vi.fn(),
-    setZoom: vi.fn(),
-    getZoom: vi.fn(() => 12),
+    easeTo: vi.fn(),
     fitBounds: vi.fn(),
-    addListener: (event: string, handler: Handler) => {
+    getZoom: vi.fn(() => 12),
+    on: (event: string, handler: Handler) => {
       const set = handlers.get(event) ?? new Set<Handler>();
       set.add(handler);
       handlers.set(event, set);
-      return { remove: () => set.delete(handler) };
     },
-    /** What Google would fire. */
-    emit: (event: string) => {
-      for (const handler of handlers.get(event) ?? []) handler();
+    off: (event: string, handler: Handler) => {
+      handlers.get(event)?.delete(handler);
+    },
+    /**
+     * What Mapbox would fire. A camera event carries `originalEvent` when a
+     * person caused it and nothing at all when the map moved itself.
+     */
+    emit: (event: string, originalEvent?: unknown) => {
+      for (const handler of handlers.get(event) ?? []) handler({ originalEvent });
     },
   };
 }
 
 let map: ReturnType<typeof fakeMap>;
 
-vi.mock('@vis.gl/react-google-maps', () => ({
-  useMap: () => map,
+vi.mock('react-map-gl/mapbox', () => ({
+  useMap: () => ({ current: map }),
 }));
 
 const MOSES = 'tech-moses';
@@ -82,19 +91,10 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   map = fakeMap();
-  vi.stubGlobal('google', {
-    maps: {
-      LatLngBounds: class {
-        extend() {}
-      },
-      event: { addListenerOnce: vi.fn() },
-    },
-  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllGlobals();
   map.container.remove();
 });
 
@@ -102,8 +102,7 @@ describe('following a technician', () => {
   it('goes to them once when they are picked', () => {
     render(<CameraDirector {...props({ focus: following, followed: onTheFreeway })} />);
 
-    expect(map.panTo).toHaveBeenCalledWith({ lat: 29.5516, lng: -95.1449 });
-    expect(map.setZoom).toHaveBeenCalledWith(15);
+    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.1449, 29.5516], zoom: 15 });
   });
 
   it('does not move when their position is merely delivered again', () => {
@@ -111,8 +110,7 @@ describe('following a technician', () => {
     const { rerender } = render(
       <CameraDirector {...props({ focus: following, followed: onTheFreeway })} />,
     );
-    map.panTo.mockClear();
-    map.setZoom.mockClear();
+    map.easeTo.mockClear();
 
     rerender(
       <CameraDirector
@@ -126,20 +124,19 @@ describe('following a technician', () => {
       />,
     );
 
-    expect(map.panTo).not.toHaveBeenCalled();
-    expect(map.setZoom).not.toHaveBeenCalled();
+    expect(map.easeTo).not.toHaveBeenCalled();
   });
 
   it('keeps them in the middle as they drive, leaving the zoom alone', () => {
     const { rerender } = render(
       <CameraDirector {...props({ focus: following, followed: onTheFreeway })} />,
     );
-    map.setZoom.mockClear();
+    map.easeTo.mockClear();
 
     rerender(<CameraDirector {...props({ focus: following, followed: furtherUp })} />);
 
-    expect(map.panTo).toHaveBeenLastCalledWith({ lat: 29.5541, lng: -95.1421 });
-    expect(map.setZoom).not.toHaveBeenCalled();
+    // No `zoom` key at all: the zoom belongs to the reader once they have set it.
+    expect(map.easeTo).toHaveBeenLastCalledWith({ center: [-95.1421, 29.5541] });
   });
 
   it('stops following the moment the reader moves the map', () => {
@@ -148,25 +145,23 @@ describe('following a technician', () => {
       <CameraDirector {...props({ focus: following, followed: onTheFreeway, onReaderMoved })} />,
     );
 
-    vi.setSystemTime(NOW + 5_000);
-    map.emit('dragstart');
+    map.emit('dragstart', new PointerEvent('pointerdown'));
     expect(onReaderMoved).toHaveBeenCalled();
 
-    map.panTo.mockClear();
+    map.easeTo.mockClear();
     rerender(
       <CameraDirector
         {...props({ focus: following, followed: furtherUp, onReaderMoved, readerMoved: true })}
       />,
     );
-    expect(map.panTo).not.toHaveBeenCalled();
+    expect(map.easeTo).not.toHaveBeenCalled();
   });
 
   it('goes back to them, and zooms in again, on Re-center', () => {
     const { rerender } = render(
       <CameraDirector {...props({ focus: following, followed: onTheFreeway, readerMoved: true })} />,
     );
-    map.panTo.mockClear();
-    map.setZoom.mockClear();
+    map.easeTo.mockClear();
 
     rerender(
       <CameraDirector
@@ -174,8 +169,7 @@ describe('following a technician', () => {
       />,
     );
 
-    expect(map.panTo).toHaveBeenCalledWith({ lat: 29.5541, lng: -95.1421 });
-    expect(map.setZoom).toHaveBeenCalledWith(15);
+    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.1421, 29.5541], zoom: 15 });
   });
 
   it('frames their stops when they have not reported a position', () => {
@@ -192,67 +186,83 @@ describe('following a technician', () => {
     );
 
     expect(map.fitBounds).toHaveBeenCalled();
-    expect(map.panTo).not.toHaveBeenCalled();
+    expect(map.easeTo).not.toHaveBeenCalled();
+  });
+
+  it('never dives past the fit ceiling, however tight the day is', () => {
+    render(
+      <CameraDirector
+        {...props({
+          fallback: [
+            [29.53, -95.28],
+            [29.5301, -95.2801],
+          ],
+          focus: following,
+        })}
+      />,
+    );
+
+    // Mapbox takes the ceiling with the fit, so there is no second, racing
+    // correction the way there was under Google.
+    expect(map.fitBounds).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ maxZoom: 15 }),
+    );
   });
 });
 
 describe('telling the reader’s moves from the map’s own', () => {
   function renderFollowing(onReaderMoved = vi.fn()) {
     render(<CameraDirector {...props({ focus: following, followed: onTheFreeway, onReaderMoved })} />);
-    // Past the window in which the fly-to above is still the map's own move.
-    vi.setSystemTime(NOW + 5_000);
     return onReaderMoved;
   }
 
   it('counts a scroll-wheel zoom', () => {
     const onReaderMoved = renderFollowing();
 
-    map.container.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
+    map.emit('zoomstart', new WheelEvent('wheel'));
 
     expect(onReaderMoved).toHaveBeenCalledTimes(1);
   });
 
-  it('counts Google’s zoom buttons: a click, then the zoom', () => {
+  it('counts a drag, a rotate and a tilt', () => {
     const onReaderMoved = renderFollowing();
-    const zoomIn = document.createElement('button');
-    map.container.append(zoomIn);
 
-    zoomIn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    vi.setSystemTime(NOW + 5_200);
-    map.emit('zoom_changed');
+    map.emit('dragstart', new PointerEvent('pointerdown'));
+    map.emit('rotatestart', new PointerEvent('pointerdown'));
+    map.emit('pitchstart', new PointerEvent('pointerdown'));
 
-    expect(onReaderMoved).toHaveBeenCalledTimes(1);
+    expect(onReaderMoved).toHaveBeenCalledTimes(3);
   });
 
+  /**
+   * The whole reason the guesswork went. Under Google a fly-to fired the same
+   * events a drag did, and the only defence was a clock: anything within a
+   * second and a half of the map moving itself was assumed to be the map. A
+   * reader who happened to click during those frames lost their view anyway.
+   */
   it('does not count a camera change nobody touched the map for', () => {
     const onReaderMoved = renderFollowing();
 
-    map.emit('zoom_changed');
-    map.emit('center_changed');
-
-    expect(onReaderMoved).not.toHaveBeenCalled();
-  });
-
-  it('does not count the map’s own pan, even if the reader clicked during it', () => {
-    const onReaderMoved = vi.fn();
-    render(<CameraDirector {...props({ focus: following, followed: onTheFreeway, onReaderMoved })} />);
-
-    // Within the fly-to's own window.
-    map.container.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    map.emit('center_changed');
+    map.emit('zoomstart');
+    map.emit('dragstart');
+    map.emit('pitchstart');
 
     expect(onReaderMoved).not.toHaveBeenCalled();
   });
 
   it('does not count touching this console’s own controls on the map', () => {
     const onReaderMoved = renderFollowing();
+    const panel = document.createElement('div');
+    panel.setAttribute(MAP_OVERLAY_ATTRIBUTE, '');
     const recenter = document.createElement('button');
-    recenter.setAttribute(MAP_OVERLAY_ATTRIBUTE, '');
-    map.container.append(recenter);
+    panel.append(recenter);
+    map.container.append(panel);
 
-    recenter.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    recenter.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
-    map.emit('center_changed');
+    // Mapbox reports the element the gesture actually started on, so a press on
+    // Re-center is recognisably not a press on the map.
+    map.emit('dragstart', { target: recenter });
+    map.emit('zoomstart', { target: recenter });
 
     expect(onReaderMoved).not.toHaveBeenCalled();
   });
@@ -330,11 +340,10 @@ describe('a picked property', () => {
     const focus: CameraFocus = { kind: 'PROPERTY', propertyId: property.id };
     const { rerender } = render(<CameraDirector {...props({ focus, properties: [property] })} />);
 
-    expect(map.panTo).toHaveBeenCalledWith({ lat: 29.53, lng: -95.28 });
-    expect(map.setZoom).toHaveBeenCalledWith(18);
+    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.28, 29.53], zoom: 18 });
 
     rerender(<CameraDirector {...props({ focus: { ...focus }, properties: [{ ...property }] })} />);
 
-    expect(map.panTo).toHaveBeenCalledTimes(1);
+    expect(map.easeTo).toHaveBeenCalledTimes(1);
   });
 });

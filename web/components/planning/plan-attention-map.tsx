@@ -1,17 +1,12 @@
 'use client';
 
-import {
-  AdvancedMarker,
-  APIProvider,
-  APILoadingStatus,
-  ColorScheme,
-  Map as GoogleMap,
-  useApiLoadingStatus,
-  useMap,
-} from '@vis.gl/react-google-maps';
-import { useTheme } from 'next-themes';
-import { memo, useEffect, useMemo } from 'react';
+import 'mapbox-gl/dist/mapbox-gl.css';
 
+import { useTheme } from 'next-themes';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import Map, { Marker, NavigationControl, useMap } from 'react-map-gl/mapbox';
+
+import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { attentionText, type AttentionKind } from '@/lib/planning';
 
 /**
@@ -24,13 +19,17 @@ import { attentionText, type AttentionKind } from '@/lib/planning';
  * see which day each one is near. A pin opens the visit, where the day and the
  * technician are set.
  *
- * Must be loaded with `ssr: false`, like the day's map: the Maps script touches
+ * Mapbox, as the rest of the console's maps now are.
+ *
+ * Must be loaded with `ssr: false`, like the day's map: Mapbox GL touches
  * `window` and measures its container.
  */
 
-const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
-const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
-const FALLBACK_CENTER = { lat: 29.76, lng: -95.37 };
+/** Houston, for the moment before the pins have been framed. */
+const FALLBACK_VIEW = { longitude: -95.37, latitude: 29.76, zoom: 9 };
+
+/** A fitted set stops here, so one lone visit does not dive to the rooftops. */
+const FIT_MAX_ZOOM = 15;
 
 /** A visit on the map: one waiting for something, or one already planned. */
 export interface AttentionMapStop {
@@ -79,20 +78,34 @@ const PlannedDot = memo(function PlannedDot() {
   );
 });
 
-/** Frames every pin whenever the set of them changes. */
-function FitAll({ points }: { points: readonly { lat: number; lng: number }[] }) {
-  const map = useMap();
+/**
+ * Frames every pin whenever the set of them changes.
+ *
+ * Mapbox takes `maxZoom` with the fit, so the follow-up listener Google needed
+ * to pull an over-eager zoom back is gone.
+ */
+function FitAll({ points }: { points: readonly (readonly [number, number])[] }) {
+  const { current: map } = useMap();
 
   useEffect(() => {
     if (!map || !points.length) return;
-    const bounds = new google.maps.LatLngBounds();
-    for (const point of points) bounds.extend(point);
-    map.fitBounds(bounds, 56);
-    const listener = google.maps.event.addListenerOnce(map, 'idle', () => {
-      const zoom = map.getZoom();
-      if (zoom !== undefined && zoom > 15) map.setZoom(15);
-    });
-    return () => listener.remove();
+    let west = points[0]![1];
+    let east = points[0]![1];
+    let south = points[0]![0];
+    let north = points[0]![0];
+    for (const [lat, lng] of points) {
+      west = Math.min(west, lng);
+      east = Math.max(east, lng);
+      south = Math.min(south, lat);
+      north = Math.max(north, lat);
+    }
+    map.fitBounds(
+      [
+        [west, south],
+        [east, north],
+      ],
+      { padding: 56, maxZoom: FIT_MAX_ZOOM, duration: 0 },
+    );
   }, [map, points]);
 
   return null;
@@ -104,16 +117,6 @@ function Unavailable({ children }: { children: React.ReactNode }) {
       <p>{children}</p>
     </div>
   );
-}
-
-/** The map, or the reason there is not one -- a rejected key must not take the list with it. */
-function MapOrReason({ children }: { children: React.ReactNode }) {
-  const status = useApiLoadingStatus();
-  if (status === APILoadingStatus.AUTH_FAILURE)
-    return <Unavailable>Google rejected this key for this site, so the map cannot be drawn.</Unavailable>;
-  if (status === APILoadingStatus.FAILED)
-    return <Unavailable>Google Maps could not be loaded. Reloading usually clears it.</Unavailable>;
-  return <>{children}</>;
 }
 
 export function PlanAttentionMap({
@@ -128,55 +131,77 @@ export function PlanAttentionMap({
   onSelectStop?: (stopId: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  const dark = resolvedTheme === 'dark';
+  const [failed, setFailed] = useState(false);
+  const onError = useCallback(() => setFailed(true), []);
+
   const needing = useMemo(() => placedOnly(stops), [stops]);
   const behind = useMemo(() => placedOnly(planned), [planned]);
   // The frame follows the visits that need attention: the plan behind them is
   // context, and a day at the other end of the patch must not shrink them away.
-  const points = useMemo(() => needing.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })), [needing]);
+  const points = useMemo(
+    () => needing.map((stop) => [stop.latitude, stop.longitude] as const),
+    [needing],
+  );
 
-  if (!API_KEY) return <Unavailable>The map needs a Google Maps browser key (NEXT_PUBLIC_GOOGLE_MAPS_API_KEY).</Unavailable>;
+  const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
+  if (tokenProblem) return <Unavailable>{tokenProblem}</Unavailable>;
+  if (failed)
+    return (
+      <Unavailable>
+        Mapbox would not load this map. If it keeps happening, check that the token is still valid
+        and that this site is allowed on it.
+      </Unavailable>
+    );
 
   return (
-    <APIProvider apiKey={API_KEY}>
-      <MapOrReason>
-        <GoogleMap
-          className="h-full w-full rounded-lg"
-          colorScheme={resolvedTheme === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT}
-          defaultCenter={FALLBACK_CENTER}
-          defaultZoom={9}
-          gestureHandling="greedy"
-          mapId={MAP_ID}
-          mapTypeControl={false}
-          streetViewControl={false}
+    <Map
+      initialViewState={FALLBACK_VIEW}
+      mapStyle={dark ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/streets-v12'}
+      mapboxAccessToken={MAPBOX_TOKEN}
+      onError={onError}
+      style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
+    >
+      <FitAll points={points} />
+      {behind.map((stop) => (
+        <Marker
+          anchor="center"
+          key={stop.id}
+          latitude={stop.latitude}
+          longitude={stop.longitude}
+          style={{ zIndex: 1 }}
         >
-          <FitAll points={points} />
-          {behind.map((stop) => (
-            <AdvancedMarker
-              clickable={false}
-              key={stop.id}
-              position={{ lat: stop.latitude, lng: stop.longitude }}
-              title={`${stop.address ?? 'Unknown address'} · planned`}
-              zIndex={1}
-            >
-              <PlannedDot />
-            </AdvancedMarker>
-          ))}
-          {needing.map((stop, index) => (
-            <AdvancedMarker
-              clickable={Boolean(onSelectStop)}
-              key={stop.id}
-              onClick={onSelectStop ? () => onSelectStop(stop.id) : undefined}
-              position={{ lat: stop.latitude, lng: stop.longitude }}
-              title={`${stop.address ?? 'Unknown address'}${stop.city ? `, ${stop.city}` : ''} · ${attentionText(
-                stop.attention ?? 'NO_DAY',
-              )}${onSelectStop ? ' (open its details)' : ''}`}
-              zIndex={10 + index}
-            >
-              <NeedsPin kind={stop.attention ?? 'NO_DAY'} />
-            </AdvancedMarker>
-          ))}
-        </GoogleMap>
-      </MapOrReason>
-    </APIProvider>
+          <span title={`${stop.address ?? 'Unknown address'} · planned`}>
+            <PlannedDot />
+          </span>
+        </Marker>
+      ))}
+      {needing.map((stop, index) => (
+        <Marker
+          anchor="bottom"
+          key={stop.id}
+          latitude={stop.latitude}
+          longitude={stop.longitude}
+          onClick={
+            onSelectStop
+              ? (event) => {
+                  event.originalEvent.stopPropagation();
+                  onSelectStop(stop.id);
+                }
+              : undefined
+          }
+          style={{ zIndex: 10 + index }}
+        >
+          <span
+            title={`${stop.address ?? 'Unknown address'}${stop.city ? `, ${stop.city}` : ''} · ${attentionText(
+              stop.attention ?? 'NO_DAY',
+            )}${onSelectStop ? ' (open its details)' : ''}`}
+          >
+            <NeedsPin kind={stop.attention ?? 'NO_DAY'} />
+          </span>
+        </Marker>
+      ))}
+      <NavigationControl position="top-right" />
+    </Map>
   );
 }

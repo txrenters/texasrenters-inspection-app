@@ -1,8 +1,9 @@
 'use client';
 
 import type { PropertyPosition } from '@texasrenters/shared';
-import { useMap } from '@vis.gl/react-google-maps';
-import { useCallback, useEffect, useRef, type RefObject } from 'react';
+import { useMap } from 'react-map-gl/mapbox';
+import type { MapRef } from 'react-map-gl/mapbox';
+import { useCallback, useEffect, useRef } from 'react';
 
 /**
  * Who moves the map: the reader, or the map itself.
@@ -44,22 +45,6 @@ const PROPERTY_ZOOM = 18;
 const FIT_MAX_ZOOM = 15;
 
 /**
- * How long after the map moves itself a camera change is still its own.
- *
- * Google animates a pan, and `center_changed` fires on every frame of it. A
- * reader who happens to click during those frames has not moved anything.
- */
-const AUTOMATIC_MOVE_MS = 1_500;
-
-/**
- * How long after the reader touches the map a camera change counts as theirs.
- *
- * Long enough to cover a click on Google's own zoom buttons -- the zoom lands on
- * the click, after the pointer is already up -- and a double-click.
- */
-const GESTURE_WINDOW_MS = 800;
-
-/**
  * Marks this console's own controls inside the map: Re-center and the panel
  * along the bottom. Touching those is not moving the map.
  */
@@ -73,80 +58,82 @@ export function focusKey(focus: CameraFocus) {
 
 type Point = { latitude: number; longitude: number };
 
-const literal = (point: Point) => ({ lat: point.latitude, lng: point.longitude });
+/** Mapbox takes a centre as [longitude, latitude], the other way round from Google. */
+const literal = (point: Point): [number, number] => [point.longitude, point.latitude];
 
-function fitTo(
-  map: google.maps.Map,
-  points: readonly [number, number][],
-  padding: number,
-  stillAutomatic: () => void,
-) {
-  const bounds = new google.maps.LatLngBounds();
-  for (const [lat, lng] of points) bounds.extend({ lat, lng });
-  map.fitBounds(bounds, padding);
-  google.maps.event.addListenerOnce(map, 'idle', () => {
-    const zoom = map.getZoom();
-    if (zoom === undefined || zoom <= FIT_MAX_ZOOM) return;
-    stillAutomatic();
-    map.setZoom(FIT_MAX_ZOOM);
-  });
+/**
+ * Frame these points, without diving to the rooftops for one of them.
+ *
+ * Under Google this took two steps: fit, then wait for the map to settle and
+ * pull the zoom back if it had gone too far, marking the correction automatic
+ * so it did not read as the reader moving. Mapbox takes `maxZoom` with the fit,
+ * so the second step and the race it carried are gone.
+ */
+function fitTo(map: MapRef, points: readonly [number, number][], padding: number) {
+  let west = points[0]![1];
+  let east = points[0]![1];
+  let south = points[0]![0];
+  let north = points[0]![0];
+  for (const [lat, lng] of points) {
+    west = Math.min(west, lng);
+    east = Math.max(east, lng);
+    south = Math.min(south, lat);
+    north = Math.max(north, lat);
+  }
+  map.fitBounds(
+    [
+      [west, south],
+      [east, north],
+    ],
+    { padding, maxZoom: FIT_MAX_ZOOM, duration: 0 },
+  );
 }
 
 /**
  * Calls `onReaderMoved` when the reader moves the camera, and not when the map
  * moves itself.
  *
- * Google does not say who moved it, so this watches for the reader's hands:
+ * This used to be guesswork. Google does not say who moved the camera, so it
+ * watched for the reader's hands -- a pointer, touch, wheel or key on the
+ * container, then a camera change closely enough behind it -- with a
+ * gesture window and a second clock marking the map's own moves so they were
+ * not mistaken for somebody dragging.
  *
- * - `dragstart` only ever comes from somebody dragging.
- * - A wheel over the map zooms it (gesture handling is greedy), so the wheel
- *   itself is enough -- waiting for the zoom would miss one that lands while
- *   the map is still animating a move of its own.
- * - Everything else -- Google's zoom and camera buttons, a double-click, a
- *   pinch, the keyboard -- is a pointer, touch or key on the map followed
- *   closely by the camera changing.
+ * Mapbox says. Every camera event carries `originalEvent` when a person caused
+ * it and nothing when the map moved itself, so the question is answered rather
+ * than inferred — and the gesture window, the arming, and the clock that marked
+ * the map's own moves are all gone with it. A fly-to can no longer be mistaken
+ * for a drag, and a reader who clicks during one no longer loses their view.
  */
 export function useReaderMovesCamera(
-  map: google.maps.Map | null,
+  map: MapRef | null | undefined,
   onReaderMoved: () => void,
-  automaticUntil: RefObject<number>,
 ) {
   useEffect(() => {
     if (!map) return;
-    const container = map.getDiv();
-    let armedUntil = 0;
-
-    const ours = (target: EventTarget | null) =>
-      target instanceof Element && target.closest(`[${MAP_OVERLAY_ATTRIBUTE}]`) !== null;
-    const arm = (event: Event) => {
-      if (!ours(event.target)) armedUntil = Date.now() + GESTURE_WINDOW_MS;
-    };
-    const wheel = (event: Event) => {
-      if (!ours(event.target)) onReaderMoved();
-    };
-    const cameraChanged = () => {
-      const now = Date.now();
-      if (now <= armedUntil && now > automaticUntil.current) onReaderMoved();
+    const moved = (event: { originalEvent?: unknown; target?: unknown }) => {
+      // No original event means the map moved itself -- a fit, a follow, a
+      // re-center -- which is not the reader taking over.
+      if (!event.originalEvent) return;
+      // Our own controls sit inside the map's container; touching Re-center is
+      // not moving the map.
+      const target = (event.originalEvent as Event | undefined)?.target ?? null;
+      if (target instanceof Element && target.closest(`[${MAP_OVERLAY_ATTRIBUTE}]`)) return;
+      onReaderMoved();
     };
 
-    container.addEventListener('pointerdown', arm, true);
-    container.addEventListener('touchstart', arm, { capture: true, passive: true });
-    container.addEventListener('keydown', arm, true);
-    container.addEventListener('wheel', wheel, { capture: true, passive: true });
-    const listeners = [
-      map.addListener('dragstart', onReaderMoved),
-      map.addListener('zoom_changed', cameraChanged),
-      map.addListener('center_changed', cameraChanged),
-    ];
+    map.on('dragstart', moved);
+    map.on('zoomstart', moved);
+    map.on('rotatestart', moved);
+    map.on('pitchstart', moved);
 
     return () => {
-      container.removeEventListener('pointerdown', arm, true);
-      container.removeEventListener('touchstart', arm, true);
-      container.removeEventListener('keydown', arm, true);
-      container.removeEventListener('wheel', wheel, true);
-      for (const listener of listeners) listener.remove();
+      map.off('dragstart', moved);
+      map.off('zoomstart', moved);
+      map.off('rotatestart', moved);
+      map.off('pitchstart', moved);
     };
-  }, [map, onReaderMoved, automaticUntil]);
+  }, [map, onReaderMoved]);
 }
 
 /**
@@ -184,8 +171,13 @@ export function CameraDirector({
   /** Increments on every Re-center. */
   recenterRequest: number;
 }) {
-  const map = useMap();
-  const automaticUntil = useRef(0);
+  /**
+   * `useMap` hands back every map on the page, keyed; `current` is the one
+   * this director is inside. Reaching for the collection itself type-checks
+   * against its index signature and then fails at runtime, which is a poor
+   * trade.
+   */
+  const { current: map } = useMap();
   const readerHasMoved = useRef(readerMoved);
   readerHasMoved.current = readerMoved;
   const latest = useRef({ fallback, fitKey, followed, points, properties });
@@ -193,19 +185,14 @@ export function CameraDirector({
   /** The `fitKey` the overview was last framed for. */
   const framedFor = useRef<string | null>(null);
 
-  const markAutomatic = useCallback(() => {
-    automaticUntil.current = Date.now() + AUTOMATIC_MOVE_MS;
-  }, []);
-
-  useReaderMovesCamera(map, onReaderMoved, automaticUntil);
+  useReaderMovesCamera(map, onReaderMoved);
 
   const frameOverview = useCallback(() => {
     const { fitKey: key, points: framed } = latest.current;
     if (!map || !framed.length) return;
     framedFor.current = key;
-    markAutomatic();
-    fitTo(map, framed, 48, markAutomatic);
-  }, [map, markAutomatic]);
+    fitTo(map, framed, 48);
+  }, [map]);
 
   const key = focusKey(focus);
 
@@ -216,14 +203,11 @@ export function CameraDirector({
 
     if (focus.kind === 'TECHNICIAN') {
       if (position) {
-        markAutomatic();
-        map.panTo(literal(position));
-        map.setZoom(FOLLOW_ZOOM);
+        map.easeTo({ center: literal(position), zoom: FOLLOW_ZOOM });
       } else if (stops.length) {
         // Not reporting yet, but they have work: framing it answers "where is
         // this person working" when "where are they" has no answer.
-        markAutomatic();
-        fitTo(map, stops, 64, markAutomatic);
+        fitTo(map, stops, 64);
       }
       return;
     }
@@ -231,9 +215,7 @@ export function CameraDirector({
     if (focus.kind === 'PROPERTY') {
       const building = buildings.find((entry) => entry.id === focus.propertyId);
       if (!building) return;
-      markAutomatic();
-      map.panTo(literal(building));
-      map.setZoom(PROPERTY_ZOOM);
+      map.easeTo({ center: literal(building), zoom: PROPERTY_ZOOM });
       return;
     }
 
@@ -242,7 +224,7 @@ export function CameraDirector({
     if (!readerHasMoved.current) frameOverview();
     // `focus` itself is a new object on every selection render; `key` is its
     // identity, and the honest trigger.
-  }, [map, key, recenterRequest, markAutomatic, frameOverview]);
+  }, [map, key, recenterRequest, frameOverview]);
 
   // The overview again when who or what is on the map changes -- somebody came
   // on shift, the properties arrived -- and never when anybody merely moved.
@@ -258,11 +240,11 @@ export function CameraDirector({
   useEffect(() => {
     const position = latest.current.followed;
     if (!map || focus.kind !== 'TECHNICIAN' || readerHasMoved.current || !position) return;
-    markAutomatic();
-    map.panTo(literal(position));
+    // Pans without touching the zoom, which is the reader's.
+    map.easeTo({ center: literal(position) });
     // On where they are, as a string: the position object is rebuilt on every
     // refetch whether or not the technician moved.
-  }, [map, followedAt, markAutomatic]);
+  }, [map, followedAt]);
 
   return null;
 }
