@@ -40,6 +40,54 @@ export function strokeFrom(computed: {
   return painted || computed.color || '#2563eb';
 }
 
+/**
+ * The same colour, in a form Mapbox can actually parse.
+ *
+ * **This is why the routes drew white and the circles did not draw at all.**
+ * The design system is authored in `oklch`, and `getComputedStyle` hands the
+ * value back in the colour space it was written in — `oklch(0.68 0.19 52)`.
+ * Google took that happily, because Google paints through canvas and canvas
+ * understands every colour the browser does. Mapbox parses colours *itself*,
+ * in JavaScript, for WebGL, and does not know `oklch`.
+ *
+ * An unparseable colour does not degrade: it makes the whole paint property
+ * invalid, so Mapbox refuses to add the layer at all. On a route that left
+ * only the white casing underneath — a white line where an orange one should
+ * be — and the geofence and grouping circles, which have nothing underneath
+ * them, simply never appeared.
+ *
+ * Canvas is the way back: it accepts any colour the browser understands and
+ * hands it back normalised to `#rrggbb` or `rgba(...)`, which Mapbox does
+ * understand.
+ *
+ * Not cached. `useMapStroke` memoises per class and per theme, so this runs a
+ * handful of times for a whole map — and a kept context would outlive the
+ * document it came from.
+ */
+export function renderableColor(value: string, fallback = '#2563eb'): string {
+  if (!value) return fallback;
+  // Already a form Mapbox parses; most of the web is still written this way.
+  if (/^(#|rgb|hsl)/i.test(value)) return value;
+  if (typeof document === 'undefined') return fallback;
+
+  const normaliser = document.createElement('canvas').getContext('2d');
+  if (!normaliser) return fallback;
+
+  /**
+   * Canvas keeps its previous `fillStyle` when handed something it cannot
+   * read, so a known value goes in first and a result still equal to it means
+   * the colour was refused rather than converted.
+   */
+  const sentinel = '#010203';
+  normaliser.fillStyle = sentinel;
+  normaliser.fillStyle = value;
+  const painted = String(normaliser.fillStyle);
+  if (painted === sentinel) return fallback;
+  // Some browsers hand wide-gamut colours back as `color(display-p3 …)`, which
+  // Mapbox cannot read either. Anything not plainly sRGB is not worth guessing.
+  return /^(#|rgb|hsl)/i.test(painted) ? painted : fallback;
+}
+
 /** The colour a class paints, read off a probe element. Server-safe. */
 export function strokeOf(className: string): string {
   if (typeof document === 'undefined') return '#2563eb';
@@ -49,7 +97,7 @@ export function strokeOf(className: string): string {
   document.body.append(probe);
   const painted = strokeFrom(getComputedStyle(probe));
   probe.remove();
-  return painted;
+  return renderableColor(painted);
 }
 
 /**
