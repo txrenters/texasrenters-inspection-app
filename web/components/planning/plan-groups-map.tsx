@@ -7,6 +7,7 @@ import Map, { Layer, Marker, Source, type LayerProps } from 'react-map-gl/mapbox
 import { useTheme } from 'next-themes';
 
 import { circlePolygon, planGroups, type GroupableStop } from './plan-groups';
+import { presenceOf, type TechnicianPosition } from '@texasrenters/shared';
 
 /**
  * A quarter's days, drawn as the office sketched them.
@@ -47,11 +48,21 @@ export function PlanGroupsMap({
   stops,
   onSelectDay,
   selectedDate,
+  technicians = [],
 }: {
   stops: readonly GroupableStop[];
   onSelectDay?: (date: string) => void;
   /** The day being read, drawn stronger than the rest. */
   selectedDate?: string | null;
+  /**
+   * Where the crew are right now, over the plan they are working.
+   *
+   * The office asked for one map rather than two: the technician map and the
+   * quarter's map showed different worlds, so seeing whether anybody is near
+   * today's group meant opening another page and holding both in your head.
+   * Empty by default, because a quarter three months out has nobody on it.
+   */
+  technicians?: readonly TechnicianPosition[];
 }) {
   const { resolvedTheme } = useTheme();
   const groups = useMemo(() => planGroups(stops), [stops]);
@@ -153,6 +164,41 @@ export function PlanGroupsMap({
         label the moment two collide — which is exactly where the circles
         overlap and the reading matters most.
       */}
+      {/*
+        The crew, over the plan. Drawn after the circles so a person is never
+        underneath one, and in the technician green the rest of the console
+        uses for a person rather than a place.
+      */}
+      {technicians.map((position) => (
+        <Marker
+          key={position.technicianId}
+          latitude={position.latitude}
+          longitude={position.longitude}
+        >
+          <span
+            className={[
+              'flex h-5 w-5 items-center justify-center rounded-full border-2 border-white text-[10px] font-semibold text-white shadow',
+              /**
+               * The console's one answer to "is this person out there now".
+               *
+               * `presenceOf` rather than the timestamp: it also counts the app
+               * being open, because location recording stops on its own often
+               * enough -- the phone kills the task, a permission changes -- and
+               * a technician visibly working is not offline because of it.
+               */
+              presenceOf(position) === 'ONLINE' ? 'bg-map-technician' : 'bg-map-technician-stale',
+            ].join(' ')}
+            title={`${position.technician?.displayName ?? 'Technician'} · ${
+              presenceOf(position) === 'ONLINE'
+                ? 'reporting now'
+                : `last seen ${new Date(position.recordedAt).toLocaleString()}`
+            }`}
+          >
+            {(position.technician?.displayName ?? '?').slice(0, 1).toUpperCase()}
+          </span>
+        </Marker>
+      ))}
+
       {groups.map((group) => (
         <Marker
           key={group.date}

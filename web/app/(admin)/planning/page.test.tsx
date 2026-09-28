@@ -16,6 +16,14 @@ const hooks = vi.hoisted(() => ({
 
 vi.mock('@/lib/planning-queries', () => hooks);
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
+/**
+ * The crew's live positions, drawn over the quarter on the Groups tab.
+ *
+ * A real react-query hook, so without this the page cannot render at all here
+ * -- there is no QueryClient in these tests, and every one of them fails on a
+ * screen that has nothing to do with the map.
+ */
+vi.mock('@/lib/queries', () => ({ useTechnicianLocations: () => ({ data: [] }) }));
 const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 // The maps load Google's script; the page around them is what is under test.
