@@ -53,6 +53,25 @@ export function circleFeature(
 }
 
 /**
+ * One point as a GeoJSON feature, at exactly the coordinates given.
+ *
+ * For the things that must be drawn where they actually are, however far out
+ * the map is zoomed — which a marker cannot promise, because markers are real
+ * elements and hundreds of them stutter, so they get grouped.
+ */
+export function pointFeature(
+  latitude: number,
+  longitude: number,
+  properties: Record<string, string | number | boolean> = {},
+) {
+  return {
+    type: 'Feature' as const,
+    properties,
+    geometry: { type: 'Point' as const, coordinates: [longitude, latitude] as [number, number] },
+  };
+}
+
+/**
  * Every coordinate in a feature is a real number.
  *
  * A property with no latitude, or a radius that arrived as null, makes a ring

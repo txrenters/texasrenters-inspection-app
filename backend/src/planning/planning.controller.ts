@@ -172,6 +172,7 @@ export class PlanningController {
           maxStopsPerDay: true,
           maxLegMinutes: true,
           holidays: true,
+        excludedZones: true,
           startsOn: true,
           crewTechnicianIds: true,
           officeDetailsImportedAt: true,

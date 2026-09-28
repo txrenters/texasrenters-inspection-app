@@ -67,6 +67,7 @@ const PLAN = {
   maxStopsPerDay: 12,
   maxLegMinutes: 20,
   holidays: [] as string[],
+  excludedZones: [] as string[],
   startsOn: null as Date | null,
   crewTechnicianIds: [] as string[],
 };
@@ -81,6 +82,7 @@ const SETTINGS = {
   maxStopsPerDay: 12,
   maxLegMinutes: 20,
   holidays: [] as string[],
+  excludedZones: [] as string[],
   startsOn: null as string | null,
   technicianIds: [] as string[],
 };
@@ -426,6 +428,62 @@ describe('routing a draft quarter', () => {
       }),
     );
   });
+
+/**
+ * A quarter built without a zone.
+ *
+ * The office works zones 1 to 4 and arranges zone 5 by hand. Until now that
+ * meant building the quarter with it and deleting the visits afterwards, which
+ * a rebuild undid. Measured on their own Q4: zone 5 is 34 of the 431 visits and
+ * takes four days of the quarter to reach.
+ */
+describe('zones left out of a build', () => {
+  it('holds back the excluded zone and routes the rest', async () => {
+    const { service, stopUpdateMany } = build(
+      [
+        stop('s1', 1, 0, { zone: '1' }),
+        stop('s2', 2, 1, { zone: '1' }),
+        stop('s3', 3, 2, { zone: '5' }),
+      ],
+      { googleSeconds: fiveMinutes },
+    );
+
+    const summary = await service.route('org-1', 'plan-1', {
+      excludedZones: ['5'],
+      holidays: onlyTheFirstWorkingDay(),
+    });
+
+    expect(summary.placed).toBe(2);
+    // Held back and said so, which is a different thing from a visit the
+    // planner could not place.
+    expect(stopUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ['s3'] } },
+        data: expect.objectContaining({ status: TbpStopStatus.BLOCKED, blockedCode: 'ZONE_EXCLUDED' }),
+      }),
+    );
+  });
+
+  /** "Zone 5" and "5" are the same zone; the data holds both spellings. */
+  it('reads a zone however it is written', async () => {
+    const { service } = build([stop('s1', 1, 0, { zone: 'Zone 5' })], {});
+
+    const summary = await service.route('org-1', 'plan-1', {
+      excludedZones: ['5'],
+      holidays: onlyTheFirstWorkingDay(),
+    });
+
+    expect(summary.placed).toBe(0);
+  });
+
+  it('refuses a zone that is not a number, rather than quietly ignoring it', async () => {
+    const { service } = build([stop('s1', 1)], {});
+
+    await expect(service.route('org-1', 'plan-1', { excludedZones: ['north'] })).rejects.toMatchObject({
+      code: 'INVALID_PLAN_SETTINGS',
+    });
+  });
+});
 
   /**
    * The office (2026-09-20), on a quarter whose publish had failed: "I should
@@ -888,6 +946,7 @@ describe('the office’s limits on a planned day', () => {
         maxStopsPerDay: 12,
         maxLegMinutes: 20,
         holidays: ['2026-11-26'],
+        excludedZones: [],
         startsOn: null,
         crewTechnicianIds: [],
       },

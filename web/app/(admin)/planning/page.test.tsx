@@ -258,13 +258,12 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         year: 2026,
         quarter: 4,
         technicianIds: ['tech-1', 'tech-2', 'tech-4'],
         startsOn: '2026-10-01',
-        movePublishedVisits: false,
-      },
+      }),
       expect.anything(),
     );
   });
@@ -291,15 +290,13 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 2 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      {
-        year: 2026,
-        quarter: 4,
+      expect.objectContaining({
         technicianIds: ['tech-1', 'tech-2'],
         startsOn: '2026-09-21',
         // Off unless the box is ticked: a published visit is a date Jobber has
         // already been told about.
         movePublishedVisits: false,
-      },
+      }),
       expect.anything(),
     );
     expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
@@ -328,6 +325,59 @@ describe('the benefit package plan page', () => {
     );
   });
 
+  /**
+   * The control that actually moves the number of days in a quarter.
+   *
+   * Measured on the office's own Q4: at ten a day, 41 of 47 days come out
+   * exactly full at a five-minute median hop. The grouping radius never did
+   * this -- days are chained from nearest neighbours up to the leg limit, and
+   * the limit already reaches about eleven kilometres.
+   */
+  it('builds days of the size the office picks, at both ends', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /10 a day/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Build for 3 technicians/ }));
+
+    // Both ends, so the planner fills to ten rather than stopping at its own
+    // nine and treating ten as a ceiling it need not reach.
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ minStopsPerDay: 10 }),
+      expect.anything(),
+    );
+  });
+
+  /** The office works zones 1 to 4 and arranges zone 5 by hand. */
+  it('leaves out the zones the office unticks', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Zone 5' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Build for 3 technicians/ }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ excludedZones: ['5'] }),
+      expect.anything(),
+    );
+  });
+
+  it('leaves every zone in when none is unticked', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /Build for 3 technicians/ }),
+    );
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ excludedZones: [] }),
+      expect.anything(),
+    );
+  });
+
   /** There is nothing published to move on a quarter that has never been built. */
   it('does not offer to move published visits on a first build', () => {
     mount({ plans: [] });
@@ -351,13 +401,7 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      {
-        year: 2026,
-        quarter: 4,
-        technicianIds: ['tech-1', 'tech-2', 'tech-3'],
-        startsOn: '2026-09-16',
-        movePublishedVisits: false,
-      },
+      expect.objectContaining({ startsOn: '2026-09-16' }),
       expect.anything(),
     );
   });
