@@ -62,6 +62,47 @@ export function chunkForRequests(count: number, max = MAX_COORDINATES): [number,
   return chunks;
 }
 
+/**
+ * Travel seconds and metres between every pair, as the planner needs them.
+ *
+ * Exported for its tests. Mapbox returns `null` for a pair it cannot connect --
+ * an island, a gated estate, a coordinate off the network -- and that becomes
+ * `Infinity` here for the same reason OSRM's does: it keeps the value
+ * comparable while making it never chosen, which is what "unreachable" should
+ * mean to a solver. A zero would make it look like the best stop of all.
+ */
+export function parseMatrixResponse(
+  body: unknown,
+): { durations: number[][]; distances: number[][] } | null {
+  const payload = body as { code?: unknown; durations?: unknown; distances?: unknown } | null;
+  if (payload?.code !== 'Ok' || !Array.isArray(payload.durations)) return null;
+
+  const grid = (rows: unknown): number[][] | null => {
+    if (!Array.isArray(rows)) return null;
+    const out: number[][] = [];
+    for (const row of rows) {
+      if (!Array.isArray(row)) return null;
+      out.push(
+        (row as unknown[]).map((value) =>
+          typeof value === 'number' ? value : Number.POSITIVE_INFINITY,
+        ),
+      );
+    }
+    return out.length ? out : null;
+  };
+
+  const durations = grid(payload.durations);
+  if (!durations) return null;
+  /**
+   * Distances are asked for but not depended on. The planner uses them to
+   * report how far a day drives; a matrix without them is still a matrix it
+   * can order a day with, and refusing the whole answer over the softer half
+   * would be trading a measured day for an estimated one.
+   */
+  const distances = grid(payload.distances) ?? durations.map((row) => row.map(() => 0));
+  return { durations, distances };
+}
+
 /** Join consecutive routes into one, without repeating the shared point. */
 export function stitch(parts: readonly OsrmRoute[]): OsrmRoute | null {
   if (!parts.length) return null;
@@ -152,5 +193,28 @@ export class MapboxDirectionsClient {
       parts.push(part);
     }
     return stitch(parts);
+  }
+
+  /**
+   * Travel seconds and metres between every pair, origin first.
+   *
+   * What the quarter planner orders a day with. Null when unavailable, which
+   * the caller reads as "measure it in a straight line instead".
+   *
+   * **Not chunked, unlike `route`.** A matrix is every pair against every
+   * other, so it cannot be split into overlapping runs and joined back up the
+   * way a line can — the pairs that span two chunks would simply be missing. A
+   * day past the limit is refused rather than half-answered, and falls back to
+   * the straight-line estimate, which is at least wrong in a way the console
+   * already reports. Days here are nine or ten stops and a home.
+   */
+  async matrix(points: readonly GeoPoint[]) {
+    if (!this.configured || points.length < 2 || points.length > MAX_COORDINATES) return null;
+    return parseMatrixResponse(
+      await this.get(
+        `/directions-matrix/v1/mapbox/driving/${toOsrmCoordinates(points)}` +
+          `?annotations=duration,distance&access_token=${encodeURIComponent(this.token())}`,
+      ),
+    );
   }
 }

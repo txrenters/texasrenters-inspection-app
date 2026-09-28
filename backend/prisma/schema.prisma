@@ -3275,6 +3275,11 @@ enum PlanOriginKind {
 /// biased; straight-line is not a drive time at all.
 enum DriveTimeSource {
   GOOGLE_TRAFFIC_AWARE
+  /// Free-flow road time from Mapbox, asked for as `driving` rather than
+  /// `driving-traffic` -- the road at its speed limits, not the afternoon the
+  /// quarter happened to be built on. Reproducible, and what the office asked
+  /// for.
+  MAPBOX_FREE_FLOW
   OSRM_FREE_FLOW
   HAVERSINE
 }

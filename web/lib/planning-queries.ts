@@ -148,7 +148,7 @@ export interface PlanDay {
   homeDriveMeters: number | null;
   /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
   originKind: string;
-  durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
+  durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'MAPBOX_FREE_FLOW' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
   stops: PlanDayStop[];
   /**

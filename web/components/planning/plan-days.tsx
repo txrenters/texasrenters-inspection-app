@@ -257,6 +257,11 @@ function measuredText(day: PlanDay, maxLegMinutes: number) {
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
       return `Drives measured by Google for a 9 AM start. ${counted}`;
+    case 'MAPBOX_FREE_FLOW':
+      // Free-flow on purpose, not a limitation: the office asked for times
+      // from the road rather than from whatever the traffic was on the
+      // afternoon the quarter happened to be built.
+      return `Drives measured on the road, without traffic. ${counted}`;
     case 'OSRM_FREE_FLOW':
       return `Drives measured without traffic. ${counted}`;
     case 'HAVERSINE':
