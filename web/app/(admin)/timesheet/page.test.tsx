@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TimesheetPage from './page';
 
@@ -85,6 +85,25 @@ function mount(sheet: unknown = SHEET) {
 beforeEach(() => {
   vi.clearAllMocks();
   permissions.allowed = true;
+  /**
+   * A fixed today, because the page opens on the last fortnight.
+   *
+   * `defaultRange()` is today minus thirteen days, and the fixture below was
+   * written on 2026-09-23 — so "the range the office is looking at" matched it
+   * exactly on the day this was written and stopped matching five days later,
+   * failing on main for a reason that had nothing to do with the page. The
+   * assertion is about the form sending the range it is showing, which is a
+   * claim about the page rather than about the date, so the date is held still.
+   *
+   * `shouldAdvanceTime` so React's own scheduling still runs; a fully frozen
+   * clock hangs the renderer.
+   */
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date(`${SHEET.to}T12:00:00Z`));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('the hours', () => {
