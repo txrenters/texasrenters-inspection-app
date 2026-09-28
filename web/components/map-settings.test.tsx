@@ -38,8 +38,8 @@ describe('remembering how the map should look', () => {
     // never opened the settings should get.
     const { result } = renderHook(() => useMapPreferences());
 
-    expect(result.current[0]).toEqual({ mapType: 'roadmap', tilted: false });
-    expect(DEFAULT_PREFERENCES).toEqual({ mapType: 'roadmap', tilted: false });
+    expect(result.current[0]).toEqual({ mapType: 'roadmap', tilted: false, groupingRadiusMeters: 0 });
+    expect(DEFAULT_PREFERENCES).toEqual({ mapType: 'roadmap', tilted: false, groupingRadiusMeters: 0 });
   });
 
   it('restores what was chosen last time', () => {
@@ -47,7 +47,7 @@ describe('remembering how the map should look', () => {
 
     const { result } = renderHook(() => useMapPreferences());
 
-    expect(result.current[0]).toEqual({ mapType: 'hybrid', tilted: true });
+    expect(result.current[0]).toEqual({ mapType: 'hybrid', tilted: true, groupingRadiusMeters: 0 });
   });
 
   it('writes the choice through, merged rather than replaced', () => {
@@ -58,8 +58,12 @@ describe('remembering how the map should look', () => {
     act(() => result.current[1]({ tilted: true }));
     act(() => result.current[1]({ mapType: 'terrain' }));
 
-    expect(result.current[0]).toEqual({ mapType: 'terrain', tilted: true });
-    expect(JSON.parse(store.get(KEY) ?? '{}')).toEqual({ mapType: 'terrain', tilted: true });
+    expect(result.current[0]).toEqual({ mapType: 'terrain', tilted: true, groupingRadiusMeters: 0 });
+    expect(JSON.parse(store.get(KEY) ?? '{}')).toEqual({
+      mapType: 'terrain',
+      tilted: true,
+      groupingRadiusMeters: 0,
+    });
   });
 
   it('refuses a stored map type Google would reject', () => {
@@ -93,5 +97,57 @@ describe('remembering how the map should look', () => {
     // Still applied in memory, so the map changes for this visit even though
     // nothing could be written down.
     expect(result.current[0].mapType).toBe('hybrid');
+  });
+});
+
+/**
+ * The circles the office judges grouping by.
+ *
+ * Off unless asked for: drawn over 589 properties they are the loudest thing
+ * on the map, and somebody opening it to find a technician is not asking this
+ * question. Stored like the rest, so the same storage traps apply — and one
+ * more, because this value reaches Google as a radius.
+ */
+describe('the grouping radius', () => {
+  it('draws nothing until somebody asks for it', () => {
+    expect(DEFAULT_PREFERENCES.groupingRadiusMeters).toBe(0);
+  });
+
+  it('remembers the size that was chosen', () => {
+    const { result } = renderHook(() => useMapPreferences());
+
+    act(() => result.current[1]({ groupingRadiusMeters: 500 }));
+
+    expect(result.current[0].groupingRadiusMeters).toBe(500);
+    expect(JSON.parse(store.get('texasrenters.map-preferences')!)).toMatchObject({
+      groupingRadiusMeters: 500,
+    });
+  });
+
+  /**
+   * A number from an older build, or one somebody typed into storage, must
+   * not reach Google as a radius — the same rule the map type has kept since
+   * this was written.
+   */
+  it('refuses a stored size it does not offer', () => {
+    store.set(
+      'texasrenters.map-preferences',
+      JSON.stringify({ mapType: 'roadmap', tilted: false, groupingRadiusMeters: 99_999 }),
+    );
+
+    const { result } = renderHook(() => useMapPreferences());
+
+    expect(result.current[0].groupingRadiusMeters).toBe(0);
+  });
+
+  it('keeps a stored size it does offer', () => {
+    store.set(
+      'texasrenters.map-preferences',
+      JSON.stringify({ mapType: 'roadmap', tilted: false, groupingRadiusMeters: 1_000 }),
+    );
+
+    const { result } = renderHook(() => useMapPreferences());
+
+    expect(result.current[0].groupingRadiusMeters).toBe(1_000);
   });
 });

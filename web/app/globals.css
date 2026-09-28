@@ -61,6 +61,7 @@
   --color-map-route-next: var(--map-route-next);
   --color-map-air: var(--map-air);
   --color-map-geofence: var(--map-geofence);
+  --color-map-grouping: var(--map-grouping);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
@@ -213,6 +214,18 @@
      moving what a geofence looks like. The shapes are what tell them apart --
      a thin line along roads against a filled circle sitting on one pin. */
   --map-geofence: oklch(0.7 0.19 52);
+  /* How near is near enough to share a day, drawn to scale.
+
+     Green, and deliberately not the orange one above: these answer different
+     questions over the same pins. Orange is the distance a technician's time
+     is measured from, one property at a time. This is the office asking which
+     properties could be visited together, and what it is read for is where
+     the circles OVERLAP -- so it is drawn as a fill with a faint edge rather
+     than a ring, because a pile of hard outlines is unreadable and the
+     overlaps are the whole point.
+
+     Not the technician green either: that one means a person on this map. */
+  --map-grouping: oklch(0.72 0.16 155);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);
@@ -404,6 +417,11 @@
  * to be resolved in JavaScript before it can be handed over. */
 .map-geofence-ring {
   stroke: var(--map-geofence);
+}
+
+/* Read off a probe by `GroupingRadiusLayer`, like the rest of the map's lines. */
+.map-grouping-circle {
+  stroke: var(--map-grouping);
 }
 
 /* Google's info window, made to follow the theme.

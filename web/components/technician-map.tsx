@@ -615,6 +615,68 @@ function AccuracyRing({
 }
 
 /**
+ * A circle of one radius around every property, to judge grouping by eye.
+ *
+ * The office rebuilds a quarter by deciding which properties are near enough
+ * to be worth one day's driving, and the planner's own answer to that is a
+ * number of minutes nobody can see. This draws the question instead: turn it
+ * on and where the circles overlap is where properties could share a day.
+ *
+ * One overlay for every property rather than a circle per marker, because
+ * this is drawn over the whole portfolio at once -- the point is the shape a
+ * few hundred of them make together, not any single one. Filled and faint:
+ * hundreds of hard outlines read as noise, and it is the overlaps being read.
+ *
+ * Nothing to do with `GeofenceRing`, which is orange, per-property, and is the
+ * distance somebody's hours are measured from. Two questions, two colours.
+ */
+const GroupingRadiusLayer = memo(function GroupingRadiusLayer({
+  properties,
+  radiusMeters,
+}: {
+  properties: readonly PropertyPosition[];
+  radiusMeters: number;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || !radiusMeters) return;
+    const probe = document.createElement('span');
+    probe.className = 'map-grouping-circle';
+    probe.style.display = 'none';
+    document.body.append(probe);
+    const green = strokeFrom(getComputedStyle(probe));
+    probe.remove();
+
+    const circles = properties.map(
+      (property) =>
+        new google.maps.Circle({
+          map,
+          center: { lat: property.latitude, lng: property.longitude },
+          radius: radiusMeters,
+          strokeColor: green,
+          strokeOpacity: 0.35,
+          strokeWeight: 1,
+          fillColor: green,
+          // Low, and deliberately so: two overlapping circles read as a
+          // darker patch, which is exactly the signal. At a heavier fill the
+          // whole of west Houston is one green slab and says nothing.
+          fillOpacity: 0.08,
+          clickable: false,
+          // Under everything. This is context for the pins, not a thing to
+          // click, and it must never sit over a technician.
+          zIndex: 0,
+        }),
+    );
+    return () => {
+      for (const circle of circles) circle.setMap(null);
+    };
+  }, [map, properties, radiusMeters]);
+
+  return null;
+});
+
+/**
  * How close a technician has to be before the time counts as on site.
  *
  * Drawn because this is the number the hours are computed from, and until now
@@ -1431,6 +1493,14 @@ export function TechnicianMap({
             route={route}
           />
           <AirTravelLayer route={route} />
+
+          {/* Before the pins, so the circles sit under them. */}
+          {mapPreferences.groupingRadiusMeters ? (
+            <GroupingRadiusLayer
+              properties={properties}
+              radiusMeters={mapPreferences.groupingRadiusMeters}
+            />
+          ) : null}
 
           <PropertyLayer
             highlighted={highlightedBuildingIds}

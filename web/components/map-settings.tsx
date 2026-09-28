@@ -49,10 +49,32 @@ export interface MapPreferences {
    * quietly does nothing there.
    */
   tilted: boolean;
+
+  /**
+   * A circle of this radius around every property, to judge grouping by eye.
+   *
+   * Off by default and nothing to do with the orange ring, which is the
+   * distance a technician's *time* is measured from. This one answers a
+   * different question the office asked while rebuilding a quarter: which
+   * properties are near enough to each other to be worth visiting on one day.
+   *
+   * Two sizes rather than a slider because the office is comparing two
+   * candidate rules, not tuning one -- and where the circles overlap is the
+   * thing being read, which a number in a box does not show.
+   */
+  groupingRadiusMeters: GroupingRadius;
 }
 
-/** Roadmap, flat. The plainest reading of a map full of pins. */
-export const DEFAULT_PREFERENCES: MapPreferences = { mapType: 'roadmap', tilted: false };
+/** Off, or one of the two the office is weighing up. */
+export const GROUPING_RADII = [0, 500, 1_000] as const;
+export type GroupingRadius = (typeof GROUPING_RADII)[number];
+
+/** Roadmap, flat, no circles. The plainest reading of a map full of pins. */
+export const DEFAULT_PREFERENCES: MapPreferences = {
+  mapType: 'roadmap',
+  tilted: false,
+  groupingRadiusMeters: 0,
+};
 
 const STORAGE_KEY = 'texasrenters.map-preferences';
 
@@ -78,6 +100,11 @@ export function useMapPreferences() {
         // reject.
         mapType: stored.mapType && stored.mapType in MAP_TYPES ? stored.mapType : DEFAULT_PREFERENCES.mapType,
         tilted: typeof stored.tilted === 'boolean' ? stored.tilted : DEFAULT_PREFERENCES.tilted,
+        // Same reasoning as the map type: a stored number from another build
+        // must not reach Google as a radius, so only the offered ones pass.
+        groupingRadiusMeters: GROUPING_RADII.includes(stored.groupingRadiusMeters as GroupingRadius)
+          ? (stored.groupingRadiusMeters as GroupingRadius)
+          : DEFAULT_PREFERENCES.groupingRadiusMeters,
       });
     } catch {
       // Private windows throw on access. Losing a preference is nothing; taking
@@ -147,6 +174,24 @@ export function MapSettings({
         >
           3D
         </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {/* Named for what it is for, not for what it draws. Somebody opening
+            this menu while rebuilding a quarter is asking "which of these
+            could share a day", and "Grouping radius" answers that where
+            "Circles" would not. */}
+        <DropdownMenuLabel>Grouping radius</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          onValueChange={(value) =>
+            onChange({ groupingRadiusMeters: Number(value) as GroupingRadius })
+          }
+          value={String(preferences.groupingRadiusMeters)}
+        >
+          {GROUPING_RADII.map((metres) => (
+            <DropdownMenuRadioItem key={metres} value={String(metres)}>
+              {metres === 0 ? 'None' : metres < 1_000 ? `${metres} m` : `${metres / 1_000} km`}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
