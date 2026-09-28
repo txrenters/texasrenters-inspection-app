@@ -3,7 +3,7 @@
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 import { useTheme } from 'next-themes';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import Map, {
   Layer,
   Marker,
@@ -14,6 +14,7 @@ import Map, {
 } from 'react-map-gl/mapbox';
 
 import { useMapStroke } from '@/components/map-colors';
+import { useMapFailure } from '@/components/map-error';
 import { featureCollection, lineFeature } from '@/components/map-geometry';
 import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 
@@ -175,8 +176,7 @@ export function PlanDayMap({
   const doneColor = useMapStroke('map-route-done-line');
   const casingColor = useMapStroke('map-route-casing');
 
-  const [failed, setFailed] = useState(false);
-  const onError = useCallback(() => setFailed(true), []);
+  const [failure, onError] = useMapFailure();
 
   const placed = useMemo(
     () =>
@@ -229,13 +229,7 @@ export function PlanDayMap({
 
   const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
   if (tokenProblem) return <Unavailable>{tokenProblem}</Unavailable>;
-  if (failed)
-    return (
-      <Unavailable>
-        Mapbox would not load this map. If it keeps happening, check that the token is still valid
-        and that this site is allowed on it.
-      </Unavailable>
-    );
+  if (failure) return <Unavailable>{failure}</Unavailable>;
 
   const color: LayerProps['paint'] = {
     'line-color': ['case', ['==', ['get', 'tone'], 'done'], doneColor, routeColor],
