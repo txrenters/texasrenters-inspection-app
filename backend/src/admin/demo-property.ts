@@ -108,21 +108,54 @@ const DEMO_CITY = 'Katy';
 const DEMO_STATE = 'TX';
 const DEMO_POSTAL_CODE = '77494';
 
+const DEMO_EXTERNAL_ID_PREFIX = 'demo-property-';
+
+/** The external id for a sequence number. The only place the format is written. */
+export const demoExternalId = (sequence: number) => `${DEMO_EXTERNAL_ID_PREFIX}${sequence}`;
+
+/** The sequence a demo external id carries, or null if it carries none. */
+export function demoPropertySequence(externalId: string): number | null {
+  if (!externalId.startsWith(DEMO_EXTERNAL_ID_PREFIX)) return null;
+  const sequence = Number(externalId.slice(DEMO_EXTERNAL_ID_PREFIX.length));
+  return Number.isInteger(sequence) && sequence > 0 ? sequence : null;
+}
+
 /**
- * The row for the next demo property, numbered from how many already exist.
+ * The next sequence number, from the highest one already used.
  *
- * `externalId` carries the sequence too, which is what makes the button
- * idempotent under a double-click: the second request writes the same external
- * id and the unique key on `(organizationId, sourceSystem, externalId)` rejects
- * it, rather than quietly producing two identical demo properties. The caller
- * turns that into "one already exists", which is the truth.
+ * **Not the count.** Once a demo property can be deleted, the count stops being
+ * the next number: delete Demo Property 2 of three and the count is two, so
+ * numbering from it proposes 3 — which already exists, and the unique key
+ * rejects it. The button would then refuse for as long as that gap existed, and
+ * the refusal would read as "it already exists" about a property the person had
+ * just deleted.
+ *
+ * Numbering from the maximum leaves gaps instead, which is the honest outcome:
+ * Demo Property 2 is gone, the next one is 4, and nothing pretends otherwise.
+ * The cap counts rows, not sequence numbers, so gaps cost nothing.
+ */
+export function nextDemoSequence(externalIds: readonly string[]): number {
+  const used = externalIds
+    .map(demoPropertySequence)
+    .filter((sequence): sequence is number => sequence !== null);
+  return used.length === 0 ? 1 : Math.max(...used) + 1;
+}
+
+/**
+ * The row for the next demo property.
+ *
+ * `externalId` carries the sequence, which is what makes the button safe under a
+ * double-click: both requests read the same set and compose the same external
+ * id, and the unique key on `(organizationId, sourceSystem, externalId)` rejects
+ * the second rather than quietly producing two identical demo properties. The
+ * caller turns that into "one already exists", which is the truth.
  */
 export function demoPropertyFixture(sequence: number) {
   const addressLine1 = `${1_000 + sequence} Demo Ranch Road`;
   const address = { addressLine1, city: DEMO_CITY, state: DEMO_STATE, postalCode: DEMO_POSTAL_CODE };
   return {
     sourceSystem: DEMO_SOURCE_SYSTEM,
-    externalId: `demo-property-${sequence}`,
+    externalId: demoExternalId(sequence),
     idNumber: `DEMO-${String(sequence).padStart(3, '0')}`,
     name: `Demo Property ${sequence}`,
     abbreviation: `DEMO${sequence}`,

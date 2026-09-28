@@ -1,12 +1,16 @@
 'use client';
 
 import { isDemoProperty } from '@texasrenters/shared';
-import { Building2Icon, PlusIcon } from 'lucide-react';
+import { Building2Icon, PlusIcon, Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import {
+  DemoPropertyDeleteDialog,
+  type DeletableDemoProperty,
+} from '@/components/demo-property-delete-dialog';
 import { ListToolbar } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
@@ -16,6 +20,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatAddress, formatRelative } from '@/lib/format';
 import { useAdminMutations, usePortfolios, useProperties } from '@/lib/queries';
@@ -132,6 +137,7 @@ export default function PropertiesPage() {
   const [portfolioSearch, setPortfolioSearch] = useState('');
   const canManage = usePermissions().has('properties:manage');
   const createDemoProperty = useAdminMutations().createDemoProperty;
+  const [pendingDelete, setPendingDelete] = useState<DeletableDemoProperty | null>(null);
 
   const debouncedSearch = useDebouncedValue(state.q);
   const isSearchPending = state.q.trim() !== debouncedSearch.trim();
@@ -321,6 +327,46 @@ export default function PropertiesPage() {
       ) : (
         <>
           <DataTable
+            /**
+             * Only demo properties get a control, and only for somebody who can
+             * manage properties.
+             *
+             * `undefined` for a synced row rather than a disabled button: the
+             * whole portfolio is synced, so a column of greyed-out bins beside
+             * 570 real properties would imply deleting them is a thing that
+             * could be arranged. It is not — there is no endpoint for it.
+             *
+             * The row itself is a link to the detail page, and `DataTable` puts
+             * this cell above the stretched link, so the bin does not just open
+             * the property.
+             */
+            actions={
+              canManage
+                ? (row) =>
+                    isDemoProperty(row) ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            aria-label={`Delete ${row.name}`}
+                            className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            onClick={() =>
+                              setPendingDelete({
+                                id: row.id,
+                                name: row.name,
+                                inspectionCount: row._count?.inspections ?? 0,
+                              })
+                            }
+                            size="icon-sm"
+                            variant="ghost"
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete demo property</TooltipContent>
+                      </Tooltip>
+                    ) : null
+                : undefined
+            }
             columns={COLUMNS}
             label="Active synchronized properties"
             rowHref={(row) => `/properties/${row.id}`}
@@ -335,6 +381,13 @@ export default function PropertiesPage() {
           />
         </>
       )}
+
+      {pendingDelete ? (
+        <DemoPropertyDeleteDialog
+          onClose={() => setPendingDelete(null)}
+          property={pendingDelete}
+        />
+      ) : null}
     </>
   );
 }

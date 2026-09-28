@@ -171,6 +171,28 @@ export const DEMO_PROPERTY_SOURCE_SYSTEM = 'demo';
 export const isDemoProperty = (property: { sourceSystem?: string | null }) =>
   property.sourceSystem === DEMO_PROPERTY_SOURCE_SYSTEM;
 
+/** What deleting a demo property removed. */
+export interface DeletedDemoProperty {
+  deleted: true;
+  id: string;
+  name: string;
+  /**
+   * How many inspections went with it.
+   *
+   * Reported because it is the part the reader cannot see afterwards, and the
+   * part that destroyed recordings. Zero is the ordinary case.
+   */
+  inspectionsErased: number;
+  /**
+   * Media the database forgot but storage still holds.
+   *
+   * Storage is cleared after the commit, so a Cloudflare or R2 failure leaves an
+   * object with nothing pointing at it. Surfaced rather than swallowed: the
+   * delete did succeed, and this is the footnote.
+   */
+  orphanedStorageObjects: number;
+}
+
 export interface AdminProperty {
   id: string;
   externalId: string;

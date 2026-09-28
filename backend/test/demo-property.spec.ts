@@ -6,7 +6,12 @@ import {
 } from '@texasrenters/shared';
 
 import { AdminService } from '../src/admin/admin.service';
-import { DEMO_PROPERTY_LIMIT, demoPropertyFixture } from '../src/admin/demo-property';
+import {
+  DEMO_PROPERTY_LIMIT,
+  demoPropertySequence,
+  demoPropertyFixture,
+  nextDemoSequence,
+} from '../src/admin/demo-property';
 import { GEOCODE_SOURCE } from '../src/admin/property-geocoding.service';
 import { PROPERTYWARE_SOURCE_SYSTEM } from '../src/integrations/propertyware/propertyware.constants';
 import type { AuthenticatedUser } from '../src/common/auth';
@@ -57,14 +62,25 @@ const createdRow = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-function build(options: { existing?: number; createRejects?: unknown } = {}) {
+function build(
+  options: { existing?: number | string[]; createRejects?: unknown } = {},
+) {
   const create =
     options.createRejects === undefined
       ? jest.fn().mockResolvedValue(createdRow())
       : jest.fn().mockRejectedValue(options.createRejects);
+  // A number means "this many, numbered from one"; a list pins the exact ids,
+  // which is what the gap cases need.
+  const externalIds =
+    typeof options.existing === 'number'
+      ? Array.from({ length: options.existing }, (_, index) => `demo-property-${index + 1}`)
+      : (options.existing ?? []);
   const auditCreate = jest.fn().mockResolvedValue({});
+  const findMany = jest
+    .fn()
+    .mockResolvedValue(externalIds.map((externalId) => ({ externalId })));
   const prisma = {
-    propertywareBuilding: { create, count: jest.fn().mockResolvedValue(options.existing ?? 0) },
+    propertywareBuilding: { create, findMany },
     auditLog: { create: auditCreate },
   };
   const bump = jest.fn().mockResolvedValue(undefined);
@@ -75,7 +91,7 @@ function build(options: { existing?: number; createRejects?: unknown } = {}) {
     undefined,
     { bump } as never,
   );
-  return { service, prisma, create, auditCreate, bump };
+  return { service, prisma, create, auditCreate, bump, findMany };
 }
 
 const dataOf = (create: jest.Mock) => create.mock.calls[0][0].data;
@@ -100,26 +116,41 @@ describe('creating a demo property', () => {
     expect(dataOf(create).organizationId).not.toBe(OTHER_ORG);
   });
 
-  it('counts only this organization’s demo properties when numbering', async () => {
+  it('reads only this organization’s demo properties when numbering', async () => {
     // Two organizations demonstrating the app must not number over each other,
-    // and the count must not include the 570 real properties either.
-    const { service, prisma } = build({ existing: 2 });
+    // and the read must not include the 570 real properties either.
+    const { service, findMany } = build({ existing: 2 });
     await service.createDemoProperty(user);
 
-    expect(prisma.propertywareBuilding.count).toHaveBeenCalledWith({
+    expect(findMany).toHaveBeenCalledWith({
       where: { organizationId: ORG, sourceSystem: DEMO_PROPERTY_SOURCE_SYSTEM },
+      select: { externalId: true },
     });
   });
 
   it('numbers from every demo property, including deactivated ones', async () => {
-    // The unique key on `externalId` ignores `isActive`, so numbering from the
-    // active count would collide with a demo property somebody had taken out
-    // rather than producing the next one.
+    // The unique key on `externalId` ignores `isActive`, so numbering that
+    // skipped a deactivated one would collide with it rather than produce the
+    // next number.
     const { service, create } = build({ existing: 3 });
     await service.createDemoProperty(user);
 
     expect(dataOf(create).externalId).toBe('demo-property-4');
     expect(dataOf(create).name).toBe('Demo Property 4');
+  });
+
+  it('numbers past a gap a delete left, rather than into it', async () => {
+    // The bug that arrives with the delete button. Delete Demo Property 2 of
+    // three and the *count* is two, so numbering from it proposes 3 — which
+    // still exists. The unique key would reject it and the button would refuse
+    // for as long as the gap did, saying "it already exists" about a property
+    // the person had just deleted.
+    const { service, create } = build({
+      existing: ['demo-property-1', 'demo-property-3'],
+    });
+    await service.createDemoProperty(user);
+
+    expect(dataOf(create).externalId).toBe('demo-property-4');
   });
 
   it('arrives already placed, so it is on the map at once', async () => {
@@ -250,6 +281,271 @@ describe('when a demo property must be refused', () => {
   });
 });
 
+/**
+ * Deleting one, and the demonstration it holds.
+ *
+ * Two boundaries are the whole point of these tests. The first is that the
+ * endpoint cannot reach a Propertyware property: `sourceSystem` is in the
+ * lookup, so a real one is *not found* rather than refused, and no argument
+ * widens that. The second is that `properties:manage` is not a way around
+ * `inspections:delete` — a demo property carrying recordings needs the key that
+ * gates destroying recordings everywhere else.
+ */
+describe('deleting a demo property', () => {
+  const PROPERTY_ID = '00000000-0000-4000-8000-0000000000aa';
+
+  const actor = (permissions: string[] = []) =>
+    ({ ...user, permissions } as unknown as AuthenticatedUser);
+
+  function buildDelete(
+    options: { found?: boolean; inspections?: number; transactionRejects?: unknown } = {},
+  ) {
+    const inspections = Array.from({ length: options.inspections ?? 0 }, (_, index) => ({
+      id: `inspection-${index + 1}`,
+    }));
+    const tx = {
+      baselineMedia: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      baselineAreaCondition: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      baselineInspection: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      floorPlanExtractionJob: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      propertyFloorPlan: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      propertyArea: { deleteMany: jest.fn().mockResolvedValue({ count: 15 }) },
+      propertyFloor: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      property: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      propertywareLease: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      jobberPropertyLink: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      propertywareUnit: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      propertywareBuilding: { delete: jest.fn().mockResolvedValue({}) },
+    };
+    /** Records the order the deletes were issued in, which is the fragile part. */
+    const order: string[] = [];
+    for (const [table, delegate] of Object.entries(tx))
+      for (const [verb, fn] of Object.entries(delegate))
+        (fn as jest.Mock).mockImplementation(async () => {
+          order.push(`${table}.${verb}`);
+          return { count: 0 };
+        });
+
+    const auditCreate = jest.fn().mockResolvedValue({});
+    const prisma = {
+      propertywareBuilding: {
+        findFirst: jest.fn().mockResolvedValue(
+          options.found === false
+            ? null
+            : { id: PROPERTY_ID, name: 'Demo Property 1', externalId: 'demo-property-1' },
+        ),
+      },
+      inspection: { findMany: jest.fn().mockResolvedValue(inspections) },
+      auditLog: { create: auditCreate },
+      $transaction:
+        options.transactionRejects === undefined
+          ? jest.fn(async (fn: (client: typeof tx) => unknown) => fn(tx))
+          : jest.fn().mockRejectedValue(options.transactionRejects),
+    };
+    const bump = jest.fn().mockResolvedValue(undefined);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const service = new AdminService(
+      prisma as never,
+      {} as never,
+      undefined,
+      undefined,
+      { bump, publish } as never,
+    );
+    // The inspection erase is not re-tested here: it has its own delete order
+    // across a dozen tables and its own coverage. What matters is that this
+    // path delegates to it rather than growing a second copy.
+    const erase = jest
+      .spyOn(service as unknown as { eraseInspection: unknown } as never, 'eraseInspection' as never)
+      .mockResolvedValue({ orphanedStorageObjects: 0 } as never);
+    return { service, prisma, tx, order, auditCreate, bump, publish, erase };
+  }
+
+  it('cannot be pointed at a Propertyware property', async () => {
+    // `sourceSystem` is in the `where`, so the lookup itself is the boundary.
+    const { service, prisma } = buildDelete();
+    await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    expect(prisma.propertywareBuilding.findFirst.mock.calls[0][0].where).toEqual({
+      id: PROPERTY_ID,
+      organizationId: ORG,
+      sourceSystem: DEMO_PROPERTY_SOURCE_SYSTEM,
+    });
+  });
+
+  it('reports a real property as not found, telling the reader nothing about it', async () => {
+    // 404 rather than 403: somebody who cannot delete it has no business
+    // learning whether the id was a real property or no property at all.
+    const { service } = buildDelete({ found: false });
+
+    await expect(service.deleteDemoProperty(actor(), PROPERTY_ID)).rejects.toMatchObject({
+      status: 404,
+      code: 'DEMO_PROPERTY_NOT_FOUND',
+    });
+  });
+
+  it('deletes a clean demo property without needing inspections:delete', async () => {
+    // The ordinary case, and the reason the controller does not simply require
+    // both keys: a demo property nobody walked holds nothing irreversible, and
+    // the person who created it must be able to remove it.
+    const { service, tx, erase } = buildDelete({ inspections: 0 });
+    const result = await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    expect(erase).not.toHaveBeenCalled();
+    expect(tx.propertywareBuilding.delete).toHaveBeenCalledWith({ where: { id: PROPERTY_ID } });
+    expect(result).toMatchObject({ deleted: true, inspectionsErased: 0 });
+  });
+
+  it('refuses to cascade into inspections without inspections:delete', async () => {
+    // The boundary that matters. Otherwise this endpoint is a way around a
+    // permission the office deliberately grants to almost nobody.
+    const { service, erase, tx } = buildDelete({ inspections: 2 });
+
+    await expect(service.deleteDemoProperty(actor(), PROPERTY_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'DEMO_PROPERTY_HAS_INSPECTIONS',
+    });
+    expect(erase).not.toHaveBeenCalled();
+    expect(tx.propertywareBuilding.delete).not.toHaveBeenCalled();
+  });
+
+  it('says how many inspections are in the way', async () => {
+    // "It cannot be deleted" sends somebody hunting. The count and the
+    // permission name are the two facts that let them act.
+    const { service } = buildDelete({ inspections: 3 });
+
+    await expect(service.deleteDemoProperty(actor(), PROPERTY_ID)).rejects.toMatchObject({
+      message: expect.stringContaining('3 inspections'),
+    });
+    await expect(service.deleteDemoProperty(actor(), PROPERTY_ID)).rejects.toMatchObject({
+      message: expect.stringContaining('inspections:delete'),
+    });
+  });
+
+  it('erases every inspection through the path that already owns that order', async () => {
+    const { service, erase } = buildDelete({ inspections: 2 });
+    const result = await service.deleteDemoProperty(actor(['inspections:delete']), PROPERTY_ID);
+
+    expect(erase).toHaveBeenCalledTimes(2);
+    expect(result.inspectionsErased).toBe(2);
+  });
+
+  it('only counts inspections belonging to this organization and this property', async () => {
+    const { service, prisma } = buildDelete();
+    await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    expect(prisma.inspection.findMany.mock.calls[0][0].where).toEqual({
+      organizationId: ORG,
+      propertywareBuildingId: PROPERTY_ID,
+    });
+  });
+
+  it('removes the Property shadow, which no foreign key would have taken with it', async () => {
+    // `ensureStandardLayout` upserts a `Property` row carrying the same id, and
+    // nothing relates the two tables. Left behind it is an orphan that
+    // `Property`'s own geocoding pass keeps looking up for ever.
+    const { service, tx } = buildDelete();
+    await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    expect(tx.propertyArea.deleteMany).toHaveBeenCalledWith({
+      where: { propertyId: PROPERTY_ID },
+    });
+    expect(tx.property.deleteMany).toHaveBeenCalledWith({
+      where: { id: PROPERTY_ID, organizationId: ORG },
+    });
+  });
+
+  it('deletes children before the rows they restrict', async () => {
+    // The order is dictated by the schema and every step is a `Restrict` that
+    // would otherwise refuse. Pinned because a reordering would only fail
+    // against a real database, which these tests are not.
+    const { service, order } = buildDelete();
+    await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    const at = (step: string) => order.indexOf(step);
+    expect(at('baselineMedia.deleteMany')).toBeLessThan(at('baselineAreaCondition.deleteMany'));
+    expect(at('baselineAreaCondition.deleteMany')).toBeLessThan(
+      at('baselineInspection.deleteMany'),
+    );
+    expect(at('baselineAreaCondition.deleteMany')).toBeLessThan(at('propertyArea.deleteMany'));
+    expect(at('floorPlanExtractionJob.deleteMany')).toBeLessThan(
+      at('propertyFloorPlan.deleteMany'),
+    );
+    expect(at('propertyFloorPlan.deleteMany')).toBeLessThan(at('propertyArea.deleteMany'));
+    // Areas cite a floor and a unit, and both restrict.
+    expect(at('propertyArea.deleteMany')).toBeLessThan(at('propertyFloor.deleteMany'));
+    expect(at('propertyFloor.deleteMany')).toBeLessThan(at('propertywareUnit.deleteMany'));
+    expect(at('propertyArea.deleteMany')).toBeLessThan(at('property.deleteMany'));
+    // The building last of all.
+    expect(at('propertywareBuilding.delete')).toBe(order.length - 1);
+  });
+
+  it('does it all in one transaction, so a surprise leaves the property intact', async () => {
+    const { service, prisma } = buildDelete();
+    await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns an unanticipated foreign key into a refusal, not a crash', async () => {
+    // The transaction has already rolled back, so the honest thing to say is
+    // that the property is still there — not that the server broke.
+    const blocked = new Prisma.PrismaClientKnownRequestError('fk', {
+      code: 'P2003',
+      clientVersion: 'test',
+    });
+    const { service } = buildDelete({ transactionRejects: blocked });
+
+    await expect(service.deleteDemoProperty(actor(), PROPERTY_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'DEMO_PROPERTY_STILL_REFERENCED',
+    });
+  });
+
+  it('records what was destroyed, including the inspection count', async () => {
+    // The audit row outlives the property, and the inspection count is the part
+    // nobody can reconstruct afterwards.
+    const { service, auditCreate } = buildDelete({ inspections: 2 });
+    await service.deleteDemoProperty(actor(['inspections:delete']), PROPERTY_ID);
+
+    expect(auditCreate.mock.calls[0][0].data).toMatchObject({
+      organizationId: ORG,
+      actorUserId: user.id,
+      action: 'demo_property.deleted',
+      entityType: 'PropertywareBuilding',
+      metadata: expect.objectContaining({ inspectionsErased: 2 }),
+    });
+  });
+
+  it('tells every open console the inspection list changed, but only when it did', async () => {
+    const withInspections = buildDelete({ inspections: 1 });
+    await withInspections.service.deleteDemoProperty(
+      actor(['inspections:delete']),
+      PROPERTY_ID,
+    );
+    expect(withInspections.publish).toHaveBeenCalledWith({
+      type: 'inspection.changed',
+      organizationId: ORG,
+    });
+
+    // A clean demo property changed no inspection, and saying otherwise would
+    // make every console refetch a list that did not move.
+    const clean = buildDelete({ inspections: 0 });
+    await clean.service.deleteDemoProperty(actor(), PROPERTY_ID);
+    expect(clean.publish).not.toHaveBeenCalled();
+  });
+
+  it('clears the detail cache as well as the list', async () => {
+    // The deleted property has its own cached detail response, and leaving it
+    // would serve a property that no longer exists.
+    const { service, bump } = buildDelete();
+    await service.deleteDemoProperty(actor(), PROPERTY_ID);
+
+    expect(bump.mock.calls.map((call) => call[0])).toEqual(
+      expect.arrayContaining(['properties', 'propertySearch', 'propertyDetails', 'dashboard']),
+    );
+  });
+});
+
 describe('the fixture itself', () => {
   it('gives each demo property its own address and external id', async () => {
     // Two demo properties at the same address would be indistinguishable in
@@ -266,5 +562,29 @@ describe('the fixture itself', () => {
     // The badge comes from `sourceSystem`, but the name is what a plain text
     // export, a Jobber title or a log line carries.
     expect(demoPropertyFixture(1).name).toMatch(/demo/i);
+  });
+
+  it('round-trips its sequence through the external id', () => {
+    // The delete path depends on this: numbering reads the sequence back out of
+    // the ids it wrote, so the two halves have to agree.
+    expect(demoPropertySequence(demoPropertyFixture(7).externalId)).toBe(7);
+  });
+
+  it('claims no sequence from a Propertyware external id', () => {
+    // A real building's id must never be read as a demo number, or a sync would
+    // decide what the next demo property is called.
+    expect(demoPropertySequence('PW-100234')).toBeNull();
+    expect(demoPropertySequence('demo-property-')).toBeNull();
+    expect(demoPropertySequence('demo-property-nope')).toBeNull();
+  });
+
+  it('starts at one when there are none', () => {
+    expect(nextDemoSequence([])).toBe(1);
+  });
+
+  it('ignores ids it does not recognize when numbering', () => {
+    // Defensive: a demo row whose id came from somewhere else must not make the
+    // next number `NaN`, which `Math.max` would happily produce.
+    expect(nextDemoSequence(['PW-100234', 'demo-property-2'])).toBe(3);
   });
 });

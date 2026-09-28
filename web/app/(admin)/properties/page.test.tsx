@@ -10,8 +10,20 @@ const hooks = vi.hoisted(() => ({
   useAdminMutations: vi.fn(),
 }));
 vi.mock('@/lib/queries', () => hooks);
-const permissions = vi.hoisted(() => ({ allowed: true }));
-vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => permissions.allowed }) }));
+const permissions = vi.hoisted(() => ({ granted: new Set(['properties:manage']) }));
+vi.mock('@/lib/auth', () => ({
+  usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }),
+}));
+/**
+ * The dialog is the inspection dialog's sibling and has its own reasoning to
+ * test; here it stands in for itself so these tests are about the page — which
+ * property was handed over, and whether a control appeared at all.
+ */
+vi.mock('@/components/demo-property-delete-dialog', () => ({
+  DemoPropertyDeleteDialog: ({ property }: { property: { name: string; inspectionCount: number } }) => (
+    <div data-testid="delete-dialog">{`${property.name} · ${property.inspectionCount}`}</div>
+  ),
+}));
 const url = vi.hoisted(() => ({
   state: { page: 1, q: '', portfolio: '', occupancy: '' },
   set: vi.fn(),
@@ -54,10 +66,19 @@ function mount(items = [property()]) {
   return render(<PropertiesPage />);
 }
 
+const demo = (over: Record<string, unknown> = {}) =>
+  property({
+    id: 'demo-1',
+    name: 'Demo Property 1',
+    sourceSystem: 'demo',
+    _count: { units: 0, inspections: 0 },
+    ...over,
+  });
+
 beforeEach(() => {
   createDemoProperty.mutate.mockReset();
   createDemoProperty.isPending = false;
-  permissions.allowed = true;
+  permissions.granted = new Set(['properties:manage']);
   vi.mocked(toast.success).mockReset();
   vi.mocked(toast.error).mockReset();
 });
@@ -79,7 +100,7 @@ describe('adding a demo property', () => {
   it('hides it from somebody who cannot', () => {
     // Hidden rather than disabled: a button that cannot be pressed invites a
     // support question, and nothing on this page explains the permission.
-    permissions.allowed = false;
+    permissions.granted = new Set();
     mount();
     expect(screen.queryByRole('button', { name: 'Add demo property' })).toBeNull();
   });
@@ -122,9 +143,57 @@ describe('adding a demo property', () => {
   });
 });
 
+/**
+ * The bin appears for demo properties and nothing else.
+ *
+ * The portfolio has 570 synced properties and no endpoint that deletes one, so
+ * the risk here is not a failed request — it is a control that implies deleting
+ * a real property is a thing that could be arranged.
+ */
+describe('deleting a demo property', () => {
+  it('offers a bin on the demo row', () => {
+    mount([property(), demo()]);
+    expect(screen.getByRole('button', { name: 'Delete Demo Property 1' })).toBeTruthy();
+  });
+
+  it('offers nothing on a synced row', () => {
+    mount([property()]);
+    expect(screen.queryByRole('button', { name: /^Delete / })).toBeNull();
+  });
+
+  it('offers nothing at all without properties:manage', () => {
+    permissions.granted = new Set();
+    mount([demo()]);
+    expect(screen.queryByRole('button', { name: 'Delete Demo Property 1' })).toBeNull();
+  });
+
+  it('opens the dialog on the property that was clicked', () => {
+    // Two demo properties is the case the confirmation exists for, so the page
+    // has to hand over the right one.
+    mount([demo(), demo({ id: 'demo-2', name: 'Demo Property 2' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Demo Property 2' }));
+
+    expect(screen.getByTestId('delete-dialog').textContent).toContain('Demo Property 2');
+  });
+
+  it('tells the dialog how many inspections are at stake', () => {
+    // The dialog decides whether to require the name typed from this number, so
+    // a row that dropped it would silently downgrade the confirmation.
+    mount([demo({ _count: { units: 0, inspections: 3 } })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Demo Property 1' }));
+
+    expect(screen.getByTestId('delete-dialog').textContent).toContain('· 3');
+  });
+
+  it('shows no dialog until the bin is clicked', () => {
+    mount([demo()]);
+    expect(screen.queryByTestId('delete-dialog')).toBeNull();
+  });
+});
+
 describe('telling a demo property apart from a real one', () => {
   it('badges the demo property', () => {
-    mount([property(), property({ id: 'demo-1', name: 'Demo Property 1', sourceSystem: 'demo' })]);
+    mount([property(), demo()]);
 
     const table = screen.getByRole('table', { name: 'Active synchronized properties' });
     expect(within(table).getByText('Demo')).toBeTruthy();

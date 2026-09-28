@@ -1,10 +1,16 @@
 'use client';
 
 import { isDemoProperty, leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
+import { Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { useState } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
+import {
+  DemoPropertyDeleteDialog,
+  type DeletableDemoProperty,
+} from '@/components/demo-property-delete-dialog';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { PageHeader } from '@/components/page-header';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
@@ -135,6 +141,7 @@ export default function PropertyDetailPage() {
   const permissions = usePermissions();
   const id = useParams<{ propertyId: string }>().propertyId;
   const property = useProperty(id);
+  const [pendingDelete, setPendingDelete] = useState<DeletableDemoProperty | null>(null);
 
   // isError first: a failed fetch has no data either, and checking `!data`
   // ahead of it would show a skeleton forever instead of the error.
@@ -156,13 +163,33 @@ export default function PropertyDetailPage() {
     <>
       <PageHeader
         actions={
-          item.isActive && permissions.has('inspections:manage') ? (
-            <Button asChild>
-              <Link href={`/inspections/new?propertyId=${item.id}`}>Create inspection</Link>
-            </Button>
-          ) : (
-            <StatusBadge value="INACTIVE" />
-          )
+          <>
+            {/* Only for a demo property, and only for somebody who can manage
+                properties. A synced property has no delete endpoint at all, so
+                there is nothing to show beside one. */}
+            {isDemoProperty(item) && permissions.has('properties:manage') ? (
+              <Button
+                onClick={() =>
+                  setPendingDelete({
+                    id: item.id,
+                    name: item.name,
+                    inspectionCount: item._count?.inspections ?? 0,
+                  })
+                }
+                variant="outline"
+              >
+                <Trash2Icon />
+                Delete demo property
+              </Button>
+            ) : null}
+            {item.isActive && permissions.has('inspections:manage') ? (
+              <Button asChild>
+                <Link href={`/inspections/new?propertyId=${item.id}`}>Create inspection</Link>
+              </Button>
+            ) : (
+              <StatusBadge value="INACTIVE" />
+            )}
+          </>
         }
         /* Carried over from the list, because this is the screen the Create
            inspection button is on — the last place somebody should discover
@@ -287,6 +314,16 @@ export default function PropertyDetailPage() {
           propertyId={item.id}
         />
       </div>
+
+      {/* Back to the list once it is gone: this page is *about* the property that
+          no longer exists, so staying would show a 404 where the record was. */}
+      {pendingDelete ? (
+        <DemoPropertyDeleteDialog
+          onClose={() => setPendingDelete(null)}
+          property={pendingDelete}
+          redirectTo="/properties"
+        />
+      ) : null}
     </>
   );
 }
