@@ -9,23 +9,12 @@ import type {
 } from '@texasrenters/shared';
 import { ONLINE_WITHIN_MS, splitRouteAtPosition } from '@texasrenters/shared';
 import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
-import Map, {
-  FullscreenControl,
-  Layer,
-  Marker,
-  NavigationControl,
-  Popup,
-  Source,
-  useMap,
-  type LayerProps,
-} from 'react-map-gl/mapbox';
-import { useTheme } from 'next-themes';
+import { Layer, Marker, Popup, Source, useMap, type LayerProps } from 'react-map-gl/mapbox';
 
 import { CameraDirector, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
+import { ConsoleMap } from '@/components/console-map';
 import { useMapStroke } from '@/components/map-colors';
-import { useMapFailure } from '@/components/map-error';
-import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { circleFeature, featureCollection, lineFeature } from '@/components/map-geometry';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
@@ -41,7 +30,6 @@ import { formatDistance, formatDuration } from '@/lib/format';
 import { useGlide } from '@/lib/map-animation';
 import { drawsAsDriving, motionOf, type Motion } from '@/lib/technician-motion';
 import { useMotionTracks } from '@/lib/use-motion-tracks';
-import { MapSettings, useMapPreferences, type MapTypeKey } from '@/components/map-settings';
 import {
   ClusterPin,
   DonePin,
@@ -74,32 +62,6 @@ import {
  * Must be loaded with `ssr: false`. Mapbox GL touches `window` and measures its
  * container, neither of which exists on a server.
  */
-
-/**
- * The map each of the reader's choices draws on.
- *
- * Only the roadmap has a dark variant. Satellite imagery is neither light nor
- * dark — it is a photograph — and swapping it for something darker at night
- * would be changing the data to match the furniture.
- */
-const MAP_STYLES: Record<MapTypeKey, { light: string; dark: string }> = {
-  roadmap: {
-    light: 'mapbox://styles/mapbox/streets-v12',
-    dark: 'mapbox://styles/mapbox/dark-v11',
-  },
-  terrain: {
-    light: 'mapbox://styles/mapbox/outdoors-v12',
-    dark: 'mapbox://styles/mapbox/outdoors-v12',
-  },
-  satellite: {
-    light: 'mapbox://styles/mapbox/satellite-v9',
-    dark: 'mapbox://styles/mapbox/satellite-v9',
-  },
-  hybrid: {
-    light: 'mapbox://styles/mapbox/satellite-streets-v12',
-    dark: 'mapbox://styles/mapbox/satellite-streets-v12',
-  },
-};
 
 /** Past this, a position is history rather than an answer to "where are they". */
 /**
@@ -181,28 +143,6 @@ function useSettledView() {
   }, [map]);
 
   return view;
-}
-
-/**
- * Tilt, applied to the live camera rather than through a controlled prop.
- *
- * Making `pitch` a prop of `<Map>` puts the camera under React's control, and
- * then every fly-to and follow in `CameraDirector` has to round-trip through
- * state to survive a render. This leaves the camera where it belongs — with the
- * map — and only nudges the angle when the reader asks for a different one.
- *
- * `easeTo` carries no `originalEvent`, so this does not read as the reader
- * taking the camera.
- */
-function MapPitch({ degrees }: { degrees: number }) {
-  const { current: map } = useMap();
-
-  useEffect(() => {
-    if (!map) return;
-    map.easeTo({ pitch: degrees, duration: 300 });
-  }, [map, degrees]);
-
-  return null;
 }
 
 /**
@@ -545,68 +485,6 @@ const AccuracyLayer = memo(function AccuracyLayer({
         id="accuracy-fill"
         paint={{ 'fill-color': '#6b7280', 'fill-opacity': 0.1, 'fill-outline-color': '#6b7280' }}
         type="fill"
-      />
-    </Source>
-  );
-});
-
-/**
- * A circle of one radius around every property, to judge grouping by eye.
- *
- * The office rebuilds a quarter by deciding which properties are near enough
- * to be worth one day's driving, and the planner's own answer to that is a
- * number of minutes nobody can see. This draws the question instead: turn it
- * on and where the circles overlap is where properties could share a day.
- *
- * One source for the whole portfolio rather than a circle per property. Under
- * Google this was several hundred `Circle` objects, each added and removed
- * individually; here it is one shape collection the map draws in a pass.
- * Filled and faint: hundreds of hard outlines read as noise, and it is the
- * overlaps being read.
- *
- * Nothing to do with the geofence rings, which are orange, per-property, and
- * are the distance somebody's hours are measured from. Two questions, two
- * colours.
- */
-const GroupingRadiusLayer = memo(function GroupingRadiusLayer({
-  properties,
-  radiusMeters,
-}: {
-  properties: readonly PropertyPosition[];
-  radiusMeters: number;
-}) {
-  const green = useMapStroke('map-grouping-circle');
-  const data = useMemo(
-    () =>
-      featureCollection(
-        radiusMeters
-          ? properties.map((property) =>
-              circleFeature(property.latitude, property.longitude, radiusMeters),
-            )
-          : [],
-      ),
-    [properties, radiusMeters],
-  );
-
-  if (!radiusMeters || !data.features.length) return null;
-
-  return (
-    <Source data={data} id="grouping-radius" type="geojson">
-      <Layer
-        id="grouping-radius-fill"
-        paint={{
-          'fill-color': green,
-          // Low, and deliberately so: two overlapping circles read as a darker
-          // patch, which is exactly the signal. At a heavier fill the whole of
-          // west Houston is one green slab and says nothing.
-          'fill-opacity': 0.08,
-        }}
-        type="fill"
-      />
-      <Layer
-        id="grouping-radius-outline"
-        paint={{ 'line-color': green, 'line-opacity': 0.35, 'line-width': 1 }}
-        type="line"
       />
     </Source>
   );
@@ -959,15 +837,6 @@ const TechnicianMarker = memo(function TechnicianMarker({
   );
 });
 
-/** Said plainly, rather than rendering a grey rectangle nobody can diagnose. */
-function MapUnavailable({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
-      <p>{children}</p>
-    </div>
-  );
-}
-
 export function TechnicianMap({
   currentInspectionIds = null,
   highlightedBuildingIds = null,
@@ -999,23 +868,6 @@ export function TechnicianMap({
    * the brightest thing on the screen by a wide margin — and this console is
    * read at night, from Manila, by people looking at a Texas afternoon.
    */
-  const { resolvedTheme } = useTheme();
-  const dark = resolvedTheme === 'dark';
-
-  /**
-   * Imagery and tilt, chosen by the reader and remembered per browser.
-   */
-  const [mapPreferences, setMapPreferences] = useMapPreferences();
-
-  /**
-   * Mapbox refusing us, said rather than drawn -- but only when it really has.
-   *
-   * See `map-error.ts`: this used to treat every error Mapbox reported as
-   * fatal, which took the whole map away over a tile that failed to load or a
-   * source touched during a style swap.
-   */
-  const [failure, onError] = useMapFailure();
-
   // Fit to everything, technicians and properties alike, rather than centring
   // on a fixed point: this office works one metropolitan area today, but a
   // hard-coded centre is the kind of thing that silently stops making sense
@@ -1135,116 +987,77 @@ export function TechnicianMap({
         ? 'the property'
         : 'everyone';
 
-  const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
-  if (tokenProblem) return <MapUnavailable>{tokenProblem}</MapUnavailable>;
-
   const now = Date.now();
-  const style = MAP_STYLES[mapPreferences.mapType];
 
   return (
-    <div className="relative h-full w-full">
-      {failure ? (
-        <MapUnavailable>{failure}</MapUnavailable>
-      ) : (
-        <Map
-          initialViewState={FALLBACK_VIEW}
-          mapStyle={dark ? style.dark : style.light}
-          mapboxAccessToken={MAPBOX_TOKEN}
-          onError={onError}
-          /* One world. Mapbox repeats the map horizontally when zoomed out, so
-             without this a technician can appear in two places at once and the
-             properties are drawn three times over. */
-          renderWorldCopies={false}
-          style={{ width: '100%', height: '100%', borderRadius: '0.5rem' }}
-        >
-          <CameraDirector
-            fallback={selectedStops}
-            fitKey={fitKey}
-            focus={focus}
-            followed={selectedPosition}
-            onReaderMoved={readerMovedTheMap}
-            points={points}
-            properties={properties}
-            readerMoved={readerMoved}
-            recenterRequest={recenterRequest}
-          />
-          {/* 45° is the angle a vector basemap has buildings modelled for. */}
-          <MapPitch degrees={mapPreferences.tilted ? 45 : 0} />
+    <ConsoleMap initialView={FALLBACK_VIEW} radiusPoints={properties}>
+      <CameraDirector
+        fallback={selectedStops}
+        fitKey={fitKey}
+        focus={focus}
+        followed={selectedPosition}
+        onReaderMoved={readerMovedTheMap}
+        points={points}
+        properties={properties}
+        readerMoved={readerMoved}
+        recenterRequest={recenterRequest}
+      />
 
-          {/* Layer order is mount order, so this reads bottom to top: the
-              context circles, then the geofence rings inside the property
-              layer, then the routes. Markers are real elements above the
-              canvas, so every pin is above every one of these regardless. */}
-          <GroupingRadiusLayer
-            properties={properties}
-            radiusMeters={mapPreferences.groupingRadiusMeters}
-          />
+      {/* Layer order is mount order, and the shared map has already drawn the
+          grouping circles beneath everything here. Markers are real elements
+          above the canvas, so every pin sits above every layer regardless. */}
+      <PropertyLayer
+        highlighted={highlightedBuildingIds}
+        properties={properties}
+        selectedPropertyId={selectedPropertyId}
+      />
 
-          <PropertyLayer
-            highlighted={highlightedBuildingIds}
-            properties={properties}
-            selectedPropertyId={selectedPropertyId}
-          />
+      <RouteLayer
+        currentInspectionIds={currentInspectionIds}
+        position={selectedPosition}
+        route={route}
+      />
+      <AirTravelLayer route={route} />
+      <AccuracyLayer positions={positions} />
 
-          <RouteLayer
-            currentInspectionIds={currentInspectionIds}
-            position={selectedPosition}
-            route={route}
-          />
-          <AirTravelLayer route={route} />
-          <AccuracyLayer positions={positions} />
+      {positions.map((position) => (
+        // Keyed on the technician, not the fix. The fix's id is new on every
+        // report, which remounted the marker each time -- so there was nothing
+        // to slide, only a marker destroyed and drawn again.
+        <TechnicianMarker
+          dim={Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId}
+          key={position.technicianId}
+          motion={motionOf(tracks.get(position.technicianId) ?? [], now)}
+          onSelect={selectFromMap}
+          position={position}
+          selected={position.technicianId === selectedTechnicianId}
+        />
+      ))}
 
-          {positions.map((position) => (
-            // Keyed on the technician, not the fix. The fix's id is new on
-            // every report, which remounted the marker each time -- so there
-            // was nothing to slide, only a marker destroyed and drawn again.
-            <TechnicianMarker
-              dim={Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId}
-              key={position.technicianId}
-              motion={motionOf(tracks.get(position.technicianId) ?? [], now)}
-              onSelect={selectFromMap}
-              position={position}
-              selected={position.technicianId === selectedTechnicianId}
-            />
-          ))}
-
-          <NavigationControl position="top-right" showCompass visualizePitch />
-          <FullscreenControl position="top-right" />
-
-          {/* Inside the map rather than over it, so they stay on screen in
-              fullscreen. Lifted clear of the bottom edge, which belongs to
-              Mapbox's logo and attribution — both of which have to stay
-              readable. */}
-          <div
-            {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }}
-            className="absolute right-0 bottom-6 z-10"
-          >
-            <RecenterControl
-              following={focus.kind === 'TECHNICIAN' && Boolean(selectedPosition)}
-              onRecenter={recenter}
-              readerMoved={readerMoved}
-              subject={recenterSubject}
-            />
-          </div>
-          {selectedPosition ? (
-            <div
-              {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }}
-              className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2"
-            >
-              <TechnicianHud
-                nextStop={nextStop}
-                position={selectedPosition}
-                track={tracks.get(selectedPosition.technicianId) ?? []}
-              />
-            </div>
-          ) : null}
-        </Map>
-      )}
-      {/* Outside the map on purpose: the settings still open, and still
-          remember, when the map will not load at all. */}
-      <div className="absolute top-3 left-3 z-10">
-        <MapSettings onChange={setMapPreferences} preferences={mapPreferences} />
+      {/* Inside the map rather than over it, so they stay on screen in
+          fullscreen. Lifted clear of the bottom edge, which belongs to
+          Mapbox's logo and attribution -- both of which have to stay
+          readable. */}
+      <div {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }} className="absolute right-0 bottom-6 z-10">
+        <RecenterControl
+          following={focus.kind === 'TECHNICIAN' && Boolean(selectedPosition)}
+          onRecenter={recenter}
+          readerMoved={readerMoved}
+          subject={recenterSubject}
+        />
       </div>
-    </div>
+      {selectedPosition ? (
+        <div
+          {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }}
+          className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2"
+        >
+          <TechnicianHud
+            nextStop={nextStop}
+            position={selectedPosition}
+            track={tracks.get(selectedPosition.technicianId) ?? []}
+          />
+        </div>
+      ) : null}
+    </ConsoleMap>
   );
 }

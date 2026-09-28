@@ -70,8 +70,11 @@ export function renderableColor(value: string, fallback = '#2563eb'): string {
   if (/^(#|rgb|hsl)/i.test(value)) return value;
   if (typeof document === 'undefined') return fallback;
 
-  const normaliser = document.createElement('canvas').getContext('2d');
-  if (!normaliser) return fallback;
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return fallback;
 
   /**
    * Canvas keeps its previous `fillStyle` when handed something it cannot
@@ -79,13 +82,37 @@ export function renderableColor(value: string, fallback = '#2563eb'): string {
    * the colour was refused rather than converted.
    */
   const sentinel = '#010203';
-  normaliser.fillStyle = sentinel;
-  normaliser.fillStyle = value;
-  const painted = String(normaliser.fillStyle);
-  if (painted === sentinel) return fallback;
-  // Some browsers hand wide-gamut colours back as `color(display-p3 …)`, which
-  // Mapbox cannot read either. Anything not plainly sRGB is not worth guessing.
-  return /^(#|rgb|hsl)/i.test(painted) ? painted : fallback;
+  context.fillStyle = sentinel;
+  context.fillStyle = value;
+  if (String(context.fillStyle) === sentinel) return fallback;
+
+  /**
+   * Read back as a *painted pixel*, not as a string.
+   *
+   * Reading `fillStyle` back was the first attempt and it was not enough:
+   * Chrome returns a wide-gamut colour as `color(srgb 0.9 0.42 0.1)`, which
+   * Mapbox understands no better than the `oklch` it came from. So the route
+   * drew in the fallback blue instead of the design system's orange — the
+   * right shape, the wrong colour, and no error anywhere.
+   *
+   * Painting one pixel and reading its bytes asks the browser to do the
+   * conversion it is actually good at, and there is no serialisation left to
+   * disagree about.
+   */
+  try {
+    context.clearRect(0, 0, 1, 1);
+    context.fillRect(0, 0, 1, 1);
+    const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+    if (red === undefined || green === undefined || blue === undefined) return fallback;
+    return alpha === 255 || alpha === undefined
+      ? `rgb(${red}, ${green}, ${blue})`
+      : `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`;
+  } catch {
+    // A tainted or blocked canvas refuses `getImageData`. The serialised value
+    // is still worth having when it happens to be a form Mapbox can read.
+    const painted = String(context.fillStyle);
+    return /^(#|rgb|hsl)/i.test(painted) ? painted : fallback;
+  }
 }
 
 /** The colour a class paints, read off a probe element. Server-safe. */
