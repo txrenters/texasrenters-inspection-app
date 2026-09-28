@@ -52,9 +52,30 @@ export function circleFeature(
   };
 }
 
-/** A collection, which is what a Mapbox source wants even for one shape. */
+/**
+ * Every coordinate in a feature is a real number.
+ *
+ * A property with no latitude, or a radius that arrived as null, makes a ring
+ * of `NaN`s -- and Mapbox rejects the *whole source*, so one unplaced row takes
+ * out every circle on the map rather than just its own. JSON has no `NaN`
+ * either, so the shape could not survive being serialised in any case.
+ */
+function drawable(feature: unknown): boolean {
+  const coordinates = (feature as { geometry?: { coordinates?: unknown } } | null)?.geometry
+    ?.coordinates;
+  const finite = (value: unknown): boolean =>
+    Array.isArray(value) ? value.every(finite) : typeof value === 'number' && Number.isFinite(value);
+  return finite(coordinates);
+}
+
+/**
+ * A collection, which is what a Mapbox source wants even for one shape.
+ *
+ * Anything undrawable is left out rather than passed on. A missing circle is a
+ * missing circle; a rejected source is a blank map.
+ */
 export function featureCollection<T>(features: readonly T[]) {
-  return { type: 'FeatureCollection' as const, features: [...features] };
+  return { type: 'FeatureCollection' as const, features: features.filter(drawable) };
 }
 
 /**

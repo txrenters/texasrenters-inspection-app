@@ -95,4 +95,31 @@ describe('a collection', () => {
   it('is happy empty, because a map with nothing on it still draws', () => {
     expect(featureCollection([]).features).toEqual([]);
   });
+
+  /**
+   * Mapbox rejects a source, not a shape. A property that arrived without a
+   * latitude would otherwise take every circle on the map with it -- which is
+   * the difference between one missing ring and a blank rectangle where the
+   * technician map used to be.
+   */
+  it('drops a shape with a coordinate that is not a number', () => {
+    const good = circleFeature(HOUSTON.latitude, HOUSTON.longitude, 40);
+    const noLatitude = circleFeature(Number.NaN, HOUSTON.longitude, 40);
+    const noRadius = circleFeature(HOUSTON.latitude, HOUSTON.longitude, Number.NaN);
+
+    expect(featureCollection([good, noLatitude, noRadius]).features).toEqual([good]);
+  });
+
+  it('keeps a line whose points are all real, and drops one that is not', () => {
+    const good = lineFeature([
+      [29.76, -95.37],
+      [29.78, -95.41],
+    ]);
+    const bad = lineFeature([
+      [29.76, -95.37],
+      [Number.POSITIVE_INFINITY, -95.41],
+    ]);
+
+    expect(featureCollection([good, bad]).features).toEqual([good]);
+  });
 });
