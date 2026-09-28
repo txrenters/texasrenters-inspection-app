@@ -19,6 +19,7 @@ import {
 import { PrismaService } from '../common/prisma.service';
 import { businessDayBounds } from '../common/business-day';
 import { GoogleRoutesClient, type GoogleRoute } from './google-routes.client';
+import { MapboxDirectionsClient } from './mapbox-directions.client';
 import type { GeoPoint, OsrmRoute } from './osrm.client';
 import { OsrmClient } from './osrm.client';
 
@@ -162,6 +163,7 @@ export class RouteService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OsrmClient) private readonly osrm: OsrmClient,
     @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
+    @Inject(MapboxDirectionsClient) private readonly mapbox: MapboxDirectionsClient,
   ) {}
 
   /**
@@ -194,6 +196,19 @@ export class RouteService {
   private async driveFor(
     points: readonly GeoPoint[],
   ): Promise<{ drive: GoogleRoute | OsrmRoute; source: RouteTimingSource } | null> {
+    /**
+     * Mapbox first.
+     *
+     * It draws the same roads the console's maps are drawn on, it needs no
+     * billing account beyond the one already paying for the tiles, and -- the
+     * reason it is first rather than last -- it answers when Google's does
+     * not. This deployment spent days with Google's billing lapsed and every
+     * route silently empty.
+     */
+    if (this.mapbox.configured) {
+      const drive = await this.mapbox.route(points);
+      if (drive) return { drive, source: 'MAPBOX_FREE_FLOW' };
+    }
     if (this.google.configured) {
       const drive = await this.google.route(points);
       if (drive) return { drive, source: 'GOOGLE_TRAFFIC' };

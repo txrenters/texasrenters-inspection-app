@@ -83,6 +83,9 @@ describe('a start OSRM will not accept', () => {
       // Google unconfigured, so these keep exercising the OSRM path they were
       // written for -- the teleport guard is specific to it.
       { configured: false } as never,
+      // Mapbox likewise. It is tried before Google, so leaving it configured
+      // would take the drive away from OSRM and the guard would never run.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     expect(route.originOutsideServiceArea).toBe(true);
@@ -122,6 +125,9 @@ describe('a start OSRM will not accept', () => {
       // Google unconfigured, so these keep exercising the OSRM path they were
       // written for -- the teleport guard is specific to it.
       { configured: false } as never,
+      // Mapbox likewise. It is tried before Google, so leaving it configured
+      // would take the drive away from OSRM and the guard would never run.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     // Distance is a fact about the Earth. A duration would need airports,
@@ -145,6 +151,9 @@ describe('a start OSRM will not accept', () => {
       osrm as never,
       // Google unconfigured, so these keep exercising the OSRM path they were
       // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
+      // Mapbox likewise. It is tried before Google, so leaving it configured
+      // would take the drive away from OSRM and the guard would never run.
       { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
@@ -190,6 +199,9 @@ describe('a stop OSRM will not accept', () => {
       // Google unconfigured, so these keep exercising the OSRM path they were
       // written for -- the teleport guard is specific to it.
       { configured: false } as never,
+      // Mapbox likewise. It is tried before Google, so leaving it configured
+      // would take the drive away from OSRM and the guard would never run.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     expect(matrixCalls).toBe(2);
@@ -222,6 +234,9 @@ describe('a stop OSRM will not accept', () => {
       osrm as never,
       // Google unconfigured, so these keep exercising the OSRM path they were
       // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
+      // Mapbox likewise. It is tried before Google, so leaving it configured
+      // would take the drive away from OSRM and the guard would never run.
       { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 

@@ -34,7 +34,7 @@ describe("a stop's actual times", () => {
         ]),
       },
     };
-    const service = new RouteService(prisma as never, {} as never, {} as never);
+    const service = new RouteService(prisma as never, {} as never, {} as never, {} as never);
 
     const [entry] = await service.assignmentsByTechnician('org', businessDayFromQuery('2026-09-14'));
 
@@ -68,7 +68,7 @@ describe('the day a map date asks for', () => {
       },
       technicianPlanningProfile: { findFirst: async () => null },
     };
-    const service = new RouteService(prisma as never, {} as never, {} as never);
+    const service = new RouteService(prisma as never, {} as never, {} as never, {} as never);
     return { service, seen };
   }
 
