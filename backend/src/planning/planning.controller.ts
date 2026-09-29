@@ -297,8 +297,18 @@ export class PlanningController {
         })
       : [];
     const names = new Map(previous.map((technician) => [technician.id, technician.displayName]));
+    // A quarter sent out to nobody names its days' groups, not people.
+    const groups = await this.planner.dayGroups(
+      organizationId,
+      planId,
+      stops.flatMap((stop) => (stop.assignedTechnicianId ? [stop.assignedTechnicianId] : [])),
+    );
     return stops.map(({ previousTechnicianId, propertywareBuilding, ...stop }) => ({
       ...stop,
+      assignedTechnician:
+        groups && stop.assignedTechnician
+          ? { ...stop.assignedTechnician, displayName: groups.get(stop.assignedTechnician.id) ?? 'Day group' }
+          : stop.assignedTechnician,
       // Prisma gives a decimal; the console wants a number it can put on a map.
       latitude: propertyPosition(propertywareBuilding)?.latitude ?? null,
       longitude: propertyPosition(propertywareBuilding)?.longitude ?? null,
@@ -400,8 +410,17 @@ export class PlanningController {
       anchorsByDay.set(key, [...(anchorsByDay.get(key) ?? []), anchor]);
     }
 
+    // A quarter sent out to nobody names its days' groups, not people.
+    const groups = await this.planner.dayGroups(
+      organizationId,
+      planId,
+      days.map((day) => day.technicianId),
+    );
     return days.map((day) => ({
       ...day,
+      technician: groups
+        ? { ...day.technician, displayName: groups.get(day.technicianId) ?? 'Day group' }
+        : day.technician,
       stops: (byDay.get(`${day.date.toISOString().slice(0, 10)}|${day.technicianId}`) ?? []).map((stop) => ({
         id: stop.id,
         sequence: stop.sequence,

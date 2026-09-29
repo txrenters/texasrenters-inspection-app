@@ -61,7 +61,14 @@ const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): 
 
 const build = (
   stops: StopRow[],
-  options: { blockedCount?: number; withoutUnit?: number; claimed?: number; existingInspectionId?: string | null } = {},
+  options: {
+    blockedCount?: number;
+    withoutUnit?: number;
+    claimed?: number;
+    existingInspectionId?: string | null;
+    /** The quarter was sent out to nobody. */
+    jobberUnassigned?: boolean;
+  } = {},
 ) => {
   const remaining = new Map(stops.map((row) => [row.id, row]));
 
@@ -86,6 +93,7 @@ const build = (
     inspectionAssignment: { create: assignmentCreate },
     jobberOutboundTask: { create: outboundCreate },
     tbpQuarterPlanStop: { update: stopUpdate },
+    tbpQuarterPlan: { findUnique: jest.fn().mockResolvedValue({ jobberUnassigned: options.jobberUnassigned ?? false }) },
     auditLog: { create: auditCreate },
   };
 
@@ -339,6 +347,23 @@ describe('publishing a reviewed quarter', () => {
     await service.publish(USER, 'plan-1');
 
     expect(assignmentCreate.mock.calls[0][0].data.idempotencyKey).toBe('tbp-plan:plan-1:s1');
+  });
+
+  /**
+   * The office, 2026-09-29: sent out unassigned means nobody has the visits --
+   * not in Jobber and not on a phone -- until they are handed out in Jobber.
+   */
+  it('gives nobody the visits of a quarter sent out to nobody, though its days have groups', async () => {
+    const { service, assignmentCreate, outboundCreate } = build([aStop('s1', 1), aStop('s2', 2)], {
+      jobberUnassigned: true,
+    });
+
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary.published).toBe(2);
+    expect(assignmentCreate).not.toHaveBeenCalled();
+    // Still booked into Jobber, where the office hands them out.
+    expect(outboundCreate).toHaveBeenCalledTimes(2);
   });
 
   it('leaves an unassigned stop without an assignment rather than inventing one', async () => {

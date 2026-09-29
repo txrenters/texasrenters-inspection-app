@@ -232,3 +232,24 @@ describe('changing a draft visit in its window', () => {
     expect(screen.getByText('None: it is taken up with the second month’s')).toBeTruthy();
   });
 });
+
+/**
+ * A quarter sent out to nobody (the office, 2026-09-29): its days are groups,
+ * so a visit's window names the group and never a person.
+ */
+describe('a visit on a quarter sent out unassigned', () => {
+  it('shows its day group, not a technician', () => {
+    mount({
+      editable: false,
+      stop: stop({ assignedTechnician: { id: 'moses', displayName: 'Day group 1' } }),
+      dayGroups: [
+        { id: 'moses', name: 'Day group 1' },
+        { id: 'kevin', name: 'Day group 2' },
+      ],
+    });
+
+    expect(screen.getByText('Day group')).toBeTruthy();
+    expect(screen.getByText('Day group 1 · sent out unassigned')).toBeTruthy();
+    expect(screen.queryByText('Technician')).toBeNull();
+  });
+});

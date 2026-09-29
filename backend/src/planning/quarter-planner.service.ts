@@ -283,6 +283,32 @@ export interface Roster {
   homes: Map<string, GeoPoint>;
 }
 
+/**
+ * The crew a quarter sent out to nobody is laid out with.
+ *
+ * The office, 2026-09-29: ticking "Send the visits out unassigned" means nobody
+ * has the visits -- not in Jobber and not on a phone -- until the office hands
+ * them out in Jobber. The planner still needs days, and a day is keyed to a crew
+ * member (`TbpQuarterPlanDay.technicianId`), so the crew is kept as the number
+ * of days that run at once and the zone each group takes in a week: groups, not
+ * people. What it drops is where they live. A day nobody has been given does
+ * not start at somebody's front door; it starts at its own first visit.
+ */
+export function forUnassigned(roster: Roster, unassigned: boolean): Roster {
+  return unassigned ? { technicianIds: roster.technicianIds, homes: new Map() } : roster;
+}
+
+/**
+ * What a quarter sent out to nobody calls its days: "Day group 1", "Day group 2",
+ * in the crew's order, so the console never shows a person's name on a day that
+ * person does not have. Any other id a stop carries -- a coordinator's pin from
+ * before the box was ticked -- is numbered after them.
+ */
+export function dayGroupNames(crew: readonly string[], others: readonly string[] = []): Map<string, string> {
+  const order = [...crew, ...[...new Set(others)].filter((id) => !crew.includes(id)).sort()];
+  return new Map(order.map((id, index) => [id, `Day group ${index + 1}`]));
+}
+
 @Injectable()
 export class QuarterPlannerService {
   private readonly logger = new Logger(QuarterPlannerService.name);
@@ -380,7 +406,10 @@ export class QuarterPlannerService {
     const quarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
     const settings = routingSettings(planSettings(plan), input, quarter);
     // A crew chosen now is checked before anything is written.
-    const roster = await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined);
+    const roster = forUnassigned(
+      await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined),
+      settings.jobberUnassigned,
+    );
     await this.prisma.tbpQuarterPlan.update({ where: { id: planId }, data: planColumns(settings) });
 
     // A visit a publish could not create -- no approved areas, no unit -- is
@@ -540,6 +569,20 @@ export class QuarterPlannerService {
    * the page shows the rotation the days were laid out with, as long as the
    * crew has not changed since. Reads only: it never blocks a stop.
    */
+  /**
+   * The names a quarter sent out to nobody shows instead of its crew's, or
+   * null for a quarter whose days belong to people. See `dayGroupNames`.
+   */
+  async dayGroups(organizationId: string, planId: string, others: readonly string[] = []) {
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { crewTechnicianIds: true, jobberUnassigned: true },
+    });
+    if (!plan?.jobberUnassigned) return null;
+    const roster = await this.roster(organizationId, plan.crewTechnicianIds);
+    return dayGroupNames(roster.technicianIds, others);
+  }
+
   async rotation(organizationId: string, planId: string): Promise<PlanRotation> {
     const plan = await this.prisma.tbpQuarterPlan.findFirst({
       where: { id: planId, organizationId },
@@ -584,7 +627,7 @@ export class QuarterPlannerService {
             ],
       ),
     );
-    const roster = await this.roster(organizationId, plan.crewTechnicianIds);
+    const roster = forUnassigned(await this.roster(organizationId, plan.crewTechnicianIds), plan.jobberUnassigned);
     const zones = zoneCircle(stops, roster, plan.maxDriveMinutes);
     const startsOn = plan.startsOn ? isoDay(plan.startsOn) : null;
     const people = roster.technicianIds.length
@@ -593,7 +636,9 @@ export class QuarterPlannerService {
           select: { id: true, displayName: true },
         })
       : [];
-    const names = new Map(people.map((person) => [person.id, person.displayName]));
+    const names = new Map<string, string | null>(people.map((person) => [person.id, person.displayName]));
+    // Nobody's days on a quarter sent out to nobody: see `dayGroupNames`.
+    if (plan.jobberUnassigned) for (const [id, group] of dayGroupNames(roster.technicianIds)) names.set(id, group);
 
     const weeks = new Map<string, Record<string, string>>();
     for (const date of plannedVisitDaysOfQuarter(quarter, plan.holidays, startsOn)) {
@@ -1231,11 +1276,11 @@ export class QuarterPlannerService {
    * and its assignment are separate, and a reschedule that silently reassigned
    * would leave the old technician's calendar wrong.
    *
-   * On a plan the office chose to publish unassigned, the technician half is not
-   * sent at all. The assignment still moves *here* — the phone and the console's
-   * calendar read it — but pushing it would write a name onto a Jobber visit the
-   * office deliberately left blank, and a rebuild would silently undo the choice
-   * they made in the build dialog.
+   * On a plan the office chose to publish unassigned, there is no technician
+   * half. Its days are groups, not people (the office, 2026-09-29: nobody has
+   * them until they are handed out in Jobber), so a visit moving from one group
+   * to another changes nobody's work -- here or in Jobber. Whoever the office
+   * gave it to in Jobber keeps it.
    */
   private async rebookMovedVisits(
     organizationId: string,
@@ -1265,7 +1310,7 @@ export class QuarterPlannerService {
       // reason to strand a technician's calendar entry.
       if (!date || !row.assignedTechnicianId) continue;
       const dayMoved = date !== was.date;
-      const technicianChanged = row.assignedTechnicianId !== was.technicianId;
+      const technicianChanged = !plan?.jobberUnassigned && row.assignedTechnicianId !== was.technicianId;
       if (!dayMoved && !technicianChanged) continue;
 
       await this.prisma.$transaction(async (tx) => {
@@ -1307,8 +1352,7 @@ export class QuarterPlannerService {
             kind: JobberOutboundKind.VISIT_RESCHEDULE,
             requestedById: actorId,
           });
-        // Not on a plan published unassigned: see the note on this method.
-        if (technicianChanged && !plan?.jobberUnassigned)
+        if (technicianChanged)
           await requestVisitPush(tx, {
             organizationId,
             inspectionId: was.inspectionId,
@@ -1557,6 +1601,18 @@ export function routingSettings(
       'Whether Jobber visits go out unassigned must be true or false.',
     );
   const jobberUnassigned = input.jobberUnassigned ?? current.jobberUnassigned ?? false;
+  /**
+   * Nobody chosen is an answer only for a quarter sent out to nobody (the
+   * office, 2026-09-29: "I already clicked unassigned ... but still needs to
+   * select a technician?"). Otherwise the days would silently go to whoever the
+   * planning profiles name, which is not what an empty choice says.
+   */
+  if (Array.isArray(input.technicianIds) && input.technicianIds.length === 0 && !jobberUnassigned)
+    throw new ApplicationError(
+      422,
+      'INVALID_PLAN_SETTINGS',
+      'Choose the technicians to send out on the plan, or send its visits out unassigned.',
+    );
   return {
     jobberUnassigned,
     occupiedVisitMinutes: within('occupiedVisitMinutes', 5, 240),

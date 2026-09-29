@@ -54,7 +54,8 @@ function controllerWith(anchors: ReturnType<typeof anchor>[]) {
   return new PlanningController(
     prisma as never,
     {} as never,
-    {} as never,
+    // An ordinary plan, whose days belong to people: no day groups to name.
+    { dayGroups: jest.fn().mockResolvedValue(null) } as never,
     {} as never,
     {} as never,
     {} as never,
