@@ -179,6 +179,39 @@ export async function savedJobStarts(): Promise<Map<string, string>> {
 }
 
 /**
+ * The areas submitted on this phone that the server has not confirmed yet.
+ *
+ * Submit Evidence goes back the moment it is pressed (the office, 2026-09-30:
+ * "when I click the submit, it should not wait on the server"), and the area's
+ * photographs and its completion are sent behind it -- saved first, so a closed
+ * app or a lost signal sends them later. Until the server has it, every read of
+ * the area says submitted, as the technician saw it.
+ */
+export async function savedRoomCompletions(): Promise<Set<string>> {
+  const rooms = new Set<string>();
+  for (const entry of await readQueue())
+    if (entry.kind === 'room-complete' && entry.payload.roomId) rooms.add(String(entry.payload.roomId));
+  return rooms;
+}
+
+/**
+ * Areas as the technician left them: one whose submission is saved here reads as
+ * completed. Only an area the server still has open is changed -- a skipped one,
+ * or one the server has already completed, keeps the server's answer.
+ */
+export function withCompletionsSaved<Room extends { id: string; completionStatus: string }>(
+  rooms: readonly Room[],
+  saved: ReadonlySet<string>,
+): Room[] {
+  if (!saved.size) return [...rooms];
+  return rooms.map((room) =>
+    saved.has(room.id) && room.completionStatus !== 'COMPLETED' && room.completionStatus !== 'SKIPPED'
+      ? ({ ...room, completionStatus: 'COMPLETED' } as Room)
+      : room,
+  );
+}
+
+/**
  * How each queued kind is replayed.
  *
  * Written out rather than closing over the repository, so adding a queued

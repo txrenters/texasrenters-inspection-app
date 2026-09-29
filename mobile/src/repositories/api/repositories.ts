@@ -45,9 +45,12 @@ import {
   QueuedOfflineError,
   dropQueuedWrite,
   jobStartEntryId,
+  drainOfflineWrites,
   queueOnConnectionFailure,
   savedJobStarts,
+  savedRoomCompletions,
   sendSavedFirst,
+  withCompletionsSaved,
 } from './offline-writes';
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
@@ -936,14 +939,14 @@ export class ApiInspectionRepository implements InspectionRepository {
     return {
       ...context,
       inspection: (await withSavedStarts([context.inspection]))[0]!,
-      rooms: inspectedRooms(context.rooms).map(withLocalRoomState),
+      rooms: (await withSavedCompletions(inspectedRooms(context.rooms))).map(withLocalRoomState),
     };
   }
   async report(id: string) {
     const report = await cachedApiRecord(`inspection-report:${id}`, reportSchema, () =>
       getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/report`),
     );
-    return { ...report, rooms: inspectedRooms(report.rooms) };
+    return { ...report, rooms: await withSavedCompletions(inspectedRooms(report.rooms)) };
   }
   /**
    * Start job, saved on the phone before it is sent (`sendSavedFirst`), with
@@ -1062,6 +1065,14 @@ export class ApiInspectionRepository implements InspectionRepository {
     ]);
   }
   async complete(id: string, servicesReport?: VisitServicesReport, closingComments?: Partial<ClosingComments>) {
+    /*
+     * What this phone saved and has not sent goes first: an area submitted a
+     * moment ago is sent behind the technician (`completeRoom`), and ending the
+     * job before it lands would have the server refuse the job for an area it
+     * has not been told about. Best effort -- with no signal the job cannot be
+     * submitted either, and says so below.
+     */
+    await drainOfflineWrites(sendQueuedWrite).catch(() => undefined);
     // The closing comments sit beside the services report on the body, as the
     // API reads them; neither is sent when there is nothing to say.
     const body =
@@ -1086,14 +1097,13 @@ export class ApiInspectionRepository implements InspectionRepository {
       z.array(roomSchema),
       () => getJson(`/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/rooms`),
     );
-    return inspectedRooms(rooms).map(withLocalRoomState);
+    return (await withSavedCompletions(inspectedRooms(rooms))).map(withLocalRoomState);
   }
   async room(roomId: string) {
-    return withLocalRoomState(
-      await cachedApiRecord(`room:${roomId}`, roomSchema, () =>
-        getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}`),
-      ),
+    const room = await cachedApiRecord(`room:${roomId}`, roomSchema, () =>
+      getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}`),
     );
+    return withLocalRoomState((await withSavedCompletions([room]))[0]!);
   }
   async evidenceRequests(inspectionId: string) {
     return cachedApiRecord(`evidenceRequests:${inspectionId}`, evidenceRequestSchema, () =>
@@ -1317,10 +1327,19 @@ export class ApiInspectionRepository implements InspectionRepository {
    * completion held here will succeed, because the queue delivers the
    * photographs that justify it first.
    */
+  /**
+   * Submit Evidence, sent behind the technician (the office, 2026-09-30).
+   *
+   * The screen goes back on the tap, so this is saved before it is sent
+   * (`sendSavedFirst`): the area's photographs and its completion survive the
+   * app being closed or the signal going, and reads show the area submitted
+   * meanwhile (`withSavedCompletions`). The photographs go first, because the
+   * server counts them before it completes the area.
+   */
   async completeRoom(roomId: string) {
     try {
       const room = roomSchema.parse(
-        await queueOnConnectionFailure(
+        await sendSavedFirst(
           { id: `complete:${roomId}`, kind: 'room-complete', payload: { roomId } },
           async () => {
             await flushRoomSnapshotsNow(roomId);
@@ -1896,6 +1915,13 @@ async function withSavedStarts<Job extends { id: string; status: string; started
     const startedAt = starts.get(job.id);
     return startedAt && job.status === 'SCHEDULED' ? ({ ...job, status: 'IN_PROGRESS', startedAt } as Job) : job;
   });
+}
+
+/** Areas as the technician left them: see `withCompletionsSaved`. */
+async function withSavedCompletions<Room extends { id: string; completionStatus: string }>(
+  rooms: readonly Room[],
+): Promise<Room[]> {
+  return withCompletionsSaved(rooms, await savedRoomCompletions().catch(() => new Set<string>()));
 }
 
 function withLocalRoomState(room: z.infer<typeof roomSchema>) {

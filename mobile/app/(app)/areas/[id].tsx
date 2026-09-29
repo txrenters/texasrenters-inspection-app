@@ -885,15 +885,18 @@ export default function AreaDetailScreen() {
                     ? 'Marks this area finished and returns to the inspection'
                     : gate.reason
                 }
-                busy={updates.complete.isPending}
-                busyLabel="Submitting…"
                 className="mt-4"
                 /* Disabled rather than hidden, with the reason above it in the
                    checklist: a control that vanishes tells a technician nothing
                    about what is missing. */
                 disabled={!gate.canComplete}
                 label="Submit Evidence"
-                onPress={() => updates.complete.mutate(undefined, { onSuccess: () => goBack() })}
+                // Back at once: the evidence and the completion are sent behind
+                // the technician, and survive a closed app (`useUpdateRoom`).
+                onPress={() => {
+                  updates.complete.mutate();
+                  goBack();
+                }}
               />
             </View>
           )}
