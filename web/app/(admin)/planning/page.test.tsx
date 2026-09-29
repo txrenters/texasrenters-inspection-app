@@ -384,16 +384,22 @@ describe('the benefit package plan page', () => {
    * Unassigned list. Q4 is grouped for one technician, so every visit Jobber
    * receives lands on Moses, and the office would rather hand them out itself.
    */
-  it('publishes the quarter unassigned in Jobber when that is ticked', () => {
+  /**
+   * The office, 2026-09-29: "I already checked that send the visit out
+   * unassigned but I still can't rebuild it cause it still requires me to pick
+   * one technician". Sent out unassigned, nobody has the visits, so nobody is
+   * chosen.
+   */
+  it('builds a quarter sent out unassigned with nobody chosen', () => {
     mount({ plans: [] });
 
     fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
     const dialog = screen.getByRole('dialog');
     fireEvent.click(within(dialog).getByRole('checkbox', { name: /Send the visits out unassigned/ }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Build unassigned' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ jobberUnassigned: true }),
+      expect.objectContaining({ jobberUnassigned: true, technicianIds: [] }),
       expect.anything(),
     );
   });
@@ -440,14 +446,17 @@ describe('the benefit package plan page', () => {
     );
   });
 
-  it('says the days here still belong to the technicians chosen', () => {
-    // The misreading worth preventing: that ticking this means nobody is doing
-    // the visits. It changes what Jobber is told, not who goes out.
+  it('says nobody gets the visits, here or in Jobber, and asks for nobody', () => {
     mount({ plans: [] });
 
     fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/days here still belong to the technicians chosen above/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Send the visits out unassigned/ }));
+
+    expect(within(dialog).getByText(/Nobody gets them/)).toBeTruthy();
+    expect(within(dialog).getByText(/Nobody to choose: the visits go out unassigned/)).toBeTruthy();
+    // The people are not offered: choosing one would say somebody has the visits.
+    expect(within(dialog).queryByRole('checkbox', { name: /Moses/ })).toBeNull();
   });
 
   /** There is nothing published to move on a quarter that has never been built. */

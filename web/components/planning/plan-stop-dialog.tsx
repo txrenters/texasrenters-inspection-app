@@ -104,6 +104,7 @@ export function PlanStopDialog({
   quarter = null,
   closedDays = [],
   startsOn = null,
+  dayGroups = null,
 }: {
   /** The visit to show; null closes the window. */
   stop: PlanStop | null;
@@ -121,6 +122,12 @@ export function PlanStopDialog({
   closedDays?: readonly string[];
   /** The plan's own first day, `YYYY-MM-DD`, when it is not the quarter's: the earliest a visit can move to. */
   startsOn?: string | null;
+  /**
+   * A quarter sent out to nobody: its days' groups, which a visit is moved
+   * between instead of people (the office, 2026-09-29). Null for a quarter whose
+   * days belong to technicians.
+   */
+  dayGroups?: readonly { id: string; name: string }[] | null;
 }) {
   const { editStop } = usePlanningMutations();
   const canEdit = Boolean(
@@ -129,13 +136,15 @@ export function PlanStopDialog({
   const technicians = usePlanTechnicians(canEdit);
   const technicianOptions = useMemo<PickOption[]>(
     () =>
-      (technicians.data ?? []).map((technician) => ({
-        value: technician.id,
-        label: technician.displayName,
-        hint: technician.hasHome ? undefined : 'No home on file: the day starts at the first visit',
-        group: technician.crewOrder === null ? 'Other technicians' : 'Benefit-package crew',
-      })),
-    [technicians.data],
+      dayGroups
+        ? dayGroups.map((group) => ({ value: group.id, label: group.name }))
+        : (technicians.data ?? []).map((technician) => ({
+            value: technician.id,
+            label: technician.displayName,
+            hint: technician.hasHome ? undefined : 'No home on file: the day starts at the first visit',
+            group: technician.crewOrder === null ? 'Other technicians' : 'Benefit-package crew',
+          })),
+    [dayGroups, technicians.data],
   );
   const timing = useMemo(() => {
     if (!stop || !day) return null;
@@ -157,7 +166,9 @@ export function PlanStopDialog({
   const lastDay = quarter ? new Date(quarterEnd(quarter).getTime() - 86_400_000).toISOString().slice(0, 10) : '';
 
   const dateText = scheduledOn ? LONG_DAY.format(new Date(stop.scheduledOn!)) : 'Not on a day yet';
-  const technicianText = stop.assignedTechnician?.displayName ?? 'Nobody yet';
+  const technicianText = dayGroups
+    ? `${stop.assignedTechnician?.displayName ?? 'No day group yet'} · sent out unassigned`
+    : (stop.assignedTechnician?.displayName ?? 'Nobody yet');
   const unitText = stop.propertywareUnit
     ? [stop.propertywareUnit.name, stop.propertywareUnit.addressLine1].filter(Boolean).join(' · ')
     : stop.unitResolution === 'NO_UNITS'
@@ -241,12 +252,12 @@ export function PlanStopDialog({
               ],
               ['Time', timing ? `${formatClock(timing.entry.arrives)} – ${formatClock(timing.entry.leaves)}` : null],
               [
-                'Technician',
+                dayGroups ? 'Day group' : 'Technician',
                 canEdit ? (
                   <EditablePick
                     display={technicianText}
                     key="technician"
-                    label="the technician"
+                    label={dayGroups ? 'the day group' : 'the technician'}
                     onSave={(value) => save({ assignedTechnicianId: value })}
                     options={technicianOptions}
                     searchable

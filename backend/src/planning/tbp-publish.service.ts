@@ -338,6 +338,15 @@ export class TbpPublishService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
+        /**
+         * A quarter sent out to nobody gives its visits to nobody here either
+         * (the office, 2026-09-29): its days are groups, and whoever the office
+         * hands a visit to in Jobber gets it on the next sync (`applyAssignment`).
+         */
+        const sentToNobody = Boolean(
+          (await tx.tbpQuarterPlan.findUnique({ where: { id: planId }, select: { jobberUnassigned: true } }))
+            ?.jobberUnassigned,
+        );
         const plan = await resolveInspectionPlan(tx, {
           organizationId: user.organizationId,
           buildingId: stop.propertywareBuildingId!,
@@ -386,7 +395,7 @@ export class TbpPublishService {
             },
           });
 
-        if (stop.assignedTechnicianId)
+        if (stop.assignedTechnicianId && !sentToNobody)
           await tx.inspectionAssignment.create({
             data: {
               inspectionId: inspection.id,

@@ -4,7 +4,6 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   ArrayMaxSize,
-  ArrayMinSize,
   IsArray,
   IsEnum,
   IsIn,
@@ -96,10 +95,13 @@ export class PlanRoutingSettingsDto {
    * Who to send out on the plan's days (the office, 2026-09-19: "before
    * generating ... it should ask for the technicians"). Left out: the plan's
    * crew as it was, or the benefit-package crew on the planning profiles.
+   *
+   * Empty only with `jobberUnassigned` (the office, 2026-09-29): a quarter sent
+   * out to nobody has nobody to choose, and its days are then sized for the
+   * benefit-package crew. `routingSettings` refuses it otherwise.
    */
   @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(50)
   @IsUUID('all', { each: true })
   technicianIds?: string[];

@@ -1,7 +1,12 @@
 import { JobberOutboundKind } from '@prisma/client';
 
 import type { PrismaService } from '../src/common/prisma.service';
-import { QuarterPlannerService, routingSettings } from '../src/planning/quarter-planner.service';
+import {
+  QuarterPlannerService,
+  dayGroupNames,
+  forUnassigned,
+  routingSettings,
+} from '../src/planning/quarter-planner.service';
 
 /**
  * Publishing a quarter into Jobber's Unassigned list.
@@ -12,16 +17,17 @@ import { QuarterPlannerService, routingSettings } from '../src/planning/quarter-
  * for one technician, so every visit Jobber receives lands on Moses, and the
  * office would rather distribute them itself.
  *
- * Two things this must not become:
+ * **It means nobody has the visits** (the office, 2026-09-29, replacing the
+ * first version, where the phone still showed the plan's technicians their
+ * days): not in Jobber and not on a phone, until the office hands them out in
+ * Jobber and the sync gives them to whoever it named. So nobody needs choosing:
+ * the days are sized for the benefit-package crew and are groups, not people.
+ * `tbp-visit-shape.spec.ts` pins the booking half, `tbp-publish.spec.ts` the
+ * inspections.
  *
- * - **It is not "unassign the inspections".** The plan is still routed into
- *   somebody's days, the inspection still carries its assignment, and the phone
- *   and the console's calendar both read it. Only the `teamMemberIds` sent to
- *   Jobber are dropped. `tbp-visit-shape.spec.ts` pins the booking half.
- * - **It must survive a rebuild.** A rebuild that moved a visit to a different
- *   technician used to push that change to Jobber, which would write a name back
- *   onto a visit the office deliberately left blank — silently undoing the
- *   choice they made in the dialog. That guard is the second half of this file.
+ * **It must survive a rebuild.** A rebuild that moved a visit to a different
+ * group must not put a name on it -- here or in Jobber. That guard is the
+ * second half of this file.
  */
 
 const Q4 = { year: 2026, quarter: 4 as const };
@@ -184,15 +190,13 @@ describe('rebuilding a plan published unassigned', () => {
     expect(pushed(upsert)).not.toContain(JobberOutboundKind.VISIT_ASSIGN);
   });
 
-  it('still moves the assignment here, because the phone reads it', async () => {
-    // The part that would be wrong to skip: the visit belongs to somebody's day
-    // in this app whatever Jobber has been told.
+  it('gives it to nobody here either: moving between groups changes nobody’s work', async () => {
+    // Whoever the office handed it to in Jobber keeps it.
     const { rebook, tx } = build(true);
     await rebook();
 
-    expect(tx.inspectionAssignment.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ technicianId: 'tech-2' }) }),
-    );
+    expect(tx.inspectionAssignment.updateMany).not.toHaveBeenCalled();
+    expect(tx.inspectionAssignment.create).not.toHaveBeenCalled();
   });
 
   it('pushes both halves on an ordinary plan', async () => {
@@ -206,5 +210,46 @@ describe('rebuilding a plan published unassigned', () => {
         JobberOutboundKind.VISIT_ASSIGN,
       ]),
     );
+  });
+});
+
+/**
+ * Nobody to choose (the office, 2026-09-29: "I already checked that send the
+ * visit out unassigned but I still can't rebuild it cause it still requires me
+ * to pick one technician").
+ */
+describe('a quarter sent out to nobody needs nobody chosen', () => {
+  it('takes an empty crew when the visits go out unassigned', () => {
+    const settings = routingSettings(SETTINGS, { technicianIds: [], jobberUnassigned: true }, Q4);
+    expect(settings.technicianIds).toEqual([]);
+    expect(settings.jobberUnassigned).toBe(true);
+  });
+
+  it('takes it on a plan already sent out unassigned, too', () => {
+    const unassigned = { ...SETTINGS, jobberUnassigned: true, technicianIds: ['tech-1'] };
+    expect(routingSettings(unassigned, { technicianIds: [] }, Q4).technicianIds).toEqual([]);
+  });
+
+  it('still refuses an empty crew for visits that go to people', () => {
+    expect(() => routingSettings(SETTINGS, { technicianIds: [] }, Q4)).toThrow(
+      'Choose the technicians to send out on the plan, or send its visits out unassigned.',
+    );
+  });
+
+  it('starts nobody’s day at somebody’s front door', () => {
+    const roster = {
+      technicianIds: ['tech-1', 'tech-2'],
+      homes: new Map([['tech-1', { latitude: 29.7, longitude: -95.4 }]]),
+    };
+    expect(forUnassigned(roster, true)).toEqual({ technicianIds: ['tech-1', 'tech-2'], homes: new Map() });
+    expect(forUnassigned(roster, false)).toBe(roster);
+  });
+
+  it('names the days by group, in the crew’s order, and anyone else after them', () => {
+    expect([...dayGroupNames(['tech-2', 'tech-1'], ['tech-9', 'tech-1'])]).toEqual([
+      ['tech-2', 'Day group 1'],
+      ['tech-1', 'Day group 2'],
+      ['tech-9', 'Day group 3'],
+    ]);
   });
 });

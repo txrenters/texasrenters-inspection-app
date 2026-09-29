@@ -569,11 +569,15 @@ export default function PlanningPage() {
               <StatStripItem
                 label="Crew"
                 value={
-                  rotation.data.crew.length
-                    ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · ${
-                        plan.crewTechnicianIds?.length ? 'chosen for this plan' : 'the crew on the planning profiles'
-                      } · a zone each, moving weekly`
-                    : 'nobody yet: choose who goes out when you rebuild'
+                  plan.jobberUnassigned
+                    ? `nobody: sent out unassigned, to hand out in Jobber · ${rotation.data.crew.length} day ${
+                        rotation.data.crew.length === 1 ? 'group' : 'groups'
+                      } at a time, a zone each, moving weekly`
+                    : rotation.data.crew.length
+                      ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · ${
+                          plan.crewTechnicianIds?.length ? 'chosen for this plan' : 'the crew on the planning profiles'
+                        } · a zone each, moving weekly`
+                      : 'nobody yet: choose who goes out when you rebuild'
                 }
               />
             ) : null}
@@ -766,6 +770,14 @@ export default function PlanningPage() {
       <PlanStopDialog
         closedDays={closedDaysOfQuarter(quarter, plan?.holidays ?? [], startsOn)}
         day={openStopDay}
+        dayGroups={
+          plan?.jobberUnassigned
+            ? (rotation.data?.crew ?? []).map((member) => ({
+                id: member.technicianId,
+                name: member.displayName ?? 'Day group',
+              }))
+            : null
+        }
         editable={canPlace}
         onOpenChange={(open) => !open && setOpenStopId(null)}
         quarter={quarter}

@@ -29,8 +29,9 @@ export interface PlanBuildChoice {
   /** Lay the visits already published out again, moving their booked dates. */
   movePublishedVisits: boolean;
   /**
-   * Send the visits to Jobber with nobody on them, so they arrive in Jobber's
-   * Unassigned list for the office to hand out there.
+   * Send the visits out to nobody: not on a phone, and into Jobber's Unassigned
+   * list for the office to hand out there (the office, 2026-09-29). Nobody is
+   * chosen then, and `technicianIds` is empty.
    *
    * Asked here rather than at publish time because it is stored on the plan: a
    * visit reaches Jobber minutes to hours after publishing, and the answer has
@@ -149,7 +150,10 @@ export function PlanBuildDialog({
   const build = () => {
     onBuild({
       // In the list's order -- the crew's, then by name -- which is the order the zones go round.
-      technicianIds: listed.filter((technician) => selected.has(technician.id)).map((technician) => technician.id),
+      // Nobody, for a quarter sent out to nobody: the server sizes its days for the crew.
+      technicianIds: sendUnassigned
+        ? []
+        : listed.filter((technician) => selected.has(technician.id)).map((technician) => technician.id),
       startsOn: chosenStart.date,
       movePublishedVisits: rebuild && movePublished,
       jobberUnassigned: sendUnassigned,
@@ -164,6 +168,8 @@ export function PlanBuildDialog({
     setSkipped(new Set());
   };
   const count = listed.filter((technician) => selected.has(technician.id)).length;
+  /** How many days a quarter sent out to nobody runs at once: the benefit-package crew's. */
+  const crewSize = listed.filter((technician) => technician.crewOrder !== null).length;
 
   return (
     <Dialog onOpenChange={close} open={open}>
@@ -177,9 +183,44 @@ export function PlanBuildDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* First, because it decides whether anyone is chosen at all (the office,
+            2026-09-29: "I already clicked that unassigned ... but still needs to
+            select a technician?"). Sent out to nobody, nobody has the visits --
+            not on a phone and not in Jobber -- until the office hands them out in
+            Jobber, and the sync gives each to whoever it names. */}
+        <fieldset className="grid min-w-0 gap-2">
+          <legend className="mb-2 text-sm font-medium">Who gets the visits</legend>
+          <label className="hover:bg-accent/60 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2">
+            <Checkbox
+              checked={sendUnassigned}
+              className="mt-0.5"
+              onCheckedChange={(checked) => setUnassigned(checked === true)}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">Send the visits out unassigned</span>
+              <span className="text-muted-foreground block text-xs">
+                Nobody gets them &mdash; not on a phone, and not in Jobber, where they arrive in the
+                Unassigned list. Whoever you hand a visit to in Jobber gets it on their phone at the next
+                sync.
+              </span>
+            </span>
+          </label>
+          <FieldDescription>
+            {sendUnassigned
+              ? 'Rebuilding later will not put a name on a visit, here or in Jobber.'
+              : 'Each visit goes to whoever its day belongs to, on their phone and in Jobber where Jobber knows them.'}
+          </FieldDescription>
+        </fieldset>
+
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Technicians</legend>
-          {technicians.isLoading ? (
+          {sendUnassigned ? (
+            <p className="text-muted-foreground text-sm">
+              Nobody to choose: the visits go out unassigned. The quarter is planned in{' '}
+              {crewSize > 0 ? crewSize : 'the'} day group{crewSize === 1 ? '' : 's'} at a time, the size of the
+              benefit-package crew, and each day starts at its own first visit.
+            </p>
+          ) : technicians.isLoading ? (
             <Skeleton className="h-32 w-full rounded-lg" />
           ) : listed.length === 0 ? (
             <p className="text-muted-foreground text-sm">No active technicians to send out.</p>
@@ -204,10 +245,12 @@ export function PlanBuildDialog({
               ))}
             </ul>
           )}
-          <p className="text-muted-foreground text-xs">
-            {count} chosen. Each works every day until the month&rsquo;s visits are done, starting in a zone of their
-            own each week.
-          </p>
+          {sendUnassigned ? null : (
+            <p className="text-muted-foreground text-xs">
+              {count} chosen. Each works every day until the month&rsquo;s visits are done, starting in a zone of
+              their own each week.
+            </p>
+          )}
         </fieldset>
 
         <fieldset className="grid min-w-0 gap-2">
@@ -341,44 +384,18 @@ export function PlanBuildDialog({
           </FieldDescription>
         </fieldset>
 
-        {/* The last question, and the only one about somebody else's calendar.
-            Kept apart from the technician list rather than added to it, because
-            it does not change who goes out — it changes what Jobber is told, and
-            reading it as "nobody does these" would be the wrong conclusion to
-            invite. Unlike the published-visits question this shows on a first build too:
-            the answer is stored on the plan and used at publish time, so it is a
-            question from the start rather than only on a rebuild. */}
-        <fieldset className="grid min-w-0 gap-2">
-          <legend className="mb-2 text-sm font-medium">Jobber</legend>
-          <label className="hover:bg-accent/60 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2">
-            <Checkbox
-              checked={sendUnassigned}
-              className="mt-0.5"
-              onCheckedChange={(checked) => setUnassigned(checked === true)}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-medium">Send the visits out unassigned</span>
-              <span className="text-muted-foreground block text-xs">
-                They arrive in Jobber&rsquo;s Unassigned list with nobody on them, to hand out
-                there. The days here still belong to the technicians chosen above, and that is what
-                the phone shows.
-              </span>
-            </span>
-          </label>
-          <FieldDescription>
-            {sendUnassigned
-              ? 'Rebuilding later will not put a name back on a visit in Jobber.'
-              : 'Each visit reaches Jobber assigned to whoever its day belongs to, where Jobber knows them.'}
-          </FieldDescription>
-        </fieldset>
-
         <DialogFooter>
           <Button onClick={() => close(false)} type="button" variant="outline">
             Cancel
           </Button>
-          <Button disabled={pending || technicians.isLoading || count === 0} onClick={build} type="button">
+          <Button
+            disabled={pending || technicians.isLoading || (!sendUnassigned && count === 0)}
+            onClick={build}
+            type="button"
+          >
             {pending ? <Spinner /> : null}
-            {rebuild ? 'Rebuild' : 'Build'} for {count} {count === 1 ? 'technician' : 'technicians'}
+            {rebuild ? 'Rebuild' : 'Build'}{' '}
+            {sendUnassigned ? 'unassigned' : `for ${count} ${count === 1 ? 'technician' : 'technicians'}`}
           </Button>
         </DialogFooter>
       </DialogContent>
