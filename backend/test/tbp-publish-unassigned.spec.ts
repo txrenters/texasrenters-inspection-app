@@ -36,6 +36,7 @@ const SETTINGS = {
   maxStopsPerDay: 10,
   maxLegMinutes: 20,
   holidays: [] as string[],
+  excludedZones: [] as string[],
   startsOn: null as string | null,
   technicianIds: [] as string[],
   jobberUnassigned: false,
