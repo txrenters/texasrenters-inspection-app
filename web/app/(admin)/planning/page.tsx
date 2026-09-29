@@ -786,6 +786,9 @@ export default function PlanningPage() {
 
       <PlanBuildDialog
         chosen={plan?.crewTechnicianIds ?? []}
+        // The plan's own answer, so a rebuild opens on the last one given rather
+        // than quietly reverting to assigning everybody.
+        jobberUnassigned={plan?.jobberUnassigned ?? false}
         label={choice.label}
         onBuild={build}
         onOpenChange={setChoosing}

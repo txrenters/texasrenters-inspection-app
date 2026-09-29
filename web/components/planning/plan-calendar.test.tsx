@@ -19,6 +19,7 @@ const SETTINGS: PlanSettings = {
   holidays: ['2026-11-27'],
   startsOn: null,
   crewTechnicianIds: [],
+  jobberUnassigned: false,
 };
 
 const ROTATION: PlanRotation = {

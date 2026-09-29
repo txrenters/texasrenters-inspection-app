@@ -330,7 +330,7 @@ export class JobberOutboundWorker {
         zone: true,
         propertywareBuildingId: true,
         propertywareUnitId: true,
-        plan: { select: { quarterYear: true, quarterNumber: true } },
+        plan: { select: { quarterYear: true, quarterNumber: true, jobberUnassigned: true } },
       },
     });
     if (!stop?.visitTitle || !stop.scheduledOn || !stop.propertywareBuildingId)
@@ -371,13 +371,27 @@ export class JobberOutboundWorker {
       buildingId: stop.propertywareBuildingId,
       unitId: stop.propertywareUnitId,
     });
-    // On the visit, as the plan's day was: the technician the plan chose, when
-    // Jobber knows them. Unknown books it unassigned, and the sync keeps ours.
-    const technicianJobberId = await jobberUserIdForEmail(
-      this.prisma,
-      organizationId,
-      inspection.assignments[0]?.technician.email,
-    );
+    /**
+     * On the visit, as the plan's day was: the technician the plan chose, when
+     * Jobber knows them. Unknown books it unassigned, and the sync keeps ours.
+     *
+     * Unless the plan says to send the whole quarter out unassigned, which the
+     * office asks for when it means to hand the visits round in Jobber itself.
+     * The lookup is skipped rather than its answer discarded — there is nothing
+     * to ask Jobber about, and one query per visit across several hundred is
+     * worth not making.
+     *
+     * This does not unassign the inspection *here*. The plan routed the day for
+     * a technician, the phone reads that assignment, and the console's calendar
+     * is built from it; only Jobber's copy is left blank.
+     */
+    const technicianJobberId = stop.plan.jobberUnassigned
+      ? null
+      : await jobberUserIdForEmail(
+          this.prisma,
+          organizationId,
+          inspection.assignments[0]?.technician.email,
+        );
     await this.createVisitInJobber(organizationId, taskId, inspectionId, {
       jobberPropertyId: link.jobberPropertyId,
       // The job title carries no address; the visit title does. That is the

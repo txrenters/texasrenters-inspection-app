@@ -3096,6 +3096,21 @@ model TbpQuarterPlan {
   /// technicians' planning profiles.
   crewTechnicianIds    String[]  @default([]) @db.Uuid
 
+  /// Send this plan's visits to Jobber with nobody on them, so they land in
+  /// Jobber's Unassigned list for the office to hand out there.
+  ///
+  /// Asked in the build dialog beside the crew, and read at booking time rather
+  /// than at build time: the visit reaches Jobber minutes to hours after the
+  /// plan is published, and this is a fact about the plan, not about the queue.
+  ///
+  /// It does not change who the visit is assigned to *here* -- the plan still
+  /// routes days per technician and the inspection still carries its assignment,
+  /// because that is what the phone reads. Only the `teamMemberIds` Jobber is
+  /// sent are dropped.
+  ///
+  /// Default false, which is the behaviour every existing plan had.
+  jobberUnassigned     Boolean   @default(false)
+
   /// The office's sheet of visit Details for the quarter, as imported:
   /// `[{ address, city, postalCode, details }]`. Kept whole rather than only
   /// copied onto stops, so a regeneration matches it to the tenancies it adds.

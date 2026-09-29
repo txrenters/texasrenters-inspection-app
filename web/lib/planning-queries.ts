@@ -35,6 +35,14 @@ export interface PlanSettings {
   startsOn: string | null;
   /** Who the coordinator chose to send out; empty, the crew on the technicians' planning profiles. */
   crewTechnicianIds: string[];
+  /**
+   * Send this plan's visits to Jobber with nobody on them, so they arrive in
+   * Jobber's Unassigned list for the office to hand out there.
+   *
+   * Only Jobber's copy: the days here still belong to the technicians the plan
+   * was built for, which is what the phone and the calendar read.
+   */
+  jobberUnassigned: boolean;
 }
 
 export interface PlanQuarter extends PlanSettings {

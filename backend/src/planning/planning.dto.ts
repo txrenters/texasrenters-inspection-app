@@ -103,6 +103,15 @@ export class PlanRoutingSettingsDto {
   @ArrayMaxSize(50)
   @IsUUID('all', { each: true })
   technicianIds?: string[];
+
+  /**
+   * Send this plan's visits to Jobber with nobody on them, so they arrive in
+   * Jobber's Unassigned list for the office to hand out there.
+   *
+   * Left out: whatever the plan already says, so a rebuild that does not mention
+   * it keeps the coordinator's last answer.
+   */
+  @IsOptional() @IsBoolean() jobberUnassigned?: boolean;
 }
 
 export class PlanQuarterDto extends PlanRoutingSettingsDto {

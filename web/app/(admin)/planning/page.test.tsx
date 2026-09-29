@@ -43,6 +43,7 @@ const idle = { mutate: vi.fn(), isPending: false };
 const build = { mutate: vi.fn(), isPending: false };
 
 const PLAN = {
+  jobberUnassigned: false,
   id: 'plan-1',
   quarterYear: 2026,
   quarterNumber: 4,
@@ -376,6 +377,77 @@ describe('the benefit package plan page', () => {
       expect.objectContaining({ excludedZones: [] }),
       expect.anything(),
     );
+  });
+
+  /**
+   * The office (2026-09-29): a checkbox so a published quarter lands in Jobber's
+   * Unassigned list. Q4 is grouped for one technician, so every visit Jobber
+   * receives lands on Moses, and the office would rather hand them out itself.
+   */
+  it('publishes the quarter unassigned in Jobber when that is ticked', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Send the visits out unassigned/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ jobberUnassigned: true }),
+      expect.anything(),
+    );
+  });
+
+  it('assigns by default, so a plan built without a thought behaves as it always did', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    expect(
+      within(dialog)
+        .getByRole('checkbox', { name: /Send the visits out unassigned/ })
+        .getAttribute('data-state'),
+    ).toBe('unchecked');
+  });
+
+  it('opens a rebuild on the answer the plan already carries', () => {
+    // The trap this exists for: opening unticked on a plan published unassigned
+    // and silently reassigning the whole quarter on the next rebuild.
+    mount({ plans: [{ ...PLAN, jobberUnassigned: true }] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+    const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+    expect(
+      within(dialog)
+        .getByRole('checkbox', { name: /Send the visits out unassigned/ })
+        .getAttribute('data-state'),
+    ).toBe('checked');
+  });
+
+  it('lets a rebuild turn it back off', () => {
+    // `false` is an answer, not an absence. A coordinator who unticks it must
+    // not have the plan's own `true` win.
+    mount({ plans: [{ ...PLAN, jobberUnassigned: true }] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+    const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Send the visits out unassigned/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 3 technicians' }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ jobberUnassigned: false }),
+      expect.anything(),
+    );
+  });
+
+  it('says the days here still belong to the technicians chosen', () => {
+    // The misreading worth preventing: that ticking this means nobody is doing
+    // the visits. It changes what Jobber is told, not who goes out.
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/days here still belong to the technicians chosen above/)).toBeTruthy();
   });
 
   /** There is nothing published to move on a quarter that has never been built. */

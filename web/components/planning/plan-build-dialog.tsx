@@ -28,6 +28,15 @@ export interface PlanBuildChoice {
   startsOn: string;
   /** Lay the visits already published out again, moving their booked dates. */
   movePublishedVisits: boolean;
+  /**
+   * Send the visits to Jobber with nobody on them, so they arrive in Jobber's
+   * Unassigned list for the office to hand out there.
+   *
+   * Asked here rather than at publish time because it is stored on the plan: a
+   * visit reaches Jobber minutes to hours after publishing, and the answer has
+   * to be waiting for it.
+   */
+  jobberUnassigned: boolean;
   /** Visits in a day: the planner fills to this where the driving allows. */
   stopsPerDay: number;
   /** Zones left out of the build, by number. */
@@ -66,6 +75,7 @@ export function PlanBuildDialog({
   rebuild,
   chosen = [],
   startsOn = null,
+  jobberUnassigned = false,
   pending = false,
   onBuild,
 }: {
@@ -80,6 +90,8 @@ export function PlanBuildDialog({
   chosen?: readonly string[];
   /** The plan's own first day, when it has one. */
   startsOn?: string | null;
+  /** The plan's own answer, so a rebuild opens on the last one given. */
+  jobberUnassigned?: boolean;
   pending?: boolean;
   onBuild: (choice: PlanBuildChoice) => void;
 }) {
@@ -95,6 +107,12 @@ export function PlanBuildDialog({
   // has already told Jobber about, which is not something a rebuild should do
   // because somebody clicked the usual button.
   const [movePublished, setMovePublished] = useState(false);
+  // `null` until it is touched, so the plan's own answer shows through — the
+  // same shape as `picked` and `start` above, and for the same reason. Unlike
+  // `movePublished`, which is a one-off for this rebuild, this is stored on the
+  // plan and so has a previous answer to fall back to.
+  const [unassigned, setUnassigned] = useState<boolean | null>(null);
+  const sendUnassigned = unassigned ?? jobberUnassigned;
   /**
    * Nine unless the office says otherwise, which is the planner's own default.
    * This is the control that actually moves the number of days in a quarter --
@@ -116,6 +134,7 @@ export function PlanBuildDialog({
       setPicked(null);
       setStart(null);
       setMovePublished(false);
+      setUnassigned(null);
       setStopsPerDay(9);
       setSkipped(new Set());
     }
@@ -133,12 +152,14 @@ export function PlanBuildDialog({
       technicianIds: listed.filter((technician) => selected.has(technician.id)).map((technician) => technician.id),
       startsOn: chosenStart.date,
       movePublishedVisits: rebuild && movePublished,
+      jobberUnassigned: sendUnassigned,
       stopsPerDay,
       excludedZones: [...skipped].sort(),
     });
     setPicked(null);
     setStart(null);
     setMovePublished(false);
+    setUnassigned(null);
     setStopsPerDay(9);
     setSkipped(new Set());
   };
@@ -273,16 +294,16 @@ export function PlanBuildDialog({
                 </span>
                 <span className="text-muted-foreground text-xs">
                   {size === 9
-                    ? 'the planner\u2019s own default'
+                    ? 'the planner’s own default'
                     : size === 10
-                      ? 'fills the day, about 5\u00bd hours'
+                      ? 'fills the day, about 5½ hours'
                       : 'only where the day is mostly HVAC'}
                 </span>
               </label>
             ))}
           </div>
           <FieldDescription>
-            A day is filled to this where the driving allows it \u2014 never more than 20 minutes from
+            A day is filled to this where the driving allows it &mdash; never more than 20 minutes from
             one property to the next, so a thin patch still makes a short day.
           </FieldDescription>
         </fieldset>
@@ -315,8 +336,39 @@ export function PlanBuildDialog({
             })}
           </div>
           <FieldDescription>
-            A zone left out is held back and said so, not dropped \u2014 its visits wait for the
+            A zone left out is held back and said so, not dropped &mdash; its visits wait for the
             office to arrange them.
+          </FieldDescription>
+        </fieldset>
+
+        {/* The last question, and the only one about somebody else's calendar.
+            Kept apart from the technician list rather than added to it, because
+            it does not change who goes out — it changes what Jobber is told, and
+            reading it as "nobody does these" would be the wrong conclusion to
+            invite. Unlike the published-visits question this shows on a first build too:
+            the answer is stored on the plan and used at publish time, so it is a
+            question from the start rather than only on a rebuild. */}
+        <fieldset className="grid min-w-0 gap-2">
+          <legend className="mb-2 text-sm font-medium">Jobber</legend>
+          <label className="hover:bg-accent/60 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2">
+            <Checkbox
+              checked={sendUnassigned}
+              className="mt-0.5"
+              onCheckedChange={(checked) => setUnassigned(checked === true)}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">Send the visits out unassigned</span>
+              <span className="text-muted-foreground block text-xs">
+                They arrive in Jobber&rsquo;s Unassigned list with nobody on them, to hand out
+                there. The days here still belong to the technicians chosen above, and that is what
+                the phone shows.
+              </span>
+            </span>
+          </label>
+          <FieldDescription>
+            {sendUnassigned
+              ? 'Rebuilding later will not put a name back on a visit in Jobber.'
+              : 'Each visit reaches Jobber assigned to whoever its day belongs to, where Jobber knows them.'}
           </FieldDescription>
         </fieldset>
 

@@ -154,6 +154,8 @@ describe('booking a published plan stop in Jobber', () => {
       jobberVisitTitle: string | null;
       jobberVisitDetails: string | null;
       technicianEmail: string | null;
+      /** The plan's own setting, read at booking time rather than at publish. */
+      jobberUnassigned: boolean;
     }> = {},
   ) => {
     const tx = {
@@ -187,7 +189,11 @@ describe('booking a published plan stop in Jobber', () => {
           zone,
           propertywareBuildingId: 'building-1',
           propertywareUnitId: null,
-          plan: { quarterYear: 2026, quarterNumber: 4 },
+          plan: {
+            quarterYear: 2026,
+            quarterNumber: 4,
+            jobberUnassigned: inspection.jobberUnassigned ?? false,
+          },
         }),
       },
       inspection: {
@@ -279,6 +285,60 @@ describe('booking a published plan stop in Jobber', () => {
 
   it('puts the planned technician on the visit when Jobber knows them', async () => {
     const { visit } = await book('4', { technicianEmail: 'moses@example.com' });
+
+    expect(visit.schedule.teamMemberIdsToAssign).toEqual(['jobber-user-7']);
+  });
+
+  /**
+   * The office's own ask: publish the quarter into Jobber's Unassigned list and
+   * hand the visits round there.
+   *
+   * The plan is still built and routed for a technician — a quarter is grouped
+   * into *somebody's* days, and the phone reads that assignment. Only the
+   * `teamMemberIdsToAssign` Jobber is sent are dropped, which is what leaves a
+   * visit unassigned in Jobber.
+   */
+  it('leaves the visit unassigned in Jobber when the plan says to', async () => {
+    const { visit } = await book('4', {
+      technicianEmail: 'moses@example.com',
+      jobberUnassigned: true,
+    });
+
+    // The field is *omitted*, not sent empty — which is how the existing
+    // unknown-technician path already books an unassigned visit, so this takes
+    // the shape Jobber is known to accept rather than inventing a second one.
+    expect(visit.schedule.teamMemberIdsToAssign).toBeUndefined();
+  });
+
+  it('still books the day and the title on an unassigned visit', async () => {
+    // Unassigned is about who, not whether. A visit with no day would land in
+    // Jobber's Unscheduled list instead, which is a different thing entirely.
+    const { visit, visitTitle: title } = await book('4', {
+      technicianEmail: 'moses@example.com',
+      jobberUnassigned: true,
+    });
+
+    expect(visit.schedule.startAt).toEqual({ date: '2026-10-06', timezone: 'America/Chicago' });
+    expect(title).toBe('19803 Bolton Bridge Ln - Zone 4 - Q4 2026 Tenant Benefit Package');
+  });
+
+  it('does not ask Jobber who the technician is when nobody is being assigned', async () => {
+    // One query per visit across several hundred, for an answer that is thrown
+    // away. The lookup is skipped, not its result discarded.
+    const { request } = await book('4', {
+      technicianEmail: 'moses@example.com',
+      jobberUnassigned: true,
+    });
+
+    // Only the two mutations: the job and the visit. No user lookup.
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('assigns by default, so an existing plan behaves as it did', async () => {
+    const { visit } = await book('4', {
+      technicianEmail: 'moses@example.com',
+      jobberUnassigned: false,
+    });
 
     expect(visit.schedule.teamMemberIdsToAssign).toEqual(['jobber-user-7']);
   });

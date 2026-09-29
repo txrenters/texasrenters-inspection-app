@@ -176,6 +176,7 @@ export class PlanningController {
         excludedZones: true,
           startsOn: true,
           crewTechnicianIds: true,
+          jobberUnassigned: true,
           officeDetailsImportedAt: true,
         },
       }),
