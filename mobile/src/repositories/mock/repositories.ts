@@ -315,7 +315,6 @@ export class MockInspectionRepository implements InspectionRepository {
   async recordChecklistItem() {
     await mockDelay();
     // Nothing to score against without authored items — see roomChecklist.
-    return [];
   }
   async updateArea(roomId: string) {
     await mockDelay();
