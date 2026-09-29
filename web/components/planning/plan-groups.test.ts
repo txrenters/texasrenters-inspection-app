@@ -155,7 +155,17 @@ describe('the circle it draws', () => {
  * planning screen up in jsdom to assert one permission string.
  */
 describe('showing the crew on the plan', () => {
-  it('asks for positions with the locate grant, not the planning one', async () => {
+  /**
+   * The plan's maps draw the crew through the shared map now, which asks for
+   * positions behind `technicians:locate` itself -- see `console-map.test.tsx`,
+   * which renders it with the grant absent and present and was checked to fail
+   * with the gate removed.
+   *
+   * What is left to guard here is the page growing its own request again. It
+   * used to make one, and a copy made under the planning grant would hand live
+   * staff positions to anybody who can read a schedule.
+   */
+  it('leaves the crew to the shared map, and asks for no positions of its own', async () => {
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
     const page = readFileSync(
@@ -163,8 +173,6 @@ describe('showing the crew on the plan', () => {
       'utf8',
     );
 
-    expect(page).toContain("useTechnicianLocations(has('technicians:locate'))");
-    expect(page).not.toContain("useTechnicianLocations(has('planning:read'))");
-    expect(page).not.toContain("useTechnicianLocations(has('technicians:read'))");
+    expect(page).not.toContain('useTechnicianLocations');
   });
 });

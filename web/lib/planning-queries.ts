@@ -127,6 +127,11 @@ export interface PlanStop {
 
 export interface PlanDayStop {
   id: string;
+  /**
+   * Which building, so the one map can pick the day's properties out of the
+   * whole portfolio. Null only for a stop whose building has since gone.
+   */
+  buildingId: string | null;
   sequence: number;
   positionInDay: number | null;
   inspectionType: PlanInspectionType;
@@ -173,6 +178,8 @@ export interface PlanDay {
 export interface PlanDayAnchor {
   id: string;
   inspectionId: string;
+  /** Which building, as for a visit. */
+  buildingId: string | null;
   kind: 'MOVE_OUT' | 'MOVE_IN';
   /** 1-based among all the day's stops, visits included. */
   positionInDay: number | null;

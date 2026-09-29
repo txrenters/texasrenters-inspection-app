@@ -16,10 +16,10 @@ import { attentionText, type AttentionKind } from '@/lib/planning';
  * see which day each one is near. A pin opens the visit, where the day and the
  * technician are set.
  *
- * Drawn on `ConsoleMap`, like every other map here, so the map type, the tilt
- * and the grouping radius are the same on this page as on any other -- and the
- * radius is worth having here in particular, since the question these pins
- * raise is which day each of them is near enough to join.
+ * Drawn on `ConsoleMap` with the portfolio and the crew turned on, so these
+ * pins sit on the same map as everywhere else -- and the grouping radius,
+ * drawn around the whole portfolio, answers the question these pins raise:
+ * which properties each of them is near enough to join.
  *
  * Must be loaded with `ssr: false`, like the day's map: Mapbox GL touches
  * `window` and measures its container.
@@ -132,7 +132,7 @@ export function PlanAttentionMap({
   );
 
   return (
-    <ConsoleMap initialView={FALLBACK_VIEW} radiusPoints={needing}>
+    <ConsoleMap crew initialView={FALLBACK_VIEW} portfolio>
       <FitAll points={points} />
       {behind.map((stop) => (
         <Marker
@@ -140,7 +140,7 @@ export function PlanAttentionMap({
           key={stop.id}
           latitude={stop.latitude}
           longitude={stop.longitude}
-          style={{ zIndex: 1 }}
+          style={{ zIndex: 150 }}
         >
           <span title={`${stop.address ?? 'Unknown address'} · planned`}>
             <PlannedDot />
@@ -161,7 +161,7 @@ export function PlanAttentionMap({
                 }
               : undefined
           }
-          style={{ zIndex: 10 + index }}
+          style={{ zIndex: 800 + index }}
         >
           <span
             title={`${stop.address ?? 'Unknown address'}${stop.city ? `, ${stop.city}` : ''} · ${attentionText(
