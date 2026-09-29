@@ -19,7 +19,7 @@ const NOT_DONE = 'Not done';
  *
  * The filter screen answers the filter change with it when it did not happen at
  * all. Pest control and flea treatment are checkboxes on the job's list now (the
- * office, 2026-09-18), asked why at End job when left unticked (`NotDoneSheet`);
+ * office, 2026-09-18), with "Not done" beside them for a note (`NotDoneSheet`);
  * the optional photograph (`onAddPhoto`) is no longer offered for them.
  *
  * The reason is required when it was not done, because that sentence is what a

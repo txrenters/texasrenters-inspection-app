@@ -150,7 +150,7 @@ describe('how a task reads as the work happens', () => {
     const not = tasksFor({
       report: report({ services: { pestControl: { done: false, reason: 'Newborn in the house', reschedule: true } } }),
     });
-    expect(not[1]).toMatchObject({ state: 'NOT_DONE', detail: 'Newborn in the house' });
+    expect(not[1]).toMatchObject({ state: 'NOT_DONE', detail: 'Newborn in the house · rebook' });
   });
 
   it("mentions pest control's optional photograph only when there is one", () => {

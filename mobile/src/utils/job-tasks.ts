@@ -223,7 +223,8 @@ export function jobTasks(input: JobTasksInput): JobTask[] {
       detail: !outcome
         ? null
         : !outcome.done
-          ? outcome.reason || 'Not done'
+          ? // "rebook" because the office reads it as its to-do (the office, 2026-09-29).
+            `${outcome.reason || 'Not done'}${outcome.reschedule ? ' · rebook' : ''}`
           : // The photograph is optional, so it is mentioned only when there is one.
             outcome.photoId
             ? 'Done · photo'
@@ -558,6 +559,40 @@ export function withoutServiceAnswer(
   const services = { ...current.services };
   delete services[service];
   return { ...current, filters: current.filters ?? [], services };
+}
+
+/** What a service left unticked at End job is recorded as. */
+export const UNTICKED_REASON = 'Not done on this visit';
+
+/**
+ * The line the office reads for a service not done: the reason picked, then the
+ * note, whichever were given -- and the same words End job uses when neither
+ * was, because the server refuses a "not done" with no reason.
+ */
+export function notDoneReason(choice: string | null, note: string): string {
+  return [choice, note.trim()].filter(Boolean).join(' — ') || UNTICKED_REASON;
+}
+
+/**
+ * Every service left unticked, answered as not done and to be booked again.
+ *
+ * End job used to stop and ask why for each one. The office, 2026-09-29: a
+ * technician who has done the filters and the inspection but not the pest
+ * control must be able to end the job, and the office must still be able to
+ * tell that pest control never happened -- so it is written down as not done,
+ * with a rebook, rather than asked about. A reason or a note can still be given
+ * on the row beforehand ("Not done"), and that answer is kept.
+ */
+export function withUntickedNotDone(
+  report: VisitServicesReport | null | undefined,
+  services: readonly ReportableVisitService[],
+): VisitServicesReport {
+  let next = report ?? EMPTY_REPORT;
+  for (const service of services) {
+    if (next.services[service]) continue;
+    next = withServiceAnswer(next, service, { done: false, reason: UNTICKED_REASON, reschedule: true });
+  }
+  return next;
 }
 
 /**

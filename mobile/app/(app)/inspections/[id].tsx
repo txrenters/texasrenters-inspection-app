@@ -47,6 +47,7 @@ import {
   jobTasks,
   toggledService,
   withServiceAnswer,
+  withUntickedNotDone,
   type JobTask,
 } from '@/src/utils/job-tasks';
 import { INSPECTION_STATUS_TONE_CLASS, inspectionStatusPresentation } from '@/src/utils/inspection-status';
@@ -68,8 +69,9 @@ registerIcons(AlertTriangleIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIc
  * with Start job under them. The timer starts on the tap -- the office asked for
  * the confirmation to go (2026-09-29), so nothing stands between. A started job
  * is its list and a running timer, with End job under it. End job is the
- * submission: it sends the technician back to anything unfinished, asks why for
- * a service left unticked, and submits once they confirm.
+ * submission: it sends the technician back to anything unfinished, sends a
+ * service left unticked as not done and to be booked again (2026-09-29), and
+ * submits once they confirm.
  */
 
 /** What each kind of visit is called on the handset. */
@@ -96,8 +98,8 @@ export default function JobScreen() {
   const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch]);
   const [noAccessOpen, setNoAccessOpen] = useState(false);
-  /** Services End job is asking about, one at a time, and the report as answered so far. */
-  const [asking, setAsking] = useState<{ queue: JobTask[]; report: VisitServicesReport | null } | null>(null);
+  /** The service whose "Not done" was tapped, while its note is written. */
+  const [notDoneFor, setNotDoneFor] = useState<(JobTask & { key: ReportableVisitService }) | null>(null);
   /** The report End job is about to submit, while the technician confirms it. */
   const [ending, setEnding] = useState<{ report: VisitServicesReport | null } | null>(null);
   const [closingComments, setClosingComments] = useState<ClosingComments>(EMPTY_CLOSING_COMMENTS);
@@ -179,24 +181,17 @@ export default function JobScreen() {
       ]);
       return;
     }
-    const report = item.servicesReport ?? null;
-    if (plan.unticked.length) setAsking({ queue: plan.unticked, report });
-    else confirmEnd(report);
-  };
-
-  /** A service left unticked, answered: not done, with the reason. The next one, or on to ending. */
-  const answerUnticked = ({ reason, reschedule }: { reason: string; reschedule: boolean }) => {
-    if (!asking) return;
-    const [current, ...rest] = asking.queue;
-    if (!current || !isService(current)) return;
-    const report = withServiceAnswer(asking.report, current.key, { done: false, reason, reschedule });
-    // Saved as it is answered, like a tick, so it is on the job even if ending waits.
-    actions.saveServices.mutate(report);
-    if (rest.length) setAsking({ queue: rest, report });
-    else {
-      setAsking(null);
-      confirmEnd(report);
-    }
+    /*
+     * Anything left unticked goes as not done, to be booked again -- never a
+     * reason to stop (the office, 2026-09-29). Only in what End job sends, so
+     * backing out of the confirmation leaves the job as it was.
+     */
+    confirmEnd(
+      withUntickedNotDone(
+        item.servicesReport,
+        plan.unticked.filter(isService).map((task) => task.key),
+      ),
+    );
   };
 
   const submit = () => {
@@ -326,6 +321,9 @@ export default function JobScreen() {
           className="mx-5 mt-5"
           mode={item.status === 'SCHEDULED' ? 'preview' : item.status === 'IN_PROGRESS' ? 'working' : 'done'}
           onOpen={open}
+          onNotDone={(task) => {
+            if (isService(task)) setNotDoneFor(task);
+          }}
           onToggle={toggle}
           tasks={tasks}
         />
@@ -401,10 +399,18 @@ export default function JobScreen() {
       </View>
 
       <NotDoneSheet
-        onClose={() => setAsking(null)}
-        onSave={answerUnticked}
-        title={asking?.queue[0]?.title ?? ''}
-        visible={Boolean(asking?.queue.length)}
+        initial={notDoneFor ? item.servicesReport?.services[notDoneFor.key] : undefined}
+        onClose={() => setNotDoneFor(null)}
+        onSave={({ reason, reschedule }) => {
+          const service = notDoneFor?.key;
+          setNotDoneFor(null);
+          if (service)
+            actions.saveServices.mutate((current) =>
+              withServiceAnswer(current, service, { done: false, reason, reschedule }),
+            );
+        }}
+        title={notDoneFor?.title ?? ''}
+        visible={Boolean(notDoneFor)}
       />
 
       <EndJobSheet
