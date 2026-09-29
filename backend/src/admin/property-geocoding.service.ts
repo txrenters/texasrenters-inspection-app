@@ -15,6 +15,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
 import { GOOGLE_GEOCODE_SOURCE, GoogleGeocodingClient } from './google-geocoding.client';
+import { propertyPosition } from './property-position';
 
 /**
  * Turns property addresses into points on a map.
@@ -433,8 +434,9 @@ export class PropertyGeocodingService {
         city: row.city ?? '',
         state: row.state ?? '',
         postalCode: row.postalCode ?? '',
-        latitude: (moved ? row.geofence?.latitude : row.latitude)?.toNumber() ?? 0,
-        longitude: (moved ? row.geofence?.longitude : row.longitude)?.toNumber() ?? 0,
+        // The one rule, from the one place every other reader asks it.
+        latitude: propertyPosition(row)?.latitude ?? 0,
+        longitude: propertyPosition(row)?.longitude ?? 0,
         geocodePrecision: (row.geocodePrecision as GeocodePrecision | null) ?? null,
         enterRadiusMeters: row.geofence?.enterRadiusMeters ?? SEGMENT_DEFAULTS.enterRadiusMeters,
         exitRadiusMeters: row.geofence?.exitRadiusMeters ?? SEGMENT_DEFAULTS.exitRadiusMeters,

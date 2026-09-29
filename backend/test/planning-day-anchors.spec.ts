@@ -37,7 +37,7 @@ const anchor = (
     inspectionType: overrides.kind ?? InspectionType.MOVE_OUT,
     scheduledAt: new Date(`${overrides.scheduledAt ?? '2026-10-14'}T00:00:00.000Z`),
     status: overrides.status ?? InspectionStatus.SCHEDULED,
-    propertywareBuilding: { addressLine1: '9 Move Out Ln', city: 'Katy', latitude: 29.7, longitude: -95.7 },
+    propertywareBuilding: { id: 'building-9', addressLine1: '9 Move Out Ln', city: 'Katy', latitude: 29.7, longitude: -95.7 },
     assignments:
       overrides.assigned === null
         ? []
@@ -80,6 +80,9 @@ describe('the move-outs and move-ins a planned day is built around', () => {
         driveSecondsForecast: 420,
         address: '9 Move Out Ln',
         city: 'Katy',
+        // Which building, so the one map can pick the day's properties out of
+        // the whole portfolio rather than guessing by coordinate.
+        buildingId: 'building-9',
         latitude: 29.7,
         longitude: -95.7,
         assignedTechnician: { id: 'moses', displayName: 'Moses Rodriguez' },

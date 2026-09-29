@@ -14,6 +14,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { TechnicianSkillsService } from '../admin/technician-skills.service';
 import { TbpStopEditService } from './tbp-stop-edit.service';
+import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-position';
 
 /**
  * What the office is told about its quarter, and the moves it is offered.
@@ -270,7 +271,7 @@ export class PlanAdvisorService {
         onSiteMinutes: true,
         inspectionType: true,
         assignedTechnician: { select: { displayName: true } },
-        propertywareBuilding: { select: { latitude: true, longitude: true } },
+        propertywareBuilding: { select: BUILDING_POSITION_SELECT },
         tenant: { select: { addressLine1: true } },
       },
     });
@@ -305,8 +306,8 @@ export class PlanAdvisorService {
         id: row.id,
         address: row.tenant.addressLine1,
         zone: row.zone,
-        latitude: Number(row.propertywareBuilding.latitude),
-        longitude: Number(row.propertywareBuilding.longitude),
+        latitude: propertyPosition(row.propertywareBuilding)?.latitude ?? 0,
+        longitude: propertyPosition(row.propertywareBuilding)?.longitude ?? 0,
         onSiteMinutes: row.onSiteMinutes ?? 0,
         inspectionType: row.inspectionType,
         date,

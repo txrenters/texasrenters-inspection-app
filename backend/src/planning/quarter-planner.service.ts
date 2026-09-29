@@ -50,6 +50,7 @@ import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
 import type { GeoPoint } from '../routing/osrm.client';
 import { MapboxDirectionsClient } from '../routing/mapbox-directions.client';
+import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-position';
 import { OsrmClient } from '../routing/osrm.client';
 
 /**
@@ -548,19 +549,19 @@ export class QuarterPlannerService {
         sequence: true,
         zone: true,
         inspectionType: true,
-        propertywareBuilding: { select: { latitude: true, longitude: true } },
+        propertywareBuilding: { select: BUILDING_POSITION_SELECT },
       },
     });
     const stops = withZones(
       rows.flatMap((row) =>
-        row.propertywareBuilding?.latitude == null || row.propertywareBuilding.longitude == null
+        !propertyPosition(row.propertywareBuilding)
           ? []
           : [
               {
                 stopId: row.id,
                 sequence: row.sequence,
-                latitude: Number(row.propertywareBuilding.latitude),
-                longitude: Number(row.propertywareBuilding.longitude),
+                latitude: propertyPosition(row.propertywareBuilding)!.latitude,
+                longitude: propertyPosition(row.propertywareBuilding)!.longitude,
                 onSiteMinutes: 0,
                 inspectionType: row.inspectionType,
                 zone: zoneNumberOf(row.zone),
@@ -634,19 +635,19 @@ export class QuarterPlannerService {
           zone: true,
           inspectionType: true,
           onSiteMinutes: true,
-          propertywareBuilding: { select: { latitude: true, longitude: true } },
+          propertywareBuilding: { select: BUILDING_POSITION_SELECT },
         },
         orderBy: { sequence: 'asc' },
       });
       const stops: PlannableStop[] = rows.flatMap((row) =>
-        row.propertywareBuilding?.latitude == null || row.propertywareBuilding.longitude == null
+        !propertyPosition(row.propertywareBuilding)
           ? []
           : [
               {
                 stopId: row.id,
                 sequence: row.sequence,
-                latitude: Number(row.propertywareBuilding.latitude),
-                longitude: Number(row.propertywareBuilding.longitude),
+                latitude: propertyPosition(row.propertywareBuilding)!.latitude,
+                longitude: propertyPosition(row.propertywareBuilding)!.longitude,
                 inspectionType: row.inspectionType,
                 onSiteMinutes: row.onSiteMinutes ?? 0,
                 zone: zoneNumberOf(row.zone),
@@ -662,21 +663,21 @@ export class QuarterPlannerService {
             inspectionId: true,
             onSiteMinutes: true,
             inspection: {
-              select: { inspectionType: true, propertywareBuilding: { select: { latitude: true, longitude: true } } },
+              select: { inspectionType: true, propertywareBuilding: { select: BUILDING_POSITION_SELECT } },
             },
           },
         })
       ).flatMap((row) => {
         const building = row.inspection.propertywareBuilding;
-        return building?.latitude == null || building.longitude == null
+        return !propertyPosition(building)
           ? []
           : [
               anchorAsStop({
                 id: row.inspectionId,
                 date,
                 technicianId,
-                latitude: Number(building.latitude),
-                longitude: Number(building.longitude),
+                latitude: propertyPosition(building)!.latitude,
+                longitude: propertyPosition(building)!.longitude,
                 onSiteMinutes: row.onSiteMinutes,
                 kind: row.inspection.inspectionType === InspectionType.MOVE_IN ? 'MOVE_IN' : 'MOVE_OUT',
               }),
@@ -747,7 +748,7 @@ export class QuarterPlannerService {
         id: true,
         inspectionType: true,
         scheduledAt: true,
-        propertywareBuilding: { select: { latitude: true, longitude: true } },
+        propertywareBuilding: { select: BUILDING_POSITION_SELECT },
         assignments: { where: { isCurrent: true }, select: { technicianId: true }, take: 1 },
       },
     });
@@ -759,7 +760,7 @@ export class QuarterPlannerService {
       const technicianId = moveIn ? (assigned && crew.includes(assigned) ? assigned : null) : (handler?.technicianId ?? null);
       if (!technicianId) continue;
       const building = inspection.propertywareBuilding;
-      if (building?.latitude == null || building.longitude == null) {
+      if (!propertyPosition(building)) {
         withoutLocation.push(inspection.id);
         continue;
       }
@@ -767,8 +768,8 @@ export class QuarterPlannerService {
         id: inspection.id,
         date: inspection.scheduledAt.toISOString().slice(0, 10),
         technicianId,
-        latitude: Number(building.latitude),
-        longitude: Number(building.longitude),
+        latitude: propertyPosition(building)!.latitude,
+        longitude: propertyPosition(building)!.longitude,
         onSiteMinutes: MOVE_ANCHOR_MINUTES,
         kind: moveIn ? 'MOVE_IN' : 'MOVE_OUT',
       });
@@ -811,7 +812,7 @@ export class QuarterPlannerService {
         technicianOverriddenAt: true,
         onSiteMinutes: true,
         onSiteMinutesOverriddenAt: true,
-        propertywareBuilding: { select: { latitude: true, longitude: true } },
+        propertywareBuilding: { select: BUILDING_POSITION_SELECT },
         // Only read for a rebuild, and it decides whether a booked visit is
         // still the planner's to move: see `movableInspection`.
         inspection: { select: { status: true, finalizedAt: true } },
@@ -839,9 +840,10 @@ export class QuarterPlannerService {
         excluded.push(row.id);
         continue;
       }
-      const latitude = row.propertywareBuilding?.latitude;
-      const longitude = row.propertywareBuilding?.longitude;
-      if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
+      // Where the office says it is: the corrected centre when there is one, the
+      // geocode otherwise -- the same answer the maps draw it at.
+      const at = propertyPosition(row.propertywareBuilding);
+      if (!at) {
         unplaceable.push(row.id);
         continue;
       }
@@ -866,8 +868,8 @@ export class QuarterPlannerService {
       stops.push({
         stopId: row.id,
         sequence: row.sequence,
-        latitude: Number(latitude),
-        longitude: Number(longitude),
+        latitude: at.latitude,
+        longitude: at.longitude,
         inspectionType: row.inspectionType ?? InspectionType.OCCUPIED,
         onSiteMinutes:
           row.onSiteMinutesOverriddenAt && row.onSiteMinutes !== null && row.onSiteMinutes !== undefined

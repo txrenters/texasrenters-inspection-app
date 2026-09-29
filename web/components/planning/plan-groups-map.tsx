@@ -7,7 +7,6 @@ import { useTheme } from 'next-themes';
 import { ConsoleMap } from '@/components/console-map';
 
 import { circlePolygon, planGroups, type GroupableStop } from './plan-groups';
-import { presenceOf, type TechnicianPosition } from '@texasrenters/shared';
 
 /**
  * A quarter's days, drawn as the office sketched them.
@@ -18,11 +17,16 @@ import { presenceOf, type TechnicianPosition } from '@texasrenters/shared';
  * across the county; where two overlap, those days are covering the same
  * ground and could be one.
  *
- * Drawn on `ConsoleMap`, like every other map here, so the reader's map type,
- * the tilt and the grouping radius come with it. The radius is worth having on
- * this page above all others: these circles are one per *day*, and the radius
- * is one per *property*, so the two together show both how a day is spread and
- * which properties were close enough to have shared one.
+ * Drawn on `ConsoleMap` with the portfolio and the crew turned on, so the
+ * quarter's days sit on the same map as everything else: the same pins, the
+ * same people, and the grouping radius around the same portfolio. The radius
+ * is worth having here above all: these circles are one per *day* and the
+ * radius is one per *property*, so together they show both how a day is
+ * spread and which properties were close enough to have shared one.
+ *
+ * It used to draw its own crew as letters in green circles and its own
+ * properties as grey dots, which is exactly how the console came to have
+ * "two different maps".
  */
 
 /** Houston, for the moment before the plan has been measured. */
@@ -32,21 +36,11 @@ export function PlanGroupsMap({
   stops,
   onSelectDay,
   selectedDate,
-  technicians = [],
 }: {
   stops: readonly GroupableStop[];
   onSelectDay?: (date: string) => void;
   /** The day being read, drawn stronger than the rest. */
   selectedDate?: string | null;
-  /**
-   * Where the crew are right now, over the plan they are working.
-   *
-   * The office asked for one map rather than two: the technician map and the
-   * quarter's map showed different worlds, so seeing whether anybody is near
-   * today's group meant opening another page and holding both in your head.
-   * Empty by default, because a quarter three months out has nobody on it.
-   */
-  technicians?: readonly TechnicianPosition[];
 }) {
   const { resolvedTheme } = useTheme();
   const groups = useMemo(() => planGroups(stops), [stops]);
@@ -77,31 +71,6 @@ export function PlanGroupsMap({
     [groups, selectedDate],
   );
 
-  /**
-   * What the shared grouping-radius overlay draws around.
-   *
-   * The day circles above are one per day; these are one per property. Read
-   * together they answer the question the office actually asks of this page --
-   * whether two days that look separate were ever close enough to be one.
-   */
-  const radiusPoints = useMemo(
-    () => groups.flatMap((group) => group.stops.map((stop) => ({ latitude: stop.latitude, longitude: stop.longitude }))),
-    [groups],
-  );
-
-  const properties = useMemo(
-    () => ({
-      type: 'FeatureCollection' as const,
-      features: groups.flatMap((group) =>
-        group.stops.map((stop) => ({
-          type: 'Feature' as const,
-          properties: {},
-          geometry: { type: 'Point' as const, coordinates: [stop.longitude, stop.latitude] },
-        })),
-      ),
-    }),
-    [groups],
-  );
 
   const dark = resolvedTheme === 'dark';
   const fill: LayerProps = {
@@ -126,8 +95,9 @@ export function PlanGroupsMap({
 
   return (
     <ConsoleMap
+      crew
       initialView={FALLBACK}
-      radiusPoints={radiusPoints}
+      portfolio
       unavailable={
         groups.length
           ? undefined
@@ -139,66 +109,21 @@ export function PlanGroupsMap({
         <Layer {...outline} />
       </Source>
 
-      {/* The properties themselves, small: the circles are the subject here. */}
-      <Source data={properties} id="properties" type="geojson">
-        <Layer
-          id="property-dots"
-          paint={{
-            'circle-color': dark ? '#e5e7eb' : '#1f2937',
-            'circle-radius': 2.5,
-            'circle-opacity': 0.7,
-          }}
-          type="circle"
-        />
-      </Source>
-
       {/*
         The number, as a real element rather than a Mapbox symbol layer: it is
         the thing the office reads off this map, and a symbol layer hides a
         label the moment two collide — which is exactly where the circles
         overlap and the reading matters most.
       */}
-      {/*
-        The crew, over the plan. Drawn after the circles so a person is never
-        underneath one, and in the technician green the rest of the console
-        uses for a person rather than a place.
-      */}
-      {technicians.map((position) => (
-        <Marker
-          key={position.technicianId}
-          latitude={position.latitude}
-          longitude={position.longitude}
-        >
-          <span
-            className={[
-              'flex h-5 w-5 items-center justify-center rounded-full border-2 border-white text-[10px] font-semibold text-white shadow',
-              /**
-               * The console's one answer to "is this person out there now".
-               *
-               * `presenceOf` rather than the timestamp: it also counts the app
-               * being open, because location recording stops on its own often
-               * enough -- the phone kills the task, a permission changes -- and
-               * a technician visibly working is not offline because of it.
-               */
-              presenceOf(position) === 'ONLINE' ? 'bg-map-technician' : 'bg-map-technician-stale',
-            ].join(' ')}
-            title={`${position.technician?.displayName ?? 'Technician'} · ${
-              presenceOf(position) === 'ONLINE'
-                ? 'reporting now'
-                : `last seen ${new Date(position.recordedAt).toLocaleString()}`
-            }`}
-          >
-            {(position.technician?.displayName ?? '?').slice(0, 1).toUpperCase()}
-          </span>
-        </Marker>
-      ))}
-
       {groups.map((group) => (
         <Marker
           key={group.date}
           latitude={group.latitude}
           longitude={group.longitude}
           onClick={onSelectDay ? () => onSelectDay(group.date) : undefined}
+          // Over the portfolio's pins and the crew: the day's number is what
+          // this page is read by.
+          style={{ zIndex: 800 }}
         >
           <span
             className={[
