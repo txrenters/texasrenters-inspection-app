@@ -41,7 +41,14 @@ import type {
   UploadRepository,
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
-import { QueuedOfflineError, dropQueuedWrite, queueOnConnectionFailure } from './offline-writes';
+import {
+  QueuedOfflineError,
+  dropQueuedWrite,
+  jobStartEntryId,
+  queueOnConnectionFailure,
+  savedJobStarts,
+  sendSavedFirst,
+} from './offline-writes';
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
@@ -902,17 +909,19 @@ export class ApiInspectionRepository implements InspectionRepository {
     if (filters.statuses?.length) query.set('status', filters.statuses.join(','));
     if (filters.search?.trim()) query.set('search', filters.search.trim());
     if (filters.dueToday) query.set('dueToday', 'true');
-    return cachedApiRecord(`inspections:${query.toString()}`, inspectionPageSchema, () =>
+    const result = await cachedApiRecord(`inspections:${query.toString()}`, inspectionPageSchema, () =>
       getJson(`/api/v1/technician/inspections?${query.toString()}`),
     );
+    return { ...result, items: await withSavedStarts(result.items) };
   }
   async list(filters: InspectionListFilters = {}) {
     return (await this.listPage(filters)).items;
   }
   async get(id: string) {
-    return cachedApiRecord(`inspection:${id}`, inspectionSchema, () =>
+    const inspection = await cachedApiRecord(`inspection:${id}`, inspectionSchema, () =>
       getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}`),
     );
+    return (await withSavedStarts([inspection]))[0]!;
   }
   async context(id: string) {
     const context = await cachedApiRecord(`inspection-context:${id}`, inspectionContextSchema, () =>
@@ -924,7 +933,11 @@ export class ApiInspectionRepository implements InspectionRepository {
       storeApiRecord(`inspection-rooms:${id}`, z.array(roomSchema), context.rooms),
       ...context.rooms.map((room) => storeApiRecord(`room:${room.id}`, roomSchema, room)),
     ]);
-    return { ...context, rooms: inspectedRooms(context.rooms).map(withLocalRoomState) };
+    return {
+      ...context,
+      inspection: (await withSavedStarts([context.inspection]))[0]!,
+      rooms: inspectedRooms(context.rooms).map(withLocalRoomState),
+    };
   }
   async report(id: string) {
     const report = await cachedApiRecord(`inspection-report:${id}`, reportSchema, () =>
@@ -932,9 +945,20 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
     return { ...report, rooms: inspectedRooms(report.rooms) };
   }
-  async start(id: string) {
+  /**
+   * Start job, saved on the phone before it is sent (`sendSavedFirst`), with
+   * the time it was pressed -- so a start the app was closed on, or that met no
+   * signal, is sent on the next launch and still counts the job from the tap.
+   */
+  async start(id: string, startedAt: string = new Date().toISOString()) {
     const inspection = inspectionSchema.parse(
-      await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/start`, 'POST'),
+      await sendSavedFirst(
+        { id: jobStartEntryId(id), kind: 'job-start', payload: { inspectionId: id, startedAt } },
+        () =>
+          writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/start`, 'POST', {
+            startedAt,
+          }),
+      ),
     );
     await Promise.all([
       storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
@@ -1851,6 +1875,27 @@ function inspectedRooms<Room extends { inspectionType: string; name: string; sou
   rooms: readonly Room[],
 ): Room[] {
   return rooms.filter((room) => isInspectedArea(room.inspectionType, room));
+}
+
+/**
+ * Jobs as the phone started them: one whose start is saved here and not yet
+ * confirmed reads as started, from the moment it was pressed.
+ *
+ * The server says SCHEDULED until the start arrives, and it may not have: the
+ * app closed before the reply, or no signal. Without this a reopened app
+ * offered Start job again on a job whose timer was already running (the
+ * office, 2026-09-29). Only a SCHEDULED job is changed -- once the server has
+ * the start, or has moved the job on, its answer stands.
+ */
+async function withSavedStarts<Job extends { id: string; status: string; startedAt?: string | null }>(
+  jobs: readonly Job[],
+): Promise<Job[]> {
+  const starts = await savedJobStarts().catch(() => new Map<string, string>());
+  if (!starts.size) return [...jobs];
+  return jobs.map((job) => {
+    const startedAt = starts.get(job.id);
+    return startedAt && job.status === 'SCHEDULED' ? ({ ...job, status: 'IN_PROGRESS', startedAt } as Job) : job;
+  });
 }
 
 function withLocalRoomState(room: z.infer<typeof roomSchema>) {

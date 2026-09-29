@@ -157,10 +157,17 @@ async function storageKey() {
  * from an empty react-query cache: spinner, wait for the round trip, then
  * paint, even though the answer was sitting in SQLite.
  *
- * Restored entries keep their original `dataUpdatedAt`, so they are already
- * stale against the 30s `staleTime` and react-query revalidates each one the
- * moment its screen mounts. The technician sees yesterday's list instantly and
- * it corrects itself a beat later, instead of seeing nothing at all.
+ * Every restored entry is marked stale, so react-query revalidates each one
+ * the moment its screen mounts. The technician sees yesterday's list instantly
+ * and it corrects itself a beat later, instead of seeing nothing at all.
+ *
+ * Marked, not left to age. Restored entries keep their original
+ * `dataUpdatedAt`, and this note used to say that made them stale against the
+ * 30s `staleTime` -- true only of an app closed for longer than that. Close and
+ * reopen within half a minute and the copy on disk counted as fresh, so nothing
+ * asked the server: and the copy is written two seconds after the last change,
+ * so it could predate that change. That is how a job started just before the
+ * app was closed could reopen offering Start job again (the office, 2026-09-29).
  */
 export async function restoreQueryCache(client: QueryClient): Promise<boolean> {
   const key = await storageKey();
@@ -177,6 +184,8 @@ export async function restoreQueryCache(client: QueryClient): Promise<boolean> {
       return false;
     }
     hydrate(client, withoutVolatileQueries(payload.state));
+    // Shown at once, believed only once the server has been asked again.
+    void client.invalidateQueries({ refetchType: 'none' });
     return true;
   } catch {
     // A truncated or hand-edited payload must not wedge every future launch.

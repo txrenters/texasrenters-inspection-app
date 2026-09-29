@@ -123,6 +123,62 @@ export async function queueOnConnectionFailure<T>(
 }
 
 /**
+ * Sends a write that must survive the app being closed while it is in flight.
+ *
+ * `queueOnConnectionFailure` keeps a write only once its send has *failed*. A
+ * send still waiting for its reply when the app is swiped away has not failed
+ * -- it is simply gone, and nothing on the next launch knows it was ever made.
+ * That is how a started job came back asking to be started again (the office,
+ * 2026-09-29): Start job answers on the tap, so a technician can close the app
+ * a second later, before the request has landed.
+ *
+ * So the entry is written to the queue *before* the send and removed after the
+ * reply. Closed mid-flight, it is still there, and the launch drain sends it.
+ * A held failure keeps it, like `queueOnConnectionFailure`; a refusal removes
+ * it and is thrown, so the screen can say so. Only for writes whose replay is
+ * harmless -- the drain may send it again while this send is still out.
+ */
+export async function sendSavedFirst<T>(
+  entry: { id: string; kind: string; payload: Record<string, unknown> },
+  send: () => Promise<T>,
+): Promise<T> {
+  await enqueueMutation(entry);
+  try {
+    const result = await send();
+    await removeMutation(entry.id);
+    return result;
+  } catch (error) {
+    const held = classifyWriteFailure(error, useNetworkStore.getState().isOnline);
+    if (!held.hold) {
+      await removeMutation(entry.id);
+      throw error;
+    }
+    throw new QueuedOfflineError(held.reason);
+  }
+}
+
+/** The key a job's saved start is queued under. */
+export const jobStartEntryId = (inspectionId: string) => `start:${inspectionId}`;
+
+/**
+ * The starts saved on this phone that the server has not confirmed, by job.
+ *
+ * Read so a job started here reads as started everywhere on the phone -- the
+ * job screen, the list -- until the server says so itself, whether the app was
+ * closed in between or the signal went.
+ */
+export async function savedJobStarts(): Promise<Map<string, string>> {
+  const starts = new Map<string, string>();
+  for (const entry of await readQueue()) {
+    if (entry.kind !== 'job-start') continue;
+    const inspectionId = String(entry.payload.inspectionId ?? '');
+    const startedAt = String(entry.payload.startedAt ?? '');
+    if (inspectionId && startedAt) starts.set(inspectionId, startedAt);
+  }
+  return starts;
+}
+
+/**
  * How each queued kind is replayed.
  *
  * Written out rather than closing over the repository, so adding a queued
@@ -180,6 +236,21 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
       await flushRoomSnapshotsNow(roomId);
       return send(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST', {});
     },
+    /**
+     * Start job, saved when it was pressed (`sendSavedFirst`).
+     *
+     * Safe to replay: the server answers a job already started with the job,
+     * and keeps the first start. Sent with the time it was pressed, so a start
+     * that lands on the next launch still counts the job from the tap. Queued
+     * ahead of the job's checklist, which the server takes only once the job is
+     * started, and the drain keeps that order.
+     */
+    'job-start': (payload, send) =>
+      send(
+        `/api/v1/technician/inspections/${encodeURIComponent(String(payload.inspectionId))}/start`,
+        'POST',
+        { startedAt: payload.startedAt },
+      ),
     /**
      * The job's checklist as it stood when the signal went.
      *

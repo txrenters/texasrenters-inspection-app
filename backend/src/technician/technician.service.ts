@@ -58,6 +58,7 @@ import { ApplicationError } from '../common/errors';
 import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
 import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
+import { jobStartTime } from './job-start-time';
 import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
@@ -782,20 +783,37 @@ export class TechnicianService {
     };
   }
 
-  async startInspection(user: AuthenticatedUser, id: string) {
+  /**
+   * Start job.
+   *
+   * The phone saves the start the moment it is pressed and sends it when it
+   * can, so this can arrive late, and more than once: again on the next launch
+   * when the app was closed before the first reply (the office, 2026-09-29).
+   * So the start is the phone's own time (`jobStartTime`), and a job already
+   * started answers with itself rather than a refusal -- the second arrival is
+   * the same start, not a second one.
+   *
+   * Compare-and-set on SCHEDULED, so two arriving together cannot both write:
+   * the first start is the one the office reads the job's time from.
+   */
+  async startInspection(user: AuthenticatedUser, id: string, startedAt?: string) {
     const record = await this.assignedInspection(user, id);
+    if (record.status === InspectionStatus.IN_PROGRESS) return this.mapInspection(record, user.id);
     if (record.status !== InspectionStatus.SCHEDULED)
       throw new ApplicationError(
         409,
         'INSPECTION_NOT_STARTABLE',
         'Only a scheduled inspection can be started.',
       );
-    const updated = await this.prisma.inspection.update({
+    const { count } = await this.prisma.inspection.updateMany({
+      where: { id: record.id, status: InspectionStatus.SCHEDULED },
+      data: { status: InspectionStatus.IN_PROGRESS, startedAt: jobStartTime(startedAt, new Date()) },
+    });
+    const updated = await this.prisma.inspection.findUniqueOrThrow({
       where: { id: record.id },
-      data: { status: InspectionStatus.IN_PROGRESS, startedAt: new Date() },
       select: technicianInspectionSummarySelect,
     });
-    this.notifyInspectionChanged(user, record.id);
+    if (count) this.notifyInspectionChanged(user, record.id);
     return this.mapInspection(updated, user.id);
   }
 

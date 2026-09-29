@@ -192,10 +192,12 @@ export default function RoomCameraScreen() {
   useEffect(() => {
     if (inspection.data?.status !== 'SCHEDULED' || startedRef.current) return;
     startedRef.current = true;
-    startInspection.mutate(undefined, {
+    startInspection.mutate(new Date().toISOString(), {
       // Let it retry on the next mount rather than stranding the technician in
-      // a screen that silently cannot save what they record.
-      onError: () => {
+      // a screen that silently cannot save what they record -- unless it was
+      // saved on the phone, which is started and will be sent.
+      onError: (error) => {
+        if (error instanceof Error && error.name === 'QueuedOfflineError') return;
         startedRef.current = false;
       },
     });
