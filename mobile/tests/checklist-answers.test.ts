@@ -37,15 +37,29 @@ const row = (id: string): ChecklistItemWithAssessment =>
     recordedAt: null,
   }) as ChecklistItemWithAssessment;
 
-const makeClient = () =>
-  new QueryClient({
+const clients: QueryClient[] = [];
+
+/**
+ * `gcTime: Infinity` because a finite one schedules a five-minute timer for
+ * every query and settled mutation, and an open timer keeps jest from exiting:
+ * CI's `npm test` has no `--forceExit`, so it waited on them indefinitely.
+ */
+const makeClient = () => {
+  const client = new QueryClient({
     queryCache: new QueryCache(),
     mutationCache: new MutationCache(),
     defaultOptions: {
-      queries: { structuralSharing: reconcileMobileState, retry: false },
-      mutations: { retry: false },
+      queries: { structuralSharing: reconcileMobileState, retry: false, gcTime: Infinity },
+      mutations: { retry: false, gcTime: Infinity },
     },
   });
+  clients.push(client);
+  return client;
+};
+
+afterEach(() => {
+  for (const client of clients.splice(0)) client.clear();
+});
 
 const flush = async () => {
   for (let i = 0; i < 12; i += 1) await Promise.resolve();
