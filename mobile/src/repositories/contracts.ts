@@ -261,7 +261,8 @@ export interface InspectionRepository {
   get(id: string): Promise<Inspection>;
   context(id: string): Promise<InspectionContext>;
   report(id: string): Promise<InspectionReport>;
-  start(id: string): Promise<Inspection>;
+  /** `startedAt`: when Start job was pressed, by this phone's clock. */
+  start(id: string, startedAt?: string): Promise<Inspection>;
   /** `servicesReport` only for a visit that booked services; older builds sent none. */
   complete(
     id: string,

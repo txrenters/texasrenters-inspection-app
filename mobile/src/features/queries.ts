@@ -369,12 +369,12 @@ export function useInspectionActions(id: string) {
      * Held as the intent's shadow too, so a list refetch that races the
      * request cannot put the old job back on screen.
      */
-    optimistic?: () => Record<string, unknown>,
+    optimistic?: (variables: Variables) => Record<string, unknown>,
   ) => ({
     mutationFn: request,
-    onMutate: async () => {
+    onMutate: async (variables: Variables) => {
       await cancelQueries(client, [queryKeys.inspection(id), queryKeys.inspectionsRoot]);
-      const patch = optimistic?.();
+      const patch = optimistic?.(variables);
       const operation = beginIntent(id, state, patch);
       patchEntity(client, queryKeys.all, id, patch ?? {}, { state, operationId: operation });
       return { operation };
@@ -389,7 +389,19 @@ export function useInspectionActions(id: string) {
       client.setQueryData(queryKeys.inspection(id), inspection);
       void refresh();
     },
-    onError: (_error: unknown, _variables: Variables, context?: { operation: string }) => {
+    onError: (error: unknown, _variables: Variables, context?: { operation: string }) => {
+      /*
+       * Saved on the phone, to be sent when it can: what was drawn is what
+       * will be, so it stays. The guard keeps it over a refetch for its usual
+       * spell, and the repository reads a saved start into every copy of the
+       * job after that (`withSavedStarts`). Rolling it back told a technician
+       * whose start was safely kept that it "did not start".
+       */
+      if (optimistic && error instanceof QueuedOfflineError) {
+        if (context) completeIntent(id, context.operation, undefined);
+        void refresh();
+        return;
+      }
       if (context) failIntent(id, context.operation);
       void refresh();
     },
@@ -399,15 +411,17 @@ export function useInspectionActions(id: string) {
      * Start job, shown as started the moment it is pressed (the office,
      * 2026-09-29: the confirmation was redundant and the start must be smooth).
      *
-     * The timer runs from the handset's tap until the server's stamp replaces
-     * it a moment later, so it may jump by the round trip -- never by more. A
-     * failure puts the scheduled job back (`refresh`) and the screen says so.
+     * Takes the moment it was pressed, which is both what is drawn and what is
+     * sent, so the timer never jumps when the server answers. The start is
+     * saved on the phone before it is sent, and survives the app being closed
+     * or the signal going (`sendSavedFirst`). Only a refusal puts the scheduled
+     * job back, and the screen says so.
      */
     start: useMutation(
-      action<void>(
+      action<string>(
         'PROCESSING',
-        () => repositories.inspections.start(id),
-        () => ({ status: 'IN_PROGRESS', startedAt: new Date().toISOString() }),
+        (startedAt) => repositories.inspections.start(id, startedAt),
+        (startedAt) => ({ status: 'IN_PROGRESS', startedAt }),
       ),
     ),
     // The services report rides with the submission, so the note to Jobber and

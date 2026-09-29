@@ -592,6 +592,16 @@ export class TechnicianCouldNotAccessDto {
 }
 
 /**
+ * Starting a job: when Start job was pressed, by the phone's clock.
+ *
+ * Empty from a phone built before it was sent, and then the server's own time
+ * is the start, as it always was. See `jobStartTime` for how far it is trusted.
+ */
+export class TechnicianStartInspectionDto {
+  @IsOptional() @IsISO8601({ strict: true }) startedAt?: string;
+}
+
+/**
  * Submitting an inspection.
  *
  * Empty for every app built before the services report, and it stays valid
