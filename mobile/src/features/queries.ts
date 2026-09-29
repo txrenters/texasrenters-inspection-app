@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert } from 'react-native';
 import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import type {
@@ -874,12 +875,50 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
         void refresh();
       },
     }),
+    /**
+     * Submit Evidence, without waiting (the office, 2026-09-30: "when I click
+     * the submit, it should not wait on the server, it should work on the
+     * background").
+     *
+     * The area is drawn submitted on the tap and the screen goes back; the
+     * photographs and the completion are sent behind it, saved first so a
+     * closed app or a lost signal sends them later (`completeRoom`). Kept when
+     * held. Only a refusal puts the area back -- rare, because the button opens
+     * on the same rule the server runs -- and, the technician having left the
+     * screen, an alert names the area and the reason.
+     *
+     * The callbacks live here rather than on the `mutate` call: react-query
+     * drops a call's own callbacks once its screen unmounts, and this screen
+     * unmounts on the tap.
+     */
     complete: useMutation({
       mutationFn: () => repositories.inspections.completeRoom(roomId),
-      onSuccess: (room) => {
-        mergeEntity(client, queryKeys.all, room);
+      onMutate: async () => {
+        await cancelQueries(client, [queryKeys.room(roomId), queryKeys.rooms(inspectionId)]);
+        const name = client.getQueryData<InspectionRoom>(queryKeys.room(roomId))?.name ?? 'This area';
+        const patch = { completionStatus: 'COMPLETED' };
+        const operation = beginIntent(roomId, 'UPDATING', patch);
+        patchEntity(client, queryKeys.all, roomId, patch, { state: 'UPDATING', operationId: operation });
+        return { operation, name };
+      },
+      onSuccess: (room, _variables, context) => {
+        if (context && !completeIntent(roomId, context.operation, room)) return;
+        mergeEntity(client, queryKeys.all, room, context?.operation);
         client.setQueryData(queryKeys.room(roomId), room);
         void refresh();
+      },
+      onError: (error, _variables, context) => {
+        if (error instanceof QueuedOfflineError) {
+          if (context) completeIntent(roomId, context.operation, undefined);
+          void refresh();
+          return;
+        }
+        if (context) failIntent(roomId, context.operation);
+        void refresh();
+        Alert.alert(
+          `${context?.name ?? 'This area'} was not submitted`,
+          error instanceof Error ? error.message : 'Open the area and submit it again.',
+        );
       },
     }),
     confirmSummary: useMutation({
