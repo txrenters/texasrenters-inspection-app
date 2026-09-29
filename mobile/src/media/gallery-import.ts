@@ -1,3 +1,4 @@
+import { inspectionIsWalkedAsOccupied } from '@texasrenters/shared';
 import * as ImagePicker from 'expo-image-picker';
 
 import type { PhotoCaptureType, RoomSnapshot } from '../domain/models';
@@ -39,11 +40,16 @@ import { buildRoomSnapshot, persistRoomSnapshot } from './local-snapshots';
 /**
  * The visits that offer it, which is not yet all of them.
  *
- * Occupied and HVAC only (the office, 2026-09-22: "this request is only
- * applicable for occupied and HVAC inspection for now"). Those are the two
- * Moses was talking about -- an occupied walk is the fifteen-minute one, and an
- * HVAC visit photographs equipment somebody is often already standing in front
- * of with their own phone out.
+ * Occupied and HVAC (the office, 2026-09-22: "this request is only applicable
+ * for occupied and HVAC inspection for now"). Those are the two Moses was
+ * talking about -- an occupied walk is the fifteen-minute one, and an HVAC
+ * visit photographs equipment somebody is often already standing in front of
+ * with their own phone out.
+ *
+ * And back-to-market, which the office has said is the same inspection as an
+ * occupied one (2026-09-15) and is walked as one (`inspectionIsWalkedAsOccupied`).
+ * The list named OCCUPIED and HVAC only, so a BTM room offered no gallery --
+ * noticed after submitting one (2026-09-30).
  *
  * Move-in and move-out are left off deliberately rather than forgotten. They
  * are the two a comparison is built from, area by area, and a photograph whose
@@ -53,10 +59,8 @@ import { buildRoomSnapshot, persistRoomSnapshot } from './local-snapshots';
  * A client rule, not a server one: the API accepts a GALLERY_IMPORT against any
  * area. What it governs is which screens offer the button.
  */
-export const GALLERY_IMPORT_TYPES: readonly string[] = ['OCCUPIED', 'HVAC'];
-
 export function inspectionAllowsGalleryImport(inspectionType: string | null | undefined): boolean {
-  return GALLERY_IMPORT_TYPES.includes(inspectionType ?? '');
+  return inspectionIsWalkedAsOccupied(inspectionType) || inspectionType === 'HVAC';
 }
 
 /** The reason an import produced nothing, when it is worth telling the technician. */

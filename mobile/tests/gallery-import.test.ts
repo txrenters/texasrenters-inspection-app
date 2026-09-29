@@ -206,8 +206,13 @@ describe('which visits offer the gallery', () => {
     expect(inspectionAllowsGalleryImport('HVAC')).toBe(true);
   });
 
+  /** The same inspection as an occupied one, the office says (2026-09-15), and walked as one. */
+  it('offers it on a back-to-market visit, which is walked as an occupied one', () => {
+    expect(inspectionAllowsGalleryImport('BACK_TO_MARKET')).toBe(true);
+  });
+
   it('does not offer it anywhere else', () => {
-    for (const type of ['MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'ROOF', 'AC_FILTER_DELIVERY'])
+    for (const type of ['MOVE_IN', 'MOVE_OUT', 'ROOF', 'AC_FILTER_DELIVERY'])
       expect(inspectionAllowsGalleryImport(type)).toBe(false);
     expect(inspectionAllowsGalleryImport(null)).toBe(false);
     expect(inspectionAllowsGalleryImport(undefined)).toBe(false);
