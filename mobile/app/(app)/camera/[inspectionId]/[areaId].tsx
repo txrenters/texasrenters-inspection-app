@@ -258,7 +258,21 @@ export default function RoomCameraScreen() {
    * photographs first, and a visit that must be filmed always records.
    */
   const chosenCapture = useDemoStore((state) => state.captureModeByArea[areaId]);
-  const primary = primaryCapture(requiresRecording, chosenCapture);
+  /**
+   * A filter register's or a service's photograph is one still, whatever the
+   * job is -- so the camera is bound to stills from the first frame.
+   *
+   * It used to follow the job type like an area does, and that was the office's
+   * "freezing camera on the filter change" (2026-09-29): before the area loads
+   * an unknown type counts as one that must be filmed, and a move-out or a
+   * filter delivery really is one, so the camera came up bound to video. On
+   * Android `takePictureAsync` has nothing to shoot with then, and the shutter
+   * hung until `CAPTURE_WATCHDOG_MS`. On an HVAC job it rebound to stills once
+   * the area arrived instead, blanking the preview and the shutter meanwhile.
+   */
+  const stillsOnly =
+    Boolean(filterSize) || servicePhoto === 'pestControl' || servicePhoto === 'fleaTreatment';
+  const primary = stillsOnly ? 'PHOTO' : primaryCapture(requiresRecording, chosenCapture);
   const restingMode = initialCameraMode(primary === 'VIDEO');
   const [cameraMode, setCameraMode] = useState<CameraMode>(() => restingMode);
   // Read inside async work, where the state value would be the one captured
@@ -1131,10 +1145,24 @@ export default function RoomCameraScreen() {
     const clock = shutterClock();
     setCapturingPhoto(true);
     setError(null);
+    /**
+     * A still needs the still binding. On Android a camera resting on video --
+     * an area that must be filmed, before its take starts -- has nothing for
+     * `takePictureAsync` to shoot with, and the shutter would hang until the
+     * watchdog. iOS photographs from either binding, so it is left alone.
+     */
+    if (Platform.OS === 'android' && !recording && cameraModeRef.current !== 'picture') {
+      await bindCamera('picture');
+      if (!mountedRef.current) return;
+    }
     // Everything that gives the button back is downstream of the await below,
     // so a capture that never settles would keep it. See `CAPTURE_WATCHDOG_MS`.
     /** Whether the count was already put up, so a failure below can take it down. */
     let counted = false;
+    /** A filter register's or a service's photograph: one shot, then straight back. */
+    const oneShot = Boolean(filterRegister || serviceForPhoto);
+    /** Whether this screen has already gone back, so a failure cannot be shown on it. */
+    let left = false;
     const watchdog = setTimeout(() => {
       setCapturingPhoto(false);
       void reportError(new Error('A photograph did not return from the camera.'), {
@@ -1184,6 +1212,19 @@ export default function RoomCameraScreen() {
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
         }`,
       );
+      /**
+       * A one-shot photograph goes back now, and is filed behind the list.
+       *
+       * The downscale and the write below took up to half a second on an iPhone
+       * frame with the camera still on screen, which read as the camera
+       * freezing after the shutter. Nothing below needs this screen: the
+       * snapshot goes to the store, the answer to the job's cache, and a
+       * failure to the error log (the `catch`).
+       */
+      if (oneShot) {
+        goBack();
+        left = true;
+      }
       /**
        * Brought down to the target edge when the camera could not be asked to.
        *
@@ -1267,27 +1308,30 @@ export default function RoomCameraScreen() {
          * simply still unanswered, which the filter screen shows and a retake
          * fixes.
          */
+        /*
+         * `mutateAsync` and a `.catch`, not `mutate` with `onError`: this screen
+         * has already gone back, and react-query drops a `mutate` call's own
+         * callbacks once its component unmounts. The save itself runs either way.
+         */
         if (inspection.data) {
-          saveServices.mutate(
-            (current) =>
+          saveServices
+            .mutateAsync((current) =>
               withFilterAnswer(
                 current,
                 filterRegister,
                 { changed: true, photoKey: snapshot.id },
                 { booked: filterBooked !== 'false' },
               ),
-            { onError: recordAnswerFailed },
-          );
+            )
+            .catch(recordAnswerFailed);
         } else recordAnswerSkipped('filter');
-        goBack();
       } else if (serviceForPhoto) {
         // The same for a service's optional photograph, on the same condition.
         if (inspection.data) {
-          saveServices.mutate((current) => withServicePhoto(current, serviceForPhoto, snapshot.id), {
-            onError: recordAnswerFailed,
-          });
+          saveServices
+            .mutateAsync((current) => withServicePhoto(current, serviceForPhoto, snapshot.id))
+            .catch(recordAnswerFailed);
         } else recordAnswerSkipped('service');
-        goBack();
       }
     } catch (cause) {
       /**
@@ -1304,6 +1348,10 @@ export default function RoomCameraScreen() {
         photoCountRef.current = Math.max(0, photoCountRef.current - 1);
       }
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
+      // Nobody is looking at this screen any more, so the office's log is the
+      // only place the failure can go. The register reads unanswered, which a
+      // retake fixes.
+      if (left) void reportError(cause, { source: 'one-shot-photo-filing' });
     } finally {
       // Both idempotent: the happy path already did each of these the moment
       // the camera handed the picture over.
