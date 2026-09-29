@@ -287,12 +287,21 @@ export default function RoomCameraScreen() {
   /**
    * Which of the camera's offered sizes stills are captured at.
    *
-   * Undefined until the camera is mounted and has answered, and undefined for
-   * good on a device that reports presets by name rather than by resolution.
-   * Both leave the prop unset and the device at its default, which is what this
-   * screen did before any of this existed.
+   * Undefined for good on a device that reports presets by name rather than by
+   * resolution, which leaves the prop unset and the device at its default.
+   *
+   * **Opened with the size this phone was given last time**, not undefined. On
+   * Android the size is part of how a still camera is set up, so learning it
+   * after the first frame changed it on a running camera and restarted it: the
+   * preview stalled just as the technician lifted the phone. A photographs-only
+   * visit -- HVAC -- opens bound to stills, so it paid that every time (the
+   * office, 2026-09-30: "there is still the lag when we open the inspection app
+   * camera for the HVAC inspection"). Remembered, the first frame is already
+   * the right size and the check below changes nothing.
    */
-  const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
+  const rememberedPictureSize = useDemoStore((state) => state.backPictureSize ?? undefined);
+  const setBackPictureSize = useDemoStore((state) => state.setBackPictureSize);
+  const [pictureSize, setPictureSize] = useState<string | undefined>(() => rememberedPictureSize);
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -528,13 +537,18 @@ export default function RoomCameraScreen() {
     void camera
       .getAvailablePictureSizesAsync()
       .then((sizes) => {
-        if (!cancelled && mountedRef.current) setPictureSize(pickPictureSize(sizes));
+        if (cancelled || !mountedRef.current) return;
+        const picked = pickPictureSize(sizes);
+        // Only a change restarts the camera, and the remembered size is
+        // normally the one picked: then nothing happens at all.
+        setPictureSize((current) => (current === picked ? current : picked));
+        if (picked && facing === 'back') setBackPictureSize(picked);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [camera, ready]);
+  }, [camera, ready, facing, setBackPictureSize]);
 
   // Haptic tick at each quarter of the clockwise loop, heavy at completion —
   // progress a technician can feel without looking away from the room.

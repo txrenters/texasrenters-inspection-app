@@ -48,6 +48,14 @@ interface DemoState {
    * technician can reopen an area and come back to it later.
    */
   evidenceToReplace: Record<string, { photoKeys: string[]; photoIds: string[] }>;
+  /**
+   * The capture size this phone's back camera was last given (`pickPictureSize`),
+   * so the camera opens with it rather than learning it after the first frame.
+   * Set on Android, where changing it on a running camera restarts it -- the
+   * lag the office saw opening the HVAC camera (2026-09-30). Null until the
+   * camera has been opened once, and on a phone that reports no sizes.
+   */
+  backPictureSize: string | null;
   draftRecording: LocalMedia | null;
   setHasHydrated: (value: boolean) => void;
   selectUser: (id: string) => void;
@@ -67,6 +75,7 @@ interface DemoState {
   setCaptureMode: (areaId: string, mode: CapturePreference) => void;
   markEvidenceForReplacement: (areaId: string, old: { photoKeys: string[]; photoIds: string[] }) => void;
   clearEvidenceReplacement: (areaId: string) => void;
+  setBackPictureSize: (size: string) => void;
   /** Null clears it, which submitting does. */
   /** Marks items covered without unticking anything — used by transcript matching. */
   markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
@@ -105,6 +114,7 @@ const initialDemoData = () => ({
   areaChecklist: {} as Record<string, string[]>,
   captureModeByArea: {} as Record<string, CapturePreference>,
   evidenceToReplace: {} as Record<string, { photoKeys: string[]; photoIds: string[] }>,
+  backPictureSize: null as string | null,
   draftRecording: null as LocalMedia | null,
 });
 
@@ -149,6 +159,7 @@ export const useDemoStore = create<DemoState>()(
         })),
       markEvidenceForReplacement: (areaId, old) =>
         set((state) => ({ evidenceToReplace: { ...(state.evidenceToReplace ?? {}), [areaId]: old } })),
+      setBackPictureSize: (backPictureSize) => set({ backPictureSize }),
       clearEvidenceReplacement: (areaId) =>
         set((state) => {
           if (!state.evidenceToReplace?.[areaId]) return state;
@@ -314,6 +325,7 @@ export const useDemoStore = create<DemoState>()(
         captureModeByArea: state.captureModeByArea,
         // Like the key above: a missing one takes its initial value on merge.
         evidenceToReplace: state.evidenceToReplace,
+        backPictureSize: state.backPictureSize,
         // The services checklist used to be kept here, as a draft the review
         // screen held until submission. It is answered on the job screen now
         // and saved to the server as each task is ticked, so the device no
