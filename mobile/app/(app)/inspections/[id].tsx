@@ -145,8 +145,13 @@ export default function JobScreen() {
   const startJob = () => {
     if (actions.start.isPending) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-    actions.start.mutate(undefined, {
-      onError: () => Alert.alert('The job did not start', 'Check the connection and press Start job again.'),
+    actions.start.mutate(new Date().toISOString(), {
+      // Held on the phone is started: it is sent when it can, and the timer
+      // runs meanwhile. Only a refusal is worth saying.
+      onError: (error) => {
+        if (error instanceof Error && error.name === 'QueuedOfflineError') return;
+        Alert.alert('The job did not start', 'Check the connection and press Start job again.');
+      },
     });
   };
   const toggle = (task: JobTask) => {

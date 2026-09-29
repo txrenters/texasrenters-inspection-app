@@ -79,6 +79,26 @@ describe('restoreQueryCache', () => {
     });
   });
 
+  /**
+   * The office, 2026-09-29: a job started just before the app was closed
+   * reopened offering Start job again. A copy saved seconds earlier counted as
+   * fresh against the 30s staleTime, so nothing asked the server.
+   */
+  it('always asks the server again, however recently the copy was saved', async () => {
+    await seed({
+      buster: buster(),
+      savedAt: Date.now(),
+      state: dehydratedOneQuery(['inspection', 'job-1'], { id: 'job-1', status: 'SCHEDULED' }),
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    });
+    expect(await restoreQueryCache(queryClient)).toBe(true);
+    expect(queryClient.getQueryState(['inspection', 'job-1'])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryCache().find({ queryKey: ['inspection', 'job-1'] })?.isStale()).toBe(true);
+  });
+
   it('drops a cache written by a different app version', async () => {
     // The whole point of the buster: restored payloads are not re-validated
     // against their schemas, so a release that renames a field would hand the
