@@ -3,15 +3,16 @@ import {
   CameraIcon,
   CheckCircle2Icon,
   CircleIcon,
+  MinusIcon,
   PlusIcon,
   Trash2Icon,
   XCircleIcon,
 } from 'lucide-react-native';
-import { useRef, useState } from 'react';
-import { ScrollView, Text, TextInput, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { FILTER_SIZE_PATTERN, normalizeFilterSize } from '@texasrenters/shared';
+import { FILTER_SIZE_PATTERN, MAX_BOOKED_FILTERS } from '@texasrenters/shared';
 
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { HomeButton } from '@/src/components/HomeButton';
@@ -19,34 +20,38 @@ import { ServiceAnswerSheet } from '@/src/components/ServiceAnswerSheet';
 import { Button, Card, Loader } from '@/src/components/ui';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
-import { useInspection, useInspectionActions } from '@/src/features/queries';
+import { useFiltersArea, useInspection, useInspectionActions } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 import { goBack } from '@/src/lib/navigation';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import {
-  filterAnswered,
+  filterDeclined,
   filterRows,
-  nextFilterSlot,
-  withAddedFilter,
+  filtersPhoto,
+  withAddedFilters,
   withFilterAnswer,
+  withFilterInPhoto,
   withServiceAnswer,
   withoutFilter,
+  type FilterEntry,
   type FilterRow,
 } from '@/src/utils/job-tasks';
 
-registerIcons(CameraIcon, CheckCircle2Icon, CircleIcon, PlusIcon, Trash2Icon, XCircleIcon);
+registerIcons(CameraIcon, CheckCircle2Icon, CircleIcon, MinusIcon, PlusIcon, Trash2Icon, XCircleIcon);
 
 /**
- * The job's filter registers, one photograph each.
+ * The job's filters, and one photograph of them all.
  *
- * Moses, through the office (2026-09-18): a photograph of every filter, showing
- * the size printed on it. One picture of "the filter change" says nothing about
- * the second register in a house with two, and the office has been reading
- * "Filter Change: done" over registers nobody could reach.
+ * The office, 2026-09-29: the technician stacks the filters with the sizes
+ * facing the camera and takes one picture -- "not add a filter for this size
+ * then add another filter for this size then take a photo one by one". It
+ * replaces a photograph per register (2026-09-18), which cost a trip through
+ * the camera for every filter in the house.
  *
- * The registers come from what the coordinator listed on the visit, expanded by
- * quantity. A register found on site that the visit never listed can be added,
- * because the office would rather know than have it left out.
+ * The registers still come from what the coordinator listed on the visit,
+ * expanded by quantity, and each can still be declined with a reason, because
+ * the office acts on a filter nobody could change. Filters found on site are
+ * added in one go, every size at once.
  */
 
 /** Why a register was not changed. Required, because the office acts on it. */
@@ -109,24 +114,31 @@ function NotChangedSheet({
   );
 }
 
-/** A register the technician found that the visit never listed. */
-function AddFilterSheet({
+const blankEntry = (): FilterEntry => ({ size: '', quantity: 1 });
+
+/**
+ * Every filter found on site, listed at once: a size and how many of it per
+ * line, and another line for the next size.
+ */
+function AddFiltersSheet({
   visible,
   onClose,
   onAdd,
 }: {
   visible: boolean;
   onClose: () => void;
-  onAdd: (size: string, location: string) => void;
+  onAdd: (entries: FilterEntry[]) => void;
 }) {
   const theme = useThemeColors();
-  const [size, setSize] = useState('');
-  const [location, setLocation] = useState('');
-  const valid = FILTER_SIZE_PATTERN.test(size);
+  const [entries, setEntries] = useState<FilterEntry[]>(() => [blankEntry()]);
+  const filled = entries.filter((entry) => entry.size.trim());
+  const invalid = filled.some((entry) => !FILTER_SIZE_PATTERN.test(entry.size));
+  const total = filled.reduce((sum, entry) => sum + entry.quantity, 0);
 
+  const update = (index: number, patch: Partial<FilterEntry>) =>
+    setEntries((current) => current.map((entry, at) => (at === index ? { ...entry, ...patch } : entry)));
   const close = () => {
-    setSize('');
-    setLocation('');
+    setEntries([blankEntry()]);
     onClose();
   };
 
@@ -134,42 +146,85 @@ function AddFilterSheet({
     <BottomSheet className="max-h-[88%]" onClose={close} visible={visible}>
       <View className="gap-4">
         <View className="gap-1">
-          <Text className="text-lg font-bold text-foreground">A filter you found</Text>
+          <Text className="text-lg font-bold text-foreground">Add filters</Text>
           <Text className="text-sm text-muted-foreground">
-            One the visit did not list. The office reads it as a correction to their record.
+            Every size you found, with how many of each.
           </Text>
         </View>
-        <TextInput
-          accessibilityLabel="Filter size"
-          autoCapitalize="none"
-          className="min-h-11 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
-          keyboardType="numbers-and-punctuation"
-          onChangeText={setSize}
-          placeholder="Size, like 20x25x1"
-          placeholderTextColor={theme.mutedForeground}
-          value={size}
-        />
-        {size.length > 0 && !valid ? (
-          <Text className="text-xs text-destructive">Write it like 20x25x1.</Text>
-        ) : null}
-        <TextInput
-          accessibilityLabel="Where the filter is"
-          className="min-h-11 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
-          onChangeText={setLocation}
-          placeholder="Where it is (optional)"
-          placeholderTextColor={theme.mutedForeground}
-          value={location}
+        <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 280 }}>
+          <View className="gap-2">
+            {entries.map((entry, index) => (
+              <View className="flex-row items-center gap-2" key={index}>
+                <TextInput
+                  accessibilityLabel={`Filter size ${index + 1}`}
+                  autoCapitalize="none"
+                  autoFocus={index > 0 && index === entries.length - 1}
+                  className="min-h-11 flex-1 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  keyboardType="numbers-and-punctuation"
+                  onChangeText={(size) => update(index, { size })}
+                  placeholder="Size, like 20x25x1"
+                  placeholderTextColor={theme.mutedForeground}
+                  value={entry.size}
+                />
+                <Pressable
+                  accessibilityLabel={`One fewer of filter ${index + 1}`}
+                  accessibilityRole="button"
+                  className="h-11 w-11 items-center justify-center rounded-xl border border-border bg-card active:opacity-70"
+                  disabled={entry.quantity <= 1}
+                  onPress={() => update(index, { quantity: Math.max(1, entry.quantity - 1) })}
+                >
+                  <MinusIcon
+                    size={16}
+                    className={entry.quantity <= 1 ? 'text-muted-foreground' : 'text-foreground'}
+                  />
+                </Pressable>
+                <Text
+                  accessibilityLabel={`${entry.quantity} of this size`}
+                  className="w-6 text-center text-base font-bold text-foreground"
+                >
+                  {entry.quantity}
+                </Text>
+                <Pressable
+                  accessibilityLabel={`One more of filter ${index + 1}`}
+                  accessibilityRole="button"
+                  className="h-11 w-11 items-center justify-center rounded-xl border border-border bg-card active:opacity-70"
+                  disabled={entry.quantity >= MAX_BOOKED_FILTERS}
+                  onPress={() =>
+                    update(index, { quantity: Math.min(MAX_BOOKED_FILTERS, entry.quantity + 1) })
+                  }
+                >
+                  <PlusIcon size={16} className="text-foreground" />
+                </Pressable>
+                {entries.length > 1 ? (
+                  <Pressable
+                    accessibilityLabel={`Remove filter ${index + 1}`}
+                    accessibilityRole="button"
+                    className="h-11 w-9 items-center justify-center active:opacity-70"
+                    onPress={() => setEntries((current) => current.filter((_, at) => at !== index))}
+                  >
+                    <Trash2Icon size={16} className="text-muted-foreground" />
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+        {invalid ? <Text className="text-xs text-destructive">Write each size like 20x25x1.</Text> : null}
+        <Button
+          icon={<PlusIcon size={16} className="text-foreground" />}
+          label="Another size"
+          onPress={() => setEntries((current) => [...current, blankEntry()])}
+          variant="secondary"
         />
         <View className="flex-row gap-3">
           <Button className="flex-1" label="Cancel" onPress={close} variant="secondary" />
           <Button
             className="flex-1"
-            disabled={!valid}
-            label="Add"
+            disabled={!total || invalid}
+            label={total ? `Add ${total} filter${total === 1 ? '' : 's'}` : 'Add'}
             onPress={() => {
-              onAdd(normalizeFilterSize(size), location.trim());
-              setSize('');
-              setLocation('');
+              onAdd(filled);
+              setEntries([blankEntry()]);
             }}
           />
         </View>
@@ -178,29 +233,20 @@ function AddFilterSheet({
   );
 }
 
+/** In the photograph: answered as changed, with the photograph's key or id. */
+const inPhoto = (row: FilterRow) => Boolean(row.answer?.changed && (row.answer.photoKey || row.answer.photoId));
+
 export default function JobFiltersScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
   const inspection = useInspection(id);
   const actions = useInspectionActions(id);
+  // Asked for as the screen opens, so the camera never waits on it.
+  const filtersArea = useFiltersArea(id, inspection.data?.status === 'IN_PROGRESS');
   const [notChanged, setNotChanged] = useState<FilterRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [wholeService, setWholeService] = useState(false);
-  const [opening, setOpening] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /**
-   * The filters area, once, for as long as this job is open.
-   *
-   * `filtersArea` is find-or-create: after the first call the answer can never
-   * change, and the phone was asking again on *every* tap of Photograph --- a
-   * network round trip standing between the tap and the camera, which is what
-   * the office reported as "very slow if I click the photograph again"
-   * (2026-09-22).
-   *
-   * Still resolved on the first tap rather than when the screen opens. The
-   * area is created by that call, and a job whose filters nobody photographs
-   * is meant never to grow one.
-   */
-  const filtersAreaId = useRef<string | null>(null);
 
   if (inspection.isLoading || !inspection.data) {
     return (
@@ -213,20 +259,17 @@ export default function JobFiltersScreen() {
   const item = inspection.data;
   const report = item.servicesReport ?? null;
   const rows = filterRows(item.visitDetails, report);
+  const photo = filtersPhoto(rows);
+  /** The filters the photograph is of: every one nobody declined. */
+  const toPhotograph = rows.filter((row) => !filterDeclined(row.answer));
+  const declinedTotal = rows.length - toPhotograph.length;
+  /** Added after the photograph was taken, so not in it. */
+  const missing = toPhotograph.filter((row) => !inPhoto(row));
   /**
-   * Answered, not "changed".
-   *
-   * This counted only registers the technician had changed, so a job where
-   * every filter was answered honestly as *not* changed -- no access to the
-   * cupboard, wrong size brought, filter already clean -- read "0 of 3 done"
-   * with three answered cards underneath it. The number is there to say how
-   * much is left, and a register with a reason on it is not left.
+   * Taken, but the server has not confirmed it yet: `photoKey` is written the
+   * moment the shutter fires and `photoId` arrives when the upload lands.
    */
-  const answeredTotal = rows.filter((row) => filterAnswered(row.answer)).length;
-  /** Of those, the ones with a photograph: what the office asked to see counted. */
-  const photographedTotal = rows.filter(
-    (row) => row.answer?.changed && (row.answer.photoId || row.answer.photoKey),
-  ).length;
+  const sending = toPhotograph.some((row) => inPhoto(row) && !row.answer?.photoId);
 
   const save = (next: Parameters<typeof actions.saveServices.mutate>[0]) => {
     setError(null);
@@ -235,8 +278,6 @@ export default function JobFiltersScreen() {
       // written into the cached job. Anything else is worth saying out loud --
       // and it is not retried: what reaches here is the server refusing the
       // answer or failing on it, neither of which the queue will send again.
-      // Saying "it will retry" told a technician to walk away from an answer
-      // that had not been saved and was not going to be.
       onError: (caught) =>
         setError(
           caught instanceof Error && caught.name === 'QueuedOfflineError'
@@ -247,40 +288,52 @@ export default function JobFiltersScreen() {
   };
 
   /**
-   * Opens the camera for one register.
+   * One photograph of every filter not declined.
    *
-   * The area the photographs are filed under is made on the first one, so it is
-   * resolved here rather than when the job is opened: a job whose filters
-   * nobody photographs never grows an area at all.
+   * The area it is filed under was asked for when the screen opened, so this
+   * is normally straight into the camera; it waits only when that request has
+   * not come back, or failed and has to be asked again.
    */
-  const photograph = async (row: FilterRow) => {
-    setOpening(row.label);
+  const photograph = async () => {
+    if (!toPhotograph.length) return;
     setError(null);
-    try {
-      const areaId = filtersAreaId.current ?? (await actions.filtersArea.mutateAsync());
-      filtersAreaId.current = areaId;
-      router.push({
-        pathname: '/camera/[inspectionId]/[areaId]',
-        params: {
-          inspectionId: id,
-          areaId,
-          filterSize: row.filter.size,
-          filterLocation: row.filter.location ?? '',
-          filterSlot: String(row.filter.slot),
-          filterBooked: row.answer?.booked === false ? 'false' : 'true',
-          filterLabel: row.label,
-        },
-      });
-    } catch {
-      setError('Could not open the camera for that filter. Try again in a moment.');
-    } finally {
-      setOpening(null);
+    let areaId = filtersArea.data;
+    if (!areaId) {
+      setOpening(true);
+      try {
+        areaId = (await filtersArea.refetch()).data;
+      } finally {
+        setOpening(false);
+      }
     }
+    if (!areaId) {
+      setError('Could not open the camera. Check the connection and try again.');
+      return;
+    }
+    router.push({
+      pathname: '/camera/[inspectionId]/[areaId]',
+      params: {
+        inspectionId: id,
+        areaId,
+        filterAll: '1',
+        filterLabel: `${toPhotograph.length} filter${toPhotograph.length === 1 ? '' : 's'}`,
+      },
+    });
   };
+
+  const photoLabel = !toPhotograph.length
+    ? rows.length
+      ? 'Every filter is marked not changed'
+      : 'Add the filters first'
+    : photo && !missing.length
+      ? 'Retake the photo'
+      : toPhotograph.length === 1
+        ? 'Photograph the filter'
+        : `Photograph all ${toPhotograph.length} filters`;
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 48 }}>
+      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 180 }}>
         <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
           <Button
             accessibilityLabel="Back"
@@ -303,12 +356,14 @@ export default function JobFiltersScreen() {
 
         <Card className="mx-5 gap-2">
           <Text className="text-sm text-foreground">
-            Photograph each filter after you fit it, with the size printed on the filter in shot.
+            Stack every filter with its size facing the camera, and take one photo of them all.
           </Text>
           <Text className="text-xs text-muted-foreground">
             {rows.length
-              ? `${answeredTotal} of ${rows.length} answered · ${photographedTotal} photographed`
-              : 'The visit listed no sizes. Add what you find.'}
+              ? `${rows.length} filter${rows.length === 1 ? '' : 's'}${
+                  declinedTotal ? ` · ${declinedTotal} not changed` : ''
+                }`
+              : 'The visit listed no sizes. Add the filters you find.'}
           </Text>
         </Card>
 
@@ -318,85 +373,79 @@ export default function JobFiltersScreen() {
           </Text>
         ) : null}
 
-        <View className="mt-4 gap-2 px-5">
-          {rows.map((row) => {
-            const answer = row.answer;
-            const photographed = Boolean(answer?.changed && (answer.photoId || answer.photoKey));
-            /**
-             * Taken, but the server has not confirmed it yet.
-             *
-             * `photoKey` is the handset's own id, written the moment the
-             * shutter fires; `photoId` arrives when the upload lands. The row
-             * used to show the same green tick for both and say "sending" in
-             * small grey text underneath, which reads as finished -- the
-             * office saw "no indicator that the photo is uploading"
-             * (2026-09-22). A spinner says it out loud.
-             */
-            const sending = Boolean(photographed && !answer?.photoId);
-            // Only a register somebody actually declined, which is what the
-            // reason is. One merely added reads as work still to do.
-            const refused = Boolean(answer && !answer.changed && answer.reason?.trim());
-            return (
-              <Card className="gap-3" key={`${row.filter.size}-${row.filter.location}-${row.filter.slot}`}>
-                <View className="flex-row items-start gap-3">
-                  {sending ? (
-                    <Loader accessibilityLabel="Sending the photograph" size="sm" />
-                  ) : photographed ? (
-                    <CheckCircle2Icon size={20} className="text-chart-3" />
-                  ) : refused ? (
+        {rows.length ? (
+          <Card className="mx-5 mt-4 gap-0 py-1">
+            {rows.map((row, index) => {
+              const answer = row.answer;
+              const declined = filterDeclined(answer);
+              const shot = inPhoto(row);
+              return (
+                <View
+                  className={`flex-row items-center gap-3 py-2.5 ${
+                    index < rows.length - 1 ? 'border-b border-border' : ''
+                  }`}
+                  key={`${row.filter.size}-${row.filter.location}-${row.filter.slot}`}
+                >
+                  {declined ? (
                     <XCircleIcon size={20} className="text-chart-4" />
+                  ) : shot ? (
+                    <CheckCircle2Icon size={20} className="text-chart-3" />
                   ) : (
                     <CircleIcon size={18} className="text-muted-foreground" />
                   )}
                   <View className="min-w-0 flex-1">
                     <Text className="text-sm font-semibold text-foreground">{row.label}</Text>
-                    <Text className="mt-0.5 text-xs text-muted-foreground">
-                      {photographed
-                        ? answer?.photoId
-                          ? 'Photographed'
-                          : 'Photographed · sending…'
-                        : refused
-                          ? `Not changed — ${answer?.reason ?? ''}`
-                          : row.filter.media
-                            ? 'Media filter'
-                            : 'Not done yet'}
+                    <Text numberOfLines={2} className="mt-0.5 text-xs text-muted-foreground">
+                      {declined
+                        ? `Not changed — ${answer?.reason ?? ''}`
+                        : shot
+                          ? 'In the photo'
+                          : photo
+                            ? 'Not in the photo yet'
+                            : row.filter.media
+                              ? 'Media filter'
+                              : 'To photograph'}
                     </Text>
                   </View>
-                  {row.answer?.booked === false ? (
-                    <Button
+                  {declined ? (
+                    <Pressable
+                      accessibilityLabel={`Undo not changed for ${row.label}`}
+                      accessibilityRole="button"
+                      className="min-h-11 justify-center px-2 active:opacity-70"
+                      onPress={() => save((current) => withFilterInPhoto(current, row.filter, photo))}
+                    >
+                      <Text className="text-xs font-semibold text-primary">Undo</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      accessibilityLabel={`${row.label} was not changed`}
+                      accessibilityRole="button"
+                      className="min-h-11 justify-center px-2 active:opacity-70"
+                      onPress={() => setNotChanged(row)}
+                    >
+                      <Text className="text-xs font-semibold text-muted-foreground">Not changed</Text>
+                    </Pressable>
+                  )}
+                  {answer?.booked === false ? (
+                    <Pressable
                       accessibilityLabel={`Remove ${row.label}`}
-                      className="h-9 w-9 px-0 py-0"
-                      icon={<Trash2Icon size={16} className="text-muted-foreground" />}
-                      label=""
+                      accessibilityRole="button"
+                      className="h-11 w-9 items-center justify-center active:opacity-70"
                       onPress={() => save((current) => withoutFilter(current, row.filter))}
-                      variant="quiet"
-                    />
+                    >
+                      <Trash2Icon size={16} className="text-muted-foreground" />
+                    </Pressable>
                   ) : null}
                 </View>
-                <View className="flex-row gap-3">
-                  <Button
-                    busy={opening === row.label}
-                    className="flex-1"
-                    icon={<CameraIcon size={16} className="text-primary-foreground" />}
-                    label={photographed ? 'Retake' : 'Photograph'}
-                    onPress={() => void photograph(row)}
-                  />
-                  <Button
-                    className="flex-1"
-                    label={refused ? 'Change the reason' : 'Not changed'}
-                    onPress={() => setNotChanged(row)}
-                    variant="secondary"
-                  />
-                </View>
-              </Card>
-            );
-          })}
-        </View>
+              );
+            })}
+          </Card>
+        ) : null}
 
         <View className="mt-4 gap-3 px-5">
           <Button
             icon={<PlusIcon size={16} className="text-foreground" />}
-            label="A filter you found"
+            label="Add filters"
             onPress={() => setAdding(true)}
             variant="secondary"
           />
@@ -416,6 +465,35 @@ export default function JobFiltersScreen() {
         </View>
       </ScrollView>
 
+      {/* The one photograph, under the list it is of. */}
+      <View className="absolute bottom-0 left-0 right-0 gap-2 border-t border-border bg-background px-5 pb-8 pt-3">
+        {photo ? (
+          <View className="flex-row items-center gap-2">
+            {sending ? (
+              <Loader accessibilityLabel="Sending the photo" size="sm" />
+            ) : (
+              <CheckCircle2Icon size={16} className="text-chart-3" />
+            )}
+            <Text className="flex-1 text-xs text-muted-foreground">
+              {missing.length
+                ? `${missing.length} filter${missing.length === 1 ? '' : 's'} not in the photo — take it again with all of them`
+                : sending
+                  ? 'Photo taken · sending…'
+                  : 'Photo sent'}
+            </Text>
+          </View>
+        ) : null}
+        <Button
+          busy={opening}
+          busyLabel="Opening the camera…"
+          disabled={!toPhotograph.length}
+          icon={<CameraIcon size={18} className="text-primary-foreground" />}
+          label={photoLabel}
+          onPress={() => void photograph()}
+          variant={photo && !missing.length ? 'secondary' : 'primary'}
+        />
+      </View>
+
       <NotChangedSheet
         onClose={() => setNotChanged(null)}
         onSave={(reason) => {
@@ -426,25 +504,12 @@ export default function JobFiltersScreen() {
         row={notChanged}
       />
 
-      <AddFilterSheet
-        onAdd={(size, location) => {
+      <AddFiltersSheet
+        onAdd={(entries) => {
           setAdding(false);
-          // Added unanswered, so the next tap is the photograph rather than a
-          // claim nobody has evidenced.
-          save((current) =>
-            withAddedFilter(current, {
-              size,
-              location: location || null,
-              // The first slot this size and place has free. Writing 1 here
-              // meant a filter matching one the visit already listed answered
-              // *that* register instead of adding a row — which is how adding
-              // a filter failed silently, with no new row and no error.
-              slot: nextFilterSlot(item.visitDetails, current, {
-                size,
-                location: location || null,
-              }),
-            }),
-          );
+          // Added unanswered, so they read "not in the photo" until one is
+          // taken with them in it, rather than as a claim nobody has evidenced.
+          save((current) => withAddedFilters(current, item.visitDetails, entries));
         }}
         onClose={() => setAdding(false)}
         visible={adding}

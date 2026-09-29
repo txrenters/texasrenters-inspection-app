@@ -86,7 +86,7 @@ describe('the tasks a job has', () => {
 
   it('starts every task as still to do', () => {
     expect(tasksFor().map((task) => task.state)).toEqual(['TODO', 'TODO', 'TODO']);
-    expect(tasksFor()[0]!.detail).toBe('3 to photograph');
+    expect(tasksFor()[0]!.detail).toBe('3 filters · one photo');
   });
 });
 

@@ -11,7 +11,12 @@ import {
 } from 'lucide-react-native';
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
+import {
+  parseVisitDetails,
+  reportableServices,
+  type ReportableVisitService,
+  type VisitServicesReport,
+} from '@texasrenters/shared';
 
 import { EndJobSheet } from '@/src/components/EndJobSheet';
 import { HomeButton } from '@/src/components/HomeButton';
@@ -22,7 +27,7 @@ import { NotDoneSheet } from '@/src/components/NotDoneSheet';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
-import { useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
+import { useFiltersArea, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { useSecondNow } from '@/src/features/useSecondNow';
 import { registerIcons } from '@/src/lib/icons';
@@ -100,6 +105,12 @@ export default function JobScreen() {
   // Up here with the other hooks, above the early return below.
   const running = inspection.data?.status === 'IN_PROGRESS' && !inspection.data.submittedAt;
   const now = useSecondNow(running);
+  // Asked for while the technician reads the list, so the filters' camera
+  // opens without waiting on it (the office, 2026-09-29).
+  useFiltersArea(
+    id,
+    running && reportableServices(parseVisitDetails(inspection.data?.visitDetails)).includes('filterChange'),
+  );
 
   if (inspection.isLoading || !inspection.data) {
     return (
