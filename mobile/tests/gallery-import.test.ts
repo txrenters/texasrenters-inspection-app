@@ -148,6 +148,31 @@ describe('attaching photographs from the gallery', () => {
     expect(expectImported(outcome)).toHaveLength(GALLERY_IMPORT_LIMIT);
   });
 
+  /**
+   * The job's filters, stacked, are one photograph (the office, 2026-09-29),
+   * and it shows the sizes printed on them.
+   */
+  it('asks for one photograph of labels when the filter change picks from the gallery', async () => {
+    let asked: Record<string, unknown> = {};
+    const outcome = await importFromGallery({
+      ...input,
+      single: true,
+      captureType: 'SERIAL_OR_LABEL',
+      picker: {
+        requestMediaLibraryPermissionsAsync: async () => ({ granted: true }),
+        launchImageLibraryAsync: async (options: Record<string, unknown>) => {
+          asked = options;
+          return { canceled: false, assets: [asset('stack.jpg'), asset('extra.jpg')] };
+        },
+      } as never,
+    });
+
+    expect(asked).toMatchObject({ allowsMultipleSelection: false, selectionLimit: 1 });
+    const photographs = expectImported(outcome);
+    expect(photographs).toHaveLength(1);
+    expect(photographs[0]).toMatchObject({ captureType: 'SERIAL_OR_LABEL', captureSource: 'GALLERY_IMPORT' });
+  });
+
   /** Closing the picker is a decision, not a problem: nothing is said about it. */
   it('says nothing when the technician closes the picker', async () => {
     const outcome = await importFromGallery({ ...input, picker: picker({ canceled: true }) });

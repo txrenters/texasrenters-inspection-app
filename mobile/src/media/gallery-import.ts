@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 
-import type { RoomSnapshot } from '../domain/models';
+import type { PhotoCaptureType, RoomSnapshot } from '../domain/models';
 
 import { downscaleForUpload } from './downscale';
 import { buildRoomSnapshot, persistRoomSnapshot } from './local-snapshots';
@@ -87,6 +87,14 @@ export interface GalleryImportInput {
    * would interleave an import with the walk it followed.
    */
   existingPhotoCount: number;
+  /**
+   * One photograph, not a selection: the job's filters, stacked, are one
+   * picture (the office, 2026-09-29), and a multi-select there would invite
+   * attaching several to a register that points at one.
+   */
+  single?: boolean;
+  /** What the photograph shows. The area as a whole unless the caller knows better. */
+  captureType?: PhotoCaptureType;
   /** Injected by the tests; the picker itself is native and cannot run in one. */
   picker?: Pick<
     typeof ImagePicker,
@@ -102,6 +110,8 @@ export async function importFromGallery({
   roomId,
   ownerUserId,
   existingPhotoCount,
+  single = false,
+  captureType = 'AREA_OVERVIEW',
   picker = ImagePicker,
   persist = persistRoomSnapshot,
   downscale = downscaleForUpload,
@@ -114,8 +124,8 @@ export async function importFromGallery({
     // recording review and Cloudflare Stream, which is a different pipeline
     // entirely — and it is not what was asked for.
     mediaTypes: ['images'],
-    allowsMultipleSelection: true,
-    selectionLimit: GALLERY_IMPORT_LIMIT,
+    allowsMultipleSelection: !single,
+    selectionLimit: single ? 1 : GALLERY_IMPORT_LIMIT,
     // Matches the camera's own `takePictureAsync` quality, so an imported
     // photograph is not visibly better or worse than the ones beside it.
     quality: 0.82,
@@ -126,7 +136,7 @@ export async function importFromGallery({
   if (picked.canceled) return { status: 'CANCELLED' };
 
   const snapshots: RoomSnapshot[] = [];
-  for (const [index, asset] of picked.assets.slice(0, GALLERY_IMPORT_LIMIT).entries()) {
+  for (const [index, asset] of picked.assets.slice(0, single ? 1 : GALLERY_IMPORT_LIMIT).entries()) {
     /**
      * Brought down to the size the camera aims for, before anything is queued.
      *
@@ -153,10 +163,10 @@ export async function importFromGallery({
         // The asset's own byte count describes the file the picker handed
         // over, which is not the one being queued once it has been resized.
         sizeBytes: stored.sizeBytes,
-        // The area as a whole. A picked photograph has no finding attached to
-        // it and nothing here knows which room feature it shows; the
-        // technician files it against a finding afterwards if it is one.
-        captureType: 'AREA_OVERVIEW',
+        // The area as a whole by default. A picked photograph has no finding
+        // attached to it and nothing here knows which room feature it shows;
+        // the technician files it against a finding afterwards if it is one.
+        captureType,
         captureSource: 'GALLERY_IMPORT',
         sequenceNumber: existingPhotoCount + index + 1,
         // No `clock`, so `captureTimeToSend` sends nothing and the server
