@@ -1,4 +1,6 @@
 import { InspectionType } from '../enums/index.js';
+import { NON_ROOM_SOURCES } from './standard-layout.js';
+import { SERVICE_PHOTO_AREA } from './visit-services.js';
 
 /**
  * Which areas an inspection covers, and how that set is arrived at.
@@ -172,6 +174,52 @@ export function inspectionSeedsStandardLayout(
  * which the area note already carries. What it asks may diverge again once they
  * have walked a few this way, and this is the one place that would change.
  */
+/**
+ * The areas a job's services file their photographs under: "AC filters", "Pest
+ * control", "Flea treatment". A place to keep evidence, never something the
+ * inspection inspects.
+ */
+export const SERVICE_PHOTO_AREA_NAMES: ReadonlySet<string> = new Set(Object.values(SERVICE_PHOTO_AREA));
+
+/**
+ * Whether an area attached to an inspection is part of what it inspects.
+ *
+ * The office, 2026-09-29: "inspection is purely for inspection and since we
+ * have the filter change as job already it should be no longer involved inside
+ * the inspection". Two kinds of attached area are not:
+ *
+ * - **A service's photo area**, on any job. The filter change files its one
+ *   photograph under an "AC filters" area on the inspection, because a
+ *   photograph needs an area; it was listed with the rooms, counted in "3 of
+ *   12 areas" and -- on a move-in or move-out, where every area is required --
+ *   refused completion, since nobody walks it. An HVAC visit's own filter
+ *   section is "Filters", a different area, and stays.
+ * - **Any `SYSTEM` area on a visit that walks rooms.** `layoutAreasFor` already
+ *   keeps them out of new room walks; rows added before it did ("Filters",
+ *   "A/C unit", "Thermostat" on occupied inspections) are still attached.
+ *
+ * Their rows are left alone -- the photographs in them are the filter change's
+ * evidence -- and only the inspection stops treating them as its areas.
+ */
+export function isInspectedArea(
+  inspectionType: string | null | undefined,
+  area: { name?: string | null; source?: string | null },
+): boolean {
+  if (!area.source || !NON_ROOM_SOURCES.includes(area.source)) return true;
+  if (SERVICE_PHOTO_AREA_NAMES.has(area.name ?? '')) return false;
+  return !inspectionWalksRooms(inspectionType);
+}
+
+/**
+ * Whether the visit walks rooms: a move-in or move-out (every room) or an
+ * occupied or back-to-market visit (the rooms chosen). An HVAC or roof visit
+ * inspects its own subjects instead.
+ */
+export function inspectionWalksRooms(inspectionType: string | null | undefined): boolean {
+  const scope = areaScopeFor(inspectionType);
+  return scope === AreaScope.ALL || scope === AreaScope.CHOSEN;
+}
+
 export function inspectionIsWalkedAsOccupied(inspectionType: string | null | undefined): boolean {
   return inspectionType === InspectionType.OCCUPIED || inspectionType === InspectionType.BACK_TO_MARKET;
 }

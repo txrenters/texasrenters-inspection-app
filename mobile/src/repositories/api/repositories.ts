@@ -48,7 +48,7 @@ import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import type { ClosingComments } from '../../utils/closing-comments';
-import { resolveApiUrl } from '@texasrenters/shared';
+import { isInspectedArea, resolveApiUrl } from '@texasrenters/shared';
 import type {
   InspectionType,
   NavigationLeg,
@@ -924,12 +924,13 @@ export class ApiInspectionRepository implements InspectionRepository {
       storeApiRecord(`inspection-rooms:${id}`, z.array(roomSchema), context.rooms),
       ...context.rooms.map((room) => storeApiRecord(`room:${room.id}`, roomSchema, room)),
     ]);
-    return { ...context, rooms: context.rooms.map(withLocalRoomState) };
+    return { ...context, rooms: inspectedRooms(context.rooms).map(withLocalRoomState) };
   }
   async report(id: string) {
-    return cachedApiRecord(`inspection-report:${id}`, reportSchema, () =>
+    const report = await cachedApiRecord(`inspection-report:${id}`, reportSchema, () =>
       getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/report`),
     );
+    return { ...report, rooms: inspectedRooms(report.rooms) };
   }
   async start(id: string) {
     const inspection = inspectionSchema.parse(
@@ -1061,7 +1062,7 @@ export class ApiInspectionRepository implements InspectionRepository {
       z.array(roomSchema),
       () => getJson(`/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/rooms`),
     );
-    return rooms.map(withLocalRoomState);
+    return inspectedRooms(rooms).map(withLocalRoomState);
   }
   async room(roomId: string) {
     return withLocalRoomState(
@@ -1837,6 +1838,19 @@ function localUploads() {
   return state.uploads.filter(
     (item) => item.id.startsWith('local-upload-') && item.ownerUserId === state.selectedUserId,
   );
+}
+
+/**
+ * The areas the inspection inspects (`isInspectedArea`), read the same way the
+ * server now sends them -- so a list cached from an older server, which still
+ * carried the job's "AC filters" photo area, reads correctly too. On read
+ * rather than on write: the one-room record (`room`) is still what the filter
+ * photograph's camera opens.
+ */
+function inspectedRooms<Room extends { inspectionType: string; name: string; source: string }>(
+  rooms: readonly Room[],
+): Room[] {
+  return rooms.filter((room) => isInspectedArea(room.inspectionType, room));
 }
 
 function withLocalRoomState(room: z.infer<typeof roomSchema>) {

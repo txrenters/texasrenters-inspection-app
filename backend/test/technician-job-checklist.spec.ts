@@ -575,3 +575,44 @@ describe('a service’s optional photograph', () => {
     ).resolves.toBeDefined();
   });
 });
+
+/**
+ * The job's service photo areas are not the inspection's (the office,
+ * 2026-09-29): "inspection is purely for inspection". The filter change files
+ * its photograph under an "AC filters" area on the inspection, which nobody
+ * walks -- and on a move-in or move-out, where every area is required, it
+ * refused completion.
+ */
+describe('completing an inspection that has a filter photo area', () => {
+  const countWhere = (prisma: { inspectionArea: { count: jest.Mock } }) =>
+    prisma.inspectionArea.count.mock.calls.at(-1)![0].where as Record<string, unknown>;
+  const complete = (service: TechnicianService) =>
+    service.completeInspection(technician, 'job-1', {
+      servicesReport: {
+        services: { filterChange: { done: true }, pestControl: { done: true } },
+        filters: [
+          filter(),
+          filter({ slot: 2, photoId: '30000000-0000-4000-8000-000000000002' }),
+          filter({ size: '12x12x1', location: 'downstairs', changed: false, reason: 'Painted over', photoId: null }),
+        ],
+        filtersInstalled: [],
+      } as never,
+    });
+
+  it('does not count any equipment area as unfinished on a room walk', async () => {
+    const { service, prisma } = build(job({ inspectionType: InspectionType.MOVE_OUT }));
+    await complete(service);
+    expect(countWhere(prisma).NOT).toEqual({ propertyArea: { source: { in: ['SYSTEM'] } } });
+  });
+
+  it('keeps an HVAC visit’s own sections, and leaves out only the service photo areas', async () => {
+    const { service, prisma } = build(job({ inspectionType: InspectionType.HVAC }));
+    await complete(service);
+    expect(countWhere(prisma).NOT).toEqual({
+      propertyArea: {
+        source: { in: ['SYSTEM'] },
+        name: { in: ['AC filters', 'Pest control', 'Flea treatment'] },
+      },
+    });
+  });
+});

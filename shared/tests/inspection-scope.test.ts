@@ -9,6 +9,8 @@ import {
   inspectionIsWalkedAsOccupied,
   inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
+  inspectionWalksRooms,
+  isInspectedArea,
 } from '../src/contracts/inspection-scope.js';
 import { InspectionType } from '../src/enums/index.js';
 
@@ -249,3 +251,45 @@ describe('which visits are walked as an occupied inspection', () => {
     expect(inspectionIsWalkedAsOccupied('SOMETHING_NEW')).toBe(false);
   });
 });
+
+/**
+ * The office, 2026-09-29: "inspection is purely for inspection". The filter
+ * change's photo area and equipment rows stay attached, but are not areas the
+ * inspection walks.
+ */
+describe('the areas an inspection inspects', () => {
+  const room = { name: 'Kitchen', source: 'AI_FLOOR_PLAN' };
+  const filterPhotos = { name: 'AC filters', source: 'SYSTEM' };
+  const pestPhotos = { name: 'Pest control', source: 'SYSTEM' };
+  const hvacFilters = { name: 'Filters', source: 'SYSTEM' };
+
+  it('never includes a service photo area, on any kind of visit', () => {
+    for (const type of Object.values(InspectionType)) {
+      expect(isInspectedArea(type, filterPhotos)).toBe(false);
+      expect(isInspectedArea(type, pestPhotos)).toBe(false);
+    }
+  });
+
+  it('leaves equipment out of a room walk', () => {
+    expect(isInspectedArea(InspectionType.OCCUPIED, hvacFilters)).toBe(false);
+    expect(isInspectedArea(InspectionType.MOVE_OUT, { name: 'A/C unit', source: 'SYSTEM' })).toBe(false);
+    expect(isInspectedArea(InspectionType.OCCUPIED, room)).toBe(true);
+  });
+
+  it('keeps an HVAC visit’s own sections, which are equipment', () => {
+    expect(isInspectedArea(InspectionType.HVAC, hvacFilters)).toBe(true);
+    expect(isInspectedArea(InspectionType.AC_FILTER_DELIVERY, { name: 'HVAC System', source: 'SYSTEM' })).toBe(true);
+  });
+
+  it('keeps a room a technician or the office added', () => {
+    expect(isInspectedArea(InspectionType.MOVE_IN, { name: 'Shed', source: 'TECHNICIAN' })).toBe(true);
+    expect(isInspectedArea(InspectionType.MOVE_IN, { name: 'Shed', source: 'MANUAL' })).toBe(true);
+  });
+
+  it('knows which visits walk rooms', () => {
+    expect(inspectionWalksRooms(InspectionType.MOVE_IN)).toBe(true);
+    expect(inspectionWalksRooms(InspectionType.OCCUPIED)).toBe(true);
+    expect(inspectionWalksRooms(InspectionType.HVAC)).toBe(false);
+  });
+});
+
