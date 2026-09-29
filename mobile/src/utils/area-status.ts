@@ -288,9 +288,13 @@ export function areaCameraLabel(state: {
   finished: boolean;
   hasRecording: boolean;
   hasEvidence: boolean;
+  /** Reopened by Change Evidence, with its photographs still to be replaced. */
+  replacing?: boolean;
 }): string {
   if (state.skipped) return 'Inspect Anyway';
   if (state.finished) return 'Change Evidence';
+  // As if for the first time: what is there is about to be replaced.
+  if (state.replacing) return 'Begin Walkthrough';
   if (state.hasRecording) return 'Record Additional Video';
   return state.hasEvidence ? 'Continue Walkthrough' : 'Begin Walkthrough';
 }

@@ -75,6 +75,7 @@ import {
   persistRoomSnapshot,
 } from '@/src/media/local-snapshots';
 import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
+import { replaceOldEvidence } from '@/src/media/replace-evidence';
 import { pickPictureSize } from '@/src/media/picture-size';
 import { PHOTO_REVIEW_WINDOW_MS, reviewWindowEnd } from '@/src/media/snapshot-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
@@ -1262,6 +1263,10 @@ export default function RoomCameraScreen() {
         nextAttemptAt: reviewWindowEnd(),
       });
       addSnapshot(snapshot);
+      // A changed area's new photographs replace its old ones (the office,
+      // 2026-09-30). Nothing for a filter or service shot: those areas are
+      // never reopened by Change Evidence, so nothing is ever marked there.
+      replaceOldEvidence(areaId);
       // Offer it back for as long as it is held. A second photograph replaces
       // the offer rather than stacking one: the control is about the shot just
       // taken, and anything older belongs to the area screen.

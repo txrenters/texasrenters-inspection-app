@@ -50,6 +50,10 @@ describe('what the camera button says', () => {
     expect(areaCameraLabel({ ...base, hasEvidence: true, hasRecording: true })).toBe('Record Additional Video');
   });
 
+  it('begins again once Change Evidence has reopened it, as if for the first time', () => {
+    expect(areaCameraLabel({ ...base, hasEvidence: true, replacing: true })).toBe('Begin Walkthrough');
+  });
+
   it('inspects a skipped area anyway, finished or not', () => {
     expect(areaCameraLabel({ ...base, skipped: true, finished: true })).toBe('Inspect Anyway');
   });

@@ -921,6 +921,44 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
         );
       },
     }),
+    /**
+     * Change Evidence (the office, 2026-09-30): a submitted area back to work,
+     * as if it were being done for the first time -- its notes and Submit
+     * Evidence come back, and nothing opens the camera.
+     *
+     * Drawn reopened on the tap and sent behind it, saved first
+     * (`reopenRoom`). Kept when held; put back, with an alert, only when the
+     * server refuses -- a job already submitted, whose areas are the office's.
+     */
+    reopen: useMutation({
+      mutationFn: () => repositories.inspections.reopenRoom(roomId),
+      onMutate: async () => {
+        await cancelQueries(client, [queryKeys.room(roomId), queryKeys.rooms(inspectionId)]);
+        const patch = { completionStatus: 'NOT_STARTED' };
+        const operation = beginIntent(roomId, 'UPDATING', patch);
+        patchEntity(client, queryKeys.all, roomId, patch, { state: 'UPDATING', operationId: operation });
+        return { operation };
+      },
+      onSuccess: (room, _variables, context) => {
+        if (context && !completeIntent(roomId, context.operation, room)) return;
+        mergeEntity(client, queryKeys.all, room, context?.operation);
+        client.setQueryData(queryKeys.room(roomId), room);
+        void refresh();
+      },
+      onError: (error, _variables, context) => {
+        if (error instanceof QueuedOfflineError) {
+          if (context) completeIntent(roomId, context.operation, undefined);
+          void refresh();
+          return;
+        }
+        if (context) failIntent(roomId, context.operation);
+        void refresh();
+        Alert.alert(
+          'This area could not be reopened',
+          error instanceof Error ? error.message : 'Try again in a moment.',
+        );
+      },
+    }),
     confirmSummary: useMutation({
       mutationFn: () => repositories.inspections.confirmRoomSummary(roomId),
       onSuccess: (room) => {

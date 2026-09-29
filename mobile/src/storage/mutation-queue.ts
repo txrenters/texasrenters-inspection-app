@@ -87,8 +87,19 @@ export async function enqueueMutation(entry: {
   return next;
 }
 
-export async function removeMutation(id: string): Promise<QueuedMutation[]> {
-  const next = (await readQueue()).filter((entry) => entry.id !== id);
+/**
+ * Removes an entry, or -- given the `queuedAt` it was saved with -- only that
+ * copy of it.
+ *
+ * A write saved again under the same id while its first copy was being sent
+ * (submit, change evidence, submit again, with no signal) replaces that copy in
+ * the queue. Removing by id alone once the first send answered would then drop
+ * the newer copy too, and with it the write the technician made last.
+ */
+export async function removeMutation(id: string, queuedAt?: string): Promise<QueuedMutation[]> {
+  const next = (await readQueue()).filter(
+    (entry) => entry.id !== id || (queuedAt !== undefined && entry.queuedAt !== queuedAt),
+  );
   await writeQueue(next);
   return next;
 }
@@ -126,11 +137,11 @@ export async function drainQueue(
   for (const entry of await readQueue()) {
     try {
       await send(entry);
-      await removeMutation(entry.id);
+      await removeMutation(entry.id, entry.queuedAt);
       sent += 1;
     } catch (error) {
       if (!isRetryable(error)) {
-        await removeMutation(entry.id);
+        await removeMutation(entry.id, entry.queuedAt);
         continue;
       }
       await recordAttempt(entry.id);

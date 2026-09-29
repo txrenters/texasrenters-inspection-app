@@ -48,9 +48,9 @@ import {
   drainOfflineWrites,
   queueOnConnectionFailure,
   savedJobStarts,
-  savedRoomCompletions,
+  savedRoomStates,
   sendSavedFirst,
-  withCompletionsSaved,
+  withRoomStatesSaved,
 } from './offline-writes';
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
@@ -1368,6 +1368,50 @@ export class ApiInspectionRepository implements InspectionRepository {
   }
 
   /**
+   * Change Evidence (the office, 2026-09-30): a submitted area back to work,
+   * as though it had not been submitted. Saved before it is sent, like the
+   * submission it undoes, and read as reopened meanwhile (`withRoomStatesSaved`).
+   */
+  async reopenRoom(roomId: string) {
+    try {
+      const room = roomSchema.parse(
+        await sendSavedFirst({ id: `reopen:${roomId}`, kind: 'room-reopen', payload: { roomId } }, () =>
+          writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/reopen`, 'POST'),
+        ),
+      );
+      await this.persistRoom(room);
+      return room;
+    } catch (error) {
+      if (error instanceof QueuedOfflineError)
+        await this.patchCachedRoom(roomId, { completionStatus: 'NOT_STARTED' });
+      throw error;
+    }
+  }
+
+  /**
+   * The photographs an area's new evidence replaced, removed on the server.
+   *
+   * One entry per replacement, not one per area: a second Change Evidence
+   * before the first has been sent must not overwrite the first's list, or the
+   * photographs it named would stay.
+   */
+  async replaceRoomEvidence(roomId: string, photoKeys: readonly string[], photoIds: readonly string[]) {
+    if (!photoKeys.length && !photoIds.length) return;
+    await sendSavedFirst(
+      {
+        id: `replace:${roomId}:${Date.now()}`,
+        kind: 'room-replace-evidence',
+        payload: { roomId, photoKeys: [...photoKeys], photoIds: [...photoIds] },
+      },
+      () =>
+        writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/evidence/replace`, 'POST', {
+          photoKeys,
+          photoIds,
+        }),
+    );
+  }
+
+  /**
    * Mirrors a write held offline into the three records `persistRoom` keeps.
    *
    * Every queued mutation has the same hole: `queueOnConnectionFailure` throws
@@ -1917,11 +1961,11 @@ async function withSavedStarts<Job extends { id: string; status: string; started
   });
 }
 
-/** Areas as the technician left them: see `withCompletionsSaved`. */
+/** Areas as the technician left them -- submitted, or reopened: see `withRoomStatesSaved`. */
 async function withSavedCompletions<Room extends { id: string; completionStatus: string }>(
   rooms: readonly Room[],
 ): Promise<Room[]> {
-  return withCompletionsSaved(rooms, await savedRoomCompletions().catch(() => new Set<string>()));
+  return withRoomStatesSaved(rooms, await savedRoomStates().catch(() => new Map()));
 }
 
 function withLocalRoomState(room: z.infer<typeof roomSchema>) {

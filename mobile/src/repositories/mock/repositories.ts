@@ -369,6 +369,13 @@ export class MockInspectionRepository implements InspectionRepository {
     });
     return this.room(roomId);
   }
+  async reopenRoom(roomId: string) {
+    useDemoStore.getState().updateRoom(roomId, { completionStatus: 'NOT_STARTED' });
+    return this.room(roomId);
+  }
+  async replaceRoomEvidence() {
+    // The demo keeps no server photographs to remove.
+  }
   async completeRoom(roomId: string) {
     const room = await this.room(roomId);
     if (room.uploadStatus !== 'COMPLETED') {

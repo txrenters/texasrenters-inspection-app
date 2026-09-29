@@ -142,15 +142,16 @@ export async function sendSavedFirst<T>(
   entry: { id: string; kind: string; payload: Record<string, unknown> },
   send: () => Promise<T>,
 ): Promise<T> {
-  await enqueueMutation(entry);
+  // The copy saved here, so the reply removes this one and never a newer one.
+  const queuedAt = (await enqueueMutation(entry)).find((saved) => saved.id === entry.id)?.queuedAt;
   try {
     const result = await send();
-    await removeMutation(entry.id);
+    await removeMutation(entry.id, queuedAt);
     return result;
   } catch (error) {
     const held = classifyWriteFailure(error, useNetworkStore.getState().isOnline);
     if (!held.hold) {
-      await removeMutation(entry.id);
+      await removeMutation(entry.id, queuedAt);
       throw error;
     }
     throw new QueuedOfflineError(held.reason);
@@ -189,26 +190,56 @@ export async function savedJobStarts(): Promise<Map<string, string>> {
  */
 export async function savedRoomCompletions(): Promise<Set<string>> {
   const rooms = new Set<string>();
-  for (const entry of await readQueue())
-    if (entry.kind === 'room-complete' && entry.payload.roomId) rooms.add(String(entry.payload.roomId));
+  for (const [roomId, state] of await savedRoomStates()) if (state === 'COMPLETED') rooms.add(roomId);
   return rooms;
 }
 
+/** What the technician last did to an area here that the server has not confirmed. */
+export type SavedRoomState = 'COMPLETED' | 'REOPENED';
+
 /**
- * Areas as the technician left them: one whose submission is saved here reads as
- * completed. Only an area the server still has open is changed -- a skipped one,
- * or one the server has already completed, keeps the server's answer.
+ * Each area's last saved submission or Change Evidence, in the order they were
+ * made: the queue is replayed in that order, so the last one is what the
+ * server will end up with.
  */
+export async function savedRoomStates(): Promise<Map<string, SavedRoomState>> {
+  const states = new Map<string, SavedRoomState>();
+  for (const entry of await readQueue()) {
+    const roomId = entry.payload.roomId ? String(entry.payload.roomId) : null;
+    if (!roomId) continue;
+    if (entry.kind === 'room-complete') states.set(roomId, 'COMPLETED');
+    else if (entry.kind === 'room-reopen') states.set(roomId, 'REOPENED');
+  }
+  return states;
+}
+
+/**
+ * Areas as the technician left them. One whose submission is saved here reads
+ * as completed, and one reopened by Change Evidence reads as not submitted.
+ * Only a state the server has not reached yet is changed -- a skipped area, or
+ * one the server already agrees about, keeps the server's answer.
+ */
+export function withRoomStatesSaved<Room extends { id: string; completionStatus: string }>(
+  rooms: readonly Room[],
+  states: ReadonlyMap<string, SavedRoomState>,
+): Room[] {
+  if (!states.size) return [...rooms];
+  return rooms.map((room) => {
+    const state = states.get(room.id);
+    if (state === 'COMPLETED' && room.completionStatus !== 'COMPLETED' && room.completionStatus !== 'SKIPPED')
+      return { ...room, completionStatus: 'COMPLETED' } as Room;
+    if (state === 'REOPENED' && room.completionStatus === 'COMPLETED')
+      return { ...room, completionStatus: 'NOT_STARTED' } as Room;
+    return room;
+  });
+}
+
+/** Areas with their saved submissions only: see `withRoomStatesSaved`. */
 export function withCompletionsSaved<Room extends { id: string; completionStatus: string }>(
   rooms: readonly Room[],
   saved: ReadonlySet<string>,
 ): Room[] {
-  if (!saved.size) return [...rooms];
-  return rooms.map((room) =>
-    saved.has(room.id) && room.completionStatus !== 'COMPLETED' && room.completionStatus !== 'SKIPPED'
-      ? ({ ...room, completionStatus: 'COMPLETED' } as Room)
-      : room,
-  );
+  return withRoomStatesSaved(rooms, new Map([...saved].map((id) => [id, 'COMPLETED' as const])));
 }
 
 /**
@@ -283,6 +314,28 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
         `/api/v1/technician/inspections/${encodeURIComponent(String(payload.inspectionId))}/start`,
         'POST',
         { startedAt: payload.startedAt },
+      ),
+    /**
+     * Change Evidence: a submitted area back to work.
+     *
+     * Safe to replay: the server answers an area that is not completed as it
+     * is. Queued after the area's own submission when that has not gone yet, so
+     * the server completes it and then reopens it, as the technician did.
+     */
+    'room-reopen': (payload, send) =>
+      send(`/api/v1/technician/rooms/${encodeURIComponent(String(payload.roomId))}/reopen`, 'POST', {}),
+    /**
+     * The photographs new evidence replaced.
+     *
+     * Safe to replay: a photograph already removed is simply not found again.
+     * Queued behind the new photograph's capture but not behind its upload --
+     * the old ones are named, so the order the two arrive in does not matter.
+     */
+    'room-replace-evidence': (payload, send) =>
+      send(
+        `/api/v1/technician/rooms/${encodeURIComponent(String(payload.roomId))}/evidence/replace`,
+        'POST',
+        { photoKeys: payload.photoKeys ?? [], photoIds: payload.photoIds ?? [] },
       ),
     /**
      * The job's checklist as it stood when the signal went.
