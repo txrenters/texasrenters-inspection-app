@@ -2,6 +2,7 @@ import {
   bookedFilters,
   filterKey,
   filterLabel,
+  MAX_BOOKED_FILTERS,
   normalizeFilterSize,
   parseVisitDetails,
   reportableServices,
@@ -167,7 +168,9 @@ function filtersState(rows: FilterRow[]): { state: JobTaskState; detail: string 
   const settled = answered.filter((row) =>
     row.answer!.changed ? row.answer!.photoId || row.answer!.photoKey : row.answer!.reason,
   );
-  if (!answered.length) return { state: 'TODO', detail: `${rows.length} to photograph` };
+  // One photograph of them all, stacked (the office, 2026-09-29).
+  if (!answered.length)
+    return { state: 'TODO', detail: `${rows.length} filter${rows.length === 1 ? '' : 's'} · one photo` };
   if (settled.length < rows.length)
     return { state: 'PART', detail: `${settled.length} of ${rows.length} answered` };
   const missed = settled.filter((row) => !row.answer!.changed).length;
@@ -220,7 +223,8 @@ export function jobTasks(input: JobTasksInput): JobTask[] {
       detail: !outcome
         ? null
         : !outcome.done
-          ? outcome.reason || 'Not done'
+          ? // "rebook" because the office reads it as its to-do (the office, 2026-09-29).
+            `${outcome.reason || 'Not done'}${outcome.reschedule ? ' · rebook' : ''}`
           : // The photograph is optional, so it is mentioned only when there is one.
             outcome.photoId
             ? 'Done · photo'
@@ -425,6 +429,124 @@ export function withoutFilter(
   return { ...current, filters: (current.filters ?? []).filter((entry) => filterKey(entry) !== key) };
 }
 
+/** A register somebody declined, with the reason the office acts on. */
+export const filterDeclined = (answer: VisitFilterOutcome | undefined): boolean =>
+  Boolean(answer && !answer.changed && answer.reason?.trim());
+
+/**
+ * The report with one photograph for every filter (the office, 2026-09-29).
+ *
+ * The technician stacks the filters with their sizes facing the camera and
+ * takes one picture, instead of photographing each register in turn. Every
+ * register not declined is answered as changed and points at that picture: a
+ * register the visit listed, and one added on site alike.
+ *
+ * A new photograph replaces the old one outright. `withFilterAnswer` keeps a
+ * `photoId` the answer does not carry, so a retake left each register on the
+ * photograph it replaced -- the server resolves `photoId` before `photoKey` --
+ * and the retake never reached the office.
+ *
+ * The server needs nothing new: it resolves each register's key on its own, so
+ * one key on several registers resolves to the one photograph on each.
+ */
+export function withFiltersPhoto(
+  report: VisitServicesReport | null | undefined,
+  visitDetails: string | null | undefined,
+  photoKey: string,
+): VisitServicesReport {
+  let next = report ?? EMPTY_REPORT;
+  for (const row of filterRows(visitDetails, next)) {
+    if (filterDeclined(row.answer)) continue;
+    next = withFilterAnswer(next, row.filter, { changed: true, photoKey });
+  }
+  return {
+    ...next,
+    filters: (next.filters ?? []).map((filter) =>
+      filter.changed && filter.photoKey === photoKey ? { ...filter, photoId: null } : filter,
+    ),
+  };
+}
+
+/**
+ * The photograph the filters share, once one has been taken.
+ *
+ * The first changed register's, which after `withFiltersPhoto` is every changed
+ * register's. A job answered one register at a time on an older build can
+ * carry several; the screen only needs to know that one exists and whether it
+ * has arrived.
+ */
+export function filtersPhoto(
+  rows: readonly FilterRow[],
+): { photoKey: string | null; photoId: string | null } | null {
+  const answer = rows.find((row) => row.answer?.changed && (row.answer.photoKey || row.answer.photoId))?.answer;
+  return answer ? { photoKey: answer.photoKey ?? null, photoId: answer.photoId ?? null } : null;
+}
+
+/**
+ * A declined register taken back: into the photograph when there is one, and
+ * unanswered when there is not.
+ *
+ * "Not changed" pressed by mistake used to be undone only by photographing the
+ * register again. The filters are photographed together now, so the register
+ * simply rejoins the picture that is already there.
+ */
+export function withFilterInPhoto(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+  photo: { photoKey: string | null; photoId: string | null } | null,
+): VisitServicesReport {
+  const current = report ?? EMPTY_REPORT;
+  if (photo) return withFilterAnswer(current, filter, { changed: true, ...photo });
+  const key = filterKey(filter);
+  return {
+    ...current,
+    filters: (current.filters ?? []).flatMap((entry) => {
+      if (filterKey(entry) !== key) return [entry];
+      // A register the office listed is unanswered when it has no entry; one
+      // found on site keeps its entry, because the entry is all there is of it.
+      return entry.booked === false
+        ? [{ ...entry, changed: false, reason: null, photoId: null, photoKey: null }]
+        : [];
+    }),
+  };
+}
+
+/** One line of the Add filters sheet: a size, and how many of it. */
+export interface FilterEntry {
+  size: string;
+  quantity: number;
+}
+
+/**
+ * Several filters found on site, added in one go.
+ *
+ * The Add sheet took one size at a time, so a house with two sizes was two
+ * trips through it (the office, 2026-09-29: "not add a filter for this size
+ * then add another filter for this size"). Each is added unanswered, like a
+ * single one, and takes the next free slot of its size -- worked out against
+ * the report as it grows, so two of one size become slots 1 and 2 rather than
+ * both claiming the first. Capped at `MAX_BOOKED_FILTERS`, like the visit's own.
+ */
+export function withAddedFilters(
+  report: VisitServicesReport | null | undefined,
+  visitDetails: string | null | undefined,
+  entries: readonly FilterEntry[],
+): VisitServicesReport {
+  let next = report ?? EMPTY_REPORT;
+  for (const entry of entries) {
+    const size = normalizeFilterSize(entry.size);
+    for (let count = 0; count < Math.min(entry.quantity, MAX_BOOKED_FILTERS); count += 1) {
+      if (filterRows(visitDetails, next).length >= MAX_BOOKED_FILTERS) return next;
+      next = withAddedFilter(next, {
+        size,
+        location: null,
+        slot: nextFilterSlot(visitDetails, next, { size, location: null }),
+      });
+    }
+  }
+  return next;
+}
+
 /**
  * The report with a service's answer taken back: unticked, so End job asks
  * about it again.
@@ -437,6 +559,40 @@ export function withoutServiceAnswer(
   const services = { ...current.services };
   delete services[service];
   return { ...current, filters: current.filters ?? [], services };
+}
+
+/** What a service left unticked at End job is recorded as. */
+export const UNTICKED_REASON = 'Not done on this visit';
+
+/**
+ * The line the office reads for a service not done: the reason picked, then the
+ * note, whichever were given -- and the same words End job uses when neither
+ * was, because the server refuses a "not done" with no reason.
+ */
+export function notDoneReason(choice: string | null, note: string): string {
+  return [choice, note.trim()].filter(Boolean).join(' — ') || UNTICKED_REASON;
+}
+
+/**
+ * Every service left unticked, answered as not done and to be booked again.
+ *
+ * End job used to stop and ask why for each one. The office, 2026-09-29: a
+ * technician who has done the filters and the inspection but not the pest
+ * control must be able to end the job, and the office must still be able to
+ * tell that pest control never happened -- so it is written down as not done,
+ * with a rebook, rather than asked about. A reason or a note can still be given
+ * on the row beforehand ("Not done"), and that answer is kept.
+ */
+export function withUntickedNotDone(
+  report: VisitServicesReport | null | undefined,
+  services: readonly ReportableVisitService[],
+): VisitServicesReport {
+  let next = report ?? EMPTY_REPORT;
+  for (const service of services) {
+    if (next.services[service]) continue;
+    next = withServiceAnswer(next, service, { done: false, reason: UNTICKED_REASON, reschedule: true });
+  }
+  return next;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
@@ -10,7 +11,12 @@ import {
 } from 'lucide-react-native';
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
+import {
+  parseVisitDetails,
+  reportableServices,
+  type ReportableVisitService,
+  type VisitServicesReport,
+} from '@texasrenters/shared';
 
 import { EndJobSheet } from '@/src/components/EndJobSheet';
 import { HomeButton } from '@/src/components/HomeButton';
@@ -18,11 +24,10 @@ import { JobFileCard } from '@/src/components/JobFileCard';
 import { JobTasksCard } from '@/src/components/JobTasksCard';
 import { NoAccessSheet } from '@/src/components/NoAccessSheet';
 import { NotDoneSheet } from '@/src/components/NotDoneSheet';
-import { StartJobSheet } from '@/src/components/StartJobSheet';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
-import { useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
+import { useFiltersArea, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { useSecondNow } from '@/src/features/useSecondNow';
 import { registerIcons } from '@/src/lib/icons';
@@ -42,6 +47,7 @@ import {
   jobTasks,
   toggledService,
   withServiceAnswer,
+  withUntickedNotDone,
   type JobTask,
 } from '@/src/utils/job-tasks';
 import { INSPECTION_STATUS_TONE_CLASS, inspectionStatusPresentation } from '@/src/utils/inspection-status';
@@ -60,10 +66,12 @@ registerIcons(AlertTriangleIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIc
  * button that submits the job."
  *
  * So a scheduled job shows the property, what is booked and the office's notes,
- * with Start job under them, confirmed before the timer starts. A started job
+ * with Start job under them. The timer starts on the tap -- the office asked for
+ * the confirmation to go (2026-09-29), so nothing stands between. A started job
  * is its list and a running timer, with End job under it. End job is the
- * submission: it sends the technician back to anything unfinished, asks why for
- * a service left unticked, and submits once they confirm.
+ * submission: it sends the technician back to anything unfinished, sends a
+ * service left unticked as not done and to be booked again (2026-09-29), and
+ * submits once they confirm.
  */
 
 /** What each kind of visit is called on the handset. */
@@ -89,10 +97,9 @@ export default function JobScreen() {
   const actions = useInspectionActions(id);
   const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch]);
-  const [startOpen, setStartOpen] = useState(false);
   const [noAccessOpen, setNoAccessOpen] = useState(false);
-  /** Services End job is asking about, one at a time, and the report as answered so far. */
-  const [asking, setAsking] = useState<{ queue: JobTask[]; report: VisitServicesReport | null } | null>(null);
+  /** The service whose "Not done" was tapped, while its note is written. */
+  const [notDoneFor, setNotDoneFor] = useState<(JobTask & { key: ReportableVisitService }) | null>(null);
   /** The report End job is about to submit, while the technician confirms it. */
   const [ending, setEnding] = useState<{ report: VisitServicesReport | null } | null>(null);
   const [closingComments, setClosingComments] = useState<ClosingComments>(EMPTY_CLOSING_COMMENTS);
@@ -100,6 +107,12 @@ export default function JobScreen() {
   // Up here with the other hooks, above the early return below.
   const running = inspection.data?.status === 'IN_PROGRESS' && !inspection.data.submittedAt;
   const now = useSecondNow(running);
+  // Asked for while the technician reads the list, so the filters' camera
+  // opens without waiting on it (the office, 2026-09-29).
+  useFiltersArea(
+    id,
+    running && reportableServices(parseVisitDetails(inspection.data?.visitDetails)).includes('filterChange'),
+  );
 
   if (inspection.isLoading || !inspection.data) {
     return (
@@ -125,6 +138,17 @@ export default function JobScreen() {
   const elapsed = jobElapsed(item, now);
   const status = inspectionStatusPresentation(item.status);
 
+  /**
+   * Straight in: the list and the running timer replace the button on the tap,
+   * because the mutation draws the job as started before the server answers.
+   */
+  const startJob = () => {
+    if (actions.start.isPending) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    actions.start.mutate(undefined, {
+      onError: () => Alert.alert('The job did not start', 'Check the connection and press Start job again.'),
+    });
+  };
   const toggle = (task: JobTask) => {
     if (isService(task)) actions.saveServices.mutate((current) => toggledService(current, task.key));
   };
@@ -157,24 +181,17 @@ export default function JobScreen() {
       ]);
       return;
     }
-    const report = item.servicesReport ?? null;
-    if (plan.unticked.length) setAsking({ queue: plan.unticked, report });
-    else confirmEnd(report);
-  };
-
-  /** A service left unticked, answered: not done, with the reason. The next one, or on to ending. */
-  const answerUnticked = ({ reason, reschedule }: { reason: string; reschedule: boolean }) => {
-    if (!asking) return;
-    const [current, ...rest] = asking.queue;
-    if (!current || !isService(current)) return;
-    const report = withServiceAnswer(asking.report, current.key, { done: false, reason, reschedule });
-    // Saved as it is answered, like a tick, so it is on the job even if ending waits.
-    actions.saveServices.mutate(report);
-    if (rest.length) setAsking({ queue: rest, report });
-    else {
-      setAsking(null);
-      confirmEnd(report);
-    }
+    /*
+     * Anything left unticked goes as not done, to be booked again -- never a
+     * reason to stop (the office, 2026-09-29). Only in what End job sends, so
+     * backing out of the confirmation leaves the job as it was.
+     */
+    confirmEnd(
+      withUntickedNotDone(
+        item.servicesReport,
+        plan.unticked.filter(isService).map((task) => task.key),
+      ),
+    );
   };
 
   const submit = () => {
@@ -304,6 +321,9 @@ export default function JobScreen() {
           className="mx-5 mt-5"
           mode={item.status === 'SCHEDULED' ? 'preview' : item.status === 'IN_PROGRESS' ? 'working' : 'done'}
           onOpen={open}
+          onNotDone={(task) => {
+            if (isService(task)) setNotDoneFor(task);
+          }}
           onToggle={toggle}
           tasks={tasks}
         />
@@ -331,7 +351,7 @@ export default function JobScreen() {
             accessibilityLabel="Start job"
             accessibilityRole="button"
             className="min-h-12 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
-            onPress={() => setStartOpen(true)}
+            onPress={startJob}
           >
             <View className="flex-row items-center gap-2">
               <PlayCircleIcon size={20} className="text-primary-foreground" />
@@ -378,26 +398,19 @@ export default function JobScreen() {
         )}
       </View>
 
-      <StartJobSheet
-        address={item.property.address}
-        busy={actions.start.isPending}
-        onClose={() => setStartOpen(false)}
-        onStart={() =>
-          actions.start.mutate(undefined, {
-            // The job's list takes over the screen once it has started.
-            onSettled: () => setStartOpen(false),
-            onError: () =>
-              Alert.alert('The job did not start', 'Check the connection and press Start job again.'),
-          })
-        }
-        visible={startOpen}
-      />
-
       <NotDoneSheet
-        onClose={() => setAsking(null)}
-        onSave={answerUnticked}
-        title={asking?.queue[0]?.title ?? ''}
-        visible={Boolean(asking?.queue.length)}
+        initial={notDoneFor ? item.servicesReport?.services[notDoneFor.key] : undefined}
+        onClose={() => setNotDoneFor(null)}
+        onSave={({ reason, reschedule }) => {
+          const service = notDoneFor?.key;
+          setNotDoneFor(null);
+          if (service)
+            actions.saveServices.mutate((current) =>
+              withServiceAnswer(current, service, { done: false, reason, reschedule }),
+            );
+        }}
+        title={notDoneFor?.title ?? ''}
+        visible={Boolean(notDoneFor)}
       />
 
       <EndJobSheet

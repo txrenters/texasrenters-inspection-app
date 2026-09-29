@@ -13,9 +13,11 @@ import type { SubmissionGate } from './submission-gate';
  *   filter change with a register not yet photographed, is something only the
  *   technician can finish, so End job names it and opens it rather than
  *   submitting around it.
- * - **A service left unticked.** Pest control not ticked means it was not done,
- *   and the office's rule wants the reason (the owner's choice: "Ask why, then
- *   submit"), so End job asks why and then carries on.
+ * - **A service left unticked.** Pest control not ticked means it was not done.
+ *   End job used to stop and ask why ("Ask why, then submit"); since 2026-09-29
+ *   it is never a reason to stop -- the job goes in with it as not done and to
+ *   be booked again (`withUntickedNotDone`), and a note can be left on the row
+ *   beforehand.
  */
 
 export interface EndJobBlocker {
@@ -28,7 +30,7 @@ export interface EndJobBlocker {
 export interface EndJobPlan {
   /** What has to be finished first. End job opens the first of them. */
   blockers: EndJobBlocker[];
-  /** Services not ticked, asked about one at a time and then submitted as not done. */
+  /** Services not ticked, submitted as not done and to be booked again. */
   unticked: JobTask[];
 }
 
@@ -58,8 +60,8 @@ export function planEndJob(
       opens: 'FILTERS',
       title: 'Finish the filter change first',
       message: filters.detail
-        ? `${filters.detail}. Photograph each filter with its size in shot, or say why it was not changed.`
-        : 'Photograph each filter with its size in shot, or say why it was not changed.',
+        ? `${filters.detail}. Stack the filters and take one photo of them all, or say why one was not changed.`
+        : 'Stack the filters and take one photo of them all, or say why one was not changed.',
     });
 
   return {

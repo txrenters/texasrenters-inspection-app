@@ -42,36 +42,71 @@ function StateGlyph({ state }: { state: JobTaskState }) {
 
 const titleOf = (task: JobTask) => `${task.number ? `${task.number}. ` : ''}${task.title}`;
 
-/** A service that is one answer: a box to tick. */
-function CheckboxRow({ task, disabled, onToggle }: { task: JobTask; disabled: boolean; onToggle: () => void }) {
+/**
+ * A service that is one answer: a box to tick, and "Not done" beside it for a
+ * note to the office (2026-09-29) -- say, pest control left for another day
+ * while the filters and the inspection were done.
+ */
+function CheckboxRow({
+  task,
+  disabled,
+  onToggle,
+  onNotDone,
+}: {
+  task: JobTask;
+  disabled: boolean;
+  onToggle: () => void;
+  onNotDone: () => void;
+}) {
   const checked = task.state === 'DONE';
+  const notDone = task.state === 'NOT_DONE';
   return (
-    <Pressable
-      accessibilityHint={checked ? 'Unticks it' : 'Ticks it done'}
-      accessibilityLabel={[titleOf(task), task.state === 'NOT_DONE' ? `Not done, ${task.detail ?? ''}` : ''].filter(Boolean).join(', ')}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked, disabled }}
-      className={`min-h-14 flex-row items-center gap-3 rounded-xl border bg-card px-3 py-3 ${
-        checked ? 'border-primary/40' : task.state === 'NOT_DONE' ? 'border-chart-4/40' : 'border-border'
-      } ${disabled ? 'opacity-50' : PRESS_ROW}`}
-      disabled={disabled}
-      onPress={onToggle}
+    <View
+      className={`min-h-14 flex-row items-center rounded-xl border bg-card ${
+        checked ? 'border-primary/40' : notDone ? 'border-chart-4/40' : 'border-border'
+      } ${disabled ? 'opacity-50' : ''}`}
     >
-      <View
-        importantForAccessibility="no-hide-descendants"
-        className={`h-6 w-6 items-center justify-center rounded-md ${
-          checked ? 'bg-primary' : 'border-2 border-muted-foreground'
-        }`}
+      <Pressable
+        accessibilityHint={checked ? 'Unticks it' : 'Ticks it done'}
+        accessibilityLabel={[titleOf(task), notDone ? `Not done, ${task.detail ?? ''}` : ''].filter(Boolean).join(', ')}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked, disabled }}
+        className={`min-h-14 min-w-0 flex-1 flex-row items-center gap-3 rounded-xl px-3 py-3 ${disabled ? '' : PRESS_ROW}`}
+        disabled={disabled}
+        onPress={onToggle}
       >
-        {checked ? <CheckIcon size={16} className="text-primary-foreground" /> : null}
-      </View>
-      <View importantForAccessibility="no-hide-descendants" className="min-w-0 flex-1">
-        <Text className="text-base font-semibold text-foreground">{titleOf(task)}</Text>
-        {task.state === 'NOT_DONE' ? (
-          <Text className="mt-0.5 text-xs text-chart-4">Not done · {task.detail}</Text>
-        ) : null}
-      </View>
-    </Pressable>
+        <View
+          importantForAccessibility="no-hide-descendants"
+          className={`h-6 w-6 items-center justify-center rounded-md ${
+            checked ? 'bg-primary' : 'border-2 border-muted-foreground'
+          }`}
+        >
+          {checked ? <CheckIcon size={16} className="text-primary-foreground" /> : null}
+        </View>
+        <View importantForAccessibility="no-hide-descendants" className="min-w-0 flex-1">
+          <Text className="text-base font-semibold text-foreground">{titleOf(task)}</Text>
+          {notDone ? (
+            <Text numberOfLines={2} className="mt-0.5 text-xs text-chart-4">
+              Not done · {task.detail}
+            </Text>
+          ) : null}
+        </View>
+      </Pressable>
+      {/* Not offered once ticked: a done service has nothing to explain. */}
+      {checked ? null : (
+        <Pressable
+          accessibilityHint="Say why it was not done, with a note for the office"
+          accessibilityLabel={notDone ? `Change the note on ${task.title}` : `${task.title} not done`}
+          accessibilityRole="button"
+          accessibilityState={{ disabled }}
+          className={`min-h-14 justify-center px-3 ${disabled ? '' : 'active:opacity-70'}`}
+          disabled={disabled}
+          onPress={onNotDone}
+        >
+          <Text className="text-xs font-semibold text-muted-foreground">{notDone ? 'Edit note' : 'Not done'}</Text>
+        </Pressable>
+      )}
+    </View>
   );
 }
 
@@ -115,7 +150,7 @@ export type JobTasksMode = 'preview' | 'working' | 'done';
 
 const SUBTITLE: Record<JobTasksMode, string> = {
   preview: 'Start the job to work through these.',
-  working: 'Tick what you did, and open the rest.',
+  working: 'Tick what you did, and open the rest. Anything unticked goes to the office as not done.',
   done: 'How the job went.',
 };
 
@@ -123,6 +158,7 @@ export function JobTasksCard({
   tasks,
   onOpen,
   onToggle,
+  onNotDone,
   mode,
   className = '',
 }: {
@@ -131,6 +167,8 @@ export function JobTasksCard({
   onOpen: (task: JobTask) => void;
   /** A service's checkbox was tapped. */
   onToggle: (task: JobTask) => void;
+  /** A service's "Not done" was tapped. */
+  onNotDone: (task: JobTask) => void;
   mode: JobTasksMode;
   className?: string;
 }) {
@@ -147,7 +185,13 @@ export function JobTasksCard({
       <View className="gap-2">
         {tasks.map((task) =>
           task.kind === 'SERVICE' ? (
-            <CheckboxRow disabled={!working} key={task.key} onToggle={() => onToggle(task)} task={task} />
+            <CheckboxRow
+              disabled={!working}
+              key={task.key}
+              onNotDone={() => onNotDone(task)}
+              onToggle={() => onToggle(task)}
+              task={task}
+            />
           ) : (
             <OpenRow
               disabled={!(working || (mode === 'done' && task.kind === 'INSPECTION'))}

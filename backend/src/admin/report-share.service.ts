@@ -7,6 +7,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { withSystemTenant, withTenant } from '../database/tenant-context';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
+import { inspectedAreas } from '../common/inspected-areas';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
@@ -224,7 +225,8 @@ export class ReportShareService {
             completionStatus: true,
             skipReason: true,
             completedAt: true,
-            propertyArea: { select: { name: true, floor: { select: { name: true } } } },
+            // source with the name: whether the area is the inspection's at all.
+            propertyArea: { select: { name: true, source: true, floor: { select: { name: true } } } },
             /**
              * The condition checklist as the technician scored it.
              *
@@ -305,11 +307,15 @@ export class ReportShareService {
     if (!inspection)
       throw new ApplicationError(404, 'REPORT_NOT_AVAILABLE', 'This report is not available.');
     const building = inspection.propertywareBuilding;
+    /**
+     * The rooms the inspection inspected (`inspectedAreas`). The job's "AC
+     * filters" photo area printed as a room of its own, of filters, in a report
+     * about the property's condition (the office, 2026-09-29).
+     */
+    const areas = inspectedAreas(inspection.inspectionType, inspection.areas);
     // Findings carry the catalog area id; rooms are per-inspection areas. Map
     // one to the other so the view model can group without guessing by name.
-    const roomIdByPropertyArea = new Map(
-      inspection.areas.map((area) => [area.propertyAreaId, area.id]),
-    );
+    const roomIdByPropertyArea = new Map(areas.map((area) => [area.propertyAreaId, area.id]));
     return {
       brand: this.brand(),
       property: {
@@ -356,7 +362,7 @@ export class ReportShareService {
         maintenanceComments: inspection.maintenanceComments,
         generalComments: inspection.generalComments,
       },
-      rooms: inspection.areas.map((area) => ({
+      rooms: areas.map((area) => ({
         id: area.id,
         name: area.propertyArea.name,
         floorName: area.propertyArea.floor?.name ?? null,
@@ -408,7 +414,7 @@ export class ReportShareService {
         comparisonResult: finding.comparisonResult,
         baselineCondition: finding.baselineCondition,
       })),
-      photos: inspection.areas.flatMap((area) =>
+      photos: areas.flatMap((area) =>
         area.photos.map((photo) => ({
           id: photo.id,
           roomId: area.id,

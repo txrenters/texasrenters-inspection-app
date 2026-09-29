@@ -52,7 +52,7 @@ describe('what End job settles first', () => {
     const plan = planEndJob([task({ key: 'filterChange', kind: 'FILTERS', state: 'PART', detail: '1 of 2 answered' })], ready);
 
     expect(plan.blockers.map((blocker) => [blocker.opens, blocker.message])).toEqual([
-      ['FILTERS', '1 of 2 answered. Photograph each filter with its size in shot, or say why it was not changed.'],
+      ['FILTERS', '1 of 2 answered. Stack the filters and take one photo of them all, or say why one was not changed.'],
     ]);
   });
 
@@ -60,8 +60,8 @@ describe('what End job settles first', () => {
     expect(planEndJob([task({ key: 'filterChange', kind: 'FILTERS', state: 'NOT_DONE' })], ready).blockers).toEqual([]);
   });
 
-  /** The owner's choice (2026-09-18): "Ask why, then submit". */
-  it('asks why about a service left unticked rather than refusing to end the job', () => {
+  /** The office (2026-09-29): an unticked service is never a reason to stop. */
+  it('never blocks on a service left unticked, and hands it on to be sent as not done', () => {
     const pest = task({ key: 'pestControl', kind: 'SERVICE', state: 'TODO' });
     const plan = planEndJob([pest, task({ key: 'fleaTreatment', kind: 'SERVICE', state: 'NOT_DONE' })], ready);
 

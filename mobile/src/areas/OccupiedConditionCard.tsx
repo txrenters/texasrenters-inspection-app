@@ -1,7 +1,7 @@
 import { Text, View } from 'react-native';
 import { choiceInvitesComment } from '@texasrenters/shared';
 
-import { ChoicesField, CommentField } from '../capture/ChecklistAnswerFields';
+import { ChoiceField, CommentField } from '../capture/ChecklistAnswerFields';
 import type { ChecklistItem } from '../capture/area-checklist';
 import type { ChecklistAssessment } from '../domain/models';
 
@@ -25,8 +25,11 @@ import type { ChecklistAssessment } from '../domain/models';
  * checklist at all now: demoed to the product owner, that sheet read as a
  * duplicate of this card, so this card is the one place they are answered.
  *
- * Each question is a list of checkboxes — see `ChoicesField`. The office asked
- * on 2026-09-15 to tick several: a room can be clean and still need attention.
+ * Each question is a radio list -- one answer -- see `ChoiceField`. It was
+ * checkboxes that ticked several from 2026-09-15 (the office: a room can be
+ * clean and still need attention); the technicians asked for the radio buttons
+ * back on 2026-09-29. The server still reads an answer with several ticks, so
+ * one saved in between prints as it was, and a tap on it picks just the one.
  *
  * ── INLINE RATHER THAN BEHIND A BUTTON ───────────────────────────────────────
  *
@@ -69,14 +72,13 @@ export function OccupiedConditionCard({
         return (
           <View className="mt-4" key={item.id}>
             <Text className="text-sm font-semibold text-foreground">{item.label}</Text>
-            <ChoicesField
+            <ChoiceField
               item={item}
               onChange={(next) => onRecord(item.id, { textValue: next })}
               value={answer}
             />
-            {/* Asked only when something ticked says something was wrong —
-                prompted rather than required, for the reasons in
-                `choiceInvitesComment`. */}
+            {/* Asked only when the answer says something was wrong — prompted
+                rather than required, for the reasons in `choiceInvitesComment`. */}
             {choiceInvitesComment(answer) ? (
               <CommentField
                 item={item}

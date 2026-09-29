@@ -11,8 +11,7 @@ import { navDuration, navMiles, useNavColors } from './nav-colors';
  * ## Why arriving does not start the job
  *
  * The start is the server's stamp and the office reads how long a job took from
- * it — `StartJobSheet` says the same thing, and it is confirmed there for the
- * same reason. Arrival is a guess made from a GPS fix: good enough to open this
+ * it, so it waits for the technician's own tap on Start job. Arrival is a guess made from a GPS fix: good enough to open this
  * sheet, nowhere near good enough to begin timing somebody's work. A technician
  * who pulls up outside and spends ten minutes on the phone would otherwise have
  * those ten minutes recorded as inspection time.

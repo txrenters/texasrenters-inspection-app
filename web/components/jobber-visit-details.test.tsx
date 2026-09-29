@@ -297,6 +297,40 @@ describe('the Jobber visit on an inspection', () => {
     expect(screen.queryByRole('button', { name: /12x12x1/ })).not.toBeInTheDocument();
   });
 
+  it('shows one photograph of all the filters once, named for every filter in it', () => {
+    const register = (size: string, location: string, slot: number) => ({
+      size,
+      location,
+      slot,
+      changed: true,
+      reason: null,
+      photoId: 'photo-stack',
+      photoKey: 'snapshot-stack',
+      booked: true,
+    });
+    render(
+      <JobberVisitDetails
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        servicesReport={{
+          services: { filterChange: { done: true, reason: null, reschedule: false } },
+          filters: [register('20x25x1', 'upstairs hallway', 1), register('12x12x1', 'downstairs', 1)],
+          filtersInstalled: [],
+          notes: null,
+        }}
+        title={TITLE}
+      />,
+    );
+
+    // The phone takes one photograph of the filters stacked (the office, 2026-09-29).
+    expect(screen.getAllByRole('button', { name: /^Open Serial or label/ })).toHaveLength(1);
+    expect(
+      screen.getByRole('button', {
+        name: 'Open Serial or label of this job - 20x25x1 · upstairs hallway, 12x12x1 · downstairs',
+      }),
+    ).toBeInTheDocument();
+  });
+
   it('shows nothing for an inspection that did not come from Jobber', () => {
     const { container } = render(<JobberVisitDetails inspectionType="MOVE_IN" />);
     expect(container).toBeEmptyDOMElement();

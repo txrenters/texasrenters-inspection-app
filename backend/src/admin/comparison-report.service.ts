@@ -23,6 +23,7 @@ import type { Prisma } from '@prisma/client';
 
 import { ApplicationError } from '../common/errors';
 import type { AuthenticatedUser } from '../common/auth';
+import { inspectedAreas } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
 
 /** Bounded per inspection, so a photo-heavy pair cannot build an unbounded document. */
@@ -165,7 +166,8 @@ export class ComparisonReportService {
             propertyAreaId: true,
             completionStatus: true,
             skipReason: true,
-            propertyArea: { select: { name: true, floor: { select: { name: true } } } },
+            // source with the name: whether the area is the inspection's at all.
+            propertyArea: { select: { name: true, source: true, floor: { select: { name: true } } } },
             checklistResponses: {
               orderBy: [
                 { checklistItem: { sortOrder: 'asc' as const } },
@@ -232,7 +234,8 @@ export class ComparisonReportService {
     }
 
     const areas = new Map<string, ComparisonReportAreaSide>();
-    for (const area of inspection.areas) {
+    // The rooms it inspected, as the comparison paired them (`inspectedAreas`).
+    for (const area of inspectedAreas(inspection.inspectionType, inspection.areas)) {
       areas.set(area.propertyAreaId, {
         roomId: area.id,
         name: area.propertyArea.name,

@@ -12,6 +12,7 @@ import type { Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { inspectedAreaWhere } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
 
@@ -176,8 +177,8 @@ export class ComparisonService {
 
     const [moveOutAreas, moveInAreas, moveOutCondition, moveInCondition, moveOutEvidence] =
       await Promise.all([
-        this.loadAreas(moveOut.id),
-        this.loadAreas(moveIn.id),
+        this.loadAreas(moveOut.id, InspectionType.MOVE_OUT),
+        this.loadAreas(moveIn.id, InspectionType.MOVE_IN),
         this.loadConditionSignals(moveOut.id),
         this.loadConditionSignals(moveIn.id),
         this.loadAreaEvidenceCounts(moveOut.id),
@@ -435,9 +436,14 @@ export class ComparisonService {
     });
   }
 
-  private async loadAreas(inspectionId: string): Promise<AreaRow[]> {
+  /**
+   * The areas each side inspected (`inspectedAreaWhere`). A job's "AC filters"
+   * photo area on either side would otherwise stand in the comparison as a
+   * room with no counterpart (the office, 2026-09-29).
+   */
+  private async loadAreas(inspectionId: string, inspectionType: InspectionType): Promise<AreaRow[]> {
     const areas = await this.prisma.inspectionArea.findMany({
-      where: { inspectionId },
+      where: { inspectionId, ...inspectedAreaWhere(inspectionType) },
       // Ordered, because the matcher walks this list and the weak fallback used
       // to take whichever row the database happened to return first -- so the
       // same two inspections could pair differently from one run to the next.

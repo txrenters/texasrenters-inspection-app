@@ -21,6 +21,7 @@ import {
   reportableServices,
   servicesReportProblems,
   SERVICE_PHOTO_AREA,
+  SERVICE_PHOTO_AREA_NAMES,
   type BookedFilter,
   type ReportableVisitService,
   type VisitFilterOutcome,
@@ -56,6 +57,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
+import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
@@ -83,8 +85,6 @@ import type {
   TechnicianSaveServicesDto,
 } from './technician.dto';
 
-/** The areas a job's service photographs are filed under, by name. */
-const SERVICE_PHOTO_AREA_NAMES = new Set<string>(Object.values(SERVICE_PHOTO_AREA));
 
 /** One photograph a checklist points at: the handset's key for it, then the photograph once it lands. */
 interface PhotoReference {
@@ -393,7 +393,8 @@ const technicianInspectionSummarySelect = {
     select: {
       id: true,
       completionStatus: true,
-      propertyArea: { select: { isRequired: true } },
+      // name and source decide whether the area is the inspection's at all.
+      propertyArea: { select: { isRequired: true, name: true, source: true } },
       // Needed to decide whether the type overrides that flag.
       media: {
         orderBy: { createdAt: 'desc' as const },
@@ -772,7 +773,7 @@ export class TechnicianService {
         'Assigned inspection was not found.',
       );
     const property = this.mapProperty(record.propertywareBuilding, record.propertywareUnit);
-    const rooms = record.areas.map((room) => this.mapRoom(room));
+    const rooms = inspectedAreas(record.inspectionType, record.areas).map((room) => this.mapRoom(room));
     return {
       inspection: this.mapInspection(record, user.id),
       property,
@@ -1142,6 +1143,10 @@ export class TechnicianService {
         ...(inspectionRequiresEveryArea(inspection.inspectionType)
           ? {}
           : { propertyArea: { isRequired: true } }),
+        // Not the inspection's areas (`isInspectedArea`): a service's photo
+        // area, which nobody walks, used to refuse every move-in and move-out
+        // with a filter change.
+        ...inspectedAreaWhere(inspection.inspectionType),
         completionStatus: {
           notIn: [InspectionAreaCompletionStatus.COMPLETED, InspectionAreaCompletionStatus.SKIPPED],
         },
@@ -1323,7 +1328,7 @@ export class TechnicianService {
   }
 
   async rooms(user: AuthenticatedUser, inspectionId: string) {
-    await this.assignedInspection(user, inspectionId);
+    const inspection = await this.assignedInspection(user, inspectionId);
     const rooms = await this.prisma.inspectionArea.findMany({
       relationLoadStrategy: 'join',
       where: { inspectionId },
@@ -1334,7 +1339,7 @@ export class TechnicianService {
       ],
       take: 100,
     });
-    return rooms.map((room) => this.mapRoom(room));
+    return inspectedAreas(inspection.inspectionType, rooms).map((room) => this.mapRoom(room));
   }
 
   /**
@@ -3231,7 +3236,7 @@ export class TechnicianService {
       photoCounts.map((row) => [row.inspectionAreaId, row._count._all]),
     );
 
-    const rooms = record.areas.map((area) => {
+    const rooms = inspectedAreas(record.inspectionType, record.areas).map((area) => {
       const room = this.mapRoom(area);
       const roomFindings = findings.filter(
         (finding) => finding.propertyAreaId === area.propertyAreaId,
@@ -3358,7 +3363,8 @@ export class TechnicianService {
     // property flagged optional — the two are compared area by area, and one
     // missing from either end drops out of the comparison without a trace.
     const everyAreaCounts = inspectionRequiresEveryArea(record.inspectionType);
-    const requiredAreas = record.areas.filter(
+    const areas = inspectedAreas(record.inspectionType, record.areas);
+    const requiredAreas = areas.filter(
       (area) => everyAreaCounts || area.propertyArea.isRequired,
     );
     const completedAreas = requiredAreas.filter(
@@ -3388,7 +3394,7 @@ export class TechnicianService {
       priority: record.priority,
       unitId: record.propertywareUnit?.id ?? null,
       unitName: record.propertywareUnit?.name ?? null,
-      roomIds: record.areas.map((area) => area.id),
+      roomIds: areas.map((area) => area.id),
       allowTechnicianAreaCapture: record.allowTechnicianAreaCapture,
       // Undefined rather than empty string: the app shows the banner only when
       // there is something to read.
@@ -3404,7 +3410,7 @@ export class TechnicianService {
       progress: {
         completed: completedAreas.length,
         total: requiredAreas.length,
-        hasFailedUpload: record.areas.some(
+        hasFailedUpload: areas.some(
           (area) => area.media[0]?.uploadStatus === MediaUploadStatus.FAILED,
         ),
       },

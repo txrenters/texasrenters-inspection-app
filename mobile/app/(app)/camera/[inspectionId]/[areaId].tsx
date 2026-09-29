@@ -38,7 +38,7 @@ import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { reportError } from '@/src/lib/error-log';
 import { goBack } from '@/src/lib/navigation';
-import { withFilterAnswer, withServicePhoto } from '@/src/utils/job-tasks';
+import { withFiltersPhoto, withServicePhoto } from '@/src/utils/job-tasks';
 import { HomeButton } from '@/src/components/HomeButton';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
@@ -140,10 +140,7 @@ export default function RoomCameraScreen() {
     inspectionId = '',
     areaId = '',
     recordingType,
-    filterSize,
-    filterLocation,
-    filterSlot,
-    filterBooked,
+    filterAll,
     filterLabel: filterLabelParam,
     servicePhoto,
   } = useLocalSearchParams<{
@@ -151,17 +148,15 @@ export default function RoomCameraScreen() {
     areaId: string;
     recordingType?: string;
     /**
-     * This shot is one filter register's photograph.
+     * This shot is the one photograph of the job's filters, stacked.
      *
-     * Sent by the job's filter screen, which has already resolved the area
-     * these are filed under. The shutter then takes one picture, attaches it to
-     * that register and comes straight back — the office asked for a
-     * photograph of each register (2026-09-18), not a walk of an area.
+     * Sent by the job's filter screen, which has already resolved the area it
+     * is filed under. The shutter takes one picture, attaches it to every
+     * filter not declined and comes straight back -- the office asked for one
+     * photograph of them all (2026-09-29), not one per register.
      */
-    filterSize?: string;
-    filterLocation?: string;
-    filterSlot?: string;
-    filterBooked?: string;
+    filterAll?: string;
+    /** What the photograph is of, for the title: "3 filters". */
     filterLabel?: string;
     /**
      * This shot is a service's optional photograph — pest control or a flea
@@ -258,7 +253,21 @@ export default function RoomCameraScreen() {
    * photographs first, and a visit that must be filmed always records.
    */
   const chosenCapture = useDemoStore((state) => state.captureModeByArea[areaId]);
-  const primary = primaryCapture(requiresRecording, chosenCapture);
+  /**
+   * The filters' photograph or a service's is one still, whatever the
+   * job is -- so the camera is bound to stills from the first frame.
+   *
+   * It used to follow the job type like an area does, and that was the office's
+   * "freezing camera on the filter change" (2026-09-29): before the area loads
+   * an unknown type counts as one that must be filmed, and a move-out or a
+   * filter delivery really is one, so the camera came up bound to video. On
+   * Android `takePictureAsync` has nothing to shoot with then, and the shutter
+   * hung until `CAPTURE_WATCHDOG_MS`. On an HVAC job it rebound to stills once
+   * the area arrived instead, blanking the preview and the shutter meanwhile.
+   */
+  const stillsOnly =
+    filterAll === '1' || servicePhoto === 'pestControl' || servicePhoto === 'fleaTreatment';
+  const primary = stillsOnly ? 'PHOTO' : primaryCapture(requiresRecording, chosenCapture);
   const restingMode = initialCameraMode(primary === 'VIDEO');
   const [cameraMode, setCameraMode] = useState<CameraMode>(() => restingMode);
   // Read inside async work, where the state value would be the one captured
@@ -286,17 +295,8 @@ export default function RoomCameraScreen() {
   const [seconds, setSeconds] = useState(0);
   const [torch, setTorch] = useState(false);
   const [facing, setFacing] = useState<CameraType>('back');
-  /**
-   * The filter register this shot belongs to, when the job's filter screen sent
-   * one. Null for the ordinary case: photographing an area.
-   */
-  const filterRegister = filterSize
-    ? {
-        size: filterSize,
-        location: filterLocation?.trim() ? filterLocation.trim() : null,
-        slot: Number(filterSlot ?? '1') || 1,
-      }
-    : null;
+  /** This shot is the filters' one photograph, sent by the job's filter screen. */
+  const allFilters = filterAll === '1';
   /**
    * This screen leaves in the same tick it saves, so nothing here can show a
    * failure to the technician -- and until now nothing recorded one either.
@@ -323,7 +323,7 @@ export default function RoomCameraScreen() {
   // filter to be in shot: the photograph is of a label, not of a room. A
   // treatment's photograph is of neither.
   const [captureType, setCaptureType] = useState<PhotoCaptureType>(
-    filterSize ? 'SERIAL_OR_LABEL' : serviceForPhoto ? 'OTHER' : 'AREA_OVERVIEW',
+    allFilters ? 'SERIAL_OR_LABEL' : serviceForPhoto ? 'OTHER' : 'AREA_OVERVIEW',
   );
   const [photoCount, setPhotoCount] = useState(0);
   /**
@@ -1131,10 +1131,24 @@ export default function RoomCameraScreen() {
     const clock = shutterClock();
     setCapturingPhoto(true);
     setError(null);
+    /**
+     * A still needs the still binding. On Android a camera resting on video --
+     * an area that must be filmed, before its take starts -- has nothing for
+     * `takePictureAsync` to shoot with, and the shutter would hang until the
+     * watchdog. iOS photographs from either binding, so it is left alone.
+     */
+    if (Platform.OS === 'android' && !recording && cameraModeRef.current !== 'picture') {
+      await bindCamera('picture');
+      if (!mountedRef.current) return;
+    }
     // Everything that gives the button back is downstream of the await below,
     // so a capture that never settles would keep it. See `CAPTURE_WATCHDOG_MS`.
     /** Whether the count was already put up, so a failure below can take it down. */
     let counted = false;
+    /** The filters' photograph or a service's: one shot, then straight back. */
+    const oneShot = allFilters || Boolean(serviceForPhoto);
+    /** Whether this screen has already gone back, so a failure cannot be shown on it. */
+    let left = false;
     const watchdog = setTimeout(() => {
       setCapturingPhoto(false);
       void reportError(new Error('A photograph did not return from the camera.'), {
@@ -1184,6 +1198,19 @@ export default function RoomCameraScreen() {
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
         }`,
       );
+      /**
+       * A one-shot photograph goes back now, and is filed behind the list.
+       *
+       * The downscale and the write below took up to half a second on an iPhone
+       * frame with the camera still on screen, which read as the camera
+       * freezing after the shutter. Nothing below needs this screen: the
+       * snapshot goes to the store, the answer to the job's cache, and a
+       * failure to the error log (the `catch`).
+       */
+      if (oneShot) {
+        goBack();
+        left = true;
+      }
       /**
        * Brought down to the target edge when the camera could not be asked to.
        *
@@ -1251,13 +1278,13 @@ export default function RoomCameraScreen() {
        * round trip to remove it.
        */
       /**
-       * A filter register's photograph is one shot, and the answer goes with it.
+       * The filters' photograph is one shot, and the answer goes with it.
        *
-       * The snapshot's id is the key its upload carries, so the register can
+       * The snapshot's id is the key its upload carries, so every register can
        * point at the photograph before the image has left the device — which is
        * the ordinary case in a utility cupboard with no signal.
        */
-      if (filterRegister) {
+      if (allFilters) {
         /**
          * Only against a checklist this screen has actually read.
          *
@@ -1267,27 +1294,24 @@ export default function RoomCameraScreen() {
          * simply still unanswered, which the filter screen shows and a retake
          * fixes.
          */
+        /*
+         * `mutateAsync` and a `.catch`, not `mutate` with `onError`: this screen
+         * has already gone back, and react-query drops a `mutate` call's own
+         * callbacks once its component unmounts. The save itself runs either way.
+         */
         if (inspection.data) {
-          saveServices.mutate(
-            (current) =>
-              withFilterAnswer(
-                current,
-                filterRegister,
-                { changed: true, photoKey: snapshot.id },
-                { booked: filterBooked !== 'false' },
-              ),
-            { onError: recordAnswerFailed },
-          );
+          const { visitDetails } = inspection.data;
+          saveServices
+            .mutateAsync((current) => withFiltersPhoto(current, visitDetails, snapshot.id))
+            .catch(recordAnswerFailed);
         } else recordAnswerSkipped('filter');
-        goBack();
       } else if (serviceForPhoto) {
         // The same for a service's optional photograph, on the same condition.
         if (inspection.data) {
-          saveServices.mutate((current) => withServicePhoto(current, serviceForPhoto, snapshot.id), {
-            onError: recordAnswerFailed,
-          });
+          saveServices
+            .mutateAsync((current) => withServicePhoto(current, serviceForPhoto, snapshot.id))
+            .catch(recordAnswerFailed);
         } else recordAnswerSkipped('service');
-        goBack();
       }
     } catch (cause) {
       /**
@@ -1304,6 +1328,10 @@ export default function RoomCameraScreen() {
         photoCountRef.current = Math.max(0, photoCountRef.current - 1);
       }
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
+      // Nobody is looking at this screen any more, so the office's log is the
+      // only place the failure can go. The register reads unanswered, which a
+      // retake fixes.
+      if (left) void reportError(cause, { source: 'one-shot-photo-filing' });
     } finally {
       // Both idempotent: the happy path already did each of these the moment
       // the camera handed the picture over.
@@ -1418,8 +1446,8 @@ export default function RoomCameraScreen() {
                 {filterLabelParam ?? room.data?.name ?? 'Room'}
               </Text>
               <Text className="text-xs text-white/70">
-                {filterRegister
-                  ? 'Show the size printed on the filter'
+                {allFilters
+                  ? 'Stack them, every size facing the camera'
                   : serviceForPhoto
                     ? 'One photo of the treatment (optional)'
                     : isAdditional

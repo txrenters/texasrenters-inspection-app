@@ -94,6 +94,8 @@ export const queryKeys = {
   roomRoot: ['room'] as const,
   room: (id: string) => ['room', id] as const,
   media: (roomId: string) => ['media', roomId] as const,
+  /** Its own root: under `inspection` every refresh of the job would ask again. */
+  filtersArea: (inspectionId: string) => ['filters-area', inspectionId] as const,
   /**
    * Rooted so the upload runner can refresh every area's photo list at once.
    *
@@ -362,12 +364,19 @@ export function useInspectionActions(id: string) {
   const action = <Variables = void>(
     state: 'PROCESSING',
     request: (variables: Variables) => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>,
+    /**
+     * What the job looks like once the request lands, drawn before it does.
+     * Held as the intent's shadow too, so a list refetch that races the
+     * request cannot put the old job back on screen.
+     */
+    optimistic?: () => Record<string, unknown>,
   ) => ({
     mutationFn: request,
     onMutate: async () => {
       await cancelQueries(client, [queryKeys.inspection(id), queryKeys.inspectionsRoot]);
-      const operation = beginIntent(id, state);
-      patchEntity(client, queryKeys.all, id, {}, { state, operationId: operation });
+      const patch = optimistic?.();
+      const operation = beginIntent(id, state, patch);
+      patchEntity(client, queryKeys.all, id, patch ?? {}, { state, operationId: operation });
       return { operation };
     },
     onSuccess: (
@@ -386,7 +395,21 @@ export function useInspectionActions(id: string) {
     },
   });
   return {
-    start: useMutation(action<void>('PROCESSING', () => repositories.inspections.start(id))),
+    /**
+     * Start job, shown as started the moment it is pressed (the office,
+     * 2026-09-29: the confirmation was redundant and the start must be smooth).
+     *
+     * The timer runs from the handset's tap until the server's stamp replaces
+     * it a moment later, so it may jump by the round trip -- never by more. A
+     * failure puts the scheduled job back (`refresh`) and the screen says so.
+     */
+    start: useMutation(
+      action<void>(
+        'PROCESSING',
+        () => repositories.inspections.start(id),
+        () => ({ status: 'IN_PROGRESS', startedAt: new Date().toISOString() }),
+      ),
+    ),
     // The services report rides with the submission, so the note to Jobber and
     // "submitted" are written by the same request -- and so do an HVAC
     // report's closing comments.
@@ -487,14 +510,6 @@ export function useInspectionActions(id: string) {
         if (!(error instanceof QueuedOfflineError)) void refresh();
       },
     }),
-    /**
-     * The area this job's filter photographs are filed under.
-     *
-     * Made on the first photograph rather than when the job is created: there
-     * are hundreds of jobs already booked, and a job whose filters nobody
-     * photographs never grows an area at all.
-     */
-    filtersArea: useMutation({ mutationFn: () => repositories.inspections.filtersArea(id) }),
     /** The area a service's optional photographs are filed under, made on the first one. */
     serviceArea: useMutation({
       mutationFn: (service: ReportableVisitService) => repositories.inspections.serviceArea(id, service),
@@ -504,6 +519,25 @@ export function useInspectionActions(id: string) {
       action<string>('PROCESSING', (reason) => repositories.inspections.couldNotAccess(id, reason)),
     ),
   };
+}
+/**
+ * The area a job's filter photograph is filed under, asked for before anyone
+ * needs it.
+ *
+ * It was resolved on the first tap of Photograph, so the first photograph of
+ * every job waited on a round trip before the camera opened (the office,
+ * 2026-09-29). Asked for as soon as a started job with a filter change is on
+ * screen instead, and kept: the server finds or creates it, so the answer never
+ * changes for the job, and it is a system area nothing counts as a room.
+ */
+export function useFiltersArea(inspectionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.filtersArea(inspectionId),
+    queryFn: () => repositories.inspections.filtersArea(inspectionId),
+    enabled: Boolean(inspectionId) && enabled,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+  });
 }
 export function useRooms(inspectionId: string) {
   return useQuery({

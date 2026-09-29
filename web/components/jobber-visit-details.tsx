@@ -23,9 +23,21 @@ import { formatDateTime } from '@/lib/format';
 
 /** Every photograph the technician took for the job's services, labelled by what it shows. */
 function servicePhotos(report: VisitServicesReport): ServicePhoto[] {
-  const registers = (report.filters ?? [])
-    .filter((filter) => filter.photoId)
-    .map((filter): ServicePhoto => ({ id: filter.photoId!, label: filterLabel(filter), captureType: 'SERIAL_OR_LABEL' }));
+  /**
+   * One thumbnail per photograph, named for every filter in it.
+   *
+   * The phone takes one photograph of all the filters, stacked (the office,
+   * 2026-09-29), so every register points at the same one -- and listing a
+   * thumbnail per register showed that picture once for each filter.
+   */
+  const byPhoto = new Map<string, string[]>();
+  for (const filter of report.filters ?? []) {
+    if (!filter.photoId) continue;
+    byPhoto.set(filter.photoId, [...(byPhoto.get(filter.photoId) ?? []), filterLabel(filter)]);
+  }
+  const registers = [...byPhoto].map(
+    ([id, labels]): ServicePhoto => ({ id, label: labels.join(', '), captureType: 'SERIAL_OR_LABEL' }),
+  );
   const services = REPORTABLE_VISIT_SERVICES.filter((service) => report.services[service]?.photoId).map(
     (service): ServicePhoto => ({
       id: report.services[service]!.photoId!,

@@ -15,6 +15,7 @@ import type {
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { inspectedAreas } from '../common/inspected-areas';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
@@ -206,7 +207,7 @@ export class AreaEvidenceService {
    */
   async summary(user: AuthenticatedUser, inspectionId: string): Promise<AreaEvidenceSummary> {
     const inspection = await this.requireInspection(user.organizationId, inspectionId);
-    const areas = await this.prisma.inspectionArea.findMany({
+    const attached = await this.prisma.inspectionArea.findMany({
       where: { inspectionId },
       orderBy: { propertyArea: { inspectionOrder: 'asc' } },
       select: {
@@ -217,6 +218,8 @@ export class AreaEvidenceService {
           select: {
             id: true,
             name: true,
+            // With the name, decides whether the area is the inspection's at all.
+            source: true,
             environment: true,
             isRequired: true,
             // Counted in the same query rather than fetched per area from the
@@ -228,7 +231,13 @@ export class AreaEvidenceService {
         },
       },
     });
-    if (!areas.length)
+    /**
+     * The areas the inspection inspects (`inspectedAreas`): not the job's
+     * "AC filters" photo area, whose photographs the console shows beside the
+     * filter change's answers instead.
+     */
+    const areas = inspectedAreas(inspection.inspectionType, attached);
+    if (!attached.length)
       return {
         inspectionId,
         totals: {
@@ -387,7 +396,9 @@ export class AreaEvidenceService {
       };
     });
 
-    const knownAreaIds = new Set(areas.map((area) => area.id));
+    // Every attached area, the hidden ones too: their photographs are filed,
+    // not lost, and must not be reported as evidence with nowhere to go.
+    const knownAreaIds = new Set(attached.map((area) => area.id));
     return {
       inspectionId,
       totals: {

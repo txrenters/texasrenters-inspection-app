@@ -86,7 +86,7 @@ describe('the tasks a job has', () => {
 
   it('starts every task as still to do', () => {
     expect(tasksFor().map((task) => task.state)).toEqual(['TODO', 'TODO', 'TODO']);
-    expect(tasksFor()[0]!.detail).toBe('3 to photograph');
+    expect(tasksFor()[0]!.detail).toBe('3 filters · one photo');
   });
 });
 
@@ -150,7 +150,7 @@ describe('how a task reads as the work happens', () => {
     const not = tasksFor({
       report: report({ services: { pestControl: { done: false, reason: 'Newborn in the house', reschedule: true } } }),
     });
-    expect(not[1]).toMatchObject({ state: 'NOT_DONE', detail: 'Newborn in the house' });
+    expect(not[1]).toMatchObject({ state: 'NOT_DONE', detail: 'Newborn in the house · rebook' });
   });
 
   it("mentions pest control's optional photograph only when there is one", () => {
