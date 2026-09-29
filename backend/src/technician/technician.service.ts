@@ -14,10 +14,7 @@ import {
   STANDARD_LAYOUT_SOURCE,
   inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
-  inspectionWalksRooms,
-  isInspectedArea,
   keywordsFromLabel,
-  NON_ROOM_SOURCES,
   normalizeFilterSize,
   parseVisitDetails,
   REPORTABLE_VISIT_SERVICES,
@@ -60,6 +57,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
+import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
@@ -87,17 +85,6 @@ import type {
   TechnicianSaveServicesDto,
 } from './technician.dto';
 
-/**
- * The attached areas the inspection actually inspects -- see `isInspectedArea`.
- * A job's "AC filters" photo area, and a leftover equipment row on a room walk,
- * stay attached (their photographs are evidence) but are not its areas.
- */
-function inspectedAreas<Area extends { propertyArea: { name: string; source: string } }>(
-  inspectionType: string,
-  areas: readonly Area[],
-): Area[] {
-  return areas.filter((area) => isInspectedArea(inspectionType, area.propertyArea));
-}
 
 /** One photograph a checklist points at: the handset's key for it, then the photograph once it lands. */
 interface PhotoReference {
@@ -1159,11 +1146,7 @@ export class TechnicianService {
         // Not the inspection's areas (`isInspectedArea`): a service's photo
         // area, which nobody walks, used to refuse every move-in and move-out
         // with a filter change.
-        NOT: {
-          propertyArea: inspectionWalksRooms(inspection.inspectionType)
-            ? { source: { in: [...NON_ROOM_SOURCES] } }
-            : { source: { in: [...NON_ROOM_SOURCES] }, name: { in: [...SERVICE_PHOTO_AREA_NAMES] } },
-        },
+        ...inspectedAreaWhere(inspection.inspectionType),
         completionStatus: {
           notIn: [InspectionAreaCompletionStatus.COMPLETED, InspectionAreaCompletionStatus.SKIPPED],
         },

@@ -40,6 +40,7 @@ import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
+import { inspectedAreaWhere } from '../common/inspected-areas';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import {
@@ -2890,11 +2891,11 @@ export class AdminService {
     });
   }
 
-  /** Inspection areas for the workflow merge UI. */
+  /** Inspection areas for the workflow merge UI: the ones it inspects (`inspectedAreaWhere`). */
   async inspectionAreas(user: AuthenticatedUser, id: string) {
-    await this.requireInspection(user.organizationId, id);
+    const inspection = await this.requireInspection(user.organizationId, id);
     const areas = await this.prisma.inspectionArea.findMany({
-      where: { inspectionId: id },
+      where: { inspectionId: id, ...inspectedAreaWhere(inspection.inspectionType) },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
