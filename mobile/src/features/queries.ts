@@ -3,8 +3,6 @@ import { Alert } from 'react-native';
 import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import type {
-  ChecklistAssessment,
-  ChecklistItemWithAssessment,
   DemoRole,
   FindingStatus,
   Inspection,
@@ -15,6 +13,7 @@ import type {
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
 import { QueuedOfflineError } from '../repositories/api/offline-writes';
+import { checklistAnswerOptions, withPendingAnswers } from './checklist-answers';
 import type { ClosingComments } from '../utils/closing-comments';
 import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
@@ -732,9 +731,13 @@ export function useResolveEvidenceRequest(inspectionId: string) {
 }
 
 export function useRoomChecklist(roomId: string) {
+  const client = useQueryClient();
   return useQuery({
     queryKey: queryKeys.roomChecklist(roomId),
-    queryFn: () => repositories.inspections.roomChecklist(roomId),
+    // With every answer still being sent on top: a read must never draw the
+    // server's copy from before them (`withPendingAnswers`).
+    queryFn: async () =>
+      withPendingAnswers(client, roomId, await repositories.inspections.roomChecklist(roomId)),
     enabled: Boolean(roomId),
     // Checklists change when an administrator edits them, not minute to minute.
     staleTime: 5 * 60_000,
@@ -742,37 +745,29 @@ export function useRoomChecklist(roomId: string) {
 }
 
 /**
- * Records how one checklist item was found.
+ * Records how one checklist item was found: drawn on the tap, never taken back
+ * by a reply, and sent one at a time per area -- see `checklistAnswerOptions`
+ * for the three faults this replaced (the office, 2026-09-30: answers "cleared
+ * out by itself" and were "gone" on coming back).
  *
- * Optimistic, because this is a form: a toggle that waits for a round trip
- * before moving reads as broken, and the technician is often on a weak
- * connection in a unit. The queued-offline path is a *success* for the user —
- * their answer is safely on the device — so the previous value is restored only
- * when the write genuinely failed.
+ * Takes only what the tap changed (`{ itemId, patch }`), never a whole row built
+ * from what was on screen: that is what lost the earlier of two quick taps.
  */
 export function useRecordChecklistItem(roomId: string) {
   const client = useQueryClient();
-  const key = queryKeys.roomChecklist(roomId);
-  return useMutation({
-    mutationFn: ({ itemId, assessment }: { itemId: string; assessment: ChecklistAssessment }) =>
-      repositories.inspections.recordChecklistItem(roomId, itemId, assessment),
-    onMutate: async ({ itemId, assessment }) => {
-      await cancelQueries(client, [key]);
-      const previous = client.getQueryData<ChecklistItemWithAssessment[]>(key);
-      client.setQueryData<ChecklistItemWithAssessment[]>(key, (current = []) =>
-        current.map((item) => (item.id === itemId ? { ...item, ...assessment } : item)),
-      );
-      return { previous };
-    },
-    onSuccess: (items) => client.setQueryData(key, items),
-    onError: (error, _variables, context) => {
-      // A queued write is not a lost write. The repository has already written
-      // the assessment into the offline cache, so rolling the screen back here
-      // would contradict what is actually stored.
-      if (error instanceof QueuedOfflineError) return;
-      if (context?.previous) client.setQueryData(key, context.previous);
-    },
-  });
+  return useMutation(
+    checklistAnswerOptions({
+      client,
+      key: queryKeys.roomChecklist(roomId),
+      roomId,
+      send: (itemId, assessment) => repositories.inspections.recordChecklistItem(roomId, itemId, assessment),
+      onRefused: (error) =>
+        Alert.alert(
+          'That answer was not saved',
+          error instanceof Error ? error.message : 'Answer it again in a moment.',
+        ),
+    }),
+  );
 }
 
 /**

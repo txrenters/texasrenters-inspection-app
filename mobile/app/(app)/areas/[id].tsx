@@ -52,7 +52,6 @@ import {
 } from '@/src/capture/AreaChecklistSheet';
 import { CaptureChoiceSheet } from '@/src/capture/CaptureChoiceSheet';
 import { asksCaptureChoice, type CapturePreference } from '@/src/capture/capture-intents';
-import { withAxes } from '@/src/capture/condition-answers';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { importFromGallery, inspectionAllowsGalleryImport } from '@/src/media/gallery-import';
 import { replaceOldEvidence } from '@/src/media/replace-evidence';
@@ -481,25 +480,15 @@ export default function AreaDetailScreen() {
    * Records one answer that is not a yes/no axis: a choice, a reading, a line
    * of text, or a comment.
    *
-   * The whole assessment every time: the API takes a complete record, so
-   * sending one field would clear the others. Nothing is being filmed on this
-   * screen, so there is no moment in a recording to point the reviewer at.
+   * Only what the tap changed. The API takes a complete record, and it gets
+   * one -- built from the row as it stands when the answer is sent, every
+   * earlier tap included (`checklistAnswerOptions`). Building it here, from the
+   * row as drawn, lost the earlier of two quick taps on one row (the office,
+   * 2026-09-30). Nothing is being filmed on this screen, so there is no moment
+   * in a recording to point the reviewer at.
    */
   const recordAnswer = (itemId: string, patch: ChecklistAnswerPatch) => {
-    const current = conditionAssessments.get(itemId);
-    recordCondition.mutate({
-      itemId,
-      assessment: {
-        isClean: current?.isClean ?? null,
-        isUndamaged: current?.isUndamaged ?? null,
-        isWorking: current?.isWorking ?? null,
-        comment: current?.comment ?? null,
-        numericValue: current?.numericValue ?? null,
-        textValue: current?.textValue ?? null,
-        ...patch,
-        videoTimestampSeconds: null,
-      },
-    });
+    recordCondition.mutate({ itemId, patch: { ...patch, videoTimestampSeconds: null } });
   };
   /**
    * The area's checklist, behind an entry in the finish section.
@@ -1380,25 +1369,11 @@ export default function AreaDetailScreen() {
           items={areaChecklist}
           onAssess={
             checklistAnswerable
-              ? (itemId, axis, next) => {
-                  const current = conditionAssessments.get(itemId);
-                  recordCondition.mutate({
-                    itemId,
-                    // The whole assessment every time: the API takes a complete
-                    // record, so sending one axis would clear the other two --
-                    // and the reading, text and choice.
-                    assessment: withAxes(
-                      current,
-                      {
-                        isClean: current?.isClean ?? null,
-                        isUndamaged: current?.isUndamaged ?? null,
-                        isWorking: current?.isWorking ?? null,
-                        [axis]: next,
-                      },
-                      null,
-                    ),
-                  });
-                }
+              ? (itemId, axis, next) =>
+                  // The axis alone: the whole record is built from the row as it
+                  // stands when this is sent, so a Y then an N tapped quickly on
+                  // one row both survive (`checklistAnswerOptions`).
+                  recordCondition.mutate({ itemId, patch: { [axis]: next, videoTimestampSeconds: null } })
               : undefined
           }
           onClose={() => setChecklistOpen(false)}

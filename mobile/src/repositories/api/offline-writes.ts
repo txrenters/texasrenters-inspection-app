@@ -194,6 +194,24 @@ export async function savedRoomCompletions(): Promise<Set<string>> {
   return rooms;
 }
 
+/**
+ * The checklist answers saved on this phone for one area and not yet
+ * confirmed, by item: the assessment each will send. One per item, because an
+ * answer saved again replaces the one before it in the queue.
+ */
+export async function savedChecklistAnswers(roomId: string): Promise<Map<string, Record<string, unknown>>> {
+  const answers = new Map<string, Record<string, unknown>>();
+  for (const entry of await readQueue()) {
+    if (entry.kind !== 'checklist-assessment' || String(entry.payload.roomId) !== roomId) continue;
+    const { itemId, ...rest } = entry.payload;
+    if (!itemId) continue;
+    const assessment = { ...rest };
+    delete assessment.roomId;
+    answers.set(String(itemId), assessment);
+  }
+  return answers;
+}
+
 /** What the technician last did to an area here that the server has not confirmed. */
 export type SavedRoomState = 'COMPLETED' | 'REOPENED';
 

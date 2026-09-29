@@ -47,6 +47,7 @@ import {
   jobStartEntryId,
   drainOfflineWrites,
   queueOnConnectionFailure,
+  savedChecklistAnswers,
   savedJobStarts,
   savedRoomStates,
   sendSavedFirst,
@@ -1125,10 +1126,19 @@ export class ApiInspectionRepository implements InspectionRepository {
       'POST',
     );
   }
+  /**
+   * The area's checklist, with every answer saved on this phone and not yet
+   * confirmed laid over it (`savedChecklistAnswers`): an answer the app was
+   * closed on, or that met no signal, is still answered when the screen is
+   * opened again (the office, 2026-09-30: answered rows "are gone" on coming
+   * back).
+   */
   async roomChecklist(roomId: string) {
-    return cachedApiRecord(`roomChecklist:${roomId}`, checklistSchema, () =>
+    const items = await cachedApiRecord(`roomChecklist:${roomId}`, checklistSchema, () =>
       getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/checklist`),
     );
+    const saved = await savedChecklistAnswers(roomId).catch(() => new Map<string, Record<string, unknown>>());
+    return saved.size ? items.map((item) => (saved.has(item.id) ? { ...item, ...saved.get(item.id) } : item)) : items;
   }
   /**
    * Records how one checklist item was found.
@@ -1139,8 +1149,14 @@ export class ApiInspectionRepository implements InspectionRepository {
    *
    * The queue id is per item, so a re-score before the queue drains replaces
    * the pending entry rather than sending two conflicting assessments.
+   *
+   * Saved before it is sent (`sendSavedFirst`), so an answer the app is closed
+   * on is sent at the next launch; and nothing is re-read afterwards. It used
+   * to fetch the whole list after every answer and hand it to the screen,
+   * which drew over any answer still being sent (the office, 2026-09-30: a Y or
+   * N "cleared out by itself").
    */
-  async recordChecklistItem(roomId: string, itemId: string, assessment: ChecklistAssessment) {
+  async recordChecklistItem(roomId: string, itemId: string, assessment: ChecklistAssessment): Promise<void> {
     const body = {
       isClean: assessment.isClean ?? null,
       isUndamaged: assessment.isUndamaged ?? null,
@@ -1154,7 +1170,7 @@ export class ApiInspectionRepository implements InspectionRepository {
       videoTimestampSeconds: assessment.videoTimestampSeconds ?? null,
     };
     try {
-      await queueOnConnectionFailure(
+      await sendSavedFirst(
         {
           id: `checklist:${roomId}:${itemId}`,
           kind: 'checklist-assessment',
@@ -1183,9 +1199,6 @@ export class ApiInspectionRepository implements InspectionRepository {
         );
       throw error;
     }
-    // Re-read rather than patching the cached list by hand: the server is the
-    // authority on what was stored, including the trimmed comment.
-    return this.roomChecklist(roomId);
   }
   /**
    * Corrects an area this technician added.

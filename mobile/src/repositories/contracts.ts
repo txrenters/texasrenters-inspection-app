@@ -298,7 +298,7 @@ export interface InspectionRepository {
     roomId: string,
     itemId: string,
     assessment: ChecklistAssessment,
-  ): Promise<ChecklistItemWithAssessment[]>;
+  ): Promise<void>;
   /** Open requests from the office for more evidence on this inspection. */
   evidenceRequests(inspectionId: string): Promise<EvidenceRequest[]>;
   openEvidenceRequests(): Promise<OpenEvidenceRequest[]>;
