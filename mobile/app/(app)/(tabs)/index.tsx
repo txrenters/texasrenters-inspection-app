@@ -19,7 +19,6 @@ import { useCurrentUser, useDashboard, useDayRoute } from '@/src/features/querie
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { HomeEmptyState } from '@/src/components/HomeEmptyState';
 import { DayRouteSummary } from '@/src/components/DayRouteSummary';
-import { StartDrivingButton } from '@/src/components/StartDrivingButton';
 import { hasNeverBeenAssigned } from '@/src/utils/home-state';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
@@ -257,7 +256,10 @@ export default function HomeScreen() {
         ) : null}
 
         <DayRouteSummary route={dayRoute.data} />
-        <StartDrivingButton route={dayRoute.data} />
+        {/* Turn-by-turn navigation is off for now (the office, 2026-09-29):
+            bugs and small adjustments first. Put `<StartDrivingButton
+            route={dayRoute.data} />` back here to bring it back; the
+            `/navigate` screen itself is untouched. */}
 
         <View className="mt-6">
           <SectionHeader

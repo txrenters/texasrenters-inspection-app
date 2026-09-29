@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
@@ -18,7 +19,6 @@ import { JobFileCard } from '@/src/components/JobFileCard';
 import { JobTasksCard } from '@/src/components/JobTasksCard';
 import { NoAccessSheet } from '@/src/components/NoAccessSheet';
 import { NotDoneSheet } from '@/src/components/NotDoneSheet';
-import { StartJobSheet } from '@/src/components/StartJobSheet';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
@@ -60,7 +60,8 @@ registerIcons(AlertTriangleIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIc
  * button that submits the job."
  *
  * So a scheduled job shows the property, what is booked and the office's notes,
- * with Start job under them, confirmed before the timer starts. A started job
+ * with Start job under them. The timer starts on the tap -- the office asked for
+ * the confirmation to go (2026-09-29), so nothing stands between. A started job
  * is its list and a running timer, with End job under it. End job is the
  * submission: it sends the technician back to anything unfinished, asks why for
  * a service left unticked, and submits once they confirm.
@@ -89,7 +90,6 @@ export default function JobScreen() {
   const actions = useInspectionActions(id);
   const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch]);
-  const [startOpen, setStartOpen] = useState(false);
   const [noAccessOpen, setNoAccessOpen] = useState(false);
   /** Services End job is asking about, one at a time, and the report as answered so far. */
   const [asking, setAsking] = useState<{ queue: JobTask[]; report: VisitServicesReport | null } | null>(null);
@@ -125,6 +125,17 @@ export default function JobScreen() {
   const elapsed = jobElapsed(item, now);
   const status = inspectionStatusPresentation(item.status);
 
+  /**
+   * Straight in: the list and the running timer replace the button on the tap,
+   * because the mutation draws the job as started before the server answers.
+   */
+  const startJob = () => {
+    if (actions.start.isPending) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    actions.start.mutate(undefined, {
+      onError: () => Alert.alert('The job did not start', 'Check the connection and press Start job again.'),
+    });
+  };
   const toggle = (task: JobTask) => {
     if (isService(task)) actions.saveServices.mutate((current) => toggledService(current, task.key));
   };
@@ -331,7 +342,7 @@ export default function JobScreen() {
             accessibilityLabel="Start job"
             accessibilityRole="button"
             className="min-h-12 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
-            onPress={() => setStartOpen(true)}
+            onPress={startJob}
           >
             <View className="flex-row items-center gap-2">
               <PlayCircleIcon size={20} className="text-primary-foreground" />
@@ -377,21 +388,6 @@ export default function JobScreen() {
           })()
         )}
       </View>
-
-      <StartJobSheet
-        address={item.property.address}
-        busy={actions.start.isPending}
-        onClose={() => setStartOpen(false)}
-        onStart={() =>
-          actions.start.mutate(undefined, {
-            // The job's list takes over the screen once it has started.
-            onSettled: () => setStartOpen(false),
-            onError: () =>
-              Alert.alert('The job did not start', 'Check the connection and press Start job again.'),
-          })
-        }
-        visible={startOpen}
-      />
 
       <NotDoneSheet
         onClose={() => setAsking(null)}

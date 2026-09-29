@@ -362,12 +362,19 @@ export function useInspectionActions(id: string) {
   const action = <Variables = void>(
     state: 'PROCESSING',
     request: (variables: Variables) => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>,
+    /**
+     * What the job looks like once the request lands, drawn before it does.
+     * Held as the intent's shadow too, so a list refetch that races the
+     * request cannot put the old job back on screen.
+     */
+    optimistic?: () => Record<string, unknown>,
   ) => ({
     mutationFn: request,
     onMutate: async () => {
       await cancelQueries(client, [queryKeys.inspection(id), queryKeys.inspectionsRoot]);
-      const operation = beginIntent(id, state);
-      patchEntity(client, queryKeys.all, id, {}, { state, operationId: operation });
+      const patch = optimistic?.();
+      const operation = beginIntent(id, state, patch);
+      patchEntity(client, queryKeys.all, id, patch ?? {}, { state, operationId: operation });
       return { operation };
     },
     onSuccess: (
@@ -386,7 +393,21 @@ export function useInspectionActions(id: string) {
     },
   });
   return {
-    start: useMutation(action<void>('PROCESSING', () => repositories.inspections.start(id))),
+    /**
+     * Start job, shown as started the moment it is pressed (the office,
+     * 2026-09-29: the confirmation was redundant and the start must be smooth).
+     *
+     * The timer runs from the handset's tap until the server's stamp replaces
+     * it a moment later, so it may jump by the round trip -- never by more. A
+     * failure puts the scheduled job back (`refresh`) and the screen says so.
+     */
+    start: useMutation(
+      action<void>(
+        'PROCESSING',
+        () => repositories.inspections.start(id),
+        () => ({ status: 'IN_PROGRESS', startedAt: new Date().toISOString() }),
+      ),
+    ),
     // The services report rides with the submission, so the note to Jobber and
     // "submitted" are written by the same request -- and so do an HVAC
     // report's closing comments.
