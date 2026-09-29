@@ -2389,6 +2389,120 @@ export class TechnicianService {
   }
 
   /**
+   * Change Evidence: a submitted area back to work, as though it had not been
+   * submitted (the office, 2026-09-30: "it's as if the first time we are doing
+   * the inspection").
+   *
+   * PENDING, not a status of its own. Nothing else about the area changes --
+   * its evidence stays until new evidence replaces it (`replaceRoomEvidence`) --
+   * and the technician submits it again as ever. Only while the job is being
+   * worked: a job already submitted, or finalized, is the office's to reopen,
+   * and its evidence is frozen (`finalizedAt`). An area that is not completed
+   * is answered as it is, so a replayed reopen is harmless.
+   */
+  async reopenRoom(user: AuthenticatedUser, id: string) {
+    const existing = await this.assignedRoom(user, id);
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: existing.inspectionId },
+      select: { status: true, finalizedAt: true },
+    });
+    if (inspection?.status !== InspectionStatus.IN_PROGRESS || inspection.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'AREA_NOT_REOPENABLE',
+        'This job has been submitted, so its areas can no longer be changed. Ask the office to reopen it.',
+      );
+    if (existing.completionStatus !== InspectionAreaCompletionStatus.COMPLETED) return this.mapRoom(existing);
+
+    const room = await this.prisma.inspectionArea.update({
+      where: { id },
+      data: { completionStatus: InspectionAreaCompletionStatus.PENDING, completedAt: null },
+      select: technicianRoomSelect,
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action: 'TECHNICIAN_AREA_REOPENED',
+        entityType: 'InspectionArea',
+        entityId: id,
+        metadata: { inspectionId: existing.inspectionId },
+      },
+    });
+    this.notifyInspectionChanged(user, room.inspectionId);
+    return this.mapRoom(room);
+  }
+
+  /**
+   * A changed area's old photographs, removed now that new evidence replaces
+   * them (the office, 2026-09-30: "the old evidence should be removed and be
+   * replace with the new ones").
+   *
+   * The handset names them -- the area's photographs as they stood when Change
+   * Evidence was pressed, by its own key and by the server's id -- and sends
+   * this when the first new photograph is taken or picked. Only this area's,
+   * only the technician's own (the same rule as deleting one), and never once
+   * the inspection is finalized: its evidence is frozen. Idempotent: a
+   * photograph already gone is simply not found again. Audited, because it
+   * destroys evidence.
+   */
+  async replaceRoomEvidence(
+    user: AuthenticatedUser,
+    id: string,
+    input: { photoKeys?: string[]; photoIds?: string[] },
+  ) {
+    const room = await this.assignedRoom(user, id);
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: room.inspectionId },
+      select: { status: true, finalizedAt: true },
+    });
+    if (
+      inspection?.finalizedAt ||
+      inspection?.status === InspectionStatus.COMPLETED ||
+      inspection?.status === InspectionStatus.CANCELLED
+    )
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Photos cannot be replaced after the inspection is finalized.',
+      );
+    const keys = [...new Set(input.photoKeys ?? [])];
+    const ids = [...new Set(input.photoIds ?? [])].filter((photoId) => UUID_PATTERN.test(photoId));
+    if (!keys.length && !ids.length) return { deleted: 0 };
+
+    const photos = await this.prisma.inspectionPhoto.findMany({
+      where: {
+        inspectionAreaId: id,
+        capturedById: user.id,
+        OR: [
+          ...(keys.length ? [{ idempotencyKey: { in: keys } }] : []),
+          ...(ids.length ? [{ id: { in: ids } }] : []),
+        ],
+      },
+      select: { id: true, storageKey: true },
+    });
+    if (!photos.length) return { deleted: 0 };
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspectionPhoto.deleteMany({ where: { id: { in: photos.map((photo) => photo.id) } } });
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'TECHNICIAN_AREA_EVIDENCE_REPLACED',
+          entityType: 'InspectionArea',
+          entityId: id,
+          metadata: { inspectionId: room.inspectionId, deletedPhotoIds: photos.map((photo) => photo.id) },
+        },
+      });
+    });
+    // After the rows: a stored object with no row is waste, a row with no object is a broken report.
+    await Promise.all(photos.map((photo) => this.mediaStorage.delete(photo.storageKey).catch(() => undefined)));
+    this.notifyInspectionChanged(user, room.inspectionId);
+    return { deleted: photos.length };
+  }
+
+  /**
    * An HVAC section is finished with every item scored, or said why not.
    *
    * The office's rule for its HVAC report (2026-09-16): each row Clean,

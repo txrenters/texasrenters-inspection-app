@@ -314,6 +314,10 @@ export interface InspectionRepository {
    */
   removeRoom(roomId: string): Promise<{ id: string; removed: boolean; name: string }>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
+  /** Change Evidence: a submitted area back to work, as if not yet submitted. */
+  reopenRoom(roomId: string): Promise<InspectionRoom>;
+  /** Removes an area's old photographs once new evidence replaces them. */
+  replaceRoomEvidence(roomId: string, photoKeys: readonly string[], photoIds: readonly string[]): Promise<void>;
   /**
    * Records that the technician read the AI summary for an area and it matches
    * what they saw. Not finding review — approving or rejecting a finding is an

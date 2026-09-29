@@ -592,6 +592,18 @@ export class TechnicianCouldNotAccessDto {
 }
 
 /**
+ * The photographs a changed area's new evidence replaces (the office,
+ * 2026-09-30): the area's photographs as they stood when Change Evidence was
+ * pressed, by the key the handset gave each and by the id the server did.
+ */
+export class TechnicianReplaceEvidenceDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) @MaxLength(128, { each: true })
+  photoKeys?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsUUID('all', { each: true })
+  photoIds?: string[];
+}
+
+/**
  * Starting a job: when Start job was pressed, by the phone's clock.
  *
  * Empty from a phone built before it was sent, and then the server's own time

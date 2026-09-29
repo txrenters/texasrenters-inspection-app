@@ -55,6 +55,7 @@ import { asksCaptureChoice, type CapturePreference } from '@/src/capture/capture
 import { withAxes } from '@/src/capture/condition-answers';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { importFromGallery, inspectionAllowsGalleryImport } from '@/src/media/gallery-import';
+import { replaceOldEvidence } from '@/src/media/replace-evidence';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
@@ -210,6 +211,10 @@ export default function AreaDetailScreen() {
   const snapshots = useDemoStore((state) => state.snapshots);
   const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
+  /** The old photographs a changed area's next evidence replaces: see `replaceOldEvidence`. */
+  const replacing = useDemoStore((state) => state.evidenceToReplace?.[id] ?? null);
+  const markEvidenceForReplacement = useDemoStore((state) => state.markEvidenceForReplacement);
+  const clearEvidenceReplacement = useDemoStore((state) => state.clearEvidenceReplacement);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
   /**
    * Whether the gallery is open, so a second tap cannot start a second import.
@@ -384,6 +389,25 @@ export default function AreaDetailScreen() {
    * Once a recording exists the camera is for an additional clip, which has
    * already said "video", so that is never asked.
    */
+  /**
+   * Change Evidence on a submitted area (the office, 2026-09-30): the area goes
+   * back to work "as if the first time we are doing the inspection" -- its
+   * notes and Submit Evidence come back -- and nothing opens the camera or asks
+   * photos or video. Its photographs are only marked: the first new one taken
+   * or picked replaces them (`replaceOldEvidence`), so reopening by mistake
+   * loses nothing. A refused reopen takes the mark back.
+   */
+  const changeEvidence = () => {
+    markEvidenceForReplacement(id, {
+      photoKeys: areaSnapshots.map((snapshot) => snapshot.id),
+      photoIds: (photos.data ?? []).map((photo) => photo.id),
+    });
+    updates.reopen.mutate(undefined, {
+      onError: (error) => {
+        if (!(error instanceof Error && error.name === 'QueuedOfflineError')) clearEvidenceReplacement(id);
+      },
+    });
+  };
   const openCamera = () => {
     const asks =
       // An HVAC section is photographed, never filmed, so there is no choice to
@@ -434,6 +458,8 @@ export default function AreaDetailScreen() {
       }
       if (outcome.status === 'CANCELLED') return;
       outcome.snapshots.forEach(addSnapshot);
+      // A changed area's new photographs replace its old ones.
+      if (outcome.snapshots.length) replaceOldEvidence(id);
     } catch {
       // The picker itself failing is rare and not actionable beyond retrying.
       // Said plainly rather than swallowed: a button that does nothing at all
@@ -853,22 +879,24 @@ export default function AreaDetailScreen() {
             </Pressable>
           ) : null}
 
-          {/* Kept once the area is submitted, as its notes (the office,
-              2026-09-30: "the evidence notes is no longer available"). Only
-              the submit control goes -- there is nothing left to hand in --
-              while the note is still worth adding to or correcting. */}
-          {isSkipped || (!alreadyFinished && !hasAnyEvidence) ? null : (
+          {/* Gone once the area is submitted, and back when Change Evidence
+              reopens it (the office, 2026-09-30: "then I click change
+              evidence, then that's the time it will show the add notes"). */}
+          {alreadyFinished || !hasAnyEvidence ? null : (
             <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
-              <Text className="text-base font-bold text-foreground">
-                {alreadyFinished ? 'Evidence notes' : 'Finish this area'}
-              </Text>
+              <Text className="text-base font-bold text-foreground">Finish this area</Text>
+              {replacing ? (
+                <Text accessibilityRole="alert" className="mt-1 text-sm leading-5 text-foreground">
+                  Changing the evidence: the next photo you take or pick from the gallery replaces the{' '}
+                  {replacing.photoKeys.length + replacing.photoIds.length === 1 ? 'one' : 'ones'} here.
+                </Text>
+              ) : null}
               <Text
                 className="mt-1 text-sm leading-5 text-muted-foreground"
                 nativeID="area-note-label"
               >
-                {alreadyFinished
-                  ? `Submitted. Add to or correct what the office reads about this ${isEquipmentVisit ? 'section' : 'room'} -- it saves when you leave the box.`
-                  : `Anything the office should know about this ${isEquipmentVisit ? 'section' : 'room'}. Optional — findings and photographs carry most of it.`}
+                Anything the office should know about this {isEquipmentVisit ? 'section' : 'room'}. Optional — findings and photographs
+                carry most of it.
               </Text>
               <TextInput
                 accessibilityLabel="Notes about this area, optional"
@@ -884,34 +912,32 @@ export default function AreaDetailScreen() {
                 placeholderTextColor={theme.mutedForeground}
                 textAlignVertical="top"
               />
-              {!alreadyFinished && updates.complete.isError ? (
+              {updates.complete.isError ? (
                 <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
                   {updates.complete.error instanceof Error
                     ? updates.complete.error.message
                     : 'This area could not be submitted.'}
                 </Text>
               ) : null}
-              {alreadyFinished ? null : (
-                <Button
-                  accessibilityHint={
-                    gate.canComplete
-                      ? 'Marks this area finished and returns to the inspection'
-                      : gate.reason
-                  }
-                  className="mt-4"
-                  /* Disabled rather than hidden, with the reason above it in the
-                     checklist: a control that vanishes tells a technician nothing
-                     about what is missing. */
-                  disabled={!gate.canComplete}
-                  label="Submit Evidence"
-                  // Back at once: the evidence and the completion are sent behind
-                  // the technician, and survive a closed app (`useUpdateRoom`).
-                  onPress={() => {
-                    updates.complete.mutate();
-                    goBack();
-                  }}
-                />
-              )}
+              <Button
+                accessibilityHint={
+                  gate.canComplete
+                    ? 'Marks this area finished and returns to the inspection'
+                    : gate.reason
+                }
+                className="mt-4"
+                /* Disabled rather than hidden, with the reason above it in the
+                   checklist: a control that vanishes tells a technician nothing
+                   about what is missing. */
+                disabled={!gate.canComplete}
+                label="Submit Evidence"
+                // Back at once: the evidence and the completion are sent behind
+                // the technician, and survive a closed app (`useUpdateRoom`).
+                onPress={() => {
+                  updates.complete.mutate();
+                  goBack();
+                }}
+              />
             </View>
           )}
         </View>
@@ -1095,7 +1121,7 @@ export default function AreaDetailScreen() {
             isSkipped
               ? 'Opens the camera and inspects this area after all'
               : alreadyFinished
-                ? 'Opens the camera to add to or retake the evidence for this submitted area'
+                ? 'Reopens this area so its evidence can be taken again'
                 : 'Opens the camera'
           }
           icon={
@@ -1125,12 +1151,13 @@ export default function AreaDetailScreen() {
            * evidence could still be changed.
            */
           label={areaCameraLabel({
+            replacing: Boolean(replacing),
             skipped: isSkipped,
             finished: alreadyFinished,
             hasRecording,
             hasEvidence: hasAnyEvidence,
           })}
-          onPress={openCamera}
+          onPress={alreadyFinished && !isSkipped ? changeEvidence : openCamera}
           variant={isSkipped ? 'secondary' : 'primary'}
         />
       </View>

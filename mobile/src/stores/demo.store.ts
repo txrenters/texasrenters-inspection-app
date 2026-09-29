@@ -39,6 +39,15 @@ interface DemoState {
    * occupied area with no answer of its own is simply asked.
    */
   captureModeByArea: Record<string, CapturePreference>;
+  /**
+   * The photographs a changed area's next evidence replaces, keyed by area id
+   * (the office, 2026-09-30): the area's photographs as they stood when Change
+   * Evidence was pressed -- by this phone's key, and by the server's id for
+   * ones it only knows from the server. Taken by `replaceOldEvidence` when the
+   * first new photograph is taken or picked. Kept across a restart, because a
+   * technician can reopen an area and come back to it later.
+   */
+  evidenceToReplace: Record<string, { photoKeys: string[]; photoIds: string[] }>;
   draftRecording: LocalMedia | null;
   setHasHydrated: (value: boolean) => void;
   selectUser: (id: string) => void;
@@ -56,6 +65,8 @@ interface DemoState {
   removeSnapshots: (ids: readonly string[]) => void;
   toggleChecklistItem: (areaId: string, itemId: string) => void;
   setCaptureMode: (areaId: string, mode: CapturePreference) => void;
+  markEvidenceForReplacement: (areaId: string, old: { photoKeys: string[]; photoIds: string[] }) => void;
+  clearEvidenceReplacement: (areaId: string) => void;
   /** Null clears it, which submitting does. */
   /** Marks items covered without unticking anything — used by transcript matching. */
   markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
@@ -93,6 +104,7 @@ const initialDemoData = () => ({
   findings: findingRecord(),
   areaChecklist: {} as Record<string, string[]>,
   captureModeByArea: {} as Record<string, CapturePreference>,
+  evidenceToReplace: {} as Record<string, { photoKeys: string[]; photoIds: string[] }>,
   draftRecording: null as LocalMedia | null,
 });
 
@@ -135,6 +147,15 @@ export const useDemoStore = create<DemoState>()(
         set((state) => ({
           captureModeByArea: { ...state.captureModeByArea, [areaId]: mode },
         })),
+      markEvidenceForReplacement: (areaId, old) =>
+        set((state) => ({ evidenceToReplace: { ...(state.evidenceToReplace ?? {}), [areaId]: old } })),
+      clearEvidenceReplacement: (areaId) =>
+        set((state) => {
+          if (!state.evidenceToReplace?.[areaId]) return state;
+          const next = { ...state.evidenceToReplace };
+          delete next[areaId];
+          return { evidenceToReplace: next };
+        }),
       toggleChecklistItem: (areaId, itemId) =>
         set((state) => {
           const current = state.areaChecklist[areaId] ?? [];
@@ -291,6 +312,8 @@ export const useDemoStore = create<DemoState>()(
         // every persisted recording and upload instead. The per-inspection
         // choice this replaced is simply no longer written.
         captureModeByArea: state.captureModeByArea,
+        // Like the key above: a missing one takes its initial value on merge.
+        evidenceToReplace: state.evidenceToReplace,
         // The services checklist used to be kept here, as a draft the review
         // screen held until submission. It is answered on the job screen now
         // and saved to the server as each task is ticked, so the device no

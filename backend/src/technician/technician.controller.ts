@@ -45,6 +45,7 @@ import {
   TechnicianCompleteInspectionDto,
   TechnicianStartInspectionDto,
   TechnicianCouldNotAccessDto,
+  TechnicianReplaceEvidenceDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -517,6 +518,21 @@ export class TechnicianController {
     @Param('roomId') id: string,
   ) {
     return this.service.completeRoom(request.user, id);
+  }
+  /** Change Evidence: a submitted area back to work, as if not yet submitted. */
+  @Post('rooms/:roomId/reopen') reopenRoom(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+  ) {
+    return this.service.reopenRoom(request.user, id);
+  }
+  /** A changed area's old photographs, removed once new evidence replaces them. */
+  @Post('rooms/:roomId/evidence/replace') replaceRoomEvidence(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+    @Body() body: TechnicianReplaceEvidenceDto,
+  ) {
+    return this.service.replaceRoomEvidence(request.user, id, body);
   }
   @Get('rooms/:roomId/media') media(
     @Req() request: AuthenticatedRequest,
