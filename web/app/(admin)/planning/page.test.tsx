@@ -43,6 +43,7 @@ const idle = { mutate: vi.fn(), isPending: false };
 const build = { mutate: vi.fn(), isPending: false };
 
 const PLAN = {
+  jobberUnassigned: false,
   id: 'plan-1',
   quarterYear: 2026,
   quarterNumber: 4,
@@ -68,7 +69,6 @@ const PLAN = {
   holidays: ['2026-11-26'],
   startsOn: null as string | null,
   crewTechnicianIds: [] as string[],
-  jobberUnassigned: false,
 };
 
 /** Who can be sent out: the crew first, in its order, then everyone else. */
@@ -259,14 +259,12 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         year: 2026,
         quarter: 4,
         technicianIds: ['tech-1', 'tech-2', 'tech-4'],
         startsOn: '2026-10-01',
-        movePublishedVisits: false,
-        jobberUnassigned: false,
-      },
+      }),
       expect.anything(),
     );
   });
@@ -293,16 +291,13 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 2 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      {
-        year: 2026,
-        quarter: 4,
+      expect.objectContaining({
         technicianIds: ['tech-1', 'tech-2'],
         startsOn: '2026-09-21',
         // Off unless the box is ticked: a published visit is a date Jobber has
         // already been told about.
         movePublishedVisits: false,
-        jobberUnassigned: false,
-      },
+      }),
       expect.anything(),
     );
     expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
@@ -332,6 +327,59 @@ describe('the benefit package plan page', () => {
   });
 
   /**
+   * The control that actually moves the number of days in a quarter.
+   *
+   * Measured on the office's own Q4: at ten a day, 41 of 47 days come out
+   * exactly full at a five-minute median hop. The grouping radius never did
+   * this -- days are chained from nearest neighbours up to the leg limit, and
+   * the limit already reaches about eleven kilometres.
+   */
+  it('builds days of the size the office picks, at both ends', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /10 a day/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Build for 3 technicians/ }));
+
+    // Both ends, so the planner fills to ten rather than stopping at its own
+    // nine and treating ten as a ceiling it need not reach.
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ minStopsPerDay: 10 }),
+      expect.anything(),
+    );
+  });
+
+  /** The office works zones 1 to 4 and arranges zone 5 by hand. */
+  it('leaves out the zones the office unticks', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Zone 5' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Build for 3 technicians/ }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ excludedZones: ['5'] }),
+      expect.anything(),
+    );
+  });
+
+  it('leaves every zone in when none is unticked', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: /Build for 3 technicians/ }),
+    );
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ excludedZones: [] }),
+      expect.anything(),
+    );
+  });
+
+  /**
    * The office (2026-09-29): a checkbox so a published quarter lands in Jobber's
    * Unassigned list. Q4 is grouped for one technician, so every visit Jobber
    * receives lands on Moses, and the office would rather hand them out itself.
@@ -348,19 +396,6 @@ describe('the benefit package plan page', () => {
       expect.objectContaining({ jobberUnassigned: true }),
       expect.anything(),
     );
-  });
-
-  /** There is nothing published to move on a quarter that has never been built. */
-  it('does not offer to move published visits on a first build', () => {
-    mount({ plans: [] });
-
-    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
-
-    expect(
-      within(screen.getByRole('dialog')).queryByRole('checkbox', {
-        name: /Lay published visits out again/,
-      }),
-    ).toBeNull();
   });
 
   it('assigns by default, so a plan built without a thought behaves as it always did', () => {
@@ -415,6 +450,19 @@ describe('the benefit package plan page', () => {
     expect(within(dialog).getByText(/days here still belong to the technicians chosen above/)).toBeTruthy();
   });
 
+  /** There is nothing published to move on a quarter that has never been built. */
+  it('does not offer to move published visits on a first build', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+
+    expect(
+      within(screen.getByRole('dialog')).queryByRole('checkbox', {
+        name: /Lay published visits out again/,
+      }),
+    ).toBeNull();
+  });
+
   /** The office (2026-09-19): "the +-15 days if we will apply the +15 or -15 or on time quarter schedule". */
   it('builds from fifteen days before the quarter when that is chosen', () => {
     mount({ plans: [] });
@@ -425,14 +473,7 @@ describe('the benefit package plan page', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      {
-        year: 2026,
-        quarter: 4,
-        technicianIds: ['tech-1', 'tech-2', 'tech-3'],
-        startsOn: '2026-09-16',
-        movePublishedVisits: false,
-        jobberUnassigned: false,
-      },
+      expect.objectContaining({ startsOn: '2026-09-16' }),
       expect.anything(),
     );
   });

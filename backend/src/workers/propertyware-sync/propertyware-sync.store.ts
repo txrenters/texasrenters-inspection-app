@@ -1114,7 +1114,29 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
     externalIds: Set<string>,
     seenAt: Date,
   ) {
-    const where = { organizationId, isActive: true, externalId: { notIn: [...externalIds] } };
+    /**
+     * Only the rows this sync owns.
+     *
+     * `sourceSystem` is what every other query in this store is scoped to —
+     * `getRecordCache` reads it, `touchRecords` directly above writes it — and
+     * this sweep was the one place that was not. A Propertyware fetch cannot
+     * return a record it was never given, so anything of another origin is
+     * *always* unseen, and this sweep would conclude it had left management:
+     * the demo properties the console creates (`DEMO_SOURCE_SYSTEM`) would be
+     * deactivated by the first reconciliation run after they were made, on the
+     * strength of a fetch that was never about them.
+     *
+     * The guard above would not have caught it either. One or two doomed rows
+     * sits under `DEACTIVATION_SHARE_FLOOR`, so the share is never consulted
+     * and the sweep proceeds — and nothing reactivates a row a later fetch
+     * still does not mention.
+     */
+    const where = {
+      organizationId,
+      sourceSystem: PROPERTYWARE_SOURCE_SYSTEM,
+      isActive: true,
+      externalId: { notIn: [...externalIds] },
+    };
     const delegate = this.delegateFor(entity);
 
     // Counted before writing, because the guard needs to know the size of what
@@ -1122,9 +1144,16 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
     // `updateMany` they protect: this sweep is the only thing in the sync that
     // can take a property out of the application, and it cannot be undone by
     // the next run — a row nobody fetches is a row nobody reactivates.
+    //
+    // `activeBefore` counts the synced rows too, not every active row: it is
+    // the denominator of "what share of the portfolio is this sweep proposing
+    // to remove", and rows the sweep cannot touch do not belong in it. Counting
+    // them would quietly make the share look smaller than it is.
     const [wouldHave, activeBefore] = await Promise.all([
       (delegate as any).count({ where }) as Promise<number>,
-      (delegate as any).count({ where: { organizationId, isActive: true } }) as Promise<number>,
+      (delegate as any).count({
+        where: { organizationId, sourceSystem: PROPERTYWARE_SOURCE_SYSTEM, isActive: true },
+      }) as Promise<number>,
     ]);
 
     const refused = deactivationRefusal(externalIds.size, wouldHave, activeBefore);

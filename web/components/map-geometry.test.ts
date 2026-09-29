@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { circleFeature, circleRing, featureCollection, lineFeature } from './map-geometry';
+import {
+  circleFeature,
+  circleRing,
+  featureCollection,
+  lineFeature,
+  pointFeature,
+} from './map-geometry';
 
 /**
  * Shapes drawn in real coordinates rather than pixels.
@@ -121,5 +127,38 @@ describe('a collection', () => {
     ]);
 
     expect(featureCollection([good, bad]).features).toEqual([good]);
+  });
+});
+
+/**
+ * A property drawn exactly where it is, at any zoom.
+ *
+ * The office, zoomed out to the whole of east Texas (2026-09-28): "I want the
+ * markers to be precise also even on the zoom out, cause right now we can't do
+ * the radius if the marker is not accurate." A badge covering 388 properties
+ * can only stand on one of them; a shape layer can hold all 388 at their own
+ * coordinates, which is what this is for.
+ */
+describe('a point', () => {
+  it('turns the console’s lat,lng into GeoJSON’s lng,lat', () => {
+    expect(pointFeature(29.76, -95.37).geometry.coordinates).toEqual([-95.37, 29.76]);
+  });
+
+  it('is exactly where it was put, with nothing rounded away', () => {
+    const feature = pointFeature(29.8657123, -95.2028456);
+
+    expect(feature.geometry.coordinates).toEqual([-95.2028456, 29.8657123]);
+  });
+
+  it('survives a collection, which is what a source wants', () => {
+    const collection = featureCollection([pointFeature(29.76, -95.37)]);
+
+    expect(collection.features).toHaveLength(1);
+  });
+
+  it('is dropped when it has no real coordinates to be drawn at', () => {
+    const good = pointFeature(29.76, -95.37);
+
+    expect(featureCollection([good, pointFeature(Number.NaN, -95.37)]).features).toEqual([good]);
   });
 });

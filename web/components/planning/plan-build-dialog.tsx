@@ -37,7 +37,25 @@ export interface PlanBuildChoice {
    * to be waiting for it.
    */
   jobberUnassigned: boolean;
+  /** Visits in a day: the planner fills to this where the driving allows. */
+  stopsPerDay: number;
+  /** Zones left out of the build, by number. */
+  excludedZones: string[];
 }
+
+/**
+ * What a day may hold, and what it costs.
+ *
+ * Measured on the office's own Q4: at ten a day, 41 of 47 days come out
+ * exactly full at a five-minute median hop between properties. Twelve is
+ * offered because the planner allows it, but ten occupied visits already fill
+ * about 5.7 hours of a six-hour day once the driving is counted -- twelve does
+ * not fit unless the day is mostly HVAC.
+ */
+export const DAY_SIZES = [9, 10, 12] as const;
+
+/** The zones the office works. Five is theirs to arrange by hand. */
+export const PLAN_ZONES = ['1', '2', '3', '4', '5'] as const;
 
 /**
  * Who to send out, and from which day, asked before a quarter is built.
@@ -81,6 +99,7 @@ export function PlanBuildDialog({
   const today = businessToday();
   const starts = useMemo(() => planStartOptions(quarter, startsOn, today), [quarter, startsOn, today]);
   const startName = useId();
+  const daySizeName = useId();
   // What the coordinator changed; until then, the plan's choice or the crew.
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const [start, setStart] = useState<PlanStartOption['value'] | null>(null);
@@ -94,6 +113,13 @@ export function PlanBuildDialog({
   // plan and so has a previous answer to fall back to.
   const [unassigned, setUnassigned] = useState<boolean | null>(null);
   const sendUnassigned = unassigned ?? jobberUnassigned;
+  /**
+   * Nine unless the office says otherwise, which is the planner's own default.
+   * This is the control that actually moves the number of days in a quarter --
+   * the grouping radius never did.
+   */
+  const [stopsPerDay, setStopsPerDay] = useState<number>(9);
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
   const listed = useMemo(() => technicians.data ?? [], [technicians.data]);
   const initial = useMemo(() => {
@@ -109,6 +135,8 @@ export function PlanBuildDialog({
       setStart(null);
       setMovePublished(false);
       setUnassigned(null);
+      setStopsPerDay(9);
+      setSkipped(new Set());
     }
     onOpenChange(next);
   };
@@ -125,11 +153,15 @@ export function PlanBuildDialog({
       startsOn: chosenStart.date,
       movePublishedVisits: rebuild && movePublished,
       jobberUnassigned: sendUnassigned,
+      stopsPerDay,
+      excludedZones: [...skipped].sort(),
     });
     setPicked(null);
     setStart(null);
     setMovePublished(false);
     setUnassigned(null);
+    setStopsPerDay(9);
+    setSkipped(new Set());
   };
   const count = listed.filter((technician) => selected.has(technician.id)).length;
 
@@ -238,11 +270,82 @@ export function PlanBuildDialog({
           </fieldset>
         ) : null}
 
+        <fieldset className="grid min-w-0 gap-2">
+          <legend className="mb-2 text-sm font-medium">Visits a day</legend>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {DAY_SIZES.map((size) => (
+              <label
+                className={cn(
+                  'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
+                  size === stopsPerDay && 'border-ring bg-accent',
+                )}
+                key={size}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    checked={size === stopsPerDay}
+                    className="accent-primary"
+                    name={daySizeName}
+                    onChange={() => setStopsPerDay(size)}
+                    type="radio"
+                    value={size}
+                  />
+                  <span className="text-sm font-medium">{size} a day</span>
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {size === 9
+                    ? 'the planner’s own default'
+                    : size === 10
+                      ? 'fills the day, about 5½ hours'
+                      : 'only where the day is mostly HVAC'}
+                </span>
+              </label>
+            ))}
+          </div>
+          <FieldDescription>
+            A day is filled to this where the driving allows it &mdash; never more than 20 minutes from
+            one property to the next, so a thin patch still makes a short day.
+          </FieldDescription>
+        </fieldset>
+
+        <fieldset className="grid min-w-0 gap-2">
+          <legend className="mb-2 text-sm font-medium">Zones</legend>
+          <div className="flex flex-wrap gap-2">
+            {PLAN_ZONES.map((zone) => {
+              const on = !skipped.has(zone);
+              return (
+                <label
+                  className={cn(
+                    'hover:bg-accent/60 flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2',
+                    on ? 'border-ring bg-accent' : 'text-muted-foreground',
+                  )}
+                  key={zone}
+                >
+                  <Checkbox
+                    checked={on}
+                    onCheckedChange={(checked) => {
+                      const next = new Set(skipped);
+                      if (checked === true) next.delete(zone);
+                      else next.add(zone);
+                      setSkipped(next);
+                    }}
+                  />
+                  <span className="text-sm font-medium">Zone {zone}</span>
+                </label>
+              );
+            })}
+          </div>
+          <FieldDescription>
+            A zone left out is held back and said so, not dropped &mdash; its visits wait for the
+            office to arrange them.
+          </FieldDescription>
+        </fieldset>
+
         {/* The last question, and the only one about somebody else's calendar.
             Kept apart from the technician list rather than added to it, because
             it does not change who goes out — it changes what Jobber is told, and
             reading it as "nobody does these" would be the wrong conclusion to
-            invite. Unlike the fieldset above it this shows on a first build too:
+            invite. Unlike the published-visits question this shows on a first build too:
             the answer is stored on the plan and used at publish time, so it is a
             question from the start rather than only on a rebuild. */}
         <fieldset className="grid min-w-0 gap-2">

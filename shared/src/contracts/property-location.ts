@@ -139,4 +139,15 @@ export interface PropertyPosition {
    * coordinate the geocoder produced.
    */
   geofenceMoved: boolean;
+
+  /**
+   * True for a demo property the console created, rather than a managed home.
+   *
+   * Derived from `sourceSystem` rather than carrying it, because this contract
+   * is already a shape the map needs rather than a mirror of the record —
+   * `geofenceMoved` is computed the same way. The map has to say it: a pin on a
+   * fictional address in the middle of the service area, indistinguishable from
+   * the 570 around it, is a property somebody will route a technician to.
+   */
+  isDemo: boolean;
 }

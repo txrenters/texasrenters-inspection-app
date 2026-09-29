@@ -294,6 +294,11 @@ export interface PlanBuildInput {
    * the gaps around what is already out.
    */
   movePublishedVisits?: boolean;
+  /** Visits in a day. Nine is the planner's own default; ten fits the time. */
+  maxStopsPerDay?: number;
+  minStopsPerDay?: number;
+  /** Zones left out of the build, by number -- the office works 1 to 4. */
+  excludedZones?: string[];
 }
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */

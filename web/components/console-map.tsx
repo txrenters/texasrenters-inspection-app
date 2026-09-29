@@ -7,7 +7,7 @@ import Map, { FullscreenControl, NavigationControl, useMap } from 'react-map-gl/
 import { useTheme } from 'next-themes';
 
 import { useMapFailure } from '@/components/map-error';
-import { GroupingRadiusLayer, type MapPoint } from '@/components/map-layers';
+import { GroupingRadiusLayer, PropertyDotsLayer, type MapPoint } from '@/components/map-layers';
 import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { MapSettings, useMapPreferences, type MapTypeKey } from '@/components/map-settings';
 
@@ -91,6 +91,7 @@ function MapPitch({ degrees }: { degrees: number }) {
 export function ConsoleMap({
   children,
   initialView,
+  propertyDots = false,
   radiusPoints = [],
   settingsSlot = true,
   unavailable,
@@ -107,6 +108,17 @@ export function ConsoleMap({
    * remembers exists.
    */
   radiusPoints?: readonly MapPoint[];
+  /**
+   * Draw every one of `radiusPoints` as a dot at its exact coordinates.
+   *
+   * For a map whose pins are grouped into badges. A badge can only stand on
+   * one of the properties it covers, so zoomed out it says "388" over a spot
+   * where 387 of them are not -- and the radius drawn beside it then looks
+   * like it disagrees with the pins, which is what the office reported. The
+   * dots are a GPU layer rather than markers, so all of them can be exact at
+   * once. Off where every property already has a pin of its own.
+   */
+  propertyDots?: boolean;
   /** The map-type and radius control. Off for a map that is a thumbnail. */
   settingsSlot?: boolean;
   /**
@@ -150,6 +162,9 @@ export function ConsoleMap({
           points={radiusPoints}
           radiusMeters={preferences.groupingRadiusMeters}
         />
+        {/* Over the circles and under the pins: each dot is the property a
+            circle is drawn around, and the pins are what you click. */}
+        {propertyDots ? <PropertyDotsLayer points={radiusPoints} /> : null}
 
         {children}
 

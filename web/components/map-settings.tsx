@@ -58,15 +58,30 @@ export interface MapPreferences {
    * different question the office asked while rebuilding a quarter: which
    * properties are near enough to each other to be worth visiting on one day.
    *
-   * Two sizes rather than a slider because the office is comparing two
+   * A few sizes rather than a slider because the office is comparing
    * candidate rules, not tuning one -- and where the circles overlap is the
    * thing being read, which a number in a box does not show.
    */
   groupingRadiusMeters: GroupingRadius;
 }
 
-/** Off, or one of the two the office is weighing up. */
-export const GROUPING_RADII = [0, 500, 1_000] as const;
+/**
+ * Off, or one of the sizes the office is weighing up.
+ *
+ * 2 km was asked for on the grounds that it is still a reasonable drive, and
+ * it is: by the planner's own estimate a 2 km hop is about six minutes, well
+ * inside the twenty a day refuses to exceed between properties. 3 km follows
+ * for the same reason, at about seven and a half.
+ *
+ * **What a wider circle does not do is make the days bigger.** On this
+ * portfolio, 23% of properties have no neighbour at all within 2 km and only
+ * 12% have the eight a day of nine would need; at 3 km it is 9% and 21%. The
+ * days are not built by this radius -- they are chained from nearest
+ * neighbours up to the leg limit, which already reaches about eleven
+ * kilometres. These circles are a lens for reading the portfolio, not the rule
+ * that groups it.
+ */
+export const GROUPING_RADII = [0, 500, 1_000, 2_000, 3_000] as const;
 export type GroupingRadius = (typeof GROUPING_RADII)[number];
 
 /** Roadmap, flat, no circles. The plainest reading of a map full of pins. */
