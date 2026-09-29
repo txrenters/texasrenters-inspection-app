@@ -122,7 +122,7 @@ export function ConsoleMap({
   radiusPoints?: readonly MapPoint[];
   /**
    * Every property, drawn as the technician map draws it: grouped pins that
-   * open on a click, a dot for each at its exact position, geofence rings.
+   * open on a click, and geofence rings.
    *
    * **This is what makes the console one map.** The office asked for the
    * technician map and the quarter's maps to agree -- "same geocoding, same

@@ -15,7 +15,6 @@ import {
 } from '@/components/map-clusters';
 import { useMapStroke } from '@/components/map-colors';
 import { circleFeature, featureCollection } from '@/components/map-geometry';
-import { PropertyDotsLayer } from '@/components/map-layers';
 import { Badge } from '@/components/ui/badge';
 import { ClusterPin, DrivingPin, PropertyPin, TechnicianPin } from '@/components/map-pins';
 import { useGlide } from '@/lib/map-animation';
@@ -568,8 +567,8 @@ export interface CrewOptions {
 /**
  * Every property, exactly as the technician map draws it.
  *
- * Grouped pins that open on a click, a dot for each at its exact position, and
- * each lone property's geofence once it is big enough to read. Drawn from the
+ * Grouped pins that open on a click, and each lone property's geofence once it
+ * is big enough to read. Drawn from the
  * same positions everywhere -- `propertyPosition` on the server, which puts a
  * property at the office's corrected centre when there is one -- so no map in
  * the console can show a property somewhere another map does not.
@@ -581,7 +580,11 @@ export function PortfolioLayers({
 }: Required<Pick<PortfolioOptions, 'properties'>> & Omit<PortfolioOptions, 'properties'>) {
   return (
     <>
-      <PropertyDotsLayer points={properties} />
+      {/* No dot per property, for now (the office, 2026-09-30: "there's a lot of
+          small circles color blue on the map remove that for now"). They were
+          read as a Venn diagram that was not built right; they were in fact
+          every property at its exact position (#329). `PropertyDotsLayer`
+          still exists -- drawing it here again is the whole of bringing it back. */}
       <PropertyLayer
         highlighted={highlighted}
         properties={properties}
