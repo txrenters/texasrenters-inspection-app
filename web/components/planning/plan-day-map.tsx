@@ -10,6 +10,8 @@ import { featureCollection, lineFeature } from '@/components/map-geometry';
 /** A stop on the day's map: a visit, or a move-out or move-in the day is built around. */
 export interface DayMapStop {
   id: string;
+  /** The building, so the portfolio can show this day's properties at full strength. */
+  buildingId?: string | null;
   positionInDay: number | null;
   latitude: number | null;
   longitude: number | null;
@@ -24,9 +26,10 @@ const isBooked = (kind: DayMapStop['kind']) => kind === 'MOVE_OUT' || kind === '
  * One planned technician-day on the map: the technician's home, the day's stops
  * in driving order, and the road between them.
  *
- * Drawn on `ConsoleMap`, like every other map here, so the reader's map type,
- * the 3D tilt and the **grouping radius** are the same on this page as on the
- * technician map. The office asked for that specifically: the radius was built
+ * Drawn on `ConsoleMap` with the portfolio and the crew turned on, so this is
+ * the technician map with a planned day on top of it: the same properties at
+ * the same positions, the same people, and the same grouping radius drawn
+ * around the same portfolio -- the reader's map type and 3D tilt with them. The office asked for that specifically: the radius was built
  * on the technician map and they went looking for it here, on the plan they
  * actually rebuild a quarter against, and it did not exist.
  *
@@ -173,15 +176,19 @@ export function PlanDayMap({
     [home, placed],
   );
   /**
-   * The grouping circles go around the day's properties, and not the home.
+   * The day's properties, picked out of the whole portfolio.
    *
-   * The question they answer is which properties are near enough to share a
-   * day; a circle around where the technician sleeps answers nothing.
+   * The portfolio is drawn here exactly as on the technician map -- every
+   * property, the same pins, the same positions, the same grouping radius --
+   * and everything that is not this day recedes rather than disappearing,
+   * because what is near the day is what somebody is weighing up. Null rather
+   * than an empty set when no stop knows its building, or the whole portfolio
+   * would be dimmed with nothing to stand out from it.
    */
-  const radiusPoints = useMemo(
-    () => placed.map((stop) => ({ latitude: stop.latitude, longitude: stop.longitude })),
-    [placed],
-  );
+  const dayBuildings = useMemo(() => {
+    const ids = new Set(placed.flatMap((stop) => (stop.buildingId ? [stop.buildingId] : [])));
+    return ids.size ? ids : null;
+  }, [placed]);
 
   const straight = geometry.length < 2;
   const path = useMemo<LatLng[]>(
@@ -222,7 +229,7 @@ export function PlanDayMap({
   };
 
   return (
-    <ConsoleMap initialView={FALLBACK_VIEW} radiusPoints={radiusPoints}>
+    <ConsoleMap crew initialView={FALLBACK_VIEW} portfolio={{ highlighted: dayBuildings }}>
       <FitStops dayKey={dayKey} points={points} />
 
       <Source data={lines} id="day-route" type="geojson">
@@ -258,7 +265,7 @@ export function PlanDayMap({
       </Source>
 
       {home ? (
-        <Marker anchor="bottom" latitude={home.latitude} longitude={home.longitude} style={{ zIndex: 5 }}>
+        <Marker anchor="bottom" latitude={home.latitude} longitude={home.longitude} style={{ zIndex: 750 }}>
           <span title={`From: ${home.address ?? 'the technician’s home'}`}>
             <HomePin />
           </span>
@@ -282,7 +289,7 @@ export function PlanDayMap({
                   }
                 : undefined
             }
-            style={{ zIndex: 10 + index }}
+            style={{ zIndex: 800 + index }}
           >
             <span
               title={`${stop.positionInDay ?? index + 1}. ${stop.kind === 'MOVE_OUT' ? 'Move-out: ' : stop.kind === 'MOVE_IN' ? 'Move-in: ' : ''}${stop.address ?? 'Unknown address'}${opens ? ' (open its details)' : ''}`}

@@ -71,6 +71,7 @@ const BOOKING_LABEL: Record<PlanDayAnchor['kind'], string> = { MOVE_OUT: 'Move-o
 
 const mapStopOf = (entry: TimelineEntry): DayMapStop => ({
   id: entry.id,
+  buildingId: entry.buildingId,
   positionInDay: entry.positionInDay,
   latitude: entry.latitude,
   longitude: entry.longitude,

@@ -7,9 +7,17 @@ import Map, { FullscreenControl, NavigationControl, useMap } from 'react-map-gl/
 import { useTheme } from 'next-themes';
 
 import { useMapFailure } from '@/components/map-error';
-import { GroupingRadiusLayer, PropertyDotsLayer, type MapPoint } from '@/components/map-layers';
+import { GroupingRadiusLayer, type MapPoint } from '@/components/map-layers';
+import {
+  CrewLayers,
+  PortfolioLayers,
+  type CrewOptions,
+  type PortfolioOptions,
+} from '@/components/map-portfolio';
 import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { MapSettings, useMapPreferences, type MapTypeKey } from '@/components/map-settings';
+import { usePermissions } from '@/lib/auth';
+import { usePropertyLocations, useTechnicianLocations } from '@/lib/queries';
 
 /**
  * One map, for every map in this console.
@@ -88,10 +96,14 @@ function MapPitch({ degrees }: { degrees: number }) {
   return null;
 }
 
+/** Stable empties, so a map with nothing on it does not re-render its layers. */
+const NO_PROPERTIES: readonly never[] = [];
+
 export function ConsoleMap({
   children,
+  crew,
   initialView,
-  propertyDots = false,
+  portfolio,
   radiusPoints = [],
   settingsSlot = true,
   unavailable,
@@ -109,16 +121,26 @@ export function ConsoleMap({
    */
   radiusPoints?: readonly MapPoint[];
   /**
-   * Draw every one of `radiusPoints` as a dot at its exact coordinates.
+   * Every property, drawn as the technician map draws it: grouped pins that
+   * open on a click, a dot for each at its exact position, geofence rings.
    *
-   * For a map whose pins are grouped into badges. A badge can only stand on
-   * one of the properties it covers, so zoomed out it says "388" over a spot
-   * where 387 of them are not -- and the radius drawn beside it then looks
-   * like it disagrees with the pins, which is what the office reported. The
-   * dots are a GPU layer rather than markers, so all of them can be exact at
-   * once. Off where every property already has a pin of its own.
+   * **This is what makes the console one map.** The office asked for the
+   * technician map and the quarter's maps to agree -- "same geocoding, same
+   * Venn diagram" -- and they could not while each drew its own. Turned on,
+   * the grouping radius is drawn around the whole portfolio as well, so the
+   * overlaps read the same on every page: which properties could share a day
+   * is a fact about the portfolio, not about whichever page it is looked at on.
+   *
+   * `true` fetches the portfolio; an object passes the page's own list and
+   * says which properties it is about.
    */
-  propertyDots?: boolean;
+  portfolio?: boolean | PortfolioOptions;
+  /**
+   * The crew, as the technician map draws them. Behind `technicians:locate`
+   * wherever it is turned on: where a named person is at a given minute is not
+   * something a schedule-reader gets for free because the map is shared.
+   */
+  crew?: boolean | CrewOptions;
   /** The map-type and radius control. Off for a map that is a thumbnail. */
   settingsSlot?: boolean;
   /**
@@ -132,6 +154,23 @@ export function ConsoleMap({
   const dark = resolvedTheme === 'dark';
   const [preferences, setPreferences] = useMapPreferences();
   const [failure, onError] = useMapFailure();
+
+  /**
+   * The portfolio and the crew, fetched here only when a page turns them on
+   * and does not hand its own over -- and each only behind its own permission,
+   * so a map never asks for something it knows will be refused.
+   */
+  const permissions = usePermissions();
+  const portfolioOptions = portfolio === true ? {} : portfolio || null;
+  const crewOptions = crew === true ? {} : crew || null;
+  const fetchedProperties = usePropertyLocations(
+    Boolean(portfolioOptions) && !portfolioOptions?.properties && permissions.has('properties:read'),
+  );
+  const fetchedCrew = useTechnicianLocations(
+    Boolean(crewOptions) && !crewOptions?.positions && permissions.has('technicians:locate'),
+  );
+  const properties = portfolioOptions?.properties ?? fetchedProperties.data ?? NO_PROPERTIES;
+  const positions = crewOptions?.positions ?? fetchedCrew.data ?? NO_PROPERTIES;
 
   const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
   if (tokenProblem) return <MapUnavailable>{tokenProblem}</MapUnavailable>;
@@ -157,16 +196,34 @@ export function ConsoleMap({
         <MapPitch degrees={preferences.tilted ? 45 : 0} />
 
         {/* Before the children, so the circles sit under whatever the page
-            draws on top of them. Layer order is mount order. */}
+            draws on top of them. Layer order is mount order.
+
+            Around the whole portfolio whenever the portfolio is shown: the
+            same Venn diagram on every page. */}
         <GroupingRadiusLayer
-          points={radiusPoints}
+          points={portfolioOptions ? properties : radiusPoints}
           radiusMeters={preferences.groupingRadiusMeters}
         />
-        {/* Over the circles and under the pins: each dot is the property a
-            circle is drawn around, and the pins are what you click. */}
-        {propertyDots ? <PropertyDotsLayer points={radiusPoints} /> : null}
+        {portfolioOptions ? (
+          <PortfolioLayers
+            highlighted={portfolioOptions.highlighted ?? null}
+            properties={properties}
+            selectedPropertyId={portfolioOptions.selectedPropertyId ?? null}
+          />
+        ) : null}
 
         {children}
+
+        {/* After the page's own layers, as the technician map always drew
+            them: the ring of a vague fix over the route, not under it. */}
+        {crewOptions ? (
+          <CrewLayers
+            onSelect={crewOptions.onSelect}
+            positions={positions}
+            selectedTechnicianId={crewOptions.selectedTechnicianId ?? null}
+            tracks={crewOptions.tracks}
+          />
+        ) : null}
 
         <NavigationControl position="top-right" showCompass visualizePitch />
         <FullscreenControl position="top-right" />
