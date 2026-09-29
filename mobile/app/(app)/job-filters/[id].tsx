@@ -3,6 +3,7 @@ import {
   CameraIcon,
   CheckCircle2Icon,
   CircleIcon,
+  ImageIcon,
   MinusIcon,
   PlusIcon,
   Trash2Icon,
@@ -21,8 +22,10 @@ import { Button, Card, Loader } from '@/src/components/ui';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFiltersArea, useInspection, useInspectionActions } from '@/src/features/queries';
+import { importFromGallery } from '@/src/media/gallery-import';
 import { registerIcons } from '@/src/lib/icons';
 import { goBack } from '@/src/lib/navigation';
+import { useDemoStore } from '@/src/stores/demo.store';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import {
   filterDeclined,
@@ -31,13 +34,14 @@ import {
   withAddedFilters,
   withFilterAnswer,
   withFilterInPhoto,
+  withFiltersPhoto,
   withServiceAnswer,
   withoutFilter,
   type FilterEntry,
   type FilterRow,
 } from '@/src/utils/job-tasks';
 
-registerIcons(CameraIcon, CheckCircle2Icon, CircleIcon, MinusIcon, PlusIcon, Trash2Icon, XCircleIcon);
+registerIcons(CameraIcon, CheckCircle2Icon, CircleIcon, ImageIcon, MinusIcon, PlusIcon, Trash2Icon, XCircleIcon);
 
 /**
  * The job's filters, and one photograph of them all.
@@ -246,7 +250,10 @@ export default function JobFiltersScreen() {
   const [adding, setAdding] = useState(false);
   const [wholeService, setWholeService] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const addSnapshot = useDemoStore((state) => state.addSnapshot);
+  const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
 
   if (inspection.isLoading || !inspection.data) {
     return (
@@ -294,18 +301,21 @@ export default function JobFiltersScreen() {
    * is normally straight into the camera; it waits only when that request has
    * not come back, or failed and has to be asked again.
    */
+  /** The area the photograph is filed under, asked for again only if the screen's request has not answered. */
+  const resolveArea = async () => {
+    if (filtersArea.data) return filtersArea.data;
+    setOpening(true);
+    try {
+      return (await filtersArea.refetch()).data;
+    } finally {
+      setOpening(false);
+    }
+  };
+
   const photograph = async () => {
     if (!toPhotograph.length) return;
     setError(null);
-    let areaId = filtersArea.data;
-    if (!areaId) {
-      setOpening(true);
-      try {
-        areaId = (await filtersArea.refetch()).data;
-      } finally {
-        setOpening(false);
-      }
-    }
+    const areaId = await resolveArea();
     if (!areaId) {
       setError('Could not open the camera. Check the connection and try again.');
       return;
@@ -321,6 +331,51 @@ export default function JobFiltersScreen() {
     });
   };
 
+  /**
+   * The same one photograph, picked from the phone's gallery (the office,
+   * 2026-09-29): a technician who has already photographed the stacked filters
+   * with the phone's own camera hands that picture over instead.
+   *
+   * One picture, filed exactly as the camera files it -- the upload queue sends
+   * it, with no signal too -- and attached to every filter not declined, like a
+   * shot from the camera. Offered on every kind of job: the filter change is
+   * not the inspection, so the rule that keeps gallery photographs off move-ins
+   * and move-outs (`inspectionAllowsGalleryImport`) is about something else.
+   */
+  const pickFromGallery = async () => {
+    if (!toPhotograph.length || picking) return;
+    setError(null);
+    const areaId = await resolveArea();
+    if (!areaId) {
+      setError('Could not open your photos. Check the connection and try again.');
+      return;
+    }
+    setPicking(true);
+    try {
+      const outcome = await importFromGallery({
+        inspectionId: id,
+        roomId: areaId,
+        ownerUserId,
+        existingPhotoCount: 0,
+        single: true,
+        // Of labels -- the sizes printed on the filters -- as the camera's is.
+        captureType: 'SERIAL_OR_LABEL',
+      });
+      if (outcome.status === 'DENIED') {
+        setError('TexasRenters Inspect cannot see your photos. Allow photo access in Settings, then try again.');
+        return;
+      }
+      const [snapshot] = outcome.status === 'IMPORTED' ? outcome.snapshots : [];
+      if (!snapshot) return;
+      addSnapshot(snapshot);
+      save((current) => withFiltersPhoto(current, item.visitDetails, snapshot.id));
+    } catch {
+      setError('That photo could not be added. Try again.');
+    } finally {
+      setPicking(false);
+    }
+  };
+
   const photoLabel = !toPhotograph.length
     ? rows.length
       ? 'Every filter is marked not changed'
@@ -333,7 +388,7 @@ export default function JobFiltersScreen() {
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 180 }}>
+      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 240 }}>
         <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
           <Button
             accessibilityLabel="Back"
@@ -492,6 +547,16 @@ export default function JobFiltersScreen() {
           onPress={() => void photograph()}
           variant={photo && !missing.length ? 'secondary' : 'primary'}
         />
+        {toPhotograph.length ? (
+          <Button
+            busy={picking}
+            busyLabel="Opening your photos…"
+            icon={<ImageIcon size={18} className="text-foreground" />}
+            label="Choose from gallery"
+            onPress={() => void pickFromGallery()}
+            variant="secondary"
+          />
+        ) : null}
       </View>
 
       <NotChangedSheet
