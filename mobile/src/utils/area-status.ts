@@ -272,3 +272,25 @@ export function areaStage(status: AreaStatus, hasRecording: boolean): AreaStage 
   if (status === 'COMPLETED' || status === 'SKIPPED') return 'FINISHED';
   return hasRecording ? 'FILMED' : 'NOT_FILMED';
 }
+
+/**
+ * What the area screen's camera button says.
+ *
+ * Five states: an untouched area is begun, one with photographs is continued, a
+ * filmed one takes another video, a skipped one can be inspected anyway, and a
+ * submitted one has its evidence changed (the office, 2026-09-30: after
+ * submitting, "it just say continue walkthrough instead of change evidence").
+ * The submitted case comes before the evidence ones, because a submitted area
+ * always has evidence and "Continue" read as if nothing had been handed in.
+ */
+export function areaCameraLabel(state: {
+  skipped: boolean;
+  finished: boolean;
+  hasRecording: boolean;
+  hasEvidence: boolean;
+}): string {
+  if (state.skipped) return 'Inspect Anyway';
+  if (state.finished) return 'Change Evidence';
+  if (state.hasRecording) return 'Record Additional Video';
+  return state.hasEvidence ? 'Continue Walkthrough' : 'Begin Walkthrough';
+}

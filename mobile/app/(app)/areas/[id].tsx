@@ -31,7 +31,12 @@ import { AreaAnalysisCard } from '@/src/areas/AreaAnalysisCard';
 import { OccupiedConditionCard } from '@/src/areas/OccupiedConditionCard';
 import { BaselineCard } from '@/src/areas/BaselineCard';
 import { WalkthroughGuideCard } from '@/src/areas/WalkthroughGuideCard';
-import { areaStage, deriveAreaStatus, type AreaStatusDescriptor } from '@/src/utils/area-status';
+import {
+  areaCameraLabel,
+  areaStage,
+  deriveAreaStatus,
+  type AreaStatusDescriptor,
+} from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
 import {
   checklistKindFor,
@@ -848,15 +853,22 @@ export default function AreaDetailScreen() {
             </Pressable>
           ) : null}
 
-          {alreadyFinished || !hasAnyEvidence ? null : (
+          {/* Kept once the area is submitted, as its notes (the office,
+              2026-09-30: "the evidence notes is no longer available"). Only
+              the submit control goes -- there is nothing left to hand in --
+              while the note is still worth adding to or correcting. */}
+          {isSkipped || (!alreadyFinished && !hasAnyEvidence) ? null : (
             <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
-              <Text className="text-base font-bold text-foreground">Finish this area</Text>
+              <Text className="text-base font-bold text-foreground">
+                {alreadyFinished ? 'Evidence notes' : 'Finish this area'}
+              </Text>
               <Text
                 className="mt-1 text-sm leading-5 text-muted-foreground"
                 nativeID="area-note-label"
               >
-                Anything the office should know about this {isEquipmentVisit ? 'section' : 'room'}. Optional — findings and photographs
-                carry most of it.
+                {alreadyFinished
+                  ? `Submitted. Add to or correct what the office reads about this ${isEquipmentVisit ? 'section' : 'room'} -- it saves when you leave the box.`
+                  : `Anything the office should know about this ${isEquipmentVisit ? 'section' : 'room'}. Optional — findings and photographs carry most of it.`}
               </Text>
               <TextInput
                 accessibilityLabel="Notes about this area, optional"
@@ -872,32 +884,34 @@ export default function AreaDetailScreen() {
                 placeholderTextColor={theme.mutedForeground}
                 textAlignVertical="top"
               />
-              {updates.complete.isError ? (
+              {!alreadyFinished && updates.complete.isError ? (
                 <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
                   {updates.complete.error instanceof Error
                     ? updates.complete.error.message
                     : 'This area could not be submitted.'}
                 </Text>
               ) : null}
-              <Button
-                accessibilityHint={
-                  gate.canComplete
-                    ? 'Marks this area finished and returns to the inspection'
-                    : gate.reason
-                }
-                className="mt-4"
-                /* Disabled rather than hidden, with the reason above it in the
-                   checklist: a control that vanishes tells a technician nothing
-                   about what is missing. */
-                disabled={!gate.canComplete}
-                label="Submit Evidence"
-                // Back at once: the evidence and the completion are sent behind
-                // the technician, and survive a closed app (`useUpdateRoom`).
-                onPress={() => {
-                  updates.complete.mutate();
-                  goBack();
-                }}
-              />
+              {alreadyFinished ? null : (
+                <Button
+                  accessibilityHint={
+                    gate.canComplete
+                      ? 'Marks this area finished and returns to the inspection'
+                      : gate.reason
+                  }
+                  className="mt-4"
+                  /* Disabled rather than hidden, with the reason above it in the
+                     checklist: a control that vanishes tells a technician nothing
+                     about what is missing. */
+                  disabled={!gate.canComplete}
+                  label="Submit Evidence"
+                  // Back at once: the evidence and the completion are sent behind
+                  // the technician, and survive a closed app (`useUpdateRoom`).
+                  onPress={() => {
+                    updates.complete.mutate();
+                    goBack();
+                  }}
+                />
+              )}
             </View>
           )}
         </View>
@@ -1049,9 +1063,9 @@ export default function AreaDetailScreen() {
           says what it would be doing, and it steps back from primary so it no
           longer reads as the expected next action.
 
-          A *completed* area keeps its loud "Record Additional Video" on
-          purpose. Noticing something else in a finished room is normal, and an
-          extra clip does not undo the walkthrough.
+          A *completed* area keeps a loud button on purpose, "Change Evidence":
+          noticing something else in a finished room is normal, and adding to
+          or retaking its evidence does not undo the submission.
         */}
         {/*
           Photographs the technician already has.
@@ -1078,10 +1092,14 @@ export default function AreaDetailScreen() {
         ) : null}
         <Button
           accessibilityHint={
-            isSkipped ? 'Opens the camera and inspects this area after all' : 'Opens the camera'
+            isSkipped
+              ? 'Opens the camera and inspects this area after all'
+              : alreadyFinished
+                ? 'Opens the camera to add to or retake the evidence for this submitted area'
+                : 'Opens the camera'
           }
           icon={
-            isSkipped ? null : hasRecording ? (
+            isSkipped ? null : hasRecording || alreadyFinished ? (
               <CameraIcon size={18} className="text-primary-foreground" />
             ) : (
               <PlayCircleIcon size={18} className="text-primary-foreground" />
@@ -1100,16 +1118,18 @@ export default function AreaDetailScreen() {
            * knows about photographs: a recording earns "Record Additional
            * Video" because that is what a second take is, photographs alone
            * earn "Continue", and an untouched area earns "Begin".
+           *
+           * And a submitted area earns "Change Evidence" (the office,
+           * 2026-09-30): "Continue Walkthrough" on an area already handed in
+           * read as if the submission had not happened, and hid that its
+           * evidence could still be changed.
            */
-          label={
-            isSkipped
-              ? 'Inspect Anyway'
-              : hasRecording
-                ? 'Record Additional Video'
-                : hasAnyEvidence
-                  ? 'Continue Walkthrough'
-                  : 'Begin Walkthrough'
-          }
+          label={areaCameraLabel({
+            skipped: isSkipped,
+            finished: alreadyFinished,
+            hasRecording,
+            hasEvidence: hasAnyEvidence,
+          })}
           onPress={openCamera}
           variant={isSkipped ? 'secondary' : 'primary'}
         />
