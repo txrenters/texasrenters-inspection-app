@@ -46,6 +46,7 @@ const SETTINGS = {
   startsOn: null as string | null,
   technicianIds: [] as string[],
   jobberUnassigned: false,
+  groupTemplateId: null as string | null,
 };
 
 describe('the setting the dialog writes onto the plan', () => {

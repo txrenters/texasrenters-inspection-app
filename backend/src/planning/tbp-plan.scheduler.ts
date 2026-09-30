@@ -128,9 +128,29 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     // The crew and the start a coordinator chose are kept on the plan, so a
     // nightly rebuild lays the days out for them, from today on.
     const holidays = this.holidays();
+    // A quarter this run creates is laid out from the office's active group
+    // template, when there is one (2026-09-30). Only one it creates: a quarter
+    // already built keeps the grouping it was built with, which the plan holds.
+    const groupTemplateId = result.regenerated
+      ? null
+      : await withTenant(organizationId, () => this.planner.activeGroupTemplateId(organizationId));
     const routed = await withTenant(organizationId, () =>
-      this.planner.route(organizationId, result.planId, holidays.length ? { holidays } : {}, { today: businessDate() }),
+      this.planner.route(
+        organizationId,
+        result.planId,
+        { ...(holidays.length ? { holidays } : {}), ...(groupTemplateId ? { groupTemplateId } : {}) },
+        { today: businessDate() },
+      ),
     );
+    if (groupTemplateId)
+      this.logger.log({
+        event: 'tbp_plan_built_from_group_template',
+        quarter: quarterLabel(quarter),
+        planId: result.planId,
+        groupTemplateId,
+        templateDays: routed.template?.days ?? null,
+        notInTemplate: routed.template?.notInTemplate ?? null,
+      });
 
     if (routed.unplaced.length > 0)
       this.logger.warn({

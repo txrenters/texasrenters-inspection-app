@@ -114,6 +114,13 @@ export class PlanRoutingSettingsDto {
    * it keeps the coordinator's last answer.
    */
   @IsOptional() @IsBoolean() jobberUnassigned?: boolean;
+
+  /**
+   * Lay the days out from one of the office's group templates (2026-09-30), or
+   * null for the planner's own grouping. Left out: whatever the plan already
+   * says, so a rebuild that does not mention it groups the same way.
+   */
+  @IsOptional() @IsUUID('all') groupTemplateId?: string | null;
 }
 
 export class PlanQuarterDto extends PlanRoutingSettingsDto {

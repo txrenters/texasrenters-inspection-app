@@ -177,6 +177,10 @@ export class PlanningController {
           startsOn: true,
           crewTechnicianIds: true,
           jobberUnassigned: true,
+          groupTemplateId: true,
+          groupTemplateRevision: true,
+          // Named, so the build dialog can say which grouping the quarter has, and whether it changed since.
+          groupTemplate: { select: { id: true, name: true, revision: true, archivedAt: true } },
           officeDetailsImportedAt: true,
         },
       }),
@@ -662,6 +666,10 @@ export class PlanningController {
           placed: routed.placed,
           unplaced: routed.unplaced.length,
           days: routed.days,
+          // Which grouping decided the days: the office's template, or the planner's own.
+          groupTemplateId: routed.template?.id ?? null,
+          groupTemplateRevision: routed.template?.revision ?? null,
+          notInTemplate: routed.template?.notInTemplate ?? null,
         },
       },
     });

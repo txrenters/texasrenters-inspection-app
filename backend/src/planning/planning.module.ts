@@ -3,6 +3,8 @@ import { Module } from '@nestjs/common';
 import { AdminModule } from '../admin/admin.module';
 import { DatabaseModule } from '../database/database.module';
 import { RoutingModule } from '../routing/routing.module';
+import { GroupTemplateController } from './group-template.controller';
+import { GroupTemplateService } from './group-template.service';
 import { LeaseInspectionsController } from './lease-inspections.controller';
 import { LeaseInspectionScheduler } from './lease-inspections.scheduler';
 import { LeaseInspectionService } from './lease-inspections.service';
@@ -18,7 +20,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
 
 @Module({
   imports: [DatabaseModule, RoutingModule, AdminModule],
-  controllers: [PlanningController, TbpGroupFileController, LeaseInspectionsController],
+  controllers: [PlanningController, TbpGroupFileController, GroupTemplateController, LeaseInspectionsController],
   providers: [
     TbpPlanService,
     QuarterPlannerService,
@@ -29,6 +31,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     PlanBuildGuard,
     LeaseInspectionService,
     LeaseInspectionScheduler,
+    GroupTemplateService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })

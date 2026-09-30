@@ -28,6 +28,17 @@ interface StopRow {
   previousVisitOn?: string | null;
   /** Set once the visit has been published: it is an inspection somebody is sent to. */
   inspectionId?: string | null;
+  /** The property: what a group template names. */
+  buildingId?: string | null;
+}
+
+/** A group template as the database holds one: each group's buildings in order. */
+interface TemplateRow {
+  id: string;
+  name: string;
+  revision: number;
+  archivedAt?: Date | null;
+  groups: { name: string; buildingIds: string[] }[];
 }
 
 interface Point {
@@ -88,6 +99,7 @@ const SETTINGS = {
   startsOn: null as string | null,
   technicianIds: [] as string[],
   jobberUnassigned: false,
+  groupTemplateId: null as string | null,
 };
 
 const Q4 = { year: 2026, quarter: 4 as const };
@@ -139,6 +151,8 @@ const build = (
      * quietly take the measurement away from the router under test.
      */
     mapboxSeconds?: ((from: Point, to: Point) => number) | null;
+    /** The organization's group templates. */
+    templates?: TemplateRow[];
   } = {},
 ) => {
   const technicians = options.technicians ?? [{ technicianId: 'tech-1', isPlannable: true }];
@@ -190,6 +204,7 @@ const build = (
           technicianOverriddenAt: row.technicianOverriddenAt ?? null,
           onSiteMinutes: row.onSiteMinutes ?? null,
           onSiteMinutesOverriddenAt: row.onSiteMinutesOverriddenAt ?? null,
+          propertywareBuildingId: row.buildingId ?? null,
           propertywareBuilding:
             row.latitude === null ? null : { latitude: row.latitude, longitude: row.longitude },
         })),
@@ -234,6 +249,26 @@ const build = (
       ),
     },
     inspection: { findMany: inspectionFindMany },
+    tbpGroupTemplate: {
+      findFirst: jest.fn(({ where }: { where: { id?: string } }) => {
+        const template = (options.templates ?? []).find((row) => row.id === where.id);
+        return Promise.resolve(
+          template
+            ? {
+                id: template.id,
+                name: template.name,
+                revision: template.revision,
+                archivedAt: template.archivedAt ?? null,
+                groups: template.groups.map((group, index) => ({
+                  position: index + 1,
+                  name: group.name,
+                  members: group.buildingIds.map((buildingId) => ({ buildingId })),
+                })),
+              }
+            : null,
+        );
+      }),
+    },
     userProfile: {
       findMany: jest.fn(({ where }: { where: { id?: { in: string[] }; isActive?: boolean } }) =>
         Promise.resolve(
@@ -955,9 +990,13 @@ describe('the office’s limits on a planned day', () => {
         // Written back on every route, so the plan's answer survives a re-layout
         // that does not mention it.
         jobberUnassigned: false,
+        // The planner's own grouping, as every plan before group templates had.
+        groupTemplateId: null,
+        groupTemplateRevision: null,
       },
     });
     expect(summary.settings.hvacVisitMinutes).toBe(60);
+    expect(summary.template).toBeNull();
   });
 
   it('counts each visit by its own length on the day', async () => {
@@ -1579,5 +1618,102 @@ describe('drive times worked out from the distance', () => {
 
     expect(google.matrix).toHaveBeenCalled();
     expect(dayCreate.mock.calls[0][0].data.durationSource).toBe(DriveTimeSource.GOOGLE_TRAFFIC_AWARE);
+  });
+});
+
+/**
+ * The office's own grouping (2026-09-30): made in the Group maker, saved as a
+ * template, and chosen when the quarter is built. Its groups are the days.
+ */
+describe('a quarter built from a group template', () => {
+  const TEMPLATE_ID = '6f0c1d2e-0000-4000-8000-000000000001';
+  /** Ten visits on top of each other, one building each: the planner itself would make one day of them. */
+  const tight = () =>
+    Array.from({ length: 10 }, (_, index) => stop(`s${index + 1}`, index + 1, index * 0.05, { buildingId: `b${index + 1}` }));
+  /** The office's two days of five, drawn across each other. */
+  const template = (extra: Partial<TemplateRow> = {}): TemplateRow => ({
+    id: TEMPLATE_ID,
+    name: 'Outside in',
+    revision: 3,
+    groups: [
+      { name: 'Odd', buildingIds: ['b1', 'b3', 'b5', 'b7', 'b9'] },
+      { name: 'Even', buildingIds: ['b2', 'b4', 'b6', 'b8', 'b10'] },
+    ],
+    ...extra,
+  });
+  const dayOf = (stopUpdate: jest.Mock, id: string) => (updateFor(stopUpdate, id)?.scheduledOn as Date | undefined)?.toISOString();
+
+  it('lays the days out as the template groups them', async () => {
+    const { service, stopUpdate } = build(tight(), { templates: [template()] });
+
+    const summary = await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+
+    const odd = new Set(['s1', 's3', 's5', 's7', 's9'].map((id) => dayOf(stopUpdate, id)));
+    const even = new Set(['s2', 's4', 's6', 's8', 's10'].map((id) => dayOf(stopUpdate, id)));
+    expect(odd.size).toBe(1);
+    expect(even.size).toBe(1);
+    expect([...odd][0]).not.toEqual([...even][0]);
+    expect(summary.days).toBe(2);
+    expect(summary.template).toEqual({ id: TEMPLATE_ID, name: 'Outside in', revision: 3, days: 2, notInTemplate: 0 });
+  });
+
+  it('keeps the template, and the revision it was built from, on the plan', async () => {
+    const { service, planUpdate } = build(tight(), { templates: [template()] });
+
+    await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+
+    expect(planUpdate.mock.calls[0][0].data).toMatchObject({ groupTemplateId: TEMPLATE_ID, groupTemplateRevision: 3 });
+  });
+
+  it('groups the same way on a rebuild that does not say, and the planner’s own way when told', async () => {
+    const kept = build(tight(), { templates: [template()], plan: { groupTemplateId: TEMPLATE_ID } as Partial<typeof PLAN> });
+    expect((await kept.service.route('org-1', 'plan-1', {})).template?.id).toBe(TEMPLATE_ID);
+
+    const dropped = build(tight(), { templates: [template()], plan: { groupTemplateId: TEMPLATE_ID } as Partial<typeof PLAN> });
+    const summary = await dropped.service.route('org-1', 'plan-1', { groupTemplateId: null });
+    expect(summary.template).toBeNull();
+    expect(dropped.planUpdate.mock.calls[0][0].data).toMatchObject({ groupTemplateId: null, groupTemplateRevision: null });
+  });
+
+  it('places a visit whose property is in no group, and counts it', async () => {
+    const stops = [...tight(), stop('new', 11, 0.02, { buildingId: 'b-new' })];
+    const { service, stopUpdate } = build(stops, { templates: [template()] });
+
+    const summary = await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+
+    expect(dayOf(stopUpdate, 'new')).toBeDefined();
+    expect(summary.template?.notInTemplate).toBe(1);
+    expect(summary.unplaced).toEqual([]);
+  });
+
+  it('puts every visit at one building in its group together', async () => {
+    const stops = [...tight(), stop('s1-unit-b', 11, 0, { buildingId: 'b1' })];
+    const { service, stopUpdate } = build(stops, { templates: [template()] });
+
+    const summary = await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+
+    expect(dayOf(stopUpdate, 's1-unit-b')).toEqual(dayOf(stopUpdate, 's1'));
+    expect(summary.template?.notInTemplate).toBe(0);
+  });
+
+  it('refuses an archived template, and writes nothing', async () => {
+    const { service, planUpdate } = build(tight(), { templates: [template({ archivedAt: new Date('2026-09-30T00:00:00Z') })] });
+
+    await expect(service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID })).rejects.toMatchObject({
+      code: 'GROUP_TEMPLATE_ARCHIVED',
+    });
+    expect(planUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a template that does not exist', async () => {
+    const { service } = build(tight());
+
+    await expect(service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID })).rejects.toMatchObject({
+      code: 'GROUP_TEMPLATE_NOT_FOUND',
+    });
+  });
+
+  it('refuses a template id that is not an id', () => {
+    expect(() => routingSettings(SETTINGS, { groupTemplateId: 'outside-in' }, Q4)).toThrow('Choose a group template');
   });
 });
