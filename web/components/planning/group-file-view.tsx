@@ -37,6 +37,7 @@ import {
 } from './manual-grouping';
 import { ManualGroupingView } from './manual-grouping-view';
 import { useRoadRoutes, type RouteRequest } from './road-routes';
+import { useFillHeight } from './use-fill-height';
 import { zoneTerritories } from './zone-territories';
 
 const NO_REQUESTS: RouteRequest[] = [];
@@ -258,6 +259,8 @@ export function GroupFileView({
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
   const [display, setDisplay] = useState<MapDisplay>(DEFAULT_MAP_DISPLAY);
   const { lines, road, outlines: showOutlines, zones: showZones, legTimes: showLegTimes } = display;
+  /** The map and the list fill the window on a large screen (the office, 2026-10-01). */
+  const fill = useFillHeight<HTMLDivElement>();
   const [order, setOrder] = useState<GroupOrder>('number');
   /** Manual grouping, and the work it opened on; null for the file's own view. */
   const [manual, setManual] = useState<{
@@ -427,8 +430,12 @@ export function GroupFileView({
           properties={properties}
         />
       ) : (
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="h-80 lg:h-[36rem]">
+        <div
+          className="grid gap-3 lg:h-[36rem] lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]"
+          ref={fill.ref}
+          style={fill.height ? { height: fill.height } : undefined}
+        >
+          <div className="h-80 lg:h-full">
             <GroupFileMap
               frame={frame}
               groups={shown}

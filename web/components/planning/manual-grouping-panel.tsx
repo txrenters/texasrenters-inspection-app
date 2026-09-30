@@ -14,6 +14,7 @@ import {
   Undo2Icon,
   XIcon,
 } from 'lucide-react';
+import { uniqueGroupName } from '@texasrenters/shared';
 import { useState, type FormEvent } from 'react';
 
 import {
@@ -113,6 +114,7 @@ function GroupForm({
   title,
   initial,
   used,
+  taken,
   submitLabel,
   onSubmit,
   onOpenChange,
@@ -122,6 +124,8 @@ function GroupForm({
   initial: GroupFields;
   /** Each colour the other groups have, and the group that has it. */
   used: ReadonlyMap<string, string>;
+  /** The other groups' names: a group's name is its own (the office, 2026-10-01). */
+  taken: readonly string[];
   submitLabel: string;
   onSubmit: (fields: GroupFields) => void;
   onOpenChange: (open: boolean) => void;
@@ -138,8 +142,12 @@ function GroupForm({
   const inUse = palette.filter((value) => used.has(value)).length;
 
   const size = Number(target);
+  const clash = name.trim() && taken.some((other) => other.trim().toLowerCase() === name.trim().toLowerCase());
+  /** A free name in the same pattern, one click away, when the one typed is taken. */
+  const free = clash ? uniqueGroupName(name, taken) : null;
   const problems = [
     name.trim() ? null : 'Give the group a name.',
+    clash ? `${name.trim()} is already a group’s name.` : null,
     HEX.test(color) ? null : 'A colour is a # and six hex digits, like #0067a5.',
     Number.isInteger(size) && size >= 1 && size <= MAX_TARGET ? null : `The size is a whole number from 1 to ${MAX_TARGET}.`,
   ].filter((problem): problem is string => problem !== null);
@@ -166,7 +174,23 @@ function GroupForm({
 
           <div className="grid gap-1.5">
             <Label htmlFor="group-name">Name</Label>
-            <Input autoFocus id="group-name" maxLength={60} onChange={(event) => setName(event.target.value)} value={name} />
+            <Input
+              aria-invalid={clash ? true : undefined}
+              autoFocus
+              id="group-name"
+              maxLength={60}
+              onChange={(event) => setName(event.target.value)}
+              value={name}
+            />
+            {free ? (
+              <p className="text-warning flex flex-wrap items-center gap-1.5 text-xs" role="status">
+                <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+                Another group is called {name.trim()}.
+                <Button className="h-6 px-2 text-xs" onClick={() => setName(free)} size="sm" type="button" variant="outline">
+                  Use {free}
+                </Button>
+              </p>
+            ) : null}
           </div>
 
           <fieldset className="grid gap-1.5">
@@ -375,6 +399,7 @@ export function ManualGroupingPanel({
   onAutoOrder,
   onOptimize,
   ordering,
+  editingBy,
 }: {
   state: ManualState;
   activeId: string | null;
@@ -407,6 +432,8 @@ export function ManualGroupingPanel({
   onOptimize: (id: string) => void;
   /** Groups whose order is being worked out. */
   ordering: ReadonlySet<string>;
+  /** Who else is building each group of a live template, by group id. */
+  editingBy?: ReadonlyMap<string, readonly string[]>;
 }) {
   const [form, setForm] = useState<{ mode: 'new' } | { mode: 'edit'; group: ManualGroup } | null>(null);
   const [deleting, setDeleting] = useState<ManualGroup | null>(null);
@@ -424,7 +451,7 @@ export function ManualGroupingPanel({
   };
 
   return (
-    <aside className="bg-card flex min-h-0 flex-col rounded-lg border lg:h-[36rem]">
+    <aside className="bg-card flex min-h-0 flex-col rounded-lg border lg:h-full">
       <div className="grid gap-2 border-b px-3 py-2">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-medium">
@@ -515,6 +542,11 @@ export function ManualGroupingPanel({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className={cn('block truncate text-sm', isActive && 'font-semibold')}>{group.name}</span>
+                  {editingBy?.get(group.id)?.length ? (
+                    <span className="text-info block truncate text-xs font-medium" title="Building this group now">
+                      {editingBy.get(group.id)!.join(', ')} {editingBy.get(group.id)!.length === 1 ? 'is' : 'are'} building it
+                    </span>
+                  ) : null}
                   <GroupDrive
                     group={group}
                     minutesPerProperty={minutesPerProperty}
@@ -676,6 +708,7 @@ export function ManualGroupingPanel({
                 .map((group) => [group.color.toLowerCase(), group.name] as const),
             )
           }
+          taken={state.groups.filter((group) => form.mode !== 'edit' || group.id !== form.group.id).map((group) => group.name)}
           // A fresh form each time it opens, not the last one's leftovers.
           key={form.mode === 'edit' ? form.group.id : 'new'}
           onOpenChange={(open) => !open && setForm(null)}

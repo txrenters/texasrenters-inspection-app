@@ -186,6 +186,25 @@ describe('a group’s figures', () => {
     expect(nextGroupColor(state)).toBe(COLOR_PRESETS[1]);
   });
 
+  /** A live template (2026-10-01): somebody else's change reaches every step, so undo keeps it. */
+  it('makes somebody else’s change to every step of the history', () => {
+    let history = historyReducer({ past: [], present: EMPTY_STATE, future: [] }, {
+      type: 'edit',
+      edit: { type: 'create', group: group('a', []) },
+    });
+    history = historyReducer(history, { type: 'edit', edit: { type: 'add', id: 'a', row: 2 } });
+    const theirs = (state: ManualState): ManualState => ({ groups: [...state.groups, group('theirs', [9])] });
+
+    history = historyReducer(history, { type: 'rebase', apply: theirs });
+    history = historyReducer(history, { type: 'undo' });
+
+    // This person's own click is undone; the other person's group stays.
+    expect(history.present.groups.map((entry) => [entry.id, entry.stops])).toEqual([
+      ['a', []],
+      ['theirs', [9]],
+    ]);
+  });
+
   it('offers twenty distinct preset colours', () => {
     expect(new Set(COLOR_PRESETS).size).toBe(20);
   });

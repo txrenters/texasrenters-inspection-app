@@ -1,13 +1,17 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ManualState } from './manual-grouping';
+import type { ManualLive } from './manual-grouping-view';
+import type { TemplateLiveHandlers } from './use-template-live';
 
 import { GroupMakerView } from './group-maker-view';
 
 /**
- * The TBP Property Group maker (2026-09-30): the manual grouping over the
- * database's properties, saved to the server as a template.
+ * The TBP Property Group maker (2026-09-30), live since 2026-10-01: every
+ * change is saved as it is made, and others' changes appear as they are made.
  */
 
 const hooks = vi.hoisted(() => ({
@@ -16,41 +20,62 @@ const hooks = vi.hoisted(() => ({
   useGroupTemplate: vi.fn(),
   useGroupTemplateMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
+  postGroupTemplateOps: vi.fn(),
+  readGroupTemplate: vi.fn(),
+  planningKeys: {
+    groupTemplates: ['group-templates'],
+    groupTemplate: (id: string) => ['group-templates', id],
+  },
 }));
 vi.mock('@/lib/planning-queries', () => hooks);
-vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
+vi.mock('@/lib/auth', () => ({
+  usePermissions: () => ({ has: () => true }),
+  useAuth: () => ({ profile: { id: 'me' } }),
+}));
 const url = vi.hoisted(() => ({ state: { template: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 
+/** The live channel, reduced to the handlers the maker gives it. */
+const channel = vi.hoisted(() => ({ handlers: null as TemplateLiveHandlers | null, focus: vi.fn() }));
+vi.mock('@/components/planning/use-template-live', () => ({
+  useTemplateLive: (_templateId: string | null, handlers: TemplateLiveHandlers) => {
+    channel.handlers = handlers;
+    return { connected: true, focus: channel.focus };
+  },
+}));
+
 /** The map and its panel, reduced to what the maker hands them and hears back. */
 vi.mock('@/components/planning/manual-grouping-view', () => ({
-  ManualGroupingView: ({
+  ManualGroupingView: function Stub({
     initial,
     onChange,
-    properties,
+    live,
   }: {
-    initial: { state: ManualState };
+    initial: { state: ManualState; minutesPerProperty: number };
     onChange: (snapshot: { state: ManualState; minutesPerProperty: number }) => void;
-    properties: unknown[];
-  }) => (
-    <div data-testid="manual-grouping">
-      <span>
-        {properties.length} properties;{' '}
-        {initial.state.groups.map((group) => `${group.name}: ${group.stops.join(',')}`).join(' | ')}
-      </span>
-      <button
-        onClick={() =>
-          onChange({
-            state: { groups: [{ ...initial.state.groups[0]!, stops: [4, 2, 3] }] },
-            minutesPerProperty: 30,
-          })
-        }
-        type="button"
-      >
-        Add a stop
-      </button>
-    </div>
-  ),
+    live?: ManualLive;
+  }) {
+    const [state, setState] = useState(initial.state);
+    useEffect(() => {
+      if (!live) return;
+      live.controls.current = { rebase: (apply) => setState((current) => apply(current)), setMinutes: () => undefined };
+    }, [live]);
+    useEffect(() => onChange({ state, minutesPerProperty: 30 }), [onChange, state]);
+    return (
+      <div data-testid="manual-grouping">
+        <span data-testid="groups">{state.groups.map((group) => `${group.name}: ${group.stops.join(',')}`).join(' | ')}</span>
+        <span data-testid="editing">
+          {[...(live?.editingBy ?? new Map())].map(([groupId, names]) => `${groupId}=${names.join('+')}`).join(' ')}
+        </span>
+        <button
+          onClick={() => setState((current) => ({ groups: [{ ...current.groups[0]!, stops: [...current.groups[0]!.stops, 4] }] }))}
+          type="button"
+        >
+          Add a stop
+        </button>
+      </div>
+    );
+  },
 }));
 
 const property = (buildingId: string) => ({
@@ -67,8 +92,10 @@ const property = (buildingId: string) => ({
   units: [],
 });
 
+const TEMPLATE_ID = '6f0c1d2e-0000-4000-8000-000000000001';
+const GROUP_ID = '6f0c1d2e-0000-4000-8000-000000000011';
 const TEMPLATE = {
-  id: '6f0c1d2e-0000-4000-8000-000000000001',
+  id: TEMPLATE_ID,
   name: 'Outside in',
   isActive: false,
   minutesPerProperty: 30,
@@ -89,60 +116,89 @@ function mount({ templates = [{ ...TEMPLATE, groupCount: 1, propertyCount: 2 }] 
   });
   hooks.useGroupTemplates.mockReturnValue({ isLoading: false, data: templates });
   hooks.useGroupTemplate.mockReturnValue({
-    data: { ...TEMPLATE, groups: [{ position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2'] }] },
-    refetch: vi.fn().mockResolvedValue({}),
+    data: { ...TEMPLATE, groups: [{ id: GROUP_ID, position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2'] }] },
   });
+  hooks.postGroupTemplateOps.mockResolvedValue({ revision: 5 });
   mutations = { create: mutation(), save: mutation(), setActive: mutation(), archive: mutation(), match: mutation() };
   hooks.useGroupTemplateMutations.mockReturnValue(mutations);
-  return render(<GroupMakerView />);
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <GroupMakerView />
+    </QueryClientProvider>,
+  );
 }
 
 describe('the Group maker', () => {
   beforeEach(() => {
     url.state = { template: '' };
     url.set.mockReset();
+    hooks.postGroupTemplateOps.mockReset();
+    channel.focus.mockReset();
   });
 
   it('asks for a first template when there is none', () => {
     mount({ templates: [] });
 
     expect(screen.getByText('No groupings yet')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: /New template/ }).length).toBeGreaterThan(0);
   });
 
-  it('opens a template’s groups over every enrolled property', () => {
+  it('opens a template’s groups over every enrolled property, with no Save button to forget', () => {
     mount();
 
-    expect(screen.getByTestId('manual-grouping').textContent).toContain('3 properties; North: 2,3');
-    expect((screen.getByRole('textbox', { name: 'Template name' }) as HTMLInputElement).value).toBe('Outside in');
+    expect(screen.getByTestId('groups').textContent).toBe('North: 2,3');
+    expect(screen.queryByRole('button', { name: /^Save$/ })).toBeNull();
+    expect(screen.getByText('All changes saved')).toBeTruthy();
+    expect(screen.getByText('Live')).toBeTruthy();
   });
 
-  it('saves nothing until something changes, then saves the buildings in order against the revision it opened', () => {
+  it('sends a change the moment it is made, as what was done', async () => {
     mount();
-    const save = screen.getByRole('button', { name: /^Save$/ }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add a stop' }));
 
-    expect(screen.getByText('Unsaved changes')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    expect(mutations.save!.mutate.mock.calls[0][0]).toEqual({
-      id: TEMPLATE.id,
-      input: {
-        name: 'Outside in',
-        minutesPerProperty: 30,
-        groups: [{ name: 'North', color: '#e6194b', target: 9, buildingIds: ['b3', 'b1', 'b2'] }],
-        revision: 4,
-      },
-    });
+    await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalledTimes(1));
+    const [templateId, , ops] = hooks.postGroupTemplateOps.mock.calls[0]!;
+    expect(templateId).toBe(TEMPLATE_ID);
+    expect(ops).toEqual([{ type: 'stop.add', groupId: GROUP_ID, stop: 'b3' }]);
   });
 
-  it('counts a rename as a change', () => {
+  it('shows somebody else’s change as it is made, and sends nothing back for it', async () => {
+    mount();
+
+    act(() => channel.handlers!.onOps({
+      templateId: TEMPLATE_ID,
+      revision: 5,
+      batchId: 'theirs',
+      ops: [{ type: 'stop.add', groupId: GROUP_ID, stop: 'b3' }],
+      by: { userId: 'maria', name: 'Maria' },
+    }));
+
+    await waitFor(() => expect(screen.getByTestId('groups').textContent).toBe('North: 2,3,4'));
+    expect(hooks.postGroupTemplateOps).not.toHaveBeenCalled();
+  });
+
+  it('says who else is here, and which group each is building -- never this person', () => {
+    mount();
+
+    act(() =>
+      channel.handlers!.onPresence([
+        { userId: 'me', name: 'Ernie', groupId: GROUP_ID },
+        { userId: 'maria', name: 'Maria Santos', groupId: GROUP_ID },
+      ]),
+    );
+
+    expect(screen.getByText('Also here:')).toBeTruthy();
+    expect(screen.getByText('Maria Santos')).toBeTruthy();
+    expect(screen.getByTestId('editing').textContent).toBe(`${GROUP_ID}=Maria Santos`);
+  });
+
+  it('sends a new name once the typing stops', async () => {
     mount();
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Template name' }), { target: { value: 'Outside in, Q1' } });
 
-    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalled(), { timeout: 2_000 });
+    expect(hooks.postGroupTemplateOps.mock.calls[0]![2]).toEqual([{ type: 'template.update', name: 'Outside in, Q1' }]);
   });
 
   it('makes a template the one new quarters are built from', () => {
@@ -150,6 +206,6 @@ describe('the Group maker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Use for new quarters/ }));
 
-    expect(mutations.setActive!.mutate.mock.calls[0][0]).toEqual({ id: TEMPLATE.id, active: true });
+    expect(mutations.setActive!.mutate.mock.calls[0][0]).toEqual({ id: TEMPLATE_ID, active: true });
   });
 });

@@ -1,7 +1,15 @@
 'use client';
 
-import { ArchiveIcon, PlusIcon, SaveIcon, ShapesIcon, StarIcon, Undo2Icon } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  applyGroupOps,
+  diffGroupOps,
+  mapOpStops,
+  type GroupTemplateEditor,
+  type GroupTemplateOp,
+} from '@texasrenters/shared';
+import { useQueryClient } from '@tanstack/react-query';
+import { ArchiveIcon, PlusIcon, ShapesIcon, StarIcon } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { PageHeader } from '@/components/page-header';
@@ -30,9 +38,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
-import { usePermissions } from '@/lib/auth';
-import { formatRelative } from '@/lib/format';
+import { ApiError } from '@/lib/api';
+import { useAuth, usePermissions } from '@/lib/auth';
 import {
+  planningKeys,
+  postGroupTemplateOps,
+  readGroupTemplate,
   useGroupMakerProperties,
   useGroupTemplate,
   useGroupTemplateMutations,
@@ -50,45 +61,67 @@ import {
   type MapDisplay,
 } from './group-file-view';
 import {
+  liveGroupsOf,
+  liveGroupsOfTemplate,
   makerProperties,
   rowsToMatch,
-  sameTemplate,
   stateFromMatchedFile,
   stateFromTemplate,
   templateInput,
+  visibleGroups,
 } from './group-maker';
 import { DEFAULT_MINUTES_PER_PROPERTY, type ManualState } from './manual-grouping';
-import { ManualGroupingView } from './manual-grouping-view';
+import { ManualGroupingView, type ManualLiveControls } from './manual-grouping-view';
+import { TemplateSync, type SyncStatus } from './template-sync';
+import { useTemplateLive } from './use-template-live';
 import { zoneTerritories } from './zone-territories';
 
-/** The template open for editing, as it was when opened or last saved. */
+/** The template open for editing. */
 interface Editor {
   /** Remounts the map and its history when a different template opens. */
   key: string;
   templateId: string;
-  /** The revision the edit started from: a save over a newer one is refused. */
-  revision: number;
   name: string;
   initial: { state: ManualState; activeId: null; minutesPerProperty: number };
-  /** What the server holds, to tell an unsaved change. */
-  baseline: GroupTemplateInput;
 }
 
 /** How a new template starts. */
 type StartFrom = 'blank' | 'copy' | 'file';
+
+/** How long after the last keystroke a template's new name goes out. */
+const NAME_DEBOUNCE_MS = 600;
+
+/** The server saying no -- archived, refused, not found -- rather than the network failing: said once, not retried. */
+function refusal(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  return error.status >= 400 && error.status < 500 && ![401, 408, 429].includes(error.status) ? error.message : null;
+}
+
+/** "Maria Santos" as "MS", for the little badges of who else is here. */
+const initialsOf = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join('');
 
 /**
  * The TBP Property Group maker (the office, 2026-09-30): "once we create all
  * the groupings we can then save it as template for the TBP".
  *
  * The manual grouping tool, over every enrolled property the database holds
- * rather than a file, and saved to the server as a group template. The
- * quarterly plan's Build and Rebuild offer the templates, and the daily
- * planner builds a new quarter from the active one.
+ * rather than a file, saved to the server as a group template. Live since
+ * 2026-10-01 ("if someone logged in and they are working also for the same
+ * template I want to see the changes real time"): every change is saved as it
+ * is made and appears at once for everyone else with the template open, who
+ * are shown with the group each is building. There is no Save button any more.
  */
 export function GroupMakerView() {
   const { has } = usePermissions();
+  const { profile } = useAuth();
   const canChange = has('planning:publish');
+  const client = useQueryClient();
   const [url, setUrl] = useUrlState({ template: '' });
   const properties = useGroupMakerProperties();
   const templates = useGroupTemplates();
@@ -109,86 +142,184 @@ export function GroupMakerView() {
   const zones = useMemo(() => (display.zones && made ? zoneTerritories(made.rows) : []), [display.zones, made]);
 
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [current, setCurrent] = useState<{ state: ManualState; minutesPerProperty: number } | null>(null);
+  const [status, setStatus] = useState<SyncStatus>({ kind: 'saved' });
+  const [editors, setEditors] = useState<GroupTemplateEditor[]>([]);
+
+  /** The live copy: what goes out, what comes in, and what this browser last showed. */
+  const engine = useRef<TemplateSync | null>(null);
+  const controls = useRef<ManualLiveControls | null>(null);
+  /** The groups as the view last reported or was given them, in its row numbers. */
+  const lastKnown = useRef<ManualState>({ groups: [] });
+  const minutes = useRef(DEFAULT_MINUTES_PER_PROPERTY);
+  /** Whether the view has reported once: before it has, changes wait for it. */
+  const viewReady = useRef(false);
+  const waiting = useRef<GroupTemplateOp<string>[][]>([]);
+  const nameTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  /** Somebody else's batch, or the one that catches this copy up, made to what this person sees. */
+  const applyToView = useCallback(
+    (ops: GroupTemplateOp<string>[]) => {
+      if (!made) return;
+      if (!viewReady.current || !controls.current) {
+        waiting.current.push(ops);
+        return;
+      }
+      for (const op of ops) {
+        if (op.type !== 'template.update') continue;
+        if (op.name !== undefined) setEditor((was) => (was ? { ...was, name: op.name! } : was));
+        if (op.minutesPerProperty !== undefined) {
+          minutes.current = op.minutesPerProperty;
+          controls.current.setMinutes(op.minutesPerProperty);
+        }
+      }
+      const rows = mapOpStops(
+        ops.filter((op) => op.type !== 'template.update'),
+        (building) => made.rowOf.get(building),
+      );
+      if (!rows.length) return;
+      lastKnown.current = { groups: applyGroupOps(lastKnown.current, rows).groups };
+      controls.current.rebase((state) => ({ groups: applyGroupOps(state, rows).groups }));
+    },
+    [made],
+  );
 
   /**
-   * Opened when a different template arrives -- never again for the same one,
-   * so a save (which brings a new revision back) does not throw away the map's
-   * place and the undo history.
+   * Opened when a different template arrives -- never again for the same one:
+   * from then on it is kept up to date live.
    */
   useEffect(() => {
     const template = detail.data;
     if (!template || !made || template.id !== openId) return;
     if (editor?.templateId === template.id) return;
     const { state, missing } = stateFromTemplate(template, made.rowOf);
+    engine.current?.close();
+    viewReady.current = false;
+    waiting.current = [];
+    lastKnown.current = state;
+    minutes.current = template.minutesPerProperty;
+    engine.current = new TemplateSync({
+      base: liveGroupsOfTemplate(template),
+      revision: template.revision,
+      post: (batchId, ops) => postGroupTemplateOps(template.id, batchId, ops),
+      fetch: async () => {
+        const fresh = await readGroupTemplate(template.id);
+        client.setQueryData(planningKeys.groupTemplate(fresh.id), fresh);
+        setEditor((was) => (was && was.templateId === fresh.id ? { ...was, name: fresh.name } : was));
+        if (fresh.minutesPerProperty !== minutes.current) {
+          minutes.current = fresh.minutesPerProperty;
+          controls.current?.setMinutes(fresh.minutesPerProperty);
+        }
+        return { groups: liveGroupsOfTemplate(fresh), revision: fresh.revision };
+      },
+      view: () => liveGroupsOf(lastKnown.current, made.buildingOf),
+      applyToView,
+      visible: (groups) => visibleGroups(groups, made.rowOf),
+      onStatus: (next) => {
+        setStatus(next);
+        if (next.kind === 'refused') toast.warning('A change was not saved', { description: `${next.message} The template was read again.` });
+      },
+      newId: () => crypto.randomUUID(),
+      refused: refusal,
+    });
+    setStatus({ kind: 'saved' });
     setEditor({
       key: `${template.id}:${Date.now()}`,
       templateId: template.id,
-      revision: template.revision,
       name: template.name,
       initial: { state, activeId: null, minutesPerProperty: template.minutesPerProperty },
-      baseline: templateInput(state, made.buildingOf, template.name, template.minutesPerProperty),
     });
-    setCurrent({ state, minutesPerProperty: template.minutesPerProperty });
     if (missing)
       toast.warning(`${missing.toLocaleString()} ${missing === 1 ? 'property' : 'properties'} in ${template.name} left the package`, {
-        description: 'Or lost their position. They were left out of their groups, and saving drops them from the template.',
+        description: 'Or lost their position. They are not on the map; the template keeps them until their group is changed.',
       });
-  }, [detail.data, editor, made, openId]);
+  }, [applyToView, client, detail.data, editor, made, openId]);
 
-  const input = useMemo(
-    () => (editor && current && made ? templateInput(current.state, made.buildingOf, editor.name, current.minutesPerProperty) : null),
-    [current, editor, made],
+  useEffect(() => () => engine.current?.close(), []);
+
+  /** What this person did, worked out from the groups before and after it, and sent. */
+  const onViewChange = useCallback(
+    (snapshot: { state: ManualState; minutesPerProperty: number }) => {
+      if (!made) return;
+      if (!viewReady.current) {
+        viewReady.current = true;
+        lastKnown.current = snapshot.state;
+        minutes.current = snapshot.minutesPerProperty;
+        for (const ops of waiting.current.splice(0)) applyToView(ops);
+        return;
+      }
+      const ops: GroupTemplateOp<string>[] = [];
+      if (snapshot.minutesPerProperty !== minutes.current) {
+        minutes.current = snapshot.minutesPerProperty;
+        if (snapshot.minutesPerProperty >= 5 && snapshot.minutesPerProperty <= 240)
+          ops.push({ type: 'template.update', minutesPerProperty: snapshot.minutesPerProperty });
+      }
+      ops.push(...diffGroupOps(liveGroupsOf(lastKnown.current, made.buildingOf), liveGroupsOf(snapshot.state, made.buildingOf)));
+      lastKnown.current = snapshot.state;
+      if (canChange && ops.length) engine.current?.local(ops);
+    },
+    [applyToView, canChange, made],
   );
-  const dirty = Boolean(editor && input && !sameTemplate(input, editor.baseline));
 
-  // Leaving with unsaved groups asks first.
+  const live = useTemplateLive(editor?.templateId ?? null, {
+    onOps: (event) => engine.current?.received(event),
+    onPresence: setEditors,
+    onJoined: (revision) => engine.current?.resyncFrom(revision),
+    onReplaced: (event) => {
+      void client.invalidateQueries({ queryKey: planningKeys.groupTemplates });
+      if (event.reason === 'ARCHIVED') {
+        toast.info(`${event.by.name} archived this template`, { description: 'It is no longer offered when a quarter is built.' });
+        engine.current?.close();
+        setEditor(null);
+        setUrl({ template: '' });
+      } else if (event.reason === 'SAVED') engine.current?.resyncFrom();
+    },
+  });
+
+  /** Who else is building which group, by group id: not this person. */
+  const others = useMemo(() => editors.filter((entry) => entry.userId !== profile?.id), [editors, profile?.id]);
+  const editingBy = useMemo(() => {
+    const byGroup = new Map<string, string[]>();
+    for (const entry of others) if (entry.groupId) byGroup.set(entry.groupId, [...(byGroup.get(entry.groupId) ?? []), entry.name]);
+    return byGroup;
+  }, [others]);
+  const liveView = useMemo(
+    () => ({ controls, editingBy, onActiveChange: live.focus }),
+    [editingBy, live.focus],
+  );
+
+  // Leaving while a change is still on its way asks first.
   useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    const warn = (event: BeforeUnloadEvent) => {
+      if (engine.current?.pending) event.preventDefault();
+    };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, []);
 
-  /** Something that would lose unsaved groups, waiting for the office to say so. */
-  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
-  const guarded = (action: () => void) => (dirty ? setPendingLeave(() => action) : action());
+  /** Something that would drop a change still on its way waits for it. */
+  const whenSaved = (action: () => void) => {
+    if (engine.current?.pending) {
+      toast.info('Still saving your last change', { description: 'Try again in a moment.' });
+      return;
+    }
+    action();
+  };
 
   const openTemplate = (id: string) =>
-    guarded(() => {
+    whenSaved(() => {
+      engine.current?.close();
       setEditor(null);
       setUrl({ template: id });
     });
 
-  const save = () => {
-    if (!editor || !input) return;
-    if (!input.name) {
-      toast.error('Give the template a name first');
-      return;
-    }
-    const sent = input;
-    mutations.save.mutate(
-      { id: editor.templateId, input: { ...sent, revision: editor.revision } },
-      {
-        onSuccess: (saved) => {
-          setEditor((was) => (was ? { ...was, revision: saved.revision, name: saved.name, baseline: sent } : was));
-          toast.success(`${saved.name} saved`, {
-            description: `${sent.groups.length.toLocaleString()} groups, ${sent.groups
-              .reduce((total, group) => total + group.buildingIds.length, 0)
-              .toLocaleString()} properties. A quarter built from it uses these groups from now on.`,
-          });
-        },
-        onError: (error) => toast.error('The template was not saved', { description: error.message }),
-      },
-    );
+  const rename = (name: string) => {
+    if (!editor) return;
+    setEditor({ ...editor, name });
+    clearTimeout(nameTimer.current);
+    const trimmed = name.trim();
+    if (!canChange || !trimmed || trimmed.length > 80) return;
+    nameTimer.current = setTimeout(() => engine.current?.local([{ type: 'template.update', name: trimmed }]), NAME_DEBOUNCE_MS);
   };
-
-  /**
-   * Back to what is saved: the template opened again from the server's copy,
-   * read again first -- after somebody else's save, the copy held here is theirs
-   * less.
-   */
-  const discard = () => void detail.refetch().then(() => setEditor(null));
 
   const [creating, setCreating] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -196,10 +327,9 @@ export function GroupMakerView() {
   const create = async (name: string, from: StartFrom, loaded: LoadedGroupFile | null) => {
     if (!made) return;
     let groups: GroupTemplateInput['groups'] = [];
-    let minutesPerProperty = current?.minutesPerProperty ?? DEFAULT_MINUTES_PER_PROPERTY;
-    if (from === 'copy' && input) {
-      groups = input.groups;
-      minutesPerProperty = input.minutesPerProperty ?? minutesPerProperty;
+    let minutesPerProperty = minutes.current;
+    if (from === 'copy') {
+      groups = templateInput(lastKnown.current, made.buildingOf, name, minutesPerProperty).groups;
     } else if (from === 'file' && loaded) {
       try {
         const { matches } = await mutations.match.mutateAsync(rowsToMatch(loaded.file));
@@ -219,16 +349,17 @@ export function GroupMakerView() {
         });
         return;
       }
-    }
+    } else minutesPerProperty = DEFAULT_MINUTES_PER_PROPERTY;
     mutations.create.mutate(
       { name, minutesPerProperty, groups },
       {
         onSuccess: (created) => {
           setCreating(false);
+          engine.current?.close();
           setEditor(null);
           setUrl({ template: created.id });
           toast.success(`${created.name} created`, {
-            description: 'Click properties into groups on the map, then Save.',
+            description: 'Click properties into groups on the map. Every change is saved as you make it.',
           });
         },
         onError: (error) => toast.error('The template was not created', { description: error.message }),
@@ -241,6 +372,7 @@ export function GroupMakerView() {
     mutations.archive.mutate(editor.templateId, {
       onSuccess: (archived) => {
         setArchiving(false);
+        engine.current?.close();
         setEditor(null);
         setUrl({ template: '' });
         toast.success(`${archived.name} archived`, {
@@ -291,14 +423,14 @@ export function GroupMakerView() {
             </Select>
           ) : null}
           {canChange ? (
-            <Button onClick={() => guarded(() => setCreating(true))} size="sm" variant="outline">
+            <Button onClick={() => whenSaved(() => setCreating(true))} size="sm" variant="outline">
               <PlusIcon />
               New template
             </Button>
           ) : null}
         </>
       }
-      description="Group the benefit-package properties into days by clicking them on the map, then save the grouping as a template the quarterly plan is built from."
+      description="Group the benefit-package properties into days by clicking them on the map. Every change is saved as you make it, and anyone else with the template open sees it at once."
       title="TBP group maker"
     />
   );
@@ -334,13 +466,20 @@ export function GroupMakerView() {
       </div>
     );
 
+  const saying: Record<SyncStatus['kind'], string> = {
+    saved: 'All changes saved',
+    saving: 'Saving…',
+    offline: 'Offline — your changes go out when the connection is back',
+    refused: 'A change was not saved; the template was read again',
+  };
+
   return (
     <div className="grid gap-3">
       {header}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {editor ? (
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Label className="sr-only" htmlFor="template-name">
               Template name
             </Label>
@@ -349,7 +488,7 @@ export function GroupMakerView() {
               disabled={!canChange}
               id="template-name"
               maxLength={80}
-              onChange={(event) => setEditor({ ...editor, name: event.target.value })}
+              onChange={(event) => rename(event.target.value)}
               value={editor.name}
             />
             {open?.isActive ? (
@@ -357,23 +496,46 @@ export function GroupMakerView() {
                 Active
               </Badge>
             ) : null}
-            <span className={cn('text-xs', dirty ? 'text-warning font-medium' : 'text-muted-foreground')}>
-              {dirty ? 'Unsaved changes' : open ? `Saved ${formatRelative(open.updatedAt)}` : null}
+            {canChange ? (
+              <span
+                className={cn(
+                  'text-xs',
+                  status.kind === 'offline' || status.kind === 'refused' ? 'text-warning font-medium' : 'text-muted-foreground',
+                )}
+                role="status"
+              >
+                {saying[status.kind]}
+              </span>
+            ) : (
+              <Badge title="Changes need the planning:publish permission" variant="warning">
+                View only &mdash; your changes are not saved
+              </Badge>
+            )}
+            <span
+              className={cn('flex items-center gap-1 text-xs', live.connected ? 'text-success' : 'text-muted-foreground')}
+              title={live.connected ? 'Changes by others appear as they are made' : 'Connecting to live editing'}
+            >
+              <span aria-hidden className={cn('size-2 rounded-full', live.connected ? 'bg-success' : 'bg-muted-foreground/50')} />
+              {live.connected ? 'Live' : 'Connecting…'}
             </span>
+            {others.length ? (
+              <span className="flex items-center gap-1.5" title={others.map((entry) => entry.name).join(', ')}>
+                <span className="text-muted-foreground text-xs">Also here:</span>
+                {others.map((entry) => (
+                  <span
+                    className="bg-info/15 text-info flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium"
+                    key={entry.userId}
+                  >
+                    <span aria-hidden>{initialsOf(entry.name)}</span>
+                    <span className="max-w-28 truncate">{entry.name}</span>
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {canChange && editor ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Button disabled={!dirty || mutations.save.isPending} onClick={save} size="sm">
-              {mutations.save.isPending ? <Spinner /> : <SaveIcon />}
-              Save
-            </Button>
-            {dirty ? (
-              <Button onClick={discard} size="sm" variant="ghost">
-                <Undo2Icon />
-                Discard changes
-              </Button>
-            ) : null}
             <Button
               disabled={mutations.setActive.isPending}
               onClick={() => setActive(!open?.isActive)}
@@ -384,7 +546,7 @@ export function GroupMakerView() {
               <StarIcon />
               {open?.isActive ? 'Stop using for new quarters' : 'Use for new quarters'}
             </Button>
-            <Button onClick={() => setArchiving(true)} size="sm" variant="ghost">
+            <Button onClick={() => whenSaved(() => setArchiving(true))} size="sm" variant="ghost">
               <ArchiveIcon />
               Archive
             </Button>
@@ -410,7 +572,8 @@ export function GroupMakerView() {
           initial={editor.initial}
           key={editor.key}
           lines={display.lines}
-          onChange={setCurrent}
+          live={liveView}
+          onChange={onViewChange}
           persist={false}
           prints={EMPTY_PRINTS}
           properties={made.rows}
@@ -431,36 +594,14 @@ export function GroupMakerView() {
             <AlertDialogTitle>Archive {editor?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               It is no longer offered when a quarter is built, and stops being the active template. A quarter already
-              built from it keeps its days; rebuilding that quarter asks for another grouping.
+              built from it keeps its days; rebuilding that quarter asks for another grouping. Anyone else with it
+              open is told.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep it</AlertDialogCancel>
             <AlertDialogAction disabled={mutations.archive.isPending} onClick={archive}>
               Archive
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog onOpenChange={(next) => !next && setPendingLeave(null)} open={pendingLeave !== null}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {editor?.name} has changes that are not saved. They are lost if you go on.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Stay</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const action = pendingLeave;
-                setPendingLeave(null);
-                action?.();
-              }}
-            >
-              Leave without saving
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

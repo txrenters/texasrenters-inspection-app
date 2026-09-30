@@ -1,5 +1,6 @@
 'use client';
 
+import type { GroupTemplateOp } from '@texasrenters/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
@@ -380,6 +381,8 @@ export interface GroupTemplateSummary {
 }
 
 export interface GroupTemplateGroup {
+  /** The same on every browser, so live edits can name the group. */
+  id: string;
   position: number;
   name: string;
   color: string;
@@ -396,7 +399,7 @@ export interface GroupTemplateDetail extends Omit<GroupTemplateSummary, 'groupCo
 export interface GroupTemplateInput {
   name: string;
   minutesPerProperty?: number;
-  groups: Omit<GroupTemplateGroup, 'position'>[];
+  groups: Omit<GroupTemplateGroup, 'position' | 'id'>[];
   /** The revision the edit started from; absent for a new one. */
   revision?: number;
 }
@@ -410,6 +413,10 @@ export const useGroupMakerProperties = (enabled = true) =>
     queryFn: ({ signal }) =>
       api<{ properties: GroupMakerProperty[]; withoutPosition: number }>(`${PLANNING}/group-maker/properties`, { signal }),
     enabled,
+    // Read once while the maker is open: the map numbers its properties by this list, and a refetch
+    // underneath somebody grouping could renumber them mid-edit.
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
   });
 
 export const useGroupTemplates = (enabled = true) =>
@@ -428,6 +435,16 @@ export const useGroupTemplate = (id: string | null) =>
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
+
+/** A batch of live edits to a group template (2026-10-01); the server passes it on to everyone with it open. */
+export const postGroupTemplateOps = (id: string, batchId: string, ops: GroupTemplateOp<string>[]) =>
+  api<{ revision: number }>(`${PLANNING}/group-templates/${id}/ops`, {
+    method: 'POST',
+    body: JSON.stringify({ batchId, ops }),
+  });
+
+/** A group template read again, outside the cache: a live copy catching up. */
+export const readGroupTemplate = (id: string) => api<GroupTemplateDetail>(`${PLANNING}/group-templates/${id}`);
 
 export function useGroupTemplateMutations() {
   const client = useQueryClient();

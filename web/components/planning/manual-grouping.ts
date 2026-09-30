@@ -13,6 +13,7 @@
  * tenant's name or address.
  */
 
+import { suggestGroupName } from '@texasrenters/shared';
 import { z } from 'zod';
 
 import { extendPalette, groupColorOf, groupOutline, type FileGroup, type GroupFile, type GroupFileRow } from './group-file';
@@ -95,12 +96,13 @@ export function newGroupId(): string {
     : `group-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** "Group N", with N the first number no group is already called by. */
+/**
+ * The name a new group is offered: the next in the pattern the groups already
+ * follow -- "Group 5" after Group 1, 2 and 4, "Day 8" after Day 7 -- and never
+ * one a group already has (the office, 2026-10-01).
+ */
 export function nextGroupName(state: ManualState): string {
-  const taken = new Set(state.groups.map((group) => group.name.trim().toLowerCase()));
-  let number = state.groups.length + 1;
-  while (taken.has(`group ${number}`)) number += 1;
-  return `Group ${number}`;
+  return suggestGroupName(state.groups.map((group) => group.name));
 }
 
 /** How many groups each get a colour of their own: as many as a template holds (the office, 2026-10-01). */
@@ -214,7 +216,14 @@ export type HistoryAction =
   | { type: 'undo' }
   | { type: 'redo' }
   /** A fresh start -- blank, from the file, or resumed: nothing before it to undo. */
-  | { type: 'reset'; state: ManualState };
+  | { type: 'reset'; state: ManualState }
+  /**
+   * Somebody else's change to a live template (2026-10-01), made to every step
+   * of the history as well as the present. Undo then takes back only this
+   * person's own steps: the step it returns to carries the other change too,
+   * rather than quietly reverting it.
+   */
+  | { type: 'rebase'; apply: (state: ManualState) => ManualState };
 
 /** How far back undo reaches. A session of building 39 groups is well inside it. */
 const HISTORY_LIMIT = 500;
@@ -239,6 +248,12 @@ export function historyReducer(history: ManualHistory, action: HistoryAction): M
     }
     case 'reset':
       return { past: [], present: action.state, future: [] };
+    case 'rebase':
+      return {
+        past: history.past.map(action.apply),
+        present: action.apply(history.present),
+        future: history.future.map(action.apply),
+      };
   }
 }
 
