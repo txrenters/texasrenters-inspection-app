@@ -201,6 +201,10 @@ export class JobberOutboundWorker {
         throw new JobberError('This task has no plan stop to book from.', 'JOBBER_TASK_MISSING_STOP', 500);
       return this.bookUnscheduledJob(organizationId, task.id, task.tbpStopId);
     }
+    // A planned visit whose inspection was deleted in the console: taking it
+    // off Jobber needs only the visit and its job.
+    if (task.kind === JobberOutboundKind.VISIT_CANCEL && !task.inspectionId)
+      return this.pushCancellation(organizationId, task);
     // Every other kind is about an inspection, and a row without one should
     // never have been enqueued.
     if (!task.inspectionId)
@@ -810,7 +814,7 @@ export class JobberOutboundWorker {
    */
   private async pushCancellation(
     organizationId: string,
-    task: { inspectionId: string; jobberVisitId: string | null; jobberJobId: string | null },
+    task: { jobberVisitId: string | null; jobberJobId: string | null },
   ) {
     const visitId = this.editedVisit(task);
     const job = task.jobberJobId

@@ -1,9 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import {
-  InspectionStatus,
-  JobberVisitImportStatus,
-  WebhookProcessingStatus,
-} from '@prisma/client';
+import { WebhookProcessingStatus } from '@prisma/client';
 
 import { PrismaService } from '../../common/prisma.service';
 import { withTenant } from '../../database/tenant-context';
@@ -103,7 +99,7 @@ export class JobberWebhookService {
     try {
       await withTenant(connection.organizationId, async () => {
       if (event.topic === 'VISIT_DESTROY') {
-        await this.withdrawDeletedVisit(connection.organizationId, event.itemId);
+        await this.sync.withdrawDeletedVisit(connection.organizationId, event.itemId);
       } else if (event.topic === 'APP_DISCONNECT') {
         // Jobber has already invalidated the tokens; keeping them would leave a
         // connection that looks healthy and fails at the next refresh.
@@ -124,65 +120,6 @@ export class JobberWebhookService {
         `Jobber webhook ${event.topic} failed: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
     }
-  }
-
-  /**
-   * Withdraws an inspection whose Jobber visit was deleted.
-   *
-   * Handled here rather than by re-fetching, because a deleted visit and a
-   * visit we cannot see return the same nothing — and only the topic knows
-   * which happened. Without this the subscription would be inert: the delivery
-   * recorded, the inspection left SCHEDULED on a technician's phone for work
-   * that no longer exists.
-   *
-   * Work already under way is never cancelled from here. Once a technician has
-   * started, evidence exists and someone has to decide what happens to it, so
-   * that is recorded against the visit for a person rather than resolved by a
-   * webhook.
-   */
-  private async withdrawDeletedVisit(organizationId: string, jobberVisitId: string) {
-    const inspection = await this.prisma.inspection.findFirst({
-      where: { organizationId, jobberVisitId },
-      select: { id: true, status: true, startedAt: true },
-    });
-    if (!inspection) return;
-
-    if (inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED) {
-      await this.prisma.jobberVisitImport.updateMany({
-        where: { organizationId, jobberVisitId },
-        data: {
-          failureCode: 'JOBBER_VISIT_DELETED_NEEDS_REVIEW',
-          failureMessage:
-            'Jobber deleted this visit after the inspection was already under way. Someone has to decide what happens to the work already recorded.',
-        },
-      });
-      return;
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inspection.update({
-        where: { id: inspection.id },
-        data: {
-          status: InspectionStatus.CANCELLED,
-          cancelledAt: new Date(),
-          cancellationReason: 'The Jobber visit this inspection came from was deleted.',
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          organizationId,
-          action: 'INSPECTION_CANCELLED',
-          entityType: 'Inspection',
-          entityId: inspection.id,
-          metadata: { jobberVisitId, reason: 'JOBBER_VISIT_DESTROYED' },
-        },
-      });
-      await tx.jobberVisitImport.updateMany({
-        where: { organizationId, jobberVisitId },
-        data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null },
-      });
-    });
-    this.logger.log(`Cancelled inspection ${inspection.id}: its Jobber visit was deleted.`);
   }
 
   private finish(providerEventId: string, status: WebhookProcessingStatus) {

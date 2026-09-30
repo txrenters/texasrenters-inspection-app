@@ -78,7 +78,24 @@ const written = (tx: ReturnType<typeof build>['tx']) =>
     scheduledEndAt?: Date;
   };
 
+/**
+ * Console edits reach Jobber. A rebuild queues its moves only then, as the
+ * console does: queued with the switch off they were never sent, and held
+ * Jobber's own later moves back for good (2026-10-01).
+ */
+const pushesOn = () => {
+  const previous = { ...process.env };
+  beforeEach(() => {
+    process.env.JOBBER_PUSH_EDITS_ENABLED = 'true';
+  });
+  afterEach(() => {
+    process.env = { ...previous };
+  });
+};
+
 describe('a rebuild moving a timed visit', () => {
+  pushesOn();
+
   it('moves its window to the new day at the same Texas clock time', async () => {
     // 10:00-10:30 a.m. on 5 October: CDT, UTC-5.
     const { rebook, tx } = build(
@@ -133,6 +150,22 @@ describe('a rebuild moving a timed visit', () => {
     expect(tx.jobberOutboundTask.upsert.mock.calls[0][0].create.kind).toBe(
       JobberOutboundKind.VISIT_RESCHEDULE,
     );
+  });
+
+  it('queues nothing while console edits are not pushed, and still moves the inspection', async () => {
+    process.env.JOBBER_PUSH_EDITS_ENABLED = 'false';
+    process.env.JOBBER_BOOKING_ENABLED = 'false';
+    const { rebook, tx } = build(
+      {
+        scheduledStartAt: new Date('2026-10-05T15:00:00.000Z'),
+        scheduledEndAt: new Date('2026-10-05T15:30:00.000Z'),
+      },
+      { from: '2026-10-05', to: '2026-10-09' },
+    );
+    await expect(rebook()).resolves.toBe(1);
+
+    expect(tx.jobberOutboundTask.upsert).not.toHaveBeenCalled();
+    expect(tx.inspection.update).toHaveBeenCalled();
   });
 });
 

@@ -6,7 +6,11 @@ import type { JobberClient } from '../src/integrations/jobber/jobber.client';
 import { requestVisitPush } from '../src/integrations/jobber/jobber.outbound';
 import type { JobberVisit } from '../src/integrations/jobber/jobber.schemas';
 import { JobberOutboundWorker } from '../src/workers/jobber-sync/jobber-outbound.worker';
-import { JobberSyncWorker, type JobberSyncResult } from '../src/workers/jobber-sync/jobber-sync.worker';
+import {
+  jobberChangedSince,
+  JobberSyncWorker,
+  type JobberSyncResult,
+} from '../src/workers/jobber-sync/jobber-sync.worker';
 
 /**
  * Edits made in the console to a visit Jobber already has: a new day, a new
@@ -29,6 +33,10 @@ const withEnvironment = <T>(overrides: Record<string, string | undefined>, build
     process.env = previous;
   }
 };
+
+/** Console edits reach Jobber, as they must for the two to stay in step. */
+const PUSHES_ON = { JOBBER_PUSH_EDITS_ENABLED: 'true' };
+const PUSHES_OFF = { JOBBER_PUSH_EDITS_ENABLED: 'false', JOBBER_BOOKING_ENABLED: 'false' };
 
 const READ_AT = new Date('2026-09-15T12:00:00.000Z');
 
@@ -194,6 +202,18 @@ describe('pushing a console edit to Jobber', () => {
     expect(request.mock.calls[1][2]).toEqual({ visitIds: ['visit-9'] });
   });
 
+  it('takes the visit off Jobber after its inspection was deleted in the console', async () => {
+    // Queued with no inspection, which the delete removed (2026-10-01).
+    const { worker, request, prisma } = build({ task: editTask(JobberOutboundKind.VISIT_CANCEL, { inspectionId: null }) });
+    request
+      .mockResolvedValueOnce(jobVisits([{ id: 'visit-9', isComplete: false }]))
+      .mockResolvedValueOnce({ jobClose: { userErrors: [] } });
+
+    await expect(worker.run('org-1')).resolves.toMatchObject({ sent: 1 });
+    expect(request.mock.calls[1][2]).toEqual({ jobId: 'job-9', input: { modifyIncompleteVisitsBy: 'DESTROY_ALL' } });
+    expect(prisma.inspection.findFirst).not.toHaveBeenCalled();
+  });
+
   it('deletes only the visit when the job has more visits than one page shows', async () => {
     const { worker, request } = build({ task: editTask(JobberOutboundKind.VISIT_CANCEL) });
     request
@@ -307,13 +327,22 @@ describe('the sync while a console edit is on its way to Jobber', () => {
     notSynced: 0,
     assigned: 0,
     completedFromJobber: 0,
+    withdrawn: 0,
     skipped: 0,
     truncated: false,
   });
 
-  function syncWith(waiting: JobberOutboundKind[]) {
+  function syncWith(waiting: JobberOutboundKind[], environment: Record<string, string | undefined> = PUSHES_ON) {
+    const tx = {
+      jobberOutboundTask: { deleteMany: jest.fn().mockResolvedValue({ count: waiting.length }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      inspection: { update: jest.fn().mockResolvedValue({}) },
+      tbpQuarterPlanStop: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
     const prisma = {
-      jobberOutboundTask: { findMany: jest.fn().mockResolvedValue(waiting.map((kind) => ({ kind }))) },
+      jobberOutboundTask: {
+        findMany: jest.fn().mockResolvedValue(waiting.map((kind, index) => ({ id: `task-${index}`, kind }))),
+      },
       inspection: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'inspection-1',
@@ -328,16 +357,25 @@ describe('the sync while a console edit is on its way to Jobber', () => {
         }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      $transaction: jest.fn(),
+      $transaction: jest.fn((work: (client: typeof tx) => Promise<unknown>) => work(tx)),
     };
-    const worker = new JobberSyncWorker(prisma as never, {} as never, {} as never) as unknown as {
+    const worker = withEnvironment(
+      environment,
+      () => new JobberSyncWorker(prisma as never, {} as never, {} as never),
+    ) as unknown as {
       applyAssignment: jest.Mock;
       completeFromJobber: jest.Mock;
-      applyChanges: (organizationId: string, visit: JobberVisit, inspectionId: string, result: JobberSyncResult) => Promise<void>;
+      applyChanges: (
+        organizationId: string,
+        visit: JobberVisit,
+        inspectionId: string,
+        result: JobberSyncResult,
+        stored?: { payload?: unknown; failureCode?: string | null },
+      ) => Promise<void>;
     };
     worker.applyAssignment = jest.fn().mockResolvedValue(undefined);
     worker.completeFromJobber = jest.fn().mockResolvedValue(undefined);
-    return { worker, prisma };
+    return { worker, prisma, tx };
   }
 
   const jobberCopy = {
@@ -346,7 +384,10 @@ describe('the sync while a console edit is on its way to Jobber', () => {
     instructions: 'Old details',
     startAt: '2026-09-16T05:00:00Z',
     endAt: '2026-09-17T04:59:59Z',
+    assignedUsers: { nodes: [{ id: 'jobber-user-7' }] },
   } as unknown as JobberVisit;
+  /** What the last sync stored: the same copy, so nothing changed in Jobber since. */
+  const unchanged = { payload: { ...jobberCopy } };
 
   it("keeps the console's day, technician and Details until they have gone", async () => {
     const { worker, prisma } = syncWith([
@@ -355,7 +396,7 @@ describe('the sync while a console edit is on its way to Jobber', () => {
       JobberOutboundKind.VISIT_EDIT,
     ]);
 
-    await worker.applyChanges('org-1', jobberCopy, 'inspection-1', result());
+    await worker.applyChanges('org-1', jobberCopy, 'inspection-1', result(), unchanged);
 
     expect(worker.applyAssignment).not.toHaveBeenCalled();
     expect(prisma.inspection.updateMany).not.toHaveBeenCalled();
@@ -365,14 +406,117 @@ describe('the sync while a console edit is on its way to Jobber', () => {
     });
   });
 
-  it("goes back to Jobber's copy once nothing is waiting", async () => {
-    const { worker, prisma } = syncWith([]);
+  it('keeps holding when there is no stored copy to tell a change in Jobber by', async () => {
+    const { worker, prisma } = syncWith([JobberOutboundKind.VISIT_RESCHEDULE]);
 
     await worker.applyChanges('org-1', jobberCopy, 'inspection-1', result());
 
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("goes back to Jobber's copy once nothing is waiting", async () => {
+    const { worker, prisma, tx } = syncWith([]);
+
+    await worker.applyChanges('org-1', jobberCopy, 'inspection-1', result(), unchanged);
+
     expect(worker.applyAssignment).toHaveBeenCalled();
     expect(prisma.inspection.updateMany).toHaveBeenCalled();
-    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(tx.inspection.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ scheduledAt: new Date('2026-09-16T00:00:00Z') }) }),
+    );
+  });
+
+  it("lets Jobber's move win when the office moved the visit there after the console did", async () => {
+    // Jobber had the 14th at the last sync and has the 16th now: that move is
+    // newer than the console's, which is withdrawn so it can never be sent.
+    const { worker, tx } = syncWith([JobberOutboundKind.VISIT_RESCHEDULE, JobberOutboundKind.VISIT_ASSIGN]);
+    const before = { payload: { ...jobberCopy, startAt: '2026-09-14T05:00:00Z', endAt: '2026-09-15T04:59:59Z' } };
+    const outcome = result();
+
+    await worker.applyChanges('org-1', jobberCopy, 'inspection-1', outcome, before);
+
+    expect(tx.jobberOutboundTask.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['task-0'] }, status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] } },
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'JOBBER_CONSOLE_EDIT_WITHDRAWN',
+          metadata: expect.objectContaining({ kinds: [JobberOutboundKind.VISIT_RESCHEDULE], reason: 'CHANGED_IN_JOBBER' }),
+        }),
+      }),
+    );
+    expect(tx.inspection.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ scheduledAt: new Date('2026-09-16T00:00:00Z') }) }),
+    );
+    expect(outcome.rescheduled).toBe(1);
+    // The technician was not changed in Jobber, so the console's still holds.
+    expect(worker.applyAssignment).not.toHaveBeenCalled();
+  });
+
+  it('holds nothing back while pushes are switched off, and withdraws what can never be sent', async () => {
+    // A quarter rebuild queued these whatever the switch said, and they froze
+    // three of Moses's October 1 stops on days Jobber no longer had (2026-10-01).
+    const { worker, tx } = syncWith(
+      [JobberOutboundKind.VISIT_RESCHEDULE, JobberOutboundKind.VISIT_ASSIGN],
+      PUSHES_OFF,
+    );
+    const outcome = result();
+
+    await worker.applyChanges('org-1', jobberCopy, 'inspection-1', outcome, unchanged);
+
+    expect(tx.jobberOutboundTask.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: { in: ['task-0', 'task-1'] } }) }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ metadata: expect.objectContaining({ reason: 'PUSH_EDITS_OFF' }) }),
+      }),
+    );
+    expect(worker.applyAssignment).toHaveBeenCalled();
+    expect(outcome.rescheduled).toBe(1);
+  });
+});
+
+describe('what Jobber changed since the last sync', () => {
+  const visit = {
+    id: 'visit-9',
+    title: 'Title',
+    instructions: 'Details',
+    startAt: '2026-09-16T05:00:00Z',
+    endAt: '2026-09-17T04:59:59Z',
+    allDay: true,
+    assignedUsers: { nodes: [{ id: 'a' }, { id: 'b' }] },
+  } as unknown as JobberVisit;
+
+  it('is nothing without a stored copy', () => {
+    expect(jobberChangedSince(JobberOutboundKind.VISIT_RESCHEDULE, null, visit)).toBe(false);
+    expect(jobberChangedSince(JobberOutboundKind.VISIT_RESCHEDULE, {}, visit)).toBe(false);
+  });
+
+  it('sees a new day, and nothing when the day is the same', () => {
+    expect(jobberChangedSince(JobberOutboundKind.VISIT_RESCHEDULE, { ...visit }, visit)).toBe(false);
+    expect(
+      jobberChangedSince(JobberOutboundKind.VISIT_RESCHEDULE, { ...visit, startAt: '2026-09-15T05:00:00Z' }, visit),
+    ).toBe(true);
+  });
+
+  it('sees a different technician, in any order', () => {
+    const reordered = { ...visit, assignedUsers: { nodes: [{ id: 'b' }, { id: 'a' }] } };
+    expect(jobberChangedSince(JobberOutboundKind.VISIT_ASSIGN, reordered, visit)).toBe(false);
+    expect(
+      jobberChangedSince(JobberOutboundKind.VISIT_ASSIGN, { ...visit, assignedUsers: { nodes: [{ id: 'a' }] } }, visit),
+    ).toBe(true);
+  });
+
+  it('sees edited Details', () => {
+    expect(jobberChangedSince(JobberOutboundKind.VISIT_EDIT, { ...visit, instructions: 'Old' }, visit)).toBe(true);
+  });
+
+  it('never lets a move in Jobber overrule a cancellation made here', () => {
+    expect(
+      jobberChangedSince(JobberOutboundKind.VISIT_CANCEL, { ...visit, startAt: '2026-09-15T05:00:00Z' }, visit),
+    ).toBe(false);
   });
 });
 

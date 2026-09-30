@@ -7,6 +7,7 @@ import {
   JobberConnectionStatus,
   JobberOutboundKind,
   JobberOutboundStatus,
+  JobberVisitImportStatus,
   MediaProcessingStatus,
   Prisma,
   PropertyAreaStatus,
@@ -4506,6 +4507,45 @@ export class AdminService {
       await tx.inspectionReportShare.deleteMany({ where: { inspectionId: id } });
       await tx.areaEvidenceRequest.deleteMany({ where: { inspectionId: id } });
 
+      /**
+       * A planned visit deleted here is taken off Jobber too (the office,
+       * 2026-10-01: a visit deleted on either side goes from both). Before
+       * this the visit stayed in Jobber for good, and the sync skipped it as
+       * an import whose inspection no longer existed.
+       *
+       * Queued with no inspection, which is about to go -- the cancellation
+       * needs only the visit and its job. Only for a SCHEDULED one: work begun
+       * or done is Jobber's history as much as ours. And only while console
+       * edits are pushed at all; with them off, Jobber's calendar is not this
+       * console's to change.
+       */
+      const jobberVisit = await tx.inspection.findUnique({
+        where: { id },
+        select: { status: true, jobberVisitId: true, jobberJobId: true },
+      });
+      const removeFromJobber = Boolean(
+        jobberVisit?.jobberVisitId &&
+          jobberVisit.status === InspectionStatus.SCHEDULED &&
+          getJobberConfig().pushEditsEnabled,
+      );
+      if (removeFromJobber && jobberVisit?.jobberVisitId) {
+        await tx.jobberOutboundTask.create({
+          data: {
+            organizationId: user.organizationId,
+            inspectionId: null,
+            jobberVisitId: jobberVisit.jobberVisitId,
+            jobberJobId: jobberVisit.jobberJobId,
+            kind: JobberOutboundKind.VISIT_CANCEL,
+            createdById: user.id,
+          },
+        });
+        // A person decided this visit is not an inspection any more.
+        await tx.jobberVisitImport.updateMany({
+          where: { organizationId: user.organizationId, jobberVisitId: jobberVisit.jobberVisitId },
+          data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null },
+        });
+      }
+
       await tx.inspection.delete({ where: { id } });
 
       /**
@@ -4523,6 +4563,7 @@ export class AdminService {
         findings: deletedFindings.count,
         unlinkedBaselineOf: baselineOf.count,
         unlinkedParentOf: parentOf.count,
+        ...(removeFromJobber ? { jobberVisitId: jobberVisit?.jobberVisitId, removedFromJobber: true } : {}),
       });
 
       return {

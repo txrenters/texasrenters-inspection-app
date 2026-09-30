@@ -30,6 +30,8 @@ function build(pages: number) {
       findUnique: jest.fn().mockResolvedValue({ status: 'CONNECTED' }),
       update: jest.fn().mockResolvedValue({}),
     },
+    // Nothing linked for the rolling window's look at what it did not return.
+    inspection: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const mapping = { buildingIndex: jest.fn().mockResolvedValue(new Map()) };
 

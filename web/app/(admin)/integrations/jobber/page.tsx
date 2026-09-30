@@ -348,6 +348,9 @@ export default function JobberIntegrationPage() {
             {mutations.sync.data.completedFromJobber > 0
               ? ` ${formatCount(mutations.sync.data.completedFromJobber)} closed because Jobber finished the visit.`
               : null}
+            {mutations.sync.data.withdrawn > 0
+              ? ` ${formatCount(mutations.sync.data.withdrawn)} taken off their day because Jobber no longer has them on one.`
+              : null}
           </AlertDescription>
         </Alert>
       ) : null}
