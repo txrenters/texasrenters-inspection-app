@@ -196,6 +196,8 @@ export interface AssignedCrew {
   anchors?: DayAnchor[];
   /** Set on the days of a trip to a far zone. */
   trip?: TripDay;
+  /** Which of the office's groups the day is (`presetGroups`), by its index there; absent for a day the planner grouped. */
+  preset?: number;
 }
 
 /**
@@ -338,6 +340,21 @@ export interface LayoutOptions {
   neighbourMinutes?: number;
   /** The plan's quarter, for whoever needs to name it. */
   quarter?: Quarter;
+  /**
+   * The office's own groups, from a group template (2026-09-30): each one a
+   * day's visits, by stop id, in the template's order. Absent: the planner
+   * groups the visits itself, as it always has.
+   *
+   * A group is kept whole, as the office drew it. Only what a day cannot hold
+   * comes off its end -- more than six hours on site, more than a matrix can
+   * route -- and a day with a move-out gives up the visits furthest from it
+   * (`presetAroundAnchors`). Visits in no group -- a building new since the
+   * template was saved -- join the group they add least driving to, or make
+   * days of their own where there are a day's worth (`looseIntoGroups`).
+   * Everything after the grouping is the same: the zone of the week, the crew,
+   * the calendar, trips, and the visits nothing could take (`squeezeIn`).
+   */
+  presetGroups?: readonly (readonly string[])[];
 }
 
 const DAY_MS = 86_400_000;
@@ -589,6 +606,8 @@ interface Group {
   /** The estimate between its stops, first to last, with a leg longer than allowed priced out. */
   cost: number;
   onSite: number;
+  /** One of the office's own groups (`presetGroups`), by its index there. */
+  preset?: number;
 }
 
 /** How the visits are grouped into days. */
@@ -1066,10 +1085,12 @@ function planTrip(
     rules: GroupRules;
     homes: ReadonlyMap<string, Point> | undefined;
     unavailable: (key: string) => boolean;
+    /** The trip's days, grouped already: the office's own groups (`presetGroups`). */
+    groups?: Group[];
   },
 ): AssignedCrew[] | null {
   const { rules, homes } = context;
-  const groups = groupsOf(members, rules);
+  const groups = context.groups ?? groupsOf(members, rules);
   const middle = middleOf(members);
   const fromHome = (technicianId: string) => {
     const home = homes?.get(technicianId);
@@ -1093,6 +1114,7 @@ function planTrip(
       onSiteMinutes: group.onSite,
       driveMinutes: pathMinutes(group.path, rules.drive),
       trip: { zone, day: index + 1, days: trip.length },
+      ...(group.preset === undefined ? {} : { preset: group.preset }),
     }));
   }
   return null;
@@ -1137,6 +1159,155 @@ function squeezeIn(
   }
 }
 
+/** The zone most of a group's visits are in, which it counts as for the zone of the week; the earliest visit's settles a tie. */
+function mainZone(path: readonly PlannableStop[]): string {
+  const counts = new Map<string, number>();
+  for (const stop of path) counts.set(zoneOf(stop), (counts.get(zoneOf(stop)) ?? 0) + 1);
+  let main = '';
+  let most = 0;
+  for (const [zone, count] of counts)
+    if (count > most) {
+      main = zone;
+      most = count;
+    }
+  return main;
+}
+
+/** Visits kept in the order given, as a group the planner can hand out. */
+function asGroup(path: PlannableStop[], rules: GroupRules, preset?: number): Group {
+  return {
+    zone: rules.zoned ? mainZone(path) : null,
+    path,
+    cost: pathMinutes(path, rules.cost),
+    onSite: path.reduce((total, stop) => total + stop.onSiteMinutes, 0),
+    ...(preset === undefined ? {} : { preset }),
+  };
+}
+
+/** The office's groups, while a quarter is laid out from them: those still to hand out, and the visits in none. */
+interface Presets {
+  groups: Group[];
+  loose: PlannableStop[];
+}
+
+/**
+ * The office's own groups as the planner's: each one's visits still to be
+ * placed, in its order.
+ *
+ * A group of 21 or 25 is a day nobody can drive or route, so a day's limits
+ * still hold: once a visit would take a group past six hours on site or past a
+ * day's matrix (`MAX_STOPS_PER_DAY`), it and the rest of that group's visits
+ * are placed like visits in no group. A group crossing a zone line counts as
+ * the zone most of it is in (the office chose this, 2026-09-30). A visit two
+ * groups name stays in the first.
+ */
+function presetGroupsOf(presets: readonly (readonly string[])[], left: ReadonlySet<PlannableStop>, rules: GroupRules): Presets {
+  const byId = new Map([...left].map((stop) => [stop.stopId, stop]));
+  const used = new Set<PlannableStop>();
+  const groups: Group[] = [];
+  const loose: PlannableStop[] = [];
+  presets.forEach((ids, index) => {
+    const path: PlannableStop[] = [];
+    let onSite = 0;
+    let full = false;
+    for (const id of ids) {
+      const stop = byId.get(id);
+      if (!stop || used.has(stop)) continue;
+      used.add(stop);
+      full ||= path.length >= MAX_STOPS_PER_DAY || onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes;
+      if (full) {
+        loose.push(stop);
+        continue;
+      }
+      path.push(stop);
+      onSite += stop.onSiteMinutes;
+    }
+    if (path.length) groups.push(asGroup(path, rules, index));
+  });
+  // In last quarter's order, as `left` is.
+  for (const stop of left) if (!used.has(stop)) loose.push(stop);
+  return { groups, loose };
+}
+
+/** A visit into the group it adds least driving to, of those with room for it; false where none has. */
+function joinNearest(stop: PlannableStop, groups: readonly Group[], rules: GroupRules): boolean {
+  let best: { group: Group; at: number; added: number } | null = null;
+  for (const group of groups) {
+    if (group.path.length >= rules.most || group.onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes) continue;
+    const { at, added } = cheapestInsertion(group.path, stop, rules.cost);
+    if (!overLong(added) && (!best || added < best.added)) best = { group, at, added };
+  }
+  if (!best) return false;
+  best.group.path.splice(best.at, 0, stop);
+  best.group.cost += best.added;
+  best.group.onSite += stop.onSiteMinutes;
+  return true;
+}
+
+/**
+ * Visits none of the office's groups hold -- a building new since the template
+ * was saved, or what a day could not take -- among the groups.
+ *
+ * Where there is a day's worth of them together they are days of their own,
+ * grouped as the planner groups any (`groupsOf`). The rest join the group they
+ * add least driving to, while it has room -- the plan's most a day, its six
+ * hours, and no drive between two properties longer than the office allows --
+ * and a visit with nowhere to go is a short day of its own rather than a
+ * tenancy nobody visits.
+ */
+function looseIntoGroups(loose: readonly PlannableStop[], groups: readonly Group[], rules: GroupRules): Group[] {
+  if (loose.length === 0) return [...groups];
+  const own = groupsOf(loose, rules);
+  const pool = [...groups, ...own.filter((group) => group.path.length >= rules.size)];
+  const stranded = own
+    .filter((group) => group.path.length < rules.size)
+    .flatMap((group) => group.path)
+    .filter((stop) => !joinNearest(stop, pool, rules));
+  return [...pool, ...groupsOf(stranded, rules)];
+}
+
+/**
+ * A day with a move-out or move-in, laid out from the office's groups: the
+ * group nearest the appointments, less the visits furthest from them -- three
+ * for each appointment (`ANCHOR_VISITS`), and any more its six hours need
+ * (the office chose this, 2026-09-30). Null when no group is left to take.
+ */
+function presetAroundAnchors(
+  anchors: readonly DayAnchor[],
+  groups: readonly Group[],
+  limits: DayLimits,
+  cost: DriveEstimate,
+  drive: DriveEstimate,
+): { group: Group; visits: PlannableStop[]; dropped: PlannableStop[]; drive: number; onSite: number } | null {
+  if (groups.length === 0) return null;
+  const nearness = (stop: PlannableStop) => Math.min(...anchors.map((anchor) => drive(anchor, stop)));
+  let group = groups[0]!;
+  let nearest = Number.POSITIVE_INFINITY;
+  for (const candidate of groups) {
+    const minutes = Math.min(...candidate.path.map(nearness));
+    if (minutes < nearest) {
+      group = candidate;
+      nearest = minutes;
+    }
+  }
+  const most = Math.max(0, group.path.length - ANCHOR_VISITS * anchors.length);
+  let onSite = anchors.reduce((total, anchor) => total + anchor.onSiteMinutes, 0);
+  const kept = new Set<PlannableStop>();
+  for (const stop of [...group.path].sort((left, right) => nearness(left) - nearness(right))) {
+    if (kept.size >= most || onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) break;
+    kept.add(stop);
+    onSite += stop.onSiteMinutes;
+  }
+  const ordered = polished([...anchors.map(anchorAsStop), ...group.path.filter((stop) => kept.has(stop))], cost).path;
+  return {
+    group,
+    visits: ordered.filter((stop) => anchorIdOf(stop) === null),
+    dropped: group.path.filter((stop) => !kept.has(stop)),
+    drive: pathMinutes(ordered, drive),
+    onSite,
+  };
+}
+
 /**
  * Give every stop a day and a technician: the whole crew every planned day, a
  * group of nine each, from the first day until every visit has one -- and the
@@ -1153,7 +1324,9 @@ function squeezeIn(
  *    holding the visit first in last quarter's order (`groupFor`).
  *
  * The groups are made once from everything left, and made again only after a
- * move-out's day took visits out of them.
+ * move-out's day took visits out of them. From a group template
+ * (`presetGroups`) they are the office's, and never made again: a move-out's
+ * day takes the group nearest it, less what the day cannot hold.
  */
 export function layoutEveryDay(
   stops: readonly PlannableStop[],
@@ -1235,17 +1408,30 @@ export function layoutEveryDay(
     zoned,
   };
 
+  // The office's own groups, when the quarter is built from a template (2026-09-30).
+  const presets = options.presetGroups ? presetGroupsOf(options.presetGroups, left, rules) : null;
+
   // 0. Trips, on days fixed before anything else is laid out.
   const crew = [...new Set(days.flatMap((day) => day.technicianIds))];
   const onTrip = new Set<string>();
   for (const zone of [...new Set(options.tripZones ?? [])].sort()) {
-    const members = [...left].filter((stop) => zoneOf(stop) === zone);
+    // From a template, a far zone's days are the groups mostly in it, whole, and its visits in no group.
+    const tripGroups = presets ? presets.groups.filter((group) => mainZone(group.path) === zone) : [];
+    const looseHere = presets ? presets.loose.filter((stop) => zoneOf(stop) === zone) : [];
+    const members = presets
+      ? [...tripGroups.flatMap((group) => group.path), ...looseHere]
+      : [...left].filter((stop) => zoneOf(stop) === zone);
     if (members.length === 0) continue;
     for (const stop of members) left.delete(stop);
+    if (presets) {
+      presets.groups = presets.groups.filter((group) => !tripGroups.includes(group));
+      presets.loose = presets.loose.filter((stop) => !looseHere.includes(stop));
+    }
     const trip = planTrip(zone, members, days, crew, {
       rules: { ...rules, zoned: false },
       homes: options.homes,
       unavailable: (key) => Boolean(options.taken?.has(key)) || anchored.has(key) || onTrip.has(key),
+      ...(presets ? { groups: [...tripGroups, ...groupsOf(looseHere, { ...rules, zoned: false })] } : {}),
     });
     if (!trip) {
       for (const stop of members) unplaced.push({ stopId: stop.stopId, reason: 'NO_TRIP_DAYS' });
@@ -1260,7 +1446,8 @@ export function layoutEveryDay(
   // zone before anyone helping out.
   const rank = (group: Group) => Math.min(...group.path.map((stop) => place.get(stop.stopId)!));
   // What is left, grouped: kept while days take whole groups of it, made again when a move-out's day breaks one.
-  let groups: Group[] | null = null;
+  // From a template, the office's groups -- made once, and never made again.
+  let groups: Group[] | null = presets ? looseIntoGroups(presets.loose, presets.groups, rules) : null;
   for (const day of days) {
     const free = day.technicianIds.filter((technicianId) => {
       const key = crewKey(day.date, technicianId);
@@ -1269,6 +1456,33 @@ export function layoutEveryDay(
     for (const technicianId of free) {
       const dayAnchors = anchored.get(crewKey(day.date, technicianId));
       if (!dayAnchors) continue;
+      if (presets && groups) {
+        const fromGroup = presetAroundAnchors(
+          dayAnchors,
+          groups.filter((group) => group.path.every((stop) => qualified(day, technicianId, stop))),
+          limits,
+          cost,
+          drive,
+        );
+        // With no group left to take, the day is its move-outs, and whatever is squeezed in at the end.
+        const filled = fromGroup ?? fillAroundAnchors(dayAnchors, [], limits, cost, drive);
+        if (fromGroup) {
+          groups.splice(groups.indexOf(fromGroup.group), 1);
+          for (const visit of fromGroup.visits) left.delete(visit);
+          // What the day could not hold is placed like a visit in no group.
+          groups = looseIntoGroups(fromGroup.dropped, groups, rules);
+        }
+        crews.push({
+          date: day.date,
+          technicianId,
+          stops: filled.visits,
+          onSiteMinutes: filled.onSite,
+          driveMinutes: filled.drive,
+          anchors: dayAnchors,
+          ...(fromGroup?.group.preset === undefined ? {} : { preset: fromGroup.group.preset }),
+        });
+        continue;
+      }
       const filled = fillAroundAnchors(
         dayAnchors,
         [...left].filter((stop) => qualified(day, technicianId, stop)),
@@ -1307,6 +1521,7 @@ export function layoutEveryDay(
         stops: group.path,
         onSiteMinutes: group.onSite,
         driveMinutes: pathMinutes(group.path, drive),
+        ...(group.preset === undefined ? {} : { preset: group.preset }),
       });
     }
   }
