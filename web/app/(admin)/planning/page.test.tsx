@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type * as RoadRoutes from '@/components/planning/road-routes';
+
 import PlanningPage from './page';
 
 const hooks = vi.hoisted(() => ({
@@ -12,6 +14,7 @@ const hooks = vi.hoisted(() => ({
   usePlanRotation: vi.fn(),
   usePlanTechnicians: vi.fn(),
   usePlanningMutations: vi.fn(),
+  useGroupFileOnServer: vi.fn(),
 }));
 
 vi.mock('@/lib/planning-queries', () => hooks);
@@ -28,6 +31,13 @@ const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: ''
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 // The maps load Google's script; the page around them is what is under test.
 vi.mock('@/components/planning/plan-day-map', () => ({ PlanDayMap: () => <div data-testid="plan-day-map" /> }));
+vi.mock('@/components/planning/plan-groups-map', () => ({ PlanGroupsMap: () => <div data-testid="plan-groups-map" /> }));
+vi.mock('@/components/planning/group-file-map', () => ({ GroupFileMap: () => <div data-testid="group-file-map" /> }));
+// No road routes under test: nothing here may call Mapbox, and the list falls back to the file's own figures.
+vi.mock('@/components/planning/road-routes', async (importOriginal) => ({
+  ...(await importOriginal<typeof RoadRoutes>()),
+  useRoadRoutes: () => new Map(),
+}));
 vi.mock('@/components/planning/plan-attention-map', () => ({
   PlanAttentionMap: ({ stops, planned }: { stops: { id: string; attention: string | null }[]; planned: { id: string }[] }) => (
     <div data-testid="plan-attention-map">
@@ -162,7 +172,9 @@ function mount({
   editStop = idle as unknown,
   advice = null as unknown,
   applyAdvice = null as unknown,
+  groupFile = null as unknown,
 } = {}) {
+  hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
   hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [day] : [] });
@@ -225,6 +237,43 @@ afterEach(() => {
 });
 
 describe('the benefit package plan page', () => {
+  /**
+   * The office (2026-09-30): "Load this file by default." The server's groups
+   * file opens on the Groups tab with nothing to choose and says where it came
+   * from; going back to the quarter's days offers it again.
+   */
+  it('opens the server’s groups file on the Groups tab by default, and offers it again after going back', () => {
+    url.state = { quarter: '2026-4', tab: 'groups', day: '' };
+    mount({
+      groupFile: {
+        fileName: 'groups.csv',
+        csv: [
+          'group,group_area,stop,address,latitude,longitude,group_size,group_drive_minutes,longest_hop_minutes,group_route_miles',
+          '1,Katy,1,1 Main St,29.7,-95.4,10,72,16,30.5',
+          '1,Katy,2,2 Main St,29.71,-95.41,10,72,16,30.5',
+        ].join('\r\n'),
+        modifiedAt: '2026-09-30T08:00:00.000Z',
+      },
+    });
+
+    expect(hooks.useGroupFileOnServer).toHaveBeenCalledWith(true);
+    expect(screen.getByText('groups.csv')).toBeTruthy();
+    expect(screen.getByText(/from the server’s data folder/)).toBeTruthy();
+    expect(screen.getByText('10 properties · 72 min drive · 49.1 km')).toBeTruthy();
+    expect(screen.getByText('long hop')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Back to the quarter’s days/ }));
+    expect(screen.queryByText(/from the server’s data folder/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show groups.csv' })).toBeTruthy();
+  });
+
+  /** It names every tenant: a page that never shows it has no business asking for it. */
+  it('does not ask the server for the groups file until the Groups tab is open', () => {
+    mount();
+    expect(hooks.useGroupFileOnServer).toHaveBeenCalledWith(false);
+    expect(hooks.useGroupFileOnServer).not.toHaveBeenCalledWith(true);
+  });
+
   it('offers to build a quarter that has no plan yet', () => {
     mount({ plans: [] });
 

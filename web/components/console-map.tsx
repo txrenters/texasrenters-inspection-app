@@ -180,7 +180,10 @@ export function ConsoleMap({
   const style = MAP_STYLES[preferences.mapType];
 
   return (
-    <div className="relative h-full w-full">
+    // `isolate`: the map is its own stacking context. Pages order their pins
+    // with z-indexes in the hundreds, and without this those competed with the
+    // whole page -- a map's pins drew over a dialog opened above it.
+    <div className="relative isolate h-full w-full">
       <Map
         initialViewState={initialView}
         mapStyle={dark ? style.dark : style.light}

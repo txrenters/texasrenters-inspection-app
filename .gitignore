@@ -140,6 +140,11 @@ Desktop.ini
 backups/
 *.dump
 
+# Working files from Propertyware and the office -- tenant names and home
+# addresses. This repository is public, so they stay on the machine; the
+# console reads them from a file chosen in the browser.
+/data/
+
 # Editor/tool workspace state — per-machine, regenerated locally.
 .v3code/
 .context-bridge/

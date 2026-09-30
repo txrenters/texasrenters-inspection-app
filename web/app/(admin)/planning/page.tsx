@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+import { GroupFilePicker, GroupFileView, useGroupFileChoice } from '@/components/planning/group-file-view';
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
 import { PlanAdviceDialog } from '@/components/planning/plan-advice-dialog';
 import type { AttentionMapStop } from '@/components/planning/plan-attention-map';
@@ -129,6 +130,15 @@ export default function PlanningPage() {
    * so the office can follow one while comparing it against its neighbours.
    */
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  /**
+   * A groups file drawn on the Groups map in place of the quarter's days: the
+   * server's by default, or one chosen here.
+   *
+   * Held here rather than in the tab, so looking at another tab and coming
+   * back keeps it. Never stored in the browser: it names tenants.
+   */
+  const groupFiles = useGroupFileChoice(state.tab === 'groups');
+  const groupFile = groupFiles.shown;
 
   // What AI made of the quarter, and the moves it offered (2026-09-20).
   const [advising, setAdvising] = useState(false);
@@ -605,22 +615,52 @@ export default function PlanningPage() {
               day, sized to reach that day's properties. A wide circle is a day
               spread across the county; two overlapping circles are two days
               covering the same ground, which is a day that could be saved.
+
+              Or a file of properties already split into groups, drawn on the
+              same map: the office works groupings out in a spreadsheet too.
             */}
             <TabsContent className="mt-3" value="groups">
-              <div className="grid gap-3">
-                <div className="h-80 lg:h-[34rem]">
-                  <PlanGroupsMap
-                    onSelectDay={setSelectedDate}
-                    selectedDate={selectedDate}
-                    stops={(stops.data ?? []).map((stop) => ({
-                      id: stop.id,
-                      latitude: stop.latitude ?? Number.NaN,
-                      longitude: stop.longitude ?? Number.NaN,
-                      scheduledOn: stop.scheduledOn,
-                    }))}
-                  />
+              {groupFile ? (
+                <GroupFileView
+                  key={`${groupFile.source}:${groupFile.name}:${groupFile.loadedAt}`}
+                  loaded={groupFile}
+                  onClose={groupFiles.close}
+                  onLoad={groupFiles.choose}
+                />
+              ) : (
+                <div className="grid gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-muted-foreground text-xs">
+                      One circle per day of the quarter, numbered in the order it is worked. To see a file of properties
+                      already split into groups on this map instead, choose it here: it is read in this browser and sent
+                      nowhere.
+                      {groupFiles.serverProblem
+                        ? ` The server’s groups file could not be opened: ${groupFiles.serverProblem}.`
+                        : null}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {groupFiles.serverFile ? (
+                        <Button onClick={groupFiles.showServerFile} size="sm" variant="outline">
+                          Show {groupFiles.serverFile.name}
+                        </Button>
+                      ) : null}
+                      <GroupFilePicker label="Map a groups file" onLoad={groupFiles.choose} />
+                    </div>
+                  </div>
+                  <div className="h-80 lg:h-[34rem]">
+                    <PlanGroupsMap
+                      onSelectDay={setSelectedDate}
+                      selectedDate={selectedDate}
+                      stops={(stops.data ?? []).map((stop) => ({
+                        id: stop.id,
+                        latitude: stop.latitude ?? Number.NaN,
+                        longitude: stop.longitude ?? Number.NaN,
+                        scheduledOn: stop.scheduledOn,
+                      }))}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
             </TabsContent>
 
             <TabsContent className="mt-3" value="days">
