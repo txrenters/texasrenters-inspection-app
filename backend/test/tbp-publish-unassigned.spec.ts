@@ -119,6 +119,8 @@ describe('rebuilding a plan published unassigned', () => {
     const tx = {
       inspection: {
         update: jest.fn().mockResolvedValue({}),
+        // A whole-day visit: the window a moved day carries along.
+        findUnique: jest.fn().mockResolvedValue({ scheduledStartAt: null, scheduledEndAt: null }),
         // What `requestVisitPush` reads to decide the visit reached Jobber.
         findFirst: jest.fn().mockResolvedValue({ jobberVisitId: 'visit-9', jobberJobId: 'job-9' }),
       },

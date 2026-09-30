@@ -43,7 +43,7 @@ import {
 } from '@texasrenters/shared';
 
 import { TechnicianSkillsService } from '../admin/technician-skills.service';
-import { businessInstant } from '../common/business-day';
+import { businessInstant, movedWindow } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
@@ -1268,9 +1268,9 @@ export class QuarterPlannerService {
    *
    * The office's rule, in their words: the visit is not deleted and made
    * again, its day is changed. So the inspection keeps its id, its evidence,
-   * its Jobber visit and its place in any comparison -- only `scheduledAt`
-   * moves, and Jobber is told through the same reschedule path the console
-   * uses when somebody changes one visit by hand.
+   * its Jobber visit and its place in any comparison -- only its day moves,
+   * with any clock-time window on it, and Jobber is told through the same
+   * reschedule path the console uses when somebody changes one visit by hand.
    *
    * A technician change is a second thing and is sent as one: Jobber's visit
    * and its assignment are separate, and a reschedule that silently reassigned
@@ -1314,11 +1314,22 @@ export class QuarterPlannerService {
       if (!dayMoved && !technicianChanged) continue;
 
       await this.prisma.$transaction(async (tx) => {
-        if (dayMoved)
+        if (dayMoved) {
+          /**
+           * A visit the office gave a clock time in Jobber keeps it on its new
+           * day. The push sends a timed visit by its window, not its day, so a
+           * window left behind sent the visit back to the day it already had,
+           * and the next sync then moved the inspection back to match.
+           */
+          const window = await tx.inspection.findUnique({
+            where: { id: was.inspectionId },
+            select: { scheduledStartAt: true, scheduledEndAt: true },
+          });
           await tx.inspection.update({
             where: { id: was.inspectionId },
-            data: { scheduledAt: row.scheduledOn! },
+            data: { scheduledAt: row.scheduledOn!, ...(window ? movedWindow(window, date) : {}) },
           });
+        }
 
         if (technicianChanged) {
           // The old assignment is ended rather than edited, so the record says

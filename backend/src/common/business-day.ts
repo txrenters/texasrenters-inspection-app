@@ -95,6 +95,24 @@ export function businessInstant(date: string, time: string): Date {
   return new Date(naive.getTime() + offsetMs);
 }
 
+/**
+ * A Jobber visit's clock-time window, moved to a new day at the same Texas times.
+ *
+ * Whole-day visits have no window and get none. A visit moved without its
+ * window is sent to Jobber on the day the window still names, the old one, and
+ * the next sync brings the inspection back to it.
+ */
+export function movedWindow(
+  existing: { scheduledStartAt: Date | null; scheduledEndAt: Date | null },
+  day: string,
+): { scheduledStartAt?: Date; scheduledEndAt?: Date } {
+  if (!existing.scheduledStartAt || !existing.scheduledEndAt) return {};
+  return {
+    scheduledStartAt: businessInstant(day, businessClockTime(existing.scheduledStartAt)),
+    scheduledEndAt: businessInstant(day, businessClockTime(existing.scheduledEndAt)),
+  };
+}
+
 /** The same instant, re-read as though the clock on the wall were UTC. */
 function zonedTime(instant: Date): Date {
   const parts = new Intl.DateTimeFormat('en-CA', {
