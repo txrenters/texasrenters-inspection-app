@@ -230,6 +230,7 @@ describe('a rebuild after the office moved a visit in Jobber', () => {
       startsOn: null,
       technicianIds: [],
       jobberUnassigned: false,
+      groupTemplateId: null,
     },
     {},
     { year: 2026, quarter: 4 },
