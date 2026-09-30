@@ -298,16 +298,6 @@ export interface PlanBuildInput {
   technicianIds?: string[];
   /** `YYYY-MM-DD`, up to fifteen days either side of the quarter's first day. */
   startsOn?: string;
-  /**
-   * Lay published visits out again too, moving their booked dates.
-   *
-   * Off by default, and that is the safe reading: a published visit is a date
-   * the office has already told Jobber about. On, a rebuild is free to move
-   * them, and the visits are rescheduled where they land -- which is what the
-   * office means by rebuilding a quarter properly rather than only filling in
-   * the gaps around what is already out.
-   */
-  movePublishedVisits?: boolean;
   /** Visits in a day. Nine is the planner's own default; ten fits the time. */
   maxStopsPerDay?: number;
   minStopsPerDay?: number;

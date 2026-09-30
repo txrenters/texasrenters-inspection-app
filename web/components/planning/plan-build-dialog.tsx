@@ -27,8 +27,6 @@ export interface PlanBuildChoice {
   technicianIds: string[];
   /** `YYYY-MM-DD`: fifteen days early, on time, or fifteen days late. */
   startsOn: string;
-  /** Lay the visits already published out again, moving their booked dates. */
-  movePublishedVisits: boolean;
   /**
    * Send the visits out to nobody: not on a phone, and into Jobber's Unassigned
    * list for the office to hand out there (the office, 2026-09-29). Nobody is
@@ -116,14 +114,9 @@ export function PlanBuildDialog({
   // What the coordinator changed; until then, the plan's choice or the crew.
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const [start, setStart] = useState<PlanStartOption['value'] | null>(null);
-  // Off unless asked for. Moving a published visit changes a date the office
-  // has already told Jobber about, which is not something a rebuild should do
-  // because somebody clicked the usual button.
-  const [movePublished, setMovePublished] = useState(false);
   // `null` until it is touched, so the plan's own answer shows through — the
-  // same shape as `picked` and `start` above, and for the same reason. Unlike
-  // `movePublished`, which is a one-off for this rebuild, this is stored on the
-  // plan and so has a previous answer to fall back to.
+  // same shape as `picked` and `start` above, and for the same reason: this is
+  // stored on the plan and so has a previous answer to fall back to.
   const [unassigned, setUnassigned] = useState<boolean | null>(null);
   const sendUnassigned = unassigned ?? jobberUnassigned;
   /**
@@ -153,7 +146,6 @@ export function PlanBuildDialog({
     if (!next) {
       setPicked(null);
       setStart(null);
-      setMovePublished(false);
       setUnassigned(null);
       setStopsPerDay(9);
       setSkipped(new Set());
@@ -175,7 +167,6 @@ export function PlanBuildDialog({
         ? []
         : listed.filter((technician) => selected.has(technician.id)).map((technician) => technician.id),
       startsOn: chosenStart.date,
-      movePublishedVisits: rebuild && movePublished,
       jobberUnassigned: sendUnassigned,
       stopsPerDay,
       excludedZones: [...skipped].sort(),
@@ -184,7 +175,6 @@ export function PlanBuildDialog({
     setGrouping(undefined);
     setPicked(null);
     setStart(null);
-    setMovePublished(false);
     setUnassigned(null);
     setStopsPerDay(9);
     setSkipped(new Set());
@@ -367,32 +357,11 @@ export function PlanBuildDialog({
           ) : null}
         </fieldset>
 
-        {/* Only on a rebuild. On a first build there is nothing published to
-            move, and an option that can never do anything is a question the
-            reader has to answer for no reason. */}
-        {rebuild ? (
-          <fieldset className="grid min-w-0 gap-2">
-            <legend className="mb-2 text-sm font-medium">Visits already published</legend>
-            <label className="hover:bg-accent/60 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2">
-              <Checkbox
-                checked={movePublished}
-                className="mt-0.5"
-                onCheckedChange={(checked) => setMovePublished(checked === true)}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">Lay published visits out again</span>
-                <span className="text-muted-foreground block text-xs">
-                  Their dates move with the rest of the quarter, and each one is rescheduled in Jobber. Left
-                  off, they stay on the day they were published and the rebuild works around them.
-                </span>
-              </span>
-            </label>
-            <FieldDescription>
-              A visit already inspected is never moved, whichever way this is set.
-            </FieldDescription>
-          </fieldset>
-        ) : null}
-
+        {/* No "Lay published visits out again" here. A rebuild posts to
+            /quarters, which never moved a published visit -- the box did
+            nothing (2026-09-30). Moving one sends Jobber a visit edit, which
+            production has never sent, so that is tried on one visit through
+            POST quarters/:planId/route before it is offered for a quarter. */}
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Visits a day</legend>
           <div className="grid gap-2 sm:grid-cols-3">

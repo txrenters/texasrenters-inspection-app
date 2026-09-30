@@ -136,6 +136,69 @@ describe('building from the console', () => {
     });
   });
 
+  /**
+   * 2026-09-30: the console's "Lay published visits out again" posted here and
+   * nothing moved. That is now the rule rather than an accident: moving a
+   * published visit sends Jobber a visit edit, and a build never does that.
+   */
+  it('never moves a published visit, whatever the body asks', async () => {
+    const plans = { generate: jest.fn().mockResolvedValue({ planId: 'plan-1', stopCount: 3 }) };
+    const planner = { route: jest.fn().mockResolvedValue(routed()) };
+    const controller = controllerWith(new PlanBuildGuard(), { plans, planner, prisma: audited() });
+    const incoming = { ...request(), user: { organizationId: ORGANIZATION_ID, id: 'user-1' } };
+
+    await controller.generate(incoming as never, { ...quarter, movePublishedVisits: true } as never);
+
+    expect(planner.route).toHaveBeenCalledTimes(1);
+    const options = planner.route.mock.calls[0]![3];
+    expect(options).toEqual({ today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(options).not.toHaveProperty('movePublishedVisits');
+    expect(options).not.toHaveProperty('actorId');
+  });
+
+  describe('laying the days out again', () => {
+    const plan = () => ({
+      ...audited(),
+      tbpQuarterPlan: { findFirst: jest.fn().mockResolvedValue({ quarterYear: 2026, quarterNumber: 4 }) },
+    });
+    const incoming = () => ({ ...request(), user: { organizationId: ORGANIZATION_ID, id: 'user-1' } });
+
+    /** The one way left to move a booked visit, and so to send Jobber its first visit edit. */
+    it('moves published visits when asked, and names who asked', async () => {
+      const planner = { route: jest.fn().mockResolvedValue(routed()) };
+      const controller = controllerWith(new PlanBuildGuard(), { planner, prisma: plan() });
+
+      await controller.route(incoming() as never, 'plan-1', { movePublishedVisits: true } as never);
+
+      expect(planner.route).toHaveBeenCalledWith(
+        ORGANIZATION_ID,
+        'plan-1',
+        { movePublishedVisits: true },
+        {
+          today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          movePublishedVisits: true,
+          actorId: 'user-1',
+        },
+      );
+    });
+
+    it('leaves published visits where they are unless asked, in so many words', async () => {
+      for (const body of [{}, { movePublishedVisits: false }, { movePublishedVisits: 'true' }]) {
+        const planner = { route: jest.fn().mockResolvedValue(routed()) };
+        const controller = controllerWith(new PlanBuildGuard(), { planner, prisma: plan() });
+
+        await controller.route(incoming() as never, 'plan-1', body as never);
+
+        expect(planner.route).toHaveBeenCalledWith(
+          ORGANIZATION_ID,
+          'plan-1',
+          body,
+          expect.objectContaining({ movePublishedVisits: false, actorId: 'user-1' }),
+        );
+      }
+    });
+  });
+
   it('refuses Rebuild clicked again while the first build is still running', async () => {
     const generation = held<{ planId: string }>();
     const plans = { generate: jest.fn(() => generation.promise) };

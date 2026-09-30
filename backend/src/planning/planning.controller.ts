@@ -595,6 +595,11 @@ export class PlanningController {
    * held open past the server's 30-second idle timeout, which cut the console
    * off with a 502 while the build carried on (2026-09-16), and a second build
    * while one runs is refused rather than written over the top of it.
+   *
+   * A published visit is never moved from here. `movePublishedVisits` is
+   * accepted in the body, because consoles up to 2026-09-30 send it on every
+   * build, and deliberately not passed on: moving a visit sends Jobber a visit
+   * edit, which production has never sent. Only `quarters/:planId/route` moves one.
    */
   @Post('quarters')
   @RequirePermissions('planning:publish')

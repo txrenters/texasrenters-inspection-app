@@ -346,9 +346,6 @@ describe('the benefit package plan page', () => {
       expect.objectContaining({
         technicianIds: ['tech-1', 'tech-2'],
         startsOn: '2026-09-21',
-        // Off unless the box is ticked: a published visit is a date Jobber has
-        // already been told about.
-        movePublishedVisits: false,
       }),
       expect.anything(),
     );
@@ -356,26 +353,22 @@ describe('the benefit package plan page', () => {
   });
 
   /**
-   * Rebuilding a published quarter properly, rather than only filling the gaps
-   * around what is already out.
-   *
-   * Q4 2026 was published across 56 days measured in straight lines. Laying it
-   * out again on real road times only reshapes it if the published visits are
-   * allowed to move -- otherwise every one of them is pinned where it is and
-   * the rebuild works around them.
+   * 2026-09-30: "Lay published visits out again" never did anything. A rebuild
+   * posts to /quarters, which never moved a published visit, so the box was a
+   * promise the server did not keep. It stays out until the first Jobber visit
+   * edit has been tried on one visit.
    */
-  it('lays published visits out again when the office asks it to', () => {
-    mount({ plans: [{ ...PLAN, crewTechnicianIds: ['tech-1'], startsOn: '2026-09-21T00:00:00.000Z' }] });
+  it('offers no way to move published visits on a rebuild, and never asks for it', () => {
+    mount({ plans: [{ ...PLAN, status: 'PUBLISHED', crewTechnicianIds: ['tech-1'], startsOn: '2026-09-21T00:00:00.000Z' }] });
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
     const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Lay published visits out again/ }));
+    expect(within(dialog).queryByRole('checkbox', { name: /published visits/i })).toBeNull();
+    expect(within(dialog).queryByText(/Visits already published/)).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 1 technician' }));
 
-    expect(build.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ movePublishedVisits: true }),
-      expect.anything(),
-    );
+    expect(build.mutate).toHaveBeenCalledTimes(1);
+    expect(build.mutate.mock.calls[0]![0]).not.toHaveProperty('movePublishedVisits');
   });
 
   /**

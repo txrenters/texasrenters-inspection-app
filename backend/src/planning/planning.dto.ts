@@ -70,6 +70,9 @@ export class PlanRoutingSettingsDto {
    *
    * Work that is done, being reviewed or cancelled never moves, nor does a day
    * a coordinator set by hand.
+   *
+   * Read only by `POST quarters/:planId/route`. `POST quarters` accepts it and
+   * ignores it -- see `PlanningController.generate`.
    */
   @IsOptional() @IsBoolean() movePublishedVisits?: boolean;
 
