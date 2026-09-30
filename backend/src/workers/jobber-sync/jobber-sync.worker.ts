@@ -49,6 +49,7 @@ import {
   resolveAssignment,
   unknownAssigneeReason,
 } from '../../integrations/jobber/jobber.assignment';
+import { moveStopWithVisit } from '../../planning/move-stop-with-visit';
 
 /**
  * Page size.
@@ -132,69 +133,14 @@ function visitWindow(visit: JobberVisit) {
 const sameInstant = (a: Date | null, b: Date | null) =>
   (a?.getTime() ?? null) === (b?.getTime() ?? null);
 
-/** The day a timestamp falls on, as the DATE column stores it. */
-const dayOf = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
-
 /**
- * Moves the quarter plan's stop to the day its visit was just rescheduled to in Jobber.
+ * The day a timestamp falls on, as the DATE column stores it.
  *
- * The planner reads a booked visit's day from its stop, not its inspection:
- * `bookedVisitDays` before a rebuild, and the pins a route lays days around.
- * When only the inspection moved, a rebuild that laid the visit back on the old
- * day found nothing to send, and the plan said the 5th while Jobber said the 9th.
- *
- * `day` is the value just written to `Inspection.scheduledAt`, never worked out
- * again, because the rebuild compares the two. `dayOf` reads the UTC date of
- * Jobber's `startAt`, which is the Texas day for any visit that starts between
- * midnight and 6 p.m. in Texas; the import writes a new stop's day the same way.
- * A stop already on the day is not written.
- *
- * It leaves the old day's order and its drive forecast from its old neighbour,
- * a route it is no longer on. The day rows are not measured again: that needs
- * road times, which is the planner's work and not a sync's, once per visit; and
- * `measureDays` counts only unpublished stops, so on a published quarter it
- * would shrink a booked day to those. Until the next route rewrites every day
- * row, the old day's row still counts the visit, and the Days view (which lists
- * stops by their own day) shows it on the new day only if that technician
- * already has a row there.
+ * The UTC date of Jobber's `startAt`, which is the Texas day for any visit that
+ * starts between midnight and 6 p.m. in Texas. A rescheduled visit's plan stop
+ * is given this same value (`moveStopWithVisit`), never one worked out again.
  */
-async function moveStopWithVisit(tx: Prisma.TransactionClient, organizationId: string, inspectionId: string, day: Date) {
-  const stop = await tx.tbpQuarterPlanStop.findFirst({
-    where: { organizationId, inspectionId },
-    select: { id: true, planId: true, scheduledOn: true, assignedTechnicianId: true },
-  });
-  if (!stop || stop.scheduledOn?.getTime() === day.getTime()) return null;
-  const now = new Date();
-  await tx.tbpQuarterPlanStop.update({
-    where: { id: stop.id },
-    data: {
-      scheduledOn: day,
-      positionInDay: null,
-      driveSecondsForecast: null,
-      /**
-       * A day a person chose: the office moved it in Jobber, and a rebuild must
-       * not move it back by sending Jobber the reverse.
-       *
-       * The technician's mark goes with the day's, as a coordinator's own move
-       * records both (`TbpStopEditService.edit`), because a rebuild reads them
-       * together. The day's mark alone keeps the stop out of `bookedVisitDays`,
-       * so nothing is sent for it; but only both pin it. With one, a rebuild
-       * would lay the visit on another day and tell neither the inspection nor
-       * Jobber, which is the disagreement this function exists to prevent. The
-       * cost is the rule for a day placed by hand: a rebuild gives it none of
-       * the planner's other visits.
-       */
-      scheduleOverriddenAt: now,
-      ...(stop.assignedTechnicianId ? { technicianOverriddenAt: now } : {}),
-    },
-  });
-  return {
-    stopId: stop.id,
-    planId: stop.planId,
-    from: stop.scheduledOn?.toISOString().slice(0, 10) ?? null,
-    to: day.toISOString().slice(0, 10),
-  };
-}
+const dayOf = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
 
 /**
  * Jobber saying the details field does not exist, rather than any other error.

@@ -38,6 +38,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
+import { moveStopWithVisit } from '../planning/move-stop-with-visit';
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
@@ -2282,10 +2283,10 @@ export class AdminService {
      * change has to be made. The same day sent back is not a change — the edit
      * form always sends the date.
      */
-    const newDay = input.scheduledAt ? new Date(input.scheduledAt).toISOString().slice(0, 10) : null;
-    const movesJobberVisit = Boolean(
-      newDay && existing.jobberVisitId && newDay !== existing.scheduledAt.toISOString().slice(0, 10),
-    );
+    const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : undefined;
+    const newDay = scheduledAt ? scheduledAt.toISOString().slice(0, 10) : null;
+    const movesDay = Boolean(newDay && newDay !== existing.scheduledAt.toISOString().slice(0, 10));
+    const movesJobberVisit = movesDay && Boolean(existing.jobberVisitId);
     /**
      * Unless the console's edits are pushed to Jobber, in which case the new day
      * is sent there and the sync holds off until it has gone (see
@@ -2298,7 +2299,7 @@ export class AdminService {
         'This visit is scheduled in Jobber. Change its date in Jobber and it will update here.',
       );
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (input.scheduledAt) {
+      if (scheduledAt) {
         // Same rule as creation, and it has to stay the same rule: rescheduling
         // an HVAC visit onto a day that already holds a finished move-in is the
         // identical situation, and this check carried the identical two faults —
@@ -2310,7 +2311,7 @@ export class AdminService {
             propertywareBuildingId: existing.propertywareBuildingId,
             propertywareUnitId: existing.propertywareUnitId,
             inspectionType: existing.inspectionType,
-            scheduledAt: new Date(input.scheduledAt),
+            scheduledAt,
             status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
           },
         });
@@ -2333,7 +2334,7 @@ export class AdminService {
       const updated = await this.mapDuplicateBooking(() => tx.inspection.update({
         where: { id },
         data: {
-          scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : undefined,
+          scheduledAt,
           // A visit Jobber had at a clock time keeps that time on its new day.
           ...(movesJobberVisit && newDay ? movedWindow(existing, newDay) : {}),
           priority: input.priority,
@@ -2354,6 +2355,15 @@ export class AdminService {
           cancellationReason: input.cancellationReason,
         },
       }));
+      /**
+       * A benefit-package visit's plan stop moves with it, to the Date just
+       * written. The rebuild reads the stop's day, and once Jobber has the new
+       * day too the sync sees nothing to change, so nothing else would move it.
+       * Only on a new day: the date the edit form always sends back moves
+       * nothing, even for a stop that already disagrees.
+       */
+      const planStop =
+        movesDay && scheduledAt ? await moveStopWithVisit(tx, user.organizationId, id, scheduledAt) : null;
       const current =
         input.status === 'CANCELLED'
           ? await tx.inspectionAssignment.findFirst({
@@ -2376,7 +2386,7 @@ export class AdminService {
         user,
         input.status === 'CANCELLED' ? 'INSPECTION_CANCELLED' : 'INSPECTION_UPDATED',
         id,
-        { ...input, closedAssignmentId: current?.id },
+        { ...input, closedAssignmentId: current?.id, ...(planStop ? { planStop } : {}) },
       );
       if (movesJobberVisit) await this.pushVisitEdit(tx, user, id, JobberOutboundKind.VISIT_RESCHEDULE);
       if (input.status === 'CANCELLED' && existing.jobberVisitId)

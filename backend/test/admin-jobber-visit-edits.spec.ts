@@ -44,6 +44,8 @@ function build(inspection: ReturnType<typeof existing>) {
       findFirst: jest.fn().mockResolvedValueOnce(null).mockResolvedValue(JOBBER_VISIT),
       update: jest.fn().mockResolvedValue(inspection),
     },
+    // Not a benefit-package visit: no quarter plan stop moves with it.
+    tbpQuarterPlanStop: { findFirst: jest.fn().mockResolvedValue(null) },
     inspectionAssignment: {
       findFirst: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue({}),
