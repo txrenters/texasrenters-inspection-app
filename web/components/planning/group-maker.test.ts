@@ -4,12 +4,15 @@ import type { GroupMakerProperty } from '@/lib/planning-queries';
 
 import { readGroupFile } from './group-file';
 import {
+  liveGroupsOf,
+  liveGroupsOfTemplate,
   makerProperties,
   rowsToMatch,
   sameTemplate,
   stateFromMatchedFile,
   stateFromTemplate,
   templateInput,
+  visibleGroups,
 } from './group-maker';
 
 /**
@@ -141,5 +144,23 @@ describe('starting from a groups file', () => {
 
     expect(result.state.groups.map((group) => group.stops)).toEqual([[2, 3], []]);
     expect(result).toMatchObject({ matched: 2, repeated: 1, ambiguous: 1, unmatched: 1 });
+  });
+});
+
+/** Live editing (2026-10-01): the same groups as building ids, and back as what this browser draws. */
+describe('a template live', () => {
+  const made = makerProperties([property('b1'), property('b2'), property('b3')]);
+
+  it('names each group by the server’s id and each stop by its building', () => {
+    const template = { groups: [{ id: 'g-1', position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b3', 'b1'] }] };
+    const { state } = stateFromTemplate(template, made.rowOf);
+
+    expect(state.groups[0]!.id).toBe('g-1');
+    expect(liveGroupsOf(state, made.buildingOf)).toEqual(liveGroupsOfTemplate(template));
+  });
+
+  it('leaves out of what it draws a building this browser has no row for', () => {
+    const groups = { groups: [{ id: 'g-1', name: 'North', color: '#e6194b', target: 9, stops: ['b1', 'gone', 'b2'] }] };
+    expect(visibleGroups(groups, made.rowOf).groups[0]!.stops).toEqual(['b1', 'b2']);
   });
 });

@@ -118,7 +118,7 @@ export function GroupFileLegend({
   const listed = sortGroups(file.groups, order, (group) => driveMinutesOf(group, routeViews?.get(group.key)));
 
   return (
-    <aside className="bg-card flex min-h-0 flex-col rounded-lg border lg:h-[36rem]">
+    <aside className="bg-card flex min-h-0 flex-col rounded-lg border lg:h-full">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-sm font-medium">
           {picked.size

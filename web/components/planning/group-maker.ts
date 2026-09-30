@@ -1,3 +1,5 @@
+import type { LiveGroups } from '@texasrenters/shared';
+
 import type {
   GroupMakerProperty,
   GroupTemplateDetail,
@@ -82,13 +84,14 @@ export function makerProperties(properties: readonly GroupMakerProperty[]): Make
  * position -- is left out, and counted so the office is told.
  */
 export function stateFromTemplate(
-  template: Pick<GroupTemplateDetail, 'groups'>,
+  template: { groups: (Omit<GroupTemplateDetail['groups'][number], 'id'> & { id?: string })[] },
   rowOf: ReadonlyMap<string, number>,
 ): { state: ManualState; missing: number } {
   let missing = 0;
   const groups = template.groups.map(
     (group): ManualGroup => ({
-      id: newGroupId(),
+      // The server's id, so every browser editing it live names the same group.
+      id: group.id ?? newGroupId(),
       name: group.name,
       color: group.color,
       target: group.target,
@@ -100,6 +103,37 @@ export function stateFromTemplate(
     }),
   );
   return { state: { groups }, missing };
+}
+
+/** The groups being edited as live editing holds them: stops as building ids. */
+export function liveGroupsOf(state: ManualState, buildingOf: ReadonlyMap<number, string>): LiveGroups<string> {
+  return {
+    groups: state.groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      color: group.color,
+      target: group.target,
+      stops: group.stops.flatMap((row) => buildingOf.get(row) ?? []),
+    })),
+  };
+}
+
+/** The server's groups as this browser can draw them: a property it does not draw is left out. */
+export function visibleGroups(groups: LiveGroups<string>, rowOf: ReadonlyMap<string, number>): LiveGroups<string> {
+  return { groups: groups.groups.map((group) => ({ ...group, stops: group.stops.filter((stop) => rowOf.has(stop)) })) };
+}
+
+/** A template's groups as live editing holds them. */
+export function liveGroupsOfTemplate(template: Pick<GroupTemplateDetail, 'groups'>): LiveGroups<string> {
+  return {
+    groups: template.groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      color: group.color,
+      target: group.target,
+      stops: [...group.buildingIds],
+    })),
+  };
 }
 
 /** The most a group's target may say: the most stops a day can be routed with. */

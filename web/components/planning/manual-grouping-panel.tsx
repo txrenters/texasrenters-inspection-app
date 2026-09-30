@@ -14,6 +14,7 @@ import {
   Undo2Icon,
   XIcon,
 } from 'lucide-react';
+import { uniqueGroupName } from '@texasrenters/shared';
 import { useState, type FormEvent } from 'react';
 
 import {
@@ -49,7 +50,8 @@ import {
   DEFAULT_TARGET,
   estDaySeconds,
   nextGroupName,
-  nextPresetColor,
+  groupPalette,
+  nextGroupColor,
   routeMiles,
   type ManualGroup,
   type ManualState,
@@ -67,16 +69,52 @@ const HEX = /^#[0-9a-f]{6}$/i;
 /** More than any day anyone drives, and a guard against a typo of 90 for 9. */
 const MAX_TARGET = 50;
 
+/** One colour to pick, dimmed with the group's name when another group has it. */
+function Swatch({
+  value,
+  chosen,
+  usedBy,
+  small = false,
+  onPick,
+}: {
+  value: string;
+  chosen: boolean;
+  usedBy: string | undefined;
+  small?: boolean;
+  onPick: (value: string) => void;
+}) {
+  return (
+    <button
+      aria-label={usedBy ? `${value}, used by ${usedBy}` : value}
+      aria-pressed={chosen}
+      className={cn(
+        'rounded-full border-2 border-background shadow-sm outline-offset-2',
+        small ? 'size-4' : 'size-6',
+        chosen && 'outline-foreground outline-2',
+        usedBy && !chosen && 'opacity-30',
+      )}
+      onClick={() => onPick(value)}
+      style={{ backgroundColor: value }}
+      title={usedBy ? `${value} · used by ${usedBy}` : value}
+      type="button"
+    />
+  );
+}
+
 /**
  * A group's name, colour and size: for a new group, or to change one.
  *
- * Twenty swatches picked to be told apart, and any other colour by its hex --
- * typed, or from the browser's own picker.
+ * Twenty swatches picked to be told apart, then 180 more for a template of up
+ * to two hundred groups (the office, 2026-10-01), and any other colour by its
+ * hex -- typed, or from the browser's own picker. A colour another group has
+ * is dimmed and named, not refused: two groups far apart can share one.
  */
 function GroupForm({
   open,
   title,
   initial,
+  used,
+  taken,
   submitLabel,
   onSubmit,
   onOpenChange,
@@ -84,6 +122,10 @@ function GroupForm({
   open: boolean;
   title: string;
   initial: GroupFields;
+  /** Each colour the other groups have, and the group that has it. */
+  used: ReadonlyMap<string, string>;
+  /** The other groups' names: a group's name is its own (the office, 2026-10-01). */
+  taken: readonly string[];
   submitLabel: string;
   onSubmit: (fields: GroupFields) => void;
   onOpenChange: (open: boolean) => void;
@@ -92,10 +134,20 @@ function GroupForm({
   const [color, setColor] = useState(initial.color);
   const [hex, setHex] = useState(initial.color);
   const [target, setTarget] = useState(String(initial.target));
+  const palette = groupPalette();
+  const presets = palette.slice(0, COLOR_PRESETS.length);
+  const more = palette.slice(COLOR_PRESETS.length);
+  // Open already when the colour is one of them, so the chosen swatch shows.
+  const [showMore, setShowMore] = useState(() => more.includes(initial.color.toLowerCase()));
+  const inUse = palette.filter((value) => used.has(value)).length;
 
   const size = Number(target);
+  const clash = name.trim() && taken.some((other) => other.trim().toLowerCase() === name.trim().toLowerCase());
+  /** A free name in the same pattern, one click away, when the one typed is taken. */
+  const free = clash ? uniqueGroupName(name, taken) : null;
   const problems = [
     name.trim() ? null : 'Give the group a name.',
+    clash ? `${name.trim()} is already a group’s name.` : null,
     HEX.test(color) ? null : 'A colour is a # and six hex digits, like #0067a5.',
     Number.isInteger(size) && size >= 1 && size <= MAX_TARGET ? null : `The size is a whole number from 1 to ${MAX_TARGET}.`,
   ].filter((problem): problem is string => problem !== null);
@@ -122,27 +174,58 @@ function GroupForm({
 
           <div className="grid gap-1.5">
             <Label htmlFor="group-name">Name</Label>
-            <Input autoFocus id="group-name" maxLength={60} onChange={(event) => setName(event.target.value)} value={name} />
+            <Input
+              aria-invalid={clash ? true : undefined}
+              autoFocus
+              id="group-name"
+              maxLength={60}
+              onChange={(event) => setName(event.target.value)}
+              value={name}
+            />
+            {free ? (
+              <p className="text-warning flex flex-wrap items-center gap-1.5 text-xs" role="status">
+                <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+                Another group is called {name.trim()}.
+                <Button className="h-6 px-2 text-xs" onClick={() => setName(free)} size="sm" type="button" variant="outline">
+                  Use {free}
+                </Button>
+              </p>
+            ) : null}
           </div>
 
           <fieldset className="grid gap-1.5">
             <legend className="mb-1.5 text-sm font-medium">Colour</legend>
             <div className="grid grid-cols-10 gap-1.5">
-              {COLOR_PRESETS.map((preset) => (
-                <button
-                  aria-label={preset}
-                  aria-pressed={color === preset}
-                  className={cn(
-                    'size-6 rounded-full border-2 border-background shadow-sm outline-offset-2',
-                    color === preset && 'outline-foreground outline-2',
-                  )}
-                  key={preset}
-                  onClick={() => pick(preset)}
-                  style={{ backgroundColor: preset }}
-                  type="button"
-                />
+              {presets.map((preset) => (
+                <Swatch chosen={color === preset} key={preset} onPick={pick} usedBy={used.get(preset)} value={preset} />
               ))}
             </div>
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                aria-expanded={showMore}
+                className="h-7 px-2 text-xs"
+                onClick={() => setShowMore((open) => !open)}
+                type="button"
+                variant="ghost"
+              >
+                {showMore ? <ChevronUpIcon /> : <ChevronDownIcon />}
+                {showMore ? 'Fewer colours' : `${more.length} more colours`}
+              </Button>
+              <span className="text-muted-foreground text-xs">
+                {inUse.toLocaleString()} of {palette.length.toLocaleString()} in use
+              </span>
+            </div>
+            {showMore ? (
+              <div
+                aria-label="More colours"
+                className="grid max-h-44 grid-cols-15 gap-1 overflow-y-auto rounded-md border p-1.5"
+                role="group"
+              >
+                {more.map((value) => (
+                  <Swatch chosen={color === value} key={value} onPick={pick} small usedBy={used.get(value)} value={value} />
+                ))}
+              </div>
+            ) : null}
             <div className="flex items-center gap-2">
               <input
                 aria-label="Pick any colour"
@@ -316,6 +399,7 @@ export function ManualGroupingPanel({
   onAutoOrder,
   onOptimize,
   ordering,
+  editingBy,
 }: {
   state: ManualState;
   activeId: string | null;
@@ -348,6 +432,8 @@ export function ManualGroupingPanel({
   onOptimize: (id: string) => void;
   /** Groups whose order is being worked out. */
   ordering: ReadonlySet<string>;
+  /** Who else is building each group of a live template, by group id. */
+  editingBy?: ReadonlyMap<string, readonly string[]>;
 }) {
   const [form, setForm] = useState<{ mode: 'new' } | { mode: 'edit'; group: ManualGroup } | null>(null);
   const [deleting, setDeleting] = useState<ManualGroup | null>(null);
@@ -365,7 +451,7 @@ export function ManualGroupingPanel({
   };
 
   return (
-    <aside className="bg-card flex min-h-0 flex-col rounded-lg border lg:h-[36rem]">
+    <aside className="bg-card flex min-h-0 flex-col rounded-lg border lg:h-full">
       <div className="grid gap-2 border-b px-3 py-2">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-medium">
@@ -456,6 +542,11 @@ export function ManualGroupingPanel({
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className={cn('block truncate text-sm', isActive && 'font-semibold')}>{group.name}</span>
+                  {editingBy?.get(group.id)?.length ? (
+                    <span className="text-info block truncate text-xs font-medium" title="Building this group now">
+                      {editingBy.get(group.id)!.join(', ')} {editingBy.get(group.id)!.length === 1 ? 'is' : 'are'} building it
+                    </span>
+                  ) : null}
                   <GroupDrive
                     group={group}
                     minutesPerProperty={minutesPerProperty}
@@ -608,8 +699,16 @@ export function ManualGroupingPanel({
           initial={
             form.mode === 'edit'
               ? { name: form.group.name, color: form.group.color, target: form.group.target }
-              : { name: nextGroupName(state), color: nextPresetColor(state), target: DEFAULT_TARGET }
+              : { name: nextGroupName(state), color: nextGroupColor(state), target: DEFAULT_TARGET }
           }
+          used={
+            new Map(
+              state.groups
+                .filter((group) => form.mode !== 'edit' || group.id !== form.group.id)
+                .map((group) => [group.color.toLowerCase(), group.name] as const),
+            )
+          }
+          taken={state.groups.filter((group) => form.mode !== 'edit' || group.id !== form.group.id).map((group) => group.name)}
           // A fresh form each time it opens, not the last one's leftovers.
           key={form.mode === 'edit' ? form.group.id : 'new'}
           onOpenChange={(open) => !open && setForm(null)}

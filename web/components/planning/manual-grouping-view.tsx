@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type MutableRefObject } from 'react';
 import { toast } from 'sonner';
 
 import {
@@ -42,6 +42,7 @@ import {
   type RouteRequest,
 } from './road-routes';
 import { fastestOrder, getMatrixSource, pathSeconds } from './route-order';
+import { useFillHeight } from './use-fill-height';
 import type { ZoneTerritory } from './zone-territories';
 
 /** How long after the last change to a group its stops are put in order: clicking five in a row orders once. */
@@ -52,6 +53,25 @@ const GroupFileMap = dynamic(() => import('./group-file-map').then((module) => m
   ssr: false,
   loading: () => <Skeleton className="h-full w-full rounded-lg" />,
 });
+
+/**
+ * How somebody else's changes to a live template reach the groups being edited
+ * (2026-10-01). Filled in by the view once it is on screen.
+ */
+export interface ManualLiveControls {
+  /** A change made to the groups and to every step of the history, so undo keeps it. */
+  rebase: (apply: (state: ManualState) => ManualState) => void;
+  setMinutes: (minutes: number) => void;
+}
+
+/** Live editing, in the Group maker. */
+export interface ManualLive {
+  controls: MutableRefObject<ManualLiveControls | null>;
+  /** Who else is building each group, by group id. */
+  editingBy?: ReadonlyMap<string, readonly string[]>;
+  /** The group this person is building changed. */
+  onActiveChange?: (groupId: string | null) => void;
+}
 
 /** Where a click would take a property from, to be confirmed first. */
 interface PendingMove {
@@ -89,6 +109,7 @@ export function ManualGroupingView({
   zones,
   persist = true,
   onChange,
+  live,
 }: {
   file: GroupFile;
   fileName: string;
@@ -112,6 +133,8 @@ export function ManualGroupingView({
   persist?: boolean;
   /** Told the groups and the minutes per property whenever either changes. */
   onChange?: (snapshot: { state: ManualState; minutesPerProperty: number }) => void;
+  /** Live editing of a saved template: others' changes in, and who is building what. */
+  live?: ManualLive;
 }) {
   const [history, dispatch] = useReducer(historyReducer, undefined, () => ({
     past: [],
@@ -281,12 +304,32 @@ export function ManualGroupingView({
     if (persist) writeSaved(toSaved(state, activeId, prints, fileName, true, { minutesPerProperty, autoOrder }));
   }, [activeId, autoOrder, fileName, minutesPerProperty, persist, prints, state]);
 
+  // Somebody else's changes come in through here -- set up before the view first reports,
+  // so a change that arrived while it opened can be made to it then.
+  const liveControls = live?.controls;
+  useEffect(() => {
+    if (!liveControls) return;
+    liveControls.current = {
+      rebase: (apply) => dispatch({ type: 'rebase', apply }),
+      setMinutes: setMinutesPerProperty,
+    };
+    return () => {
+      liveControls.current = null;
+    };
+  }, [liveControls]);
+
   /** The newest listener, so a parent's new function each render is not a change of its own. */
   const listener = useRef(onChange);
   listener.current = onChange;
   useEffect(() => {
     listener.current?.({ state, minutesPerProperty });
   }, [minutesPerProperty, state]);
+  const onActiveChange = live?.onActiveChange;
+  useEffect(() => {
+    onActiveChange?.(activeId);
+  }, [activeId, onActiveChange]);
+
+  const fill = useFillHeight<HTMLDivElement>();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -390,8 +433,12 @@ export function ManualGroupingView({
   };
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <div className="h-80 lg:h-[36rem]">
+    <div
+      className="grid gap-3 lg:h-[36rem] lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]"
+      ref={fill.ref}
+      style={fill.height ? { height: fill.height } : undefined}
+    >
+      <div className="h-80 lg:h-full">
         <GroupFileMap
           frame={frame}
           groups={groups}
@@ -438,6 +485,7 @@ export function ManualGroupingView({
         routeViews={routeViews}
         state={state}
         total={properties.length}
+        {...(live?.editingBy ? { editingBy: live.editingBy } : {})}
       />
 
       <AlertDialog onOpenChange={(open) => !open && setPendingMove(null)} open={Boolean(pendingMove)}>
