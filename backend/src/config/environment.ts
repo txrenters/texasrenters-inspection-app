@@ -202,6 +202,11 @@ const environmentSchema = z
      * happens to have the code. */
     TBP_PLANNING_ENABLED: z.enum(['true', 'false']).default('false'),
     TBP_PLANNING_ORGANIZATION_ID: z.string().uuid().optional(),
+    /** The office's groups file the console's Groups map opens by default,
+     * served only to TBP_PLANNING_ORGANIZATION_ID. Relative to the backend's
+     * working directory; `../data/tbp-active-groups-outside-in.csv` when unset.
+     * Holds tenant names and addresses, so it is never committed. */
+    TBP_GROUP_FILE: z.string().optional(),
     /** Daily by default, because cron cannot express "fourteen days before the
      * first of January, April, July and October" -- the lead time moves the
      * date across two different months. The job asks whether today falls in a

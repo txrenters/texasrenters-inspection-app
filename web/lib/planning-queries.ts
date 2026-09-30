@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { api } from './api';
+import { api, ApiError } from './api';
 import type { OfficeSheetRow } from './planning';
 
 /**
@@ -338,7 +338,37 @@ export const planningKeys = {
   dayRoute: (planId: string, dayId: string) => ['admin', 'planning', planId, 'days', dayId, 'route'] as const,
   rotation: (planId: string) => ['admin', 'planning', planId, 'rotation'] as const,
   technicians: ['admin', 'planning', 'technicians'] as const,
+  groupFile: ['admin', 'planning', 'group-file'] as const,
 };
+
+/** The office's groups file as the server holds it: the CSV exactly as it is on disk. */
+export interface PlanGroupFile {
+  fileName: string;
+  csv: string;
+  modifiedAt: string;
+}
+
+/**
+ * The groups file in the server's `data/` folder, which the Groups map opens
+ * by default -- or null when there is none, or none for this organization.
+ *
+ * Asked for only while the Groups tab is open: it names every tenant, and a
+ * page that never shows it has no business holding it.
+ */
+export const useGroupFileOnServer = (enabled: boolean) =>
+  useQuery({
+    queryKey: planningKeys.groupFile,
+    queryFn: async ({ signal }) => {
+      try {
+        return await api<PlanGroupFile>(`${PLANNING}/group-file`, { signal });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+  });
 
 /** The most stops one request returns; a plan larger than this is read a page at a time. */
 const STOP_PAGE = 500;

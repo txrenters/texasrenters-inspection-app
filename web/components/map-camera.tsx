@@ -69,7 +69,7 @@ const literal = (point: Point): [number, number] => [point.longitude, point.lati
  * so it did not read as the reader moving. Mapbox takes `maxZoom` with the fit,
  * so the second step and the race it carried are gone.
  */
-function fitTo(map: MapRef, points: readonly [number, number][], padding: number) {
+export function fitTo(map: MapRef, points: readonly [number, number][], padding: number) {
   let west = points[0]![1];
   let east = points[0]![1];
   let south = points[0]![0];

@@ -64,6 +64,7 @@
   --color-map-grouping: var(--map-grouping);
   --color-warning: var(--warning);
   --color-info: var(--info);
+  --color-road-distance: var(--road-distance);
 
   /* The TexasRenters green. Deliberately NOT `--accent`: in shadcn `--accent`
      is the neutral *hover surface* for menus, rows and command items, so
@@ -173,6 +174,10 @@
   --success: oklch(0.478 0.132 150);
   --warning: oklch(0.508 0.122 71);
   --info: oklch(0.407 0.136 262.1);
+  /* A distance along the roads, from Mapbox, on the Groups map's lists: a
+     purple-blue, so it is never read as a straight-line figure (the office,
+     2026-09-30). About 6:1 on the card. */
+  --road-distance: oklch(0.51 0.22 282);
 
   /* Markers on the technician map.
      Declared once and NOT repeated in the dark block on purpose: the map tiles
@@ -284,6 +289,7 @@
   --success: oklch(0.771 0.155 148);
   --warning: oklch(0.822 0.128 79);
   --info: oklch(0.735 0.117 264);
+  --road-distance: oklch(0.74 0.14 282);
 
   --chart-1: oklch(0.72 0.13 262);
   --chart-2: oklch(0.72 0.11 190);
@@ -451,8 +457,13 @@
  * only the bubble reverts to white.
  *
  * `--popover` rather than `--card`: this is a transient thing floating above
- * the page, which is the token for exactly that. */
-.mapboxgl-popup-content {
+ * the page, which is the token for exactly that.
+ *
+ * Every selector is under `.mapboxgl-map` (a popup is drawn inside the map's
+ * container) to outrank Mapbox's own. Its stylesheet arrives with the map's
+ * chunk, *after* this one, so at equal specificity its white won and the bubble
+ * was the unreadable white-on-white described above, in dark mode. */
+.mapboxgl-map .mapboxgl-popup-content {
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: 0 2px 10px oklch(0 0 0 / 0.25);
@@ -465,72 +476,89 @@
  * the bubble -- which depends on where the popup sits relative to its point.
  * Every anchor Mapbox can choose is covered, because it picks one at draw time
  * from the room available. */
-.mapboxgl-popup-anchor-top .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-top-left .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-top-right .mapboxgl-popup-tip {
+.mapboxgl-map .mapboxgl-popup-anchor-top .mapboxgl-popup-tip,
+.mapboxgl-map .mapboxgl-popup-anchor-top-left .mapboxgl-popup-tip,
+.mapboxgl-map .mapboxgl-popup-anchor-top-right .mapboxgl-popup-tip {
   border-bottom-color: var(--popover);
 }
 
-.mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-bottom-left .mapboxgl-popup-tip,
-.mapboxgl-popup-anchor-bottom-right .mapboxgl-popup-tip {
+.mapboxgl-map .mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip,
+.mapboxgl-map .mapboxgl-popup-anchor-bottom-left .mapboxgl-popup-tip,
+.mapboxgl-map .mapboxgl-popup-anchor-bottom-right .mapboxgl-popup-tip {
   border-top-color: var(--popover);
 }
 
-.mapboxgl-popup-anchor-left .mapboxgl-popup-tip {
+.mapboxgl-map .mapboxgl-popup-anchor-left .mapboxgl-popup-tip {
   border-right-color: var(--popover);
 }
 
-.mapboxgl-popup-anchor-right .mapboxgl-popup-tip {
+.mapboxgl-map .mapboxgl-popup-anchor-right .mapboxgl-popup-tip {
   border-left-color: var(--popover);
 }
 
 /* Mapbox's close button is a bare text glyph that inherits nothing useful. */
-.mapboxgl-popup-close-button {
+.mapboxgl-map .mapboxgl-popup-close-button {
   color: var(--muted-foreground);
   padding: 0 6px;
   font-size: 1rem;
   line-height: 1.4;
 }
 
-.mapboxgl-popup-close-button:hover {
+.mapboxgl-map .mapboxgl-popup-close-button:hover {
   background: transparent;
   color: var(--foreground);
 }
 
 /* The zoom, compass and fullscreen buttons, which are white squares with dark
- * glyphs. On a dark map they are the brightest thing on the screen. */
-.mapboxgl-ctrl-group {
+ * glyphs. On a dark map they are the brightest thing on the screen.
+ *
+ * Under `.mapboxgl-map`, as the popup's rules are and for the same reason:
+ * Mapbox's stylesheet loads after this one and wins every tie. The shadow also
+ * needs `:not(:empty)`, because that is where Mapbox draws its own -- one step
+ * more specific than the group itself. */
+.mapboxgl-map .mapboxgl-ctrl-group {
   background: var(--popover);
+}
+
+.mapboxgl-map .mapboxgl-ctrl-group:not(:empty) {
   box-shadow: 0 0 0 1px var(--border);
 }
 
-.mapboxgl-ctrl-group button + button {
+.mapboxgl-map .mapboxgl-ctrl-group button + button {
   border-top-color: var(--border);
 }
 
-.mapboxgl-ctrl-group button:not(:disabled):hover {
+.mapboxgl-map .mapboxgl-ctrl-group button:not(:disabled):hover {
   background: var(--accent);
 }
 
 /* The glyphs themselves are background images, black by default. Inverting is
- * the only handle on them, and it is enough. */
-:root[data-theme='dark'] .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
+ * the only handle on them, and it is enough.
+ *
+ * `.dark` is the class next-themes puts on <html> (`attribute="class"`) whether
+ * the reader chose dark or the system did. This used to be
+ * `[data-theme='dark']`, which nothing sets, so only the media query ever
+ * inverted the glyphs: a reader who chose dark on a light-mode computer got
+ * black glyphs on dark buttons. The query stays as the fallback for a page the
+ * theme script has not run on, and stands down for a reader who chose light. */
+:root.dark .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
   filter: invert(1);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
+  :root:not(.light) .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon {
     filter: invert(1);
   }
 }
 
 /* Attribution has to stay readable -- it is a condition of using the maps, not
- * decoration -- so it is themed rather than dimmed away. */
-.mapboxgl-ctrl-attrib {
+ * decoration -- so it is themed rather than dimmed away. Mapbox paints its
+ * background on `.mapboxgl-ctrl.mapboxgl-ctrl-attrib`, two classes, so this
+ * takes three; that also covers the compact attribution on a narrow map. */
+.mapboxgl-map .mapboxgl-ctrl.mapboxgl-ctrl-attrib {
   background: color-mix(in oklab, var(--popover) 85%, transparent);
 }
 
-.mapboxgl-ctrl-attrib a {
+.mapboxgl-map .mapboxgl-ctrl-attrib a {
   color: var(--muted-foreground);
 }
