@@ -61,6 +61,11 @@ export interface PlanQuarter extends PlanSettings {
   officeDetailsImportedAt: string | null;
   hvacStopCount: number;
   occupiedStopCount: number;
+  /** The group template the days were last laid out from; null for the planner's own grouping. */
+  groupTemplateId?: string | null;
+  /** The template's revision when the days were laid out from it. */
+  groupTemplateRevision?: number | null;
+  groupTemplate?: { id: string; name: string; revision: number; archivedAt: string | null } | null;
 }
 
 export interface PlanStop {
@@ -204,6 +209,8 @@ export interface PlanRoutingSummary {
   days: number;
   durationSource: PlanDay['durationSource'];
   settings: PlanSettings;
+  /** The group template the days came from; null for the planner's own grouping. */
+  template?: { id: string; name: string; revision: number; days: number; notInTemplate: number } | null;
 }
 
 export interface OfficeDetailsAddress {
@@ -306,6 +313,11 @@ export interface PlanBuildInput {
   minStopsPerDay?: number;
   /** Zones left out of the build, by number -- the office works 1 to 4. */
   excludedZones?: string[];
+  /**
+   * One of the office's group templates to lay the days out from, or null for
+   * the planner's own grouping. Left out, the plan keeps what it had.
+   */
+  groupTemplateId?: string | null;
 }
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */
@@ -339,7 +351,139 @@ export const planningKeys = {
   rotation: (planId: string) => ['admin', 'planning', planId, 'rotation'] as const,
   technicians: ['admin', 'planning', 'technicians'] as const,
   groupFile: ['admin', 'planning', 'group-file'] as const,
+  groupTemplates: ['admin', 'planning', 'group-templates'] as const,
+  groupTemplate: (id: string) => ['admin', 'planning', 'group-templates', id] as const,
+  groupMakerProperties: ['admin', 'planning', 'group-maker', 'properties'] as const,
 };
+
+/** A property the Group maker can put in a group: an enrolled building, its tenancies together. */
+export interface GroupMakerProperty {
+  buildingId: string;
+  address: string;
+  city: string | null;
+  postalCode: string | null;
+  latitude: number;
+  longitude: number;
+  /** A postcode centre rather than the house. */
+  approximate: boolean;
+  zone: string | null;
+  hvacPlans: string[];
+  leases: string[];
+  units: string[];
+}
+
+/** A group template as the list shows it. */
+export interface GroupTemplateSummary {
+  id: string;
+  name: string;
+  /** The one the daily planner builds a new quarter from. */
+  isActive: boolean;
+  minutesPerProperty: number;
+  /** One more on every save. */
+  revision: number;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: { id: string; displayName: string | null } | null;
+  groupCount: number;
+  propertyCount: number;
+}
+
+export interface GroupTemplateGroup {
+  position: number;
+  name: string;
+  color: string;
+  target: number;
+  /** In the group's driving order. */
+  buildingIds: string[];
+}
+
+export interface GroupTemplateDetail extends Omit<GroupTemplateSummary, 'groupCount' | 'propertyCount'> {
+  groups: GroupTemplateGroup[];
+}
+
+/** A template as the Group maker saves it: its groups replace the ones it had. */
+export interface GroupTemplateInput {
+  name: string;
+  minutesPerProperty?: number;
+  groups: Omit<GroupTemplateGroup, 'position'>[];
+  /** The revision the edit started from; absent for a new one. */
+  revision?: number;
+}
+
+export type GroupTemplateMatch = { buildingId: string; outcome: 'MATCHED' } | { buildingId: null; outcome: 'NONE' | 'AMBIGUOUS' };
+
+/** Every enrolled property with a position, for the Group maker. */
+export const useGroupMakerProperties = (enabled = true) =>
+  useQuery({
+    queryKey: planningKeys.groupMakerProperties,
+    queryFn: ({ signal }) =>
+      api<{ properties: GroupMakerProperty[]; withoutPosition: number }>(`${PLANNING}/group-maker/properties`, { signal }),
+    enabled,
+  });
+
+export const useGroupTemplates = (enabled = true) =>
+  useQuery({
+    queryKey: planningKeys.groupTemplates,
+    queryFn: ({ signal }) => api<GroupTemplateSummary[]>(`${PLANNING}/group-templates`, { signal }),
+    enabled,
+  });
+
+export const useGroupTemplate = (id: string | null) =>
+  useQuery({
+    queryKey: planningKeys.groupTemplate(id ?? ''),
+    queryFn: ({ signal }) => api<GroupTemplateDetail>(`${PLANNING}/group-templates/${id}`, { signal }),
+    enabled: Boolean(id),
+    // An open template is the office's work in progress: never swapped underneath them by a refetch.
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
+
+export function useGroupTemplateMutations() {
+  const client = useQueryClient();
+  const send = <T>(path: string, method: 'POST' | 'PUT', body?: unknown) =>
+    api<T>(`${PLANNING}${path}`, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+  const saved = (template: GroupTemplateDetail) => {
+    client.setQueryData(planningKeys.groupTemplate(template.id), template);
+    // In the list at once, so a template just made can be opened before the list is read again.
+    const { groups, ...rest } = template;
+    const summary: GroupTemplateSummary = {
+      ...rest,
+      groupCount: groups.length,
+      propertyCount: groups.reduce((total, group) => total + group.buildingIds.length, 0),
+    };
+    client.setQueryData<GroupTemplateSummary[]>(planningKeys.groupTemplates, (list) =>
+      list?.some((entry) => entry.id === summary.id)
+        ? list.map((entry) => (entry.id === summary.id ? summary : entry))
+        : [summary, ...(list ?? [])],
+    );
+    void client.invalidateQueries({ queryKey: planningKeys.groupTemplates });
+  };
+  return {
+    create: useMutation({
+      mutationFn: (input: GroupTemplateInput) => send<GroupTemplateDetail>('/group-templates', 'POST', input),
+      onSuccess: saved,
+    }),
+    save: useMutation({
+      mutationFn: ({ id, input }: { id: string; input: GroupTemplateInput }) =>
+        send<GroupTemplateDetail>(`/group-templates/${id}`, 'PUT', input),
+      onSuccess: saved,
+    }),
+    setActive: useMutation({
+      mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+        send<GroupTemplateDetail>(`/group-templates/${id}/active`, 'POST', { active }),
+      onSuccess: saved,
+    }),
+    archive: useMutation({
+      mutationFn: (id: string) => send<GroupTemplateDetail>(`/group-templates/${id}/archive`, 'POST'),
+      onSuccess: saved,
+    }),
+    match: useMutation({
+      mutationFn: (rows: { address: string; postalCode: string | null }[]) =>
+        send<{ matches: GroupTemplateMatch[] }>('/group-templates/match', 'POST', { rows }),
+    }),
+  };
+}
 
 /** The office's groups file as the server holds it: the CSV exactly as it is on disk. */
 export interface PlanGroupFile {

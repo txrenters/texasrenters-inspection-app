@@ -10,6 +10,7 @@ import {
   KeyRound,
   MapPin,
   RefreshCw,
+  Shapes,
   ShieldCheck,
   UserRound,
   Users,
@@ -137,6 +138,15 @@ export const adminNavigation: AdminNavigationGroup[] = [
         title: 'Benefit package plan',
         href: '/planning',
         icon: CalendarRange,
+        permission: 'planning:read',
+      },
+      {
+        // The office's own grouping of the properties into days (2026-09-30),
+        // which a quarter is then built from. Its own route rather than under
+        // /planning, which would light up the plan's item as well.
+        title: 'TBP group maker',
+        href: '/group-maker',
+        icon: Shapes,
         permission: 'planning:read',
       },
       {

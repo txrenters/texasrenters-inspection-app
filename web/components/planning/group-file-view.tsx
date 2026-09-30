@@ -47,6 +47,74 @@ const GroupFileMap = dynamic(() => import('./group-file-map').then((module) => m
   loading: () => <Skeleton className="h-full w-full rounded-lg" />,
 });
 
+/** What the groups map draws besides the pins, as the switches above it set it. */
+export interface MapDisplay {
+  /** Each group's route, stop to stop. */
+  lines: boolean;
+  /** Along the roads (the default) or straight from stop to stop. */
+  road: boolean;
+  /** The straight-edged outline around each group: off unless asked for (the office, 2026-09-30). */
+  outlines: boolean;
+  /** Each zone's ground and fence (the office, 2026-09-30). */
+  zones: boolean;
+  /** Each leg's drive time on the map (the office, 2026-09-30). */
+  legTimes: boolean;
+}
+
+export const DEFAULT_MAP_DISPLAY: MapDisplay = { lines: true, road: true, outlines: false, zones: true, legTimes: true };
+
+/** The switches for what the groups map draws: the file's view and the Group maker share them. */
+export function MapDisplaySwitches({ display, onChange }: { display: MapDisplay; onChange: (next: MapDisplay) => void }) {
+  const set = (changes: Partial<MapDisplay>) => onChange({ ...display, ...changes });
+  return (
+    <>
+      <label className="flex cursor-pointer items-center gap-2 text-sm">
+        <Switch aria-label="Route lines" checked={display.lines} onCheckedChange={(lines) => set({ lines })} />
+        Route lines
+      </label>
+      <label
+        className="flex cursor-pointer items-center gap-2 text-sm"
+        title="The straight-edged outline around each group, in its colour"
+      >
+        <Switch aria-label="Group outlines" checked={display.outlines} onCheckedChange={(outlines) => set({ outlines })} />
+        Group outlines
+      </label>
+      <label
+        className="flex cursor-pointer items-center gap-2 text-sm"
+        title="Each zone's ground: every spot within 3 km of a property goes to the zone of the property nearest it"
+      >
+        <Switch aria-label="Zones" checked={display.zones} onCheckedChange={(zones) => set({ zones })} />
+        Zones
+      </label>
+      <label
+        className="flex cursor-pointer items-center gap-2 text-sm"
+        title="The drive time from each stop to the next, on the map: for the groups ticked, and for every group on screen once zoomed in"
+      >
+        <Switch aria-label="Leg times" checked={display.legTimes} onCheckedChange={(legTimes) => set({ legTimes })} />
+        Leg times
+      </label>
+      <div aria-label="How the routes are drawn" className="bg-muted inline-flex rounded-md p-0.5" role="group">
+        {([true, false] as const).map((alongRoads) => (
+          <button
+            aria-pressed={display.road === alongRoads}
+            className={cn(
+              'rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50',
+              display.road === alongRoads ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            )}
+            disabled={!display.lines}
+            key={String(alongRoads)}
+            onClick={() => set({ road: alongRoads })}
+            title={alongRoads ? 'The drive along the roads, from Mapbox' : 'Straight from stop to stop, as the crow flies'}
+            type="button"
+          >
+            {alongRoads ? 'Road routes' : 'Straight lines'}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 /** A groups file, read, with the name it was chosen under. */
 export interface LoadedGroupFile {
   name: string;
@@ -188,15 +256,8 @@ export function GroupFileView({
 }) {
   const { file } = loaded;
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
-  const [lines, setLines] = useState(true);
-  /** Along the roads (the default) or straight from stop to stop. */
-  const [road, setRoad] = useState(true);
-  /** The straight-edged outline around each group: off unless asked for (the office, 2026-09-30). */
-  const [showOutlines, setShowOutlines] = useState(false);
-  /** Each zone's ground and fence (the office, 2026-09-30). */
-  const [showZones, setShowZones] = useState(true);
-  /** Each leg's drive time on the map (the office, 2026-09-30). */
-  const [showLegTimes, setShowLegTimes] = useState(true);
+  const [display, setDisplay] = useState<MapDisplay>(DEFAULT_MAP_DISPLAY);
+  const { lines, road, outlines: showOutlines, zones: showZones, legTimes: showLegTimes } = display;
   const [order, setOrder] = useState<GroupOrder>('number');
   /** Manual grouping, and the work it opened on; null for the file's own view. */
   const [manual, setManual] = useState<{
@@ -342,53 +403,7 @@ export function GroupFileView({
             />
             Manual grouping
           </label>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <Switch aria-label="Route lines" checked={lines} onCheckedChange={setLines} />
-            Route lines
-          </label>
-          <label
-            className="flex cursor-pointer items-center gap-2 text-sm"
-            title="The straight-edged outline around each group, in its colour"
-          >
-            <Switch aria-label="Group outlines" checked={showOutlines} onCheckedChange={setShowOutlines} />
-            Group outlines
-          </label>
-          <label
-            className="flex cursor-pointer items-center gap-2 text-sm"
-            title="Each zone's ground: every spot within 3 km of a property goes to the zone of the property nearest it"
-          >
-            <Switch aria-label="Zones" checked={showZones} onCheckedChange={setShowZones} />
-            Zones
-          </label>
-          <label
-            className="flex cursor-pointer items-center gap-2 text-sm"
-            title="The drive time from each stop to the next, on the map: for the groups ticked, and for every group on screen once zoomed in"
-          >
-            <Switch aria-label="Leg times" checked={showLegTimes} onCheckedChange={setShowLegTimes} />
-            Leg times
-          </label>
-          <div aria-label="How the routes are drawn" className="bg-muted inline-flex rounded-md p-0.5" role="group">
-            {([true, false] as const).map((alongRoads) => (
-              <button
-                aria-pressed={road === alongRoads}
-                className={cn(
-                  'rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50',
-                  road === alongRoads ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                )}
-                disabled={!lines}
-                key={String(alongRoads)}
-                onClick={() => setRoad(alongRoads)}
-                title={
-                  alongRoads
-                    ? 'The drive along the roads, from Mapbox'
-                    : 'Straight from stop to stop, as the crow flies'
-                }
-                type="button"
-              >
-                {alongRoads ? 'Road routes' : 'Straight lines'}
-              </button>
-            ))}
-          </div>
+          <MapDisplaySwitches display={display} onChange={setDisplay} />
           <GroupFilePicker label="Choose another file" onLoad={onLoad} />
           <Button onClick={onClose} size="sm" variant="ghost">
             <XIcon />

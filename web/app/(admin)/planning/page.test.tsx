@@ -15,6 +15,7 @@ const hooks = vi.hoisted(() => ({
   usePlanTechnicians: vi.fn(),
   usePlanningMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
+  useGroupTemplates: vi.fn(),
 }));
 
 vi.mock('@/lib/planning-queries', () => hooks);
@@ -173,6 +174,7 @@ function mount({
   advice = null as unknown,
   applyAdvice = null as unknown,
   groupFile = null as unknown,
+  templates = [] as unknown[],
 } = {}) {
   hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
@@ -210,6 +212,7 @@ function mount({
     },
   });
   hooks.usePlanTechnicians.mockReturnValue({ data: TECHNICIANS, isLoading: false });
+  hooks.useGroupTemplates.mockReturnValue({ data: templates, isLoading: false });
   hooks.usePlanningMutations.mockReturnValue({
     build,
     editStop,
@@ -519,6 +522,88 @@ describe('the benefit package plan page', () => {
         name: /Lay published visits out again/,
       }),
     ).toBeNull();
+  });
+
+  /**
+   * The office's own grouping (2026-09-30): a template made in the Group maker
+   * is offered beside the planner's own, which stays the default.
+   */
+  describe('grouping', () => {
+    const TEMPLATE = {
+      id: '6f0c1d2e-0000-4000-8000-000000000001',
+      name: 'Outside in',
+      isActive: true,
+      minutesPerProperty: 30,
+      revision: 4,
+      archivedAt: null,
+      createdAt: '2026-09-30T12:00:00.000Z',
+      updatedAt: '2026-09-30T12:00:00.000Z',
+      updatedBy: null,
+      groupCount: 39,
+      propertyCount: 393,
+    };
+
+    it('builds with the planner’s own grouping unless a template is chosen, and says nothing of templates then', () => {
+      mount({ plans: [], templates: [TEMPLATE] });
+
+      fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+      const dialog = screen.getByRole('dialog');
+      expect((within(dialog).getByRole('radio', { name: /The planner’s own grouping/ }) as HTMLInputElement).checked).toBe(true);
+      expect(within(dialog).getByText(/39 groups · 393 properties/)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Build for/ }));
+
+      expect(build.mutate.mock.calls[0][0]).not.toHaveProperty('groupTemplateId');
+    });
+
+    it('builds from a template when it is chosen', () => {
+      mount({ plans: [], templates: [TEMPLATE] });
+
+      fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('radio', { name: /Outside in · active/ }));
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Build for/ }));
+
+      expect(build.mutate).toHaveBeenCalledWith(expect.objectContaining({ groupTemplateId: TEMPLATE.id }), expect.anything());
+    });
+
+    it('rebuilds with the template the quarter was built from, and can go back to the planner’s own', () => {
+      const plan = {
+        ...PLAN,
+        groupTemplateId: TEMPLATE.id,
+        groupTemplateRevision: 3,
+        groupTemplate: { id: TEMPLATE.id, name: TEMPLATE.name, revision: 4, archivedAt: null },
+      };
+      mount({ plans: [plan], templates: [TEMPLATE] });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+      let dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+      expect((within(dialog).getByRole('radio', { name: /Outside in/ }) as HTMLInputElement).checked).toBe(true);
+      // Saved since the quarter was built from it.
+      expect(within(dialog).getByText(/has been saved since this quarter was built/)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Rebuild for/ }));
+      expect(build.mutate.mock.calls[0][0]).toMatchObject({ groupTemplateId: TEMPLATE.id });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+      dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+      fireEvent.click(within(dialog).getByRole('radio', { name: /The planner’s own grouping/ }));
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Rebuild for/ }));
+      expect(build.mutate.mock.calls[1][0]).toMatchObject({ groupTemplateId: null });
+    });
+
+    it('does not rebuild quietly from a template that has been archived', () => {
+      const plan = {
+        ...PLAN,
+        groupTemplateId: TEMPLATE.id,
+        groupTemplate: { id: TEMPLATE.id, name: TEMPLATE.name, revision: 4, archivedAt: '2026-10-01T00:00:00.000Z' },
+      };
+      mount({ plans: [plan], templates: [{ ...TEMPLATE, archivedAt: '2026-10-01T00:00:00.000Z' }] });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+      const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+      expect(within(dialog).getByText(/which has since been archived/)).toBeTruthy();
+      expect((within(dialog).getByRole('radio', { name: /The planner’s own grouping/ }) as HTMLInputElement).checked).toBe(true);
+      expect(within(dialog).queryByRole('radio', { name: /Outside in/ })).toBeNull();
+    });
   });
 
   /** The office (2026-09-19): "the +-15 days if we will apply the +15 or -15 or on time quarter schedule". */

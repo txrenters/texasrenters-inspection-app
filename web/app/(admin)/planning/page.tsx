@@ -230,12 +230,15 @@ export default function PlanningPage() {
       id,
       description: 'Drive times are measured on the road, so this takes a few minutes. Keep this page open.',
     });
-    const { stopsPerDay, ...rest } = picked;
+    const { stopsPerDay, groupTemplateId, ...rest } = picked;
     mutations.build.mutate(
       {
         year: choice.year,
         quarter: choice.quarter,
         ...rest,
+        // Only when a template is in it, either way: a build that never touched
+        // one says nothing, and so means nothing to a server that has none.
+        ...(groupTemplateId || plan?.groupTemplateId ? { groupTemplateId } : {}),
         // Both ends, so the planner fills to the number asked for rather than
         // stopping at its own nine and treating the rest as a ceiling.
         minStopsPerDay: stopsPerDay,
@@ -247,7 +250,15 @@ export default function PlanningPage() {
             id,
             description: `${result.routing.placed.toLocaleString()} visits over ${result.routing.days.toLocaleString()} technician-days${
               result.routing.unplaced.length ? `; ${result.routing.unplaced.length} need attention` : ''
-            }.`,
+            }.${
+              result.routing.template
+                ? ` ${result.routing.template.days.toLocaleString()} days are groups of “${result.routing.template.name}”${
+                    result.routing.template.notInTemplate
+                      ? `; ${result.routing.template.notInTemplate.toLocaleString()} visits were in none of its groups and joined the nearest`
+                      : ''
+                  }.`
+                : ''
+            }`,
           });
         },
         onError: (error) => toast.error(`${choice.label} could not be planned`, { id, description: error.message }),
@@ -841,6 +852,9 @@ export default function PlanningPage() {
         // The plan's own answer, so a rebuild opens on the last one given rather
         // than quietly reverting to assigning everybody.
         jobberUnassigned={plan?.jobberUnassigned ?? false}
+        // The grouping the quarter was last built with, so a rebuild keeps it unless changed.
+        groupTemplate={plan?.groupTemplate ?? null}
+        groupTemplateRevision={plan?.groupTemplateRevision ?? null}
         label={choice.label}
         onBuild={build}
         onOpenChange={setChoosing}
