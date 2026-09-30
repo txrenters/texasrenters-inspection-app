@@ -87,6 +87,8 @@ export function ManualGroupingView({
   showOutlines,
   showLegTimes,
   zones,
+  persist = true,
+  onChange,
 }: {
   file: GroupFile;
   fileName: string;
@@ -103,6 +105,13 @@ export function ManualGroupingView({
   zones: readonly ZoneTerritory[];
   /** Each leg's drive time on the map. */
   showLegTimes: boolean;
+  /**
+   * Save the work in this browser as it changes, as fingerprints. Off in the
+   * Group maker, whose work is saved to the server as a template instead.
+   */
+  persist?: boolean;
+  /** Told the groups and the minutes per property whenever either changes. */
+  onChange?: (snapshot: { state: ManualState; minutesPerProperty: number }) => void;
 }) {
   const [history, dispatch] = useReducer(historyReducer, undefined, () => ({
     past: [],
@@ -269,8 +278,15 @@ export function ManualGroupingView({
 
   // Saved on every change, so a reload loses nothing.
   useEffect(() => {
-    writeSaved(toSaved(state, activeId, prints, fileName, true, { minutesPerProperty, autoOrder }));
-  }, [activeId, autoOrder, fileName, minutesPerProperty, prints, state]);
+    if (persist) writeSaved(toSaved(state, activeId, prints, fileName, true, { minutesPerProperty, autoOrder }));
+  }, [activeId, autoOrder, fileName, minutesPerProperty, persist, prints, state]);
+
+  /** The newest listener, so a parent's new function each render is not a change of its own. */
+  const listener = useRef(onChange);
+  listener.current = onChange;
+  useEffect(() => {
+    listener.current?.({ state, minutesPerProperty });
+  }, [minutesPerProperty, state]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

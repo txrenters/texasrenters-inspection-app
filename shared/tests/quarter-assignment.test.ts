@@ -608,6 +608,170 @@ describe('the quarter finished as early as the crew can', () => {
   });
 });
 
+/**
+ * The office's own groups, from a group template (2026-09-30): "we want to have
+ * the best property grouping", made by hand on the map and saved. A quarter
+ * built from one takes its groups as its days.
+ */
+describe('a quarter built from the office’s own groups', () => {
+  const ids = (stops: readonly PlannableStop[]) => stops.map((stop) => stop.stopId);
+  const ofDay = (crew: AssignedCrew) => crew.stops.map((stop) => stop.stopId);
+
+  it('keeps each group whole, a day each, in the order it was drawn', () => {
+    // Eleven on top of each other: the planner itself would stop at ten.
+    const west = cluster('w', 11, 1, {}, 29.76);
+    const east = cluster('e', 9, 20, {}, 29.9);
+    const drawn = [[...ids(west)].reverse(), ids(east)];
+
+    const { crews, unplaced } = layoutEveryDay([...west, ...east], days(5, ['moses']), { presetGroups: drawn });
+
+    expect(unplaced).toEqual([]);
+    expect(crews).toHaveLength(2);
+    expect(crews.map(ofDay)).toEqual(expect.arrayContaining(drawn));
+    expect(crews.map((day) => day.preset).sort()).toEqual([0, 1]);
+  });
+
+  it('counts a group crossing a zone line as the zone most of it is in', () => {
+    const mixed = [...cluster('a', 7, 1, { zone: '2' }), ...cluster('b', 3, 10, { zone: '1' }, 29.768)];
+
+    const { crews } = layoutEveryDay(mixed, days(1, ['moses', 'kevin'], { zoneTechnicians: { '1': 'moses', '2': 'kevin' } }), {
+      presetGroups: [ids(mixed)],
+    });
+
+    expect(crews.map((day) => [day.technicianId, day.stops.length])).toEqual([['kevin', 10]]);
+  });
+
+  it('puts a visit in no group into the group it adds least driving to', () => {
+    const group = cluster('g', 9);
+    const added = at('new', 50, 29.7605, -95.3705);
+
+    const { crews } = layoutEveryDay([...group, added], days(5, ['moses']), { presetGroups: [ids(group)] });
+
+    expect(crews).toHaveLength(1);
+    expect(stopIds(crews[0]!)).toContain('new');
+    expect(crews[0]!.preset).toBe(0);
+  });
+
+  it('makes a day of its own from a day’s worth of visits in no group', () => {
+    const group = cluster('g', 9);
+    // Twenty-odd kilometres north: too far to join, and nine of them.
+    const newArea = cluster('n', 9, 30, {}, 29.96);
+
+    const { crews, unplaced } = layoutEveryDay([...group, ...newArea], days(5, ['moses']), { presetGroups: [ids(group)] });
+
+    expect(unplaced).toEqual([]);
+    expect(crews.map((day) => [day.preset, day.stops.length])).toEqual(
+      expect.arrayContaining([
+        [0, 9],
+        [undefined, 9],
+      ]),
+    );
+  });
+
+  it('visits a property far from every group on a short day rather than leave it out', () => {
+    const group = cluster('g', 9);
+    const alone = at('alone', 60, 30.2, -95.37);
+
+    const { crews, unplaced } = layoutEveryDay([...group, alone], days(5, ['moses']), { presetGroups: [ids(group)] });
+
+    expect(unplaced).toEqual([]);
+    expect(crews.find((day) => day.stops.some((stop) => stop.stopId === 'alone'))!.stops).toHaveLength(1);
+  });
+
+  it('takes the last visits off a group that would run past six hours on site', () => {
+    // Twenty visits of twenty minutes is 400 minutes; eighteen is the six hours.
+    const long = cluster('l', 20);
+
+    const { crews, unplaced } = layoutEveryDay(long, days(5, ['moses']), { presetGroups: [ids(long)] });
+
+    expect(unplaced).toEqual([]);
+    const drawn = crews.find((day) => day.preset === 0)!;
+    expect(ofDay(drawn)).toEqual(ids(long).slice(0, 18));
+    expect(crews.flatMap(ofDay).sort()).toEqual(ids(long).sort());
+  });
+
+  it('ignores a stop the quarter does not have, and a stop named twice stays in its first group', () => {
+    const group = cluster('g', 9);
+
+    const { crews, unplaced } = layoutEveryDay(group, days(5, ['moses']), {
+      presetGroups: [['gone', ...ids(group)], [ids(group)[0]!]],
+    });
+
+    expect(unplaced).toEqual([]);
+    expect(crews.map(ofDay)).toEqual([ids(group)]);
+  });
+
+  describe('with a move-out', () => {
+    const moveOut: DayAnchor = {
+      id: 'move-out-1',
+      date: '2026-10-01',
+      technicianId: 'moses',
+      latitude: 29.56,
+      longitude: -95.37,
+      onSiteMinutes: 60,
+    };
+    const north = cluster('n', 9, 1, { zone: '1' });
+    const south = cluster('s', 10, 10, { zone: '2' }, 29.56);
+
+    it('takes the group nearest it, less the three visits furthest from it', () => {
+      const { crews, unplaced } = layoutEveryDay([...north, ...south], days(5, ['moses']), {
+        anchors: [moveOut],
+        presetGroups: [ids(north), ids(south)],
+      });
+
+      expect(unplaced).toEqual([]);
+      const anchored = crews.find((day) => day.anchors?.length)!;
+      expect(anchored.preset).toBe(1);
+      expect(anchored.stops).toHaveLength(7);
+      expect(anchored.stops.every((stop) => stop.stopId.startsWith('s'))).toBe(true);
+      // The three it gave up furthest from the move-out, north along the street, still get a day.
+      expect(crews.flatMap(ofDay).sort()).toEqual([...ids(north), ...ids(south)].sort());
+      const given = ids(south).filter((id) => !ofDay(anchored).includes(id));
+      expect(given).toEqual(['s8', 's9', 's10']);
+    });
+
+    it('keeps its day with the move-out alone once every group has a day', () => {
+      const planned: PlannableDay[] = [
+        { date: '2026-10-01', technicianIds: ['kevin'] },
+        { date: '2026-10-02', technicianIds: ['moses'] },
+      ];
+
+      const { crews, unplaced } = layoutEveryDay(north, planned, {
+        anchors: [{ ...moveOut, date: '2026-10-02' }],
+        presetGroups: [ids(north)],
+      });
+
+      expect(unplaced).toEqual([]);
+      expect(crews.map((day) => [day.date, day.technicianId, day.stops.length, day.anchors?.length ?? 0])).toEqual([
+        ['2026-10-01', 'kevin', 9, 0],
+        ['2026-10-02', 'moses', 0, 1],
+      ]);
+    });
+  });
+
+  it('sends a far zone’s groups on its trip whole', () => {
+    const far = Array.from({ length: 20 }, (_, index) =>
+      at(`far${index + 1}`, 100 + index, 31.6 + (index % 5) * 0.004, -94.65 + Math.floor(index / 5) * 0.004, { zone: '5' }),
+    );
+    const drawn = [ids(far).slice(0, 11), ids(far).slice(11)];
+    const homes = new Map([
+      ['moses', { latitude: 29.76, longitude: -95.37 }],
+      ['kevin', { latitude: 30.3, longitude: -95.0 }],
+    ]);
+
+    const { crews, unplaced } = layoutEveryDay(far, days(10, ['moses', 'kevin'], { zoneTechnicians: { '1': 'moses' } }), {
+      homes,
+      tripZones: ['5'],
+      presetGroups: drawn,
+    });
+
+    expect(unplaced).toEqual([]);
+    const trip = crews.filter((day) => day.trip);
+    expect(trip.map((day) => day.technicianId)).toEqual(['kevin', 'kevin']);
+    expect(trip.map(ofDay)).toEqual(expect.arrayContaining(drawn));
+  });
+});
+
 describe('estimating a drive before it is measured', () => {
   it('is no drive at all within one building', () => {
     expect(estimatedDriveMinutes({ latitude: 29.76, longitude: -95.37 }, { latitude: 29.76, longitude: -95.37 })).toBe(0);

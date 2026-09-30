@@ -389,6 +389,9 @@ model Organization {
   tbpQuarterPlanStops             TbpQuarterPlanStop[]
   tbpQuarterPlanDays              TbpQuarterPlanDay[]
   tbpQuarterPlanAnchors           TbpQuarterPlanAnchor[]
+  tbpGroupTemplates               TbpGroupTemplate[]
+  tbpGroupTemplateGroups          TbpGroupTemplateGroup[]
+  tbpGroupTemplateMembers         TbpGroupTemplateMember[]
   leaseScheduledInspections       LeaseScheduledInspection[]
   technicianPlanningProfiles      TechnicianPlanningProfile[]
 }
@@ -508,6 +511,8 @@ model UserProfile {
   tbpPlanStops         TbpQuarterPlanStop[]     @relation("TbpStopTechnician")
   tbpPlanDays          TbpQuarterPlanDay[]      @relation("TbpPlanDayTechnician")
   tbpPlanAnchors       TbpQuarterPlanAnchor[]   @relation("TbpPlanAnchorTechnician")
+  tbpGroupTemplatesCreated TbpGroupTemplate[]   @relation("TbpGroupTemplateCreatedBy")
+  tbpGroupTemplatesUpdated TbpGroupTemplate[]   @relation("TbpGroupTemplateUpdatedBy")
   planningProfile      TechnicianPlanningProfile? @relation("TechnicianPlanningProfile")
 }
 
@@ -1467,6 +1472,7 @@ model PropertywareBuilding {
   @@map("propertyware_buildings")
   jobberPropertyLinks    JobberPropertyLink[]
   tenants             PropertywareTenant[]
+  tbpGroupTemplateMembers TbpGroupTemplateMember[]
   inspectionDocuments PropertywareInspectionDocument[]
 }
 
@@ -3111,6 +3117,15 @@ model TbpQuarterPlan {
   /// Default false, which is the behaviour every existing plan had.
   jobberUnassigned     Boolean   @default(false)
 
+  /// The office's group template the days were laid out from, chosen in the
+  /// build dialog (2026-09-30); null for the planner's own grouping, which every
+  /// plan before it used. Kept on the plan like the crew, so a rebuild -- the
+  /// office's or the nightly one -- groups the same way.
+  groupTemplateId       String? @db.Uuid
+  /// The template's `revision` when the days were last laid out from it, so the
+  /// console can say the template has changed since.
+  groupTemplateRevision Int?
+
   /// The office's sheet of visit Details for the quarter, as imported:
   /// `[{ address, city, postalCode, details }]`. Kept whole rather than only
   /// copied onto stops, so a regeneration matches it to the tenancies it adds.
@@ -3127,6 +3142,7 @@ model TbpQuarterPlan {
 
   organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   publishedBy  UserProfile?         @relation("TbpPlanPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+  groupTemplate TbpGroupTemplate?   @relation(fields: [groupTemplateId], references: [id], onDelete: SetNull)
   stops        TbpQuarterPlanStop[]
   days         TbpQuarterPlanDay[]
   anchors      TbpQuarterPlanAnchor[]
@@ -3445,6 +3461,91 @@ model TbpQuarterPlanAnchor {
   @@unique([planId, inspectionId])
   @@index([planId, technicianId, date])
   @@index([organizationId, date])
+}
+
+/// The office's own grouping of the benefit-package properties into days: a
+/// group template (the office, 2026-09-30: "we want to have the best property
+/// grouping").
+///
+/// Made in the console's Group maker by clicking properties into groups on the
+/// map, each group a technician-day in its best driving order. A quarter built
+/// with one takes its groups as its days (`TbpQuarterPlan.groupTemplateId`); the
+/// planner's own grouping stays the default.
+///
+/// Keyed on buildings, never tenancies: the nightly sync recreates a tenancy's
+/// row and its id changes with every lease, while a building is the same place
+/// every quarter. A building's tenancies -- its units -- ride together.
+///
+/// At most one per organization is active: the one the daily planner builds a
+/// new quarter from. A partial unique index holds that, which Prisma cannot say.
+model TbpGroupTemplate {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  name           String
+  isActive       Boolean   @default(false)
+  /// The minutes at each property the maker estimated its days with. Advisory:
+  /// a quarter's own visit lengths decide its days.
+  minutesPerProperty Int   @default(30)
+  /// One more on every save, so a quarter built from an older one can say so.
+  revision       Int       @default(1)
+  /// Set instead of deleting: a quarter built from it still says what it was.
+  archivedAt     DateTime?
+  createdById    String?   @db.Uuid
+  updatedById    String?   @db.Uuid
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    UserProfile?             @relation("TbpGroupTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    UserProfile?             @relation("TbpGroupTemplateUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  groups       TbpGroupTemplateGroup[]
+  members      TbpGroupTemplateMember[]
+  plans        TbpQuarterPlan[]
+
+  @@index([organizationId, archivedAt])
+}
+
+/// One group of a template: a technician-day.
+model TbpGroupTemplateGroup {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  templateId     String @db.Uuid
+  /// 1-based: the group's number on the map and in the list.
+  position       Int
+  name           String
+  /// `#rrggbb`, as the office chose it on the map.
+  color          String
+  /// How many properties the office meant it to hold.
+  target         Int
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     TbpGroupTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  members      TbpGroupTemplateMember[]
+
+  @@unique([templateId, position])
+  @@index([organizationId])
+}
+
+/// A property in a template's group, and its place in the group's driving order.
+model TbpGroupTemplateMember {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  templateId     String @db.Uuid
+  groupId        String @db.Uuid
+  buildingId     String @db.Uuid
+  /// 1-based: the stop's place in the group's driving order.
+  position       Int
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     TbpGroupTemplate      @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  group        TbpGroupTemplateGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  building     PropertywareBuilding  @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  /// A property is in one group of a template.
+  @@unique([templateId, buildingId])
+  @@unique([groupId, position])
+  @@index([organizationId])
+  @@index([buildingId])
 }
 
 /// What the lease schedule did about one lease's move-out or move-in.

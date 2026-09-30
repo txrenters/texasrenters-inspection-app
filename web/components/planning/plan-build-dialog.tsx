@@ -17,8 +17,9 @@ import { FieldDescription } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { businessToday } from '@/lib/clock';
+import { formatRelative } from '@/lib/format';
 import { formatShortDay, planStartOptions, planStartValue, type PlanStartOption } from '@/lib/planning';
-import { usePlanTechnicians } from '@/lib/planning-queries';
+import { useGroupTemplates, usePlanTechnicians, type PlanQuarter } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
 /** Who to send out and the first day, as the Build dialog hands them over. */
@@ -42,6 +43,11 @@ export interface PlanBuildChoice {
   stopsPerDay: number;
   /** Zones left out of the build, by number. */
   excludedZones: string[];
+  /**
+   * One of the office's group templates, whose groups are the days (the
+   * office, 2026-09-30); null for the planner's own grouping.
+   */
+  groupTemplateId: string | null;
 }
 
 /**
@@ -77,6 +83,8 @@ export function PlanBuildDialog({
   chosen = [],
   startsOn = null,
   jobberUnassigned = false,
+  groupTemplate = null,
+  groupTemplateRevision = null,
   pending = false,
   onBuild,
 }: {
@@ -93,6 +101,10 @@ export function PlanBuildDialog({
   startsOn?: string | null;
   /** The plan's own answer, so a rebuild opens on the last one given. */
   jobberUnassigned?: boolean;
+  /** The group template the plan was last laid out from, when it was. */
+  groupTemplate?: PlanQuarter['groupTemplate'];
+  /** That template's revision when it was. */
+  groupTemplateRevision?: number | null;
   pending?: boolean;
   onBuild: (choice: PlanBuildChoice) => void;
 }) {
@@ -121,6 +133,13 @@ export function PlanBuildDialog({
    */
   const [stopsPerDay, setStopsPerDay] = useState<number>(9);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const groupingName = useId();
+  const templates = useGroupTemplates(open);
+  const usable = useMemo(() => (templates.data ?? []).filter((template) => !template.archivedAt), [templates.data]);
+  // `undefined` until touched, so the plan's own grouping shows through -- unless its template has since been archived.
+  const [grouping, setGrouping] = useState<string | null | undefined>(undefined);
+  const chosenGrouping = grouping === undefined ? (groupTemplate && !groupTemplate.archivedAt ? groupTemplate.id : null) : grouping;
+  const chosenTemplate = usable.find((template) => template.id === chosenGrouping) ?? null;
 
   const listed = useMemo(() => technicians.data ?? [], [technicians.data]);
   const initial = useMemo(() => {
@@ -138,6 +157,7 @@ export function PlanBuildDialog({
       setUnassigned(null);
       setStopsPerDay(9);
       setSkipped(new Set());
+      setGrouping(undefined);
     }
     onOpenChange(next);
   };
@@ -159,7 +179,9 @@ export function PlanBuildDialog({
       jobberUnassigned: sendUnassigned,
       stopsPerDay,
       excludedZones: [...skipped].sort(),
+      groupTemplateId: chosenGrouping,
     });
+    setGrouping(undefined);
     setPicked(null);
     setStart(null);
     setMovePublished(false);
@@ -287,6 +309,64 @@ export function PlanBuildDialog({
           </FieldDescription>
         </fieldset>
 
+        {/* The office's own grouping (2026-09-30): a template made in the Group
+            maker, whose groups are the days. The planner's own stays the
+            default, so a quarter is grouped the old way unless somebody chooses. */}
+        <fieldset className="grid min-w-0 gap-2">
+          <legend className="mb-2 text-sm font-medium">Grouping</legend>
+          <div className="grid gap-2">
+            {[
+              { id: null, title: 'The planner’s own grouping', detail: 'Days of the size below, grouped for the least driving.' },
+              ...usable.map((template) => ({
+                id: template.id as string | null,
+                title: `${template.name}${template.isActive ? ' · active' : ''}`,
+                detail: `${template.groupCount.toLocaleString()} groups · ${template.propertyCount.toLocaleString()} properties · saved ${formatRelative(template.updatedAt)}`,
+              })),
+            ].map((option) => (
+              <label
+                className={cn(
+                  'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
+                  option.id === chosenGrouping && 'border-ring bg-accent',
+                )}
+                key={option.id ?? 'planner'}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    checked={option.id === chosenGrouping}
+                    className="accent-primary"
+                    name={groupingName}
+                    onChange={() => setGrouping(option.id)}
+                    type="radio"
+                    value={option.id ?? ''}
+                  />
+                  <span className="text-sm font-medium">{option.title}</span>
+                </span>
+                <span className="text-muted-foreground text-xs">{option.detail}</span>
+              </label>
+            ))}
+            {templates.isLoading ? <Skeleton className="h-12 w-full rounded-lg" /> : null}
+          </div>
+          <FieldDescription>
+            {chosenTemplate
+              ? 'Each of its groups is a day, as drawn in the Group maker. A property new since it was saved joins the group nearest it, and a day with a move-out gives up the three stops furthest from it.'
+              : 'Groupings made in the Group maker are listed here to build from.'}
+          </FieldDescription>
+          {groupTemplate?.archivedAt ? (
+            <p className="text-warning text-xs">
+              This quarter was built from &ldquo;{groupTemplate.name}&rdquo;, which has since been archived.
+            </p>
+          ) : null}
+          {chosenTemplate &&
+          groupTemplate?.id === chosenTemplate.id &&
+          groupTemplateRevision !== null &&
+          chosenTemplate.revision > groupTemplateRevision ? (
+            <p className="text-muted-foreground text-xs">
+              &ldquo;{chosenTemplate.name}&rdquo; has been saved since this quarter was built: rebuilding uses its
+              groups as they are now.
+            </p>
+          ) : null}
+        </fieldset>
+
         {/* Only on a rebuild. On a first build there is nothing published to
             move, and an option that can never do anything is a question the
             reader has to answer for no reason. */}
@@ -346,8 +426,9 @@ export function PlanBuildDialog({
             ))}
           </div>
           <FieldDescription>
-            A day is filled to this where the driving allows it &mdash; never more than 20 minutes from
-            one property to the next, so a thin patch still makes a short day.
+            {chosenTemplate
+              ? 'The template sets each day. This sizes only the days made from properties in none of its groups.'
+              : 'A day is filled to this where the driving allows it — never more than 20 minutes from one property to the next, so a thin patch still makes a short day.'}
           </FieldDescription>
         </fieldset>
 

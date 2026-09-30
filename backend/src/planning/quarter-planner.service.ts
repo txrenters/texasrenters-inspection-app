@@ -52,6 +52,7 @@ import type { GeoPoint } from '../routing/osrm.client';
 import { MapboxDirectionsClient } from '../routing/mapbox-directions.client';
 import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-position';
 import { OsrmClient } from '../routing/osrm.client';
+import { activeTemplateId, templateForPlanning, type TemplateForPlanning } from './group-template.service';
 
 /**
  * When a planned day starts, in Texas: the first job at nine.
@@ -146,6 +147,12 @@ export interface PlanRoutingSettings {
    * (2026-09-19). Empty: the benefit-package crew on the planning profiles.
    */
   technicianIds?: string[];
+  /**
+   * The office's group template the days are laid out from (2026-09-30), or
+   * null for the planner's own grouping. Kept on the plan like the crew, so a
+   * rebuild groups the same way until somebody chooses otherwise.
+   */
+  groupTemplateId?: string | null;
 }
 
 /** How a routing run is told what day it is: never a planned day before today. */
@@ -225,6 +232,16 @@ export interface RoutingSummary {
    * kept free has no planned day; a day a coordinator took is theirs.
    */
   anchorsSkipped: { inspectionId: string; reason: AnchorSkipReason | 'NO_LOCATION' }[];
+  /** The group template the days came from, and how much of the quarter it held; null for the planner's own grouping. */
+  template: {
+    id: string;
+    name: string;
+    revision: number;
+    /** Days laid out from one of its groups. */
+    days: number;
+    /** Visits whose building is in no group of it -- new since it was saved -- placed by the planner. */
+    notInTemplate: number;
+  } | null;
 }
 
 /** Who has which zone in each week of a plan's quarter, for the console. */
@@ -388,6 +405,7 @@ export class QuarterPlannerService {
         startsOn: true,
         crewTechnicianIds: true,
         jobberUnassigned: true,
+        groupTemplateId: true,
       },
     });
     if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
@@ -410,7 +428,12 @@ export class QuarterPlannerService {
       await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined),
       settings.jobberUnassigned,
     );
-    await this.prisma.tbpQuarterPlan.update({ where: { id: planId }, data: planColumns(settings) });
+    // So is the template: a quarter is never quietly grouped some other way than the one chosen.
+    const template = settings.groupTemplateId ? await this.groupTemplate(organizationId, settings.groupTemplateId) : null;
+    await this.prisma.tbpQuarterPlan.update({
+      where: { id: planId },
+      data: { ...planColumns(settings), groupTemplateRevision: template?.revision ?? null },
+    });
 
     // A visit a publish could not create -- no approved areas, no unit -- is
     // laid out again with the rest rather than staying failed forever.
@@ -433,7 +456,7 @@ export class QuarterPlannerService {
         data: { onSiteMinutes: minutes },
       });
 
-    const { stops, pins } = await this.plannableStops(
+    const { stops, pins, buildings } = await this.plannableStops(
       organizationId,
       planId,
       settings,
@@ -469,6 +492,7 @@ export class QuarterPlannerService {
     // In last quarter's order. A zone too far for a day's drive from any home is
     // a trip for the crew member living nearest it (the office, 2026-09-18).
     const booked = await this.dayAnchors(organizationId, quarter, roster.technicianIds, settings.startsOn);
+    const presets = template ? templateStops(template, free, buildings) : null;
     const assignment = layoutEveryDay(free, days, {
       limits,
       rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
@@ -477,6 +501,7 @@ export class QuarterPlannerService {
       homes: roster.homes,
       tripZones: zones.outOfReach,
       quarter,
+      ...(presets ? { presetGroups: presets.groups } : {}),
     });
     const unplaced: RoutingSummary['unplaced'] = assignment.unplaced;
     // A day's move-outs and move-ins are routed and measured with its visits,
@@ -526,6 +551,16 @@ export class QuarterPlannerService {
         ...booked.withoutLocation.map((inspectionId) => ({ inspectionId, reason: 'NO_LOCATION' as const })),
         ...assignment.skippedAnchors.map(({ anchorId, reason }) => ({ inspectionId: anchorId, reason })),
       ],
+      template:
+        template && presets
+          ? {
+              id: template.id,
+              name: template.name,
+              revision: template.revision,
+              days: assignment.crews.filter((crew) => crew.preset !== undefined).length,
+              notInTemplate: presets.notInTemplate,
+            }
+          : null,
     };
 
     if (assignment.capacity.onSiteMinutes > assignment.capacity.availableMinutes)
@@ -557,6 +592,9 @@ export class QuarterPlannerService {
       zonesOutOfReach: zones.outOfReach,
       tripDays: assignment.crews.filter((crew) => crew.trip).length,
       durationSource: summary.durationSource,
+      groupTemplateId: summary.template?.id ?? null,
+      templateDays: summary.template?.days ?? null,
+      notInTemplate: summary.template?.notInTemplate ?? null,
     });
 
     return summary;
@@ -581,6 +619,29 @@ export class QuarterPlannerService {
     if (!plan?.jobberUnassigned) return null;
     const roster = await this.roster(organizationId, plan.crewTechnicianIds);
     return dayGroupNames(roster.technicianIds, others);
+  }
+
+  /**
+   * A group template a quarter is to be laid out from, refused when there is
+   * none by that id or it has been archived: the quarter is then built with
+   * another grouping chosen, never quietly with the planner's own.
+   */
+  private async groupTemplate(organizationId: string, templateId: string): Promise<TemplateForPlanning> {
+    const template = await templateForPlanning(this.prisma, organizationId, templateId);
+    if (!template)
+      throw new ApplicationError(422, 'GROUP_TEMPLATE_NOT_FOUND', 'That group template does not exist. Choose another grouping.');
+    if (template.archivedAt)
+      throw new ApplicationError(
+        422,
+        'GROUP_TEMPLATE_ARCHIVED',
+        `The group template “${template.name}” has been archived. Choose another grouping to build this quarter.`,
+      );
+    return template;
+  }
+
+  /** The template the daily planner lays out a quarter it creates from: the active one, or none. */
+  activeGroupTemplateId(organizationId: string): Promise<string | null> {
+    return activeTemplateId(this.prisma, organizationId);
   }
 
   async rotation(organizationId: string, planId: string): Promise<PlanRotation> {
@@ -872,6 +933,8 @@ export class QuarterPlannerService {
         technicianOverriddenAt: true,
         onSiteMinutes: true,
         onSiteMinutesOverriddenAt: true,
+        // Which property it is, for a quarter laid out from a group template.
+        propertywareBuildingId: true,
         propertywareBuilding: { select: BUILDING_POSITION_SELECT },
         // Only read for a rebuild, and it decides whether a booked visit is
         // still the planner's to move: see `movableInspection`.
@@ -881,6 +944,8 @@ export class QuarterPlannerService {
     });
 
     const stops: PlannableStop[] = [];
+    /** Each stop's building: what a group template names. */
+    const buildings = new Map<string, string>();
     // Placed by hand: a coordinator chose both the day and the technician.
     const pins = new Map<string, Pin>();
     const unplaceable: string[] = [];
@@ -925,6 +990,7 @@ export class QuarterPlannerService {
       const settled = booked || Boolean(row.scheduleOverriddenAt && row.technicianOverriddenAt);
       if (settled && row.scheduledOn && row.assignedTechnicianId)
         pins.set(row.id, { date: row.scheduledOn.toISOString().slice(0, 10), technicianId: row.assignedTechnicianId });
+      if (row.propertywareBuildingId) buildings.set(row.id, row.propertywareBuildingId);
       stops.push({
         stopId: row.id,
         sequence: row.sequence,
@@ -969,7 +1035,7 @@ export class QuarterPlannerService {
         },
       });
 
-    return { stops: withZones(stops), pins };
+    return { stops: withZones(stops), pins, buildings };
   }
 
   /**
@@ -1487,8 +1553,10 @@ function planSettings(plan: {
   startsOn: Date | null;
   crewTechnicianIds: string[];
   jobberUnassigned: boolean;
+  groupTemplateId?: string | null;
 }): Required<PlanRoutingSettings> {
   return {
+    groupTemplateId: plan.groupTemplateId ?? null,
     jobberUnassigned: plan.jobberUnassigned,
     occupiedVisitMinutes: plan.occupiedVisitMinutes,
     hvacVisitMinutes: plan.hvacVisitMinutes,
@@ -1518,7 +1586,7 @@ const isoDay = (value: Date) => value.toISOString().slice(0, 10);
 
 type NumericSetting = keyof Omit<
   PlanRoutingSettings,
-  'holidays' | 'excludedZones' | 'startsOn' | 'technicianIds' | 'jobberUnassigned'
+  'holidays' | 'excludedZones' | 'startsOn' | 'technicianIds' | 'jobberUnassigned' | 'groupTemplateId'
 >;
 
 /**
@@ -1613,7 +1681,17 @@ export function routingSettings(
       'INVALID_PLAN_SETTINGS',
       'Choose the technicians to send out on the plan, or send its visits out unassigned.',
     );
+  /**
+   * A template's id, or null for the planner's own grouping. Left out, the plan
+   * keeps what it had -- so a nightly rebuild groups the way the office chose.
+   * Whether the template exists is the planner's to check: that needs the
+   * database, and this does not.
+   */
+  const groupTemplateId = input.groupTemplateId === undefined ? (current.groupTemplateId ?? null) : input.groupTemplateId;
+  if (groupTemplateId !== null && (typeof groupTemplateId !== 'string' || !UUID.test(groupTemplateId)))
+    throw new ApplicationError(422, 'INVALID_PLAN_SETTINGS', 'Choose a group template, or the planner’s own grouping.');
   return {
+    groupTemplateId,
     jobberUnassigned,
     occupiedVisitMinutes: within('occupiedVisitMinutes', 5, 240),
     hvacVisitMinutes: within('hvacVisitMinutes', 5, 240),
@@ -1626,6 +1704,31 @@ export function routingSettings(
     excludedZones: [...new Set(excludedZones.map((zone) => zone.trim()))].sort(byZoneNumber),
     startsOn: startsOn === quarterFirstDay(quarter) ? null : startsOn,
     technicianIds: [...new Set(technicianIds)],
+  };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A template's groups as the quarter's stops, in each group's order: every
+ * visit this quarter at each building it names, a building's visits together.
+ * A building with no visit this quarter -- its tenants left the package -- is
+ * simply not there, and its group is that much shorter.
+ */
+export function templateStops(
+  template: Pick<TemplateForPlanning, 'groups'>,
+  stops: readonly PlannableStop[],
+  buildings: ReadonlyMap<string, string>,
+): { groups: string[][]; notInTemplate: number } {
+  const atBuilding = new Map<string, string[]>();
+  for (const stop of stops) {
+    const building = buildings.get(stop.stopId);
+    if (building) atBuilding.set(building, [...(atBuilding.get(building) ?? []), stop.stopId]);
+  }
+  const named = new Set(template.groups.flatMap((group) => group.buildingIds));
+  return {
+    groups: template.groups.map((group) => group.buildingIds.flatMap((building) => atBuilding.get(building) ?? [])),
+    notInTemplate: stops.filter((stop) => !named.has(buildings.get(stop.stopId) ?? '')).length,
   };
 }
 
