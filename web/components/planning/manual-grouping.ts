@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 
-import { groupColorOf, groupOutline, type FileGroup, type GroupFile, type GroupFileRow } from './group-file';
+import { extendPalette, groupColorOf, groupOutline, type FileGroup, type GroupFile, type GroupFileRow } from './group-file';
 import { metresBetween } from './plan-groups';
 import type { RoadRoute } from './road-routes';
 
@@ -103,10 +103,25 @@ export function nextGroupName(state: ManualState): string {
   return `Group ${number}`;
 }
 
-/** The first preset no group has; round again once all twenty are used. */
-export function nextPresetColor(state: ManualState): string {
+/** How many groups each get a colour of their own: as many as a template holds (the office, 2026-10-01). */
+export const GROUP_COLOR_COUNT = 200;
+
+let palette: readonly string[] | null = null;
+
+/**
+ * The colours a group can have: the twenty presets first, then 180 more, each
+ * as far as possible from every colour before it (`extendPalette`). Worked out
+ * once, the first time it is asked for.
+ */
+export function groupPalette(): readonly string[] {
+  return (palette ??= extendPalette(COLOR_PRESETS, GROUP_COLOR_COUNT));
+}
+
+/** The first colour of the palette no group has: two hundred groups before any two share one. */
+export function nextGroupColor(state: ManualState): string {
   const used = new Set(state.groups.map((group) => group.color.toLowerCase()));
-  return COLOR_PRESETS.find((color) => !used.has(color)) ?? COLOR_PRESETS[state.groups.length % COLOR_PRESETS.length]!;
+  const colors = groupPalette();
+  return colors.find((color) => !used.has(color)) ?? colors[state.groups.length % colors.length]!;
 }
 
 /* ------------------------------------------------------------------------ */

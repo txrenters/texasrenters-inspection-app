@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { nearUngroupedGreen, readGroupFile } from './group-file';
+import { colorDifference, nearUngroupedGreen, readGroupFile } from './group-file';
 import {
   applyEdit,
   clickIntent,
@@ -14,7 +14,9 @@ import {
   groupArea,
   historyReducer,
   nextGroupName,
-  nextPresetColor,
+  groupPalette,
+  GROUP_COLOR_COUNT,
+  nextGroupColor,
   propertiesOf,
   routeMiles,
   toSaved,
@@ -181,11 +183,49 @@ describe('a group’s figures', () => {
     const state: ManualState = { groups: [group('a', [], { name: 'Group 2', color: COLOR_PRESETS[0] })] };
     expect(nextGroupName(state)).toBe('Group 3');
     expect(nextGroupName(EMPTY_STATE)).toBe('Group 1');
-    expect(nextPresetColor(state)).toBe(COLOR_PRESETS[1]);
+    expect(nextGroupColor(state)).toBe(COLOR_PRESETS[1]);
   });
 
   it('offers twenty distinct preset colours', () => {
     expect(new Set(COLOR_PRESETS).size).toBe(20);
+  });
+
+  /** The office, 2026-10-01: "add more color so it can accommodate up to 200 groups". */
+  describe('a colour for each of two hundred groups', () => {
+    const palette = groupPalette();
+    /** The nearest two of the first `count` colours, in OKLab. */
+    const closest = (count: number) => {
+      let nearest = Number.POSITIVE_INFINITY;
+      for (let one = 0; one < count; one += 1)
+        for (let other = one + 1; other < count; other += 1)
+          nearest = Math.min(nearest, colorDifference(palette[one]!, palette[other]!)!);
+      return nearest;
+    };
+
+    it('is two hundred colours, the twenty presets first, none of them twice', () => {
+      expect(palette).toHaveLength(GROUP_COLOR_COUNT);
+      expect(new Set(palette).size).toBe(GROUP_COLOR_COUNT);
+      expect(palette.slice(0, COLOR_PRESETS.length)).toEqual([...COLOR_PRESETS]);
+      expect(palette.every((color) => /^#[0-9a-f]{6}$/.test(color))).toBe(true);
+    });
+
+    it('never offers the green an ungrouped property is drawn in', () => {
+      expect(palette.filter(nearUngroupedGreen)).toEqual([]);
+    });
+
+    it('keeps the first hundred as far apart as the presets, and every two a little apart', () => {
+      expect(closest(100)).toBeCloseTo(closest(COLOR_PRESETS.length), 3);
+      expect(closest(GROUP_COLOR_COUNT)).toBeGreaterThan(0.03);
+    });
+
+    it('gives each new group a colour no other group has, two hundred times over', () => {
+      let state: ManualState = EMPTY_STATE;
+      for (let count = 0; count < GROUP_COLOR_COUNT; count += 1)
+        state = { groups: [...state.groups, group(`g${count}`, [], { color: nextGroupColor(state) })] };
+      expect(new Set(state.groups.map((entry) => entry.color)).size).toBe(GROUP_COLOR_COUNT);
+      // The two hundred and first shares one: there are no more to give.
+      expect(palette).toContain(nextGroupColor(state));
+    });
   });
 
   /** Green is what an ungrouped property is drawn in (2026-09-30): no preset may pass for it. */

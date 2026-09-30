@@ -508,6 +508,62 @@ export function distinctColors(count: number): Lab[] {
   return chosen;
 }
 
+/**
+ * How far a generated group colour stands from the ungrouped green: 0.2, wider
+ * than `NEAR_UNGROUPED`. A dark green passes that line and still looks like
+ * "green" beside the ungrouped pins; the presets keep 0.25 from it.
+ */
+const GENERATED_CLEARANCE = 0.2;
+
+/**
+ * `seeds`, then more colours up to `count`, each new one as far as possible
+ * from every colour before it -- the seeds included.
+ *
+ * For the office's own groups, which a template holds up to two hundred of
+ * (2026-10-01). Two hundred colours need more to choose between than
+ * `distinctColors` offers forty-odd, so the grid is finer -- seven lightness
+ * bands, 120 hues, each at its most colourful, three-quarters and half. The
+ * first hundred then stand as far apart as the twenty presets do (0.05 in
+ * OKLab), and all two hundred at least 0.034. Never near the ungrouped green;
+ * the same every time.
+ */
+export function extendPalette(seeds: readonly string[], count: number): string[] {
+  const candidates: Lab[] = [];
+  const hues = 120;
+  for (const lightness of [0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.74])
+    for (let step = 0; step < hues; step += 1) {
+      const hue = (step / hues) * 2 * Math.PI;
+      const most = mostChroma(lightness, hue);
+      for (const chroma of [most, most * 0.75, most * 0.5]) {
+        if (chroma < MIN_CHROMA) continue;
+        // Judged as the hex it will be drawn in: rounding can carry a colour on the line across it.
+        const shown = oklabOf(hex({ l: lightness, a: chroma * Math.cos(hue), b: chroma * Math.sin(hue) }))!;
+        if (colorDistance(shown, UNGROUPED_LAB) >= GENERATED_CLEARANCE) candidates.push(shown);
+      }
+    }
+
+  const palette = seeds.map((seed) => seed.toLowerCase());
+  const chosen = palette.flatMap((seed) => oklabOf(seed) ?? []);
+  const nearest = candidates.map((lab) => Math.min(Number.POSITIVE_INFINITY, ...chosen.map((one) => colorDistance(lab, one))));
+  while (palette.length < count) {
+    let pick = 0;
+    for (let index = 1; index < candidates.length; index += 1) if (nearest[index]! > nearest[pick]!) pick = index;
+    const lab = candidates[pick]!;
+    palette.push(hex(lab));
+    candidates.forEach((candidate, index) => {
+      nearest[index] = Math.min(nearest[index]!, colorDistance(candidate, lab));
+    });
+  }
+  return palette;
+}
+
+/** How far apart two colours are in OKLab: 0 alike, about 0.3 and up plainly different. Null for anything not `#rrggbb`. */
+export function colorDifference(one: string, other: string): number | null {
+  const left = oklabOf(one);
+  const right = oklabOf(other);
+  return left && right ? colorDistance(left, right) : null;
+}
+
 interface Point {
   latitude: number;
   longitude: number;
