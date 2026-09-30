@@ -4,7 +4,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Post, Pu
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
-import { GroupTemplateActiveDto, GroupTemplateMatchDto, GroupTemplateSaveDto } from './group-template.dto';
+import { GroupTemplateActiveDto, GroupTemplateMatchDto, GroupTemplateOpsDto, GroupTemplateSaveDto } from './group-template.dto';
 import { GroupTemplateService } from './group-template.service';
 import { PLANNING_TAG } from './planning.controller';
 
@@ -53,6 +53,17 @@ export class GroupTemplateController {
   @RequirePermissions('planning:publish')
   save(@Req() request: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string, @Body() body: GroupTemplateSaveDto) {
     return this.templates.save(request.user, id, body);
+  }
+
+  /**
+   * Live edits: a batch of changes applied on top of what the template holds
+   * now, and passed on to everyone with it open (2026-10-01).
+   */
+  @Post('group-templates/:id/ops')
+  @RequirePermissions('planning:publish')
+  @HttpCode(200)
+  applyOps(@Req() request: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string, @Body() body: GroupTemplateOpsDto) {
+    return this.templates.applyOps(request.user, id, body.batchId, body.ops);
   }
 
   /** The template a quarter the daily planner creates is built from: one at a time. */

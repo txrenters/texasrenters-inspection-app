@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import { Inject, Injectable } from '@nestjs/common';
-import { MAX_STOPS_PER_DAY, zoneNumberOf } from '@texasrenters/shared';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import {
+  type GroupTemplateOp,
+  MAX_STOPS_PER_DAY,
+  applyGroupOps,
+  groupTemplateOpsSchema,
+  zoneNumberOf,
+} from '@texasrenters/shared';
 
 import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-position';
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -15,6 +21,7 @@ import {
   matchBuildingWithFallback,
 } from '../integrations/jobber/jobber.address';
 import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-report';
+import { GroupTemplateGateway } from './group-template.gateway';
 
 /**
  * The office's group templates: its own grouping of the benefit-package
@@ -28,6 +35,8 @@ import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-
 
 /** A group as the console sends and reads it. */
 export interface GroupTemplateGroupInput {
+  /** Kept when given, so a group keeps its id through a save; a new one otherwise. */
+  id?: string;
   name: string;
   /** `#rrggbb`. */
   color: string;
@@ -66,6 +75,13 @@ export interface GroupMakerProperty {
 
 /** How many groups a template may hold: a quarter's worth several times over. */
 export const MAX_TEMPLATE_GROUPS = 200;
+
+/**
+ * How long one person's live edits to one template are one audit row: the
+ * first edit in ten minutes writes it. Live editing saves every click, and a
+ * row a click would bury every other entry in the log.
+ */
+const EDIT_AUDIT_WINDOW_MS = 10 * 60 * 1000;
 
 const COLOR = /^#[0-9a-f]{6}$/i;
 
@@ -174,7 +190,10 @@ export function templateProblem(input: GroupTemplateInput): string | null {
 
 @Injectable()
 export class GroupTemplateService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional() @Inject(GroupTemplateGateway) private readonly live?: GroupTemplateGateway,
+  ) {}
 
   /**
    * The properties the Group maker draws: every building with an active,
@@ -267,6 +286,7 @@ export class GroupTemplateService {
         groups: {
           orderBy: { position: 'asc' },
           select: {
+            id: true,
             position: true,
             name: true,
             color: true,
@@ -346,7 +366,107 @@ export class GroupTemplateService {
       return input.revision! + 1;
     });
     await this.audit(user, 'TBP_GROUP_TEMPLATE_SAVED', id, { name: input.name.trim(), revision, ...counts(input) });
+    this.live?.publishReplaced({ templateId: id, revision, reason: 'SAVED', by: byOf(user) });
     return this.get(organizationId, id);
+  }
+
+  /**
+   * One batch of live edits (2026-10-01), applied on top of whatever the
+   * template holds now -- including what somebody else changed a moment ago --
+   * and passed on to everyone with it open.
+   *
+   * One batch at a time per template: the revision is bumped first, which
+   * locks the template's row until the batch is saved, so two batches never
+   * interleave. Refused whole when what it would leave breaks a template's
+   * rules -- a group past a day's stops, a property that is not the
+   * organization's -- and the sender reads the template again.
+   */
+  async applyOps(user: AuthenticatedUser, id: string, batchId: string, raw: unknown) {
+    const organizationId = user.organizationId;
+    const parsed = groupTemplateOpsSchema.safeParse(raw);
+    if (!parsed.success)
+      throw new ApplicationError(422, 'INVALID_GROUP_TEMPLATE_OPS', 'These changes could not be read. Reload the template.');
+    const ops = parsed.data as GroupTemplateOp<string>[];
+    const settings: { name?: string; minutesPerProperty?: number } = {};
+    for (const op of ops)
+      if (op.type === 'template.update') {
+        if (op.name !== undefined) settings.name = op.name.trim();
+        if (op.minutesPerProperty !== undefined) settings.minutesPerProperty = op.minutesPerProperty;
+      }
+
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.tbpGroupTemplate.updateMany({
+        where: { id, organizationId, archivedAt: null },
+        data: {
+          revision: { increment: 1 },
+          updatedById: user.principalType === 'API_KEY' ? null : user.id,
+          ...settings,
+        },
+      });
+      if (claimed.count !== 1) {
+        const exists = await tx.tbpGroupTemplate.findFirst({ where: { id, organizationId }, select: { archivedAt: true } });
+        if (!exists) throw notFound();
+        throw new ApplicationError(409, 'TEMPLATE_ARCHIVED', 'This template has been archived, so it can no longer be changed.');
+      }
+      const current = await tx.tbpGroupTemplate.findFirst({
+        where: { id, organizationId },
+        select: {
+          name: true,
+          revision: true,
+          groups: {
+            orderBy: { position: 'asc' },
+            select: {
+              id: true,
+              name: true,
+              color: true,
+              target: true,
+              members: { orderBy: { position: 'asc' }, select: { buildingId: true } },
+            },
+          },
+        },
+      });
+      if (!current) throw notFound();
+      const before = {
+        groups: current.groups.map((group) => ({
+          id: group.id,
+          name: group.name,
+          color: group.color,
+          target: group.target,
+          stops: group.members.map((member) => member.buildingId),
+        })),
+      };
+      const after = applyGroupOps(before, ops);
+      const input: GroupTemplateInput = {
+        name: current.name,
+        groups: after.groups.map((group) => ({
+          id: group.id,
+          name: group.name,
+          color: group.color,
+          target: group.target,
+          buildingIds: group.stops,
+        })),
+      };
+      const problem = templateProblem(input);
+      if (problem) throw new ApplicationError(422, 'INVALID_GROUP_TEMPLATE', problem);
+      const known = new Set(before.groups.flatMap((group) => group.stops));
+      const added = [...new Set(after.groups.flatMap((group) => group.stops))].filter((building) => !known.has(building));
+      if (added.length) {
+        const found = await tx.propertywareBuilding.count({ where: { organizationId, id: { in: added } } });
+        if (found !== added.length)
+          throw new ApplicationError(422, 'UNKNOWN_PROPERTY', 'A property in this change is not one of this organization’s.');
+      }
+      const existing = new Set(before.groups.map((group) => group.id));
+      const made = after.groups.map((group) => group.id).filter((groupId) => !existing.has(groupId));
+      if (made.length && (await tx.tbpGroupTemplateGroup.count({ where: { id: { in: made } } })))
+        throw new ApplicationError(422, 'INVALID_GROUP_TEMPLATE', 'A new group came with an id already in use. Reload the template.');
+      await tx.tbpGroupTemplateGroup.deleteMany({ where: { templateId: id, organizationId } });
+      await writeGroups(tx, organizationId, id, input.groups);
+      return { revision: current.revision, name: current.name, input };
+    });
+
+    this.live?.publishOps({ templateId: id, revision: saved.revision, batchId, ops, by: byOf(user) });
+    await this.auditEdit(user, id, saved.revision, saved.input);
+    return { revision: saved.revision };
   }
 
   /**
@@ -372,7 +492,9 @@ export class GroupTemplateService {
       await tx.tbpGroupTemplate.update({ where: { id }, data: { isActive: active } });
     });
     await this.audit(user, active ? 'TBP_GROUP_TEMPLATE_ACTIVATED' : 'TBP_GROUP_TEMPLATE_DEACTIVATED', id, { name: template.name });
-    return this.get(organizationId, id);
+    const detail = await this.get(organizationId, id);
+    this.live?.publishReplaced({ templateId: id, revision: detail.revision, reason: 'ACTIVATED', by: byOf(user) });
+    return detail;
   }
 
   /**
@@ -390,7 +512,9 @@ export class GroupTemplateService {
       const exists = await this.prisma.tbpGroupTemplate.findFirst({ where: { id, organizationId }, select: { id: true } });
       if (!exists) throw notFound();
     } else await this.audit(user, 'TBP_GROUP_TEMPLATE_ARCHIVED', id, {});
-    return this.get(organizationId, id);
+    const detail = await this.get(organizationId, id);
+    this.live?.publishReplaced({ templateId: id, revision: detail.revision, reason: 'ARCHIVED', by: byOf(user) });
+    return detail;
   }
 
   /**
@@ -435,6 +559,22 @@ export class GroupTemplateService {
       throw new ApplicationError(422, 'UNKNOWN_PROPERTY', 'A property in this template is not one of this organization’s.');
   }
 
+  /** One row per person per template per ten minutes of live editing, however many clicks. */
+  private async auditEdit(user: AuthenticatedUser, templateId: string, revision: number, input: GroupTemplateInput) {
+    const recent = await this.prisma.auditLog.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        action: 'TBP_GROUP_TEMPLATE_EDITED',
+        entityType: 'TbpGroupTemplate',
+        entityId: templateId,
+        ...auditActor(user),
+        createdAt: { gte: new Date(Date.now() - EDIT_AUDIT_WINDOW_MS) },
+      },
+      select: { id: true },
+    });
+    if (!recent) await this.audit(user, 'TBP_GROUP_TEMPLATE_EDITED', templateId, { revision, ...counts(input) });
+  }
+
   /** Who changed which template and how much of it: never an address or a tenant. */
   private async audit(user: AuthenticatedUser, action: string, templateId: string, metadata: Record<string, unknown>) {
     await this.prisma.auditLog.create({
@@ -458,7 +598,7 @@ async function writeGroups(
   groups: readonly GroupTemplateGroupInput[],
 ) {
   const rows = groups.map((group, index) => ({
-    id: randomUUID(),
+    id: group.id ?? randomUUID(),
     organizationId,
     templateId,
     position: index + 1,
@@ -485,6 +625,9 @@ const counts = (input: GroupTemplateInput) => ({
 });
 
 const notFound = () => new ApplicationError(404, 'TEMPLATE_NOT_FOUND', 'This group template does not exist.');
+
+/** Who made a change, as the others with the template open are told it. */
+const byOf = (user: AuthenticatedUser) => ({ userId: user.id, name: user.displayName });
 
 /** The value most of them have, the first of a tie; null when none has one. */
 function mostCommon(values: readonly (string | null)[]): string | null {

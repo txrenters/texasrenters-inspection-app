@@ -4,6 +4,7 @@ import { AdminModule } from '../admin/admin.module';
 import { DatabaseModule } from '../database/database.module';
 import { RoutingModule } from '../routing/routing.module';
 import { GroupTemplateController } from './group-template.controller';
+import { GroupTemplateGateway } from './group-template.gateway';
 import { GroupTemplateService } from './group-template.service';
 import { LeaseInspectionsController } from './lease-inspections.controller';
 import { LeaseInspectionScheduler } from './lease-inspections.scheduler';
@@ -32,6 +33,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     LeaseInspectionService,
     LeaseInspectionScheduler,
     GroupTemplateService,
+    GroupTemplateGateway,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })

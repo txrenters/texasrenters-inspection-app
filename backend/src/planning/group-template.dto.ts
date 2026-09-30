@@ -46,6 +46,17 @@ export class GroupTemplateSaveDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) revision?: number;
 }
 
+/**
+ * A batch of live edits (2026-10-01). The operations are checked against the
+ * shared schema by the service, which knows their shapes; here only that they
+ * are a list of a sane length.
+ */
+export class GroupTemplateOpsDto {
+  /** The sender's id for the batch, which comes back with it to everyone. */
+  @IsUUID('all') batchId!: string;
+  @IsArray() @ArrayMaxSize(500) ops!: unknown[];
+}
+
 export class GroupTemplateActiveDto {
   @IsBoolean() active!: boolean;
 }
