@@ -68,7 +68,7 @@ import {
   requestVisitPush,
   type VisitEditKind,
 } from '../integrations/jobber/jobber.outbound';
-import { businessClockTime, businessInstant } from '../common/business-day';
+import { movedWindow } from '../common/business-day';
 import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
 // A pure function, not the service: the panel needs Stream's definition of
@@ -124,22 +124,6 @@ function bookingAddress(
   unit: { addressLine1: string | null } | null,
 ): string {
   return unit?.addressLine1?.trim() || building.addressLine1?.trim() || building.name;
-}
-
-/**
- * A Jobber visit's clock-time window, moved to a new day at the same Texas times.
- *
- * Whole-day visits have no window and get none.
- */
-function movedWindow(
-  existing: { scheduledStartAt: Date | null; scheduledEndAt: Date | null },
-  day: string,
-): { scheduledStartAt?: Date; scheduledEndAt?: Date } {
-  if (!existing.scheduledStartAt || !existing.scheduledEndAt) return {};
-  return {
-    scheduledStartAt: businessInstant(day, businessClockTime(existing.scheduledStartAt)),
-    scheduledEndAt: businessInstant(day, businessClockTime(existing.scheduledEndAt)),
-  };
 }
 
 function webOrigin(): string {
