@@ -268,6 +268,17 @@ export function diffGroupOps<K>(before: LiveGroups<K>, after: LiveGroups<K>): Gr
     if (old.target !== group.target) changes.target = group.target;
     if (Object.keys(changes).length) ops.push({ type: 'group.update', groupId: group.id, ...changes });
   }
+  // Two groups trading names: the first rename finds the name still taken and
+  // moves on to the next number, so the names are set again until they hold.
+  for (let round = 0; round < 3; round += 1) {
+    const reached = applyGroupOps(before, ops);
+    const wrong = after.groups.filter((group) => {
+      const got = reached.groups.find((entry) => entry.id === group.id);
+      return got !== undefined && got.name !== group.name;
+    });
+    if (!wrong.length) break;
+    for (const group of wrong) ops.push({ type: 'group.update', groupId: group.id, name: group.name });
+  }
 
   const inBefore = new Map<K, string>();
   for (const group of before.groups) for (const stop of group.stops) inBefore.set(stop, group.id);

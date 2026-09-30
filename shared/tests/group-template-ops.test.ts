@@ -108,6 +108,12 @@ describe('what one person did, as operations', () => {
     expect(diffGroupOps(before, after)).toEqual([{ type: 'stop.add', groupId: 'a', stop: 7 }]);
   });
 
+  it('lets two groups trade names', () => {
+    const before: LiveGroups<number> = { groups: [group('x', [], { name: 'Group 4' }), group('y', [], { name: 'Group 3' })] };
+    const after: LiveGroups<number> = { groups: [group('x', [], { name: 'Group 3' }), group('y', [], { name: 'Group 4' })] };
+    expect(sameGroups(applyGroupOps(before, diffGroupOps(before, after)), after)).toBe(true);
+  });
+
   it('is an order when a route was optimized, and nothing when nothing changed', () => {
     const before: LiveGroups<number> = { groups: [group('a', [1, 2, 3])] };
     expect(diffGroupOps(before, { groups: [group('a', [3, 1, 2])] })).toEqual([
