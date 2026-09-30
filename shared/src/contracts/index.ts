@@ -76,6 +76,7 @@ export * from './visit-services.js';
 export * from './area-classification.js';
 export * from './inspection-scope.js';
 export * from './property-location.js';
+export * from './group-template-ops.js';
 export * from './quarter-assignment.js';
 export * from './quarter-plan.js';
 export * from './tbp-visit-plan.js';
