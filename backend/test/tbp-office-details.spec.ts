@@ -310,7 +310,13 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     { id: 'unit-half', externalId: '9012', name: '1/2', abbreviation: '50091/2NM', addressLine1: '5009 1/2 N Main St' },
     { id: 'unit-quarter', externalId: '9014', name: '1/4', abbreviation: '50091/4NM', addressLine1: '5009 1/4 N Main St' },
   ];
-  const build = (existing: Record<string, unknown>, fromReport: Record<string, unknown> = {}, priorPlans: unknown[] = []) => {
+  const build = (
+    existing: Record<string, unknown>,
+    fromReport: Record<string, unknown> = {},
+    priorPlans: unknown[] = [],
+    /** The unit this tenancy's visit had in an earlier quarter, as the database would find it. */
+    earlierUnitId: string | null = null,
+  ) => {
     const tenant = {
       ...tenancy('t1', '5009 N Main St', '77009'),
       ...fromReport,
@@ -349,6 +355,11 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
           ...existing,
         }),
         upsert: stopUpsert,
+        findFirst: jest.fn(({ where }: { where: { propertywareUnitId: { in: string[] } } }) =>
+          Promise.resolve(
+            earlierUnitId && where.propertywareUnitId.in.includes(earlierUnitId) ? { propertywareUnitId: earlierUnitId } : null,
+          ),
+        ),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         count: jest.fn().mockResolvedValue(1),
       },
@@ -469,6 +480,40 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     await service.generate('org-1', { year: 2026, quarter: 4 });
 
     expect(stopUpsert.mock.calls[0][0].update).toMatchObject({ propertywareUnitId: null, unitResolution: 'UNRESOLVED' });
+  });
+
+  /**
+   * The office, 2026-10-02: "why do we still have a blocker on this when we
+   * already grouped them?" Grouping is by building and never says which door;
+   * a unit chosen once now stays chosen for that tenancy in later quarters.
+   */
+  it('takes the unit the tenancy’s visit had in an earlier quarter', async () => {
+    const { service, stopUpsert } = build({}, {}, [], 'unit-half');
+
+    await service.generate('org-1', { year: 2027, quarter: 1 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({
+      propertywareUnitId: 'unit-half',
+      unitResolution: 'PRIOR_QUARTER',
+      visitTitle: expect.stringContaining('5009 1/2 N Main St'),
+    });
+  });
+
+  it('does not carry a unit the building no longer has', async () => {
+    const { service, stopUpsert } = build({}, {}, [], 'unit-gone');
+
+    await service.generate('org-1', { year: 2027, quarter: 1 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({ propertywareUnitId: null, unitResolution: 'UNRESOLVED' });
+  });
+
+  /** One side of the report writes "Unit", the other does not. */
+  it('takes a unit the report names with a word like “Unit” in front', async () => {
+    const { service, stopUpsert } = build({}, { unitName: 'Unit 1/4' });
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({ propertywareUnitId: 'unit-quarter', unitResolution: 'REPORT_UNIT' });
   });
 });
 
