@@ -56,7 +56,12 @@ import {
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
-import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
+import {
+  runStreamUpload,
+  sessionRefusalRetryable,
+  StreamSessionError,
+  type StreamUploadSession,
+} from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import type { ClosingComments } from '../../utils/closing-comments';
 import { isInspectedArea, resolveApiUrl } from '@texasrenters/shared';
@@ -507,6 +512,8 @@ const inspectionContextSchema = z.object({
   rooms: z.array(roomSchema),
   pendingReviewCount: z.number(),
 });
+/** How long asking the backend for an upload session may go unanswered. */
+const UPLOAD_SESSION_TIMEOUT_MS = 60_000;
 /**
  * Ask the backend to reserve a direct-to-Cloudflare upload.
  *
@@ -530,11 +537,18 @@ async function createStreamUploadSession(input: {
   const { baseUrl, accessToken, ...body } = input;
   const url = resolveApiUrl(baseUrl, '/api/v1/inspection-videos/upload-session');
   let response: Response;
+  // Never left open on a stalled connection: the upload queue waits on this
+  // one recording at a time, so a request that never answered held every
+  // recording behind it (see `CHUNK_TIMEOUT_MS`). An abort lands in the catch
+  // below and is retried like any lost connection.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_SESSION_TIMEOUT_MS);
   try {
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
   } catch (error) {
     /**
@@ -556,13 +570,20 @@ async function createStreamUploadSession(input: {
         'The recording is safe on this device and will retry.',
       'transport',
     );
+  } finally {
+    clearTimeout(timer);
   }
   if (response.status === 503) return null;
   if (!response.ok) {
     const detail = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(
+    // Says whether asking again can help, so a refusal that will never change
+    // -- the inspection already submitted, the room reassigned -- shows the
+    // technician why instead of retrying silently every minute.
+    throw new StreamSessionError(
       detail?.message ??
         `The upload could not be started (${response.status} from ${new URL(url).host}).`,
+      sessionRefusalRetryable(response.status),
+      response.status,
     );
   }
   return (await response.json()) as StreamUploadSession;

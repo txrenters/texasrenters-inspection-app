@@ -302,12 +302,6 @@ export class InspectionVideoService {
         'ASSIGNED_ROOM_NOT_FOUND',
         'Assigned room was not found.',
       );
-    if (area.inspection.status !== InspectionStatus.IN_PROGRESS)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_NOT_IN_PROGRESS',
-        'Evidence can only be uploaded while the inspection is in progress.',
-      );
 
     // A retried request — a lost response, a double tap, an app relaunch mid
     // queue — must not create a second Cloudflare video. The client's key is
@@ -317,18 +311,38 @@ export class InspectionVideoService {
       where: { providerMediaId: input.idempotencyKey },
       select: { id: true, streamUid: true, uploadStatus: true, inspectionAreaId: true },
     });
+    if (existing && existing.inspectionAreaId !== area.id)
+      throw new ApplicationError(
+        409,
+        'UPLOAD_KEY_REUSED',
+        'That upload key already belongs to a different area.',
+      );
+
+    /**
+     * Already sent, whatever the inspection's status now.
+     *
+     * Asked before the status check: a recording whose last chunk landed just
+     * as the phone lost signal is asked about again later -- often after the
+     * inspection was submitted -- and the honest answer is "it arrived", not
+     * "evidence can only be uploaded while the inspection is in progress",
+     * which would leave a delivered video showing as failed on the handset.
+     */
     if (existing) {
-      if (existing.inspectionAreaId !== area.id)
-        throw new ApplicationError(
-          409,
-          'UPLOAD_KEY_REUSED',
-          'That upload key already belongs to a different area.',
-        );
-      // The Cloudflare URL from the original session may well have expired, so
-      // a fresh one is minted against the *same* video record. The device keeps
-      // its queue item and its uid; only the URL changes.
-      return this.refreshSession(existing.id, existing.streamUid, input);
+      const delivered = await this.deliveredSession(existing);
+      if (delivered) return delivered;
     }
+
+    if (area.inspection.status !== InspectionStatus.IN_PROGRESS)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_NOT_IN_PROGRESS',
+        'Evidence can only be uploaded while the inspection is in progress.',
+      );
+
+    // The Cloudflare URL from the original session may well have expired, so
+    // a fresh one is minted against the *same* video record. The device keeps
+    // its queue item and the record its id; the upload behind it is new.
+    if (existing) return this.renewSession(existing, area, user, input);
 
     const upload = await this.stream.createDirectUpload({
       uploadLengthBytes: input.fileSize,
@@ -782,34 +796,100 @@ export class InspectionVideoService {
     return { checked: stuck.length, reconciled };
   }
 
-  private async refreshSession(
-    mediaId: string,
-    streamUid: string | null,
+  /**
+   * A session asked for again, for a recording this backend already holds.
+   *
+   * The device asks only when it has no upload URL it can use: the one it was
+   * given expired (Cloudflare keeps one about an hour), was refused, or never
+   * reached it. This used to return the record with no URL at all, and the
+   * device read that as "try again later" -- every minute, for good. A
+   * walkthrough paused by a locked phone for an hour could never be sent, and a
+   * move-out, whose areas complete only when their video lands, could never be
+   * submitted (2026-10-02).
+   *
+   * So the answer is decided by what Cloudflare holds. All the bytes: the
+   * device is told the upload is done (`deliveredSession`). Nothing usable --
+   * a half-sent upload whose URL has lapsed, or no video at all: a new upload
+   * for the same record, the stale one dropped. A tus upload cannot be resumed
+   * past its URL's expiry, so starting over is the only way forward.
+   */
+  private async renewSession(
+    existing: { id: string; streamUid: string | null },
+    area: { id: string; inspectionId: string },
+    user: AuthenticatedUser,
     input: UploadSessionInput,
   ) {
-    // No stored uid means the first attempt failed before Cloudflare answered.
-    // Nothing exists upstream to resume, so a new video is correct here.
-    if (!streamUid) {
-      const upload = await this.stream.createDirectUpload({
-        uploadLengthBytes: input.fileSize,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        metadata: { name: input.filename },
-      });
-      await this.prisma.inspectionMedia.update({
-        where: { id: mediaId },
-        data: { streamUid: upload.streamUid, uploadStatus: MediaUploadStatus.SESSION_CREATED },
-      });
-      return this.sessionResponse(mediaId, upload.streamUid, upload.uploadUrl, upload.expiresAt);
+    if (existing.streamUid) {
+      // Never finished, and never will through the URL the device lost. Dropped
+      // so the account does not keep an empty video per lapsed attempt; a
+      // failure here costs nothing but that.
+      await this.stream.deleteVideo(existing.streamUid).catch((error: unknown) =>
+        this.logger.warn({
+          event: 'stream_stale_upload_not_deleted',
+          mediaId: existing.id,
+          streamUid: existing.streamUid,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
 
-    // The video already exists at Cloudflare. tus resumption is driven by the
-    // upload URL the device still holds, so this returns the record rather than
-    // minting a second video for the same recording.
-    await this.prisma.inspectionMedia.update({
-      where: { id: mediaId },
-      data: { retryCount: { increment: 1 } },
+    const upload = await this.stream.createDirectUpload({
+      uploadLengthBytes: input.fileSize,
+      maxDurationSeconds: MAX_DURATION_SECONDS,
+      metadata: {
+        name: input.filename,
+        inspectionid: area.inspectionId,
+        areaid: area.id,
+        technicianid: user.id,
+      },
     });
-    return this.sessionResponse(mediaId, streamUid, null, null);
+    await this.prisma.inspectionMedia.update({
+      where: { id: existing.id },
+      data: {
+        streamUid: upload.streamUid,
+        uploadStatus: MediaUploadStatus.SESSION_CREATED,
+        uploadBytesTotal: input.fileSize,
+        uploadBytesCompleted: 0,
+        retryCount: { increment: 1 },
+      },
+    });
+    this.logger.log({
+      event: 'stream_upload_session_renewed',
+      mediaId: existing.id,
+      previousStreamUid: existing.streamUid,
+      streamUid: upload.streamUid,
+    });
+    return this.sessionResponse(existing.id, upload.streamUid, upload.uploadUrl, upload.expiresAt);
+  }
+
+  /**
+   * The "it arrived" answer, when Cloudflare holds every byte of this recording.
+   *
+   * Our own record first, then Cloudflare itself: the webhook that would have
+   * marked it uploaded may not have come yet, or may have been lost. What
+   * Cloudflare reports is applied as that webhook would have applied it, so
+   * the area completes and processing starts exactly as it otherwise would.
+   * Null when the bytes are not all there -- including a video Cloudflare no
+   * longer has -- which the caller answers with a new upload.
+   */
+  private async deliveredSession(existing: {
+    id: string;
+    streamUid: string | null;
+    uploadStatus: MediaUploadStatus;
+  }) {
+    if (!existing.streamUid) return null;
+    if (existing.uploadStatus === MediaUploadStatus.UPLOADED)
+      return this.sessionResponse(existing.id, existing.streamUid, null, null, true);
+    const video = await this.stream.getVideo(existing.streamUid);
+    if (!video || video.state === 'pendingupload') return null;
+    await this.applyWebhook({
+      uid: video.streamUid,
+      status: { state: video.state, errorReasonText: video.errorReasonText },
+      duration: video.durationSeconds,
+      input: { width: video.widthPx, height: video.heightPx },
+      thumbnail: video.thumbnailUrl,
+    });
+    return this.sessionResponse(existing.id, existing.streamUid, null, null, true);
   }
 
   private sessionResponse(
@@ -817,11 +897,14 @@ export class InspectionVideoService {
     streamUid: string,
     uploadUrl: string | null,
     expiresAt: string | null,
+    /** Cloudflare already has every byte: there is nothing left to send. */
+    uploaded = false,
   ) {
     return {
       videoId,
       streamUid,
       uploadUrl,
+      uploaded,
       uploadProtocol: 'tus' as const,
       expiresAt,
       // Cloudflare requires every tus chunk except the last to be a multiple of

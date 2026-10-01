@@ -1,5 +1,7 @@
 import {
   CHUNK_ALIGNMENT,
+  CHUNK_TIMEOUT_MS,
+  OFFSET_TIMEOUT_MS,
   TusUploadError,
   alignChunkSize,
   fetchUploadOffset,
@@ -256,5 +258,46 @@ describe('network failure reporting', () => {
     } finally {
       global.fetch = original;
     }
+  });
+});
+
+describe('a request that never answers (2026-10-02)', () => {
+  // React Native's fetch has no timeout, and on Android none underneath: a
+  // stalled connection held the queue -- one recording at a time -- for good.
+  const hangs = () =>
+    jest.fn((_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () =>
+          reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })),
+        );
+      }),
+    );
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('gives up on the offset check and leaves it to retry', async () => {
+    global.fetch = hangs() as never;
+    const asked = fetchUploadOffset('https://upload/x');
+    const outcome = expect(asked).rejects.toMatchObject({ kind: 'retryable', message: expect.stringMatching(/stopped answering/) });
+    await jest.advanceTimersByTimeAsync(OFFSET_TIMEOUT_MS);
+    await outcome;
+  });
+
+  it('gives a chunk longer, then gives up on it too', async () => {
+    mockFile.size = 2 * CHUNK_ALIGNMENT;
+    mockFile.open.mockReturnValue(handleOver(mockFile.size));
+    const patch = hangs();
+    global.fetch = jest.fn((url: string, init: RequestInit) =>
+      init.method === 'HEAD' ? Promise.resolve(respond(200, { 'upload-offset': '0' })) : patch(url, init),
+    ) as never;
+
+    const sent = uploadFileInChunks({ uploadUrl: 'https://upload/x', localUri: 'file:///a.mp4', chunkBytes: CHUNK_ALIGNMENT });
+    const outcome = expect(sent).rejects.toMatchObject({ kind: 'retryable', message: expect.stringMatching(/stopped answering/) });
+    // Not at the offset check's limit: a slow link is not a hung one.
+    await jest.advanceTimersByTimeAsync(OFFSET_TIMEOUT_MS);
+    expect(patch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(CHUNK_TIMEOUT_MS);
+    await outcome;
   });
 });

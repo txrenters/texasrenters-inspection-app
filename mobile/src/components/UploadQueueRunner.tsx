@@ -46,11 +46,14 @@ export function UploadQueueRunner() {
   }).allowed;
 
   const flush = useCallback(async () => {
-    // Deliberately not gated on AppState. Transfers use a background session,
-    // so one already in flight survives the phone being locked or the app being
-    // switched away — and on Android, where JS can keep running for a while
-    // after backgrounding, refusing to start the next item just wasted that
-    // window. `running` still prevents overlapping drains.
+    // Deliberately not gated on AppState: on Android, where JS can keep running
+    // for a while after backgrounding, refusing to start the next item just
+    // wasted that window. `running` still prevents overlapping drains.
+    //
+    // A recording sent to Cloudflare is *not* a background transfer -- its
+    // chunks are ordinary requests, which stop when the phone is locked. It
+    // picks up from Cloudflare's confirmed offset when the app is next open,
+    // and with a fresh upload link if the old one lapsed while it waited.
     if (!allowed || running.current) return;
     running.current = true;
     try {

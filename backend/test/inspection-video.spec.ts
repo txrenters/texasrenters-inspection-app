@@ -165,17 +165,18 @@ describe('upload session creation', () => {
 
   it('returns the existing video when the same key is sent twice', async () => {
     // A double tap, a lost response, or an app relaunch mid-queue must not
-    // create a second Cloudflare video for one recording.
+    // create a second record for one recording -- nor a second Cloudflare
+    // video for one Cloudflare already has.
     const { service, stream } = build({
       existing: {
         id: 'media-1',
         streamUid: 'uid-1',
-        uploadStatus: 'UPLOADING',
+        uploadStatus: 'UPLOADED',
         inspectionAreaId: AREA_ID,
       },
     });
     const session = await service.createUploadSession(technician, validInput);
-    expect(session.streamUid).toBe('uid-1');
+    expect(session).toMatchObject({ videoId: 'media-1', streamUid: 'uid-1', uploaded: true, uploadUrl: null });
     expect(stream.createDirectUpload).not.toHaveBeenCalled();
   });
 
@@ -191,6 +192,105 @@ describe('upload session creation', () => {
     await expect(service.createUploadSession(technician, validInput)).rejects.toMatchObject({
       code: 'UPLOAD_KEY_REUSED',
     });
+  });
+});
+
+describe('a session asked for again (2026-10-02)', () => {
+  // The device asks again only when it has no link it can use: the old one
+  // lapsed (a phone locked for an hour mid-upload), was refused, or never
+  // arrived. This used to answer with no link at all, and the device retried
+  // that every minute, for good -- so a move-out could never be submitted.
+  const pending = {
+    id: 'media-1',
+    streamUid: 'uid-old',
+    uploadStatus: 'UPLOADING',
+    inspectionAreaId: AREA_ID,
+    // Read by the webhook path, which shares the same lookup in this double.
+    organizationId: technician.organizationId,
+    inspectionId: 'insp-1',
+    processingStatus: 'PENDING',
+    readyAt: null,
+  };
+  const cloudflare = (state: string) => ({
+    streamUid: 'uid-old',
+    state,
+    durationSeconds: 90,
+    widthPx: 1280,
+    heightPx: 720,
+    thumbnailUrl: null,
+    errorReasonText: null,
+  });
+  const withStream = (getVideo: unknown) =>
+    ({ getVideo: jest.fn().mockResolvedValue(getVideo), deleteVideo: jest.fn().mockResolvedValue(undefined) }) as never;
+
+  it('renews a lapsed upload: the stale video goes and a new one is minted for the same record', async () => {
+    const { service, stream, prisma } = build({ existing: pending, stream: withStream(cloudflare('pendingupload')) });
+
+    const session = await service.createUploadSession(technician, validInput);
+
+    expect(session).toMatchObject({
+      videoId: 'media-1',
+      streamUid: 'uid-1',
+      uploadUrl: 'https://upload.cloudflarestream.com/tus/abc',
+      uploaded: false,
+    });
+    expect((stream as unknown as { deleteVideo: jest.Mock }).deleteVideo).toHaveBeenCalledWith('uid-old');
+    expect(stream.createDirectUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ areaid: AREA_ID, inspectionid: 'insp-1' }) }),
+    );
+    expect(prisma.inspectionMedia.update).toHaveBeenCalledWith({
+      where: { id: 'media-1' },
+      data: expect.objectContaining({ streamUid: 'uid-1', uploadStatus: 'SESSION_CREATED', uploadBytesCompleted: 0 }),
+    });
+  });
+
+  it('mints a new upload when Cloudflare no longer has the video at all', async () => {
+    const { service, stream } = build({ existing: pending, stream: withStream(null) });
+
+    await expect(service.createUploadSession(technician, validInput)).resolves.toMatchObject({ uploadUrl: expect.any(String) });
+    expect(stream.createDirectUpload).toHaveBeenCalled();
+  });
+
+  it('says a video is delivered when Cloudflare has it, though the webhook never came', async () => {
+    const { service, stream, prisma } = build({ existing: pending, stream: withStream(cloudflare('ready')) });
+
+    await expect(service.createUploadSession(technician, validInput)).resolves.toMatchObject({
+      videoId: 'media-1',
+      streamUid: 'uid-old',
+      uploaded: true,
+      uploadUrl: null,
+    });
+    expect(stream.createDirectUpload).not.toHaveBeenCalled();
+    // Brought up to date as the webhook would have: uploaded, and the area complete.
+    expect(prisma.inspectionMedia.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ uploadStatus: 'UPLOADED' }) }),
+    );
+    expect(prisma.inspectionArea.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ completionStatus: 'COMPLETED' }) }),
+    );
+  });
+
+  it('still says a delivered video arrived after the inspection was submitted', async () => {
+    const { service } = build({
+      area: { ...areaRecord, inspection: { ...areaRecord.inspection, status: 'TECHNICIAN_SUBMITTED' } },
+      existing: { ...pending, uploadStatus: 'UPLOADED' },
+    });
+
+    await expect(service.createUploadSession(technician, validInput)).resolves.toMatchObject({ uploaded: true });
+  });
+
+  it('does not renew an undelivered one once the inspection is submitted', async () => {
+    const { service, stream } = build({
+      area: { ...areaRecord, inspection: { ...areaRecord.inspection, status: 'TECHNICIAN_SUBMITTED' } },
+      existing: pending,
+      stream: withStream(cloudflare('pendingupload')),
+    });
+
+    await expect(service.createUploadSession(technician, validInput)).rejects.toMatchObject({
+      code: 'INSPECTION_NOT_IN_PROGRESS',
+    });
+    expect(stream.createDirectUpload).not.toHaveBeenCalled();
+    expect((stream as unknown as { deleteVideo: jest.Mock }).deleteVideo).not.toHaveBeenCalled();
   });
 });
 

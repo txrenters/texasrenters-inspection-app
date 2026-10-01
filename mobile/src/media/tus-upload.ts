@@ -48,6 +48,15 @@ export class TusUploadError extends Error {
   }
 }
 
+/**
+ * Whether the upload link itself is what died -- expired, unknown, or refused
+ * -- as opposed to the recording or the chunk being at fault. A new link cures
+ * the first; nothing automatic cures the second.
+ */
+export function sessionExpired(error: TusUploadError) {
+  return error.kind === 'permanent' && (error.status === 404 || error.status === 410 || error.status === 403);
+}
+
 export interface TusProgress {
   uploadedBytes: number;
   totalBytes: number;
@@ -160,13 +169,48 @@ export async function uploadFileInChunks(options: {
   return offset;
 }
 
-async function request(url: string, init: RequestInit & { headers?: Record<string, string> }) {
+/**
+ * How long one request may go unanswered before it is given up and retried.
+ *
+ * React Native's fetch has no timeout of its own, and on Android none at all
+ * underneath it: a connection that stalls rather than drops -- a phone moving
+ * from Wi-Fi to cellular mid-chunk -- leaves the request open for good. The
+ * queue sends one recording at a time, so that one hung chunk held every
+ * recording behind it until the app was restarted (2026-10-02).
+ *
+ * Generous, because a slow link is not a hung one: a full 10 MiB chunk at a
+ * quarter of a megabit is about five minutes. The offset check is tiny.
+ */
+export const OFFSET_TIMEOUT_MS = 60_000;
+export const CHUNK_TIMEOUT_MS = 6 * 60_000;
+
+async function request(
+  url: string,
+  init: RequestInit & { headers?: Record<string, string> },
+  timeoutMs = init.method === 'PATCH' ? CHUNK_TIMEOUT_MS : OFFSET_TIMEOUT_MS,
+) {
+  // The caller's pause and this timeout, as one signal fetch understands.
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const pause = () => controller.abort();
+  if (init.signal?.aborted) controller.abort();
+  init.signal?.addEventListener?.('abort', pause);
   try {
     return await fetch(url, {
       ...init,
+      signal: controller.signal,
       headers: { 'Tus-Resumable': TUS_VERSION, ...(init.headers ?? {}) },
     });
   } catch (error) {
+    if (timedOut)
+      throw new TusUploadError(
+        `The upload stopped answering for ${Math.round(timeoutMs / 1000)} seconds. It will try again.`,
+        'retryable',
+      );
     // No signal, a dropped connection, or a paused upload all land here. All are
     // worth another attempt once the phone has a network again.
     if ((error as { name?: string }).name === 'AbortError')
@@ -184,5 +228,8 @@ async function request(url: string, init: RequestInit & { headers?: Record<strin
     })();
     const reason = error instanceof Error ? error.message : String(error);
     throw new TusUploadError(`The upload could not reach ${host} (${reason}).`, 'retryable');
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener?.('abort', pause);
   }
 }
