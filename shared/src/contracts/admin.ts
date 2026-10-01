@@ -1380,5 +1380,7 @@ export interface JobberSyncResult {
   assigned: number;
   /** Inspections closed here because Jobber says the visit is finished. */
   completedFromJobber: number;
+  /** Inspections taken off their day because Jobber has the visit on none: deleted there, or moved to Unscheduled. */
+  withdrawn: number;
   skipped: number;
 }

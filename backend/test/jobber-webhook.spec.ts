@@ -145,7 +145,14 @@ describe('the topics the handler acts on', () => {
   });
 
   it('never cancels work a technician has already started', () => {
-    expect(SERVICE).toMatch(/inspection\.startedAt \|\| inspection\.status !== InspectionStatus\.SCHEDULED/);
-    expect(SERVICE).toContain('JOBBER_VISIT_DELETED_NEEDS_REVIEW');
+    // The withdrawal lives on the sync worker, which the sweep shares
+    // (2026-10-01); the webhook hands the deletion to it.
+    const WORKER = readFileSync(
+      join(__dirname, '..', 'src', 'workers', 'jobber-sync', 'jobber-sync.worker.ts'),
+      'utf8',
+    );
+    expect(SERVICE).toContain('this.sync.withdrawDeletedVisit(');
+    expect(WORKER).toMatch(/inspection\.startedAt \|\| inspection\.status !== InspectionStatus\.SCHEDULED/);
+    expect(WORKER).toContain('JOBBER_VISIT_DELETED_NEEDS_REVIEW');
   });
 });

@@ -377,9 +377,19 @@ export const JOB_NOTE_CREATE_MUTATION = `
  * webhook replaced the stored visit with one that had no Details, and synced a
  * benefit-package visit without the phrase that makes it an occupied inspection.
  */
-export const VISIT_BY_ID_QUERY = `
+export const VISIT_BY_ID_QUERY = visitsByIdsQuery(1);
+
+/**
+ * Up to 25 visits by id, for the sweep's look at linked visits its window did
+ * not return (see `JobberSyncWorker.reconcileUnseen`). The same selection as
+ * the single-visit query, at the page size the paged sync already pays for.
+ */
+export const VISITS_BY_IDS_QUERY = visitsByIdsQuery(25);
+
+function visitsByIdsQuery(first: number) {
+  return `
   query InspectionVisitById($ids: [EncodedId!]) {
-    visits(first: 1, filter: { ids: $ids }) {
+    visits(first: ${first}, filter: { ids: $ids }) {
       nodes {
         id
         title
@@ -427,3 +437,4 @@ export const VISIT_BY_ID_QUERY = `
     }
   }
 `;
+}

@@ -111,7 +111,24 @@ describe('the setting the dialog writes onto the plan', () => {
  * visit: the day, and the technician. The day is always Jobber's to know. The
  * technician is not, on a plan published unassigned.
  */
+/**
+ * Console edits reach Jobber. A rebuild queues its moves only then, as the
+ * console does: queued with the switch off they were never sent, and held
+ * Jobber's own later moves back for good (2026-10-01).
+ */
+const pushesOn = () => {
+  const previous = { ...process.env };
+  beforeEach(() => {
+    process.env.JOBBER_PUSH_EDITS_ENABLED = 'true';
+  });
+  afterEach(() => {
+    process.env = { ...previous };
+  });
+};
+
 describe('rebuilding a plan published unassigned', () => {
+  pushesOn();
+
   const INSPECTION = 'inspection-1';
   const STOP = 'stop-1';
 

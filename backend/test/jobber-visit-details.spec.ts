@@ -33,6 +33,7 @@ const result = (): JobberSyncResult => ({
   notSynced: 0,
   assigned: 0,
   completedFromJobber: 0,
+  withdrawn: 0,
   skipped: 0,
   truncated: false,
 });
@@ -67,8 +68,15 @@ function workerFor(stored: { jobberVisitTitle: string | null; jobberVisitDetails
   return { worker: internals, updateMany };
 }
 
+// On the day the inspection already has, all day: only the text is in question.
 const visit = (fields: Partial<JobberVisit>): JobberVisit =>
-  ({ id: 'visit-1', title: '100 Main St - Zone 1 - Q3 2026 Tenant Benefit Package', ...fields }) as JobberVisit;
+  ({
+    id: 'visit-1',
+    title: '100 Main St - Zone 1 - Q3 2026 Tenant Benefit Package',
+    startAt: '2026-09-16T05:00:00Z',
+    allDay: true,
+    ...fields,
+  }) as JobberVisit;
 
 describe('the Details on an inspection made from a Jobber visit', () => {
   it('keeps them as the coordinator wrote them, and nothing for blank ones', () => {
@@ -82,7 +90,7 @@ describe('the Details on an inspection made from a Jobber visit', () => {
   it('updates them when the coordinator edits the visit, even when nothing else moved', async () => {
     const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: 'Filter Change: 20x25x1' });
 
-    await worker.applyChanges('organization-1', visit({ instructions: DETAILS, startAt: null }), 'inspection-1', result());
+    await worker.applyChanges('organization-1', visit({ instructions: DETAILS }), 'inspection-1', result());
 
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: 'inspection-1', organizationId: 'organization-1' },
@@ -112,7 +120,7 @@ describe('the Details on an inspection made from a Jobber visit', () => {
   it('writes nothing when they have not changed', async () => {
     const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: DETAILS });
 
-    await worker.applyChanges('organization-1', visit({ instructions: DETAILS, startAt: null }), 'inspection-1', result());
+    await worker.applyChanges('organization-1', visit({ instructions: DETAILS }), 'inspection-1', result());
 
     expect(updateMany).not.toHaveBeenCalled();
   });
@@ -122,7 +130,7 @@ describe('the Details on an inspection made from a Jobber visit', () => {
     // deleted what they wrote.
     const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: DETAILS });
 
-    await worker.applyChanges('organization-1', visit({ startAt: null }), 'inspection-1', result());
+    await worker.applyChanges('organization-1', visit({}), 'inspection-1', result());
 
     expect(updateMany).not.toHaveBeenCalled();
   });
@@ -130,7 +138,7 @@ describe('the Details on an inspection made from a Jobber visit', () => {
   it('clears them when the coordinator emptied the Details', async () => {
     const { worker, updateMany } = workerFor({ jobberVisitTitle: visit({}).title ?? null, jobberVisitDetails: DETAILS });
 
-    await worker.applyChanges('organization-1', visit({ instructions: '', startAt: null }), 'inspection-1', result());
+    await worker.applyChanges('organization-1', visit({ instructions: '' }), 'inspection-1', result());
 
     expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { jobberVisitDetails: null } }));
   });

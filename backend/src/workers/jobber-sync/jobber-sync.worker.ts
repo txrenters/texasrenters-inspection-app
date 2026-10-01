@@ -32,6 +32,7 @@ import {
   visitsQuery,
   VISIT_BY_ID_QUERY,
   VISIT_DETAILS_FIELD,
+  VISITS_BY_IDS_QUERY,
 } from '../../integrations/jobber/jobber.queries';
 import { jobberVisitsPageSchema, type JobberVisit } from '../../integrations/jobber/jobber.schemas';
 import {
@@ -73,6 +74,76 @@ const MAX_PAGES = 200;
 const THROTTLE_RETRIES = 5;
 const THROTTLE_BACKOFF_SECONDS = 5;
 
+/** Linked visits asked for by id in one request -- the size `VISITS_BY_IDS_QUERY` asks for. */
+const RECONCILE_BATCH = 25;
+
+/**
+ * The most inspections one sweep will take off their day for visits Jobber no
+ * longer returns.
+ *
+ * A handful is an ordinary day's deletions. Dozens at once is far likelier to
+ * be Jobber answering differently than the office deleting dozens of visits,
+ * and acting on that would empty technicians' days; so past this nothing is
+ * withdrawn, and the run says why.
+ */
+const MAX_WITHDRAWN_PER_RUN = 15;
+
+/**
+ * On a visit's import row while the inspection is off its day because Jobber
+ * has the visit on none. `applyChanges` restores the inspection -- the same
+ * one, same id, same plan stop -- when Jobber gives it a day again.
+ */
+export const JOBBER_VISIT_UNSCHEDULED = 'JOBBER_VISIT_UNSCHEDULED';
+
+/**
+ * On a linked visit's import row when the last sweep asked Jobber for it by id
+ * and got nothing. A second sweep that finds the same takes the inspection off
+ * its day; seeing the visit again clears it.
+ */
+export const JOBBER_VISIT_MISSING = 'JOBBER_VISIT_MISSING';
+const MISSING_MESSAGE =
+  'Jobber did not return this visit when the last sync asked for it. If the next sync finds the same, the inspection comes off its day.';
+
+/** What the last sync kept of a visit it had imported. */
+interface StoredVisit {
+  /** The visit as Jobber returned it last time. */
+  payload?: Prisma.JsonValue | null;
+  failureCode?: string | null;
+}
+
+/**
+ * Whether Jobber changed this part of a visit since the last sync stored it.
+ *
+ * How a console edit waiting to be sent tells "Jobber still has the old copy"
+ * from "the office changed it in Jobber since" -- `Visit` has no `updatedAt`,
+ * so the stored copy is the only clock there is. False when there is no stored
+ * copy, or it lacks the field: with nothing to compare, nothing changed.
+ *
+ * Never true for a cancellation. Cancelling here is the stronger intent, and a
+ * later move in Jobber is no reason to put back an inspection somebody called off.
+ */
+export function jobberChangedSince(kind: JobberOutboundKind, stored: unknown, visit: JobberVisit): boolean {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return false;
+  const before = stored as Record<string, unknown>;
+  const differs = (field: 'startAt' | 'endAt' | 'allDay' | 'title' | 'instructions') =>
+    field in before && visit[field] !== undefined && (before[field] ?? null) !== (visit[field] ?? null);
+  if (kind === JobberOutboundKind.VISIT_RESCHEDULE) return differs('startAt') || differs('endAt') || differs('allDay');
+  if (kind === JobberOutboundKind.VISIT_EDIT) return differs('title') || differs('instructions');
+  if (kind === JobberOutboundKind.VISIT_ASSIGN) {
+    const assignees = (users: unknown) =>
+      ((users as { nodes?: { id: string }[] } | null | undefined)?.nodes ?? [])
+        .map((user) => user.id)
+        .sort()
+        .join(',');
+    return (
+      'assignedUsers' in before &&
+      visit.assignedUsers !== undefined &&
+      assignees(before.assignedUsers) !== assignees(visit.assignedUsers)
+    );
+  }
+  return false;
+}
+
 export interface JobberSyncResult {
   correlationId: string;
   visitsSeen: number;
@@ -95,6 +166,12 @@ export interface JobberSyncResult {
    * were never worked in this app, and have now been closed to match Jobber.
    */
   completedFromJobber: number;
+  /**
+   * Inspections taken off their day because Jobber has the visit on none: it
+   * was deleted there, or moved to Unscheduled. One that comes back with a day
+   * is restored and counted as rescheduled.
+   */
+  withdrawn: number;
   skipped: number;
   /**
    * Jobber still had more pages when the run stopped.
@@ -192,6 +269,7 @@ export class JobberSyncWorker {
       notSynced: 0,
       assigned: 0,
       completedFromJobber: 0,
+      withdrawn: 0,
       skipped: 0,
       truncated: false,
     };
@@ -227,6 +305,8 @@ export class JobberSyncWorker {
        */
       const window = over ?? this.window();
       let cursor: string | null = null;
+      /** Every visit the window returned, for `reconcileUnseen`. */
+      const seen = new Set<string>();
 
       for (let page = 0; page < MAX_PAGES; page += 1) {
         const { data, cost } = await this.fetchVisitsPageWithRetry(
@@ -246,6 +326,7 @@ export class JobberSyncWorker {
 
         for (const visit of parsed.data.visits.nodes) {
           result.visitsSeen += 1;
+          seen.add(visit.id);
           await this.processVisit(organizationId, visit, index, rules, result);
         }
 
@@ -265,6 +346,20 @@ export class JobberSyncWorker {
         }
         await this.pace(cost);
       }
+
+      // Only for the rolling window, and only when it was read to the end: a
+      // backfill's fixed slice says nothing about what is scheduled now, and a
+      // truncated run did not see everything it would call missing.
+      // Nor does it fail the run: the window's work is done and recorded, and
+      // anything this misses is asked again in five minutes.
+      if (!over && !result.truncated)
+        await this.reconcileUnseen(organizationId, seen, window, index, rules, result, correlationId).catch((error) =>
+          this.logger.warn({
+            event: 'jobber_reconcile_failed',
+            correlationId,
+            reason: error instanceof Error ? error.message : String(error),
+          }),
+        );
 
       await this.prisma.jobberConnection.update({
         where: { organizationId },
@@ -310,6 +405,7 @@ export class JobberSyncWorker {
       notSynced: 0,
       assigned: 0,
       completedFromJobber: 0,
+      withdrawn: 0,
       skipped: 0,
       truncated: false,
     };
@@ -488,7 +584,9 @@ export class JobberSyncWorker {
   ) {
     const existing = await this.prisma.jobberVisitImport.findUnique({
       where: { organizationId_jobberVisitId: { organizationId, jobberVisitId: visit.id } },
-      select: { id: true, status: true, inspectionId: true },
+      // The payload before it is replaced below: `applyChanges` compares it with
+      // this copy to see what Jobber changed since the last sync.
+      select: { id: true, status: true, inspectionId: true, payload: true, failureCode: true },
     });
 
     // A visit a person has already ruled out stays ruled out. Re-deciding it
@@ -518,7 +616,16 @@ export class JobberSyncWorker {
     });
 
     if (existing?.status === JobberVisitImportStatus.IMPORTED && existing.inspectionId) {
-      await this.applyChanges(organizationId, visit, existing.inspectionId, result);
+      // Jobber has it after all: whatever made the last sweep miss it, it is not gone.
+      if (existing.failureCode === JOBBER_VISIT_MISSING)
+        await this.prisma.jobberVisitImport.update({
+          where: { id: record.id },
+          data: { failureCode: null, failureMessage: null },
+        });
+      await this.applyChanges(organizationId, visit, existing.inspectionId, result, {
+        payload: existing.payload,
+        failureCode: existing.failureCode === JOBBER_VISIT_MISSING ? null : existing.failureCode,
+      });
       return;
     }
 
@@ -866,8 +973,31 @@ export class JobberSyncWorker {
     await this.prisma.inspection.updateMany({ where: { id: inspection.id, organizationId }, data });
   }
 
-  /** The console edits to this inspection still waiting to reach Jobber. */
-  private async pendingConsoleEdits(organizationId: string, inspectionId: string): Promise<Set<JobberOutboundKind>> {
+  /**
+   * The console edits to this inspection that still hold Jobber's copy back.
+   *
+   * An edit made here and not yet in Jobber wins over Jobber's copy of the same
+   * thing -- see `applyChanges`. But only while it can still get there, and
+   * only until Jobber itself changes that thing:
+   *
+   * - With pushes switched off it is never sent, and holding for it froze the
+   *   visit for good. A quarter rebuild queued its moves whatever the switch
+   *   said, so Jobber moved those visits and the console kept the old days:
+   *   three of Moses's October 1 stops that Jobber no longer had there
+   *   (2026-10-01).
+   * - Jobber changing it after the edit was made is the office changing its
+   *   mind in Jobber, and the newer change wins -- told by comparing Jobber's
+   *   copy with the one the last sync stored (`jobberChangedSince`).
+   *
+   * An edit that no longer holds is withdrawn rather than left waiting, so that
+   * switching pushes on later cannot send Jobber a change it has since overruled.
+   */
+  private async heldConsoleEdits(
+    organizationId: string,
+    inspectionId: string,
+    visit: JobberVisit,
+    stored: StoredVisit,
+  ): Promise<Set<JobberOutboundKind>> {
     const waiting = await this.prisma.jobberOutboundTask.findMany({
       where: {
         organizationId,
@@ -875,9 +1005,36 @@ export class JobberSyncWorker {
         kind: { in: [...VISIT_EDIT_KINDS] },
         status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
       },
-      select: { kind: true },
+      select: { id: true, kind: true },
     });
-    return new Set(waiting.map((task) => task.kind));
+    const held = new Set<JobberOutboundKind>();
+    const overruled: { id: string; kind: JobberOutboundKind }[] = [];
+    for (const task of waiting)
+      if (this.config.pushEditsEnabled && !jobberChangedSince(task.kind, stored.payload, visit)) held.add(task.kind);
+      else overruled.push(task);
+    if (overruled.length)
+      await this.prisma.$transaction(async (tx) => {
+        await tx.jobberOutboundTask.deleteMany({
+          where: {
+            id: { in: overruled.map((task) => task.id) },
+            status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            action: 'JOBBER_CONSOLE_EDIT_WITHDRAWN',
+            entityType: 'Inspection',
+            entityId: inspectionId,
+            metadata: {
+              jobberVisitId: visit.id,
+              kinds: overruled.map((task) => task.kind),
+              reason: this.config.pushEditsEnabled ? 'CHANGED_IN_JOBBER' : 'PUSH_EDITS_OFF',
+            },
+          },
+        });
+      });
+    return held;
   }
 
   /**
@@ -893,6 +1050,7 @@ export class JobberSyncWorker {
     visit: JobberVisit,
     inspectionId: string,
     result: JobberSyncResult,
+    stored: StoredVisit = {},
   ) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId },
@@ -928,8 +1086,9 @@ export class JobberSyncWorker {
      * after they made it -- the Mariposa Green move-in, re-dated at 1:28 and put
      * back at 1:30, was exactly that. Once the push is sent the two agree and
      * this reconciles as before; if it is abandoned, Jobber's copy wins again.
+     * So does a change made in Jobber after the edit (`heldConsoleEdits`).
      */
-    const held = await this.pendingConsoleEdits(organizationId, inspectionId);
+    const held = await this.heldConsoleEdits(organizationId, inspectionId, visit, stored);
     if (!held.has(JobberOutboundKind.VISIT_ASSIGN))
       await this.applyAssignment(organizationId, visit, inspectionId, result);
     if (!held.has(JobberOutboundKind.VISIT_EDIT)) await this.applyVisitText(organizationId, visit, inspection);
@@ -946,8 +1105,20 @@ export class JobberSyncWorker {
       return;
     }
 
-    if (!visit.startAt || held.has(JobberOutboundKind.VISIT_RESCHEDULE) || held.has(JobberOutboundKind.VISIT_CANCEL)) {
+    if (held.has(JobberOutboundKind.VISIT_RESCHEDULE) || held.has(JobberOutboundKind.VISIT_CANCEL)) {
       result.skipped += 1;
+      return;
+    }
+
+    // Taken off its day because Jobber had it on none. Back on one now?
+    if (inspection.status === InspectionStatus.CANCELLED && stored.failureCode === JOBBER_VISIT_UNSCHEDULED) {
+      if (visit.startAt) await this.restoreWithdrawn(organizationId, visit, inspectionId, result);
+      else result.skipped += 1;
+      return;
+    }
+
+    if (!visit.startAt) {
+      await this.withdrawFromDay(organizationId, visit.id, inspection, 'UNSCHEDULED', result);
       return;
     }
     /**
@@ -1030,6 +1201,339 @@ export class JobberSyncWorker {
       }
       throw error;
     }
+  }
+
+  /**
+   * Takes an inspection off its day because Jobber has its visit on none.
+   *
+   * `UNSCHEDULED`: Jobber returned the visit with no day -- it was moved to
+   * Unscheduled there. `MISSING`: two sweeps running asked Jobber for it by id
+   * and got nothing -- deleted, most likely. Either way the console has to stop
+   * showing it on the old day, which it did not: three of Moses's October 1
+   * stops were visits Jobber no longer had there (2026-10-01).
+   *
+   * An inspection must have a day, so it is cancelled -- with a code on its
+   * Jobber link, and `applyChanges` restores it, the same inspection, on the day
+   * Jobber gives it. That is the difference from a deletion the webhook reports
+   * (`withdrawDeletedVisit`), and it is why the uncertain case is handled this
+   * way too: if the visit comes back, so does the inspection.
+   *
+   * Work already under way is left for a person, as a reschedule is.
+   */
+  private async withdrawFromDay(
+    organizationId: string,
+    jobberVisitId: string,
+    inspection: { id: string; status: InspectionStatus; startedAt: Date | null },
+    why: 'UNSCHEDULED' | 'MISSING',
+    result: JobberSyncResult,
+  ) {
+    if (inspection.status === InspectionStatus.CANCELLED) {
+      result.skipped += 1;
+      return;
+    }
+    if (inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED) {
+      await this.prisma.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId },
+        data: {
+          failureCode: 'JOBBER_RESCHEDULE_NEEDS_REVIEW',
+          failureMessage:
+            'Jobber no longer has this visit on a day, and the inspection is already under way. Someone has to decide what happens to the work already recorded.',
+        },
+      });
+      result.skipped += 1;
+      return;
+    }
+    const reason =
+      why === 'UNSCHEDULED'
+        ? 'Moved to Unscheduled in Jobber. It comes back on the day Jobber gives it.'
+        : 'No longer on Jobber’s schedule: deleted there, or moved to Unscheduled. It comes back if Jobber gives it a day.';
+    const withdrawn = await this.prisma.$transaction(async (tx) => {
+      // Re-asserted here: a technician may have started it since it was read.
+      const { count } = await tx.inspection.updateMany({
+        where: { id: inspection.id, organizationId, status: InspectionStatus.SCHEDULED, startedAt: null },
+        data: { status: InspectionStatus.CANCELLED, cancelledAt: new Date(), cancellationReason: reason },
+      });
+      if (!count) return false;
+      await tx.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId },
+        data: { failureCode: JOBBER_VISIT_UNSCHEDULED, failureMessage: reason },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          action: 'INSPECTION_CANCELLED',
+          entityType: 'Inspection',
+          entityId: inspection.id,
+          metadata: {
+            jobberVisitId,
+            reason: why === 'UNSCHEDULED' ? 'JOBBER_VISIT_UNSCHEDULED' : 'JOBBER_VISIT_MISSING',
+          },
+        },
+      });
+      return true;
+    });
+    if (withdrawn) result.withdrawn += 1;
+    else result.skipped += 1;
+  }
+
+  /**
+   * Puts back an inspection `withdrawFromDay` took off, on the day Jobber has
+   * now given its visit.
+   *
+   * The same inspection -- its id, assignment, plan stop and Details -- not a
+   * new one: `Inspection.jobberVisitId` is unique, and a visit coming back is
+   * the same visit. The plan stop follows it as it follows any Jobber move.
+   */
+  private async restoreWithdrawn(
+    organizationId: string,
+    visit: JobberVisit,
+    inspectionId: string,
+    result: JobberSyncResult,
+  ) {
+    const window = visitWindow(visit);
+    const day = dayOf(visit.startAt!);
+    try {
+      const restored = await this.prisma.$transaction(async (tx) => {
+        const { count } = await tx.inspection.updateMany({
+          where: { id: inspectionId, organizationId, status: InspectionStatus.CANCELLED },
+          data: {
+            status: InspectionStatus.SCHEDULED,
+            cancelledAt: null,
+            cancellationReason: null,
+            scheduledAt: day,
+            scheduledStartAt: window.start,
+            scheduledEndAt: window.end,
+          },
+        });
+        if (!count) return false;
+        const planStop = await moveStopWithVisit(tx, organizationId, inspectionId, day);
+        await tx.jobberVisitImport.updateMany({
+          where: { organizationId, jobberVisitId: visit.id },
+          data: { failureCode: null, failureMessage: null },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            action: 'INSPECTION_RESCHEDULED_FROM_JOBBER',
+            entityType: 'Inspection',
+            entityId: inspectionId,
+            metadata: {
+              jobberVisitId: visit.id,
+              scheduledAt: visit.startAt,
+              restoredFromUnscheduled: true,
+              ...(planStop ? { planStop } : {}),
+            },
+          },
+        });
+        return true;
+      });
+      if (restored) result.rescheduled += 1;
+      else result.skipped += 1;
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+      // The code stays, so a later sweep restores it once the office has
+      // decided which of the two bookings on that day survives.
+      await this.prisma.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId: visit.id },
+        data: {
+          failureMessage: 'Jobber gave this visit a day again, and that day already has the same inspection booked.',
+        },
+      });
+      result.skipped += 1;
+    }
+  }
+
+  /**
+   * Linked inspections whose visit the window did not return.
+   *
+   * The window only returns visits that still have a day inside it, so three
+   * changes in Jobber never reached a sweep: a visit deleted, one moved to
+   * Unscheduled, and one moved outside the window. The webhook reports each --
+   * when its delivery arrives, and for a job deleted whole it may never -- and a
+   * missed one left the inspection on its old day for good.
+   *
+   * So every scheduled inspection whose day is inside the window and whose
+   * visit was not in it is asked for by id. A visit that comes back goes through
+   * `processVisit` like any other, which moves, withdraws or completes it. One
+   * that does not is marked, and withdrawn by the next sweep that finds the same
+   * -- so one odd answer from Jobber cannot take anything off a technician's
+   * day, and a withdrawal is undone if the visit reappears.
+   */
+  private async reconcileUnseen(
+    organizationId: string,
+    seen: ReadonlySet<string>,
+    window: JobberSyncWindow,
+    index: BuildingIndex,
+    rules: Record<InspectionType, string[]>,
+    result: JobberSyncResult,
+    correlationId: string,
+  ) {
+    const day = 86_400_000;
+    const linked = await this.prisma.inspection.findMany({
+      where: {
+        organizationId,
+        status: InspectionStatus.SCHEDULED,
+        startedAt: null,
+        jobberVisitId: { not: null },
+        // A day in from each end: the window's edges are instants and an
+        // inspection's day is a date, so a visit on the first or last day can
+        // be inside one and outside the other. Those are the next sweep's.
+        scheduledAt: {
+          gte: new Date(Date.parse(window.startAfter) + day),
+          lte: new Date(Date.parse(window.startBefore) - day),
+        },
+      },
+      select: { id: true, status: true, startedAt: true, jobberVisitId: true, jobberJobId: true },
+    });
+    const unseen = linked.filter(
+      (row): row is typeof row & { jobberVisitId: string } =>
+        row.jobberVisitId !== null && !seen.has(row.jobberVisitId),
+    );
+    if (!unseen.length) return;
+
+    const found = new Map<string, JobberVisit>();
+    for (let start = 0; start < unseen.length; start += RECONCILE_BATCH) {
+      const data = await this.client.request(
+        organizationId,
+        VISITS_BY_IDS_QUERY,
+        { ids: unseen.slice(start, start + RECONCILE_BATCH).map((row) => row.jobberVisitId) },
+        correlationId,
+      );
+      const parsed = jobberVisitsPageSchema.safeParse(data);
+      if (!parsed.success)
+        throw new JobberError(
+          'Jobber returned visits in an unexpected shape.',
+          'JOBBER_VISIT_SCHEMA_MISMATCH',
+          502,
+        );
+      for (const visit of parsed.data.visits.nodes) found.set(visit.id, visit);
+    }
+    for (const visit of found.values()) {
+      result.visitsSeen += 1;
+      // One visit this cannot handle does not stop the others being looked at.
+      await this.processVisit(organizationId, visit, index, rules, result).catch((error) =>
+        this.logger.warn({
+          event: 'jobber_reconcile_visit_failed',
+          correlationId,
+          jobberVisitId: visit.id,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+
+    const missing = unseen.filter((row) => !found.has(row.jobberVisitId));
+    if (!missing.length) return;
+    /**
+     * Nothing back at all, for several visits we hold, is an answer about the
+     * query rather than the visits -- a filter Jobber changed, say. Nothing is
+     * marked, so a wrong answer never counts towards a withdrawal.
+     */
+    if (!found.size && missing.length > 3) {
+      this.logger.warn({ event: 'jobber_reconcile_found_nothing', correlationId, asked: missing.length });
+      return;
+    }
+
+    const rows = await this.prisma.jobberVisitImport.findMany({
+      where: { organizationId, jobberVisitId: { in: missing.map((row) => row.jobberVisitId) } },
+      select: { jobberVisitId: true, failureCode: true },
+    });
+    const missedBefore = new Set(
+      rows.filter((row) => row.failureCode === JOBBER_VISIT_MISSING).map((row) => row.jobberVisitId),
+    );
+    for (const row of missing.filter((row) => !missedBefore.has(row.jobberVisitId)))
+      await this.prisma.jobberVisitImport.upsert({
+        where: { organizationId_jobberVisitId: { organizationId, jobberVisitId: row.jobberVisitId } },
+        // A visit booked here before the booking claimed its row has none.
+        create: {
+          organizationId,
+          jobberVisitId: row.jobberVisitId,
+          jobberJobId: row.jobberJobId,
+          status: JobberVisitImportStatus.IMPORTED,
+          inspectionId: row.id,
+          failureCode: JOBBER_VISIT_MISSING,
+          failureMessage: MISSING_MESSAGE,
+        },
+        update: { failureCode: JOBBER_VISIT_MISSING, failureMessage: MISSING_MESSAGE },
+      });
+
+    const confirmed = missing.filter((row) => missedBefore.has(row.jobberVisitId));
+    if (confirmed.length > MAX_WITHDRAWN_PER_RUN) {
+      this.logger.warn({
+        event: 'jobber_reconcile_withdrawals_capped',
+        correlationId,
+        missing: confirmed.length,
+        cap: MAX_WITHDRAWN_PER_RUN,
+      });
+      return;
+    }
+    for (const row of confirmed) await this.withdrawFromDay(organizationId, row.jobberVisitId, row, 'MISSING', result);
+  }
+
+  /**
+   * Withdraws an inspection whose Jobber visit was deleted.
+   *
+   * For the webhook's VISIT_DESTROY, which is the one case that knows the visit
+   * is gone rather than unseen -- so, unlike `withdrawFromDay`, the link is let
+   * go: the import row is IGNORED and nothing will bring it back. Without this
+   * the subscription would be inert: the delivery recorded, the inspection left
+   * SCHEDULED on a technician's phone for work that no longer exists.
+   *
+   * Work already under way is never cancelled from here. Once a technician has
+   * started, evidence exists and someone has to decide what happens to it, so
+   * that is recorded against the visit for a person rather than resolved by a
+   * webhook.
+   */
+  async withdrawDeletedVisit(organizationId: string, jobberVisitId: string) {
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { organizationId, jobberVisitId },
+      select: { id: true, status: true, startedAt: true },
+    });
+    if (!inspection) return;
+
+    if (inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED) {
+      // Already off its day for a visit it could not see, and now known to be deleted.
+      if (inspection.status === InspectionStatus.CANCELLED) {
+        await this.prisma.jobberVisitImport.updateMany({
+          where: { organizationId, jobberVisitId },
+          data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null, failureCode: null },
+        });
+        return;
+      }
+      await this.prisma.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId },
+        data: {
+          failureCode: 'JOBBER_VISIT_DELETED_NEEDS_REVIEW',
+          failureMessage:
+            'Jobber deleted this visit after the inspection was already under way. Someone has to decide what happens to the work already recorded.',
+        },
+      });
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspection.update({
+        where: { id: inspection.id },
+        data: {
+          status: InspectionStatus.CANCELLED,
+          cancelledAt: new Date(),
+          cancellationReason: 'The Jobber visit this inspection came from was deleted.',
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          action: 'INSPECTION_CANCELLED',
+          entityType: 'Inspection',
+          entityId: inspection.id,
+          metadata: { jobberVisitId, reason: 'JOBBER_VISIT_DESTROYED' },
+        },
+      });
+      await tx.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId },
+        data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null },
+      });
+    });
+    this.logger.log(`Cancelled inspection ${inspection.id}: its Jobber visit was deleted.`);
   }
 
   /**

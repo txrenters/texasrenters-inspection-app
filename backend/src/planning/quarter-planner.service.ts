@@ -46,6 +46,7 @@ import { TechnicianSkillsService } from '../admin/technician-skills.service';
 import { businessInstant, movedWindow } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
 import type { GeoPoint } from '../routing/osrm.client';
@@ -1366,6 +1367,7 @@ export class QuarterPlannerService {
       }),
     ]);
 
+    const pushEdits = getJobberConfig().pushEditsEnabled;
     let moved = 0;
     for (const row of after) {
       const was = before.get(row.id);
@@ -1420,16 +1422,20 @@ export class QuarterPlannerService {
           });
         }
 
-        // `requestVisitPush` is a no-op for a visit that never reached Jobber,
-        // so this needs no guard of its own.
-        if (dayMoved)
+        // `requestVisitPush` is a no-op for a visit that never reached Jobber.
+        // It is not one while pushes are switched off, which is why the switch
+        // is read here as the console reads it: a move queued then is never
+        // sent, and it held Jobber's own later moves back for good -- three of
+        // Moses's October 1 stops that Jobber no longer had there (2026-10-01).
+        // With the switch off, Jobber's day is the one both keep.
+        if (pushEdits && dayMoved)
           await requestVisitPush(tx, {
             organizationId,
             inspectionId: was.inspectionId,
             kind: JobberOutboundKind.VISIT_RESCHEDULE,
             requestedById: actorId,
           });
-        if (technicianChanged)
+        if (pushEdits && technicianChanged)
           await requestVisitPush(tx, {
             organizationId,
             inspectionId: was.inspectionId,

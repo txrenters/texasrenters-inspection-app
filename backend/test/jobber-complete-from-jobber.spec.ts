@@ -35,6 +35,7 @@ const emptyResult = (): JobberSyncResult => ({
   notSynced: 0,
   assigned: 0,
   completedFromJobber: 0,
+  withdrawn: 0,
   skipped: 0,
   truncated: false,
 });
