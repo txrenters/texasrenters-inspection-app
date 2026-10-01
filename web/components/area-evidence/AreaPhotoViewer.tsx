@@ -4,10 +4,15 @@ import type { AreaEvidenceSummaryItem } from '@texasrenters/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { areaEvidenceQuery, useAreaEvidence } from '@/lib/queries';
+import { usePermissions } from '@/lib/auth';
+import { areaEvidenceQuery, useAreaEvidence, useInspection } from '@/lib/queries';
 
 import { areaPhotoItems, nextAreaWithPhotos } from './area-photos';
 import { EvidenceViewer } from './EvidenceViewer';
+import { ReviewPanel } from './ReviewPanel';
+
+/** Wide enough for the photograph and the review panel side by side. */
+const PANEL_BY_DEFAULT = '(min-width: 1280px)';
 
 /** How long "Now in Kitchen" stays up after crossing into an area. */
 const NOTICE_MS = 1800;
@@ -60,6 +65,16 @@ export function AreaPhotoViewer({
   const noticeTimer = useRef<number | undefined>(undefined);
   // One crossing at a time: a held arrow key must not queue a run of them.
   const moving = useRef(false);
+  /**
+   * The review panel beside the photograph, open by default where there is
+   * room for both. Held here, not in the viewer, so closing it stays closed
+   * through the areas that follow.
+   */
+  const [panelOpen, setPanelOpen] = useState(
+    () => typeof window !== 'undefined' && Boolean(window.matchMedia?.(PANEL_BY_DEFAULT).matches),
+  );
+  const canReview = usePermissions().has('findings:review');
+  const finalized = Boolean(useInspection(inspectionId).data?.finalizedAt);
 
   const previous = nextAreaWithPhotos(areas, at.areaId, -1);
   const next = nextAreaWithPhotos(areas, at.areaId, 1);
@@ -137,6 +152,23 @@ export function AreaPhotoViewer({
 
   return (
     <EvidenceViewer
+      aside={
+        current.data
+          ? {
+              content: (
+                <ReviewPanel
+                  bundle={current.data}
+                  canReview={canReview}
+                  finalized={finalized}
+                  inspectionId={inspectionId}
+                  onNextArea={next ? () => void cross(1, 'first') : undefined}
+                />
+              ),
+              open: panelOpen,
+              onToggle: () => setPanelOpen((open) => !open),
+            }
+          : undefined
+      }
       beyond={{ previous: Boolean(previous), next: Boolean(next) }}
       edges={edges}
       heading={current.data?.area.name}
