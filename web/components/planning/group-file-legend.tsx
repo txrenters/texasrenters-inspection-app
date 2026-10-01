@@ -81,6 +81,18 @@ function GroupSummaryLine({ group, route }: { group: FileGroup; route?: RouteVie
   );
 }
 
+/** What the list calls a group, and a property in none. */
+export interface LegendNoun {
+  one: string;
+  many: string;
+  /** A property in no group, after "Green: ". */
+  loose: string;
+}
+
+const GROUP_NOUN: LegendNoun = { one: 'group', many: 'groups', loose: 'in no group' };
+
+const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
 /** What a group is sorted by when sorted by drive: its road route's minutes, else the file's. */
 export const driveMinutesOf = (group: FileGroup, route?: RouteView) =>
   route?.status === 'ok' ? route.route.durationS / 60 : group.driveMinutes;
@@ -102,8 +114,11 @@ export function GroupFileLegend({
   onToggle,
   onShowAll,
   routeViews,
+  noun = GROUP_NOUN,
 }: {
   file: GroupFile;
+  /** What a group is called: a file's "group", a quarter's "day". */
+  noun?: LegendNoun;
   /** Each group's road route, by group key. */
   routeViews?: ReadonlyMap<string, RouteView>;
   /** The groups ticked. Empty is every group. */
@@ -122,8 +137,8 @@ export function GroupFileLegend({
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
         <p className="text-sm font-medium">
           {picked.size
-            ? `${picked.size.toLocaleString()} of ${file.groups.length.toLocaleString()} groups`
-            : `All ${file.groups.length.toLocaleString()} groups`}
+            ? `${picked.size.toLocaleString()} of ${file.groups.length.toLocaleString()} ${noun.many}`
+            : `All ${file.groups.length.toLocaleString()} ${noun.many}`}
         </p>
         <Button disabled={!picked.size} onClick={onShowAll} size="sm" variant="outline">
           Show all
@@ -132,11 +147,11 @@ export function GroupFileLegend({
       <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5">
         <span className="text-muted-foreground text-xs">Sort</span>
         <Select onValueChange={(value) => onOrder(value as GroupOrder)} value={order}>
-          <SelectTrigger aria-label="Sort the groups" className="h-7 w-auto text-xs" size="sm">
+          <SelectTrigger aria-label={`Sort the ${noun.many}`} className="h-7 w-auto text-xs" size="sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="number">By group number</SelectItem>
+            <SelectItem value="number">By {noun.one} number</SelectItem>
             <SelectItem value="drive">By drive time, longest first</SelectItem>
           </SelectContent>
         </Select>
@@ -162,7 +177,7 @@ export function GroupFileLegend({
                 )}
               >
                 <Checkbox
-                  aria-label={`Group ${group.key}`}
+                  aria-label={`${capital(noun.one)} ${group.label}`}
                   checked={picked.has(group.key)}
                   onCheckedChange={() => onToggle(group.key)}
                 />
@@ -171,7 +186,7 @@ export function GroupFileLegend({
                   <span className="flex items-center gap-1.5">
                     {/* A name given by hand (an exported manual grouping) before the area. */}
                     <span className="min-w-0 truncate text-sm font-medium">
-                      {group.name ?? group.area ?? `Group ${group.label}`}
+                      {group.name ?? group.area ?? `${capital(noun.one)} ${group.label}`}
                     </span>
                     {hop ? (
                       <Badge
@@ -216,7 +231,7 @@ export function GroupFileLegend({
           <svg aria-hidden height="14" viewBox="0 0 22 22" width="14">
             <circle className="fill-muted-foreground" cx="11" cy="11" r="9" stroke="#fff" strokeWidth="2" />
           </svg>
-          A property, numbered in its group&rsquo;s visiting order. Click one for its details.
+          A property, numbered in its {noun.one}&rsquo;s visiting order. Click one for its details.
         </p>
         <p className="flex items-center gap-1.5">
           <svg aria-hidden height="14" viewBox="0 0 22 22" width="14">
@@ -229,7 +244,7 @@ export function GroupFileLegend({
             <svg aria-hidden height="14" viewBox="0 0 22 22" width="14">
               <circle cx="11" cy="11" fill={UNGROUPED_GREEN} r="6.5" stroke="#fff" strokeWidth="2" />
             </svg>
-            Green: in no group ({file.ungrouped.length.toLocaleString()})
+            Green: {noun.loose} ({file.ungrouped.length.toLocaleString()})
           </p>
         ) : null}
         {longHops ? (
@@ -239,7 +254,7 @@ export function GroupFileLegend({
             </svg>
             <span>
               Red: a drive of {LONG_HOP_MINUTES} min or more between two stops ({longHops.toLocaleString()}{' '}
-              {longHops === 1 ? 'group' : 'groups'}), drawn on the leg Mapbox times longest; with straight lines, the
+              {longHops === 1 ? noun.one : noun.many}), drawn on the leg Mapbox times longest; with straight lines, the
               longest straight step.
             </span>
           </p>

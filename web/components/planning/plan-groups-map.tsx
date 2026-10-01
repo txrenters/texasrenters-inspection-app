@@ -1,143 +1,143 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Layer, Marker, Source, type LayerProps } from 'react-map-gl/mapbox';
-import { useTheme } from 'next-themes';
+import { useMemo, useState } from 'react';
 
-import { ConsoleMap } from '@/components/console-map';
+import { MapUnavailable } from '@/components/console-map';
 
-import { circlePolygon, planGroups, type GroupableStop } from './plan-groups';
+import type { GroupOrder } from './group-file';
+import { GroupFileLegend, type LegendNoun } from './group-file-legend';
+import { GroupFileMap, type MapFrame } from './group-file-map';
+import { DEFAULT_MAP_DISPLAY, MapDisplaySwitches, type MapDisplay } from './group-file-view';
+import { planDayGroups, type DayStop } from './plan-day-groups';
+import { useRoadRoutes, type RouteRequest } from './road-routes';
+import { useFillHeight } from './use-fill-height';
+import { zoneTerritories } from './zone-territories';
 
 /**
- * A quarter's days, drawn as the office sketched them.
+ * A quarter's days, drawn as the Group maker draws a template (the office,
+ * 2026-10-01: the Group maker's map is the better one).
  *
- * One circle per day, sized to reach that day's properties, numbered in the
- * order the quarter is worked — a blanket of numbered circles over the patch,
- * low numbers around the outside. Where a circle is large, that day is spread
- * across the county; where two overlap, those days are covering the same
- * ground and could be one.
+ * Each technician-day is a group in its own colour, numbered in the order the
+ * quarter is worked, with its stops numbered in the order they are driven and
+ * the road between them; the list beside it is every day, which is both the
+ * legend and the filter. A visit with no day yet is a green dot, as a property
+ * in no group is in the Group maker.
  *
- * Drawn on `ConsoleMap` with the portfolio and the crew turned on, so the
- * quarter's days sit on the same map as everything else: the same pins, the
- * same people, and the grouping radius around the same portfolio. The radius
- * is worth having here above all: these circles are one per *day* and the
- * radius is one per *property*, so together they show both how a day is
- * spread and which properties were close enough to have shared one.
+ * This replaced one numbered circle per date, sized to reach the day's
+ * properties. The circles showed where a day was and how far it spread; this
+ * shows the day itself -- which stop comes after which, and how long each
+ * drive is -- and it reads the same as the Group maker the office builds
+ * templates in.
  *
- * It used to draw its own crew as letters in green circles and its own
- * properties as grey dots, which is exactly how the console came to have
- * "two different maps".
+ * Must be loaded with `ssr: false`: Mapbox GL touches `window` and measures its
+ * container.
  */
 
-/** Houston, for the moment before the plan has been measured. */
-const FALLBACK = { longitude: -95.5, latitude: 29.8, zoom: 8.5 };
+const DAY_NOUN: LegendNoun = { one: 'day', many: 'days', loose: 'no day yet' };
 
-export function PlanGroupsMap({
-  stops,
-  onSelectDay,
-  selectedDate,
-}: {
-  stops: readonly GroupableStop[];
-  onSelectDay?: (date: string) => void;
-  /** The day being read, drawn stronger than the rest. */
-  selectedDate?: string | null;
-}) {
-  const { resolvedTheme } = useTheme();
-  const groups = useMemo(() => planGroups(stops), [stops]);
+export function PlanGroupsMap({ stops }: { stops: readonly DayStop[] }) {
+  const file = useMemo(() => planDayGroups(stops), [stops]);
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+  const [display, setDisplay] = useState<MapDisplay>(DEFAULT_MAP_DISPLAY);
+  const [order, setOrder] = useState<GroupOrder>('number');
+  /** The map and the list fill the window on a large screen, as in the Group maker. */
+  const fill = useFillHeight<HTMLDivElement>();
+
+  const shown = useMemo(
+    () => (picked.size ? file.groups.filter((group) => picked.has(group.key)) : file.groups),
+    [file.groups, picked],
+  );
+  /** Every visit's zone, whether it has a day or not: a zone is the tenancy's, not the day's. */
+  const zones = useMemo(
+    () => (display.zones ? zoneTerritories([...file.groups.flatMap((group) => group.rows), ...file.ungrouped]) : []),
+    [display.zones, file],
+  );
+  /** Each day's road route, for its line on the map and its drive in the list. */
+  const requests = useMemo<RouteRequest[]>(
+    () =>
+      file.groups.map((group) => ({
+        id: group.key,
+        coordinates: group.rows.map((row) => [row.longitude, row.latitude]),
+      })),
+    [file.groups],
+  );
+  const routeViews = useRoadRoutes(requests);
 
   /**
-   * Every circle in one source rather than one source each.
-   *
-   * A quarter is thirty-odd days and Mapbox re-evaluates a layer per source on
-   * every frame of a zoom; thirty sources is the stutter the technician map
-   * had to fix by grouping its pins.
+   * Framed when the days arrive and when the reader picks different ones, and
+   * never because anything merely re-rendered.
    */
-  const circles = useMemo(
+  const frame = useMemo<MapFrame>(
     () => ({
-      type: 'FeatureCollection' as const,
-      features: groups.map((group) => ({
-        type: 'Feature' as const,
-        properties: {
-          date: group.date,
-          number: group.number,
-          visits: group.stops.length,
-          // Painted from the feature rather than by swapping layers, so
-          // selecting a day costs a repaint and not a re-render.
-          selected: group.date === selectedDate ? 1 : 0,
-        },
-        geometry: { type: 'Polygon' as const, coordinates: [circlePolygon(group)] },
-      })),
+      key: `${file.groups.length}:${file.placed}:${[...picked].sort().join(',')}`,
+      points: [
+        ...shown.flatMap((group) => group.outline.map(([longitude, latitude]) => ({ latitude, longitude }))),
+        ...(picked.size ? [] : file.ungrouped),
+      ],
     }),
-    [groups, selectedDate],
+    [file.groups.length, file.placed, file.ungrouped, picked, shown],
   );
 
+  const toggle = (key: string) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
-  const dark = resolvedTheme === 'dark';
-  const fill: LayerProps = {
-    id: 'group-fill',
-    type: 'fill',
-    paint: {
-      'fill-color': dark ? '#4ade80' : '#16a34a',
-      // Faint, because the reading is in the overlaps: two circles over the
-      // same ground make a darker patch, and that is the signal.
-      'fill-opacity': ['case', ['==', ['get', 'selected'], 1], 0.35, 0.12],
-    },
-  };
-  const outline: LayerProps = {
-    id: 'group-outline',
-    type: 'line',
-    paint: {
-      'line-color': dark ? '#4ade80' : '#15803d',
-      'line-width': ['case', ['==', ['get', 'selected'], 1], 3, 1.5],
-      'line-opacity': 0.9,
-    },
-  };
+  if (!file.groups.length)
+    return (
+      <div className="h-80">
+        <MapUnavailable>No visit in this quarter has a day yet, so there are no days to draw.</MapUnavailable>
+      </div>
+    );
 
   return (
-    <ConsoleMap
-      crew
-      initialView={FALLBACK}
-      portfolio
-      unavailable={
-        groups.length
-          ? undefined
-          : 'No visit in this quarter has a day yet, so there are no groups to draw.'
-      }
-    >
-      <Source data={circles} id="groups" type="geojson">
-        <Layer {...fill} />
-        <Layer {...outline} />
-      </Source>
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p className="text-muted-foreground min-w-0 text-sm">
+          {file.placed.toLocaleString()} {file.placed === 1 ? 'visit' : 'visits'} over {file.groups.length.toLocaleString()}{' '}
+          {file.groups.length === 1 ? 'day' : 'days'}
+          {file.ungrouped.length ? ` · ${file.ungrouped.length.toLocaleString()} with no day yet` : ''}
+        </p>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <MapDisplaySwitches display={display} onChange={setDisplay} />
+        </div>
+      </div>
 
-      {/*
-        The number, as a real element rather than a Mapbox symbol layer: it is
-        the thing the office reads off this map, and a symbol layer hides a
-        label the moment two collide — which is exactly where the circles
-        overlap and the reading matters most.
-      */}
-      {groups.map((group) => (
-        <Marker
-          key={group.date}
-          latitude={group.latitude}
-          longitude={group.longitude}
-          onClick={onSelectDay ? () => onSelectDay(group.date) : undefined}
-          // Over the portfolio's pins and the crew: the day's number is what
-          // this page is read by.
-          style={{ zIndex: 800 }}
-        >
-          <span
-            className={[
-              'flex h-7 min-w-7 cursor-pointer items-center justify-center rounded-full border px-1.5 text-xs font-semibold shadow-sm',
-              group.date === selectedDate
-                ? 'border-success bg-success text-success-foreground'
-                : 'border-border bg-card text-foreground',
-            ].join(' ')}
-            title={`Day ${group.number} · ${group.date} · ${group.stops.length} visits`}
-          >
-            {group.number}
-          </span>
-        </Marker>
-      ))}
-    </ConsoleMap>
+      <div
+        className="grid gap-3 lg:h-[36rem] lg:grid-cols-[minmax(0,1fr)_20rem] 2xl:grid-cols-[minmax(0,1fr)_24rem]"
+        ref={fill.ref}
+        style={fill.height ? { height: fill.height } : undefined}
+      >
+        <div className="h-80 lg:h-full">
+          <GroupFileMap
+            frame={frame}
+            groups={shown}
+            legTimes={display.legTimes ? picked : null}
+            lines={display.lines}
+            onPickGroup={(key) => setPicked(new Set([key]))}
+            road={display.road}
+            routeViews={routeViews}
+            showOutlines={display.outlines}
+            // A drive of 15 minutes or more between two stops, in amber: the leg to look at.
+            slowLegs
+            ungrouped={picked.size ? [] : file.ungrouped}
+            zones={zones}
+          />
+        </div>
+        <GroupFileLegend
+          file={file}
+          noun={DAY_NOUN}
+          onOrder={setOrder}
+          onShowAll={() => setPicked(new Set())}
+          onToggle={toggle}
+          order={order}
+          picked={picked}
+          routeViews={routeViews}
+        />
+      </div>
+    </div>
   );
 }
