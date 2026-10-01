@@ -6,10 +6,10 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 
+import { EvidenceViewer } from '@/components/area-evidence/EvidenceViewer';
 import { LazyPhoto } from '@/components/area-evidence/LazyPhoto';
 import { ComparisonReportView } from '@/components/comparison-report-view';
 import type { PhotoContext } from '@/components/comparison-report-view';
-import { PhotoLightbox } from '@/components/photo-lightbox';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { useComparisonReport } from '@/lib/queries';
@@ -52,25 +52,34 @@ export default function ComparisonReportPage() {
       */}
       <ComparisonReportView
         renderPhoto={(photo: PublicReportPhoto, context) => (
-          <button
-            className="block cursor-zoom-in text-left"
+          // LazyPhoto is the button. It used to sit inside a second one, which
+          // is invalid markup and leaves keyboard focus on a control that does
+          // nothing.
+          <LazyPhoto
+            areaName={context.areaName}
             key={photo.id}
-            onClick={() => setViewing(context)}
-            type="button"
-          >
-            <LazyPhoto areaName={context.areaName} photo={photo} />
-          </button>
+            onOpen={() => setViewing(context)}
+            photo={photo}
+          />
         )}
         report={data}
       />
 
+      {/* The inspection page's viewer, zoom and all: one viewer for both
+          pages rather than a second that only this one had. */}
       {viewing ? (
-        <PhotoLightbox
-          areaName={viewing.areaName}
-          index={viewing.index}
+        <EvidenceViewer
+          heading={`${viewing.areaName} · ${viewing.sideLabel}`}
+          items={viewing.photos.map((photo) => ({
+            id: photo.id,
+            kind: 'photo',
+            contentPath: photo.contentPath,
+            title: photo.label ?? 'Photograph',
+            capturedAt: photo.capturedAt,
+            captureTimeSource: photo.captureTimeSource,
+          }))}
           onClose={() => setViewing(null)}
-          photos={viewing.photos}
-          sideLabel={viewing.sideLabel}
+          startIndex={viewing.index}
         />
       ) : null}
     </div>
