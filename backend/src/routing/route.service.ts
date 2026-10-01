@@ -3,6 +3,7 @@ import { InspectionStatus } from '@prisma/client';
 import {
   chooseRouteOrigin,
   type DrawnRoute,
+  estimatedDriveMinutes,
   haversineMeters,
   maneuverFromGoogle,
   type NavigationLeg,
@@ -125,6 +126,15 @@ function nearestByAir(
   return best;
 }
 
+/**
+ * Seconds between every pair as the crow flies, for ordering a day no router
+ * would time. Only the order comes from this; the drive drawn through it is
+ * still a road route, timed by whichever router draws it.
+ */
+export function straightLineDurations(points: readonly GeoPoint[]): number[][] {
+  return points.map((from) => points.map((to) => Math.round(estimatedDriveMinutes(from, to) * 60)));
+}
+
 @Injectable()
 export class RouteService {
   private readonly logger = new Logger(RouteService.name);
@@ -167,15 +177,22 @@ export class RouteService {
   ) {}
 
   /**
-   * Travel times between every pair, from whichever router is configured.
+   * Travel times between every pair, from whichever router answers.
    *
-   * Google first. Not a preference for the paid service for its own sake --
-   * OSRM has never been configured on this deployment, so `planDay` returned
-   * its empty shape for every technician on every day: no line on the map, no
-   * distance, no leg times, and no error to explain any of it. Google also
-   * answers with traffic, which OSRM cannot.
+   * Mapbox first, as `driveFor` asks it. The drive moved to Mapbox in v2.5.119
+   * when Google's billing lapsed, and this matrix stayed on Google -- so a lapsed
+   * bill still emptied every route ahead. On 2 October the map showed a
+   * technician with three stops left, every one placed, and no line to any of
+   * them: no matrix, so no order, so `drawRoute` gave up before the drive was
+   * ever asked for. The quarter planner already orders its days through
+   * Mapbox's matrix; this is the same call. Google behind it, then OSRM, which
+   * has never been configured on this deployment.
    */
   private async durationsFor(points: readonly GeoPoint[]): Promise<number[][] | null> {
+    if (this.mapbox.configured) {
+      const matrix = await this.mapbox.matrix(points);
+      if (matrix) return matrix.durations;
+    }
     if (this.google.configured) {
       const matrix = await this.google.matrix(points, new Date());
       if (matrix) return matrix.durations;
@@ -788,41 +805,53 @@ export class RouteService {
       // Null means OSRM could not be asked, which is an outage rather than a
       // fact about any of these points. Blaming the technician's position for
       // it would be a confident wrong answer of exactly the kind this whole
-      // change is about.
-      if (!reachable) return empty;
+      // change is about -- so nothing is set aside, and the order falls back to
+      // the straight line below.
+      if (reachable) {
+        // The origin first, because a route without a starting point is not a
+        // shorter route -- it is a different question. Starting from the first
+        // stop instead would silently answer that different question.
+        if (!reachable[0])
+          return {
+            ...empty,
+            originOutsideServiceArea: true,
+            // The nearest stop, so the console can draw one line and give one
+            // number rather than a fan of them. Nearest by great-circle because
+            // there is no road distance to sort by -- that is the whole problem.
+            airTravel: nearestByAir(origin, stops),
+          };
 
-      // The origin first, because a route without a starting point is not a
-      // shorter route -- it is a different question. Starting from the first
-      // stop instead would silently answer that different question.
-      if (!reachable[0])
-        return {
-          ...empty,
-          originOutsideServiceArea: true,
-          // The nearest stop, so the console can draw one line and give one
-          // number rather than a fan of them. Nearest by great-circle because
-          // there is no road distance to sort by -- that is the whole problem.
-          airTravel: nearestByAir(origin, stops),
-        };
+        const kept: RouteStop[] = [];
+        stops.forEach((stop, index) => {
+          if (reachable[index + 1]) kept.push(stop);
+          else
+            // Moved rather than dropped, so the panel still lists the property
+            // and can say why it is not in the drive. A geocode that landed in
+            // open water is a data fault worth seeing, not one worth hiding.
+            unroutable.push({
+              inspectionId: stop.inspectionId,
+              propertyName: stop.propertyName,
+              reason: 'OUTSIDE_SERVICE_AREA',
+            });
+        });
 
-      const kept: RouteStop[] = [];
-      stops.forEach((stop, index) => {
-        if (reachable[index + 1]) kept.push(stop);
-        else
-          // Moved rather than dropped, so the panel still lists the property
-          // and can say why it is not in the drive. A geocode that landed in
-          // open water is a data fault worth seeing, not one worth hiding.
-          unroutable.push({
-            inspectionId: stop.inspectionId,
-            propertyName: stop.propertyName,
-            reason: 'OUTSIDE_SERVICE_AREA',
-          });
-      });
+        if (!kept.length) return { ...empty, stops: [], unroutable };
 
-      if (!kept.length) return { ...empty, stops: [], unroutable };
+        stops = kept;
+        matrix = await this.durationsFor([origin, ...stops]);
+      }
 
-      stops = kept;
-      matrix = await this.durationsFor([origin, ...stops]);
-      if (!matrix) return { ...empty, stops, unroutable };
+      /**
+       * Nothing could time the pairs: order by the straight line, and still
+       * ask for the drive.
+       *
+       * This used to give up here, and that is how a lapsed Google bill hid
+       * every route ahead: the matrix is only the order, and the drive is a
+       * separate call that Mapbox so often answers when the matrices do not.
+       * `estimatedDriveMinutes` is the planner's own straight-line rule, so a
+       * day ordered this way is ordered the way a quarter falls back to.
+       */
+      matrix ??= straightLineDurations([origin, ...stops]);
     }
 
     const order = shortestRouteOrder(matrix);
