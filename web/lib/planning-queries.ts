@@ -195,9 +195,8 @@ export interface PlanDayAnchor {
   city: string | null;
   latitude: number | null;
   longitude: number | null;
+  /** Whoever it is assigned to now: somebody else than the day's technician when it was reassigned since. */
   assignedTechnician: { id: string; displayName: string } | null;
-  /** A move-out assigned to someone other than the day's technician, or nobody: move-outs are theirs, so reassign it. */
-  needsReassigning: boolean;
   /** `YYYY-MM-DD`, its date now: another day's than this one when it moved after the plan was laid out. */
   scheduledOn: string;
   cancelled: boolean;
@@ -211,7 +210,15 @@ export interface PlanRoutingSummary {
   durationSource: PlanDay['durationSource'];
   settings: PlanSettings;
   /** The group template the days came from; null for the planner's own grouping. */
-  template?: { id: string; name: string; revision: number; days: number; notInTemplate: number } | null;
+  template?: {
+    id: string;
+    name: string;
+    revision: number;
+    days: number;
+    notInTemplate: number;
+    /** Visits move-out days gave up, put on the Monday after; absent from a server older than this. */
+    toMondays?: number;
+  } | null;
 }
 
 export interface OfficeDetailsAddress {

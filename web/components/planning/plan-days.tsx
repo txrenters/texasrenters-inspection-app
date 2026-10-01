@@ -82,15 +82,13 @@ const mapStopOf = (entry: TimelineEntry): DayMapStop => ({
 /** What the office needs to do about a move-out or move-in a day is built around, if anything. */
 export function bookedProblem(
   day: PlanDay,
-  anchor: Pick<PlanDayAnchor, 'cancelled' | 'scheduledOn' | 'needsReassigning' | 'assignedTechnician'>,
-  kind: PlanDayAnchor['kind'],
+  anchor: Pick<PlanDayAnchor, 'cancelled' | 'scheduledOn' | 'assignedTechnician'>,
 ): string | null {
   if (anchor.cancelled) return 'Cancelled since the plan was laid out · rebuild';
   if (anchor.scheduledOn !== day.date.slice(0, 10)) return `Moved to ${formatShortDay(anchor.scheduledOn)} · rebuild`;
-  if (anchor.needsReassigning)
-    return `${anchor.assignedTechnician ? `Assigned to ${anchor.assignedTechnician.displayName}` : 'Not assigned'} · reassign in Jobber`;
-  // A move-in is on the day of whoever it was booked for; booked for someone else since, the day no longer holds it.
-  if (kind === 'MOVE_IN' && anchor.assignedTechnician?.id !== day.technician.id)
+  // A move-out or move-in is on the day of whoever it was assigned to (2026-10-01);
+  // assigned to someone else since, the day no longer holds it.
+  if (anchor.assignedTechnician?.id !== day.technician.id)
     return `${anchor.assignedTechnician ? `Now ${anchor.assignedTechnician.displayName}’s` : 'Not assigned now'} · rebuild`;
   return null;
 }
@@ -390,8 +388,8 @@ function DayDetail({
                     {stop.city ? <span>{stop.city}</span> : null}
                     <Badge variant="warning">{BOOKING_LABEL[stop.booking]}</Badge>
                     <span>{formatMinutes(stop.onSiteMinutes)}</span>
-                    {bookedProblem(day, stop, stop.booking) ? (
-                      <span className="text-destructive">{bookedProblem(day, stop, stop.booking)}</span>
+                    {bookedProblem(day, stop) ? (
+                      <span className="text-destructive">{bookedProblem(day, stop)}</span>
                     ) : null}
                   </div>
                 </div>
