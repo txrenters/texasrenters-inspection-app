@@ -70,6 +70,7 @@ import type {
 import { allPropertywareEntities } from '@texasrenters/shared';
 import {
   keepPreviousData,
+  queryOptions,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -381,17 +382,30 @@ export const useAreaEvidenceSummary = (id: string, enabled = true) =>
   });
 
 /**
+ * One area's evidence, as a query definition rather than only a hook.
+ *
+ * The photo viewer walks from one area into the next and reads the next area
+ * before it gets there. Sharing the key and the fetch here is what makes that
+ * read fill the same cache entry `useAreaEvidence` reads, rather than a second
+ * copy of the same bundle.
+ */
+export const areaEvidenceQuery = (id: string, areaId: string) =>
+  queryOptions({
+    queryKey: keys.areaEvidence(id, areaId),
+    queryFn: ({ signal }) =>
+      api<AreaEvidenceBundle>(`/api/v1/admin/inspections/${id}/areas/${areaId}/evidence`, {
+        signal,
+      }),
+  });
+
+/**
  * Evidence for the one open area. Cached per area id, so returning to a
  * previously opened area is served from cache instead of refetching, and a
  * slow response for one area can never paint over another.
  */
 export const useAreaEvidence = (id: string, areaId: string | null) =>
   useQuery({
-    queryKey: keys.areaEvidence(id, areaId ?? ''),
-    queryFn: ({ signal }) =>
-      api<AreaEvidenceBundle>(`/api/v1/admin/inspections/${id}/areas/${areaId}/evidence`, {
-        signal,
-      }),
+    ...areaEvidenceQuery(id, areaId ?? ''),
     enabled: Boolean(id) && Boolean(areaId),
   });
 

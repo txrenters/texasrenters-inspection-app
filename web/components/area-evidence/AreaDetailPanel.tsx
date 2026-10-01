@@ -1,13 +1,6 @@
 'use client';
 
-import {
-  describePhotoCaptureTime,
-  formatPhotoStamp,
-  type AreaChecklistEntry,
-  type AreaFinding,
-  type AreaPhoto,
-  type AreaRecording,
-} from '@texasrenters/shared';
+import type { AreaChecklistEntry, AreaFinding, AreaRecording } from '@texasrenters/shared';
 import { Maximize2Icon, PlayIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -24,29 +17,12 @@ import { usePermissions } from '@/lib/auth';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 
+import { areaPhotoItems } from './area-photos';
 import { AreaConditionChecklist, isChecklistItemAssessed } from './AreaConditionChecklist';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface } from './RecordingSurface';
-
-/**
- * Where a photograph's time and bytes come from, for the reviewer.
- *
- * The stamp on the photo says when; this says how that is known, when the
- * server received the file, and the start of its SHA-256 -- enough to match
- * against the original if the photograph is ever challenged.
- */
-function photoProvenance(photo: AreaPhoto) {
-  const received = photo.receivedAt ? formatPhotoStamp(photo.receivedAt, 'DEVICE_CLOCK') : null;
-  return [
-    describePhotoCaptureTime(photo.captureTimeSource),
-    received && photo.captureTimeSource !== 'SERVER_RECEIPT' ? `received ${received}` : null,
-    photo.sha256 ? `SHA-256 ${photo.sha256.slice(0, 12)}…` : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
 
 /** A section heading with an optional count. */
 function SectionHeading({ children, count }: { children: string; count?: number }) {
@@ -376,12 +352,19 @@ export function AreaDetailPanel({
   areaId,
   tab,
   onTabChange,
+  onOpenPhoto,
 }: {
   inspectionId: string;
   areaId: string;
   /** Controlled by the workspace so it survives switching area. */
   tab: string;
   onTabChange: (tab: string) => void;
+  /**
+   * Opens a photograph in the viewer that walks on into the next area. The
+   * workspace supplies it because it holds the area order; without it the
+   * photograph opens in this area's own viewer.
+   */
+  onOpenPhoto?: (photoId: string) => void;
 }) {
   const evidence = useAreaEvidence(inspectionId, areaId);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
@@ -427,17 +410,10 @@ export function AreaDetailPanel({
         caption: `${formatSeconds(recording.durationSeconds)} · ${recording.technicianName} · ${formatDateTime(recording.createdAt)}`,
         posterUrl: recording.thumbnailUrl,
       })),
-      ...bundle.photoGroups.flatMap((group) =>
-        group.photos.map((photo) => ({
-          id: photo.id,
-          kind: 'photo' as const,
-          contentPath: photo.contentPath,
-          title: photo.label || captureLabel(photo.captureType),
-          caption: `${bundle.area.name} · ${group.label} · ${photoProvenance(photo)}`,
-          capturedAt: photo.capturedAt,
-          captureTimeSource: photo.captureTimeSource,
-        })),
-      ),
+      ...areaPhotoItems(bundle).map((photo) => ({
+        ...photo,
+        caption: `${bundle.area.name} · ${photo.caption}`,
+      })),
     ];
   }, [evidence.data]);
 
@@ -629,7 +605,9 @@ export function AreaDetailPanel({
                       areaName={area.name}
                       key={photo.id}
                       onOpen={() =>
-                        setViewerIndex(viewerItems.findIndex((entry) => entry.id === photo.id))
+                        onOpenPhoto
+                          ? onOpenPhoto(photo.id)
+                          : setViewerIndex(viewerItems.findIndex((entry) => entry.id === photo.id))
                       }
                       photo={photo}
                     />

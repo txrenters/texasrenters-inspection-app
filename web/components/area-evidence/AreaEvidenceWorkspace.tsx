@@ -25,6 +25,7 @@ import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib
 import { cn } from '@/lib/utils';
 
 import { AreaDetailPanel } from './AreaDetailPanel';
+import { AreaPhotoViewer } from './AreaPhotoViewer';
 
 /**
  * Area-first inspection evidence.
@@ -153,6 +154,17 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
    * there means every tab click is a router write.
    */
   const [activeTab, selectTab] = useState('overview');
+
+  /**
+   * The photograph open in the viewer, if any.
+   *
+   * Held here rather than in the area panel because the viewer walks on past
+   * the open area into the next one in this list, and only this component
+   * knows the list's order and filter.
+   */
+  const [photoViewer, setPhotoViewer] = useState<{ areaId: string; photoId: string } | null>(
+    null,
+  );
 
   const [checklistArea, setChecklistArea] = useState<{ id: string; name: string } | null>(null);
   // Announce completion for screen readers, which otherwise get no signal that
@@ -370,6 +382,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               <AreaDetailPanel
                 areaId={selectedId}
                 inspectionId={inspectionId}
+                onOpenPhoto={(photoId) => setPhotoViewer({ areaId: selectedId, photoId })}
                 onTabChange={selectTab}
                 tab={activeTab}
               />
@@ -398,6 +411,21 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           areas={manageableAreas}
           inspectionId={inspectionId}
           onClose={() => setMerging(false)}
+        />
+      ) : null}
+
+      {/* Walks the list as it is filtered, so "Needs review" walks only the
+          areas that need review. An area opened from the URL that the filter
+          hides walks the whole list instead of nothing. Each crossing selects
+          the area underneath, so closing lands where the reviewer stopped. */}
+      {photoViewer ? (
+        <AreaPhotoViewer
+          areas={filtered.some((area) => area.id === photoViewer.areaId) ? filtered : areas}
+          inspectionId={inspectionId}
+          onAreaChange={select}
+          onClose={() => setPhotoViewer(null)}
+          startAreaId={photoViewer.areaId}
+          startPhotoId={photoViewer.photoId}
         />
       ) : null}
 
