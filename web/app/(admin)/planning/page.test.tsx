@@ -12,6 +12,7 @@ const hooks = vi.hoisted(() => ({
   usePlanDays: vi.fn(),
   usePlanDayRoute: vi.fn(),
   usePlanRotation: vi.fn(),
+  usePlanLateMoveOuts: vi.fn(),
   usePlanTechnicians: vi.fn(),
   usePlanningMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
@@ -175,7 +176,10 @@ function mount({
   applyAdvice = null as unknown,
   groupFile = null as unknown,
   templates = [] as unknown[],
+  lateMoveOuts = { conflicts: [], jobberEditsPushed: true } as unknown,
+  moveToMonday = idle as unknown,
 } = {}) {
+  hooks.usePlanLateMoveOuts.mockReturnValue({ data: lateMoveOuts });
   hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
@@ -223,6 +227,7 @@ function mount({
     publish: idle,
     advice: advice ?? idle,
     applyAdvice: applyAdvice ?? idle,
+    moveToMonday,
   });
   return render(<PlanningPage />);
 }
@@ -1153,5 +1158,68 @@ describe('the benefit package plan page', () => {
     mount();
 
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * A move-out booked onto a technician's benefit-package day after the quarter
+ * was published (the office, 2026-10-01): the day gives up the three visits
+ * furthest from it, to the Monday after -- offered, and moved only once the
+ * office confirms, because moving a visit sends Jobber an edit.
+ */
+describe('move-outs booked onto a published day since the plan', () => {
+  const CONFLICT = {
+    date: '2026-10-07',
+    technician: { id: 'tech-1', displayName: 'Moses Rivera' },
+    bookings: [{ inspectionId: 'move-out-1', kind: 'MOVE_OUT', address: '9 Move Out Ln' }],
+    visits: 6,
+    suggested: [
+      { inspectionId: 'far-3', address: '3 Far St', metresFromBooking: 7000 },
+      { inspectionId: 'far-2', address: '2 Far St', metresFromBooking: 6000 },
+      { inspectionId: 'far-1', address: '1 Far St', metresFromBooking: 5000 },
+    ],
+    monday: '2026-10-19',
+    mondayLoad: 2,
+  };
+  const PUBLISHED = { ...PLAN, status: 'PUBLISHED' };
+
+  it('offers the visits furthest from it for the Monday after, and moves them once confirmed', () => {
+    const moveToMonday = { mutate: vi.fn(), isPending: false };
+    mount({ plans: [PUBLISHED], lateMoveOuts: { conflicts: [CONFLICT], jobberEditsPushed: true }, moveToMonday });
+
+    const panel = screen.getByRole('region', { name: 'Move-outs booked since the plan' });
+    expect(within(panel).getByText(/move-out at 9 Move Out Ln · 6 benefit-package visits that day/)).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Move 3 to Mon, Oct 19…' }));
+    expect(screen.getByText('Moses Rivera already has 2 visits on Mon, Oct 19.')).toBeTruthy();
+    expect(moveToMonday.mutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move 3 visits' }));
+
+    expect(moveToMonday.mutate.mock.calls[0]![0]).toEqual({
+      planId: 'plan-1',
+      date: '2026-10-07',
+      technicianId: 'tech-1',
+      inspectionIds: ['far-3', 'far-2', 'far-1'],
+    });
+  });
+
+  it('does not offer the move when edits are not sent to Jobber, and says where to make it', () => {
+    mount({ plans: [PUBLISHED], lateMoveOuts: { conflicts: [CONFLICT], jobberEditsPushed: false } });
+
+    const panel = screen.getByRole('region', { name: 'Move-outs booked since the plan' });
+    expect((within(panel).getByRole('button', { name: /^Move 3/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(panel).getByText('Edits are not sent to Jobber from here: move them in Jobber.')).toBeTruthy();
+  });
+
+  it('says to move them by hand when the quarter has no Monday left', () => {
+    mount({ plans: [PUBLISHED], lateMoveOuts: { conflicts: [{ ...CONFLICT, monday: null }], jobberEditsPushed: true } });
+
+    expect(screen.getByText('No Monday is left in the quarter after this day: move them by hand.')).toBeTruthy();
+  });
+
+  it('shows nothing when no move-out was booked since', () => {
+    mount({ plans: [PUBLISHED] });
+
+    expect(screen.queryByRole('region', { name: 'Move-outs booked since the plan' })).toBeNull();
   });
 });

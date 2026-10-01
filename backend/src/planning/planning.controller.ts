@@ -7,6 +7,7 @@ import {
   HttpCode,
   Inject,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -34,7 +35,9 @@ import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-po
 import { toLatLngPath } from '../routing/route.service';
 import { PlanAdvisorService } from './plan-advisor.service';
 import { PlanBuildGuard } from './plan-build-guard';
+import { LateMoveOutService } from './late-move-outs.service';
 import {
+  LateMoveOutMoveDto,
   OfficeDetailsImportDto,
   PlanAdviceApplyDto,
   PlanQuarterDto,
@@ -135,7 +138,35 @@ export class PlanningController {
     @Inject(TbpStopEditService) private readonly edits: TbpStopEditService,
     @Inject(PlanBuildGuard) private readonly builds: PlanBuildGuard,
     @Inject(PlanAdvisorService) private readonly advisor: PlanAdvisorService,
+    @Inject(LateMoveOutService) private readonly lateMoveOuts: LateMoveOutService,
   ) {}
+
+  /**
+   * Move-outs and move-ins booked onto a technician's benefit-package day after
+   * the quarter was published, with the visits to move to the Monday after.
+   * See `LateMoveOutService`.
+   */
+  @Get('quarters/:planId/late-move-outs')
+  @RequirePermissions('planning:read')
+  lateMoveOutConflicts(@Req() request: AuthenticatedRequest, @Param('planId', ParseUUIDPipe) planId: string) {
+    return this.lateMoveOuts.conflicts(request.user.organizationId, planId);
+  }
+
+  /**
+   * Moves the visits the office confirmed to the Monday after their day: here,
+   * in Jobber, and their plan stops with them -- a reschedule as the console
+   * makes one, so it takes that grant as well as the planner's.
+   */
+  @Post('quarters/:planId/late-move-outs/move')
+  @RequirePermissions('planning:publish', 'inspections:manage')
+  @HttpCode(200)
+  moveLateMoveOutVisits(
+    @Req() request: AuthenticatedRequest,
+    @Param('planId', ParseUUIDPipe) planId: string,
+    @Body() body: LateMoveOutMoveDto,
+  ) {
+    return this.lateMoveOuts.moveToMonday(request.user, planId, body);
+  }
 
   /** Whether the cron is alive and when it next wakes, for the console. */
   @Get('schedule')

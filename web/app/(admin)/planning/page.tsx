@@ -14,6 +14,7 @@ import type { AttentionMapStop } from '@/components/planning/plan-attention-map'
 import { PlanBuildDialog, type PlanBuildChoice } from '@/components/planning/plan-build-dialog';
 import { PlanCalendar } from '@/components/planning/plan-calendar';
 import { bookedProblem, PlanDays } from '@/components/planning/plan-days';
+import { LateMoveOutsPanel } from '@/components/planning/late-move-outs';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
@@ -52,6 +53,7 @@ import {
 } from '@/lib/planning';
 import {
   usePlanDays,
+  usePlanLateMoveOuts,
   usePlanQuarters,
   usePlanRotation,
   usePlanStops,
@@ -168,6 +170,30 @@ export default function PlanningPage() {
   // (2026-09-20). The table and the visit's window refuse a published or
   // excluded visit themselves.
   const canPlace = canChange && (draft || plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED');
+  /**
+   * Move-outs booked onto a published day since the plan (2026-10-01): only a
+   * published quarter has visits to move. Moving one reschedules it, here and
+   * in Jobber, so it takes the inspections grant as well as the planner's.
+   */
+  const lateMoveOuts = usePlanLateMoveOuts(plan?.id, plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED');
+  const canMoveVisits = canChange && has('inspections:manage');
+  const moveToMonday = (conflict: { date: string; technician: { id: string } }, inspectionIds: string[]) => {
+    if (!plan) return;
+    mutations.moveToMonday.mutate(
+      { planId: plan.id, date: conflict.date, technicianId: conflict.technician.id, inspectionIds },
+      {
+        onSuccess: (result) => {
+          const moved = `${result.moved.toLocaleString()} ${result.moved === 1 ? 'visit' : 'visits'} moved to ${formatShortDay(result.monday)}`;
+          if (result.failed.length)
+            toast.warning(moved, {
+              description: `${result.failed.length.toLocaleString()} could not be: ${result.failed.map((entry) => entry.message).join(' ')}`,
+            });
+          else toast.success(moved, { description: 'Here and in Jobber.' });
+        },
+        onError: (error) => toast.error('The visits were not moved', { description: error.message }),
+      },
+    );
+  };
   const building = mutations.build.isPending;
   // Blocked or failed, or on a day but still without the unit it is booked at.
   const attention = (stops.data ?? []).filter(
@@ -632,6 +658,15 @@ export default function PlanningPage() {
             />
             <StatStripItem label="Built" value={formatRelative(plan.generatedAt)} />
           </StatStrip>
+
+          {lateMoveOuts.data ? (
+            <LateMoveOutsPanel
+              canMove={canMoveVisits}
+              data={lateMoveOuts.data}
+              onMove={moveToMonday}
+              pending={mutations.moveToMonday.isPending}
+            />
+          ) : null}
 
           <Tabs onValueChange={(tab) => setState({ tab })} value={state.tab}>
             <TabsList>

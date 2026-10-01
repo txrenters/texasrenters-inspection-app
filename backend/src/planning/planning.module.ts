@@ -8,6 +8,7 @@ import { GroupTemplateGateway } from './group-template.gateway';
 import { GroupTemplateService } from './group-template.service';
 import { LeaseInspectionsController } from './lease-inspections.controller';
 import { LeaseInspectionScheduler } from './lease-inspections.scheduler';
+import { LateMoveOutService } from './late-move-outs.service';
 import { LeaseInspectionService } from './lease-inspections.service';
 import { PlanAdvisorService } from './plan-advisor.service';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
@@ -34,6 +35,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     LeaseInspectionScheduler,
     GroupTemplateService,
     GroupTemplateGateway,
+    LateMoveOutService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })
