@@ -35,10 +35,10 @@ function build(answer: unknown) {
 }
 
 const ROOFTOP = {
-  latitude: 30.0167,
-  longitude: -95.6031,
+  latitude: 30.003,
+  longitude: -95.587,
   precision: 'ROOFTOP',
-  matchedAddress: '12111 Westwold Dr, Tomball, TX 77377, USA',
+  matchedAddress: '12048 Hypothetical Dr, Tomball, TX 77377, USA',
   source: 'GOOGLE',
 };
 
@@ -46,17 +46,17 @@ describe('setting a home', () => {
   it('stores the rooftop it was geocoded to', async () => {
     const { service, prisma } = build(ROOFTOP);
 
-    await service.set(user, '12111 Westwold Dr, Tomball TX');
+    await service.set(user, '12048 Hypothetical Dr, Tomball TX');
 
     const args = prisma.technicianPlanningProfile.upsert.mock.calls[0][0];
     expect(args.where).toEqual({ technicianId: user.id });
-    expect(args.create.homeLatitude).toBe(30.0167);
-    expect(args.update.homeGeocodedFor).toBe('12111 Westwold Dr, Tomball TX');
+    expect(args.create.homeLatitude).toBe(30.003);
+    expect(args.update.homeGeocodedFor).toBe('12048 Hypothetical Dr, Tomball TX');
   });
 
   it('reads back what Google matched, so a wrong suburb is caught now', async () => {
     const { service } = build(ROOFTOP);
-    const result = await service.set(user, '12111 Westwold Dr');
+    const result = await service.set(user, '12048 Hypothetical Dr');
     expect(result.home.matchedAddress).toContain('Tomball');
   });
 
@@ -90,13 +90,13 @@ describe('setting a home', () => {
 
   it('tidies whitespace so the stored address is the one somebody meant', async () => {
     const { service, geocoding } = build(ROOFTOP);
-    await service.set(user, '  12111   Westwold  Dr  ');
-    expect(geocoding.geocodeAddress).toHaveBeenCalledWith('12111 Westwold Dr');
+    await service.set(user, '  12048   Hypothetical  Dr  ');
+    expect(geocoding.geocodeAddress).toHaveBeenCalledWith('12048 Hypothetical Dr');
   });
 
   it('only ever writes the signed-in technician’s own row', async () => {
     const { service, prisma } = build(ROOFTOP);
-    await service.set(user, '12111 Westwold Dr');
+    await service.set(user, '12048 Hypothetical Dr');
     const args = prisma.technicianPlanningProfile.upsert.mock.calls[0][0];
     expect(args.create.technicianId).toBe(user.id);
     expect(args.create.organizationId).toBe(user.organizationId);
@@ -112,12 +112,12 @@ describe('reading and clearing a home', () => {
   it('returns numbers, not decimals', async () => {
     const { service, prisma } = build(ROOFTOP);
     prisma.technicianPlanningProfile.findUnique.mockResolvedValue({
-      homeGeocodedFor: '12111 Westwold Dr',
-      homeLatitude: dec(30.0167),
-      homeLongitude: dec(-95.6031),
+      homeGeocodedFor: '12048 Hypothetical Dr',
+      homeLatitude: dec(30.003),
+      homeLongitude: dec(-95.587),
     });
     const { home } = await service.get(user);
-    expect(home?.latitude).toBe(30.0167);
+    expect(home?.latitude).toBe(30.003);
     expect(typeof home?.longitude).toBe('number');
   });
 

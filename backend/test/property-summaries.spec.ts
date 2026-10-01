@@ -23,8 +23,8 @@ function building(overrides: Record<string, unknown>) {
   return {
     id: 'b1',
     externalId: '233900007',
-    name: '7306 Cypress Prairie',
-    addressLine1: '7306 Cypress Prairie',
+    name: '7419 Fable Prairie',
+    addressLine1: '7419 Fable Prairie',
     addressLine2: null,
     city: 'Houston',
     state: 'TX',
@@ -282,8 +282,8 @@ describe('property detail per-unit lease status', () => {
         findFirst: jest.fn().mockResolvedValue({
           id: 'b1',
           externalId: '233900007',
-          name: '7306 Cypress Prairie',
-          addressLine1: '7306 Cypress Prairie',
+          name: '7419 Fable Prairie',
+          addressLine1: '7419 Fable Prairie',
           addressLine2: null,
           city: 'Houston',
           state: 'TX',

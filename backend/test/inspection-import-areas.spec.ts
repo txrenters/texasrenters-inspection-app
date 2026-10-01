@@ -39,8 +39,8 @@ const KITCHEN_ID = '00000000-0000-4000-8000-000000000005';
 
 const building = {
   id: PROPERTY_ID,
-  name: '17307 Nordway',
-  addressLine1: '17307 Nordway Dr',
+  name: '17351 Wireframe',
+  addressLine1: '17351 Wireframe Dr',
   city: 'Houston',
   state: 'TX',
   postalCode: '77070',
@@ -474,7 +474,7 @@ describe('an import over an inspection that already holds rooms', () => {
   /**
    * The property whose layout carried two rooms that were never real.
    *
-   * 10051 Spotted Horse Dr had test areas invented on its layout, snapshotted
+   * One property had test areas invented on its layout, snapshotted
    * onto every inspection there. They could not be deleted from the property
    * while an inspection referenced them, and the inspection could not be
    * imported over because it was "not empty" -- so they were permanent. A
@@ -552,7 +552,7 @@ describe('an import over an inspection that already holds rooms', () => {
 
 describe('the rooms an import establishes for the rest of the property', () => {
   /**
-   * 21223 Harbor Shore Dr, reported from the console.
+   * One property, reported from the console.
    *
    * A move-in was imported and filled in properly. The occupied inspection at
    * the same address still read "0 areas — No areas match this filter", with an
@@ -606,7 +606,7 @@ describe('the rooms an import establishes for the rest of the property', () => {
   it('does not hand on a room the report dropped', async () => {
     // The sweep removes rooms the new report does not mention. Sharing the
     // property's whole approved layout instead of the report's rooms would put
-    // those straight back onto a sibling — the Spotted Horse test areas
+    // those straight back onto a sibling — the invented test areas
     // reappearing one inspection over.
     const db = database({
       areas: [

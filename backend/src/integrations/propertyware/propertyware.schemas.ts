@@ -144,7 +144,7 @@ export const propertywareLeaseSchema = z
  * Entity ID", `'0'` annotated "Status", and so on. Propertyware reports carry
  * their own column list, and this one was edited upstream: index 9 is now
  * "Balance" and index 0 is "Lease Name". Nothing failed. The parser read
- * `$0.00` as a building id and `Abuah - Abuah` as a status, the
+ * `$0.00` as a building id and a tenant's lease name as a status, the
  * `/^active/i` filter matched **0 of 448 rows**, and the lease table sat empty
  * for weeks behind a warning that reads the same as a quiet week.
  *

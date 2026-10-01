@@ -10,7 +10,7 @@ import { isActiveLeaseStatus } from '../src/integrations/propertyware/propertywa
  * The lease report's columns used to be pinned by index — `'9'` was the
  * building id, `'0'` was the status. Propertyware was then edited upstream so
  * index 9 became "Balance" and index 0 became "Lease Name", and nothing
- * failed. The parser read `$0.00` as a building id and `Abuah - Abuah` as a
+ * failed. The parser read `$0.00` as a building id and a lease name as a
  * status; `/^active/i` matched **0 of 448 rows**; every sync logged
  * ZERO_RECORDS_WARNING and the lease table stayed empty for weeks.
  *

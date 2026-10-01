@@ -19,8 +19,8 @@ const user = {
 
 const fix = (over: Record<string, unknown> = {}) => ({
   deviceFixId: 'fix-abc-123',
-  latitude: 30.015878,
-  longitude: -95.602839,
+  latitude: 30.002178,
+  longitude: -95.586739,
   recordedAt: '2026-09-11T20:43:22.995Z',
   accuracyMeters: 38,
   ...over,

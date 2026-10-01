@@ -3270,8 +3270,8 @@ model TbpQuarterPlanStop {
   onSiteMinutesOverriddenAt DateTime?
   /// The unit a coordinator chose (`unitResolution` MANUAL). The tenant and
   /// lease reports hold only the building, so in a building of several units
-  /// nothing else can say which door a tenancy is behind -- 5009 N Main St's
-  /// House, 1/2 and 1/4. Regeneration keeps it.
+  /// nothing else can say which door a tenancy is behind -- the House, 1/2
+  /// and 1/4 of one building. Regeneration keeps it.
   unitOverriddenAt          DateTime?
 
   createdAt DateTime @default(now())

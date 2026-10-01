@@ -51,7 +51,7 @@ const list = (data: unknown[]) => ({ ...idle, data });
 /** Portfolios and properties are paged; the page reads `data.pages`. */
 const paged = (items: unknown[]) => ({ ...idle, data: { pages: [{ items }] } });
 
-/** The real areas of 10 Salado Vista Ct, which is where this was reported. */
+/** The real areas of the property where this was reported. */
 const AREAS = [
   { id: 'a1', name: 'Kitchen', status: 'APPROVED', source: 'STANDARD_TEMPLATE', unitId: null },
   { id: 'a2', name: 'Main Bedroom', status: 'APPROVED', source: 'STANDARD_TEMPLATE', unitId: null },

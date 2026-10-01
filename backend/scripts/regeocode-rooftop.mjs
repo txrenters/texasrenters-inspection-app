@@ -126,7 +126,7 @@ async function main() {
      * Never write a worse answer over a better one.
      *
      * This is here because it happened. Google could not find
-     * `3623 Rock Ledge Dr, Richmond` and returned the *area centroid*; this
+     * one address in Richmond and returned the *area centroid*; this
      * script wrote it, moving the pin 7.2km off a good Census match on the
      * right street. `TRUSTWORTHY_PRECISIONS` refuses to draw a CENTROID, so
      * the property would have left the map altogether.

@@ -2,8 +2,8 @@
  * Label for a property in a picker.
  *
  * Most properties are named after their own street address, which made every
- * option read "10054 Copper Hollow Ln. — 10054 Copper Hollow Ln, Houston, TX
- * 77044-5594" — the same thing twice, and long enough that it had to be
+ * option read "10181 Invented Hollow Ln. — 10181 Invented Hollow Ln, Houston, TX
+ * 77044-0102" — the same thing twice, and long enough that it had to be
  * truncated before it said anything useful. When the address already begins
  * with the name, the name adds nothing.
  */

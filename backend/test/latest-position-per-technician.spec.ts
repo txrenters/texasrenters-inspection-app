@@ -25,8 +25,8 @@ const decimal = (value: number) => ({ toNumber: () => value });
 const ping = (over: Record<string, unknown> = {}) => ({
   id: 'ping-a',
   technicianId: 'tech-1',
-  latitude: decimal(30.015878),
-  longitude: decimal(-95.602839),
+  latitude: decimal(30.002178),
+  longitude: decimal(-95.586739),
   accuracyMeters: 38,
   batteryPercent: null,
   headingDegrees: null,
@@ -73,8 +73,8 @@ describe('the latest position of each technician', () => {
   it('is one row even when two fixes claim the same instant', async () => {
     // The exact pair from production, twenty-two metres apart.
     const positions = await build([
-      ping({ id: 'ping-a', accuracyMeters: 38, latitude: decimal(30.015878) }),
-      ping({ id: 'ping-b', accuracyMeters: 33, latitude: decimal(30.016079) }),
+      ping({ id: 'ping-a', accuracyMeters: 38, latitude: decimal(30.002178) }),
+      ping({ id: 'ping-b', accuracyMeters: 33, latitude: decimal(30.002379) }),
     ]).latestPositions(user);
 
     expect(positions).toHaveLength(1);

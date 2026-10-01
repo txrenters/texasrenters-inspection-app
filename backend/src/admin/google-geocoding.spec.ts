@@ -18,7 +18,7 @@ const ok = (over: Record<string, unknown> = {}) => ({
   status: 'OK',
   results: [
     {
-      formatted_address: '9656 Knight Rd, Houston, TX 77045, USA',
+      formatted_address: '9612 Figment Rd, Houston, TX 77045, USA',
       geometry: {
         location: { lat: 29.665898, lng: -95.399864 },
         location_type: 'ROOFTOP',
@@ -34,7 +34,7 @@ describe('reading a Google geocode', () => {
       latitude: 29.665898,
       longitude: -95.399864,
       precision: 'ROOFTOP',
-      matchedAddress: '9656 Knight Rd, Houston, TX 77045, USA',
+      matchedAddress: '9612 Figment Rd, Houston, TX 77045, USA',
     });
   });
 

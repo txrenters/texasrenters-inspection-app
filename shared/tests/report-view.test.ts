@@ -7,8 +7,8 @@ function report(overrides: Partial<PublicInspectionReport> = {}): PublicInspecti
   return {
     brand: { name: 'TexasRenters.com' },
     property: {
-      name: 'Watercrest',
-      addressLine1: '302 Watercrest Harbor Ln',
+      name: 'Notional',
+      addressLine1: '318 Notional Harbor Ln',
       unitName: null,
       city: 'League City',
       state: 'TX',
@@ -117,7 +117,7 @@ describe('inspection report view model', () => {
 
     expect(view.summary.headline).toBe('No findings were confirmed during review');
     expect(view.rooms[0].hasEvidence).toBe(false);
-    expect(view.title).toBe('302 Watercrest Harbor Ln');
+    expect(view.title).toBe('318 Notional Harbor Ln');
     expect(view.dateLabel).toBe('Completed July 23, 2026');
     expect(view.inspectionLabel).toBe('Occupied inspection');
   });

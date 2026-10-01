@@ -1,7 +1,7 @@
 /**
  * The default coverage checklist for an area.
  *
- * Transcribed from the TexasRenters inspection report for 17307 Nordway Dr,
+ * Transcribed from a TexasRenters inspection report (the "Nordway" report),
  * which is the house standard: every indoor area shares a base set, each kind
  * of room adds its own items, and outdoor areas replace the base rather than
  * extending it.

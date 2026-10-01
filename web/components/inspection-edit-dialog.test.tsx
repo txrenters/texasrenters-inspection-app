@@ -8,7 +8,7 @@ import { InspectionEditDialog } from './inspection-actions-dialogs';
  * A Jobber visit's date is Jobber's.
  *
  * The sync puts Jobber's date back on its next pass, so the form used to accept
- * a date that quietly reverted two minutes later: 10118 Mariposa Green Ct's
+ * a date that quietly reverted two minutes later: one property's
  * move-in, re-dated to the report it held and restored to the next tenant's
  * visit. The API refuses that now, and the form says where to go instead of
  * offering it.

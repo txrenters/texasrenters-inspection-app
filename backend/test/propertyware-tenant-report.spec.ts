@@ -36,7 +36,7 @@ const columns = [
 
 /** One real row, verbatim from the live report. */
 const row = (overrides: Record<string, string> = {}) => ({
-  '0': 'Abuah - Abuah',
+  '0': 'Doe - Doe',
   '1': 'Active',
   '2': '01/23/2025',
   '3': '01/19/2027',
@@ -52,10 +52,10 @@ const row = (overrides: Record<string, string> = {}) => ({
   '13': '04/09/2026 - Moses',
   '14': '',
   '15': '',
-  '16': '6341 Del Monte Dr',
+  '16': '6417 Del Ejemplo Dr',
   '17': 'Houston',
   '18': 'TX',
-  '19': '77057-3403',
+  '19': '77057-0103',
   ...overrides,
 });
 
@@ -69,15 +69,15 @@ describe('parsing the tenancy report', () => {
   it('reads a real row', () => {
     const [tenant] = parseTenantReport(report([row()]));
     expect(tenant).toMatchObject({
-      leaseName: 'Abuah - Abuah',
+      leaseName: 'Doe - Doe',
       sourceStatus: 'Active',
       startDate: '2025-01-23',
       endDate: '2027-01-19',
       tbpEnrollment: 'Yes',
       zone: '2',
       hvacPlan: 'Not Completed',
-      addressLine1: '6341 Del Monte Dr',
-      postalCode: '77057-3403',
+      addressLine1: '6417 Del Ejemplo Dr',
+      postalCode: '77057-0103',
     });
   });
 
@@ -115,19 +115,19 @@ describe('parsing the tenancy report', () => {
     // The report writes a size with its unit label and the office's notes
     // around it, so anything anchored matches almost nothing here.
     const [tenant] = parseTenantReport(
-      report([row({ '9': '16x20x1 (1/2 N Main)', '10': '20x25 MEDIA', '11': '20x30', '12': 'N/A' })]),
+      report([row({ '9': '16x20x1 (1/2 N Fictional)', '10': '20x25 MEDIA', '11': '20x30', '12': 'N/A' })]),
     );
-    expect(tenant!.hvacFilterSizes).toEqual(['16x20x1 (1/2 N Main)', '20x25 MEDIA', '20x30']);
+    expect(tenant!.hvacFilterSizes).toEqual(['16x20x1 (1/2 N Fictional)', '20x25 MEDIA', '20x30']);
   });
 
   it('keeps a unit note that names no size, because a unit with no filter is an answer', () => {
-    // "reusable window AC unit (no need to change - 1/4 N Main)" is how the
+    // "reusable window AC unit (no need to change - 1/4 N Fictional)" is how the
     // office records a unit with nothing to change. Drop it and `unitFilterSizes`
     // stops seeing that unit as spoken for, so it falls back to the building's
     // sizes and sends a technician to change next door's filter.
-    const note = 'reusable window AC unit (no need to change - 1/4 N Main)';
-    const [tenant] = parseTenantReport(report([row({ '9': '20x20x1 (N Main)', '10': note, '11': '', '12': '' })]));
-    expect(tenant!.hvacFilterSizes).toEqual(['20x20x1 (N Main)', note]);
+    const note = 'reusable window AC unit (no need to change - 1/4 N Fictional)';
+    const [tenant] = parseTenantReport(report([row({ '9': '20x20x1 (N Fictional)', '10': note, '11': '', '12': '' })]));
+    expect(tenant!.hvacFilterSizes).toEqual(['20x20x1 (N Fictional)', note]);
   });
 
   it('keeps the last filter delivery as written', () => {
@@ -143,8 +143,8 @@ describe('parsing the tenancy report', () => {
     // returned zero rows for weeks.
     const reversed = [...columns].reverse();
     const [tenant] = parseTenantReport({ totalCount: 1, columns: reversed, records: [row()] });
-    expect(tenant!.leaseName).toBe('Abuah - Abuah');
-    expect(tenant!.addressLine1).toBe('6341 Del Monte Dr');
+    expect(tenant!.leaseName).toBe('Doe - Doe');
+    expect(tenant!.addressLine1).toBe('6417 Del Ejemplo Dr');
   });
 
   it('refuses a report with no building address rather than storing rows it cannot place', () => {
@@ -161,7 +161,7 @@ describe('parsing the tenancy report', () => {
     // filter column was renamed would be a bad trade for one field.
     const withoutHvac = columns.filter((column) => !column.label.startsWith('HVAC'));
     const [tenant] = parseTenantReport({ totalCount: 1, columns: withoutHvac, records: [row()] });
-    expect(tenant!.leaseName).toBe('Abuah - Abuah');
+    expect(tenant!.leaseName).toBe('Doe - Doe');
     expect(tenant!.hvacFilterSizes).toEqual([]);
   });
 
@@ -187,7 +187,7 @@ describe('parsing the tenancy report', () => {
     // address remains the fallback.
     const [tenant] = parseTenantReport(report([row()]));
     expect(tenant!.buildingExternalId).toBeNull();
-    expect(tenant!.addressLine1).toBe('6341 Del Monte Dr');
+    expect(tenant!.addressLine1).toBe('6417 Del Ejemplo Dr');
     expect(tenant).toMatchObject({ unitExternalId: null, unitName: null });
   });
 
@@ -218,8 +218,8 @@ describe('parsing the tenancy report', () => {
 
 describe('the derived identity', () => {
   it('is stable, so a re-sync updates rather than duplicates', () => {
-    const a = tenantExternalId('Abuah - Abuah', '01/23/2025', '6341 Del Monte Dr');
-    const b = tenantExternalId('Abuah - Abuah', '01/23/2025', '6341 Del Monte Dr');
+    const a = tenantExternalId('Doe - Doe', '01/23/2025', '6417 Del Ejemplo Dr');
+    const b = tenantExternalId('Doe - Doe', '01/23/2025', '6417 Del Ejemplo Dr');
     expect(a).toBe(b);
   });
 

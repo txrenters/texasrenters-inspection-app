@@ -168,7 +168,7 @@ export function inspectionSeedsStandardLayout(
  * every component scored.
  *
  * Occupied, and back-to-market since 2026-09-15. The office asked for it after
- * a technician opened a back-to-market at 418 Drennan and found none of the
+ * a technician opened a back-to-market at one property and found none of the
  * occupied flow: no condition to choose, and no way to finish a room without
  * filming it. In their words the two are the same inspection, mostly
  * photographs; a back-to-market adds notes on repairs to make before the move-out,

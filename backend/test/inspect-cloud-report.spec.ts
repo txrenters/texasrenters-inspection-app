@@ -138,7 +138,7 @@ describe('reading an Inspect & Cloud report', () => {
         [cell(12, 0, 'ENTRANCE')],
         [cell(12, 0, 'ROOM/ITEM')],
         graded('DOORS & LOCKS', 'Y Y Y'),
-        [cell(8, 0, '17307 Nordway dr', 80), cell(510, 0, 'Page 1 of 48', 60)],
+        [cell(8, 0, '17351 Wireframe dr', 80), cell(510, 0, 'Page 1 of 48', 60)],
       ]),
     ]);
     expect(report.areas[0]?.items).toHaveLength(1);

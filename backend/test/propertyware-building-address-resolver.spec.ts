@@ -21,24 +21,24 @@ const index = (
 ) => new BuildingAddressIndex(buildings, logger);
 
 const BUILDINGS = [
-  { id: 'b1', externalId: '93001', addressLine1: '2455 Morgan Ridge Ln', postalCode: '77386-3316' },
-  { id: 'b2', externalId: '93002', addressLine1: '6341 Del Monte Dr', postalCode: '77057-3403' },
+  { id: 'b1', externalId: '93001', addressLine1: '2318 Madeup Ridge Ln', postalCode: '77386-0110' },
+  { id: 'b2', externalId: '93002', addressLine1: '6417 Del Ejemplo Dr', postalCode: '77057-0103' },
 ];
 
 describe('resolving a building from an address', () => {
   it('resolves on street plus ZIP', () => {
-    expect(index(BUILDINGS).resolve('2455 Morgan Ridge Ln', '77386-3316')).toBe('93001');
+    expect(index(BUILDINGS).resolve('2318 Madeup Ridge Ln', '77386-0110')).toBe('93001');
   });
 
   it('resolves without a ZIP when the street is unique', () => {
     // The lease report has no ZIP column, so this is the ordinary case for it.
-    expect(index(BUILDINGS).resolve('6341 Del Monte Dr')).toBe('93002');
+    expect(index(BUILDINGS).resolve('6417 Del Ejemplo Dr')).toBe('93002');
   });
 
   it('still forgives a missing street type', () => {
     // Same tolerance the Jobber matcher gained: one system writes
-    // "Morgan Ridge", the other "Morgan Ridge Ln".
-    expect(index(BUILDINGS).resolve('2455 Morgan Ridge', '77386-3316')).toBe('93001');
+    // "Madeup Ridge", the other "Madeup Ridge Ln".
+    expect(index(BUILDINGS).resolve('2318 Madeup Ridge', '77386-0110')).toBe('93001');
   });
 
   it('refuses a street shared by two buildings when there is no ZIP', () => {

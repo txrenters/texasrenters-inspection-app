@@ -257,7 +257,7 @@ describe('technician realtime authorization', () => {
     const sent = await gateway.publishOrganizationNotification('organization-1', {
       kind: 'INSPECTION_SUBMITTED',
       title: 'Inspection submitted',
-      body: '4226 Oak Shadows · Submitted by Moses',
+      body: '4371 Pretend Oaks · Submitted by Moses',
       inspectionId: 'inspection-1',
     });
 
@@ -266,7 +266,7 @@ describe('technician realtime authorization', () => {
         organizationId: 'organization-1',
         kind: 'INSPECTION_SUBMITTED',
         title: 'Inspection submitted',
-        body: '4226 Oak Shadows · Submitted by Moses',
+        body: '4371 Pretend Oaks · Submitted by Moses',
         inspectionId: 'inspection-1',
       },
       select: { id: true, createdAt: true },

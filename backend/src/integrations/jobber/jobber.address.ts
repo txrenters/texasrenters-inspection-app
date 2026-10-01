@@ -53,8 +53,8 @@ export function normalizePostalCode(value: string | null | undefined): string {
  * Two things, both observed in live data rather than imagined:
  *
  * **Parenthetical notes.** The office marks retired Jobber properties
- * "(Do not use)", so `3002 Thicket Path Way (Do not use)` never matched the
- * `3002 Thicket Path Way` Propertyware holds. A parenthetical never
+ * "(Do not use)", so `3046 Storybook Path Way (Do not use)` never matched the
+ * `3046 Storybook Path Way` Propertyware holds. A parenthetical never
  * distinguishes two real addresses, so removing it cannot merge two places.
  *
  * **A city/state/ZIP tail.** Many Propertyware rows carry the whole address in
@@ -105,9 +105,9 @@ export function normalizeAddressKey(
 /**
  * The keys an address could legitimately be filed under, most specific first.
  *
- * Jobber splits a unit onto its own line — `5200 Weslayan Street` +
+ * Jobber splits a unit onto its own line — `5288 Facsimile Street` +
  * `unit a201` — while Propertyware writes it inline:
- * `5200 Weslayan Street Unit #A201`. Neither is wrong, and neither matches the
+ * `5288 Facsimile Street Unit #A201`. Neither is wrong, and neither matches the
  * other unless the two lines are folded together.
  *
  * Both forms are returned because both are real answers. The unit-bearing key
@@ -135,9 +135,9 @@ export function addressKeyCandidates(
  * Listed explicitly rather than derived from `STREET_SUFFIXES`, and every entry
  * is an abbreviation that is essentially never part of a street's *name*. That
  * restraint is the whole safety property, and the queue supplies the
- * counterexample: `2455 Morgan Ridge Ln`. Had `ridge` been droppable — it is a
- * real USPS street type — then `morgan ridge ln` would lose `ln` while
- * `morgan ridge` lost `ridge`, and the two would stop matching each other. The
+ * counterexample: `2318 Madeup Ridge Ln`. Had `ridge` been droppable — it is a
+ * real USPS street type — then `madeup ridge ln` would lose `ln` while
+ * `madeup ridge` lost `ridge`, and the two would stop matching each other. The
  * same argument rules out `way`, `path`, `run`, `creek`, `hollow` and every
  * other type that reads naturally as part of a name.
  *
@@ -162,7 +162,7 @@ const DROPPABLE_STREET_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The street with a trailing type removed — `2455 morgan ridge ln` → `2455 morgan ridge`.
+ * The street with a trailing type removed — `2318 madeup ridge ln` → `2318 madeup ridge`.
  *
  * Only the last word, and only when at least a number and a name survive it. A
  * street genuinely called `2455 Park` must not become `2455`, which would be a
@@ -177,8 +177,8 @@ function withoutStreetType(street: string): string {
 /**
  * The looser key, for addresses that disagree only about the street type.
  *
- * Jobber's property record says `2455 Morgan Ridge`; Propertyware says
- * `2455 Morgan Ridge Ln`. Same house number, same street, same ZIP+4 — one
+ * Jobber's property record says `2318 Madeup Ridge`; Propertyware says
+ * `2318 Madeup Ridge Ln`. Same house number, same street, same ZIP+4 — one
  * system simply never recorded the type. `STREET_SUFFIXES` cannot bridge that:
  * it collapses `lane` onto `ln`, and neither of those equals nothing at all.
  * Half the properties sitting in the mapping queue were exactly this, and 76
@@ -276,7 +276,7 @@ export function matchBuilding(
    * ambiguous.
    *
    * Falling past an ambiguous specific key to a broader one would answer a
-   * question nobody asked: if two homes share `5200 weslayan st unit a201`,
+   * question nobody asked: if two homes share `5288 facsimile st unit a201`,
    * quietly linking the building instead hides a real conflict behind a match
    * that looks clean.
    */

@@ -10,7 +10,7 @@ import { ZERO_EVIDENCE } from './support/prisma-evidence';
  *
  * Jobber is the scheduling source of record, and its sync copies the visit's
  * date over any inspection still scheduled here whose date differs. So a date
- * changed in the console did not stay changed. 10118 Mariposa Green Ct's move-in
+ * changed in the console did not stay changed. One property's move-in
  * was re-dated at 1:28 PM and was back on Jobber's date at 1:30, with nothing on
  * the page to say that would happen.
  */

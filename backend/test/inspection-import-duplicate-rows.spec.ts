@@ -10,7 +10,7 @@ import { join } from 'node:path';
  * `@@unique([inspectionAreaId, checklistItemId])`, and because the write runs
  * inside a transaction it took the **entire import** down with it.
  *
- * 1547 Revolution Way failed exactly this way in production: fifteen areas and
+ * One import failed exactly this way in production: fifteen areas and
  * 185 photographs rolled back over one duplicated row, and the inspection was
  * left showing nothing at all. It is the same shape as the area-attachment bug
  * fixed in #135, one table over.

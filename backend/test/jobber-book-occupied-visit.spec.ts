@@ -257,7 +257,7 @@ describe('which Jobber property a visit is booked against', () => {
 
   /**
    * Sixty-two addresses exist twice in this office's Jobber — the same house
-   * spelled "1103 East Hampton Drive" and "1103 E Hampton Dr". Refusing them
+   * spelled "1167 East Phantom Drive" and "1167 E Phantom Dr". Refusing them
    * abandoned 61 outbound visits. The office's own rule (2026-09-22): the
    * record they used most recently is the live one.
    */

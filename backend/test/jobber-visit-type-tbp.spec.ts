@@ -14,14 +14,14 @@ import { resolveVisitType } from '../src/integrations/jobber/jobber.visit-type';
  */
 describe('typing a Jobber visit from its title', () => {
   /**
-   * "5819 Flower Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)".
+   * "5863 Pattern Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)".
    *
    * `tbp` and `hvac` both matched, so it read as ambiguous and was dropped —
    * a completed HVAC inspection nobody could see. The programme word says
    * which scheme paid for the visit, not what the technician did.
    */
   it('reads the work, not the programme, when a benefit-package visit names one', () => {
-    expect(resolveVisitType('5819 Flower Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)')).toEqual({
+    expect(resolveVisitType('5863 Pattern Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)')).toEqual({
       outcome: 'RESOLVED',
       inspectionType: InspectionType.HVAC,
     });
@@ -53,9 +53,9 @@ describe('typing a Jobber visit from its title', () => {
     expect(resolveVisitType('Move Out + Roof Inspection').outcome).toBe('AMBIGUOUS');
   });
 
-  /** "21501 Rustic Elm Dr - Inspect AC - 43901", the office's own wording. */
+  /** "21545 Model Elm Dr - Inspect AC - 43901", the office's own wording. */
   it('reads "Inspect AC" as an HVAC visit', () => {
-    expect(resolveVisitType('21501 Rustic Elm Dr - Inspect AC - 43901')).toEqual({
+    expect(resolveVisitType('21545 Model Elm Dr - Inspect AC - 43901')).toEqual({
       outcome: 'RESOLVED',
       inspectionType: InspectionType.HVAC,
     });
@@ -71,7 +71,7 @@ describe('typing a Jobber visit from its title', () => {
    * it was skipped so it can be found, rather than guessing.
    */
   it('refuses a title that names an inspection but no kind of one', () => {
-    expect(resolveVisitType('5934 Solar Point Lane - Make a video inspection')).toEqual({
+    expect(resolveVisitType('5978 Sampler Point Lane - Make a video inspection')).toEqual({
       outcome: 'UNKNOWN',
     });
   });

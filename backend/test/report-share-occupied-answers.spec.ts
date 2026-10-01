@@ -41,8 +41,8 @@ function build(
         scheduledAt: new Date('2026-09-14T00:00:00Z'),
         completedAt: new Date('2026-09-14T18:00:00Z'),
         propertywareBuilding: {
-          name: '12414 Montebello Manor Lane',
-          addressLine1: '12414 Montebello Manor Lane',
+          name: '12503 Specimen Manor Lane',
+          addressLine1: '12503 Specimen Manor Lane',
           city: 'Houston',
           state: 'TX',
           postalCode: '77000',

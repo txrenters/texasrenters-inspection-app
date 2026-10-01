@@ -755,7 +755,7 @@ export class InspectionImportService {
      *
      * Usually the one it was started from. But a report carries its own date,
      * and one more than a fortnight from that inspection's schedule describes a
-     * different walkthrough. 10118 Mariposa Green Ct had its August 2023 move-in
+     * different walkthrough. One property had its August 2023 move-in
      * report written into the next tenant's October 2026 visit: the evidence
      * was right, and it could still never be a baseline, because the comparison
      * looks backwards from a move-out and the record holding it was dated after
@@ -1004,7 +1004,7 @@ export class InspectionImportService {
            * ones do — resolves both to the same item. An unconditional create
            * then violates `@@unique([inspectionAreaId, checklistItemId])`, and
            * because this runs inside a transaction it took the *entire* import
-           * down with it. 1547 Revolution Way failed exactly this way: fifteen
+           * down with it. One property's import failed exactly this way: fifteen
            * areas and 185 photographs rolled back over one duplicated row.
            *
            * The second row is merged rather than dropped or preferred
@@ -1087,8 +1087,8 @@ export class InspectionImportService {
        *
        * Areas are snapshotted onto an inspection when it is created, from the
        * property's layout — so an inspection carries whatever that layout said
-       * at the time, including mistakes. Two test rooms invented at 10051
-       * Spotted Horse Dr could not be deleted from the property while an
+       * at the time, including mistakes. Two test rooms invented on one
+       * property's layout could not be deleted from it while an
        * inspection still referenced them, and the inspection could not be
        * re-imported to drop them. A report that does not mention a room is the
        * office saying that room is not part of this walkthrough.
@@ -1133,8 +1133,8 @@ export class InspectionImportService {
        * afterwards reaches them, by design: an inspection is a record of a
        * walkthrough, not a live view of a floor plan.
        *
-       * The import is the moment that layout first exists. 21223 Harbor Shore
-       * Dr is the report: a move-in imported twelve rooms, and the occupied
+       * The import is the moment that layout first exists. One property's
+       * report is the case: a move-in imported twelve rooms, and the occupied
        * inspection at the same address still showed "0 areas · No areas match
        * this filter" with an Add area button and nothing to add. Move-in,
        * occupied and move-out walk the same rooms — the office's own rule —
@@ -1431,7 +1431,7 @@ export class InspectionImportService {
      * measured. Counting real evidence instead would have fixed that, and the
      * office asked for something else outright — an import is what they reach
      * for when the record here is *wrong*, so refusing to overwrite refused the
-     * only case that mattered. 10051 Spotted Horse Dr is the example: two test
+     * only case that mattered. One property is the example: two test
      * areas nobody could delete, on an inspection nobody could import over.
      *
      * So the import now replaces what it finds, and `runCommit` is where that
@@ -1453,7 +1453,7 @@ export class InspectionImportService {
    *
    * The refusal is the point, and its answer is what lets the console link to
    * the inspection holding the report. "Already imported" with no place was
-   * all 10118 Mariposa Green Ct's office got while its report sat on the wrong
+   * all the office got for one property while its report sat on the wrong
    * visit. A report moved off one inspection is followed to the next, because
    * the row that imported it still names the inspection it left.
    */

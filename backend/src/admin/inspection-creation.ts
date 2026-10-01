@@ -467,7 +467,7 @@ export async function resolveInspectionPlan(
    * message named the fix: categorise the roof area. Nobody ever did, because
    * no layout in this portfolio has a roof in it. A report import names rooms
    * and so does the standard template, so *every* roof inspection at a
-   * laid-out property was refused; "5826 Wilkins lane - Roof Inspection" sat in
+   * laid-out property was refused; one roof inspection sat in
    * the held queue from 2026-07-15 until this was noticed on 2026-09-22.
    *
    * `roofArea` creates one on demand instead, the way `hvacSystemArea` has
@@ -648,8 +648,8 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
  * Every house has one, and no floor plan in this portfolio records it: a report
  * import names rooms, and the standard template names rooms too, so a roof
  * inspection at a laid-out property still found nothing categorised ROOF and
- * was refused -- "5826 Wilkins lane - Roof Inspection", 2026-07-15, sitting in
- * the held queue ever since.
+ * was refused -- one booked for 2026-07-15 had sat in the held queue ever
+ * since.
  *
  * The same shape as `hvacSystemArea` and for the same reason: equipment and
  * structure that exist without anybody drawing them. `source: SYSTEM` keeps it

@@ -11,7 +11,7 @@ import {
 } from '@texasrenters/shared';
 
 /**
- * The office's own HVAC report (Inspect & Cloud, 10118 Mariposa Green Ct),
+ * The office's own HVAC report (Inspect & Cloud, from one of its properties),
  * handed over on 2026-09-16 as the design the console and the handset follow.
  *
  * These assertions are about fidelity to that report. A technician holding the

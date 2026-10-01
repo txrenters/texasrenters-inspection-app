@@ -8,7 +8,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
  * Which inspection a report is written into.
  *
  * The one it was started from, unless the report's own date says otherwise.
- * 10118 Mariposa Green Ct is why: its August 2023 move-in report was imported
+ * One property is why: its August 2023 move-in report was imported
  * into the next tenant's October 2026 visit. The photographs were right and the
  * move-out beside it still said "No move-in to compare against", because the
  * comparison only looks for a move-in dated *before* the move-out. An
@@ -34,8 +34,8 @@ const BUILDING = '00000000-0000-4000-8000-000000000004';
 
 const building = {
   id: BUILDING,
-  name: '10118 Mariposa Green Ct,',
-  addressLine1: '10118 Mariposa Green Ct',
+  name: '10163 Mirror Green Ct,',
+  addressLine1: '10163 Mirror Green Ct',
   city: 'Houston',
   state: 'TX',
   postalCode: '77044',

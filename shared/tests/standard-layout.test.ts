@@ -88,8 +88,8 @@ describe('when it is not', () => {
 });
 
 /**
- * The names are the office's, read off a real occupied inspection: 14547
- * Gleaming Rose Dr, walked by Moses Rodriguez on 2026-09-08 under their own
+ * The names are the office's, read off a real occupied inspection walked by
+ * Moses Rodriguez on 2026-09-08 under their own
  * "Occupied Inspection" template.
  *
  * Not cosmetic. A report import matches existing areas by **normalised name**,

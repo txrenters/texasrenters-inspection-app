@@ -7,7 +7,7 @@ import { api, ApiError } from './api';
  *
  * Some refusals carry their own way out. "This report has already been
  * imported" names the inspection holding the report, and dropping that left the
- * office of 10118 Mariposa Green Ct with a message and nowhere to go.
+ * office with a message and nowhere to go.
  */
 
 vi.mock('./session', () => ({

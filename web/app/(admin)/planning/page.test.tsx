@@ -694,7 +694,7 @@ describe('the benefit package plan page', () => {
       detailsRewritten: 12,
       jobberQueued: 9,
       keptOverridden: 0,
-      stillMissing: [{ stopId: 's1', tenancyId: 't1', address: '6341 Del Monte Dr' }],
+      stillMissing: [{ stopId: 's1', tenancyId: 't1', address: '6417 Del Ejemplo Dr' }],
     });
 
     expect(success).toHaveBeenCalledWith(
@@ -864,8 +864,8 @@ describe('the benefit package plan page', () => {
   it('chooses the unit of a visit waiting for one where it is listed', async () => {
     url.state = { quarter: '2026-4', tab: 'attention', day: '' };
     const units = [
-      { id: 'unit-house', name: 'House', addressLine1: '5009 N Main St' },
-      { id: 'unit-half', name: '1/2', addressLine1: '5009 1/2 N Main St' },
+      { id: 'unit-house', name: 'House', addressLine1: '4815 N Fictional St' },
+      { id: 'unit-half', name: '1/2', addressLine1: '4815 1/2 N Fictional St' },
     ];
     const chosen = stop('s1', { buildingUnits: units, unitResolution: 'MANUAL', propertywareUnit: units[0] });
     const waiting = stop('s2', { buildingUnits: units, unitResolution: 'UNRESOLVED', propertywareUnit: null });

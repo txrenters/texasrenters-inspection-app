@@ -27,7 +27,7 @@ describe("a stop's actual times", () => {
               startedAt: new Date('2026-09-14T14:55:00.000Z'),
               submittedAt: new Date('2026-09-14T15:24:00.000Z'),
               completedAt: null,
-              propertywareBuilding: { name: '4226 Oak Shadows' },
+              propertywareBuilding: { name: '4371 Pretend Oaks' },
               property: null,
             },
           },

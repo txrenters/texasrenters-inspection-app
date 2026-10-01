@@ -33,7 +33,7 @@ export const DEFAULT_VISIT_TYPE_RULES: Record<InspectionType, string[]> = {
   [InspectionType.BACK_TO_MARKET]: ['back to market', 'back-to-market', 'btm'],
   [InspectionType.OCCUPIED]: ['occupied', 'periodic', 'routine'],
   // `inspect ac` and `inspect a/c` are the office's own wording on a work
-  // order -- "21501 Rustic Elm Dr - Inspect AC - 43901" is a real completed
+  // order -- "<address> - Inspect AC - 43901" is a real completed
   // visit that named an inspection, matched no type at all, and was filed as
   // finished-and-skipped where nobody would look for it again.
   [InspectionType.HVAC]: [
@@ -111,7 +111,7 @@ export function resolveVisitType(
    * The benefit package is the wrapper; the inspection named beside it is the
    * work.
    *
-   * "5819 Flower Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)" matches `tbp` and
+   * "5863 Pattern Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)" matches `tbp` and
    * `hvac` both, so it read as ambiguous and was dropped -- a completed HVAC
    * inspection that never reached the console. The programme word says which
    * scheme paid for the visit, not what the technician did, and the office
@@ -301,7 +301,7 @@ export function benefitPackageInspectionInDetails(
  * inspections carry a work order number too, because the office bundles the
  * inspection with the code work it is booked alongside:
  *
- *   "21227 Teal Lovegrass Ln ... - Code Work + Move in Inspection - Work Order #42914"
+ *   "21283 Nominal Reed Ln ... - Code Work + Move in Inspection - Work Order #42914"
  *
  * Excluding on the number drops eleven genuine inspections. The number
  * correlates with work orders; the missing word is what actually distinguishes

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { inBox, metersPerPixel, padBox, ringIsLegible, spotOffsets } from './map-clusters';
 
-const FAR_AWAY = { id: 'woodlands', latitude: 30.1716, longitude: -95.5871 };
+const FAR_AWAY = { id: 'woodlands', latitude: 30.1579, longitude: -95.571 };
 
 describe('drawing only what is near the screen', () => {
   const houston = { north: 29.9, south: 29.6, east: -95.2, west: -95.6 };

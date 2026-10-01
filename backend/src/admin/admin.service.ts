@@ -1719,8 +1719,8 @@ export class AdminService {
          * building the tenancy report does not cover. Deliberately not
          * "not enrolled": there is nobody to enrol.
          *
-         * MIXED where a multi-unit building's tenancies disagree. 5009 N Main
-         * St has three, and answering for it with whichever came back first
+         * MIXED where a multi-unit building's tenancies disagree. One building
+         * has three, and answering for it with whichever came back first
          * would be a coin toss presented as a fact.
          */
         tbp: item.propertywareBuilding?.id
@@ -2289,7 +2289,7 @@ export class AdminService {
      *
      * Jobber is the scheduling source of record, and the sync copies its date
      * over any visit still scheduled here whose date differs. A date changed
-     * here therefore did not stay changed: 10118 Mariposa Green Ct's move-in was
+     * here therefore did not stay changed: one property's move-in was
      * re-dated at 1:28 PM and the sync restored Jobber's date at 1:30, with
      * nothing on the page to say it would. Refused instead, naming where the
      * change has to be made. The same day sent back is not a change — the edit
