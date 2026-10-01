@@ -238,6 +238,15 @@ export class AdminController {
   property(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
     return this.service.property(request.user, id);
   }
+  /**
+   * The access codes and owner phones, behind `properties:manage` rather than
+   * the page's `properties:read`: they open a tenant's home and reach its owner.
+   */
+  @Get('properties/:propertyId/private-details')
+  @RequirePermissions('properties:manage')
+  propertyPrivateDetails(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
+    return this.service.propertyPrivateDetails(request.user, id);
+  }
   @Get('properties/:propertyId/lease-summary')
   @RequirePermissions('properties:read')
   leaseSummary(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {

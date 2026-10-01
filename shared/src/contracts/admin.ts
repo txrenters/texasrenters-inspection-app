@@ -1,5 +1,6 @@
 import type { InspectionType } from '../enums/index.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
+import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
 import type { JobberBookingStatus } from './visit-details-writer.js';
 import type { VisitServicesReport } from './visit-services.js';
 
@@ -228,6 +229,14 @@ export interface AdminProperty {
   units?: AdminUnit[];
   leases?: AdminLease[];
   inspections?: AdminInspection[];
+  /**
+   * Everything else Propertyware holds on the property, without its access
+   * codes (`/private-details`). Null until the sync has stored a snapshot;
+   * absent from an older API.
+   */
+  details?: PropertyDetailsView | null;
+  /** Its owners, from the property-owner report, without their phones. */
+  owner?: PropertyOwnerView | null;
 }
 
 export interface AdminFloorPlan {

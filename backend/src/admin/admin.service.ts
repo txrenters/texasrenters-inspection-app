@@ -60,6 +60,7 @@ import {
   nextDemoSequence,
 } from './demo-property';
 import { inspectionEvidenceTimes, inspectionSpan } from './inspection-timing';
+import { detailsView, ownerView, privateDetails } from './property-details-view';
 import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
@@ -1189,6 +1190,11 @@ export class AdminService {
         category: true,
         manualTotalArea: true,
         manualAreaUnit: true,
+        // Everything else Propertyware holds on the building, for the page's
+        // Details tab. Split below: the access codes and owner phones never
+        // leave this method, so they are never in the cached response.
+        details: true,
+        ownerDetails: true,
         // How close counts as being at this property. Read here so the page
         // that sets it does not need a second request to know the current one.
         geofence: {
@@ -1241,6 +1247,8 @@ export class AdminService {
       manualAreaUnit,
       updatedAt,
       geofence,
+      details,
+      ownerDetails,
       ...rest
     } = property;
     // The relevant lease for a unit is its active lease; a unit with none reads
@@ -1249,6 +1257,8 @@ export class AdminService {
     return {
       ...rest,
       category,
+      details: detailsView(details),
+      owner: ownerView(ownerDetails),
       /**
        * Always answered, never null.
        *
@@ -1287,6 +1297,23 @@ export class AdminService {
         leaseEndDate: relevantLease.get(unit.id)?.endDate ?? null,
       })),
     };
+  }
+
+  /**
+   * The property's access codes and its owners' phones, for someone who
+   * manages properties.
+   *
+   * Its own request, read fresh and never cached: the lockbox, gate and alarm
+   * codes open a tenant's home, so they reach a browser only when somebody with
+   * the right to see them asks. The page asks when "Show" is pressed.
+   */
+  async propertyPrivateDetails(user: AuthenticatedUser, id: string) {
+    const property = await this.prisma.propertywareBuilding.findFirst({
+      where: { id, organizationId: user.organizationId },
+      select: { details: true, ownerDetails: true },
+    });
+    if (!property) throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'Property was not found.');
+    return privateDetails(property.details, property.ownerDetails);
   }
 
   async propertyLeaseSummary(user: AuthenticatedUser, id: string) {

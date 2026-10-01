@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { buildingDetails } from './propertyware.building-details';
 import type {
   RawPropertywareBuilding,
   RawPropertywareLease,
@@ -64,6 +65,7 @@ export function mapBuilding(raw: RawPropertywareBuilding): NormalizedBuilding {
     totalArea: raw.totalArea != null && raw.totalArea > 0 ? Math.round(raw.totalArea) : undefined,
     areaUnits: value(raw.areaUnits),
     category: value(raw.category),
+    details: buildingDetails(raw as Record<string, unknown>),
     isActive: raw.active,
     sourceStatus: raw.status ?? (raw.active ? 'Active' : 'Inactive'),
     ...address(raw.address),

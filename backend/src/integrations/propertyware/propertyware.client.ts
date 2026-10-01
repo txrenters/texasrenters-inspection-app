@@ -115,7 +115,10 @@ export class PropertywareClient {
       url.searchParams.set('lastModifiedDateTimeEnd', query.lastModifiedDateTimeEnd);
     if (query.includeDeactivated !== undefined && entity !== 'leases')
       url.searchParams.set('includeDeactivated', String(query.includeDeactivated));
-    url.searchParams.set('includeCustomFields', 'false');
+    // Buildings carry the office's custom fields -- occupancy, make ready,
+    // utilities, filters, the lockbox code -- which the property page shows
+    // (2026-10-01). Nothing else here reads custom fields, so the rest stay off.
+    url.searchParams.set('includeCustomFields', entity === 'buildings' ? 'true' : 'false');
 
     let response: Awaited<ReturnType<PropertywareClient['request']>>;
     try {
@@ -178,6 +181,9 @@ export class PropertywareClient {
     const url = new URL(
       `${this.config.baseUrl}${PROPERTYWARE_ENDPOINTS[entity]}/${encodeURIComponent(externalId)}`,
     );
+    // As the list asks for them: a building fetched alone without its custom
+    // fields would overwrite the ones the list stored with nothing.
+    if (entity === 'buildings') url.searchParams.set('includeCustomFields', 'true');
     const { payload } = await this.request(url, correlationId);
     const parsed = propertywareSchemas[entity].safeParse(payload);
     if (!parsed.success)

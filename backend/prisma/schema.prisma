@@ -1460,6 +1460,14 @@ model PropertywareBuilding {
   geocodeSource       String?
   geocodePrecision    String?
   sourceHash          String?
+  /// The property as Propertyware describes it beyond the columns above -- the
+  /// building record and the office's custom fields (`PropertyDetailsSnapshot`
+  /// in shared). Written by the sync; holds the access codes, so it is never
+  /// sent whole to the console.
+  details             Json?
+  /// Owners and their phones, from the property-owner report
+  /// (PROPERTYWARE_OWNER_REPORT_URL; `PropertyOwnerDetails` in shared).
+  ownerDetails        Json?
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
   portfolio           PropertywarePortfolio? @relation(fields: [portfolioId], references: [id])

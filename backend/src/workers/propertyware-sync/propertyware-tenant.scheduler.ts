@@ -9,6 +9,7 @@ import { CronJob } from 'cron';
 
 import { PROPERTYWARE_CONFIG } from '../../integrations/propertyware/propertyware.config';
 import type { PropertywareConfig } from '../../integrations/propertyware/propertyware.types';
+import { PropertywareOwnerReportService } from '../../integrations/propertyware/propertyware.owner-report';
 import { PropertywareTenantSyncService } from '../../integrations/propertyware/propertyware.tenant-sync.service';
 
 /**
@@ -33,6 +34,7 @@ export class PropertywareTenantScheduler implements OnModuleInit, OnModuleDestro
   constructor(
     @Inject(PROPERTYWARE_CONFIG) private readonly config: PropertywareConfig,
     @Inject(PropertywareTenantSyncService) private readonly tenants: PropertywareTenantSyncService,
+    @Inject(PropertywareOwnerReportService) private readonly owners: PropertywareOwnerReportService,
   ) {}
 
   onModuleInit() {
@@ -85,6 +87,17 @@ export class PropertywareTenantScheduler implements OnModuleInit, OnModuleDestro
       // here would only kill the cron tick.
       this.logger.error({
         event: 'propertyware_tenant_sync_failed',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // The property-owner report, on the same nightly tick (2026-10-01): another
+    // published report, and as independent of this one as the two are of each
+    // other -- a failure in either leaves the other's run alone.
+    try {
+      await this.owners.sync(organizationId);
+    } catch (error) {
+      this.logger.error({
+        event: 'propertyware_owner_report_failed',
         detail: error instanceof Error ? error.message : String(error),
       });
     }

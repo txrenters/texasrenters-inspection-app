@@ -13,15 +13,18 @@ import {
 } from '@/components/demo-property-delete-dialog';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { PageHeader } from '@/components/page-header';
+import { PropertyDetailsPanel } from '@/components/property-details-panel';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatAddress, formatCount, formatDate, formatRelative } from '@/lib/format';
 import { useProperty } from '@/lib/queries';
+import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
 
 /**
@@ -142,6 +145,7 @@ export default function PropertyDetailPage() {
   const id = useParams<{ propertyId: string }>().propertyId;
   const property = useProperty(id);
   const [pendingDelete, setPendingDelete] = useState<DeletableDemoProperty | null>(null);
+  const [state, setState] = useUrlState({ tab: 'details' });
 
   // isError first: a failed fetch has no data either, and checking `!data`
   // ahead of it would show a skeleton forever instead of the error.
@@ -255,65 +259,86 @@ export default function PropertyDetailPage() {
       </dl>
 
       {/*
-        Above the units, because it is a property-wide setting and because it
-        is the one thing on this page a technician's pay depends on. Only where
-        the server sent it, so an older API does not render an empty card.
+        Two tabs (the office, 2026-10-01): the property's details, which is
+        what the office comes here for, and the floor plan, kept but not the
+        way areas are set any more -- they come from earlier inspections and
+        the standard template. Details first, and the tab is in the URL so a
+        link can open either.
       */}
-      {item.geofence ? (
-        <PropertyGeofenceCard geofence={item.geofence} propertyId={item.id} />
-      ) : null}
+      <Tabs className="mt-4" onValueChange={(tab) => setState({ tab })} value={state.tab}>
+        <TabsList>
+          <TabsTrigger value="details">Details</TabsTrigger>
+          <TabsTrigger value="floor-plan">Floor plan & areas</TabsTrigger>
+        </TabsList>
 
-      <Card className="mt-4">
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>Active units</CardTitle>
-          <Badge variant="secondary">{formatCount(item.units?.length ?? 0)}</Badge>
-        </CardHeader>
-        <CardContent>
-          {item.units?.length ? (
-            <DataTable
-              columns={UNIT_COLUMNS}
-              label="Active units"
-              rowKey={(unit) => unit.id}
-              rows={item.units}
-            />
-          ) : (
-            <EmptyState
-              description="No active units have synchronized for this property."
-              title="No units"
-            />
-          )}
-        </CardContent>
-      </Card>
+        <TabsContent className="mt-2" value="details">
+          <PropertyDetailsPanel canSeePrivate={permissions.has('properties:manage')} property={item} />
 
-      <Card className="mt-4">
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>Relevant leases</CardTitle>
-          <Badge variant="secondary">{formatCount(item.leases?.length ?? 0)}</Badge>
-        </CardHeader>
-        <CardContent>
-          {item.leases?.length ? (
-            <DataTable
-              columns={LEASE_COLUMNS}
-              label="Relevant leases"
-              rowKey={(lease) => lease.id}
-              rows={item.leases}
-            />
-          ) : (
-            <EmptyState
-              description="No relevant active leases were returned by the last synchronization."
-              title="No leases"
-            />
-          )}
-        </CardContent>
-      </Card>
+          {/*
+            Above the units, because it is a property-wide setting and because it
+            is the one thing on this page a technician's pay depends on. Only where
+            the server sent it, so an older API does not render an empty card.
+          */}
+          {item.geofence ? (
+            <div className="mt-4">
+              <PropertyGeofenceCard geofence={item.geofence} propertyId={item.id} />
+            </div>
+          ) : null}
 
-      <div className="mt-6">
-        <FloorPlanManager
-          canDeleteAreas={permissions.has('properties:delete-areas')}
-          canManage={permissions.has('properties:manage')}
-          propertyId={item.id}
-        />
-      </div>
+          <Card className="mt-4">
+            <CardHeader className="flex-row items-center justify-between">
+              <CardTitle>Active units</CardTitle>
+              <Badge variant="secondary">{formatCount(item.units?.length ?? 0)}</Badge>
+            </CardHeader>
+            <CardContent>
+              {item.units?.length ? (
+                <DataTable
+                  columns={UNIT_COLUMNS}
+                  label="Active units"
+                  rowKey={(unit) => unit.id}
+                  rows={item.units}
+                />
+              ) : (
+                <EmptyState
+                  description="No active units have synchronized for this property."
+                  title="No units"
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader className="flex-row items-center justify-between">
+              <CardTitle>Relevant leases</CardTitle>
+              <Badge variant="secondary">{formatCount(item.leases?.length ?? 0)}</Badge>
+            </CardHeader>
+            <CardContent>
+              {item.leases?.length ? (
+                <DataTable
+                  columns={LEASE_COLUMNS}
+                  label="Relevant leases"
+                  rowKey={(lease) => lease.id}
+                  rows={item.leases}
+                />
+              ) : (
+                <EmptyState
+                  description="No relevant active leases were returned by the last synchronization."
+                  title="No leases"
+                />
+              )}
+            </CardContent>
+          </Card>
+
+        </TabsContent>
+
+        <TabsContent className="mt-2" value="floor-plan">
+          <FloorPlanManager
+            canDeleteAreas={permissions.has('properties:delete-areas')}
+            canManage={permissions.has('properties:manage')}
+            propertyId={item.id}
+          />
+        </TabsContent>
+      </Tabs>
 
       {/* Back to the list once it is gone: this page is *about* the property that
           no longer exists, so staying would show a 404 where the record was. */}
