@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { ACCESS_COOKIE, decodeSession, sessionIsExpired } from '@/lib/session';
+import { ACCESS_COOKIE, REMEMBER_COOKIE, decodeSession, sessionIsExpired } from '@/lib/session';
 
 /**
  * Server-side guard for the admin shell.
@@ -31,6 +31,17 @@ export function middleware(request: NextRequest) {
   // bouncing someone to /login a minute early would be worse than letting a
   // page load whose first request refreshes.
   if (session && !sessionIsExpired(session, 0)) return NextResponse.next();
+
+  /**
+   * A remembered sign-in whose hour-long access token has run out. The page
+   * loads and renews it before its first request, under the browser's
+   * cross-tab lock -- not here, where a renewal racing another tab's would
+   * replay a rotated token and the API would end every session for the
+   * account. What gets through is what a forged access cookie already gets: a
+   * shell whose every request the API refuses, and which the page then sends
+   * to sign in.
+   */
+  if (request.cookies.has(REMEMBER_COOKIE)) return NextResponse.next();
 
   const loginUrl = request.nextUrl.clone();
   loginUrl.pathname = '/login';

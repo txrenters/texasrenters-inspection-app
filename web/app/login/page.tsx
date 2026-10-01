@@ -4,13 +4,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { AuthLayout } from '@/components/auth-layout';
 import { PasswordInput } from '@/components/password-input';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -20,6 +21,8 @@ import { signIn } from '@/lib/session';
 const schema = z.object({
   email: z.email('Enter a valid email address.'),
   password: z.string().min(1, 'Enter your password.'),
+  /** "Remember me" (the office, 2026-10-02). Off by default: a workstation may be shared. */
+  remember: z.boolean(),
 });
 
 export default function LoginPage() {
@@ -29,7 +32,7 @@ export default function LoginPage() {
   const [errorTitle, setErrorTitle] = useState('Sign in failed');
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', password: '' },
+    defaultValues: { email: '', password: '', remember: false },
   });
 
   const submit = form.handleSubmit(async (values) => {
@@ -37,7 +40,7 @@ export default function LoginPage() {
     setErrorTitle('Sign in failed');
     let session;
     try {
-      session = await signIn(values.email, values.password);
+      session = await signIn(values.email, values.password, values.remember);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Sign in failed.');
       return;
@@ -93,6 +96,32 @@ export default function LoginPage() {
           />
           <FieldError>{form.formState.errors.password?.message}</FieldError>
         </Field>
+
+        {/* Said plainly what it does and when not to use it, because the
+            default -- signed out when the browser closes -- is the safe one on
+            a shared office computer. */}
+        <label className="flex cursor-pointer items-start gap-2.5" htmlFor="remember">
+          <Controller
+            control={form.control}
+            name="remember"
+            render={({ field }) => (
+              <Checkbox
+                checked={field.value}
+                className="mt-0.5"
+                id="remember"
+                onBlur={field.onBlur}
+                onCheckedChange={(checked) => field.onChange(checked === true)}
+              />
+            )}
+          />
+          <span className="grid gap-0.5">
+            <span className="text-sm font-medium">Remember me</span>
+            <span className="text-muted-foreground text-xs leading-relaxed">
+              Stay signed in on this computer, even after closing the browser, until 30 days
+              without use. Leave it off on a shared computer.
+            </span>
+          </span>
+        </label>
 
         {error ? (
           <Alert variant="destructive">
