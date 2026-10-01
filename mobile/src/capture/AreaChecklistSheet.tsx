@@ -67,12 +67,13 @@ function rowDone(item: ChecklistItem, assessment: ChecklistAssessment | undefine
  * one, and the report prints those cells blank precisely because the
  * distinction matters. Tapping the active answer clears it.
  */
-function AxisRow({
+export function AxisRow({
   assessment,
   label,
   onAnswer,
 }: {
-  assessment: ChecklistAssessment | undefined;
+  /** The three answers as they stand -- an HVAC job's filter carries them too. */
+  assessment: Partial<Pick<ChecklistAssessment, ChecklistAxisKey>> | undefined;
   label: string;
   onAnswer: (axis: ChecklistAxisKey, next: boolean | null) => void;
 }) {

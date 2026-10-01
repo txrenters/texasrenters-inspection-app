@@ -13,6 +13,7 @@ import {
   AreaScope,
   HVAC_CHECKLIST,
   HVAC_SECTIONS,
+  HVAC_WALKED_SECTIONS,
   type HvacSection,
   OCCUPIED_CHECKLIST,
   STANDARD_LAYOUT_NOTE,
@@ -718,7 +719,11 @@ async function hvacSectionAreas(tx: InspectionCreationClient, plan: InspectionPl
   await ensureAreaProperty(tx, plan);
 
   const ids: string[] = [];
-  for (const [index, section] of HVAC_SECTIONS.entries()) {
+  // Every section but the filters, which the job's AC filter change scores now
+  // (`HVAC_WALKED_SECTIONS`). The order is the report's, so an Attic made
+  // before keeps its place.
+  for (const section of HVAC_WALKED_SECTIONS) {
+    const index = HVAC_SECTIONS.indexOf(section);
     const where = { propertyId: plan.property.id, unitId: plan.unit?.id ?? null, floorId: null, name: section };
     const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
     const id =

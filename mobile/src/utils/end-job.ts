@@ -39,6 +39,8 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 export function planEndJob(
   tasks: readonly JobTask[],
   gate: Pick<SubmissionGate, 'canSubmit' | 'incompleteRequiredRooms'>,
+  /** An HVAC job's filters are scored as well (Moses, 2026-10-01). */
+  filterRules: { assess: boolean; changeAsked: boolean } = { assess: false, changeAsked: true },
 ): EndJobPlan {
   const blockers: EndJobBlocker[] = [];
 
@@ -55,14 +57,18 @@ export function planEndJob(
   }
 
   const filters = tasks.find((task) => task.kind === 'FILTERS');
-  if (filters && (filters.state === 'TODO' || filters.state === 'PART'))
+  if (filters && (filters.state === 'TODO' || filters.state === 'PART')) {
+    const ask = !filterRules.assess
+      ? 'Stack the filters and take one photo of them all, or say why one was not changed.'
+      : filterRules.changeAsked
+        ? 'Score each filter Clean, Undamaged and Working, and take one photo of them all or say why one was not changed.'
+        : 'Score each filter Clean, Undamaged and Working, or say why it could not be.';
     blockers.push({
       opens: 'FILTERS',
-      title: 'Finish the filter change first',
-      message: filters.detail
-        ? `${filters.detail}. Stack the filters and take one photo of them all, or say why one was not changed.`
-        : 'Stack the filters and take one photo of them all, or say why one was not changed.',
+      title: filterRules.assess && !filterRules.changeAsked ? 'Finish the filters first' : 'Finish the filter change first',
+      message: filters.detail ? `${filters.detail}. ${ask}` : ask,
     });
+  }
 
   return {
     blockers,

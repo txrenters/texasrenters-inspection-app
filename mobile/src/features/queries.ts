@@ -406,6 +406,13 @@ export function useInspectionActions(id: string) {
       void refresh();
     },
   });
+  /** This job's checklist answers still pending, the one finishing included. */
+  const servicesWaiting = () =>
+    client
+      .getMutationCache()
+      .getAll()
+      .filter((mutation) => mutation.options.scope?.id === `job-services:${id}` && mutation.state.status === 'pending')
+      .length;
   return {
     /**
      * Start job, shown as started the moment it is pressed (the office,
@@ -513,15 +520,33 @@ export function useInspectionActions(id: string) {
         if (!servicesReport) throw new Error('That job is not loaded, so its checklist was not saved.');
         return repositories.inspections.saveServices(id, servicesReport);
       },
+      /**
+       * The server's job -- but never its checklist while a later answer waits.
+       *
+       * Answers to one job go one at a time, so a reply can land while the next
+       * tap is drawn but not yet sent. Drawing the reply's checklist then took
+       * that tap off the screen, and its send, which reads the cache, went out
+       * without it: score Clean, then Working, quickly, and Clean was all the
+       * server heard (the office, 2026-09-30, on the checklist this replaced).
+       * The last reply, with nothing behind it, is drawn whole -- it carries the
+       * photographs the server has since matched.
+       */
       onSuccess: (inspection) => {
+        if (servicesWaiting() > 1) {
+          client.setQueryData(queryKeys.inspection(id), (cached?: Inspection) =>
+            cached ? { ...inspection, servicesReport: cached.servicesReport } : inspection,
+          );
+          return;
+        }
         client.setQueryData(queryKeys.inspection(id), inspection);
         void refresh();
       },
       onError: (error: unknown) => {
         // Held on the device: the repository has already kept it and the
         // optimistic write above still stands, so the screen goes on showing
-        // what was ticked rather than the answer springing back.
-        if (!(error instanceof QueuedOfflineError)) void refresh();
+        // what was ticked rather than the answer springing back. A refusal
+        // reads the server's copy -- unless another answer is still waiting.
+        if (!(error instanceof QueuedOfflineError) && servicesWaiting() <= 1) void refresh();
       },
     }),
     /** The area a service's optional photographs are filed under, made on the first one. */

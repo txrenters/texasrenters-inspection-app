@@ -68,7 +68,9 @@ type StoredCache = {
 // the fix would reach only jobs fetched fresh: a technician's open job would
 // still redraw as "Not done yet" over a filter they had photographed, and the
 // next tick would round-trip that back and orphan the image for good.
-const CACHE_SCHEMA_VERSION = 7;
+// 8: filter answers carry an HVAC job's scores, `removed` and `actualSize`
+// (Moses, 2026-10-01), for the same reason as 7.
+const CACHE_SCHEMA_VERSION = 8;
 
 /**
  * Invalidates the whole stored cache when either the shipped version or the

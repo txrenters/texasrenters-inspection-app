@@ -1,6 +1,7 @@
 import { InspectionType } from '../enums/index.js';
 import { NON_ROOM_SOURCES } from './standard-layout.js';
 import { SERVICE_PHOTO_AREA } from './visit-services.js';
+import { HVAC_FILTERS_SECTION } from './hvac-checklist.js';
 
 /**
  * Which areas an inspection covers, and how that set is arrived at.
@@ -203,10 +204,19 @@ export const SERVICE_PHOTO_AREA_NAMES: ReadonlySet<string> = new Set(Object.valu
  */
 export function isInspectedArea(
   inspectionType: string | null | undefined,
-  area: { name?: string | null; source?: string | null },
+  area: { name?: string | null; source?: string | null; completionStatus?: string | null },
 ): boolean {
   if (!area.source || !NON_ROOM_SOURCES.includes(area.source)) return true;
   if (SERVICE_PHOTO_AREA_NAMES.has(area.name ?? '')) return false;
+  // An HVAC inspection's Filters section, unless it was already submitted: the
+  // filters are scored on the AC filter change now (Moses, 2026-10-01), and one
+  // walked before that keeps its evidence on the report.
+  if (
+    inspectionType === InspectionType.HVAC &&
+    area.name === HVAC_FILTERS_SECTION &&
+    area.completionStatus !== 'COMPLETED'
+  )
+    return false;
   return !inspectionWalksRooms(inspectionType);
 }
 

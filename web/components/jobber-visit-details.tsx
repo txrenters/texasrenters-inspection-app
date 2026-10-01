@@ -10,6 +10,7 @@ import {
   type AdminInspection,
   type JobberBookingStatus,
   type VisitDetails,
+  type VisitFilterOutcome,
   type VisitServicesReport,
 } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
@@ -20,6 +21,24 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { formatDateTime } from '@/lib/format';
+
+/**
+ * How a filter was scored on an HVAC job, as the report's row reads: "Clean Y ·
+ * Undamaged N · Working Y · Not present". Empty for a filter nobody scored, which
+ * is every filter on any other job.
+ */
+function filterScore(filter: VisitFilterOutcome): string {
+  const axis = (name: string, value: boolean | null | undefined) =>
+    value == null ? null : `${name} ${value ? 'Y' : 'N'}`;
+  return [
+    axis('Clean', filter.isClean),
+    axis('Undamaged', filter.isUndamaged),
+    axis('Working', filter.isWorking),
+    filter.comment?.trim() || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 /** Every photograph the technician took for the job's services, labelled by what it shows. */
 function servicePhotos(report: VisitServicesReport): ServicePhoto[] {
@@ -325,13 +344,28 @@ export function JobberVisitDetails({
                     className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
                     key={`${filter.size}-${filter.location ?? ''}-${filter.slot}`}
                   >
-                    <Badge variant={filter.changed ? 'success' : 'warning'}>
-                      {filter.changed ? 'Changed' : 'Not changed'}
-                    </Badge>
-                    <span className="font-mono">{filterLabel(filter)}</span>
+                    {filter.removed ? (
+                      <Badge variant="outline">Not at the property</Badge>
+                    ) : (
+                      <Badge variant={filter.changed ? 'success' : 'warning'}>
+                        {filter.changed ? 'Changed' : 'Not changed'}
+                      </Badge>
+                    )}
+                    <span className={filter.removed ? 'font-mono line-through' : 'font-mono'}>
+                      {filterLabel(filter.removed ? { ...filter, actualSize: null } : filter)}
+                    </span>
                     {filter.booked ? null : <Badge variant="outline">Found on site</Badge>}
+                    {/* The listed size the technician corrected: the office's
+                        record of this property is wrong until somebody fixes it. */}
+                    {filter.actualSize && !filter.removed ? (
+                      <span className="text-muted-foreground text-xs">listed as {filter.size}</span>
+                    ) : null}
                     {filter.reason ? <span className="text-muted-foreground">{filter.reason}</span> : null}
-                    {filter.changed && !filter.photoId ? (
+                    {/* How it was found, on an HVAC job (Moses, 2026-10-01). */}
+                    {filterScore(filter) ? (
+                      <span className="text-muted-foreground text-xs">{filterScore(filter)}</span>
+                    ) : null}
+                    {filter.changed && !filter.photoId && !filter.removed ? (
                       <span className="text-warning text-xs">Photograph still uploading</span>
                     ) : null}
                   </li>
