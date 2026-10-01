@@ -263,7 +263,15 @@ export class AreaEvidenceService {
     const inspection = await this.requireInspection(user.organizationId, inspectionId);
     const attached = await this.prisma.inspectionArea.findMany({
       where: { inspectionId },
-      orderBy: { propertyArea: { inspectionOrder: 'asc' } },
+      // Walk order, then name and id: `inspectionOrder` is not unique, and two
+      // areas sharing a value came back in whatever order the database chose,
+      // so they could swap between two loads -- under the viewer that walks
+      // from one area into the next, and in the reviewer's own list.
+      orderBy: [
+        { propertyArea: { inspectionOrder: 'asc' } },
+        { propertyArea: { name: 'asc' } },
+        { id: 'asc' },
+      ],
       select: {
         id: true,
         completionStatus: true,
@@ -706,11 +714,21 @@ export class AreaEvidenceService {
 
     const findingTitles = new Map(findings.map((finding) => [finding.id, finding.title]));
     const groups: AreaPhotoGroup[] = [];
+    /**
+     * A photograph filed against a finding this list does not hold -- the
+     * area's condition summary, which is kept apart from the findings -- is
+     * grouped as if it had no finding.
+     *
+     * It used to fall into no group at all: counted in "Photos (n)" and in the
+     * summary, and shown nowhere, so it could not be opened or reviewed.
+     */
+    const listed = (photo: (typeof photos)[number]) =>
+      Boolean(photo.findingId && findingTitles.has(photo.findingId));
     const overview = photos.filter(
-      (photo) => !photo.findingId && photo.captureType === PhotoCaptureType.AREA_OVERVIEW,
+      (photo) => !listed(photo) && photo.captureType === PhotoCaptureType.AREA_OVERVIEW,
     );
     const supporting = photos.filter(
-      (photo) => !photo.findingId && photo.captureType !== PhotoCaptureType.AREA_OVERVIEW,
+      (photo) => !listed(photo) && photo.captureType !== PhotoCaptureType.AREA_OVERVIEW,
     );
     const mapPhoto = (photo: (typeof photos)[number]) => ({
       id: photo.id,

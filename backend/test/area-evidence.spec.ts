@@ -124,6 +124,24 @@ describe('area evidence summary', () => {
     expect(prisma.inspectionAreaChecklistResponse.findMany).toHaveBeenCalledTimes(1);
   });
 
+  it('orders areas the same way on every load', async () => {
+    const prisma = summaryPrisma();
+
+    await service(prisma).summary(user, INSPECTION);
+
+    // Walk order is not unique; name then id settle a tie, so the list and the
+    // viewer walking it never swap two areas between loads.
+    expect(prisma.inspectionArea.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [
+          { propertyArea: { inspectionOrder: 'asc' } },
+          { propertyArea: { name: 'asc' } },
+          { id: 'asc' },
+        ],
+      }),
+    );
+  });
+
   it('refuses an inspection outside the organization', async () => {
     const prisma = summaryPrisma({ inspection: { findFirst: jest.fn().mockResolvedValue(null) } });
 
@@ -697,6 +715,26 @@ describe('single area evidence bundle', () => {
     // Finding evidence must stay identifiable, not collapse into one gallery.
     expect(findingGroup?.findingId).toBe('finding-1');
     expect(findingGroup?.photos.map((photo) => photo.id)).toEqual(['photo-2']);
+  });
+
+  it('shows a photograph filed against a finding the list does not hold', async () => {
+    const prisma = bundlePrisma();
+    const [overviewPhoto, closeUp] = await prisma.inspectionPhoto.findMany();
+    prisma.inspectionPhoto.findMany.mockResolvedValue([
+      overviewPhoto,
+      closeUp,
+      // Filed against the condition summary, which is kept apart from findings.
+      { ...overviewPhoto, id: 'photo-3', sequenceNumber: 2, findingId: 'summary-1' },
+    ]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    // It used to be counted and shown nowhere.
+    const shown = bundle.photoGroups.flatMap((group) => group.photos.map((photo) => photo.id));
+    expect(shown).toEqual(expect.arrayContaining(['photo-1', 'photo-2', 'photo-3']));
+    expect(bundle.photoGroups.find((group) => group.key === 'OVERVIEW')?.photos.map((photo) => photo.id)).toEqual(
+      ['photo-1', 'photo-3'],
+    );
   });
 
   it('returns the condition summary separately from itemized findings', async () => {

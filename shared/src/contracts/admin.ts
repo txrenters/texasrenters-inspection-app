@@ -841,6 +841,13 @@ export interface AdminAuditEvent {
   id: string;
   action: string;
   createdAt: string;
+  /** Who did it: a person's name, "API client" for a key, null when unknown. */
+  actorName?: string | null;
+  /**
+   * What it was done to, when that can be said safely: the area for an area's
+   * review mark, the finding's title for a decision. Never a reason or a note.
+   */
+  detail?: string | null;
 }
 
 export interface AdminReportShare {
