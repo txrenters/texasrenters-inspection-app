@@ -13,6 +13,8 @@ import { LeaseInspectionService } from './lease-inspections.service';
 import { PlanAdvisorService } from './plan-advisor.service';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
 import { PlanBuildGuard } from './plan-build-guard';
+import { PlanDayMoveService } from './plan-day-move.service';
+import { PlanDayRouteController } from './plan-day-route.controller';
 import { PlanningController } from './planning.controller';
 import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpGroupFileController } from './tbp-group-file.controller';
@@ -22,7 +24,13 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
 
 @Module({
   imports: [DatabaseModule, RoutingModule, AdminModule],
-  controllers: [PlanningController, TbpGroupFileController, GroupTemplateController, LeaseInspectionsController],
+  controllers: [
+    PlanningController,
+    TbpGroupFileController,
+    GroupTemplateController,
+    LeaseInspectionsController,
+    PlanDayRouteController,
+  ],
   providers: [
     TbpPlanService,
     QuarterPlannerService,
@@ -36,6 +44,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     GroupTemplateService,
     GroupTemplateGateway,
     LateMoveOutService,
+    PlanDayMoveService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })

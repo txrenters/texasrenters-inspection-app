@@ -271,6 +271,21 @@ export interface FilterSizeRefresh {
   stillMissing: TenancyWithoutFilterSize[];
 }
 
+/** A day put in the order that drives least from home, and what that did to its driving. */
+export interface OptimizedPlanDay {
+  dayId: string;
+  date: string;
+  technicianId: string;
+  /** Whether its order is not the one it had. */
+  changed: boolean;
+  /** Between its properties, before and after, in seconds. */
+  driveSecondsBefore: number | null;
+  driveSecondsAfter: number | null;
+  /** From home to its first property, before and after. */
+  homeDriveSecondsBefore: number | null;
+  homeDriveSecondsAfter: number | null;
+}
+
 export interface PlanDayRoute {
   source: string | null;
   /** `[lat, lng]`, between the day's stops. Empty when nothing could draw the day. */
@@ -721,6 +736,24 @@ export function usePlanningMutations() {
     applyAdvice: useMutation({
       mutationFn: ({ planId, moves }: { planId: string; moves: { stopId: string; toDate: string; toTechnicianId: string }[] }) =>
         post<{ applied: number; refused: RefusedMove[] }>(`/quarters/${planId}/advice/apply`, { moves }),
+      onSuccess: refresh,
+    }),
+    // A day, or every day from today on, in the order that drives least from the
+    // technician's home (the office, 2026-10-02). Only the order changes.
+    optimizeDay: useMutation({
+      mutationFn: ({ planId, dayId }: { planId: string; dayId: string }) =>
+        post<{ days: OptimizedPlanDay[] }>(`/quarters/${planId}/days/${dayId}/optimize-route`),
+      onSuccess: refresh,
+    }),
+    optimizeDays: useMutation({
+      mutationFn: (planId: string) => post<{ days: OptimizedPlanDay[] }>(`/quarters/${planId}/optimize-routes`),
+      onSuccess: refresh,
+    }),
+    // A visit clicked on the Days map joins the day picked: a booked one is
+    // rescheduled, here and in Jobber, as the console reschedules one.
+    moveToDay: useMutation({
+      mutationFn: ({ planId, dayId, stopId }: { planId: string; dayId: string; stopId: string }) =>
+        post<{ stopId: string; days: OptimizedPlanDay[] }>(`/quarters/${planId}/days/${dayId}/visits`, { stopId }),
       onSuccess: refresh,
     }),
     // A crowded day's visits to the Monday after, here and in Jobber, once the office confirmed them.

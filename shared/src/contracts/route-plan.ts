@@ -11,13 +11,24 @@
 /**
  * Above this many stops, stop looking for the exact answer.
  *
- * Seven stops is 5,040 orderings, which is nothing. Eight is 40,320 and nine is
- * 362,880 — still fast, but the curve is factorial and the honest place to stop
- * is before it bites rather than after somebody notices. A technician's day is
- * three to six properties, so the exact path is what runs in practice and the
- * heuristic below exists for the day somebody assigns twelve.
+ * Exact by dynamic programming over subsets (Held-Karp), not by trying every
+ * ordering: thirteen stops is 2^13 subsets with thirteen ends each, about a
+ * million steps and a few milliseconds, where trying every ordering would be
+ * six billion. A benefit-package day is nine or ten properties (the office,
+ * 2026-10-02), which the old limit of seven left to the heuristic below -- and
+ * the heuristic is what put a 32-minute leg into a day that had a better order.
  */
-export const MAX_EXACT_STOPS = 7;
+export const MAX_EXACT_STOPS = 13;
+
+/**
+ * A pair nothing could measure, as the exact search prices it.
+ *
+ * Google leaves such a pair as `Infinity`. Summed, every order through one
+ * would be equally infinite and the search could not tell them apart, so it is
+ * priced far above any real day instead: the fewest unmeasured legs first, then
+ * the least driving.
+ */
+const UNMEASURED_SECONDS = 1e9;
 
 /**
  * Travel times between every point, in seconds.
@@ -40,15 +51,52 @@ export function routeDuration(matrix: DurationMatrix, order: readonly number[]):
   return total;
 }
 
-function permutations(items: readonly number[]): number[][] {
-  if (items.length <= 1) return [[...items]];
+/**
+ * The exact shortest path from the origin through every stop (Held-Karp).
+ *
+ * `best[set][last]` is the least driving from the origin through exactly the
+ * stops in `set`, ending at `last`; each set is built from the sets one stop
+ * smaller, and the order is read back from the step that won each one. Stops
+ * are `1..count` in the matrix and bits `0..count-1` here.
+ */
+function exactRouteOrder(matrix: DurationMatrix, count: number): number[] {
+  const cost = (from: number, to: number) => {
+    const seconds = matrix[from]?.[to];
+    return seconds !== undefined && Number.isFinite(seconds) ? seconds : UNMEASURED_SECONDS;
+  };
+  const sets = 1 << count;
+  const best = new Float64Array(sets * count).fill(Number.POSITIVE_INFINITY);
+  const previous = new Int8Array(sets * count).fill(-1);
+  for (let stop = 0; stop < count; stop += 1) best[(1 << stop) * count + stop] = cost(0, stop + 1);
 
-  const output: number[][] = [];
-  for (let index = 0; index < items.length; index += 1) {
-    const rest = [...items.slice(0, index), ...items.slice(index + 1)];
-    for (const tail of permutations(rest)) output.push([items[index] as number, ...tail]);
+  for (let set = 1; set < sets; set += 1) {
+    for (let last = 0; last < count; last += 1) {
+      if (!(set & (1 << last))) continue;
+      const here = best[set * count + last]!;
+      if (here === Number.POSITIVE_INFINITY) continue;
+      for (let next = 0; next < count; next += 1) {
+        if (set & (1 << next)) continue;
+        const grown = set | (1 << next);
+        const through = here + cost(last + 1, next + 1);
+        if (through < best[grown * count + next]!) {
+          best[grown * count + next] = through;
+          previous[grown * count + next] = last;
+        }
+      }
+    }
   }
-  return output;
+
+  const full = sets - 1;
+  let last = 0;
+  for (let stop = 1; stop < count; stop += 1) if (best[full * count + stop]! < best[full * count + last]!) last = stop;
+  const order: number[] = [];
+  for (let set = full; last !== -1; ) {
+    order.push(last + 1);
+    const before = previous[set * count + last]!;
+    set &= ~(1 << last);
+    last = before;
+  }
+  return order.reverse();
 }
 
 /**
@@ -135,18 +183,7 @@ export function shortestRouteOrder(matrix: DurationMatrix): number[] {
   const stops = Array.from({ length: Math.max(0, matrix.length - 1) }, (_, index) => index + 1);
   if (stops.length <= 1) return stops;
 
-  if (stops.length <= MAX_EXACT_STOPS) {
-    let best = stops;
-    let bestCost = Number.POSITIVE_INFINITY;
-    for (const candidate of permutations(stops)) {
-      const cost = routeDuration(matrix, candidate);
-      if (cost < bestCost) {
-        bestCost = cost;
-        best = candidate;
-      }
-    }
-    return best;
-  }
+  if (stops.length <= MAX_EXACT_STOPS) return exactRouteOrder(matrix, stops.length);
 
   return twoOpt(matrix, nearestNeighbour(matrix, stops));
 }

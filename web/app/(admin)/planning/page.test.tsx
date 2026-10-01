@@ -32,7 +32,26 @@ vi.mock('@/lib/queries', () => ({ useTechnicianLocations: () => ({ data: [] }) }
 const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 // The maps load Google's script; the page around them is what is under test.
-vi.mock('@/components/planning/plan-day-map', () => ({ PlanDayMap: () => <div data-testid="plan-day-map" /> }));
+// The Days map hands each property's click back; a button per property stands in for its pin.
+vi.mock('@/components/planning/plan-days-map', () => ({
+  PlanDaysMap: ({
+    groups,
+    ungrouped,
+    onRowClick,
+  }: {
+    groups: { rows: { rowNumber: number; address: string }[] }[];
+    ungrouped: { rowNumber: number; address: string }[];
+    onRowClick: (row: unknown) => void;
+  }) => (
+    <div data-testid="plan-days-map">
+      {[...groups.flatMap((group) => group.rows), ...ungrouped].map((row) => (
+        <button key={row.rowNumber} onClick={() => onRowClick(row)} type="button">
+          Pin of {row.address}
+        </button>
+      ))}
+    </div>
+  ),
+}));
 vi.mock('@/components/planning/plan-groups-map', () => ({ PlanGroupsMap: () => <div data-testid="plan-groups-map" /> }));
 vi.mock('@/components/planning/group-file-map', () => ({ GroupFileMap: () => <div data-testid="group-file-map" /> }));
 // No road routes under test: nothing here may call Mapbox, and the list falls back to the file's own figures.
@@ -171,6 +190,7 @@ function mount({
   plans = [PLAN],
   stops = [stop('s1'), stop('s2', { inspectionType: 'HVAC' }), stop('s3')],
   day = DAY as Record<string, unknown>,
+  otherDays = [] as Record<string, unknown>[],
   editStop = idle as unknown,
   advice = null as unknown,
   applyAdvice = null as unknown,
@@ -178,12 +198,15 @@ function mount({
   templates = [] as unknown[],
   lateMoveOuts = { conflicts: [], jobberEditsPushed: true } as unknown,
   moveToMonday = idle as unknown,
+  optimizeDay = idle as unknown,
+  optimizeDays = idle as unknown,
+  moveToDay = idle as unknown,
 } = {}) {
   hooks.usePlanLateMoveOuts.mockReturnValue({ data: lateMoveOuts });
   hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
-  hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [day] : [] });
+  hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [day, ...otherDays] : [] });
   hooks.usePlanDayRoute.mockReturnValue({ isSuccess: true, data: { source: 'GOOGLE_TRAFFIC_AWARE', geometry: [[29.7, -95.7], [29.72, -95.7]], legs: [] } });
   hooks.usePlanRotation.mockReturnValue({
     isSuccess: true,
@@ -228,6 +251,9 @@ function mount({
     advice: advice ?? idle,
     applyAdvice: applyAdvice ?? idle,
     moveToMonday,
+    optimizeDay,
+    optimizeDays,
+    moveToDay,
   });
   return render(<PlanningPage />);
 }
@@ -718,7 +744,7 @@ describe('the benefit package plan page', () => {
     expect(within(day).getByText('9:40 AM – 10:25 AM')).toBeTruthy();
     expect(within(day).getByText('HVAC inspection')).toBeTruthy();
     // Loaded after the page, as the real map is.
-    expect(await screen.findByTestId('plan-day-map')).toBeTruthy();
+    expect(await screen.findByTestId('plan-days-map')).toBeTruthy();
   });
 
   /**
@@ -1082,7 +1108,85 @@ describe('the benefit package plan page', () => {
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('not used')).toBeTruthy();
-    expect(within(day).getByText(/Rebuild the plan to route days from home/)).toBeTruthy();
+    expect(within(day).getByText(/Optimize its route, or rebuild the plan, to route it from home/)).toBeTruthy();
+  });
+
+  /**
+   * The office (2026-10-02): the Days view works as the Group maker does -- each
+   * day listed as a group is, with its drive, its distance and the day it makes.
+   */
+  it('lists each day as the Group maker lists a group', () => {
+    mount();
+
+    const list = screen.getByRole('navigation', { name: 'Planned technician-days' });
+    expect(within(list).getByText('3 visits · 1 HVAC · Zone 1')).toBeTruthy();
+    expect(within(list).getByText(/^20 min drive/)).toBeTruthy();
+    expect(within(list).getByText('14 km')).toBeTruthy();
+    // On site and between the properties: the drive from home is not in the day.
+    expect(within(list).getByText(/Est\. day: 2 h 5 min/)).toBeTruthy();
+  });
+
+  it('puts one day, or every day, in the order that drives least from home', () => {
+    const optimizeDay = { mutate: vi.fn(), isPending: false };
+    const optimizeDays = { mutate: vi.fn(), isPending: false };
+    mount({ optimizeDay, optimizeDays });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Optimize the route of Thu, Oct 1 · Moses Rivera' }));
+    expect(optimizeDay.mutate).toHaveBeenCalledWith({ planId: 'plan-1', dayId: 'day-1' }, expect.anything());
+
+    fireEvent.click(screen.getByRole('button', { name: /Optimize every day/ }));
+    expect(optimizeDays.mutate).toHaveBeenCalledWith('plan-1', expect.anything());
+  });
+
+  /** A property clicked on the map joins the day picked, as one clicked in the Group maker joins the group built. */
+  it('moves a visit with no day into the day picked, once asked', async () => {
+    const moveToDay = { mutate: vi.fn(), isPending: false };
+    mount({
+      moveToDay,
+      stops: [
+        stop('s1'),
+        stop('s2', { inspectionType: 'HVAC' }),
+        stop('s3'),
+        stop('s4', { scheduledOn: null, positionInDay: null, assignedTechnicianId: null, assignedTechnician: null, latitude: 29.8 }),
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin of s4 Any St' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Move s4 Any St to Thu, Oct 1 · Moses Rivera?')).toBeTruthy();
+    expect(within(dialog).getByText(/It has no day yet/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move here' }));
+    expect(moveToDay.mutate).toHaveBeenCalledWith({ planId: 'plan-1', dayId: 'day-1', stopId: 's4' }, expect.anything());
+  });
+
+  it('opens the details of one of the day’s own visits clicked on the map', async () => {
+    mount();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin of s2 Any St' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 's2 Any St' })).toBeTruthy();
+  });
+
+  /** A booking keeps its technician from here: giving it to someone else is sent to Jobber from its inspection. */
+  it('will not move a booked visit onto another technician’s day from the map', async () => {
+    const moveToDay = { mutate: vi.fn(), isPending: false };
+    const kevins = {
+      ...DAY,
+      id: 'day-2',
+      technicianId: 'tech-2',
+      technician: { id: 'tech-2', displayName: 'Kevin Grant' },
+      stops: [{ ...DAY.stops[0]!, id: 's9', status: 'PUBLISHED', address: '9 Any St', latitude: 29.8 }],
+    };
+    mount({ moveToDay, otherDays: [kevins] });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin of 9 Any St' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/moves here only to another day of the same technician/)).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'Move here' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(moveToDay.mutate).not.toHaveBeenCalled();
   });
 
   /** The office asked to see a planned visit the way Jobber shows one (2026-09-16). */

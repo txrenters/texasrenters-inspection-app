@@ -117,6 +117,99 @@ describe('an order through stops no leg reaches', () => {
   });
 });
 
+/**
+ * Exact up to MAX_EXACT_STOPS by dynamic programming (Held-Karp), where it used
+ * to try every ordering up to seven. A benefit-package day is nine or ten
+ * properties, which the old limit left to nearest-neighbour and 2-opt -- and a
+ * day ordered that way kept a 32-minute leg it did not need (2026-10-02).
+ */
+describe('the exact order, by dynamic programming', () => {
+  /** A seeded generator, so a failure names the matrix it failed on. */
+  function seeded(seed: number) {
+    let state = seed;
+    return () => {
+      state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return state / 2_147_483_648;
+    };
+  }
+  /** Drive times from scattered points, one way longer than the other at random, as one-way streets make them. */
+  function scattered(stops: number, seed: number) {
+    const random = seeded(seed);
+    const points = Array.from({ length: stops + 1 }, () => [random() * 40, random() * 40] as const);
+    return points.map(([x1, y1], from) =>
+      points.map(([x2, y2], to) => (from === to ? 0 : Math.round(Math.hypot(x2 - x1, y2 - y1) * 60 * (1 + random() * 0.3)))),
+    );
+  }
+  /** Every ordering tried: the answer the search must equal. */
+  function bruteForce(matrix: number[][]) {
+    const stops = Array.from({ length: matrix.length - 1 }, (_, index) => index + 1);
+    let best = Number.POSITIVE_INFINITY;
+    const walk = (order: number[], left: number[]) => {
+      if (!left.length) {
+        best = Math.min(best, routeDuration(matrix, order));
+        return;
+      }
+      for (const next of left) walk([...order, next], left.filter((stop) => stop !== next));
+    };
+    walk([], stops);
+    return best;
+  }
+
+  it('finds the least driving every ordering would, on days of up to nine stops', () => {
+    for (let stops = 2; stops <= 9; stops += 1)
+      for (let seed = 1; seed <= 4; seed += 1) {
+        const matrix = scattered(stops, stops * 100 + seed);
+        expect({ stops, seed, seconds: routeDuration(matrix, shortestRouteOrder(matrix)) }).toEqual({
+          stops,
+          seed,
+          seconds: bruteForce(matrix),
+        });
+      }
+  });
+
+  it('is never longer than nearest-neighbour and 2-opt on a ten-stop day', () => {
+    // Past every-ordering's reach in a test, so judged against the heuristic it
+    // replaced: a day the old code ordered no better than the exact one.
+    const matrix = scattered(10, 4242);
+    const stops = Array.from({ length: 10 }, (_, index) => index + 1);
+    const exact = routeDuration(matrix, shortestRouteOrder(matrix));
+    for (let first = 1; first <= 10; first += 1) {
+      const greedy = [first, ...stops.filter((stop) => stop !== first)];
+      expect(exact).toBeLessThanOrEqual(routeDuration(matrix, greedy));
+    }
+  });
+
+  it('orders thirteen stops exactly, quickly, and visits each once', () => {
+    const matrix = scattered(MAX_EXACT_STOPS, 13);
+    const started = performance.now();
+    const order = shortestRouteOrder(matrix);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect([...order].sort((a, b) => a - b)).toEqual(Array.from({ length: MAX_EXACT_STOPS }, (_, index) => index + 1));
+  });
+
+  it('drives round a pair nothing measured when another order manages, and still visits every stop', () => {
+    // Google leaves a pair it could not answer as Infinity. Stop 1 cannot be
+    // reached from stop 2, so the day must not go 2 then 1.
+    const matrix = [
+      [0, 10, 5, 20],
+      [10, 0, 10, 10],
+      [5, Number.POSITIVE_INFINITY, 0, 10],
+      [20, 10, 10, 0],
+    ];
+    const order = shortestRouteOrder(matrix);
+    expect([...order].sort()).toEqual([1, 2, 3]);
+    expect(Number.isFinite(routeDuration(matrix, order))).toBe(true);
+  });
+
+  it('still visits every stop when nothing reaches any of them from the start', () => {
+    const size = 9;
+    const matrix = Array.from({ length: size + 1 }, (_, from) =>
+      Array.from({ length: size + 1 }, (_, to) => (from === to ? 0 : from === 0 ? Number.POSITIVE_INFINITY : 60)),
+    );
+    expect([...shortestRouteOrder(matrix)].sort((a, b) => a - b)).toEqual(Array.from({ length: size }, (_, index) => index + 1));
+  });
+});
+
 describe('routeDuration', () => {
   it('sums the origin leg and every hop, and does not return home', () => {
     // origin->A 1, A->B 1, B->C 1. A tour would add C->origin (3) and be wrong:

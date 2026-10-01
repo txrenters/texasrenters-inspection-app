@@ -146,6 +146,7 @@ export default function PlanningPage() {
         postalCode: stop.tenant.postalCode,
         lease: stop.tenant.leaseName,
         hvacPlan: stop.tenant.hvacPlan,
+        status: stop.status,
       })),
     [stops.data],
   );
@@ -733,13 +734,17 @@ export default function PlanningPage() {
                 />
               ) : (
                 <PlanDays
+                  canChange={canChange}
+                  canMoveVisits={canMoveVisits}
                   days={days.data}
+                  jobberEditsPushed={lateMoveOuts.data?.jobberEditsPushed ?? null}
                   onOpenStop={setOpenStopId}
                   rotation={rotation.data ?? null}
                   onSelect={(day) => setState({ day })}
                   planId={plan.id}
                   selectedDayId={state.day}
                   settings={plan}
+                  visits={dayStops}
                 />
               )}
             </TabsContent>

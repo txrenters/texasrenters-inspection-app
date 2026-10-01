@@ -122,6 +122,34 @@ export interface FileGroup {
   outline: [number, number][];
   /** Where the group's number stands: its northernmost property, the top of its outline. */
   labelAt: { latitude: number; longitude: number };
+  /**
+   * Where the drive starts, before the first property: a planned day's
+   * technician's home. Its route then has a leg more than the group has gaps,
+   * the drive from here first, drawn and written apart from the rest. Absent in
+   * a groups file and the Group maker, whose groups start at their first stop.
+   */
+  origin?: { latitude: number; longitude: number; title: string } | null;
+}
+
+/**
+ * Where leg `index` of a group's drive runs. With an origin, leg 0 is from it to
+ * the first stop and leg `i` from stop `i` to stop `i + 1`; without, leg `i` is
+ * from stop `i + 1` to stop `i + 2`.
+ */
+export function legEnds(
+  group: Pick<FileGroup, 'rows' | 'origin'>,
+  index: number,
+): { from: { latitude: number; longitude: number }; to: GroupFileRow; fromStop: number | 'Home'; toStop: number } {
+  const before = group.origin ? 1 : 0;
+  const to = group.rows[index + 1 - before]!;
+  const home = index < before;
+  const from = home ? group.origin! : group.rows[index - before]!;
+  return {
+    from,
+    to,
+    fromStop: home ? 'Home' : ((from as GroupFileRow).stop ?? index - before + 1),
+    toStop: to.stop ?? index - before + 2,
+  };
 }
 
 export interface GroupFile {
