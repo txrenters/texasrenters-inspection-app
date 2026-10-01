@@ -15,6 +15,7 @@ import type {
 import { useDemoStore } from '../../stores/demo.store';
 import {
   ApiConnectionError,
+  ApiRefusalError,
   cachedApiRecord,
   SessionExpiredError,
   storeApiRecord,
@@ -43,6 +44,9 @@ import type {
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import {
   QueuedOfflineError,
+  RecordingStillUploadingError,
+  completionWaitsForRecording,
+  dropQueuedWrite,
   jobStartEntryId,
   drainOfflineWrites,
   queueOnConnectionFailure,
@@ -56,6 +60,7 @@ import {
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
+import { roomRecordingStillUploading } from '../../media/room-recording-upload';
 import {
   runStreamUpload,
   sessionRefusalRetryable,
@@ -690,7 +695,10 @@ export async function requestJson(
       options.signal?.removeEventListener('abort', abortFromCaller);
     }
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      const payload = (await response.json().catch(() => null)) as {
+        message?: string;
+        code?: string;
+      } | null;
       if (hasFallback && [502, 503, 504].includes(response.status)) continue;
       const message = payload?.message ?? `TexasRenters API request failed (${response.status}).`;
       // A token that expired server-side is the common case; the local
@@ -710,7 +718,7 @@ export async function requestJson(
           message,
           [502, 503, 504].includes(response.status) ? 'unavailable' : 'fault',
         );
-      throw new Error(message);
+      throw new ApiRefusalError(message, response.status, payload?.code);
     }
     /**
      * An empty body is not a parse error.
@@ -1381,6 +1389,10 @@ export class ApiInspectionRepository implements InspectionRepository {
    * app being closed or the signal going, and reads show the area submitted
    * meanwhile (`withSavedCompletions`). The photographs go first, because the
    * server counts them before it completes the area.
+   *
+   * Refused only because the area's video is still uploading from this phone,
+   * it is held like a submission with no signal, and sent when the upload
+   * finishes (`RecordingStillUploadingError`).
    */
   async completeRoom(roomId: string) {
     try {
@@ -1389,10 +1401,15 @@ export class ApiInspectionRepository implements InspectionRepository {
           { id: `complete:${roomId}`, kind: 'room-complete', payload: { roomId } },
           async () => {
             await flushRoomSnapshotsNow(roomId);
-            return writeJson(
-              `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`,
-              'POST',
-            );
+            try {
+              return await writeJson(
+                `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`,
+                'POST',
+              );
+            } catch (error) {
+              if (completionWaitsForRecording(error, roomId)) throw new RecordingStillUploadingError();
+              throw error;
+            }
           },
         ),
       );
@@ -1419,6 +1436,11 @@ export class ApiInspectionRepository implements InspectionRepository {
    * submission it undoes, and read as reopened meanwhile (`withRoomStatesSaved`).
    */
   async reopenRoom(roomId: string) {
+    // A submission still waiting for the area's video is undone here, before it
+    // is ever sent. Left queued, it would go once the upload finished -- after
+    // this reopen, which the server answers for an area not yet completed by
+    // changing nothing -- and the area would end up submitted.
+    if (roomRecordingStillUploading(roomId)) await dropQueuedWrite(`complete:${roomId}`);
     try {
       const room = roomSchema.parse(
         await sendSavedFirst({ id: `reopen:${roomId}`, kind: 'room-reopen', payload: { roomId } }, () =>

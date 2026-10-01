@@ -1,4 +1,5 @@
-import { ApiConnectionError } from '../../storage/offline-record-cache';
+import { ApiConnectionError, ApiRefusalError } from '../../storage/offline-record-cache';
+import { roomRecordingStillUploading } from '../../media/room-recording-upload';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import {
   drainQueue,
@@ -14,7 +15,9 @@ export type HeldReason =
   /** The device could not reach us. Working offline; it goes when signal does. */
   | 'offline'
   /** Signal is fine — we did not take it. Nothing to go looking for. */
-  | 'server';
+  | 'server'
+  /** An area's submission, waiting for its video to finish uploading. */
+  | 'upload';
 
 /**
  * A write that was held rather than lost.
@@ -41,11 +44,51 @@ export class QueuedOfflineError extends Error {
     super(
       reason === 'offline'
         ? 'Saved on this device. It will send when you are back on a network.'
-        : 'Saved on this device. The TexasRenters server has not taken it yet — it will keep trying.',
+        : reason === 'upload'
+          ? 'Saved on this device. It is submitted as soon as its video finishes uploading.'
+          : 'Saved on this device. The TexasRenters server has not taken it yet — it will keep trying.',
     );
     this.name = 'QueuedOfflineError';
     this.reason = reason;
   }
+}
+
+/**
+ * An area's submission that has to wait for its video.
+ *
+ * A move-in or move-out area is completed on its walkthrough, and the server
+ * takes the completion only once the walkthrough has arrived. Submit Evidence
+ * opens while the video is still uploading -- "queued counts as settled", so a
+ * technician leaving a property is never held on a transfer -- and the
+ * submission was then refused, put back, and alerted: "A confirmed uploaded
+ * video is required before completing this room." The error log, 2026-10-01:
+ * one technician, five times in half an hour, for an area that was fine.
+ *
+ * It is not a refusal. The video is on its way from this phone, and the same
+ * request is accepted when it lands, so the submission is held like one with
+ * no signal: saved, shown as submitted, and sent when the upload finishes.
+ */
+export class RecordingStillUploadingError extends Error {
+  constructor() {
+    super('This area’s video is still uploading.');
+    this.name = 'RecordingStillUploadingError';
+  }
+}
+
+/**
+ * Whether a refused completion is only early: the server wants the area's
+ * evidence, and this phone is still sending its walkthrough.
+ *
+ * Asked after the refusal, not instead of the request. An occupied area with a
+ * photograph is accepted whatever its video is doing, and a held submission
+ * would have kept it from the job's own submission for nothing.
+ */
+export function completionWaitsForRecording(error: unknown, roomId: string) {
+  return (
+    error instanceof ApiRefusalError &&
+    (error.code === 'ROOM_VIDEO_REQUIRED' || error.code === 'ROOM_EVIDENCE_REQUIRED') &&
+    roomRecordingStillUploading(roomId)
+  );
 }
 
 /** Hold the write and say why, or let the failure through to the technician. */
@@ -84,6 +127,9 @@ export type HoldDecision = { hold: false } | { hold: true; reason: HeldReason };
  * the server refusing the request — and has always been surfaced here.
  */
 export function classifyWriteFailure(error: unknown, isOnline: boolean): HoldDecision {
+  // Waiting on this phone's own upload, which the connection has nothing to do
+  // with: see `RecordingStillUploadingError`.
+  if (error instanceof RecordingStillUploadingError) return { hold: true, reason: 'upload' };
   if (!(error instanceof ApiConnectionError)) return { hold: false };
   switch (error.reason) {
     case 'transport':
@@ -320,11 +366,20 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
      * writes the same row. `flushRoomSnapshotsNow` is safe to repeat too — an
      * uploaded snapshot is no longer owed, and the idempotency key resolves a
      * re-sent one to the same photograph.
+     *
+     * Refused because the area's video is still uploading from this phone, it
+     * waits for the upload rather than being dropped: see
+     * `RecordingStillUploadingError`.
      */
     'room-complete': async (payload, send) => {
       const roomId = String(payload.roomId);
       await flushRoomSnapshotsNow(roomId);
-      return send(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST', {});
+      try {
+        return await send(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST', {});
+      } catch (error) {
+        if (completionWaitsForRecording(error, roomId)) throw new RecordingStillUploadingError();
+        throw error;
+      }
     },
     /**
      * Start job, saved when it was pressed (`sendSavedFirst`).
@@ -418,16 +473,52 @@ type Sender = (path: string, method: string, body: unknown) => Promise<unknown>;
  */
 const isWorthReplaying = (error: unknown) => error instanceof ApiConnectionError;
 
-/** Replays what is waiting. Returns how many went out and how many remain. */
+/**
+ * An entry held back for a reason that is not a failure: an area whose video is
+ * still uploading, or one queued behind it for the same area.
+ */
+const isWaiting = (error: unknown) => error instanceof RecordingStillUploadingError;
+
+let draining: Promise<{ sent: number; remaining: number }> | null = null;
+
+/**
+ * Replays what is waiting. Returns how many went out and how many remain.
+ *
+ * One drain at a time, shared by whoever asks: the connection coming back and
+ * an upload finishing can both ask at once, and two passes over the same
+ * entries send each of them twice.
+ *
+ * An area waiting on its video is passed over, not counted as a failure: it
+ * keeps its attempts, the rest of the queue still goes, and so do other areas.
+ * What comes after it *for the same area* waits with it -- a Change Evidence
+ * sent before the submission it undoes would leave the area submitted.
+ */
 export function drainOfflineWrites(send: Sender) {
-  return drainQueue(async (entry: QueuedMutation) => {
-    const sender = SENDERS[entry.kind];
-    // An unknown kind is from a build that no longer exists. Treating it as
-    // sent drops it, which is better than retrying something nothing can
-    // handle until it burns through its attempts.
-    if (!sender) return;
-    await sender(entry.payload, send);
-  }, isWorthReplaying);
+  draining ??= (async () => {
+    const waitingRooms = new Set<string>();
+    return drainQueue(
+      async (entry: QueuedMutation) => {
+        const sender = SENDERS[entry.kind];
+        // An unknown kind is from a build that no longer exists. Treating it as
+        // sent drops it, which is better than retrying something nothing can
+        // handle until it burns through its attempts.
+        if (!sender) return;
+        const roomId = entry.payload.roomId ? String(entry.payload.roomId) : null;
+        if (roomId && waitingRooms.has(roomId)) throw new RecordingStillUploadingError();
+        try {
+          await sender(entry.payload, send);
+        } catch (error) {
+          if (roomId && isWaiting(error)) waitingRooms.add(roomId);
+          throw error;
+        }
+      },
+      isWorthReplaying,
+      isWaiting,
+    );
+  })().finally(() => {
+    draining = null;
+  });
+  return draining;
 }
 
 export { readQueue as readOfflineWrites };

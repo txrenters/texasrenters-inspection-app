@@ -282,6 +282,8 @@ describe('technician mobile data boundary', () => {
         }),
         update: jest.fn(),
       },
+      // Every recording of the area, read before refusing: none.
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
     };
     const service = new TechnicianService(
       prisma as never,

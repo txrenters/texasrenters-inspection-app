@@ -8,6 +8,8 @@ import { useDemoStore } from '../stores/demo.store';
 import { verifyQueries } from '../features/state-consistency';
 import { evaluateUploadGate } from '../lib/connectivity';
 import { repositories } from '../repositories';
+import { drainOfflineWrites } from '../repositories/api/offline-writes';
+import { sendQueuedWrite } from '../repositories/api/repositories';
 import { useNetworkStore } from '../stores/network.store';
 import { usePreferencesStore } from '../stores/preferences.store';
 
@@ -104,6 +106,13 @@ export function UploadQueueRunner() {
       }
 
       if (!uploaded) return;
+      /**
+       * An area submitted while its video was uploading waits in the offline
+       * queue for exactly this (`RecordingStillUploadingError`). Sent now
+       * rather than at the next change of signal, and before the refresh below,
+       * so the area the refresh reads back is the one the server has completed.
+       */
+      await drainOfflineWrites(sendQueuedWrite).catch(() => undefined);
       await verifyQueries(client, [
         queryKeys.roomsRoot,
         queryKeys.roomRoot,
