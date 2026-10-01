@@ -78,16 +78,28 @@ export function makerProperties(properties: readonly GroupMakerProperty[]): Make
   };
 }
 
+/** A building a template names that is no longer among the properties, and the group it was in. */
+export interface MissingStop {
+  buildingId: string;
+  /** Its street address, from the template; null when the server sent none. */
+  address: string | null;
+  group: string;
+}
+
 /**
  * A saved template as groups to edit. A building it names that is no longer
  * among the properties -- its tenants left the package, or it lost its
- * position -- is left out, and counted so the office is told.
+ * position -- is left out, and listed with its group so the office is told
+ * which (the office, 2026-10-01: a count alone said nothing they could act on).
  */
 export function stateFromTemplate(
-  template: { groups: (Omit<GroupTemplateDetail['groups'][number], 'id'> & { id?: string })[] },
+  template: {
+    groups: (Omit<GroupTemplateDetail['groups'][number], 'id'> & { id?: string })[];
+    addresses?: Readonly<Record<string, string>>;
+  },
   rowOf: ReadonlyMap<string, number>,
-): { state: ManualState; missing: number } {
-  let missing = 0;
+): { state: ManualState; missing: MissingStop[] } {
+  const missing: MissingStop[] = [];
   const groups = template.groups.map(
     (group): ManualGroup => ({
       // The server's id, so every browser editing it live names the same group.
@@ -97,12 +109,25 @@ export function stateFromTemplate(
       target: group.target,
       stops: group.buildingIds.flatMap((buildingId) => {
         const row = rowOf.get(buildingId);
-        if (row === undefined) missing += 1;
+        if (row === undefined)
+          missing.push({ buildingId, address: template.addresses?.[buildingId] ?? null, group: group.name });
         return row === undefined ? [] : [row];
       }),
     }),
   );
   return { state: { groups }, missing };
+}
+
+/** How many missing properties the warning names before "and N more". */
+export const MISSING_NAMED = 8;
+
+/** "1 Main St (Group 4)", one per missing property, the first few by name. */
+export function missingStopLines(missing: readonly MissingStop[]): string[] {
+  const named = missing
+    .slice(0, MISSING_NAMED)
+    .map((stop) => `${stop.address ?? 'A property no longer in Propertyware'} (${stop.group})`);
+  const more = missing.length - named.length;
+  return more > 0 ? [...named, `and ${more.toLocaleString()} more`] : named;
 }
 
 /** The groups being edited as live editing holds them: stops as building ids. */

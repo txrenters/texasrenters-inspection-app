@@ -7,6 +7,8 @@ import {
   liveGroupsOf,
   liveGroupsOfTemplate,
   makerProperties,
+  MISSING_NAMED,
+  missingStopLines,
   rowsToMatch,
   sameTemplate,
   stateFromMatchedFile,
@@ -62,6 +64,7 @@ describe('a template, opened and saved', () => {
           { position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b3', 'gone', 'b1'] },
           { position: 2, name: 'South', color: '#4363d8', target: 10, buildingIds: ['b2'] },
         ],
+        addresses: { gone: '9 Elm St', b1: '1 Main St' },
       },
       made.rowOf,
     );
@@ -70,7 +73,25 @@ describe('a template, opened and saved', () => {
       ['North', [4, 2]],
       ['South', [3]],
     ]);
-    expect(missing).toBe(1);
+    // Named, with its group (the office, 2026-10-01): a count said nothing they could act on.
+    expect(missing).toEqual([{ buildingId: 'gone', address: '9 Elm St', group: 'North' }]);
+  });
+
+  it('names the missing properties by address and group, the first few, then how many more', () => {
+    expect(missingStopLines([{ buildingId: 'gone', address: '9 Elm St', group: 'Group 4' }])).toEqual([
+      '9 Elm St (Group 4)',
+    ]);
+    expect(missingStopLines([{ buildingId: 'gone', address: null, group: 'Group 4' }])).toEqual([
+      'A property no longer in Propertyware (Group 4)',
+    ]);
+    const many = Array.from({ length: MISSING_NAMED + 3 }, (_, n) => ({
+      buildingId: `b${n}`,
+      address: `${n} Elm St`,
+      group: 'Day 2',
+    }));
+    const lines = missingStopLines(many);
+    expect(lines).toHaveLength(MISSING_NAMED + 1);
+    expect(lines.at(-1)).toBe('and 3 more');
   });
 
   it('saves as buildings in driving order, and a round trip changes nothing', () => {
