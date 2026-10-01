@@ -179,7 +179,7 @@ export default function PlanningPage() {
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
   const bookedToCheck = (days.data ?? []).flatMap((day) =>
     (day.anchors ?? []).flatMap((anchor) => {
-      const problem = bookedProblem(day, anchor, anchor.kind);
+      const problem = bookedProblem(day, anchor);
       return problem ? [{ day, anchor, problem }] : [];
     }),
   );
@@ -272,6 +272,12 @@ export default function PlanningPage() {
                 ? ` ${result.routing.template.days.toLocaleString()} days are groups of “${result.routing.template.name}”${
                     result.routing.template.notInTemplate
                       ? `; ${result.routing.template.notInTemplate.toLocaleString()} visits were in none of its groups and joined the nearest`
+                      : ''
+                  }${
+                    result.routing.template.toMondays
+                      ? `; ${result.routing.template.toMondays.toLocaleString()} ${
+                          result.routing.template.toMondays === 1 ? 'visit' : 'visits'
+                        } a move-out day gave up went to the Monday after`
                       : ''
                   }.`
                 : ''

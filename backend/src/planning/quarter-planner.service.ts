@@ -36,6 +36,7 @@ import {
   quarterLabel,
   quarterStart,
   quarterWeekIndex,
+  rescheduleMondaysOfQuarter,
   shortestOpenPathOrder,
   shortestRouteOrder,
   weekStartOf,
@@ -243,6 +244,8 @@ export interface RoutingSummary {
     days: number;
     /** Visits whose building is in no group of it -- new since it was saved -- placed by the planner. */
     notInTemplate: number;
+    /** Visits move-out days gave up, put on the Monday after with the same person. */
+    toMondays: number;
   } | null;
 }
 
@@ -503,8 +506,26 @@ export class QuarterPlannerService {
 
     // In last quarter's order. A zone too far for a day's drive from any home is
     // a trip for the crew member living nearest it (the office, 2026-09-18).
-    const booked = await this.dayAnchors(organizationId, quarter, roster.technicianIds, settings.startsOn);
+    // A quarter sent out to nobody has day groups, not people: nobody's day can be
+    // built around anybody's move-out until the office hands the days out in Jobber.
+    const booked = settings.jobberUnassigned
+      ? { anchors: [] as DayAnchor[], withoutLocation: [] as string[] }
+      : await this.dayAnchors(organizationId, quarter, roster.technicianIds, settings.startsOn);
     const presets = template ? templateStops(template, free, buildings) : null;
+    // From a template, a move-out day's trimmed visits go to the Monday after it (2026-10-01).
+    const rescheduleMondays = presets
+      ? await this.availability(
+          organizationId,
+          quarter,
+          rescheduleMondaysOfQuarter(quarter, settings.holidays, settings.startsOn).filter(
+            (date) => !options.today || date >= options.today,
+          ),
+          stops,
+          roster,
+          zones.circle,
+          settings.startsOn,
+        )
+      : [];
     const assignment = layoutEveryDay(free, days, {
       limits,
       rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
@@ -512,6 +533,7 @@ export class QuarterPlannerService {
       anchors: booked.anchors,
       homes: roster.homes,
       tripZones: zones.outOfReach,
+      rescheduleMondays,
       quarter,
       ...(presets ? { presetGroups: presets.groups, presetTargets: presets.targets } : {}),
     });
@@ -576,6 +598,10 @@ export class QuarterPlannerService {
               revision: template.revision,
               days: assignment.crews.filter((crew) => crew.preset !== undefined).length,
               notInTemplate: presets.notInTemplate,
+              // Visits move-out days gave up, put on the Monday after.
+              toMondays: assignment.crews
+                .filter((crew) => crew.rescheduleMonday)
+                .reduce((total, crew) => total + crew.stops.length, 0),
             }
           : null,
     };
@@ -851,16 +877,13 @@ export class QuarterPlannerService {
   /**
    * The move-outs and move-ins the quarter's days are built around.
    *
-   * Every move-out booked inside the quarter and not cancelled anchors a day of
-   * the technician who handles move-outs -- Moses -- whoever it is assigned to
-   * now: move-outs are his, and the console shows one assigned to anybody else
-   * for the office to reassign (the office, 2026-09-17). With nobody marked, no
-   * move-out anchors. A move-in anchors the day of the crew member it is booked
-   * for; one booked for somebody off the crew -- Amy takes the move-ins, and
-   * has no benefit-package days -- is not the plan's (2026-09-18). One whose
-   * building has no coordinates has nowhere to gather visits round, so it is
-   * reported instead. From the plan's first day: a plan started before its
-   * quarter is built around the move-outs on those days too.
+   * Every move-out and move-in booked inside the quarter and not cancelled
+   * anchors the day of the crew member it is assigned to; one assigned to
+   * nobody, or to somebody off the crew, is not the plan's (move-ins 2026-09-18,
+   * move-outs 2026-10-01 -- see below). One whose building has no coordinates
+   * has nowhere to gather visits round, so it is reported instead. From the
+   * plan's first day: a plan started before its quarter is built around the
+   * move-outs on those days too.
    */
   private async dayAnchors(
     organizationId: string,
@@ -868,16 +891,10 @@ export class QuarterPlannerService {
     crew: readonly string[],
     startsOn: string | null,
   ): Promise<{ anchors: DayAnchor[]; withoutLocation: string[] }> {
-    const handler = await this.prisma.technicianPlanningProfile.findFirst({
-      where: { organizationId, isPlannable: true, handlesMoveOuts: true },
-      orderBy: [{ tbpZoneOrder: 'asc' }, { technicianId: 'asc' }],
-      select: { technicianId: true },
-    });
-
     const booked = await this.prisma.inspection.findMany({
       where: {
         organizationId,
-        inspectionType: { in: handler ? [InspectionType.MOVE_OUT, InspectionType.MOVE_IN] : [InspectionType.MOVE_IN] },
+        inspectionType: { in: [InspectionType.MOVE_OUT, InspectionType.MOVE_IN] },
         status: { not: InspectionStatus.CANCELLED },
         scheduledAt: { gte: startsOn ? new Date(`${startsOn}T00:00:00.000Z`) : quarterStart(quarter), lt: quarterEnd(quarter) },
       },
@@ -894,8 +911,18 @@ export class QuarterPlannerService {
     const withoutLocation: string[] = [];
     for (const inspection of booked) {
       const moveIn = inspection.inspectionType === InspectionType.MOVE_IN;
+      /**
+       * On the day of whoever it is assigned to, move-out and move-in alike.
+       *
+       * Move-outs used to go on the day of the one technician marked as handling
+       * them. Production said otherwise (2026-10-01): of 48 weekday move-outs in
+       * Q3 and Q4 2026, 14 were the benefit-package crew's, and most were
+       * Beatriz's and Amy's, who are not on it -- so his days were trimmed for
+       * work he was not doing. One assigned to nobody, or to somebody off the
+       * crew, takes nobody's day.
+       */
       const assigned = inspection.assignments[0]?.technicianId ?? null;
-      const technicianId = moveIn ? (assigned && crew.includes(assigned) ? assigned : null) : (handler?.technicianId ?? null);
+      const technicianId = assigned && crew.includes(assigned) ? assigned : null;
       if (!technicianId) continue;
       const building = inspection.propertywareBuilding;
       if (!propertyPosition(building)) {

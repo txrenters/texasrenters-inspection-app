@@ -459,10 +459,9 @@ export class PlanningController {
           buildingId: building?.id ?? null,
           latitude: propertyPosition(building)?.latitude ?? null,
           longitude: propertyPosition(building)?.longitude ?? null,
+          // Whoever it is assigned to now. A move-out or move-in is on the day of whoever it was assigned to
+          // when the plan was laid out (2026-10-01); assigned to somebody else since, the day no longer holds it.
           assignedTechnician: assigned,
-          // Move-outs are this technician's: one assigned to anyone else, or nobody, is for the office to
-          // reassign. A move-in is on the day of whoever it is booked for, so it never is.
-          needsReassigning: kind === 'MOVE_OUT' && assigned?.id !== day.technicianId,
           // Moved or cancelled since the plan was laid out: a rebuild places the day again.
           scheduledOn: anchor.inspection.scheduledAt.toISOString().slice(0, 10),
           cancelled: anchor.inspection.status === InspectionStatus.CANCELLED,

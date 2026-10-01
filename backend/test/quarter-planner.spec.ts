@@ -845,10 +845,10 @@ describe('days built around move-outs and move-ins', () => {
     ...Array.from({ length: 12 }, (_, index) => stop(`north-${index + 1}`, 10 + index, 20 + index * 0.01, { zone: '2' })),
   ];
 
-  it('gives the move-out’s day to whoever handles move-outs, with the visits nearest it', async () => {
+  it('gives the move-out’s day to whoever it is assigned to, with the visits nearest it', async () => {
     const { service, stopUpdate, anchorCreate, dayCreate, inspectionFindMany } = build(stops, {
       technicians: CREW,
-      booked: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96 }],
+      booked: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'moses' }],
     });
 
     const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
@@ -885,19 +885,57 @@ describe('days built around move-outs and move-ins', () => {
     expect(day).toMatchObject({ stopCount: mosesOnTheFirst.length, onSiteMinutes: mosesOnTheFirst.length * 30 + 60 });
   });
 
-  it('anchors no move-out when nobody is marked as handling move-outs', async () => {
-    const { service, anchorCreate, inspectionFindMany } = build(stops, {
-      technicians: CREW.map((row) => ({ ...row, handlesMoveOuts: false })),
-      booked: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'moses' }],
+  /**
+   * Production (2026-10-01): of 48 weekday move-outs in Q3 and Q4 2026, 14 were
+   * the crew's. Most were Beatriz's and Amy's, off the crew -- and the one
+   * technician marked as handling move-outs had his days trimmed for all of them.
+   */
+  it('builds nobody’s day around a move-out assigned to somebody off the crew, or to nobody', async () => {
+    const { service, anchorCreate } = build(stops, {
+      technicians: CREW,
+      booked: [
+        { id: 'beatriz-move-out', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'beatriz' },
+        { id: 'nobodys-move-out', scheduledAt: '2026-10-01', latitude: 29.96 },
+      ],
     });
 
     const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
 
-    expect(inspectionFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ inspectionType: { in: [InspectionType.MOVE_IN] } }) }),
-    );
     expect(anchorCreate).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ anchored: 0, anchorsSkipped: [] });
+  });
+
+  it('builds the day of whoever the move-out is assigned to, not of the one marked as handling them', async () => {
+    const { service, anchorCreate } = build(stops, {
+      technicians: CREW,
+      booked: [{ id: 'kevins-move-out', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'kevin' }],
+    });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
+
+    expect(anchorCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ inspectionId: 'kevins-move-out', technicianId: 'kevin' }),
+    });
+  });
+
+  /**
+   * A quarter sent out to nobody has day groups, not people: nobody can say
+   * whose day a move-out is until the office hands the days out in Jobber.
+   */
+  it('builds no day around a move-out on a quarter sent out unassigned', async () => {
+    const { service, anchorCreate } = build(stops, {
+      technicians: CREW,
+      booked: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'moses' }],
+    });
+
+    const summary = await service.route('org-1', 'plan-1', {
+      holidays: onlyOn('2026-10-01', '2026-10-02'),
+      jobberUnassigned: true,
+      technicianIds: [],
+    });
+
+    expect(anchorCreate).not.toHaveBeenCalled();
+    expect(summary.anchored).toBe(0);
   });
 
   it('builds a crew member’s day around a move-in booked for them, not one booked for somebody off the crew', async () => {
@@ -923,9 +961,9 @@ describe('days built around move-outs and move-ins', () => {
     const { service, anchorCreate } = build(stops, {
       technicians: CREW,
       booked: [
-        { id: 'no-location', scheduledAt: '2026-10-01', latitude: null },
+        { id: 'no-location', scheduledAt: '2026-10-01', latitude: null, assignedTo: 'moses' },
         // A Monday from the second week, kept for rescheduled visits.
-        { id: 'kept-free-monday', scheduledAt: '2026-10-05', latitude: 29.96 },
+        { id: 'kept-free-monday', scheduledAt: '2026-10-05', latitude: 29.96, assignedTo: 'moses' },
       ],
     });
 
@@ -1657,7 +1695,7 @@ describe('a quarter built from a group template', () => {
     expect(even.size).toBe(1);
     expect([...odd][0]).not.toEqual([...even][0]);
     expect(summary.days).toBe(2);
-    expect(summary.template).toEqual({ id: TEMPLATE_ID, name: 'Outside in', revision: 3, days: 2, notInTemplate: 0 });
+    expect(summary.template).toEqual({ id: TEMPLATE_ID, name: 'Outside in', revision: 3, days: 2, notInTemplate: 0, toMondays: 0 });
   });
 
   it('keeps the template, and the revision it was built from, on the plan', async () => {
@@ -1795,5 +1833,67 @@ describe('a quarter built from a group template', () => {
 
   it('refuses a template id that is not an id', () => {
     expect(() => routingSettings(SETTINGS, { groupTemplateId: 'outside-in' }, Q4)).toThrow('Choose a group template');
+  });
+
+  /**
+   * The office (2026-10-01): a day with a move-out gives up the three visits
+   * furthest from it, and those go to the Monday after -- the day already kept
+   * for rescheduled visits -- with the same person, rather than being pushed
+   * into somebody else's group.
+   */
+  describe('a move-out day’s trimmed visits', () => {
+    const MOVE_OUT = { id: 'move-out-1', scheduledAt: '2026-10-07', latitude: 29.76, assignedTo: 'tech-1' };
+    const scheduled = (stopUpdate: jest.Mock, id: string) => updateFor(stopUpdate, id);
+
+    it('go to the Monday after, with the same person, passing over a holiday Monday', async () => {
+      const { service, stopUpdate } = build(tight(), { templates: [template()], booked: [MOVE_OUT] });
+
+      const summary = await service.route('org-1', 'plan-1', {
+        groupTemplateId: TEMPLATE_ID,
+        holidays: onlyOn('2026-10-07', '2026-10-08'),
+      });
+
+      // The Odd group is nearest the move-out; its three furthest visits leave the day.
+      const odd = ['s1', 's3', 's5', 's7', 's9'];
+      const onMonday = odd.filter((id) => dayOf(stopUpdate, id)?.startsWith('2026-10-19'));
+      expect(onMonday.sort()).toEqual(['s5', 's7', 's9']);
+      expect(onMonday.every((id) => scheduled(stopUpdate, id)?.assignedTechnicianId === 'tech-1')).toBe(true);
+      // Monday 12 October is Columbus Day: the next Monday kept for rescheduled visits takes them.
+      expect(odd.some((id) => dayOf(stopUpdate, id)?.startsWith('2026-10-12'))).toBe(false);
+      expect(summary.template?.toMondays).toBe(3);
+    });
+
+    it('leave the rest of the group on the move-out’s day', async () => {
+      const { service, stopUpdate } = build(tight(), { templates: [template()], booked: [MOVE_OUT] });
+
+      await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID, holidays: onlyOn('2026-10-07', '2026-10-08') });
+
+      expect(['s1', 's3'].map((id) => dayOf(stopUpdate, id)?.slice(0, 10))).toEqual(['2026-10-07', '2026-10-07']);
+    });
+
+    it('join the nearest group instead when no Monday is left in the quarter', async () => {
+      // 29 December: the quarter's last Monday was the day before.
+      const late = { ...MOVE_OUT, scheduledAt: '2026-12-29' };
+      const { service, stopUpdate } = build(tight(), { templates: [template()], booked: [late] });
+
+      const summary = await service.route('org-1', 'plan-1', {
+        groupTemplateId: TEMPLATE_ID,
+        holidays: onlyOn('2026-12-29', '2026-12-30'),
+      });
+
+      const days = tight().map((row) => dayOf(stopUpdate, row.id));
+      expect(days.every(Boolean)).toBe(true);
+      expect(days.some((day) => new Date(day!).getUTCDay() === 1)).toBe(false);
+      expect(summary.template?.toMondays).toBe(0);
+    });
+
+    it('stay in the quarter’s groups on a quarter built without a template', async () => {
+      // The planner's own grouping trims nothing: a move-out's day takes the visits nearest it.
+      const { service, stopUpdate } = build(tight(), { booked: [MOVE_OUT] });
+
+      await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-07', '2026-10-08') });
+
+      expect(tight().some((row) => new Date(dayOf(stopUpdate, row.id) ?? '2026-10-07').getUTCDay() === 1)).toBe(false);
+    });
   });
 });

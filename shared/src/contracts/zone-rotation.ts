@@ -70,6 +70,20 @@ export function plannedVisitDaysOfQuarter(
 }
 
 /**
+ * The Mondays kept for rescheduled visits that work can go on: a quarter's
+ * working days from the plan's first -- holidays and closed days already out --
+ * that are reschedule Mondays. Where the visits a move-out day gives up go
+ * (the office, 2026-10-01).
+ */
+export function rescheduleMondaysOfQuarter(
+  quarter: Quarter,
+  closedDays: readonly string[] = [],
+  startsOn?: string | null,
+): string[] {
+  return workingDaysOfQuarter(quarter, closedDays, startsOn).filter((date) => isRescheduleMonday(date, quarter, startsOn));
+}
+
+/**
  * Who works which zone in a week of the quarter, as `zone -> technician`.
  *
  * The crew goes round the zones in order, one zone each, and all move one zone

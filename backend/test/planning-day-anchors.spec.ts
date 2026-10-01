@@ -87,29 +87,30 @@ describe('the move-outs and move-ins a planned day is built around', () => {
         latitude: 29.7,
         longitude: -95.7,
         assignedTechnician: { id: 'moses', displayName: 'Moses Rodriguez' },
-        needsReassigning: false,
         scheduledOn: '2026-10-14',
         cancelled: false,
       },
     ]);
   });
 
-  it('asks to reassign a move-out assigned to anyone but the day’s technician, or to nobody', async () => {
-    const [result] = await controllerWith([anchor('amy', { assigned: 'amy' }), anchor('nobody', { assigned: null })]).days(
-      request,
-      'plan-1',
-    );
+  /**
+   * A move-out is on the day of whoever it was assigned to, as a move-in is
+   * (2026-10-01), so the page tells it was reassigned since by who has it now --
+   * there is no longer a "move-outs are Moses's" to reassign it back to.
+   */
+  it('says who has a move-out or move-in now, whoever the day is', async () => {
+    const [result] = await controllerWith([
+      anchor('amy', { assigned: 'amy' }),
+      anchor('nobody', { assigned: null }),
+      anchor('in', { kind: InspectionType.MOVE_IN, assigned: 'amy' }),
+    ]).days(request, 'plan-1');
 
-    expect(result!.anchors.map((entry) => [entry.id, entry.needsReassigning])).toEqual([
-      ['amy', true],
-      ['nobody', true],
+    expect(result!.anchors.map((entry) => [entry.id, entry.kind, entry.assignedTechnician?.id ?? null])).toEqual([
+      ['amy', 'MOVE_OUT', 'amy'],
+      ['nobody', 'MOVE_OUT', null],
+      ['in', 'MOVE_IN', 'amy'],
     ]);
-  });
-
-  it('never asks to reassign a move-in: it is on the day of whoever it is booked for', async () => {
-    const [result] = await controllerWith([anchor('in', { kind: InspectionType.MOVE_IN, assigned: 'amy' })]).days(request, 'plan-1');
-
-    expect(result!.anchors.map((entry) => [entry.id, entry.kind, entry.needsReassigning])).toEqual([['in', 'MOVE_IN', false]]);
+    expect(result!.anchors.every((entry) => !('needsReassigning' in entry))).toBe(true);
   });
 
   it('says when a move-out moved or was cancelled after the plan was laid out', async () => {

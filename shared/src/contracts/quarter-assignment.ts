@@ -198,6 +198,8 @@ export interface AssignedCrew {
   trip?: TripDay;
   /** Which of the office's groups the day is (`presetGroups`), by its index there; absent for a day the planner grouped. */
   preset?: number;
+  /** A Monday kept for rescheduled visits, holding what move-out days gave up (`rescheduleMondays`). */
+  rescheduleMonday?: true;
 }
 
 /**
@@ -336,6 +338,15 @@ export interface LayoutOptions {
   homes?: ReadonlyMap<string, Point>;
   /** Zones too far for a day's drive from home, laid out as trips. */
   tripZones?: readonly string[];
+  /**
+   * The Mondays kept for rescheduled visits, as days -- who works them and on
+   * what. From a template, a move-out day keeps its group less the visits
+   * furthest from the move-out, and those go to the first of these after it,
+   * with the same person, up to a day's worth (the office, 2026-10-01): the
+   * groups stay as drawn, and Monday is already where moved visits go. Absent,
+   * or with no Monday left in the quarter, they join the nearest group instead.
+   */
+  rescheduleMondays?: readonly PlannableDay[];
   /** How near a property in another zone has to be to join a group, by the estimated drive. */
   neighbourMinutes?: number;
   /** The plan's quarter, for whoever needs to name it. */
@@ -1427,6 +1438,38 @@ export function layoutEveryDay(
   // The office's own groups, when the quarter is built from a template (2026-09-30).
   const presets = options.presetGroups ? presetGroupsOf(options.presetGroups, left, rules) : null;
 
+  /**
+   * A move-out day's trimmed visits, on the Monday after it (`rescheduleMondays`).
+   * The first one kept for rescheduled visits after the day, with the same
+   * person, while it has room for a day's worth -- the office's nine and its
+   * six hours. A Monday somebody placed visits on by hand is theirs; what no
+   * Monday takes is handed back, to be placed like a visit in no group.
+   */
+  const mondays = [...(options.rescheduleMondays ?? [])].sort((one, other) => one.date.localeCompare(other.date));
+  const mondayDays = new Map<string, { date: string; technicianId: string; stops: PlannableStop[]; onSite: number }>();
+  const toMonday = (date: string, technicianId: string, trimmed: readonly PlannableStop[]): PlannableStop[] => {
+    const monday = mondays.find((candidate) => candidate.date > date);
+    if (!monday || !monday.technicianIds.includes(technicianId)) return [...trimmed];
+    const key = crewKey(monday.date, technicianId);
+    if (options.taken?.has(key)) return [...trimmed];
+    const day = mondayDays.get(key) ?? { date: monday.date, technicianId, stops: [], onSite: 0 };
+    const rest: PlannableStop[] = [];
+    for (const stop of trimmed) {
+      const fits =
+        day.stops.length < rules.size &&
+        day.onSite + stop.onSiteMinutes <= limits.maxOnSiteMinutes &&
+        qualified(monday, technicianId, stop);
+      if (!fits) {
+        rest.push(stop);
+        continue;
+      }
+      day.stops.push(stop);
+      day.onSite += stop.onSiteMinutes;
+    }
+    if (day.stops.length) mondayDays.set(key, day);
+    return rest;
+  };
+
   // 0. Trips, on days fixed before anything else is laid out.
   const crew = [...new Set(days.flatMap((day) => day.technicianIds))];
   const onTrip = new Set<string>();
@@ -1485,8 +1528,11 @@ export function layoutEveryDay(
         if (fromGroup) {
           groups.splice(groups.indexOf(fromGroup.group), 1);
           for (const visit of fromGroup.visits) left.delete(visit);
-          // What the day could not hold is placed like a visit in no group.
-          groups = looseIntoGroups(fromGroup.dropped, groups, rules);
+          // What the day could not hold goes to the Monday after it, and what
+          // no Monday takes is placed like a visit in no group.
+          const rest = toMonday(day.date, technicianId, fromGroup.dropped);
+          for (const visit of fromGroup.dropped) if (!rest.includes(visit)) left.delete(visit);
+          groups = looseIntoGroups(rest, groups, rules);
         }
         crews.push({
           date: day.date,
@@ -1544,6 +1590,20 @@ export function layoutEveryDay(
   // Sooner a fuller day than a tenancy nobody visits (the office, 2026-09-20).
   if (left.size) squeezeIn(crews, left, dayOn, limits, cost, drive);
   for (const stop of left) unplaced.push({ stopId: stop.stopId, reason: 'NO_CAPACITY' });
+
+  // The Mondays that took a move-out day's visits, each in the order that drives least.
+  // After the squeeze, so nothing else is put on a day kept for rescheduled visits.
+  for (const monday of mondayDays.values()) {
+    const ordered = polished(monday.stops, cost).path;
+    crews.push({
+      date: monday.date,
+      technicianId: monday.technicianId,
+      stops: ordered,
+      onSiteMinutes: monday.onSite,
+      driveMinutes: pathMinutes(ordered, drive),
+      rescheduleMonday: true,
+    });
+  }
 
   crews.sort((one, other) => one.date.localeCompare(other.date) || one.technicianId.localeCompare(other.technicianId));
   const placed = crews.flatMap((crewDay) =>
