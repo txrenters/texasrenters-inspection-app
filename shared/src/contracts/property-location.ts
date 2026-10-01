@@ -150,4 +150,23 @@ export interface PropertyPosition {
    * the 570 around it, is a property somebody will route a technician to.
    */
   isDemo: boolean;
+
+  /**
+   * The zone its tenancies are filed under, as the tenant report writes it
+   * ("1", "Zone 3"); null where none says. For each zone's ground on the map.
+   */
+  zone?: string | null;
+
+  /**
+   * On the benefit package: one of its active tenancies is enrolled. Absent for
+   * a reader without `planning:read`, which is not the same as no.
+   */
+  tbpEnrolled?: boolean;
+
+  /**
+   * Its group in the office's active group template, so every map draws it in
+   * the colour the Group maker does (the office, 2026-10-01). Null when it is in
+   * none; absent for a reader without `planning:read`.
+   */
+  tbpGroup?: { position: number; name: string; color: string } | null;
 }

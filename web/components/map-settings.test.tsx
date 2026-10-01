@@ -38,8 +38,9 @@ describe('remembering how the map should look', () => {
     // never opened the settings should get.
     const { result } = renderHook(() => useMapPreferences());
 
-    expect(result.current[0]).toEqual({ mapType: 'roadmap', tilted: false, groupingRadiusMeters: 0 });
-    expect(DEFAULT_PREFERENCES).toEqual({ mapType: 'roadmap', tilted: false, groupingRadiusMeters: 0 });
+    const plainest = { mapType: 'roadmap', tilted: false, groupingRadiusMeters: 0, zones: false, otherProperties: true };
+    expect(result.current[0]).toEqual(plainest);
+    expect(DEFAULT_PREFERENCES).toEqual(plainest);
   });
 
   it('restores what was chosen last time', () => {
@@ -47,7 +48,7 @@ describe('remembering how the map should look', () => {
 
     const { result } = renderHook(() => useMapPreferences());
 
-    expect(result.current[0]).toEqual({ mapType: 'hybrid', tilted: true, groupingRadiusMeters: 0 });
+    expect(result.current[0]).toEqual({ ...DEFAULT_PREFERENCES, mapType: 'hybrid', tilted: true });
   });
 
   it('writes the choice through, merged rather than replaced', () => {
@@ -58,12 +59,8 @@ describe('remembering how the map should look', () => {
     act(() => result.current[1]({ tilted: true }));
     act(() => result.current[1]({ mapType: 'terrain' }));
 
-    expect(result.current[0]).toEqual({ mapType: 'terrain', tilted: true, groupingRadiusMeters: 0 });
-    expect(JSON.parse(store.get(KEY) ?? '{}')).toEqual({
-      mapType: 'terrain',
-      tilted: true,
-      groupingRadiusMeters: 0,
-    });
+    expect(result.current[0]).toEqual({ ...DEFAULT_PREFERENCES, mapType: 'terrain', tilted: true });
+    expect(JSON.parse(store.get(KEY) ?? '{}')).toEqual({ ...DEFAULT_PREFERENCES, mapType: 'terrain', tilted: true });
   });
 
   it('refuses a stored map type Google would reject', () => {
@@ -149,5 +146,33 @@ describe('the grouping radius', () => {
     const { result } = renderHook(() => useMapPreferences());
 
     expect(result.current[0].groupingRadiusMeters).toBe(1_000);
+  });
+});
+
+/**
+ * How the portfolio is drawn (the office, 2026-10-01): every active property by
+ * default, each zone's ground when asked for.
+ */
+describe('the properties on the map', () => {
+  it('shows every active property and no zones until asked', () => {
+    expect(DEFAULT_PREFERENCES).toMatchObject({ otherProperties: true, zones: false });
+  });
+
+  it('remembers both choices', () => {
+    const { result } = renderHook(() => useMapPreferences());
+
+    act(() => result.current[1]({ zones: true }));
+    act(() => result.current[1]({ otherProperties: false }));
+
+    expect(JSON.parse(store.get(KEY)!)).toMatchObject({ zones: true, otherProperties: false });
+  });
+
+  it('keeps the defaults for a stored value that is not a yes or a no', () => {
+    // An older build stored neither, and a hand-edited one may store anything.
+    store.set(KEY, JSON.stringify({ zones: 'on', otherProperties: 0 }));
+
+    const { result } = renderHook(() => useMapPreferences());
+
+    expect(result.current[0]).toMatchObject({ zones: false, otherProperties: true });
   });
 });

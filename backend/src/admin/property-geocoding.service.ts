@@ -8,12 +8,15 @@ import {
   isWorthReplacing,
   needsGeocoding,
   type PropertyPosition,
+  zoneNumberOf,
 } from '@texasrenters/shared';
 
 import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
+import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-report';
+import { mostCommon } from '../planning/group-template.service';
 import { GOOGLE_GEOCODE_SOURCE, GoogleGeocodingClient } from './google-geocoding.client';
 import { propertyPosition } from './property-position';
 
@@ -411,6 +414,8 @@ export class PropertyGeocodingService {
       orderBy: { name: 'asc' },
     });
 
+    const { zones, enrolled, groups } = await this.portfolioFacts(user);
+
     // Numbers, not Prisma `Decimal`s: a Decimal serialises to a *string*
     // through JSON, and a map given "-95.4012" plots nothing at all.
     //
@@ -442,8 +447,50 @@ export class PropertyGeocodingService {
         exitRadiusMeters: row.geofence?.exitRadiusMeters ?? SEGMENT_DEFAULTS.exitRadiusMeters,
         geofenceMoved: moved,
         isDemo: isDemoProperty(row),
+        zone: zones.get(row.id) ?? null,
+        ...(enrolled && groups
+          ? { tbpEnrolled: enrolled.has(row.id), tbpGroup: groups.get(row.id) ?? null }
+          : {}),
       };
     });
+  }
+
+  /**
+   * What the map colours a property by: its zone, whether it is on the benefit
+   * package, and its group in the office's active group template -- the Group
+   * maker's colours on every map (the office, 2026-10-01).
+   *
+   * The package and the groups are planning facts, so they are read only for
+   * somebody who may read the planning; `properties:read` alone gets the zones.
+   */
+  private async portfolioFacts(user: AuthenticatedUser) {
+    const planning = user.permissions.includes('planning:read');
+    const [tenancies, members] = await Promise.all([
+      this.prisma.propertywareTenant.findMany({
+        where: { organizationId: user.organizationId, isActive: true, propertywareBuildingId: { not: null } },
+        select: { propertywareBuildingId: true, zone: true, tbpEnrollment: true },
+      }),
+      planning
+        ? this.prisma.tbpGroupTemplateMember.findMany({
+            where: { organizationId: user.organizationId, template: { isActive: true, archivedAt: null } },
+            select: { buildingId: true, group: { select: { position: true, name: true, color: true } } },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const zonesOf = new Map<string, (string | null)[]>();
+    const enrolled = new Set<string>();
+    for (const tenancy of tenancies) {
+      const building = tenancy.propertywareBuildingId!;
+      zonesOf.set(building, [...(zonesOf.get(building) ?? []), zoneNumberOf(tenancy.zone)]);
+      if (isTbpEnrolled(tenancy.tbpEnrollment)) enrolled.add(building);
+    }
+    return {
+      // The zone most of its tenancies are filed under, as the Group maker reads it.
+      zones: new Map([...zonesOf].map(([building, zones]) => [building, mostCommon(zones)])),
+      enrolled: planning ? enrolled : null,
+      groups: members ? new Map(members.map((member) => [member.buildingId, member.group])) : null,
+    };
   }
 
   /**

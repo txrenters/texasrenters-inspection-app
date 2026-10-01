@@ -16,7 +16,10 @@ import { OFF_ROUTE_M, projectOntoPath } from '@texasrenters/shared';
  */
 const REROUTE_ASK_EVERY_MS = 15_000;
 
+import { GroupDisc, LooseDisc, OTHER_PROPERTY_GREY } from '@/components/map-discs';
 import { PageHeader } from '@/components/page-header';
+import { UNGROUPED_GREEN } from '@/components/planning/group-file';
+import { useFillHeight } from '@/components/planning/use-fill-height';
 import { EmptyState } from '@/components/states';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
@@ -81,18 +84,16 @@ function DrivingSwatch() {
   );
 }
 
-/** The property pin, at the same scale. */
-function PropertySwatch() {
+/** The property discs, at a legend's scale: the map's own markers, not stand-ins for them. */
+function DiscSwatch({ kind }: { kind: 'GROUP' | 'LOOSE' | 'OTHER' }) {
   return (
-    <svg aria-hidden="true" height="15" viewBox="0 0 24 32" width="11">
-      <path
-        className="fill-map-property"
-        d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
-        stroke="#fff"
-        strokeWidth="2"
-      />
-      <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff" />
-    </svg>
+    <span aria-hidden="true" className="inline-flex size-4 items-center justify-center [&>svg]:size-4">
+      {kind === 'GROUP' ? (
+        <GroupDisc fill="#7c3aed" ink="#fff" />
+      ) : (
+        <LooseDisc color={kind === 'LOOSE' ? UNGROUPED_GREEN : OTHER_PROPERTY_GREY} />
+      )}
+    </span>
   );
 }
 
@@ -117,6 +118,21 @@ export default function TechnicianMapPage() {
   // other. Asked for only when it is held, so the console never fires a request
   // it knows will be refused.
   const properties = usePropertyLocations(canView && permissions.has('properties:read'));
+
+  // The map fills the window below where it starts, as the Group maker's does,
+  // with room left under it for the legend.
+  const fill = useFillHeight<HTMLDivElement>({ bottom: 40 });
+
+  /** How many of each disc the legend explains; null where the package is not ours to say. */
+  const discCounts = useMemo(() => {
+    const list = properties.data ?? [];
+    if (!list.some((property) => property.tbpEnrolled !== undefined)) return null;
+    return {
+      group: list.filter((property) => property.tbpGroup).length,
+      loose: list.filter((property) => !property.tbpGroup && property.tbpEnrolled).length,
+      other: list.filter((property) => property.tbpEnrolled === false).length,
+    };
+  }, [properties.data]);
 
   // Today in Texas, not today where the reader is. The schema stores a date
   // with no clock value, so there is no narrower window to ask for.
@@ -372,7 +388,10 @@ export default function TechnicianMapPage() {
               faster answer to "who is out", and a map you have to scroll past
               to reach it is the wrong way round. */}
           <div className="grid gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="bg-card flex h-[70vh] flex-col overflow-hidden rounded-lg border">
+            <div
+              className="bg-card flex h-[70vh] flex-col overflow-hidden rounded-lg border"
+              style={fill.height ? { height: fill.height } : undefined}
+            >
               <Tabs className="flex min-h-0 flex-1 flex-col" defaultValue="technicians">
                 <TabsList className="m-2 grid shrink-0 grid-cols-2">
                   <TabsTrigger value="technicians">Technicians</TabsTrigger>
@@ -460,7 +479,11 @@ export default function TechnicianMapPage() {
                 at `z-50` came out *underneath* the map. Isolating confines
                 Leaflet's z-indexes to this box, where they still order its own
                 layers correctly and stop escaping. */}
-            <div className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border">
+            <div
+              className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border"
+              ref={fill.ref}
+              style={fill.height ? { height: fill.height } : undefined}
+            >
               <TechnicianMap
                 currentInspectionIds={
                   selectedId ? (timeline.data?.projection.current?.inspectionIds ?? null) : null
@@ -513,9 +536,19 @@ export default function TechnicianMapPage() {
             <LegendKey swatch={<TechnicianSwatch stale />}>
               Technician, over 30 minutes ago
             </LegendKey>
-            <LegendKey swatch={<PropertySwatch />}>
-              Property {properties.data?.length ? `(${properties.data.length})` : null}
-            </LegendKey>
+            {discCounts ? (
+              <>
+                <LegendKey swatch={<DiscSwatch kind="GROUP" />}>
+                  TBP property, in its group&rsquo;s colour ({discCounts.group})
+                </LegendKey>
+                <LegendKey swatch={<DiscSwatch kind="LOOSE" />}>TBP, in no group ({discCounts.loose})</LegendKey>
+                <LegendKey swatch={<DiscSwatch kind="OTHER" />}>Not on TBP ({discCounts.other})</LegendKey>
+              </>
+            ) : (
+              <LegendKey swatch={<DiscSwatch kind="OTHER" />}>
+                Property {properties.data?.length ? `(${properties.data.length})` : null}
+              </LegendKey>
+            )}
           </div>
         </div>
       )}

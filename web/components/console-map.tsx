@@ -121,8 +121,8 @@ export function ConsoleMap({
    */
   radiusPoints?: readonly MapPoint[];
   /**
-   * Every property, drawn as the technician map draws it: grouped pins that
-   * open on a click, and geofence rings.
+   * Every property, drawn as the Group maker draws it: a disc each in its
+   * group's colour that opens on a click, and geofence rings.
    *
    * **This is what makes the console one map.** The office asked for the
    * technician map and the quarter's maps to agree -- "same geocoding, same
@@ -210,8 +210,10 @@ export function ConsoleMap({
         {portfolioOptions ? (
           <PortfolioLayers
             highlighted={portfolioOptions.highlighted ?? null}
+            otherProperties={preferences.otherProperties}
             properties={properties}
             selectedPropertyId={portfolioOptions.selectedPropertyId ?? null}
+            zones={preferences.zones}
           />
         ) : null}
 
@@ -236,7 +238,7 @@ export function ConsoleMap({
           remember, when the map itself will not load. */}
       {settingsSlot ? (
         <div className="absolute top-3 left-3 z-10">
-          <MapSettings onChange={setPreferences} preferences={preferences} />
+          <MapSettings onChange={setPreferences} portfolio={Boolean(portfolioOptions)} preferences={preferences} />
         </div>
       ) : null}
     </div>
