@@ -5,6 +5,7 @@ import {
   geocodableAddress,
   geofenceRadiusProblem,
   isDemoProperty,
+  isTbpZone,
   isWorthReplacing,
   needsGeocoding,
   type PropertyPosition,
@@ -483,7 +484,8 @@ export class PropertyGeocodingService {
     for (const tenancy of tenancies) {
       const building = tenancy.propertywareBuildingId!;
       zonesOf.set(building, [...(zonesOf.get(building) ?? []), zoneNumberOf(tenancy.zone)]);
-      if (isTbpEnrolled(tenancy.tbpEnrollment)) enrolled.add(building);
+      // Zone 5 is not part of the package (2026-10-02): drawn as any other property, not as TBP.
+      if (isTbpEnrolled(tenancy.tbpEnrollment) && isTbpZone(tenancy.zone)) enrolled.add(building);
     }
     return {
       // The zone most of its tenancies are filed under, as the Group maker reads it.

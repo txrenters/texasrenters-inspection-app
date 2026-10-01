@@ -22,6 +22,8 @@ const build = (options: {
   archived?: boolean;
   known?: number;
   recentAudit?: boolean;
+  /** The active tenancies at the properties a change adds, as the zone check reads them. */
+  tenancies?: { propertywareBuildingId: string; zone: string; tbpEnrollment: string }[];
 } = {}) => {
   const groups = options.groups ?? [
     { id: G1, name: 'Group 1', stops: [B(1), B(2)] },
@@ -60,6 +62,7 @@ const build = (options: {
     },
     tbpGroupTemplateMember: { createMany: memberCreateMany },
     propertywareBuilding: { count: jest.fn().mockResolvedValue(options.known ?? 1) },
+    propertywareTenant: { findMany: jest.fn().mockResolvedValue(options.tenancies ?? []) },
     auditLog: {
       findFirst: jest.fn().mockResolvedValue(options.recentAudit ? { id: 'audit-1' } : null),
       create: auditCreate,
@@ -146,6 +149,18 @@ describe('a batch of live edits', () => {
 
     await expect(service.applyOps(user, TEMPLATE, BATCH, [{ type: 'stop.add', groupId: G1, stop: B(9) }])).rejects.toMatchObject({
       code: 'UNKNOWN_PROPERTY',
+    });
+    expect(groupDeleteMany).not.toHaveBeenCalled();
+  });
+
+  /** Zone 5 is not part of the benefit package (the office, 2026-10-02): none of its properties joins a template. */
+  it('refuses a property in zone 5', async () => {
+    const { service, groupDeleteMany } = build({
+      tenancies: [{ propertywareBuildingId: B(9), zone: 'Zone 5', tbpEnrollment: 'Yes' }],
+    });
+
+    await expect(service.applyOps(user, TEMPLATE, BATCH, [{ type: 'stop.add', groupId: G1, stop: B(9) }])).rejects.toMatchObject({
+      code: 'NOT_IN_PACKAGE_ZONE',
     });
     expect(groupDeleteMany).not.toHaveBeenCalled();
   });

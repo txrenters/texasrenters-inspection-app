@@ -22,6 +22,26 @@ export function zoneNumberOf(zone: string | null | undefined): string | null {
   return digits ? String(Number(digits[0])) : null;
 }
 
+/**
+ * Zones that are not part of the benefit package (the office, 2026-10-02).
+ *
+ * Zone 5 is some 200 km from the crew's homes. Its visits were generated with
+ * the rest and then held back -- out of reach, or left out of the build -- so
+ * they filled "Needs attention" every quarter with work nobody was going to
+ * plan. A tenancy there gets no visit, and its property is no template's.
+ */
+export const NON_TBP_ZONES: readonly string[] = ['5'];
+
+/**
+ * Whether a tenancy's zone is part of the benefit package: every zone but
+ * `NON_TBP_ZONES`. A tenancy with no zone set stays in: nothing says where it
+ * is, and dropping it would drop a visit somebody is paying for.
+ */
+export function isTbpZone(zone: string | null | undefined): boolean {
+  const number = zoneNumberOf(zone);
+  return number === null || !NON_TBP_ZONES.includes(number);
+}
+
 /** Zones in the order the circle goes round them: by number. */
 export function byZoneNumber(left: string, right: string): number {
   return Number(left) - Number(right) || left.localeCompare(right);

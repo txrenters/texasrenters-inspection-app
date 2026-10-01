@@ -441,6 +441,19 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     });
   });
 
+  /**
+   * Zone 5 is not part of the benefit package (the office, 2026-10-02). It was
+   * given visits and then held back, which filled "Needs attention" with work
+   * nobody was going to plan; now it has none.
+   */
+  it('makes no visit for a tenancy in zone 5', async () => {
+    const { service, stopUpsert } = build({}, { zone: 'Zone 5' });
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    expect(stopUpsert).not.toHaveBeenCalled();
+  });
+
   /** The office adds the unit to the tenant report (2026-09-18), so nobody has to choose it. */
   it('takes the unit the tenant report names, and writes the title at its door', async () => {
     const { service, stopUpsert } = build({}, { unitName: '1/2' });

@@ -63,8 +63,11 @@ export interface PlanBuildChoice {
  */
 export const DAY_SIZES = [9, 10, 12] as const;
 
-/** The zones the office works. Five is theirs to arrange by hand. */
-export const PLAN_ZONES = ['1', '2', '3', '4', '5'] as const;
+/**
+ * The zones a quarter can leave out. Zone 5 is not part of the benefit package
+ * at all (the office, 2026-10-02), so it has no visits to leave out.
+ */
+export const PLAN_ZONES = ['1', '2', '3', '4'] as const;
 
 /**
  * Who to send out, and from which day, asked before a quarter is built.
@@ -181,7 +184,8 @@ export function PlanBuildDialog({
       jobberUnassigned: sendUnassigned,
       // From a template the template sets each day, and the question was not asked.
       stopsPerDay: chosenTemplate ? null : stopsPerDay,
-      excludedZones: [...skipped].sort(),
+      // A template has its properties already, zone by zone (2026-10-02): no zone is left out of it.
+      excludedZones: chosenTemplate ? [] : [...skipped].sort(),
       groupTemplateId: chosenGrouping,
     });
     setGrouping(undefined);
@@ -420,6 +424,8 @@ export function PlanBuildDialog({
           </fieldset>
         )}
 
+        {/* Not asked with a template: its groups already say which properties, and which zones, a quarter has. */}
+        {chosenTemplate ? null : (
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Zones</legend>
           <div className="flex flex-wrap gap-2">
@@ -452,6 +458,7 @@ export function PlanBuildDialog({
             office to arrange them.
           </FieldDescription>
         </fieldset>
+        )}
 
         <DialogFooter>
           <Button onClick={() => close(false)} type="button" variant="outline">

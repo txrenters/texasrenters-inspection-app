@@ -400,17 +400,18 @@ describe('the benefit package plan page', () => {
     );
   });
 
-  /** The office works zones 1 to 4 and arranges zone 5 by hand. */
+  /** The office works zones 1 to 4; zone 5 is not part of the benefit package at all (2026-10-02). */
   it('leaves out the zones the office unticks', () => {
     mount({ plans: [] });
 
     fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
     const dialog = screen.getByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Zone 5' }));
+    expect(within(dialog).queryByRole('checkbox', { name: 'Zone 5' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Zone 4' }));
     fireEvent.click(within(dialog).getByRole('button', { name: /Build for 3 technicians/ }));
 
     expect(build.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ excludedZones: ['5'] }),
+      expect.objectContaining({ excludedZones: ['4'] }),
       expect.anything(),
     );
   });
