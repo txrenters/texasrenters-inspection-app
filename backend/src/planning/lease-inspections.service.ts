@@ -1,6 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { InspectionType, Prisma } from '@prisma/client';
-import { InspectionSource, InspectionStatus, LeaseInspectionOutcome } from '@prisma/client';
+import {
+  InspectionSource,
+  InspectionStatus,
+  JobberOutboundKind,
+  JobberOutboundStatus,
+  LeaseInspectionOutcome,
+} from '@prisma/client';
 import {
   type DueInspection,
   type LeaseDates,
@@ -25,6 +31,9 @@ import { insertInspection, resolveInspectionPlan } from '../admin/inspection-cre
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
+import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
+import { queueLeaseBookingsInJobber } from './lease-jobber-bookings';
 
 /**
  * Move-outs and move-ins, booked from Propertyware's leases (the office, 2026-09-18).
@@ -273,6 +282,20 @@ export class LeaseInspectionService {
       }
     }
 
+    // Into Jobber as well, since 2026-10-01: see lease-jobber-bookings.ts. Never
+    // the run's undoing -- what is booked here is booked, and the next run asks
+    // Jobber again.
+    const jobber = dryRun
+      ? null
+      : await queueLeaseBookingsInJobber(this.prisma, organizationId, today).catch((error) => {
+          this.logger.warn({
+            event: 'lease_jobber_booking_failed',
+            organizationId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        });
+
     this.logger.log({
       event: 'lease_inspections_run',
       organizationId,
@@ -280,6 +303,9 @@ export class LeaseInspectionService {
       dryRun,
       leases: run.leases,
       ...run.counts,
+      ...(jobber
+        ? { jobberQueued: jobber.queued, jobberNotLinked: jobber.notLinked, jobberAlreadyThere: jobber.alreadyInJobber }
+        : {}),
     });
     return run;
   }
@@ -639,6 +665,15 @@ export class LeaseInspectionService {
           where: { id: row.id },
           data: { dueOn: dateOf(wanted.dueOn), scheduledOn: dateOf(wanted.scheduledOn), detail },
         });
+        // Its Jobber visit moves too. Nothing to send for one not booked there
+        // yet: the booking sends the day the inspection has when it goes.
+        if (getJobberConfig().pushEditsEnabled)
+          await requestVisitPush(tx, {
+            organizationId,
+            inspectionId: ours.id,
+            kind: JobberOutboundKind.VISIT_RESCHEDULE,
+            requestedById: null,
+          });
         await tx.auditLog.create({
           data: {
             organizationId,
@@ -667,7 +702,7 @@ export class LeaseInspectionService {
     const reason = notAskedReason(input);
     if (!dryRun)
       await this.prisma.$transaction(async (tx) => {
-        await cancelBooked(tx, inspectionId, reason);
+        await cancelBooked(tx, organizationId, inspectionId, reason);
         await tx.leaseScheduledInspection.update({
           where: { id: row.id },
           data: { outcome: LeaseInspectionOutcome.CALLED_OFF, detail: reason },
@@ -704,7 +739,7 @@ export class LeaseInspectionService {
     const reason = `The office booked this ${LABEL[kind]} itself, for ${spoken(office.day)}.`;
     if (!dryRun)
       await this.prisma.$transaction(async (tx) => {
-        await cancelBooked(tx, inspectionId, reason);
+        await cancelBooked(tx, organizationId, inspectionId, reason);
         await tx.leaseScheduledInspection.update({
           where: { id: row.id },
           data: {
@@ -751,12 +786,28 @@ export class LeaseInspectionService {
   }
 }
 
-/** Cancel an inspection booked here, and end its technician's assignment, with the reason. */
-async function cancelBooked(tx: Prisma.TransactionClient, inspectionId: string, reason: string) {
+/**
+ * Cancel an inspection booked here, and end its technician's assignment, with the reason.
+ *
+ * Its Jobber visit goes too (2026-10-01): a booking not sent yet is dropped,
+ * and one Jobber already has is taken off its calendar the way a console
+ * cancellation is.
+ */
+async function cancelBooked(tx: Prisma.TransactionClient, organizationId: string, inspectionId: string, reason: string) {
   await tx.inspection.update({
     where: { id: inspectionId },
     data: { status: InspectionStatus.CANCELLED, cancelledAt: new Date(), cancellationReason: reason },
   });
+  await tx.jobberOutboundTask.deleteMany({
+    where: {
+      organizationId,
+      inspectionId,
+      kind: JobberOutboundKind.VISIT_CREATE,
+      status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
+    },
+  });
+  if (getJobberConfig().pushEditsEnabled)
+    await requestVisitPush(tx, { organizationId, inspectionId, kind: JobberOutboundKind.VISIT_CANCEL, requestedById: null });
   const current = await tx.inspectionAssignment.findFirst({ where: { inspectionId, isCurrent: true } });
   if (current)
     await tx.inspectionAssignment.update({

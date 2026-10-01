@@ -84,6 +84,7 @@ function build(
     },
     leaseScheduledInspection: { upsert: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    jobberOutboundTask: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
   const prisma = {
     propertywareLease: { findMany: jest.fn().mockResolvedValue(options.leases ?? [lease()]) },
@@ -256,6 +257,47 @@ describe('keeping them in step with the leases', () => {
     await service.run('org-1', { now: NOW });
 
     expect(tx.inspection.update).toHaveBeenCalledWith({ where: { id: 'inspection-1' }, data: { scheduledAt: date('2026-10-21') } });
+  });
+
+  describe('with its visit in Jobber (2026-10-01)', () => {
+    const previous = { ...process.env };
+    beforeEach(() => {
+      process.env.JOBBER_PUSH_EDITS_ENABLED = 'true';
+    });
+    afterEach(() => {
+      process.env = { ...previous };
+    });
+    const inJobber = (tx: ReturnType<typeof build>['tx']) =>
+      Object.assign(tx, {
+        inspection: { ...tx.inspection, findFirst: jest.fn().mockResolvedValue({ jobberVisitId: 'visit-9', jobberJobId: 'job-9' }) },
+        jobberOutboundTask: { ...tx.jobberOutboundTask, upsert: jest.fn().mockResolvedValue({}) },
+      });
+
+    it('moves the visit in Jobber when the lease moves the inspection', async () => {
+      const built = build({
+        rows: [row({ dueOn: date('2026-08-21'), scheduledOn: date('2026-09-21') }, { scheduledAt: date('2026-09-21') })],
+      });
+      const tx = inJobber(built.tx);
+
+      await built.service.run('org-1', { now: NOW });
+
+      expect(tx.jobberOutboundTask.upsert.mock.calls[0][0].create).toMatchObject({
+        inspectionId: 'inspection-1',
+        kind: 'VISIT_RESCHEDULE',
+      });
+    });
+
+    it('takes the visit off Jobber, and drops a booking not sent yet, when the lease calls it off', async () => {
+      const built = build({ leases: [lease({ endDate: date('2026-12-20') })], rows: [row()] });
+      const tx = inJobber(built.tx);
+
+      await built.service.run('org-1', { now: NOW });
+
+      expect(tx.jobberOutboundTask.deleteMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ inspectionId: 'inspection-1', kind: 'VISIT_CREATE' }),
+      });
+      expect(tx.jobberOutboundTask.upsert.mock.calls[0][0].create).toMatchObject({ kind: 'VISIT_CANCEL' });
+    });
   });
 
   it('calls off one whose move-out is now more than sixty days away, until it is near', async () => {
