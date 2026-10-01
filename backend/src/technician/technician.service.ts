@@ -37,7 +37,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   AreaCategory,
   AreaChecklistItemKind,
@@ -63,6 +63,7 @@ import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
 import { jobStartTime } from './job-start-time';
 import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
+import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { tenancyOnFile } from '../admin/tenancy-on-file';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
@@ -357,6 +358,13 @@ const technicianRoomSelect = {
  */
 const ANALYSIS_STALL_AFTER_MS = 5 * 60_000;
 
+/**
+ * Cloudflare states that mean every byte of a recording arrived and it is
+ * sound: being fetched, waiting to encode, encoding, or encoded. Not
+ * `pendingupload`, which is a transfer still under way, and not `error`.
+ */
+const STREAM_STATES_HOLDING_THE_BYTES = new Set(['downloading', 'queued', 'inprogress', 'ready']);
+
 const technicianInspectionSummarySelect = {
   id: true,
   inspectionType: true,
@@ -502,7 +510,14 @@ export class TechnicianService {
     @Optional()
     @Inject(TimeTrackingService)
     private readonly timeTracking?: TimeTrackingService,
+    // Optional and appended for the same reason again. Absent, completing an
+    // area waits for Cloudflare's webhook as it always did.
+    @Optional()
+    @Inject(CloudflareStreamService)
+    private readonly stream?: CloudflareStreamService,
   ) {}
+
+  private readonly logger = new Logger(TechnicianService.name);
 
   /**
    * Tells the technician's other devices that an inspection moved.
@@ -2353,7 +2368,7 @@ export class TechnicianService {
   async completeRoom(user: AuthenticatedUser, id: string) {
     const existing = await this.assignedRoom(user, id);
     await this.assertHvacSectionAnswered(user, existing);
-    const hasRecording = existing.media.some(
+    let hasRecording = existing.media.some(
       (item) => item.uploadStatus === MediaUploadStatus.UPLOADED,
     );
     /**
@@ -2375,6 +2390,9 @@ export class TechnicianService {
       hasRecording || inspectionRequiresAreaRecording(existing.inspection.inspectionType)
         ? 0
         : await this.prisma.inspectionPhoto.count({ where: { inspectionAreaId: id } });
+    // Asked only on the way to a refusal, so an area that already qualifies
+    // costs exactly the round trips it did before.
+    if (!hasRecording && photoCount === 0) hasRecording = await this.confirmAreaRecording(id);
     if (!hasRecording && photoCount === 0)
       throw inspectionRequiresAreaRecording(existing.inspection.inspectionType)
         ? new ApplicationError(
@@ -2402,6 +2420,54 @@ export class TechnicianService {
     });
     this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
+  }
+
+  /**
+   * Whether the area holds a recording that has arrived, asking Cloudflare when
+   * our own row has not heard yet.
+   *
+   * A recording is marked uploaded by Cloudflare's webhook, and Cloudflare sends
+   * that only once its encode is finished -- minutes after the phone sent the
+   * last byte of a long walkthrough. Every Submit Evidence in that window was
+   * refused "a confirmed uploaded video is required" (the error log, 2026-10-01:
+   * one technician five times in half an hour), for a video that was already
+   * safely there. Cloudflare holding the bytes is the confirmation the rule asks
+   * for, and the webhook takes it the same way (`applyWebhook`); only the upload
+   * is recorded here, so the webhook still stamps readiness and starts the
+   * analysis when it comes.
+   *
+   * Every recording of the area, not only the newest: `technicianRoomSelect`
+   * reads one, so a walkthrough already uploaded was refused as missing while a
+   * newer additional clip was still on its way.
+   */
+  private async confirmAreaRecording(areaId: string): Promise<boolean> {
+    const recordings = await this.prisma.inspectionMedia.findMany({
+      where: { inspectionAreaId: areaId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, uploadStatus: true, streamUid: true },
+    });
+    if (recordings.some((recording) => recording.uploadStatus === MediaUploadStatus.UPLOADED))
+      return true;
+    if (!this.stream) return false;
+    for (const recording of recordings) {
+      if (!recording.streamUid || recording.uploadStatus === MediaUploadStatus.FAILED) continue;
+      // Unconfigured, unreachable or unknown all leave the answer as it was.
+      const video = await this.stream.getVideo(recording.streamUid).catch(() => null);
+      if (!video || !STREAM_STATES_HOLDING_THE_BYTES.has(video.state)) continue;
+      await this.prisma.inspectionMedia.update({
+        where: { id: recording.id },
+        data: { uploadStatus: MediaUploadStatus.UPLOADED, uploadedAt: new Date() },
+      });
+      this.logger.log({
+        event: 'room_recording_confirmed_with_stream',
+        mediaId: recording.id,
+        streamUid: recording.streamUid,
+        state: video.state,
+      });
+      return true;
+    }
+    return false;
   }
 
   /**

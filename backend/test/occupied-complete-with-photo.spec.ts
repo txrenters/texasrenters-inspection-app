@@ -43,6 +43,10 @@ function build({
   areaName = 'Kitchen',
   items = [] as { id: string; label: string; responseType: string }[],
   responses = [] as Record<string, unknown>[],
+  // Every recording of the area, newest first, for the path that asks before
+  // refusing. `media` above is only the newest, as `technicianRoomSelect` reads.
+  recordings = [] as { id: string; uploadStatus: string; streamUid: string | null }[],
+  stream = undefined as { getVideo: jest.Mock } | undefined,
 } = {}) {
   const update = jest.fn().mockResolvedValue({
     id: ROOM_ID,
@@ -67,15 +71,28 @@ function build({
       update,
     },
     inspectionPhoto: { count },
+    inspectionMedia: {
+      findMany: jest.fn().mockResolvedValue(recordings),
+      update: jest.fn().mockResolvedValue({}),
+    },
     // An HVAC section's items, and what the technician has answered in it.
     areaChecklistItem: { findMany: jest.fn().mockResolvedValue(items) },
     inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue(responses) },
   };
-  const service = new TechnicianService(prisma as never, {} as never, {} as never, {
+  const service = new TechnicianService(
+    prisma as never,
+    {} as never,
+    {} as never,
     // `mediaProcessing` is untouched by this path; a bare object keeps the
     // constructor happy without pretending the pipeline is involved.
-  } as never);
-  return { service, update, count };
+    {} as never,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    stream as never,
+  );
+  return { service, update, count, media: prisma.inspectionMedia };
 }
 
 const UPLOADED = [{ uploadStatus: 'UPLOADED' }];
@@ -149,6 +166,101 @@ describe('completing an area of every other kind of visit', () => {
     const { service, update } = build({ inspectionType: 'MOVE_OUT', media: UPLOADED });
     await service.completeRoom(technician, ROOM_ID);
     expect(update).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Submit Evidence on a move-out, while Cloudflare's webhook has not come.
+ *
+ * The webhook marks a recording uploaded only once Cloudflare has finished
+ * encoding it -- minutes after the phone sent the last byte. Every Submit
+ * Evidence in that window was refused (the error log, 2026-10-01: one
+ * technician, five times in half an hour) for a video that had arrived.
+ */
+describe('completing a move-out area whose recording Cloudflare already holds', () => {
+  const pending = { id: 'media-1', uploadStatus: 'SESSION_CREATED', streamUid: 'stream-1' };
+  const stream = (state: string | null) => ({
+    getVideo: jest.fn().mockResolvedValue(state === null ? null : { streamUid: 'stream-1', state }),
+  });
+
+  it.each([['queued'], ['inprogress'], ['ready']])(
+    'completes when Cloudflare reports %s, and records the upload',
+    async (state) => {
+      const { service, update, media } = build({
+        inspectionType: 'MOVE_OUT',
+        media: [{ uploadStatus: 'SESSION_CREATED' }],
+        recordings: [pending],
+        stream: stream(state),
+      });
+
+      await service.completeRoom(technician, ROOM_ID);
+
+      expect(update.mock.calls[0][0].data.completionStatus).toBe('COMPLETED');
+      // Only the upload: readiness and the analysis stay the webhook's to start.
+      expect(media.update).toHaveBeenCalledWith({
+        where: { id: 'media-1' },
+        data: { uploadStatus: 'UPLOADED', uploadedAt: expect.any(Date) },
+      });
+    },
+  );
+
+  it('still refuses while the bytes are on their way', async () => {
+    const { service, update, media } = build({
+      inspectionType: 'MOVE_OUT',
+      recordings: [pending],
+      stream: stream('pendingupload'),
+    });
+
+    await expect(service.completeRoom(technician, ROOM_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'ROOM_VIDEO_REQUIRED',
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(media.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Cloudflare cannot be reached', { getVideo: jest.fn().mockRejectedValue(new Error('down')) }],
+    ['Cloudflare no longer has the video', stream(null)],
+    ['the encode failed', stream('error')],
+    ['Stream is not configured here', undefined],
+  ])('still refuses when %s', async (_case, double) => {
+    const { service, update } = build({
+      inspectionType: 'MOVE_OUT',
+      recordings: [pending],
+      stream: double,
+    });
+
+    await expect(service.completeRoom(technician, ROOM_ID)).rejects.toMatchObject({
+      code: 'ROOM_VIDEO_REQUIRED',
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('counts an uploaded walkthrough behind a newer clip still on its way', async () => {
+    // `technicianRoomSelect` reads only the newest recording.
+    const { service, update } = build({
+      inspectionType: 'MOVE_OUT',
+      media: [{ uploadStatus: 'SESSION_CREATED' }],
+      recordings: [
+        { id: 'clip', uploadStatus: 'SESSION_CREATED', streamUid: 'stream-2' },
+        { id: 'walkthrough', uploadStatus: 'UPLOADED', streamUid: 'stream-1' },
+      ],
+    });
+
+    await service.completeRoom(technician, ROOM_ID);
+
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('does not ask Cloudflare about an area that already qualifies', async () => {
+    const double = stream('ready');
+    const { service, media } = build({ inspectionType: 'MOVE_OUT', media: UPLOADED, stream: double });
+
+    await service.completeRoom(technician, ROOM_ID);
+
+    expect(media.findMany).not.toHaveBeenCalled();
+    expect(double.getVideo).not.toHaveBeenCalled();
   });
 });
 

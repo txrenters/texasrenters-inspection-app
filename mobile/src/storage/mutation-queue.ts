@@ -128,10 +128,15 @@ export async function recordAttempt(id: string): Promise<QueuedMutation[]> {
  * entries are dropped and the drain carries on, because a refusal says
  * nothing about the connection. Defaults to retrying everything, which is
  * what a caller with no view of its own errors should get.
+ *
+ * `isWaiting` is the third answer: not sent, not failed, not yet due -- an
+ * area's submission waiting for its video to finish uploading. The entry stays
+ * as it is, with its attempts untouched, and the drain carries on past it.
  */
 export async function drainQueue(
   send: (entry: QueuedMutation) => Promise<void>,
   isRetryable: (error: unknown) => boolean = () => true,
+  isWaiting: (error: unknown) => boolean = () => false,
 ): Promise<{ sent: number; remaining: number }> {
   let sent = 0;
   for (const entry of await readQueue()) {
@@ -140,6 +145,7 @@ export async function drainQueue(
       await removeMutation(entry.id, entry.queuedAt);
       sent += 1;
     } catch (error) {
+      if (isWaiting(error)) continue;
       if (!isRetryable(error)) {
         await removeMutation(entry.id, entry.queuedAt);
         continue;

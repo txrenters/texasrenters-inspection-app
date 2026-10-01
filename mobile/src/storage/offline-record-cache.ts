@@ -43,6 +43,25 @@ export class ApiConnectionError extends Error {
 }
 
 /**
+ * The API answered, and refused: a 4xx other than 401.
+ *
+ * Still an `Error` with the server's own sentence as its message, as every 4xx
+ * always was, so nothing that shows it changes. It also carries the server's
+ * code, because a few refusals are about timing rather than about the request:
+ * an area submitted while its video is still uploading is refused
+ * `ROOM_VIDEO_REQUIRED`, and is accepted the moment the video lands.
+ */
+export class ApiRefusalError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
  * The technician's session is gone or unrefreshable.
  *
  * Distinct from a generic Error so the app can react once, centrally, by
