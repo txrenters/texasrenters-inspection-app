@@ -101,7 +101,17 @@ describe('administrator catalog operations', () => {
 
 describe('administrator inspection operations', () => {
   it('paginates the inspection audit trail without exposing audit metadata', async () => {
-    const event = { id: 'audit-1', action: 'INSPECTION_CREATED', createdAt: new Date() };
+    const createdAt = new Date();
+    const event = {
+      id: 'audit-1',
+      action: 'INSPECTION_CREATED',
+      createdAt,
+      entityType: 'Inspection',
+      entityId: 'inspection-1',
+      actorUserId: null,
+      actorApiClientId: null,
+      metadata: { reason: 'a note that must not leave the server' },
+    };
     const prisma = {
     ...ZERO_EVIDENCE,
       auditLog: {
@@ -111,19 +121,96 @@ describe('administrator inspection operations', () => {
     };
     const service = new AdminService(prisma as never, new PresenceService());
 
-    await expect(
-      service.inspectionAudit(user, 'inspection-1', { page: 2, pageSize: 20 }),
-    ).resolves.toEqual({ items: [event], page: 2, pageSize: 20, total: 21, totalPages: 2 });
-    expect(prisma.auditLog.findMany).toHaveBeenCalledWith({
-      where: {
-        organizationId: user.organizationId,
-        entityType: 'Inspection',
-        entityId: 'inspection-1',
+    const result = await service.inspectionAudit(user, 'inspection-1', { page: 2, pageSize: 20 });
+
+    expect(result).toEqual({
+      items: [
+        { id: 'audit-1', action: 'INSPECTION_CREATED', createdAt, actorName: null, detail: null },
+      ],
+      page: 2,
+      pageSize: 20,
+      total: 21,
+      totalPages: 2,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/must not leave/);
+    expect(prisma.auditLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: user.organizationId,
+          OR: [
+            { entityType: 'Inspection', entityId: 'inspection-1' },
+            {
+              entityType: 'InspectionFinding',
+              metadata: { path: ['inspectionId'], equals: 'inspection-1' },
+            },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: 20,
+        take: 20,
+      }),
+    );
+  });
+
+  it('says who did what, and to which area or finding', async () => {
+    const at = new Date('2026-10-02T09:00:00Z');
+    const prisma = {
+      ...ZERO_EVIDENCE,
+      auditLog: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'audit-2',
+            action: 'FINDING_APPROVED',
+            createdAt: at,
+            entityType: 'InspectionFinding',
+            entityId: 'finding-1',
+            actorUserId: 'user-ernie',
+            actorApiClientId: null,
+            metadata: { inspectionId: 'inspection-1', reason: 'private' },
+          },
+          {
+            id: 'audit-3',
+            action: 'AREA_REVIEWED',
+            createdAt: at,
+            entityType: 'Inspection',
+            entityId: 'inspection-1',
+            actorUserId: 'user-ernie',
+            actorApiClientId: null,
+            metadata: { inspectionAreaId: 'area-1', areaName: 'Living Room' },
+          },
+          {
+            id: 'audit-4',
+            action: 'INSPECTION_ASSIGNED',
+            createdAt: at,
+            entityType: 'Inspection',
+            entityId: 'inspection-1',
+            actorUserId: null,
+            actorApiClientId: 'client-1',
+            metadata: {},
+          },
+        ]),
+        count: jest.fn().mockResolvedValue(3),
       },
-      orderBy: { createdAt: 'desc' },
-      skip: 20,
-      take: 20,
-      select: { id: true, action: true, createdAt: true },
+      userProfile: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'user-ernie', displayName: 'Ernie' }]),
+      },
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'finding-1', title: 'Leak under the sink' }]),
+      },
+    };
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    const { items } = await service.inspectionAudit(user, 'inspection-1', { page: 1, pageSize: 20 });
+
+    expect(items.map(({ action, actorName, detail }) => ({ action, actorName, detail }))).toEqual([
+      { action: 'FINDING_APPROVED', actorName: 'Ernie', detail: 'Leak under the sink' },
+      { action: 'AREA_REVIEWED', actorName: 'Ernie', detail: 'Living Room' },
+      { action: 'INSPECTION_ASSIGNED', actorName: 'API client', detail: null },
+    ]);
+    // A finding's title is only read for this inspection's findings.
+    expect(prisma.inspectionFinding.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['finding-1'] }, inspectionId: 'inspection-1' },
+      select: { id: true, title: true },
     });
   });
 

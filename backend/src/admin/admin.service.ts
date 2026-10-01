@@ -1885,25 +1885,92 @@ export class AdminService {
     };
   }
 
+  /**
+   * The inspection's activity: what happened, to what, and who did it.
+   *
+   * It used to answer only the action and the time, so the console could say
+   * "Finding approved, 2:14 PM" but never by whom -- for the decisions the audit
+   * log exists to account for. And finding decisions, recorded against the
+   * finding rather than the inspection, never appeared at all. They are read
+   * here by the inspection id their metadata carries.
+   *
+   * Metadata itself is still not exposed: it can hold a rejection reason or a
+   * TBD note. `detail` names only the thing acted on -- the area for an area's
+   * review mark, the finding's title for a decision -- and is null otherwise.
+   */
   async inspectionAudit(user: AuthenticatedUser, id: string, query: AuditListQueryDto) {
     const where = {
       organizationId: user.organizationId,
-      entityType: 'Inspection',
-      entityId: id,
+      OR: [
+        { entityType: 'Inspection', entityId: id },
+        { entityType: 'InspectionFinding', metadata: { path: ['inspectionId'], equals: id } },
+      ],
     } satisfies Prisma.AuditLogWhereInput;
-    const [items, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.auditLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        // Metadata may contain sensitive reasons; the audit list exposes only the
-        // action and timestamp. Human-readable reasons live on the inspection
-        // detail (tbdReason / completionBlockedReason / follow-up tasks).
-        select: { id: true, action: true, createdAt: true },
+        select: {
+          id: true,
+          action: true,
+          createdAt: true,
+          entityType: true,
+          entityId: true,
+          actorUserId: true,
+          actorApiClientId: true,
+          metadata: true,
+        },
       }),
       this.prisma.auditLog.count({ where }),
     ]);
+
+    const actorIds = [...new Set(rows.flatMap((row) => (row.actorUserId ? [row.actorUserId] : [])))];
+    const findingIds = [
+      ...new Set(rows.flatMap((row) => (row.entityType === 'InspectionFinding' ? [row.entityId] : []))),
+    ];
+    const [actors, findings] = await Promise.all([
+      actorIds.length
+        ? this.prisma.userProfile.findMany({
+            where: { id: { in: actorIds } },
+            select: { id: true, displayName: true },
+          })
+        : [],
+      findingIds.length
+        ? this.prisma.inspectionFinding.findMany({
+            where: { id: { in: findingIds }, inspectionId: id },
+            select: { id: true, title: true },
+          })
+        : [],
+    ]);
+    const actorName = new Map(actors.map((actor) => [actor.id, actor.displayName]));
+    const findingTitle = new Map(findings.map((finding) => [finding.id, finding.title]));
+
+    const items = rows.map((row) => {
+      const areaName =
+        row.action.startsWith('AREA_REVIEW') &&
+        row.metadata &&
+        typeof row.metadata === 'object' &&
+        !Array.isArray(row.metadata) &&
+        typeof row.metadata.areaName === 'string'
+          ? row.metadata.areaName
+          : null;
+      return {
+        id: row.id,
+        action: row.action,
+        createdAt: row.createdAt,
+        actorName: row.actorUserId
+          ? (actorName.get(row.actorUserId) ?? null)
+          : row.actorApiClientId
+            ? 'API client'
+            : null,
+        detail:
+          row.entityType === 'InspectionFinding'
+            ? (findingTitle.get(row.entityId) ?? null)
+            : areaName,
+      };
+    });
     return this.page(items, total, query);
   }
 

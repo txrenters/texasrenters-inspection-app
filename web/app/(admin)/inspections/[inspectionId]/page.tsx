@@ -594,11 +594,24 @@ function InspectionDetail() {
                     <ol className="divide-y">
                       {audit.data.items.map((event) => (
                         <li
-                          className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
+                          className="flex items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
                           key={event.id}
                         >
-                          <span className="text-sm font-medium">{humanize(event.action)}</span>
-                          <span className="text-muted-foreground shrink-0 text-xs">
+                          {/* What, to what, and who: "Finding approved · Leak
+                              under the sink -- Ernie". The time alone could not
+                              say who approved a finding or reviewed an area. */}
+                          <span className="grid min-w-0 gap-0.5">
+                            <span className="text-sm font-medium">{humanize(event.action)}</span>
+                            {event.detail ? (
+                              <span className="text-muted-foreground truncate text-xs">
+                                {event.detail}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="text-muted-foreground shrink-0 text-right text-xs">
+                            {event.actorName ? (
+                              <span className="text-foreground block">{event.actorName}</span>
+                            ) : null}
                             {formatDateTime(event.createdAt)}
                           </span>
                         </li>
