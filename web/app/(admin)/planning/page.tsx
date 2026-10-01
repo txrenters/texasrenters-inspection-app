@@ -94,7 +94,8 @@ const PlanAttentionMap = dynamic(() => import('@/components/planning/plan-attent
 /** Mapbox measures its container too, so this is client-only for the same reason. */
 const PlanGroupsMap = dynamic(() => import('@/components/planning/plan-groups-map').then((module) => module.PlanGroupsMap), {
   ssr: false,
-  loading: () => <Skeleton className="h-full w-full rounded-lg" />,
+  // Sized itself: the view sets its own height once loaded, and nothing around it does.
+  loading: () => <Skeleton className="h-80 w-full rounded-lg lg:h-[36rem]" />,
 });
 
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
@@ -124,12 +125,28 @@ export default function PlanningPage() {
   // The visit whose details are open, from its pin, its row in a day, or the tables.
   const [openStopId, setOpenStopId] = useState<string | null>(null);
   /**
-   * The day being read on the Groups map, `YYYY-MM-DD`.
-   *
-   * Only the map uses it: clicking a circle picks its day out from the others
-   * so the office can follow one while comparing it against its neighbours.
+   * The visits as the Groups tab draws them, each day a group. Kept between
+   * renders: every day's colour, outline and road route is worked out from it.
    */
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const dayStops = useMemo(
+    () =>
+      (stops.data ?? []).map((stop) => ({
+        id: stop.id,
+        latitude: stop.latitude,
+        longitude: stop.longitude,
+        scheduledOn: stop.scheduledOn,
+        positionInDay: stop.positionInDay,
+        technician: stop.assignedTechnician,
+        zone: stop.zone,
+        address: stop.propertywareUnit?.addressLine1 ?? stop.tenant.addressLine1,
+        unit: stop.propertywareUnit?.name ?? null,
+        city: stop.tenant.city,
+        postalCode: stop.tenant.postalCode,
+        lease: stop.tenant.leaseName,
+        hvacPlan: stop.tenant.hvacPlan,
+      })),
+    [stops.data],
+  );
   /**
    * A groups file drawn on the Groups map in place of the quarter's days: the
    * server's by default, or one chosen here.
@@ -162,7 +179,7 @@ export default function PlanningPage() {
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
   const bookedToCheck = (days.data ?? []).flatMap((day) =>
     (day.anchors ?? []).flatMap((anchor) => {
-      const problem = bookedProblem(day, anchor, anchor.kind);
+      const problem = bookedProblem(day, anchor);
       return problem ? [{ day, anchor, problem }] : [];
     }),
   );
@@ -240,9 +257,9 @@ export default function PlanningPage() {
         // one says nothing, and so means nothing to a server that has none.
         ...(groupTemplateId || plan?.groupTemplateId ? { groupTemplateId } : {}),
         // Both ends, so the planner fills to the number asked for rather than
-        // stopping at its own nine and treating the rest as a ceiling.
-        minStopsPerDay: stopsPerDay,
-        maxStopsPerDay: Math.max(stopsPerDay, 12),
+        // stopping at its own nine and treating the rest as a ceiling. Neither
+        // from a template, which sets each day itself: the plan keeps its own.
+        ...(stopsPerDay === null ? {} : { minStopsPerDay: stopsPerDay, maxStopsPerDay: Math.max(stopsPerDay, 12) }),
       },
       {
         onSuccess: (result) => {
@@ -255,6 +272,12 @@ export default function PlanningPage() {
                 ? ` ${result.routing.template.days.toLocaleString()} days are groups of “${result.routing.template.name}”${
                     result.routing.template.notInTemplate
                       ? `; ${result.routing.template.notInTemplate.toLocaleString()} visits were in none of its groups and joined the nearest`
+                      : ''
+                  }${
+                    result.routing.template.toMondays
+                      ? `; ${result.routing.template.toMondays.toLocaleString()} ${
+                          result.routing.template.toMondays === 1 ? 'visit' : 'visits'
+                        } a move-out day gave up went to the Monday after`
                       : ''
                   }.`
                 : ''
@@ -622,10 +645,9 @@ export default function PlanningPage() {
             </TabsList>
 
             {/*
-              The quarter as the office sketched it: one numbered circle per
-              day, sized to reach that day's properties. A wide circle is a day
-              spread across the county; two overlapping circles are two days
-              covering the same ground, which is a day that could be saved.
+              The quarter's days as the Group maker draws a template (the
+              office, 2026-10-01): each day a group in its own colour, its
+              stops numbered in driving order along the roads.
 
               Or a file of properties already split into groups, drawn on the
               same map: the office works groupings out in a spreadsheet too.
@@ -642,9 +664,9 @@ export default function PlanningPage() {
                 <div className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-muted-foreground text-xs">
-                      One circle per day of the quarter, numbered in the order it is worked. To see a file of properties
-                      already split into groups on this map instead, choose it here: it is read in this browser and sent
-                      nowhere.
+                      Each day of the quarter as a group, numbered in the order it is worked, its stops in driving order.
+                      To see a file of properties already split into groups on this map instead, choose it here: it is
+                      read in this browser and sent nowhere.
                       {groupFiles.serverProblem
                         ? ` The server’s groups file could not be opened: ${groupFiles.serverProblem}.`
                         : null}
@@ -658,18 +680,7 @@ export default function PlanningPage() {
                       <GroupFilePicker label="Map a groups file" onLoad={groupFiles.choose} />
                     </div>
                   </div>
-                  <div className="h-80 lg:h-[34rem]">
-                    <PlanGroupsMap
-                      onSelectDay={setSelectedDate}
-                      selectedDate={selectedDate}
-                      stops={(stops.data ?? []).map((stop) => ({
-                        id: stop.id,
-                        latitude: stop.latitude ?? Number.NaN,
-                        longitude: stop.longitude ?? Number.NaN,
-                        scheduledOn: stop.scheduledOn,
-                      }))}
-                    />
-                  </div>
+                  <PlanGroupsMap stops={dayStops} />
                 </div>
               )}
             </TabsContent>
@@ -855,6 +866,8 @@ export default function PlanningPage() {
         // The grouping the quarter was last built with, so a rebuild keeps it unless changed.
         groupTemplate={plan?.groupTemplate ?? null}
         groupTemplateRevision={plan?.groupTemplateRevision ?? null}
+        // The plan's own visits a day, so a rebuild reopens on it rather than on nine.
+        stopsPerDay={plan?.minStopsPerDay ?? null}
         label={choice.label}
         onBuild={build}
         onOpenChange={setChoosing}

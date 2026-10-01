@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import {
+  HVAC_FILTERS_SECTION,
   inspectionWalksRooms,
   isInspectedArea,
   NON_ROOM_SOURCES,
@@ -19,19 +20,25 @@ import {
  */
 export function inspectedAreaWhere(inspectionType: string): Prisma.InspectionAreaWhereInput {
   const equipment = { source: { in: [...NON_ROOM_SOURCES] } };
-  return {
-    NOT: {
-      propertyArea: inspectionWalksRooms(inspectionType)
-        ? equipment
-        : { ...equipment, name: { in: [...SERVICE_PHOTO_AREA_NAMES] } },
-    },
-  };
+  if (inspectionWalksRooms(inspectionType)) return { NOT: { propertyArea: equipment } };
+  const excluded: Prisma.InspectionAreaWhereInput[] = [
+    { propertyArea: { ...equipment, name: { in: [...SERVICE_PHOTO_AREA_NAMES] } } },
+  ];
+  // An HVAC inspection's Filters section unless submitted: scored on the AC
+  // filter change now (Moses, 2026-10-01).
+  if (inspectionType === 'HVAC')
+    excluded.push({
+      propertyArea: { ...equipment, name: HVAC_FILTERS_SECTION },
+      completionStatus: { not: 'COMPLETED' },
+    });
+  return { NOT: excluded };
 }
 
 /** The same rule over areas already loaded, each with its property area's name and source. */
-export function inspectedAreas<Area extends { propertyArea: { name: string; source: string } }>(
-  inspectionType: string,
-  areas: readonly Area[],
-): Area[] {
-  return areas.filter((area) => isInspectedArea(inspectionType, area.propertyArea));
+export function inspectedAreas<
+  Area extends { propertyArea: { name: string; source: string }; completionStatus?: string | null },
+>(inspectionType: string, areas: readonly Area[]): Area[] {
+  return areas.filter((area) =>
+    isInspectedArea(inspectionType, { ...area.propertyArea, completionStatus: area.completionStatus }),
+  );
 }

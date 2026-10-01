@@ -105,6 +105,61 @@ describe('the services note', () => {
       }),
     ).toBeNull();
   });
+
+  /**
+   * Moses, 2026-10-01: an HVAC job scores its filters on the AC filter change,
+   * and can take a listed filter off or correct its size.
+   */
+  it('says which listed filters were not there and which were another size', () => {
+    const lines = jobberServicesNote({
+      report: report({
+        filtersInstalled: [],
+        filters: [
+          { size: '20x25x1', location: null, slot: 1, changed: true, reason: null, photoId: 'p-1', booked: true, actualSize: '20x20x1' },
+          { size: '12x12x1', location: 'downstairs', slot: 1, changed: false, reason: null, photoId: null, booked: true, removed: true },
+        ],
+      }),
+      details: 'Filter Change: 20x25x1; 12x12x1 downstairs + Pest Control + HVAC Inspection',
+      inspectionType: 'HVAC',
+      inspectionDone: true,
+      technicianName: null,
+      recordedAt: RECORDED,
+    })!.split('\n');
+    expect(lines).toContain('1. Filter Change: done (installed 20x20x1)');
+    expect(lines).toContain('   12x12x1 · downstairs: not at the property.');
+    expect(lines).toContain('   Listed as 20x25x1, actually 20x20x1.');
+    // Neither is "not changed": one is not there, the other was changed.
+    expect(lines.some((line) => line.includes('NOT changed'))).toBe(false);
+  });
+
+  it('leaves out the filter change an HVAC visit never booked, which the office has no number to tick for', () => {
+    const note = jobberServicesNote({
+      report: report({
+        services: { filterChange: { done: true, reason: null, reschedule: false } },
+        filtersInstalled: [],
+        filters: [{ size: '16x25x1', location: null, slot: 1, changed: false, reason: null, photoId: null, booked: false, isClean: true }],
+      }),
+      details: 'HVAC Inspection',
+      inspectionType: 'HVAC',
+      inspectionDone: true,
+      technicianName: null,
+      recordedAt: RECORDED,
+    });
+    // Its scores are in the report; the note has nothing to say.
+    expect(note).toBeNull();
+  });
+
+  it('still reports a filter change on any other job, booked or not', () => {
+    const note = jobberServicesNote({
+      report: report({ services: { filterChange: { done: true, reason: null, reschedule: false } } }),
+      details: null,
+      inspectionType: 'OCCUPIED',
+      inspectionDone: false,
+      technicianName: null,
+      recordedAt: RECORDED,
+    });
+    expect(note).toContain('1. Filter Change: done (installed 20x25x1)');
+  });
 });
 
 describe('sending the note with the completion', () => {

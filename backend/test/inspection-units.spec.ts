@@ -197,10 +197,11 @@ describe('multi-unit inspection creation', () => {
    * property. The flag was set on one area in the entire database, so every HVAC
    * inspection ever created covered nothing and reached the technician empty.
    */
-  it('attaches the report’s four sections as system-managed areas, whatever the layout holds', async () => {
+  it('attaches the report’s sections but the filters as system-managed areas, whatever the layout holds', async () => {
     // Since 2026-09-16 an HVAC inspection is walked in the office's report's
     // sections, each an area named as the report names it: the name decides
-    // which items the area asks.
+    // which items the area asks. Not the Filters section since 2026-10-01: the
+    // job's AC filter change scores the filters (Moses).
     const tx = buildTx({
       propertyArea: {
         findMany: jest
@@ -222,14 +223,14 @@ describe('multi-unit inspection creation', () => {
     const createData = tx.inspection.create.mock.calls[0][0].data;
     expect(createData.areas.create).toEqual([
       { propertyAreaId: 'area-Attic' },
-      { propertyAreaId: 'area-Filters' },
       { propertyAreaId: 'area-A/C unit' },
       { propertyAreaId: 'area-Thermostat' },
     ]);
     const areas = tx.propertyArea.create.mock.calls.map(
       (call: [{ data: Record<string, unknown> }]) => call[0].data,
     );
-    expect(areas.map((area: Record<string, unknown>) => area.inspectionOrder)).toEqual([0, 1, 2, 3]);
+    // The report's order, so a Filters area made before keeps its place.
+    expect(areas.map((area: Record<string, unknown>) => area.inspectionOrder)).toEqual([0, 2, 3]);
     for (const area of areas) {
       // Not part of the floor plan: no floor, and never shown in a room walk.
       expect(area.floorId).toBeNull();
@@ -336,7 +337,6 @@ describe('multi-unit inspection creation', () => {
     const createData = tx.inspection.create.mock.calls[0][0].data;
     expect(createData.areas.create).toEqual([
       { propertyAreaId: 'existing-Attic' },
-      { propertyAreaId: 'existing-Filters' },
       { propertyAreaId: 'existing-A/C unit' },
       { propertyAreaId: 'existing-Thermostat' },
     ]);

@@ -3425,14 +3425,20 @@ model TbpQuarterPlanDay {
   /// which it assumed cannot be argued with later.
   departureAssumedAt DateTime?
 
+  /// The office's template group the day was laid out from, shown in its name
+  /// and colour; null for a day the planner grouped itself.
+  templateGroupId String? @db.Uuid
+
   computedAt DateTime @default(now())
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  plan         TbpQuarterPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
-  technician   UserProfile    @relation("TbpPlanDayTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan          TbpQuarterPlan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  technician    UserProfile            @relation("TbpPlanDayTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+  templateGroup TbpGroupTemplateGroup? @relation(fields: [templateGroupId], references: [id], onDelete: SetNull)
 
   @@unique([planId, technicianId, date])
   @@index([organizationId, date])
+  @@index([templateGroupId])
 }
 
 /// A move-out a benefit-package day is built around (the office, 2026-09-17).
@@ -3529,6 +3535,7 @@ model TbpGroupTemplateGroup {
   organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   template     TbpGroupTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
   members      TbpGroupTemplateMember[]
+  planDays     TbpQuarterPlanDay[]
 
   @@unique([templateId, position])
   @@index([organizationId])

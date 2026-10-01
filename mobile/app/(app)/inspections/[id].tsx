@@ -43,6 +43,7 @@ import {
 import { planEndJob } from '@/src/utils/end-job';
 import { formatTimer, formatWorked, jobElapsed } from '@/src/utils/job-clock';
 import {
+  filterRulesFor,
   jobChecklistProblems,
   jobTasks,
   toggledService,
@@ -164,7 +165,7 @@ export default function JobScreen() {
 
   /** The same rule the server runs, over the answers as they now stand, then the last confirmation. */
   const confirmEnd = (report: VisitServicesReport | null) => {
-    const problems = jobChecklistProblems(item.visitDetails, report);
+    const problems = jobChecklistProblems(item.visitDetails, report, item.type);
     if (problems.length) {
       Alert.alert('Not ready to end the job', problems[0]);
       return;
@@ -174,7 +175,11 @@ export default function JobScreen() {
   };
 
   const endJob = () => {
-    const plan = planEndJob(tasks, evaluateSubmissionGate(roomList, item.status));
+    const plan = planEndJob(
+      tasks,
+      evaluateSubmissionGate(roomList, item.status),
+      filterRulesFor(item.visitDetails, item.type),
+    );
     const first = plan.blockers[0];
     if (first) {
       Alert.alert(first.title, first.message, [

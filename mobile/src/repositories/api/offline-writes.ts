@@ -168,6 +168,14 @@ export const jobStartEntryId = (inspectionId: string) => `start:${inspectionId}`
  * job screen, the list -- until the server says so itself, whether the app was
  * closed in between or the signal went.
  */
+export async function savedServicesReports(): Promise<Map<string, unknown>> {
+  const reports = new Map<string, unknown>();
+  for (const entry of await readQueue())
+    if (entry.kind === 'job-services' && entry.payload.inspectionId && entry.payload.servicesReport)
+      reports.set(String(entry.payload.inspectionId), entry.payload.servicesReport);
+  return reports;
+}
+
 export async function savedJobStarts(): Promise<Map<string, string>> {
   const starts = new Map<string, string>();
   for (const entry of await readQueue()) {

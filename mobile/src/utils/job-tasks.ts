@@ -1,11 +1,13 @@
 import {
   bookedFilters,
+  filterAssessed,
   filterKey,
   filterLabel,
+  inspectionAssessesFilters,
+  jobServices,
   MAX_BOOKED_FILTERS,
   normalizeFilterSize,
   parseVisitDetails,
-  reportableServices,
   servicesReportProblems,
   VISIT_SERVICE_LABEL,
   type BookedFilter,
@@ -102,7 +104,9 @@ export function filterRows(
   const answers = new Map((report?.filters ?? []).map((filter) => [filterKey(filter), filter]));
   const rows = booked.map((filter) => {
     const total = booked.filter((other) => sameSizeAndPlace(filter, other)).length;
-    return { filter, total, label: filterLabel(filter, total), answer: answers.get(filterKey(filter)) };
+    const answer = answers.get(filterKey(filter));
+    // The answer's label, which carries a size the technician corrected.
+    return { filter, total, label: filterLabel(answer ?? filter, total), answer };
   });
   const bookedKeys = new Set(booked.map((filter) => filterKey(filter)));
   for (const answer of report?.filters ?? []) {
@@ -113,7 +117,7 @@ export function filterRows(
       slot: answer.slot,
       media: false,
     };
-    rows.push({ filter, total: 1, label: filterLabel(filter), answer });
+    rows.push({ filter, total: 1, label: filterLabel(answer), answer });
   }
   return rows;
 }
@@ -159,24 +163,71 @@ export function nextFilterSlot(
   return slot;
 }
 
-/** How far through the registers the technician is. */
-function filtersState(rows: FilterRow[]): { state: JobTaskState; detail: string | null } {
-  if (!rows.length) return { state: 'TODO', detail: 'No sizes given — check the filters on site' };
-  const answered = rows.filter((row) => row.answer);
+/**
+ * What a job asks of its filters.
+ *
+ * `assess` on an HVAC job: each filter is scored too (Moses, 2026-10-01).
+ * `changeAsked` when the visit booked a filter change: each listed filter is
+ * then photographed as changed or said why not. An HVAC visit that booked none
+ * asks the scores alone.
+ */
+export interface FilterRules {
+  assess: boolean;
+  changeAsked: boolean;
+}
+
+/** The rules for a job, from its Details and its kind. */
+export function filterRulesFor(visitDetails: string | null | undefined, inspectionType: string | null | undefined): FilterRules {
+  const assess = inspectionAssessesFilters(inspectionType);
+  return { assess, changeAsked: !assess || parseVisitDetails(visitDetails).services.filterChange };
+}
+
+/** Whether a filter needs nothing more, under a job's rules. */
+export function filterRowSettled(row: FilterRow, rules: FilterRules): boolean {
+  const answer = row.answer;
+  // Not at the property: removing it was the answer.
+  if (answer?.removed) return true;
+  if (!answer) return false;
   // A photograph taken in a basement has only the key the handset gave it until
   // its upload lands, and the register is answered either way.
-  const settled = answered.filter((row) =>
-    row.answer!.changed ? row.answer!.photoId || row.answer!.photoKey : row.answer!.reason,
+  const photographed = Boolean(answer.photoId || answer.photoKey);
+  const change = answer.changed ? photographed : rules.changeAsked ? Boolean(answer.reason?.trim()) : true;
+  return change && (!rules.assess || filterAssessed(answer));
+}
+
+/** How far through the registers the technician is. */
+function filtersState(
+  rows: FilterRow[],
+  rules: FilterRules = { assess: false, changeAsked: true },
+): { state: JobTaskState; detail: string | null } {
+  if (!rows.length) return { state: 'TODO', detail: 'No sizes given — check the filters on site' };
+  const live = rows.filter((row) => !row.answer?.removed);
+  const started = rows.filter(
+    (row) =>
+      row.answer &&
+      (row.answer.removed || row.answer.changed || row.answer.reason?.trim() || filterAssessed(row.answer)),
   );
-  // One photograph of them all, stacked (the office, 2026-09-29).
-  if (!answered.length)
-    return { state: 'TODO', detail: `${rows.length} filter${rows.length === 1 ? '' : 's'} · one photo` };
+  const settled = rows.filter((row) => filterRowSettled(row, rules));
+  const plural = live.length === 1 ? '' : 's';
+  // One photograph of them all, stacked (the office, 2026-09-29), and on an
+  // HVAC job a score for each (Moses, 2026-10-01).
+  if (!started.length)
+    return {
+      state: 'TODO',
+      detail: rules.assess
+        ? `${live.length} filter${plural} · ${rules.changeAsked ? 'score each, one photo' : 'score each'}`
+        : `${live.length} filter${plural} · one photo`,
+    };
   if (settled.length < rows.length)
     return { state: 'PART', detail: `${settled.length} of ${rows.length} answered` };
-  const missed = settled.filter((row) => !row.answer!.changed).length;
+  const removed = rows.length - live.length;
+  const gone = removed ? ` · ${removed} not there` : '';
+  if (!rules.changeAsked) return { state: 'DONE', detail: `${live.length} scored${gone}` };
+  const missed = live.filter((row) => !row.answer!.changed).length;
   return {
     state: 'DONE',
-    detail: missed ? `${rows.length - missed} changed · ${missed} not changed` : `${rows.length} changed`,
+    detail:
+      (missed ? `${live.length - missed} changed · ${missed} not changed` : `${live.length} changed`) + gone,
   };
 }
 
@@ -193,18 +244,21 @@ export function jobTasks(input: JobTasksInput): JobTask[] {
   const report = input.report ?? null;
   const tasks: JobTask[] = [];
 
-  for (const service of reportableServices(details)) {
+  // An HVAC job always has its AC filter change: its filters are scored there
+  // (Moses, 2026-10-01), booked or not.
+  for (const service of jobServices(details, input.inspectionType)) {
     const outcome = report?.services[service];
     if (service === 'filterChange') {
       const rows = filterRows(input.visitDetails, report);
+      const rules = filterRulesFor(input.visitDetails, input.inspectionType);
       // Not done is an answer about the whole service, and the registers are
       // then not asked about at all.
       const whole =
         outcome && !outcome.done
           ? { state: 'NOT_DONE' as JobTaskState, detail: outcome.reason || 'Not done' }
           : outcome?.done
-            ? filtersState(rows)
-            : { state: 'TODO' as JobTaskState, detail: filtersState(rows).detail };
+            ? filtersState(rows, rules)
+            : { state: 'TODO' as JobTaskState, detail: filtersState(rows, rules).detail };
       tasks.push({
         key: service,
         number: OFFICE_NUMBER[service] ?? null,
@@ -266,12 +320,14 @@ export function jobTasks(input: JobTasksInput): JobTask[] {
 export function jobChecklistProblems(
   visitDetails: string | null | undefined,
   report: VisitServicesReport | null | undefined,
+  inspectionType?: string | null,
 ): string[] {
   const details = parseVisitDetails(visitDetails);
   return servicesReportProblems(
-    reportableServices(details),
+    jobServices(details, inspectionType),
     report ?? { services: {}, filters: [] },
     bookedFilters(details),
+    { assessFilters: inspectionAssessesFilters(inspectionType) },
   );
 }
 
@@ -351,6 +407,8 @@ export function withFilterAnswer(
   const key = filterKey(filter);
   const existing = (current.filters ?? []).find((entry) => filterKey(entry) === key);
   const next: VisitFilterOutcome = {
+    // What else was said about it -- its scores, a corrected size -- stays.
+    ...existing,
     size: filter.size,
     location: filter.location,
     slot: filter.slot,
@@ -429,6 +487,113 @@ export function withoutFilter(
   return { ...current, filters: (current.filters ?? []).filter((entry) => filterKey(entry) !== key) };
 }
 
+/**
+ * One filter's entry with something changed on it, made if it has none yet --
+ * a filter the visit listed is answered for the first time this way. Answering
+ * anything about a filter is working the filter change, so the service is
+ * marked done the way `withFilterAnswer` marks it.
+ */
+function withFilterEntry(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+  change: (entry: VisitFilterOutcome) => VisitFilterOutcome,
+  options: { booked?: boolean } = {},
+): VisitServicesReport {
+  const current = report ?? EMPTY_REPORT;
+  const key = filterKey(filter);
+  const existing = (current.filters ?? []).find((entry) => filterKey(entry) === key);
+  const next = change(
+    existing ?? {
+      size: filter.size,
+      location: filter.location,
+      slot: filter.slot,
+      changed: false,
+      reason: null,
+      photoId: null,
+      photoKey: null,
+      booked: options.booked ?? true,
+    },
+  );
+  const filters = existing
+    ? (current.filters ?? []).map((entry) => (filterKey(entry) === key ? next : entry))
+    : [...(current.filters ?? []), next];
+  return {
+    ...current,
+    filters,
+    services: {
+      ...current.services,
+      filterChange: current.services.filterChange?.done
+        ? current.services.filterChange
+        : { done: true, reason: null, reschedule: false },
+    },
+  };
+}
+
+/**
+ * One filter scored, on an HVAC job: Clean, Undamaged, Working, or a comment
+ * where it could not be (Moses, 2026-10-01). Only what the tap changed is
+ * passed, and folded into what is there.
+ */
+export function withFilterAssessment(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+  patch: Partial<Pick<VisitFilterOutcome, 'isClean' | 'isUndamaged' | 'isWorking' | 'comment'>>,
+  options: { booked?: boolean } = {},
+): VisitServicesReport {
+  return withFilterEntry(report, filter, (entry) => ({ ...entry, ...patch }), options);
+}
+
+/**
+ * A filter the visit listed, taken off as not at the property -- or put back.
+ * Removed, it is answered by its removal and nothing else is asked of it.
+ */
+export function withFilterRemoved(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+  removed: boolean,
+): VisitServicesReport {
+  return withFilterEntry(report, filter, (entry) =>
+    removed
+      ? { ...entry, removed: true, changed: false, reason: null, photoId: null, photoKey: null }
+      : { ...entry, removed: false },
+  );
+}
+
+/**
+ * The size a filter really is, when it is not the size listed. The listed size
+ * stays the register's identity; the same size as listed clears the correction.
+ */
+export function withFilterSize(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+  size: string,
+  options: { booked?: boolean } = {},
+): VisitServicesReport {
+  const actual = normalizeFilterSize(size);
+  return withFilterEntry(
+    report,
+    filter,
+    (entry) => ({ ...entry, actualSize: actual === normalizeFilterSize(filter.size) ? null : actual }),
+    options,
+  );
+}
+
+/**
+ * "Not changed" taken back on an HVAC job, keeping the filter's scores: into
+ * the photograph when there is one, and outstanding when there is not.
+ * (`withFilterInPhoto` drops a listed filter's entry instead, which on an HVAC
+ * job would throw its scores away.)
+ */
+export function withFilterUndeclined(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+  photo: { photoKey: string | null; photoId: string | null } | null,
+): VisitServicesReport {
+  return withFilterEntry(report, filter, (entry) =>
+    photo ? { ...entry, changed: true, reason: null, ...photo } : { ...entry, changed: false, reason: null },
+  );
+}
+
 /** A register somebody declined, with the reason the office acts on. */
 export const filterDeclined = (answer: VisitFilterOutcome | undefined): boolean =>
   Boolean(answer && !answer.changed && answer.reason?.trim());
@@ -456,7 +621,7 @@ export function withFiltersPhoto(
 ): VisitServicesReport {
   let next = report ?? EMPTY_REPORT;
   for (const row of filterRows(visitDetails, next)) {
-    if (filterDeclined(row.answer)) continue;
+    if (filterDeclined(row.answer) || row.answer?.removed) continue;
     next = withFilterAnswer(next, row.filter, { changed: true, photoKey });
   }
   return {

@@ -169,6 +169,12 @@ export interface PlanDay {
   originKind: string;
   durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'MAPBOX_FREE_FLOW' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
+  /**
+   * The office's template group the day was laid out from, shown in its name
+   * and colour as in the Group maker; null for a day the planner grouped, and
+   * absent from a server older than this.
+   */
+  templateGroup?: { id: string; position: number; name: string; color: string } | null;
   stops: PlanDayStop[];
   /**
    * The move-outs and move-ins the day is built around; `onSiteMinutes` includes
@@ -195,9 +201,8 @@ export interface PlanDayAnchor {
   city: string | null;
   latitude: number | null;
   longitude: number | null;
+  /** Whoever it is assigned to now: somebody else than the day's technician when it was reassigned since. */
   assignedTechnician: { id: string; displayName: string } | null;
-  /** A move-out assigned to someone other than the day's technician, or nobody: move-outs are theirs, so reassign it. */
-  needsReassigning: boolean;
   /** `YYYY-MM-DD`, its date now: another day's than this one when it moved after the plan was laid out. */
   scheduledOn: string;
   cancelled: boolean;
@@ -211,7 +216,15 @@ export interface PlanRoutingSummary {
   durationSource: PlanDay['durationSource'];
   settings: PlanSettings;
   /** The group template the days came from; null for the planner's own grouping. */
-  template?: { id: string; name: string; revision: number; days: number; notInTemplate: number } | null;
+  template?: {
+    id: string;
+    name: string;
+    revision: number;
+    days: number;
+    notInTemplate: number;
+    /** Visits move-out days gave up, put on the Monday after; absent from a server older than this. */
+    toMondays?: number;
+  } | null;
 }
 
 export interface OfficeDetailsAddress {

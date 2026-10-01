@@ -1,3 +1,4 @@
+import { hvacItemAnswered } from './hvac-checklist.js';
 import type { VisitDetails } from './visit-details.js';
 
 /**
@@ -91,6 +92,27 @@ export interface VisitFilterOutcome {
   photoKey?: string | null;
   /** Listed by the visit's Details, rather than found on site by the technician. */
   booked: boolean;
+  /**
+   * How the filter was found, on an HVAC job: Clean, Undamaged and Working, or
+   * a comment where it could not be scored ("Not present"). The questions the
+   * HVAC inspection's Filters section asked, moved here (Moses, 2026-10-01).
+   * Absent on every other job, and on answers made before.
+   */
+  isClean?: boolean | null;
+  isUndamaged?: boolean | null;
+  isWorking?: boolean | null;
+  comment?: string | null;
+  /**
+   * A filter the visit listed that is not at the property. Answered by being
+   * removed: nothing else is asked of it. Only a listed filter is removed this
+   * way -- one found on site is simply deleted.
+   */
+  removed?: boolean;
+  /**
+   * The size actually there, when it is not the size the visit listed. The
+   * listed size stays the register's identity, so the office reads both.
+   */
+  actualSize?: string | null;
 }
 
 export interface VisitServicesReport {
@@ -128,6 +150,37 @@ export function normalizeFilterSize(size: string): string {
 }
 
 /** The services a visit's Details booked that the technician reports on, in the office's order. */
+/**
+ * Whether a job's filters are inspected as well as changed: an HVAC job's
+ * (Moses, 2026-10-01). Its AC filter change asks the Clean / Undamaged /
+ * Working questions on every filter, and the job always has one.
+ */
+export function inspectionAssessesFilters(inspectionType: string | null | undefined): boolean {
+  return inspectionType === 'HVAC';
+}
+
+/**
+ * The services a job answers for: what the visit booked, and on an HVAC job
+ * the AC filter change always, because that is where its filters are scored.
+ * An HVAC visit that booked no filter change asks the questions only -- its
+ * register list starts empty and a photograph is never required
+ * (`servicesReportProblems`).
+ */
+export function jobServices(
+  details: Pick<VisitDetails, 'services'>,
+  inspectionType: string | null | undefined,
+): ReportableVisitService[] {
+  const booked = reportableServices(details);
+  return inspectionAssessesFilters(inspectionType) && !booked.includes('filterChange')
+    ? ['filterChange', ...booked]
+    : booked;
+}
+
+/** Whether a filter has been scored, by the HVAC inspection's own rule for a row. */
+export function filterAssessed(answer: Pick<VisitFilterOutcome, 'isClean' | 'isUndamaged' | 'isWorking' | 'comment'>): boolean {
+  return hvacItemAnswered({ responseType: 'STATUS' }, answer);
+}
+
 export function reportableServices(details: Pick<VisitDetails, 'services'>): ReportableVisitService[] {
   return REPORTABLE_VISIT_SERVICES.filter((service) => details.services[service]);
 }
@@ -176,7 +229,9 @@ export function bookedFilters(details: Pick<VisitDetails, 'filters'>): BookedFil
 export function filterLabel(filter: BookedFilter | VisitFilterOutcome, total = 1): string {
   const place = 'location' in filter && filter.location ? ` · ${filter.location}` : '';
   const which = total > 1 ? ` (${filter.slot} of ${total})` : '';
-  return `${filter.size}${place}${which}`;
+  // The size really there, once the technician has corrected the listed one.
+  const size = ('actualSize' in filter && filter.actualSize) || filter.size;
+  return `${size}${place}${which}`;
 }
 
 /** Identity of a register, so an answer can be matched to what was booked. */
@@ -204,11 +259,18 @@ const slotsOf = (filters: readonly Pick<BookedFilter, 'size' | 'location'>[], of
  * built before the office asked for a photograph of each sends none, and must
  * still be able to submit. An empty array is the new shape with nothing
  * answered, and is checked.
+ *
+ * `assessFilters` on an HVAC job (`inspectionAssessesFilters`): every filter
+ * there -- listed or found -- is also scored. A listed one the technician
+ * removed is answered by its removal. The photograph is still asked only of a
+ * filter the visit listed, or one marked changed, so an HVAC visit that booked
+ * no filter change is asked the questions alone.
  */
 export function servicesReportProblems(
   booked: readonly ReportableVisitService[],
   report: Pick<VisitServicesReport, 'services' | 'filters'> | null | undefined,
   filters: readonly BookedFilter[] = [],
+  options: { assessFilters?: boolean } = {},
 ): string[] {
   const problems: string[] = [];
   for (const service of booked) {
@@ -224,20 +286,27 @@ export function servicesReportProblems(
   // one service, as it always did.
   if (report.filters === undefined) return problems;
   const answers = new Map((report.filters ?? []).map((filter) => [filterKey(filter), filter]));
+  const assess = options.assessFilters ?? false;
+  const unscored = (label: string) =>
+    `Score Clean, Undamaged and Working for the ${label} filter, or say why not.`;
   for (const filter of filters) {
-    const label = filterLabel(filter, slotsOf(filters, filter));
     const answer = answers.get(filterKey(filter));
+    // Not at the property: removing it was the answer.
+    if (answer?.removed) continue;
+    const label = answer ? filterLabel(answer, slotsOf(filters, filter)) : filterLabel(filter, slotsOf(filters, filter));
     if (!answer) problems.push(`Answer for the ${label} filter.`);
     else if (answer.changed && !answer.photoId && !answer.photoKey)
       problems.push(`Photograph the ${label} filter.`);
     else if (!answer.changed && !answer.reason?.trim())
       problems.push(`Say why the ${label} filter was not changed.`);
+    if (assess && answer && !filterAssessed(answer)) problems.push(unscored(label));
   }
   // A register the technician found on site rather than one the office listed.
   for (const answer of report.filters ?? []) {
-    if (answer.booked) continue;
+    if (answer.booked || answer.removed) continue;
     if (answer.changed && !answer.photoId && !answer.photoKey)
       problems.push(`Photograph the ${filterLabel(answer)} filter you found.`);
+    if (assess && !filterAssessed(answer)) problems.push(unscored(filterLabel(answer)));
   }
   return problems;
 }
@@ -254,14 +323,27 @@ export function installedSizes(
 ): string[] {
   if (!report) return [];
   if (!report.filters?.length) return [...new Set(report.filtersInstalled)];
-  return [...new Set(report.filters.filter((filter) => filter.changed).map((filter) => filter.size))];
+  return [
+    ...new Set(
+      report.filters
+        .filter((filter) => filter.changed && !filter.removed)
+        .map((filter) => filter.actualSize || filter.size),
+    ),
+  ];
 }
 
 /** The registers the technician did not change, with the reason each time. */
 export function filtersNotChanged(
   report: Pick<VisitServicesReport, 'filters'> | null | undefined,
 ): VisitFilterOutcome[] {
-  return (report?.filters ?? []).filter((filter) => !filter.changed);
+  return (report?.filters ?? []).filter((filter) => !filter.changed && !filter.removed);
+}
+
+/** The filters the visit listed that the technician found were not at the property. */
+export function filtersRemoved(
+  report: Pick<VisitServicesReport, 'filters'> | null | undefined,
+): VisitFilterOutcome[] {
+  return (report?.filters ?? []).filter((filter) => filter.removed);
 }
 
 /** The booked services the technician asked to have booked again. */

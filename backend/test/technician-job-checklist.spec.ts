@@ -583,21 +583,96 @@ describe('a service’s optional photograph', () => {
  * walks -- and on a move-in or move-out, where every area is required, it
  * refused completion.
  */
+/**
+ * Moses, 2026-10-01: an HVAC job's filters are scored on its AC filter change,
+ * not in a Filters section of the inspection, and a listed filter can be taken
+ * off as not at the property or given its real size.
+ */
+describe('the filters of an HVAC job', () => {
+  const HVAC_DETAILS = 'Filter Change: 20x25x1 upstairs hallway; 12x12x1 downstairs + HVAC Inspection';
+  const scores = { isClean: true, isUndamaged: false, isWorking: true };
+  const hvacJob = (details = HVAC_DETAILS) =>
+    build(job({ inspectionType: InspectionType.HVAC, jobberVisitDetails: details }));
+  const submit = (service: TechnicianService, filters: unknown[]) =>
+    service.completeInspection(technician, 'job-1', {
+      servicesReport: {
+        services: { filterChange: { done: true } },
+        filters,
+        filtersInstalled: [],
+      } as never,
+    });
+
+  it('refuses a filter photographed but never scored', async () => {
+    const { service } = hvacJob();
+    await expect(
+      submit(service, [filter(), filter({ size: '12x12x1', location: 'downstairs', ...scores })]),
+    ).rejects.toMatchObject({ code: 'SERVICES_REPORT_INCOMPLETE' });
+  });
+
+  it('keeps each filter’s scores, its comment, a filter not there and a corrected size', async () => {
+    const { service, prisma } = hvacJob();
+
+    await submit(service, [
+      filter({ ...scores, comment: 'Bent frame', actualSize: '20x20x1' }),
+      filter({ size: '12x12x1', location: 'downstairs', changed: false, photoId: null, removed: true }),
+    ]);
+
+    const report = written(prisma).servicesReport as unknown as {
+      filters: Record<string, unknown>[];
+      filtersInstalled: string[];
+    };
+    expect(report.filters[0]).toMatchObject({ ...scores, comment: 'Bent frame', actualSize: '20x20x1' });
+    expect(report.filters[1]).toMatchObject({ removed: true, changed: false });
+    // The size really installed, and nothing for the filter that is not there.
+    expect(report.filtersInstalled).toEqual(['20x20x1']);
+  });
+
+  it('asks a visit that booked no filter change for its scores, and no photograph', async () => {
+    const { service, prisma } = hvacJob('HVAC Inspection');
+
+    await expect(service.completeInspection(technician, 'job-1', { servicesReport: { services: {}, filters: [], filtersInstalled: [] } as never }))
+      .rejects.toMatchObject({ code: 'SERVICES_REPORT_INCOMPLETE' });
+
+    await submit(service, [filter({ location: null, changed: false, photoId: null, ...scores })]);
+    expect((written(prisma).servicesReport as unknown as { filters: unknown[] }).filters).toHaveLength(1);
+  });
+
+  it('asks nothing new of an occupied job’s filters', async () => {
+    const { service } = build();
+    await expect(
+      service.completeInspection(technician, 'job-1', {
+        servicesReport: {
+          services: { filterChange: { done: true }, pestControl: { done: true } },
+          filters: [
+            filter(),
+            filter({ slot: 2, photoId: '30000000-0000-4000-8000-000000000002' }),
+            filter({ size: '12x12x1', location: 'downstairs', changed: false, reason: 'Painted over', photoId: null }),
+          ],
+          filtersInstalled: [],
+        } as never,
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
 describe('completing an inspection that has a filter photo area', () => {
   const countWhere = (prisma: { inspectionArea: { count: jest.Mock } }) =>
     prisma.inspectionArea.count.mock.calls.at(-1)![0].where as Record<string, unknown>;
-  const complete = (service: TechnicianService) =>
-    service.completeInspection(technician, 'job-1', {
+  /** `assessed`: each filter scored, as an HVAC job's must be (Moses, 2026-10-01). */
+  const complete = (service: TechnicianService, options: { assessed?: boolean } = {}) => {
+    const scores = options.assessed ? { isClean: true, isUndamaged: true, isWorking: true } : {};
+    return service.completeInspection(technician, 'job-1', {
       servicesReport: {
         services: { filterChange: { done: true }, pestControl: { done: true } },
         filters: [
-          filter(),
-          filter({ slot: 2, photoId: '30000000-0000-4000-8000-000000000002' }),
-          filter({ size: '12x12x1', location: 'downstairs', changed: false, reason: 'Painted over', photoId: null }),
+          filter(scores),
+          filter({ slot: 2, photoId: '30000000-0000-4000-8000-000000000002', ...scores }),
+          filter({ size: '12x12x1', location: 'downstairs', changed: false, reason: 'Painted over', photoId: null, ...scores }),
         ],
         filtersInstalled: [],
       } as never,
     });
+  };
 
   it('does not count any equipment area as unfinished on a room walk', async () => {
     const { service, prisma } = build(job({ inspectionType: InspectionType.MOVE_OUT }));
@@ -605,14 +680,18 @@ describe('completing an inspection that has a filter photo area', () => {
     expect(countWhere(prisma).NOT).toEqual({ propertyArea: { source: { in: ['SYSTEM'] } } });
   });
 
-  it('keeps an HVAC visit’s own sections, and leaves out only the service photo areas', async () => {
+  it('keeps an HVAC visit’s own sections, and leaves out the service photo areas and an unsubmitted Filters', async () => {
     const { service, prisma } = build(job({ inspectionType: InspectionType.HVAC }));
-    await complete(service);
-    expect(countWhere(prisma).NOT).toEqual({
-      propertyArea: {
-        source: { in: ['SYSTEM'] },
-        name: { in: ['AC filters', 'Pest control', 'Flea treatment'] },
+    await complete(service, { assessed: true });
+    expect(countWhere(prisma).NOT).toEqual([
+      {
+        propertyArea: {
+          source: { in: ['SYSTEM'] },
+          name: { in: ['AC filters', 'Pest control', 'Flea treatment'] },
+        },
       },
-    });
+      // Scored on the AC filter change now (Moses, 2026-10-01).
+      { propertyArea: { source: { in: ['SYSTEM'] }, name: 'Filters' }, completionStatus: { not: 'COMPLETED' } },
+    ]);
   });
 });

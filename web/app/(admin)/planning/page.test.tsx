@@ -716,8 +716,12 @@ describe('the benefit package plan page', () => {
     expect(await screen.findByTestId('plan-day-map')).toBeTruthy();
   });
 
-  /** The office (2026-09-17): move-outs are Moses's, and TBPs are done around them. */
-  it('shows the move-out a day is built around, and asks to reassign one that is not the day’s technician’s', () => {
+  /**
+   * The office (2026-09-17): TBPs are done around move-outs. A move-out is on the
+   * day of whoever it is assigned to (2026-10-01), so one reassigned since is no
+   * longer the day's: a rebuild places it again.
+   */
+  it('shows the move-out a day is built around, and asks for a rebuild once it is somebody else’s', () => {
     mount({
       day: {
         ...DAY,
@@ -736,7 +740,6 @@ describe('the benefit package plan page', () => {
             latitude: 29.705,
             longitude: -95.7,
             assignedTechnician: { id: 'amy', displayName: 'Amy Wilson' },
-            needsReassigning: true,
             scheduledOn: '2026-10-01',
             cancelled: false,
           },
@@ -747,7 +750,7 @@ describe('the benefit package plan page', () => {
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByRole('link', { name: '9 Move Out Ln' }).getAttribute('href')).toBe('/inspections/insp-9');
     expect(within(day).getByText('Move-out')).toBeTruthy();
-    expect(within(day).getByText('Assigned to Amy Wilson · reassign in Jobber')).toBeTruthy();
+    expect(within(day).getByText('Now Amy Wilson’s · rebuild')).toBeTruthy();
     // Ten minutes from the first property, and an hour there.
     expect(within(day).getByText('9:40 AM – 10:40 AM')).toBeTruthy();
     expect(screen.getByText('1 move-out to check')).toBeTruthy();
@@ -773,7 +776,6 @@ describe('the benefit package plan page', () => {
             latitude: 29.705,
             longitude: -95.7,
             assignedTechnician: { id: DAY.technician.id, displayName: DAY.technician.displayName },
-            needsReassigning: false,
             scheduledOn: '2026-10-01',
             cancelled: false,
           },

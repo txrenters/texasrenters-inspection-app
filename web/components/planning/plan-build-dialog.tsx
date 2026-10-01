@@ -37,8 +37,12 @@ export interface PlanBuildChoice {
    * to be waiting for it.
    */
   jobberUnassigned: boolean;
-  /** Visits in a day: the planner fills to this where the driving allows. */
-  stopsPerDay: number;
+  /**
+   * Visits in a day: the planner fills to this where the driving allows. Null
+   * when the quarter is laid out from a template, which sets each day itself
+   * (the office, 2026-10-01): the question is not asked, and nothing is sent.
+   */
+  stopsPerDay: number | null;
   /** Zones left out of the build, by number. */
   excludedZones: string[];
   /**
@@ -83,6 +87,7 @@ export function PlanBuildDialog({
   jobberUnassigned = false,
   groupTemplate = null,
   groupTemplateRevision = null,
+  stopsPerDay: planStopsPerDay = null,
   pending = false,
   onBuild,
 }: {
@@ -103,6 +108,8 @@ export function PlanBuildDialog({
   groupTemplate?: PlanQuarter['groupTemplate'];
   /** That template's revision when it was. */
   groupTemplateRevision?: number | null;
+  /** The plan's own visits a day, so a rebuild opens on the last one given rather than on nine. */
+  stopsPerDay?: number | null;
   pending?: boolean;
   onBuild: (choice: PlanBuildChoice) => void;
 }) {
@@ -120,11 +127,15 @@ export function PlanBuildDialog({
   const [unassigned, setUnassigned] = useState<boolean | null>(null);
   const sendUnassigned = unassigned ?? jobberUnassigned;
   /**
-   * Nine unless the office says otherwise, which is the planner's own default.
-   * This is the control that actually moves the number of days in a quarter --
-   * the grouping radius never did.
+   * The plan's own answer when it has one the dialog offers, else nine, the
+   * planner's own default. This is the control that actually moves the number
+   * of days in a quarter -- the grouping radius never did. `null` until
+   * touched, like the rest: a rebuild used to reopen on nine whatever the
+   * quarter had been built with.
    */
-  const [stopsPerDay, setStopsPerDay] = useState<number>(9);
+  const openingSize = DAY_SIZES.find((size) => size === planStopsPerDay) ?? 9;
+  const [pickedSize, setStopsPerDay] = useState<number | null>(null);
+  const stopsPerDay = pickedSize ?? openingSize;
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const groupingName = useId();
   const templates = useGroupTemplates(open);
@@ -147,7 +158,7 @@ export function PlanBuildDialog({
       setPicked(null);
       setStart(null);
       setUnassigned(null);
-      setStopsPerDay(9);
+      setStopsPerDay(null);
       setSkipped(new Set());
       setGrouping(undefined);
     }
@@ -168,7 +179,8 @@ export function PlanBuildDialog({
         : listed.filter((technician) => selected.has(technician.id)).map((technician) => technician.id),
       startsOn: chosenStart.date,
       jobberUnassigned: sendUnassigned,
-      stopsPerDay,
+      // From a template the template sets each day, and the question was not asked.
+      stopsPerDay: chosenTemplate ? null : stopsPerDay,
       excludedZones: [...skipped].sort(),
       groupTemplateId: chosenGrouping,
     });
@@ -176,7 +188,7 @@ export function PlanBuildDialog({
     setPicked(null);
     setStart(null);
     setUnassigned(null);
-    setStopsPerDay(9);
+    setStopsPerDay(null);
     setSkipped(new Set());
   };
   const count = listed.filter((technician) => selected.has(technician.id)).length;
@@ -189,9 +201,9 @@ export function PlanBuildDialog({
         <DialogHeader>
           <DialogTitle>{rebuild ? `Rebuild ${label}` : `Build the ${label} plan`}</DialogTitle>
           <DialogDescription>
-            Choose who goes out and when the quarter starts. The visits are grouped into days of 9 for the least
-            driving — a 10th where it is within 5 minutes of the day — and never more than 20 minutes from one property
-            to the next.
+            {chosenTemplate
+              ? `Each day is one of the groups of “${chosenTemplate.name}”. Choose who goes out and when the quarter starts.`
+              : 'Choose who goes out and when the quarter starts. The visits are grouped into days of 9 for the least driving — a 10th where it is within 5 minutes of the day — and never more than 20 minutes from one property to the next.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -222,6 +234,66 @@ export function PlanBuildDialog({
               ? 'Rebuilding later will not put a name on a visit, here or in Jobber.'
               : 'Each visit goes to whoever its day belongs to, on their phone and in Jobber where Jobber knows them.'}
           </FieldDescription>
+        </fieldset>
+
+        {/* The office's own grouping (2026-09-30): a template made in the Group
+            maker, whose groups are the days. The planner's own stays the
+            default, so a quarter is grouped the old way unless somebody chooses.
+            Second, because like "unassigned" it decides what else is asked: a
+            template sets each day, so the day size is not (2026-10-01). */}
+        <fieldset className="grid min-w-0 gap-2">
+          <legend className="mb-2 text-sm font-medium">Grouping</legend>
+          <div className="grid gap-2">
+            {[
+              { id: null, title: 'The planner’s own grouping', detail: 'Days of the size you choose, grouped for the least driving.' },
+              ...usable.map((template) => ({
+                id: template.id as string | null,
+                title: `${template.name}${template.isActive ? ' · active' : ''}`,
+                detail: `${template.groupCount.toLocaleString()} groups · ${template.propertyCount.toLocaleString()} properties · saved ${formatRelative(template.updatedAt)}`,
+              })),
+            ].map((option) => (
+              <label
+                className={cn(
+                  'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
+                  option.id === chosenGrouping && 'border-ring bg-accent',
+                )}
+                key={option.id ?? 'planner'}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    checked={option.id === chosenGrouping}
+                    className="accent-primary"
+                    name={groupingName}
+                    onChange={() => setGrouping(option.id)}
+                    type="radio"
+                    value={option.id ?? ''}
+                  />
+                  <span className="text-sm font-medium">{option.title}</span>
+                </span>
+                <span className="text-muted-foreground text-xs">{option.detail}</span>
+              </label>
+            ))}
+            {templates.isLoading ? <Skeleton className="h-12 w-full rounded-lg" /> : null}
+          </div>
+          <FieldDescription>
+            {chosenTemplate
+              ? 'Each of its groups is a day, as drawn in the Group maker. A property new since it was saved joins the nearest group still under its target; where there is a day’s worth they make days of 9 of their own. A day with a move-out gives up the three stops furthest from it.'
+              : 'Groupings made in the Group maker are listed here to build from.'}
+          </FieldDescription>
+          {groupTemplate?.archivedAt ? (
+            <p className="text-warning text-xs">
+              This quarter was built from &ldquo;{groupTemplate.name}&rdquo;, which has since been archived.
+            </p>
+          ) : null}
+          {chosenTemplate &&
+          groupTemplate?.id === chosenTemplate.id &&
+          groupTemplateRevision !== null &&
+          chosenTemplate.revision > groupTemplateRevision ? (
+            <p className="text-muted-foreground text-xs">
+              &ldquo;{chosenTemplate.name}&rdquo; has been saved since this quarter was built: rebuilding uses its
+              groups as they are now.
+            </p>
+          ) : null}
         </fieldset>
 
         <fieldset className="grid min-w-0 gap-2">
@@ -299,107 +371,54 @@ export function PlanBuildDialog({
           </FieldDescription>
         </fieldset>
 
-        {/* The office's own grouping (2026-09-30): a template made in the Group
-            maker, whose groups are the days. The planner's own stays the
-            default, so a quarter is grouped the old way unless somebody chooses. */}
-        <fieldset className="grid min-w-0 gap-2">
-          <legend className="mb-2 text-sm font-medium">Grouping</legend>
-          <div className="grid gap-2">
-            {[
-              { id: null, title: 'The planner’s own grouping', detail: 'Days of the size below, grouped for the least driving.' },
-              ...usable.map((template) => ({
-                id: template.id as string | null,
-                title: `${template.name}${template.isActive ? ' · active' : ''}`,
-                detail: `${template.groupCount.toLocaleString()} groups · ${template.propertyCount.toLocaleString()} properties · saved ${formatRelative(template.updatedAt)}`,
-              })),
-            ].map((option) => (
-              <label
-                className={cn(
-                  'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
-                  option.id === chosenGrouping && 'border-ring bg-accent',
-                )}
-                key={option.id ?? 'planner'}
-              >
-                <span className="flex items-center gap-2">
-                  <input
-                    checked={option.id === chosenGrouping}
-                    className="accent-primary"
-                    name={groupingName}
-                    onChange={() => setGrouping(option.id)}
-                    type="radio"
-                    value={option.id ?? ''}
-                  />
-                  <span className="text-sm font-medium">{option.title}</span>
-                </span>
-                <span className="text-muted-foreground text-xs">{option.detail}</span>
-              </label>
-            ))}
-            {templates.isLoading ? <Skeleton className="h-12 w-full rounded-lg" /> : null}
-          </div>
-          <FieldDescription>
-            {chosenTemplate
-              ? 'Each of its groups is a day, as drawn in the Group maker. A property new since it was saved joins the group nearest it, and a day with a move-out gives up the three stops furthest from it.'
-              : 'Groupings made in the Group maker are listed here to build from.'}
-          </FieldDescription>
-          {groupTemplate?.archivedAt ? (
-            <p className="text-warning text-xs">
-              This quarter was built from &ldquo;{groupTemplate.name}&rdquo;, which has since been archived.
-            </p>
-          ) : null}
-          {chosenTemplate &&
-          groupTemplate?.id === chosenTemplate.id &&
-          groupTemplateRevision !== null &&
-          chosenTemplate.revision > groupTemplateRevision ? (
-            <p className="text-muted-foreground text-xs">
-              &ldquo;{chosenTemplate.name}&rdquo; has been saved since this quarter was built: rebuilding uses its
-              groups as they are now.
-            </p>
-          ) : null}
-        </fieldset>
-
         {/* No "Lay published visits out again" here. A rebuild posts to
             /quarters, which never moved a published visit -- the box did
             nothing (2026-09-30). Moving one sends Jobber a visit edit, which
             production has never sent, so that is tried on one visit through
-            POST quarters/:planId/route before it is offered for a quarter. */}
-        <fieldset className="grid min-w-0 gap-2">
-          <legend className="mb-2 text-sm font-medium">Visits a day</legend>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {DAY_SIZES.map((size) => (
-              <label
-                className={cn(
-                  'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
-                  size === stopsPerDay && 'border-ring bg-accent',
-                )}
-                key={size}
-              >
-                <span className="flex items-center gap-2">
-                  <input
-                    checked={size === stopsPerDay}
-                    className="accent-primary"
-                    name={daySizeName}
-                    onChange={() => setStopsPerDay(size)}
-                    type="radio"
-                    value={size}
-                  />
-                  <span className="text-sm font-medium">{size} a day</span>
-                </span>
-                <span className="text-muted-foreground text-xs">
-                  {size === 9
-                    ? 'the planner’s own default'
-                    : size === 10
-                      ? 'fills the day, about 5½ hours'
-                      : 'only where the day is mostly HVAC'}
-                </span>
-              </label>
-            ))}
-          </div>
-          <FieldDescription>
-            {chosenTemplate
-              ? 'The template sets each day. This sizes only the days made from properties in none of its groups.'
-              : 'A day is filled to this where the driving allows it — never more than 20 minutes from one property to the next, so a thin patch still makes a short day.'}
-          </FieldDescription>
-        </fieldset>
+            POST quarters/:planId/route before it is offered for a quarter.
+
+            Not asked from a template, which sets each day itself (the office,
+            2026-10-01: "it still asks us how many visits a day even though I
+            selected my TBP group template"). */}
+        {chosenTemplate ? null : (
+          <fieldset className="grid min-w-0 gap-2">
+            <legend className="mb-2 text-sm font-medium">Visits a day</legend>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {DAY_SIZES.map((size) => (
+                <label
+                  className={cn(
+                    'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
+                    size === stopsPerDay && 'border-ring bg-accent',
+                  )}
+                  key={size}
+                >
+                  <span className="flex items-center gap-2">
+                    <input
+                      checked={size === stopsPerDay}
+                      className="accent-primary"
+                      name={daySizeName}
+                      onChange={() => setStopsPerDay(size)}
+                      type="radio"
+                      value={size}
+                    />
+                    <span className="text-sm font-medium">{size} a day</span>
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    {size === 9
+                      ? 'the planner’s own default'
+                      : size === 10
+                        ? 'fills the day, about 5½ hours'
+                        : 'only where the day is mostly HVAC'}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <FieldDescription>
+              A day is filled to this where the driving allows it — never more than 20 minutes from one property to the
+              next, so a thin patch still makes a short day.
+            </FieldDescription>
+          </fieldset>
+        )}
 
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Zones</legend>

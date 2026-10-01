@@ -16,6 +16,8 @@ import {
   inspectionRequiresEveryArea,
   keywordsFromLabel,
   normalizeFilterSize,
+  inspectionAssessesFilters,
+  jobServices,
   parseVisitDetails,
   REPORTABLE_VISIT_SERVICES,
   reportableServices,
@@ -156,6 +158,16 @@ function filterOutcomesFor(
       // while the image is still in its upload queue.
       photoKey: answer.changed ? (answer.photoKey ?? null) : null,
       booked: false,
+      // Scored on an HVAC job, and kept only when there is something in them,
+      // so every other job's answers read exactly as they did.
+      ...(answer.isClean != null ? { isClean: answer.isClean } : {}),
+      ...(answer.isUndamaged != null ? { isUndamaged: answer.isUndamaged } : {}),
+      ...(answer.isWorking != null ? { isWorking: answer.isWorking } : {}),
+      ...(answer.comment?.trim() ? { comment: answer.comment.trim() } : {}),
+      ...(answer.removed ? { removed: true } : {}),
+      ...(answer.actualSize?.trim() && normalizeFilterSize(answer.actualSize) !== normalizeFilterSize(answer.size)
+        ? { actualSize: normalizeFilterSize(answer.actualSize) }
+        : {}),
     };
     const key = filterKey(outcome);
     // One answer per register: the last one sent wins, which is what a
@@ -827,17 +839,21 @@ export class TechnicianService {
    * submit button, so the two cannot disagree.
    */
   private servicesReportFor(
-    inspection: { jobberVisitDetails: string | null },
+    inspection: { jobberVisitDetails: string | null; inspectionType: string },
     report: TechnicianCompleteInspectionDto['servicesReport'],
     /** False while the job is still being walked, when the checklist is part-answered. */
     whole = true,
   ): VisitServicesReport | null {
     if (!report) return null;
     const details = parseVisitDetails(inspection.jobberVisitDetails);
-    const booked = reportableServices(details);
+    // An HVAC job answers for its filters whether or not the visit booked a
+    // change, because that is where they are scored now (Moses, 2026-10-01).
+    const booked = jobServices(details, inspection.inspectionType);
     const filters = bookedFilters(details);
     if (whole) {
-      const problems = servicesReportProblems(booked, report as VisitServicesReport, filters);
+      const problems = servicesReportProblems(booked, report as VisitServicesReport, filters, {
+        assessFilters: inspectionAssessesFilters(inspection.inspectionType),
+      });
       if (problems.length)
         throw new ApplicationError(422, 'SERVICES_REPORT_INCOMPLETE', problems.join(' '));
     }

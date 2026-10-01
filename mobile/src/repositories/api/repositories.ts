@@ -43,13 +43,13 @@ import type {
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import {
   QueuedOfflineError,
-  dropQueuedWrite,
   jobStartEntryId,
   drainOfflineWrites,
   queueOnConnectionFailure,
   savedChecklistAnswers,
   savedJobStarts,
   savedRoomStates,
+  savedServicesReports,
   sendSavedFirst,
   withRoomStatesSaved,
 } from './offline-writes';
@@ -176,6 +176,15 @@ const filterOutcomeSchema = z.object({
   photoId: z.string().nullable().default(null),
   photoKey: z.string().nullable().default(null),
   booked: z.boolean().default(false),
+  // An HVAC job's scores and corrections (Moses, 2026-10-01). Named here or
+  // the parse of every save's reply strips them, and the next save sends the
+  // loss back (`mobile-zod-strips-unnamed-fields`).
+  isClean: z.boolean().nullable().optional(),
+  isUndamaged: z.boolean().nullable().optional(),
+  isWorking: z.boolean().nullable().optional(),
+  comment: z.string().nullable().optional(),
+  removed: z.boolean().optional(),
+  actualSize: z.string().nullable().optional(),
 });
 
 const servicesReportSchema = z.object({
@@ -983,8 +992,11 @@ export class ApiInspectionRepository implements InspectionRepository {
    */
   async saveServices(id: string, servicesReport: VisitServicesReport) {
     try {
+      // Saved before it is sent, like every answer the screen draws at once: a
+      // tick or a filter's score the app is closed on goes at the next launch,
+      // and reads show it meanwhile (`withSavedStarts`).
       const saved = savedServicesSchema.parse(
-        await queueOnConnectionFailure(
+        await sendSavedFirst(
           { id: `services:${id}`, kind: 'job-services', payload: { inspectionId: id, servicesReport } },
           () =>
             writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/services`, 'PATCH', {
@@ -992,10 +1004,10 @@ export class ApiInspectionRepository implements InspectionRepository {
             }),
         ),
       );
+      // `sendSavedFirst` has removed the copy this reply answered, and only that
+      // one: an older copy was replaced when this one was saved, and a newer
+      // one is the next answer, still to be sent.
       await this.storeInspection(id, saved.inspection);
-      // This report is newer than anything held for this job, so a copy queued
-      // while the signal was gone must not be replayed over it later.
-      await dropQueuedWrite(`services:${id}`);
       return saved.inspection;
     } catch (error) {
       if (!(error instanceof QueuedOfflineError)) throw error;
@@ -1966,11 +1978,19 @@ function inspectedRooms<Room extends { inspectionType: string; name: string; sou
 async function withSavedStarts<Job extends { id: string; status: string; startedAt?: string | null }>(
   jobs: readonly Job[],
 ): Promise<Job[]> {
-  const starts = await savedJobStarts().catch(() => new Map<string, string>());
-  if (!starts.size) return [...jobs];
+  const [starts, reports] = await Promise.all([
+    savedJobStarts().catch(() => new Map<string, string>()),
+    savedServicesReports().catch(() => new Map<string, unknown>()),
+  ]);
+  if (!starts.size && !reports.size) return [...jobs];
   return jobs.map((job) => {
     const startedAt = starts.get(job.id);
-    return startedAt && job.status === 'SCHEDULED' ? ({ ...job, status: 'IN_PROGRESS', startedAt } as Job) : job;
+    let next = startedAt && job.status === 'SCHEDULED' ? ({ ...job, status: 'IN_PROGRESS', startedAt } as Job) : job;
+    // The job's checklist as it was last answered here and not yet confirmed:
+    // ticks and filter scores the app was closed on stay answered.
+    const report = reports.get(job.id);
+    if (report && 'servicesReport' in next) next = { ...next, servicesReport: report } as Job;
+    return next;
   });
 }
 

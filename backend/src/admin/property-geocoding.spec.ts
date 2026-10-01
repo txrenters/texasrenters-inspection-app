@@ -100,11 +100,15 @@ describe('positions', () => {
     return { toNumber: () => value };
   }
 
-  const USER = { organizationId: 'org-1' } as AuthenticatedUser;
+  // No `planning:read`: these are about the pin and its radius, not the
+  // benefit-package facts a reader with that grant is also told.
+  const USER = { organizationId: 'org-1', permissions: [] } as unknown as AuthenticatedUser;
 
   function serviceFor(rows: unknown[]) {
     const prisma = {
       propertywareBuilding: { findMany: jest.fn().mockResolvedValue(rows) },
+      // Each property's zone comes from its tenancies (2026-10-01); none here.
+      propertywareTenant: { findMany: jest.fn().mockResolvedValue([]) },
     } as unknown as PrismaService;
     return new PropertyGeocodingService(prisma);
   }

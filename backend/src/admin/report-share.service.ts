@@ -1,7 +1,19 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { AreaChecklistItemKind, FindingReviewStatus, type Prisma } from '@prisma/client';
+import {
+  AreaChecklistItemKind,
+  FindingReviewStatus,
+  InspectionAreaCompletionStatus,
+  type Prisma,
+} from '@prisma/client';
+import {
+  filterLabel,
+  HVAC_FILTERS_SECTION,
+  inspectionAssessesFilters,
+  SERVICE_PHOTO_AREA,
+  type VisitServicesReport,
+} from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -65,6 +77,75 @@ function readingText(value: { toString(): string } | null, unit: string | null):
   if (value === null) return null;
   const number = Number(value.toString());
   return [Number.isInteger(number) ? String(number) : String(Number(number.toFixed(2))), unit].filter(Boolean).join(' ');
+}
+
+/**
+ * The HVAC report's Filters table, from the job's AC filter change.
+ *
+ * Moses, 2026-10-01: the filters are scored on the AC filter change now, not in
+ * a Filters section of the inspection (`HVAC_FILTERS_SECTION`). The report keeps
+ * printing them where the office's HVAC report always has -- one row per filter
+ * the house really has, scored Clean / Undamaged / Working with its comment, and
+ * the filter change's photograph beneath. Null for every other job, for an HVAC
+ * job that answered nothing, and for one that walked the old Filters section,
+ * which prints as it did.
+ */
+function filtersRoom(
+  inspection: {
+    inspectionType: string;
+    completedAt: Date | null;
+    servicesReport: unknown;
+    areas: readonly {
+      id: string;
+      propertyArea: { name: string };
+      photos: readonly { id: string }[];
+    }[];
+  },
+  shown: readonly { propertyArea: { name: string } }[],
+) {
+  if (!inspectionAssessesFilters(inspection.inspectionType)) return null;
+  if (shown.some((area) => area.propertyArea.name === HVAC_FILTERS_SECTION)) return null;
+  const report = inspection.servicesReport as VisitServicesReport | null;
+  const scored = (report?.filters ?? []).filter((filter) => !filter.removed);
+  if (!scored.length) return null;
+  const photoArea = inspection.areas.find((area) => area.propertyArea.name === SERVICE_PHOTO_AREA.filterChange);
+  const photoIds = new Set(scored.flatMap((filter) => (filter.photoId ? [filter.photoId] : [])));
+  return {
+    room: {
+      id: photoArea?.id ?? 'hvac-filters',
+      name: HVAC_FILTERS_SECTION as string,
+      floorName: null as string | null,
+      completionStatus: InspectionAreaCompletionStatus.COMPLETED as InspectionAreaCompletionStatus,
+      skipReason: null as string | null,
+      completedAt: inspection.completedAt,
+      checklist: scored.map((filter, index) => ({
+        id: `filter-${index + 1}`,
+        label: `Filter ${index + 1} · ${filterLabel(filter)}`,
+        keywords: [] as string[],
+        isClean: filter.isClean ?? null,
+        isUndamaged: filter.isUndamaged ?? null,
+        isWorking: filter.isWorking ?? null,
+        comment: filter.comment ?? null,
+      })),
+    },
+    photos: (photoArea?.photos ?? []).filter((photo) => photoIds.has(photo.id)) as never[],
+  };
+}
+
+/**
+ * The rooms in report order, with the filters' table where the HVAC report has
+ * always printed it: after the Attic.
+ */
+function withFiltersRoom<Area extends { propertyArea: { name: string } }, Room>(
+  areas: readonly Area[],
+  filters: NoInfer<Room> | null,
+  view: (area: Area) => Room,
+): Room[] {
+  const rooms = areas.map(view);
+  if (!filters) return rooms;
+  const attic = areas.findIndex((area) => area.propertyArea.name === 'Attic');
+  rooms.splice(attic + 1, 0, filters);
+  return rooms;
 }
 
 @Injectable()
@@ -195,6 +276,9 @@ export class ReportShareService {
         nextInspectionAlert: true,
         maintenanceComments: true,
         generalComments: true,
+        // An HVAC job's filters are scored on its AC filter change: the
+        // report's Filters table is read from here (`filtersRoom`).
+        servicesReport: true,
         /**
          * Who carried out the inspection, for the report's "Inspector" line.
          *
@@ -316,6 +400,22 @@ export class ReportShareService {
     // Findings carry the catalog area id; rooms are per-inspection areas. Map
     // one to the other so the view model can group without guessing by name.
     const roomIdByPropertyArea = new Map(areas.map((area) => [area.propertyAreaId, area.id]));
+    const photoView = (photo: (typeof areas)[number]['photos'][number], roomId: string) => ({
+      id: photo.id,
+      roomId,
+      // The item name wins over free text: it is what the printed report
+      // captions with, and a technician's ad-hoc label is the fallback for
+      // a photograph that documents the room rather than one item.
+      label: photo.checklistItem?.label ?? photo.label,
+      checklistItem: photo.checklistItem?.label ?? null,
+      notes: photo.notes,
+      capturedAt: photo.capturedAt,
+      captureTimeSource: photo.captureTimeSource,
+      width: photo.width,
+      height: photo.height,
+      contentPath: `/api/v1/reports/${encodeURIComponent(token)}/photos/${photo.id}`,
+    });
+    const filters = filtersRoom(inspection, areas);
     return {
       brand: this.brand(),
       property: {
@@ -362,7 +462,7 @@ export class ReportShareService {
         maintenanceComments: inspection.maintenanceComments,
         generalComments: inspection.generalComments,
       },
-      rooms: areas.map((area) => ({
+      rooms: withFiltersRoom(areas, filters?.room ?? null, (area) => ({
         id: area.id,
         name: area.propertyArea.name,
         floorName: area.propertyArea.floor?.name ?? null,
@@ -414,23 +514,10 @@ export class ReportShareService {
         comparisonResult: finding.comparisonResult,
         baselineCondition: finding.baselineCondition,
       })),
-      photos: areas.flatMap((area) =>
-        area.photos.map((photo) => ({
-          id: photo.id,
-          roomId: area.id,
-          // The item name wins over free text: it is what the printed report
-          // captions with, and a technician's ad-hoc label is the fallback for
-          // a photograph that documents the room rather than one item.
-          label: photo.checklistItem?.label ?? photo.label,
-          checklistItem: photo.checklistItem?.label ?? null,
-          notes: photo.notes,
-          capturedAt: photo.capturedAt,
-          captureTimeSource: photo.captureTimeSource,
-          width: photo.width,
-          height: photo.height,
-          contentPath: `/api/v1/reports/${encodeURIComponent(token)}/photos/${photo.id}`,
-        })),
-      ),
+      photos: [
+        ...areas.flatMap((area) => area.photos.map((photo) => photoView(photo, area.id))),
+        ...(filters ? filters.photos.map((photo) => photoView(photo, filters.room.id)) : []),
+      ],
       generatedAt: new Date(),
     };
   }
