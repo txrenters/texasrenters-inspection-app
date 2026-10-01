@@ -1,6 +1,6 @@
 'use client';
 
-import type { AreaEvidenceSummaryItem, AreaReviewStatus } from '@texasrenters/shared';
+import { inspectionIsWalkedAsOccupied, type AreaEvidenceSummaryItem } from '@texasrenters/shared';
 import { CheckIcon, ListChecksIcon, SearchIcon } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -24,8 +24,10 @@ import { usePermissions } from '@/lib/auth';
 import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
+import { STATUS_META } from './area-status';
 import { AreaDetailPanel } from './AreaDetailPanel';
 import { AreaPhotoViewer } from './AreaPhotoViewer';
+import { PhotoSheet } from './PhotoSheet';
 
 /**
  * Area-first inspection evidence.
@@ -35,25 +37,6 @@ import { AreaPhotoViewer } from './AreaPhotoViewer';
  * room's evidence across four scroll positions. The list carries counts and
  * status only; a single area's evidence loads when it is opened.
  */
-
-/** Wording and tone per status. Never colour alone — each carries a label. */
-const STATUS_META: Record<
-  AreaReviewStatus,
-  { label: string; variant: 'secondary' | 'warning' | 'success' | 'info' | 'destructive' }
-> = {
-  NOT_STARTED: { label: 'Not started', variant: 'secondary' },
-  // Not 'warning'. A skipped area is a decision the technician recorded with a
-  // reason, not a fault to chase — colouring it like incomplete evidence sends
-  // reviewers looking for a recording that was never going to exist.
-  SKIPPED: { label: 'Skipped', variant: 'secondary' },
-  EVIDENCE_INCOMPLETE: { label: 'Evidence incomplete', variant: 'warning' },
-  EVIDENCE_READY: { label: 'Evidence ready', variant: 'success' },
-  ANALYSIS_PROCESSING: { label: 'Analysing', variant: 'info' },
-  FINDINGS_NEED_REVIEW: { label: 'Findings need review', variant: 'warning' },
-  REVIEWED: { label: 'Reviewed', variant: 'success' },
-  FOLLOW_UP_REQUIRED: { label: 'Follow-up required', variant: 'destructive' },
-  FAILED: { label: 'Failed', variant: 'destructive' },
-};
 
 /**
  * Radix Select throws on an empty-string item value, which silently left the
@@ -143,6 +126,31 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
   );
 
   /**
+   * The list with one area open, or the photo sheet with every area at once.
+   *
+   * In the URL, like the open area, so a refresh or a shared link keeps it.
+   * With none chosen, an occupied or back-to-market inspection opens on the
+   * sheet: its areas are a photograph and two answers each, which the sheet
+   * shows together and the list one area at a time.
+   */
+  const viewFromUrl = searchParams.get('view');
+  const view: 'areas' | 'sheet' =
+    viewFromUrl === 'areas' || viewFromUrl === 'sheet'
+      ? viewFromUrl
+      : inspectionIsWalkedAsOccupied(inspection?.inspectionType)
+        ? 'sheet'
+        : 'areas';
+  const showView = useCallback(
+    (next: 'areas' | 'sheet', areaId?: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('view', next);
+      if (areaId) params.set('area', areaId);
+      router.replace(`?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  /**
    * The open tab, held here rather than inside the detail panel.
    *
    * That is what makes it survive switching area: a reviewer comparing the same
@@ -192,10 +200,42 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
       if (target) select(target.id);
     },
   };
+  // One search and one status filter for both views, so switching view keeps
+  // the reviewer's place: "Needs review" narrows the sheet as it does the list.
+  const filters = (
+    <div className="flex gap-2">
+      <div className="relative min-w-0 flex-1">
+        <SearchIcon
+          aria-hidden
+          className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
+        />
+        <Input
+          aria-label="Search areas"
+          className="pl-9"
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search areas"
+          type="search"
+          value={search}
+        />
+      </div>
+      <Select onValueChange={setStatusFilter} value={statusFilter}>
+        <SelectTrigger aria-label="Filter by review status" className="w-[140px]">
+          <SelectValue placeholder="All areas" />
+        </SelectTrigger>
+        <SelectContent>
+          {STATUS_FILTERS.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 
   return (
     <Card aria-labelledby="area-evidence-heading" className="scroll-mt-20" id="evidence">
-      <CardHeader className="flex-row items-start justify-between">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <CardTitle id="area-evidence-heading" tabIndex={-1}>
             Areas
@@ -205,10 +245,29 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
             {countLabel(totals.photos, 'photo')} · {countLabel(totals.findings, 'finding')}
           </CardDescription>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant={totals.areasReviewed >= totals.areas ? 'success' : 'secondary'}>
             {totals.areasReviewed} of {totals.areas} reviewed
           </Badge>
+          <div aria-label="Show areas as" className="flex rounded-md border p-0.5" role="group">
+            {(
+              [
+                ['areas', 'Areas'],
+                ['sheet', 'Photo sheet'],
+              ] as const
+            ).map(([value, label]) => (
+              <Button
+                aria-pressed={view === value}
+                key={value}
+                onClick={() => showView(value)}
+                size="sm"
+                type="button"
+                variant={view === value ? 'secondary' : 'ghost'}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
           {/* Area management belongs beside the area list a reviewer is looking
               at. This used to sit in a second "Inspection areas" card further
               down whose only unique capability was this button — the rest of it
@@ -250,36 +309,23 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           </Alert>
         ) : null}
 
+        {view === 'sheet' ? (
+          <div className="space-y-3">
+            {filters}
+            <PhotoSheet
+              areas={filtered}
+              inspectionId={inspectionId}
+              onOpenArea={(areaId) => {
+                selectTab('findings');
+                showView('areas', areaId);
+              }}
+              onOpenPhoto={(areaId, photoId) => setPhotoViewer({ areaId, photoId })}
+            />
+          </div>
+        ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col gap-2">
-            <div className="flex gap-2">
-              <div className="relative min-w-0 flex-1">
-                <SearchIcon
-                  aria-hidden
-                  className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
-                />
-                <Input
-                  aria-label="Search areas"
-                  className="pl-9"
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search areas"
-                  type="search"
-                  value={search}
-                />
-              </div>
-              <Select onValueChange={setStatusFilter} value={statusFilter}>
-                <SelectTrigger aria-label="Filter by review status" className="w-[140px]">
-                  <SelectValue placeholder="All areas" />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_FILTERS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {filters}
 
             {filtered.length ? (
               <ul
@@ -405,6 +451,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
             )}
           </div>
         </div>
+        )}
       </CardContent>
 
       {addingAreas && inspection?.propertywareBuilding?.id ? (
