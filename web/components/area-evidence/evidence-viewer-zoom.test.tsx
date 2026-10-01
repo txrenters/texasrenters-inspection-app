@@ -1,42 +1,50 @@
-import type { PublicReportPhoto } from '@texasrenters/shared';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PhotoLightbox } from './photo-lightbox';
+import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
+import { forgetPhotos } from './photo-cache';
 
 /**
- * Getting close to the damage in a comparison photograph.
+ * Getting close to the damage in a photograph.
  *
- * The viewer only zoomed from its buttons, in half steps, and always about the
- * top of the photograph -- so reading a crack in a window frame meant clicking
- * repeatedly and then scrolling to find it again. The office asked for the
- * mouse wheel.
+ * The zoom lived in a second viewer that only the comparison report used,
+ * while the inspection page -- where damage is checked -- had none. The office
+ * asked for the mouse wheel there first; these are its tests, now against the
+ * one viewer both pages use.
  */
 
 vi.mock('@/lib/api', () => ({
   apiBlob: vi.fn().mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' })),
 }));
 
-const photo = (id: string): PublicReportPhoto => ({
+const photo = (id: string): EvidenceViewerItem => ({
   id,
-  roomId: 'area-1',
-  label: 'WINDOWS & LOCKS',
-  capturedAt: '2026-09-11T18:00:00.000Z',
+  kind: 'photo',
   contentPath: `/api/v1/admin/photos/${id}/content`,
+  title: 'WINDOWS & LOCKS',
+  capturedAt: '2026-09-11T18:00:00.000Z',
 });
 
 beforeEach(() => {
-  vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:photo', revokeObjectURL: () => {} }));
+  vi.stubGlobal(
+    'URL',
+    Object.assign(URL, { createObjectURL: () => 'blob:photo', revokeObjectURL: () => {} }),
+  );
 });
 
 afterEach(() => {
-  cleanup();
+  forgetPhotos();
   vi.unstubAllGlobals();
 });
 
 async function open() {
   render(
-    <PhotoLightbox areaName="Living Room" index={0} onClose={() => {}} photos={[photo('p1'), photo('p2')]} sideLabel="move-out" />,
+    <EvidenceViewer
+      heading="Living Room · Move-out"
+      items={[photo('p1'), photo('p2')]}
+      onClose={() => {}}
+      startIndex={0}
+    />,
   );
   // The photograph arrives asynchronously; zooming acts on the loaded image.
   await screen.findByRole('img');
@@ -46,7 +54,13 @@ async function open() {
 const zoomShown = () => screen.getByText(/%$/).textContent;
 
 function wheel(target: HTMLElement, deltaY: number) {
-  const event = new WheelEvent('wheel', { deltaY, clientX: 400, clientY: 300, bubbles: true, cancelable: true });
+  const event = new WheelEvent('wheel', {
+    deltaY,
+    clientX: 400,
+    clientY: 300,
+    bubbles: true,
+    cancelable: true,
+  });
   act(() => {
     target.dispatchEvent(event);
   });
@@ -124,13 +138,34 @@ describe('dragging a zoomed photograph', () => {
   });
 });
 
-describe('the buttons and keys it already had', () => {
-  it('still step the zoom', async () => {
+describe('the buttons and keys', () => {
+  it('step the zoom', async () => {
     await open();
 
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
     expect(zoomShown()).toBe('150%');
-    fireEvent.keyDown(document, { key: '0' });
+    fireEvent.keyDown(window, { key: '0' });
     expect(zoomShown()).toBe('100%');
+  });
+
+  it('start every photograph whole', async () => {
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(zoomShown()).toBe('150%');
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+
+    expect(zoomShown()).toBe('100%');
+  });
+});
+
+describe('downloading', () => {
+  it('names the file for the area, the shot and the photograph', async () => {
+    await open();
+
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute(
+      'download',
+      'living-room-move-out-windows-locks-p1.jpg',
+    );
   });
 });
