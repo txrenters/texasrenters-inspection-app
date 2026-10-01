@@ -191,6 +191,38 @@ describe('redrawing a route', () => {
     expect(route.origin?.latitude).toBe(HOME.latitude);
   });
 
+  it('reuses a route drawn as context however old, until the day changes', async () => {
+    /**
+     * Everybody's dashed route on the technician map. Following each of them
+     * live would cost a matrix and a drive per technician every five minutes;
+     * as context it is redrawn only when their stops do.
+     */
+    const { prisma, state } = day(['a', 'b']);
+    const { client, calls } = google();
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
+
+    state.ping = { ...HOME, recordedAt: new Date(NOW - MINUTE) };
+    await service.planDay('org', 'tech', DAY, { follow: false });
+
+    // Twenty minutes on and a kilometre off the line: a followed route redraws.
+    const later = NOW + 20 * MINUTE;
+    jest.spyOn(Date, 'now').mockReturnValue(later);
+    state.ping = { latitude: HOME.latitude + 0.01, longitude: HOME.longitude, recordedAt: new Date(later - MINUTE) };
+    const reused = await service.planDay('org', 'tech', DAY, { follow: false });
+
+    expect(calls.route).toBe(1);
+    expect(reused.legs.length).toBeGreaterThan(0);
+
+    state.stops = ['b'];
+    await service.planDay('org', 'tech', DAY, { follow: false });
+    expect(calls.route).toBe(2);
+
+    // The same day, followed, redraws for the position as it always did.
+    state.ping = { latitude: HOME.latitude + 0.03, longitude: HOME.longitude, recordedAt: new Date(later - MINUTE) };
+    await service.planDay('org', 'tech', DAY);
+    expect(calls.route).toBe(3);
+  });
+
   it('keeps the live route while the handset is quiet', async () => {
     /**
      * Recalculated while somebody is online and sending, and not otherwise. A

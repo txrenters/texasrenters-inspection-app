@@ -52,6 +52,36 @@ export function offRoadNetwork(route: TechnicianRoute | null | undefined): Set<s
 }
 
 /**
+ * Stops whose property has no coordinate on file, so no line can reach them.
+ *
+ * A stop with no building at all already says "not on the map". This is the
+ * other case: a building, never placed -- and until it is, no route will ever
+ * be drawn to it, which looks on the map exactly like routing being broken.
+ */
+export function withoutLocation(route: TechnicianRoute | null | undefined): Set<string> {
+  return new Set(
+    (route?.unroutable ?? [])
+      .filter((entry) => entry.reason === 'NO_COORDINATES')
+      .map((entry) => entry.inspectionId),
+  );
+}
+
+/**
+ * Whether a drive was there to be drawn and none came back.
+ *
+ * A start point, stops it could place, and not one leg: the routing services
+ * refused or were down. On 2 October that was the whole of Moses's afternoon --
+ * three stops, every one with a coordinate, and nothing on the map or in the
+ * panel to say why there was no line. Not a fact about the day, so it is said
+ * as an outage rather than shown as a map that simply has no line on it.
+ */
+export function routeNotDrawn(route: TechnicianRoute | null | undefined): boolean {
+  return Boolean(
+    route?.origin && route.stops.length && !route.legs.length && !route.originOutsideServiceArea,
+  );
+}
+
+/**
  * How to describe the stops the route could not include.
  *
  * Two reasons, two different faults, and the old copy only described one of
@@ -92,6 +122,9 @@ export function timingNote(route: TechnicianRoute | null | undefined): string | 
   switch (route?.source) {
     case 'GOOGLE_TRAFFIC':
       return 'Drive times include traffic.';
+    // Mapbox is asked for `driving`, not `driving-traffic`: the road at its
+    // speed limits, the same claim OSRM makes.
+    case 'MAPBOX_FREE_FLOW':
     case 'OSRM_FREE_FLOW':
       return 'Estimated from speed limits, without traffic.';
     default:

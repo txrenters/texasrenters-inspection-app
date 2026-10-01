@@ -1192,14 +1192,37 @@ export class AdminController {
     return this.timelines.dayFor(request.user, id, businessDayFromQuery(date));
   }
 
+  /**
+   * Where they actually went that day, as lines for the map. Behind the same
+   * `technicians:locate` as their live position (the office, 2026-10-02): a
+   * path is the same fact about a person, kept for the day.
+   */
+  @Get('technicians/:technicianId/trail')
+  @RequirePermissions('technicians:locate')
+  technicianTrail(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Query('date') date?: string,
+  ) {
+    return this.timelines.trailFor(request.user, id, businessDayFromQuery(date));
+  }
+
+  /**
+   * `follow=false` asks for the route as context -- the technician map's dashed
+   * line for everybody not selected -- which is redrawn only when the day
+   * changes. Anything else follows the technician as before.
+   */
   @Get('technicians/:technicianId/route')
   @RequirePermissions('technicians:locate')
   technicianRoute(
     @Req() request: AuthenticatedRequest,
     @Param('technicianId') id: string,
     @Query('date') date?: string,
+    @Query('follow') follow?: string,
   ) {
-    return this.routes.planDay(request.user.organizationId, id, businessDayFromQuery(date));
+    return this.routes.planDay(request.user.organizationId, id, businessDayFromQuery(date), {
+      follow: follow !== 'false',
+    });
   }
 
   @Get('technicians/:technicianId')

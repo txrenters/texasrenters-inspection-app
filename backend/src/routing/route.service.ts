@@ -414,6 +414,12 @@ export class RouteService {
     organizationId: string,
     technicianId: string,
     date: Date,
+    /**
+     * `follow: false` for a route drawn as context rather than followed --
+     * redrawn only when the day changes, never for age or position. See
+     * `needsReroute`.
+     */
+    options: { follow?: boolean } = {},
   ): Promise<TechnicianRoute> {
     /**
      * The day in Texas, not in UTC.
@@ -567,6 +573,7 @@ export class RouteService {
       cached?.drawn ?? null,
       { originKind, stopIds, position: originKind === 'LIVE' ? origin : null },
       now,
+      options,
     );
     if (!decision.reroute && cached)
       // The history is the fresh one: it is read every call and cached on its own.

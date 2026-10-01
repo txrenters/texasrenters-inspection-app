@@ -5,15 +5,27 @@ import { ONLINE_WITHIN_MS } from '@texasrenters/shared';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Marker, Popup, Source, useMap } from 'react-map-gl/mapbox';
 
+import { InspectionDetailsLink } from '@/components/inspection-details-link';
 import { inBox, padBox, ringIsLegible, spotOffsets, type Box } from '@/components/map-clusters';
 import { useMapStroke } from '@/components/map-colors';
-import { GroupDisc, LooseDisc, OTHER_PROPERTY_GREY, popupOffsets } from '@/components/map-discs';
+import {
+  DoneBadge,
+  GroupDisc,
+  LooseDisc,
+  OTHER_PROPERTY_RIM,
+  OTHER_PROPERTY_YELLOW,
+  popupOffsets,
+} from '@/components/map-discs';
 import { circleFeature, featureCollection } from '@/components/map-geometry';
 import { ZoneLayers } from '@/components/map-zones';
 import { groupColorOf, UNGROUPED_GREEN } from '@/components/planning/group-file';
 import { zoneTerritories } from '@/components/planning/zone-territories';
+import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { DrivingPin, TechnicianPin } from '@/components/map-pins';
+import { businessTimeOfDay } from '@/lib/clock';
+import { allSubmitted, type PropertyVisit } from '@/lib/day-visits';
+import { humanize } from '@/lib/format';
 import { useGlide } from '@/lib/map-animation';
 import { drawsAsDriving, motionOf, type Motion } from '@/lib/technician-motion';
 import { useMotionTracks } from '@/lib/use-motion-tracks';
@@ -251,19 +263,23 @@ function groupLabel(group: NonNullable<PropertyPosition['tbpGroup']>) {
 }
 
 /** What hovering over a disc says, before it is clicked. */
-function discTitle(property: PropertyPosition) {
-  if (property.tbpGroup) return `${property.name} · ${groupLabel(property.tbpGroup)}`;
-  if (property.tbpEnrolled) return `${property.name} · benefit package, in no group`;
-  return property.name;
+function discTitle(property: PropertyPosition, done: boolean) {
+  const said = property.tbpGroup
+    ? `${property.name} · ${groupLabel(property.tbpGroup)}`
+    : property.tbpEnrolled
+      ? `${property.name} · benefit package, in no group`
+      : property.name;
+  return done ? `${said} · inspection submitted` : said;
 }
 
-/** Group discs over the green ones, the green over the grey: work to plan is never under the rest. */
+/** Group discs over the green ones, the green over the yellow: work to plan is never under the rest. */
 const DISC_Z: Record<DiscKind, number> = { GROUP: 100, LOOSE: 95, OTHER: 90 };
 
 /**
  * One property, as the Group maker draws it: a disc in its group's colour, the
- * maker's green for a benefit-package property in no group, and grey for the
- * rest of the portfolio.
+ * maker's green for a benefit-package property in no group, and yellow for the
+ * rest of the portfolio -- with a tick on it once the day's inspection there is
+ * in, where the map is about a day.
  *
  * A placed centre the office corrected is exact whatever the geocoder said; a
  * zip-code centre is drawn pale with a dashed rim, as in the Group maker.
@@ -271,12 +287,15 @@ const DISC_Z: Record<DiscKind, number> = { GROUP: 100, LOOSE: 95, OTHER: 90 };
 const PortfolioDisc = memo(function PortfolioDisc({
   property,
   dim,
+  done,
   offset,
   open,
   onOpen,
 }: {
   property: PropertyPosition;
   dim: boolean;
+  /** Every inspection it had on the day being shown is in. */
+  done: boolean;
   offset: [number, number] | undefined;
   open: boolean;
   onOpen: (propertyId: string) => void;
@@ -299,19 +318,62 @@ const PortfolioDisc = memo(function PortfolioDisc({
       {/* Everything recedes rather than disappearing when somebody is
           selected: a dispatcher looking at one technician still needs to see
           what is near them. */}
-      <span style={dim ? { opacity: 0.25 } : undefined} title={discTitle(property)}>
+      <span
+        className="relative inline-flex"
+        style={dim ? { opacity: 0.25 } : undefined}
+        title={discTitle(property, done)}
+      >
         {property.tbpGroup ? (
           <GroupDisc approximate={approximate} fill={property.tbpGroup.color} ink={ink} />
+        ) : kind === 'LOOSE' ? (
+          <LooseDisc approximate={approximate} color={UNGROUPED_GREEN} />
         ) : (
-          <LooseDisc approximate={approximate} color={kind === 'LOOSE' ? UNGROUPED_GREEN : OTHER_PROPERTY_GREY} />
+          <LooseDisc approximate={approximate} color={OTHER_PROPERTY_YELLOW} rim={OTHER_PROPERTY_RIM} />
         )}
+        {/* On the disc's shoulder rather than in place of it: the colour still
+            says which group, the tick says the day's work there is in. */}
+        {done ? <DoneBadge className="absolute -top-1.5 -right-1.5" /> : null}
       </span>
     </Marker>
   );
 });
 
+/**
+ * The day's inspections at a property, in its window, each with the way to its
+ * details (the office, 2026-10-02: "on the dialogue add a button where it says
+ * show inspection details").
+ */
+function DayVisits({ visits }: { visits: readonly PropertyVisit[] }) {
+  return (
+    <ul className="grid gap-2 border-t pt-2">
+      {visits.map((visit) => {
+        const at = visit.finished ? businessTimeOfDay(visit.finishedAt) : null;
+        return (
+          <li className="grid gap-1" key={visit.inspectionId}>
+            <p className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="font-medium">{humanize(visit.inspectionType)}</span>
+              <StatusBadge value={visit.status} />
+            </p>
+            <p className="text-muted-foreground text-xs">
+              {visit.technicianName}
+              {at ? ` · done ${at}` : null}
+            </p>
+            <InspectionDetailsLink inspectionId={visit.inspectionId} />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** What a disc's window says. */
-function PropertyDetails({ property }: { property: PropertyPosition }) {
+function PropertyDetails({
+  property,
+  visits,
+}: {
+  property: PropertyPosition;
+  visits: readonly PropertyVisit[] | undefined;
+}) {
   return (
     <div className="grid max-w-64 gap-1 text-sm">
       <p>
@@ -353,6 +415,7 @@ function PropertyDetails({ property }: { property: PropertyPosition }) {
         On site within {property.enterRadiusMeters}m
         {property.geofenceMoved ? ' · centre set by the office' : null}
       </p>
+      {visits?.length ? <DayVisits visits={visits} /> : null}
     </div>
   );
 }
@@ -381,7 +444,10 @@ export const PropertyLayer = memo(function PropertyLayer({
   highlighted,
   properties,
   selectedPropertyId,
+  visits = null,
 }: {
+  /** The day's inspections by property, where the map is about a day. See `PortfolioOptions.visits`. */
+  visits?: ReadonlyMap<string, readonly PropertyVisit[]> | null;
   /**
    * The selected technician's buildings, or null when nobody is selected.
    *
@@ -450,6 +516,7 @@ export const PropertyLayer = memo(function PropertyLayer({
       {drawn.map((property) => (
         <PortfolioDisc
           dim={Boolean(highlighted && !highlighted.has(property.id))}
+          done={allSubmitted(visits?.get(property.id))}
           key={property.id}
           offset={offsets.get(property.id)}
           onOpen={setOpenId}
@@ -469,7 +536,7 @@ export const PropertyLayer = memo(function PropertyLayer({
           onClose={() => setOpenId(null)}
           style={{ zIndex: 900 }}
         >
-          <PropertyDetails property={open} />
+          <PropertyDetails property={open} visits={visits?.get(open.id)} />
         </Popup>
       ) : null}
     </>
@@ -488,12 +555,15 @@ export const PropertyLayer = memo(function PropertyLayer({
  * with a point.
  */
 export const TechnicianMarker = memo(function TechnicianMarker({
+  color = null,
   dim,
   motion,
   onSelect,
   position,
   selected,
 }: {
+  /** Their colour on the map, ringed round the marker. Null where a map gives people none. */
+  color?: string | null;
   dim: boolean;
   motion: Motion | null;
   /** Absent on a map where picking a person leads nowhere: then nothing is clickable. */
@@ -528,6 +598,7 @@ export const TechnicianMarker = memo(function TechnicianMarker({
           <DrivingPin
             dim={dim}
             heading={motion.headingDegrees ?? 0}
+            ring={color}
             stopped={motion.state === 'STOPPED'}
           />
         ) : (
@@ -536,6 +607,7 @@ export const TechnicianMarker = memo(function TechnicianMarker({
             heading={
               !stale && motion?.live && motion.state === 'ON_FOOT' ? motion.headingDegrees : null
             }
+            ring={color}
             stale={stale}
           />
         )}
@@ -556,6 +628,13 @@ export interface PortfolioOptions {
   highlighted?: ReadonlySet<string> | null;
   /** Picked from a list, so its window opens without a second click. */
   selectedPropertyId?: string | null;
+  /**
+   * The inspections each property has on the day the page is about, by
+   * property. A property whose every one is in gets a tick on its disc, and
+   * its window lists them with the way to each one's details. Absent on a map
+   * that is not about one day.
+   */
+  visits?: ReadonlyMap<string, readonly PropertyVisit[]> | null;
 }
 
 /** What a map says about the crew, beyond where they are. */
@@ -567,6 +646,8 @@ export interface CrewOptions {
   onSelect?: (technicianId: string) => void;
   /** The last few minutes of fixes, when the page already keeps them for other things. */
   tracks?: ReadonlyMap<string, Parameters<typeof motionOf>[0]>;
+  /** Each person's colour, where the page draws their lines in it -- ringed round their marker to match. */
+  colors?: ReadonlyMap<string, string> | null;
 }
 
 /**
@@ -583,13 +664,14 @@ export function PortfolioLayers({
   properties,
   highlighted = null,
   selectedPropertyId = null,
+  visits = null,
   zones = false,
   otherProperties = true,
 }: Required<Pick<PortfolioOptions, 'properties'>> &
   Omit<PortfolioOptions, 'properties'> & {
     /** Each zone's ground and fence, as the Group maker draws them. */
     zones?: boolean;
-    /** The properties off the benefit package, grey. Off, only the package's are drawn. */
+    /** The properties off the benefit package, yellow. Off, only the package's are drawn. */
     otherProperties?: boolean;
   }) {
   /**
@@ -627,6 +709,7 @@ export function PortfolioLayers({
         highlighted={highlighted}
         properties={shown}
         selectedPropertyId={selectedPropertyId}
+        visits={visits}
       />
     </>
   );
@@ -643,6 +726,7 @@ export function CrewLayers({
   selectedTechnicianId = null,
   onSelect,
   tracks,
+  colors = null,
 }: Required<Pick<CrewOptions, 'positions'>> & Omit<CrewOptions, 'positions'>) {
   // Always called, so the hook order never changes; the page's own tracks win
   // when it keeps them, which the technician map does for its heads-up panel.
@@ -658,6 +742,7 @@ export function CrewLayers({
         // report, which remounted the marker each time -- so there was nothing
         // to slide, only a marker destroyed and drawn again.
         <TechnicianMarker
+          color={colors?.get(position.technicianId) ?? null}
           dim={Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId}
           key={position.technicianId}
           motion={motionOf(motion.get(position.technicianId) ?? [], now)}

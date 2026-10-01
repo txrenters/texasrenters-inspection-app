@@ -213,6 +213,7 @@ export function ConsoleMap({
             otherProperties={preferences.otherProperties}
             properties={properties}
             selectedPropertyId={portfolioOptions.selectedPropertyId ?? null}
+            visits={portfolioOptions.visits ?? null}
             zones={preferences.zones}
           />
         ) : null}
@@ -223,6 +224,7 @@ export function ConsoleMap({
             them: the ring of a vague fix over the route, not under it. */}
         {crewOptions ? (
           <CrewLayers
+            colors={crewOptions.colors ?? null}
             onSelect={crewOptions.onSelect}
             positions={positions}
             selectedTechnicianId={crewOptions.selectedTechnicianId ?? null}

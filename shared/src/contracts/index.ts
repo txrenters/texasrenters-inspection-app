@@ -89,3 +89,4 @@ export * from './nav-progress.js';
 export * from './technician-location.js';
 export * from './technician-timeline.js';
 export * from './property-details.js';
+export * from './technician-trail.js';

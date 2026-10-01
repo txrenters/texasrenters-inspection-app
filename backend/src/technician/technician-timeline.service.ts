@@ -7,7 +7,9 @@ import {
   routeProgress,
   secondsAtPlace,
   segmentDay,
+  trailSegments,
   type TechnicianDayTimeline,
+  type TechnicianTrail,
   type TimelinePlace,
   type WorkStop,
 } from '@texasrenters/shared';
@@ -201,5 +203,38 @@ export class TechnicianTimelineService {
       /** Assigned, but with no coordinate to time them against. */
       untimedInspectionIds: unplaceable,
     } satisfies TechnicianDayTimeline;
+  }
+
+  /**
+   * Where they actually went on one Texas day, as lines for the map.
+   *
+   * The same fixes the timeline reads, in the same organization and day
+   * bounds, behind the same `technicians:locate` grant as their live position
+   * (the office, 2026-10-02). Cleaned and broken at signal gaps by
+   * `trailSegments`, so the map is handed a path rather than a cloud of fixes.
+   */
+  async trailFor(user: AuthenticatedUser, technicianId: string, date: Date): Promise<TechnicianTrail> {
+    const { start, end } = businessDayBounds(date);
+    const fixes = await this.prisma.technicianLocationPing.findMany({
+      where: {
+        organizationId: user.organizationId,
+        technicianId,
+        recordedAt: { gte: start, lt: end },
+      },
+      select: { latitude: true, longitude: true, recordedAt: true, accuracyMeters: true },
+      orderBy: { recordedAt: 'asc' },
+    });
+    return {
+      technicianId,
+      fixes: fixes.length,
+      segments: trailSegments(
+        fixes.map((fix) => ({
+          latitude: fix.latitude.toNumber(),
+          longitude: fix.longitude.toNumber(),
+          recordedAt: fix.recordedAt.toISOString(),
+          accuracyMeters: fix.accuracyMeters,
+        })),
+      ),
+    };
   }
 }
