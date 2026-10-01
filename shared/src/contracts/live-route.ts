@@ -192,6 +192,14 @@ export interface DrawnRoute {
  * started near would be a billed request for the same line. When they come back
  * the route is older than `MAX_LIVE_ROUTE_AGE_MS`, and redraws from where they
  * are.
+ *
+ * **A route nobody is following is redrawn only when the day changes**
+ * (`follow: false`): no route yet, the origin changing kind, the stops
+ * changing -- never for age or for leaving the line. The technician map draws
+ * everybody's route at once as dashed context (the office, 2026-10-02), and
+ * following every one of them live would be a billed matrix and drive for each
+ * technician every five minutes all day. The selected technician's route still
+ * follows them; the map cuts each dashed line at the live position on its own.
  */
 export function needsReroute(
   drawn: DrawnRoute | null,
@@ -201,6 +209,7 @@ export function needsReroute(
     position: { latitude: number; longitude: number } | null;
   },
   now: number = Date.now(),
+  options: { follow?: boolean } = {},
 ): { reroute: boolean; reason: RerouteReason | null } {
   if (!drawn) return { reroute: true, reason: 'NO_ROUTE' };
   const wentQuiet = drawn.originKind === 'LIVE' && current.originKind === 'LAST_KNOWN';
@@ -212,7 +221,7 @@ export function needsReroute(
     before.size === current.stopIds.length && current.stopIds.every((id) => before.has(id));
   if (!sameStops) return { reroute: true, reason: 'STOPS_CHANGED' };
 
-  if (current.originKind === 'LIVE') {
+  if (current.originKind === 'LIVE' && options.follow !== false) {
     if (current.position && drawn.geometry.length >= 2) {
       const projected = projectOntoPath(current.position, drawn.geometry);
       if (projected && projected.offsetMeters > OFF_ROUTE_M)

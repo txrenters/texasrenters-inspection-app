@@ -167,6 +167,27 @@ describe('deciding whether to ask Google again', () => {
     ).toBe('STALE');
   });
 
+  it('redraws a route nobody is following only when the day changes', () => {
+    // Everybody's dashed route on the technician map: context, not navigation.
+    const offRoad = { latitude: 29.905, longitude: -95.497 };
+    const stale = drawn({ computedAt: NOW - MAX_LIVE_ROUTE_AGE_MS - 1 });
+    expect(
+      needsReroute(stale, { originKind: 'LIVE', stopIds: ['a', 'b'], position: offRoad }, NOW, {
+        follow: false,
+      }),
+    ).toEqual({ reroute: false, reason: null });
+    expect(
+      needsReroute(stale, { originKind: 'LIVE', stopIds: ['b'], position: offRoad }, NOW, {
+        follow: false,
+      }).reason,
+    ).toBe('STOPS_CHANGED');
+    expect(
+      needsReroute(drawn({ originKind: 'HOME' }), { originKind: 'LIVE', stopIds: ['a', 'b'], position: offRoad }, NOW, {
+        follow: false,
+      }).reason,
+    ).toBe('ORIGIN_CHANGED');
+  });
+
   it('never redraws a home route for age or position', () => {
     /**
      * "Only recalculate once they are online and sending." Before the handset

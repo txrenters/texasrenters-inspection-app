@@ -375,7 +375,14 @@ export default function TechnicianMapPage() {
    * `technicians:locate` as the positions, which this page already requires.
    */
   const trails = useTechnicianTrails(visibleIds, date, live, canView);
-  const crewRoutes = useTechnicianRoutes(visibleIds, date, canView);
+  // Not the selected technician's: theirs is the followed route above, drawn
+  // in orange, and the dashed one would be a second request for a line the map
+  // does not draw.
+  const contextIds = useMemo(
+    () => visibleIds.filter((technicianId) => technicianId !== selectedId),
+    [selectedId, visibleIds],
+  );
+  const crewRoutes = useTechnicianRoutes(contextIds, date, canView);
 
   /** The day's inspections by property: the ticks on the discs, and the links in their windows. */
   const visits = useMemo(() => visitsByProperty(assignments.data), [assignments.data]);

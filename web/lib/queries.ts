@@ -152,6 +152,9 @@ export const keys = {
   technicianTimeline: (id: string, date: string) =>
     ['technician-timeline', id, date] as const,
   technicianTrail: (id: string, date: string) => ['technician-trail', id, date] as const,
+  /** Under the followed route's key, so refreshing one technician's route refreshes both. */
+  technicianContextRoute: (id: string, date: string) =>
+    ['technician-route', id, date, 'context'] as const,
   mapAssignments: (date: string) => ['map-assignments', date] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
@@ -630,20 +633,24 @@ export const useTechnicianTrails = (ids: readonly string[], date: string, today:
  * Everybody's planned drive through the day's properties, for the map's dashed
  * lines.
  *
- * The same requests, under the same keys, as `useTechnicianRoute` -- so the
- * selected technician's is one request, not two. Every minute rather than every
- * thirty seconds: these are the context around the person being watched, and the
- * server redraws a route only when something material changed, so a refresh
- * that finds nothing new costs nothing.
+ * Asked for as context (`follow=false`): the server redraws one of these only
+ * when that technician's day changes -- a stop finished, work moved, their
+ * start changing kind -- and never for age or for leaving the line, which is
+ * what following someone costs. Following everybody would be a billed matrix
+ * and drive per technician every five minutes for as long as the map is open.
+ * The map still cuts each line at the live position while they are on it, so
+ * the part already driven drops away. The selected technician's route is
+ * `useTechnicianRoute`, which does follow.
  */
 export const useTechnicianRoutes = (ids: readonly string[], date: string, enabled = true) =>
   useQueries({
     queries: ids.map((id) => ({
-      queryKey: keys.technicianRoute(id, date),
+      queryKey: keys.technicianContextRoute(id, date),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        api<TechnicianRoute>(`/api/v1/admin/technicians/${id}/route${queryString({ date })}`, {
-          signal,
-        }),
+        api<TechnicianRoute>(
+          `/api/v1/admin/technicians/${id}/route${queryString({ date, follow: 'false' })}`,
+          { signal },
+        ),
       refetchInterval: 60_000,
       enabled,
     })),
