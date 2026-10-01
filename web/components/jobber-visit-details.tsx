@@ -87,6 +87,7 @@ export function JobberVisitDetails({
   pushes,
   action,
   inJobber = true,
+  planningCollapsed = false,
 }: {
   title?: string | null;
   details?: string | null;
@@ -106,6 +107,13 @@ export function JobberVisitDetails({
    * services chosen for it.
    */
   inJobber?: boolean;
+  /**
+   * Fold the planning detail -- services and filters to bring, tenant and
+   * access, notes, completion steps -- into one closed disclosure. For a visit
+   * the technician has submitted: the card then holds what was done and any
+   * alert, rather than a screen of what to bring above the areas under review.
+   */
+  planningCollapsed?: boolean;
 }) {
   const read = useMemo(() => parseVisitDetails(details), [details]);
   if (!title && !read.raw) return null;
@@ -122,6 +130,84 @@ export function JobberVisitDetails({
   const tenantOrAccess =
     read.tenants.length > 0 || read.accessNotes.length > 0 || read.contactTenantsBeforeArrival;
   const toReschedule = servicesToReschedule(servicesReport);
+
+  // What the technician reported doing: the part a reviewer reads, so it stays
+  // open when the planning detail around it folds away.
+  const done = servicesReport ? (
+    <section className="grid gap-2" aria-label="Services done">
+      <h3 className="text-muted-foreground text-xs">
+        Services reported by the technician
+        {servicesReportedAt ? ` · ${formatDateTime(servicesReportedAt)}` : ''}
+      </h3>
+      <ul className="grid gap-1.5 text-sm">
+        {REPORTABLE_VISIT_SERVICES.filter((service) => servicesReport.services[service]).map((service) => {
+          const outcome = servicesReport.services[service]!;
+          return (
+            <li key={service} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <Badge variant={outcome.done ? 'success' : 'warning'}>
+                {outcome.done ? 'Done' : 'Not done'}
+              </Badge>
+              <span className="font-medium">{VISIT_SERVICE_LABEL[service]}</span>
+              {outcome.reason ? <span className="text-muted-foreground">{outcome.reason}</span> : null}
+              {outcome.reschedule ? <Badge variant="outline">Reschedule</Badge> : null}
+            </li>
+          );
+        })}
+      </ul>
+      {installedSizes(servicesReport).length ? (
+        <p className="text-sm">
+          Filters installed:{' '}
+          <span className="font-mono">{installedSizes(servicesReport).join(', ')}</span>
+        </p>
+      ) : null}
+      {/* Each register the technician answered for, once the office asked
+          for a photograph of each (2026-09-18). One marked changed whose
+          photograph has not arrived says so, rather than reading as
+          evidenced. */}
+      {servicesReport.filters?.length ? (
+        <ul aria-label="Filter registers" className="grid gap-1.5 text-sm">
+          {servicesReport.filters.map((filter) => (
+            <li
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+              key={`${filter.size}-${filter.location ?? ''}-${filter.slot}`}
+            >
+              {filter.removed ? (
+                <Badge variant="outline">Not at the property</Badge>
+              ) : (
+                <Badge variant={filter.changed ? 'success' : 'warning'}>
+                  {filter.changed ? 'Changed' : 'Not changed'}
+                </Badge>
+              )}
+              <span className={filter.removed ? 'font-mono line-through' : 'font-mono'}>
+                {filterLabel(filter.removed ? { ...filter, actualSize: null } : filter)}
+              </span>
+              {filter.booked ? null : <Badge variant="outline">Found on site</Badge>}
+              {/* The listed size the technician corrected: the office's
+                  record of this property is wrong until somebody fixes it. */}
+              {filter.actualSize && !filter.removed ? (
+                <span className="text-muted-foreground text-xs">listed as {filter.size}</span>
+              ) : null}
+              {filter.reason ? <span className="text-muted-foreground">{filter.reason}</span> : null}
+              {/* How it was found, on an HVAC job (Moses, 2026-10-01). */}
+              {filterScore(filter) ? (
+                <span className="text-muted-foreground text-xs">{filterScore(filter)}</span>
+              ) : null}
+              {filter.changed && !filter.photoId && !filter.removed ? (
+                <span className="text-warning text-xs">Photograph still uploading</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {/* The photographs themselves, beside the answers they evidence:
+          each filter's, and pest control's or flea treatment's where the
+          technician took one. */}
+      <ServicePhotos areaName="this job" photos={servicePhotos(servicesReport)} />
+      {servicesReport.notes ? (
+        <p className="text-sm whitespace-pre-wrap">{servicesReport.notes}</p>
+      ) : null}
+    </section>
+  ) : null;
 
   return (
     <Card aria-labelledby="jobber-visit-title">
@@ -216,6 +302,8 @@ export function JobberVisitDetails({
           </Alert>
         ) : null}
 
+        {planningCollapsed ? done : null}
+        <Fold collapsed={planningCollapsed}>
         {services.length || read.services.filterChange || read.plan ? (
           <div className="grid gap-5 md:grid-cols-2">
             <section className="grid content-start gap-2" aria-label="Services">
@@ -306,81 +394,7 @@ export function JobberVisitDetails({
           </div>
         ) : null}
 
-        {servicesReport ? (
-          <section className="grid gap-2" aria-label="Services done">
-            <h3 className="text-muted-foreground text-xs">
-              Services reported by the technician
-              {servicesReportedAt ? ` · ${formatDateTime(servicesReportedAt)}` : ''}
-            </h3>
-            <ul className="grid gap-1.5 text-sm">
-              {REPORTABLE_VISIT_SERVICES.filter((service) => servicesReport.services[service]).map((service) => {
-                const outcome = servicesReport.services[service]!;
-                return (
-                  <li key={service} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <Badge variant={outcome.done ? 'success' : 'warning'}>
-                      {outcome.done ? 'Done' : 'Not done'}
-                    </Badge>
-                    <span className="font-medium">{VISIT_SERVICE_LABEL[service]}</span>
-                    {outcome.reason ? <span className="text-muted-foreground">{outcome.reason}</span> : null}
-                    {outcome.reschedule ? <Badge variant="outline">Reschedule</Badge> : null}
-                  </li>
-                );
-              })}
-            </ul>
-            {installedSizes(servicesReport).length ? (
-              <p className="text-sm">
-                Filters installed:{' '}
-                <span className="font-mono">{installedSizes(servicesReport).join(', ')}</span>
-              </p>
-            ) : null}
-            {/* Each register the technician answered for, once the office asked
-                for a photograph of each (2026-09-18). One marked changed whose
-                photograph has not arrived says so, rather than reading as
-                evidenced. */}
-            {servicesReport.filters?.length ? (
-              <ul aria-label="Filter registers" className="grid gap-1.5 text-sm">
-                {servicesReport.filters.map((filter) => (
-                  <li
-                    className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
-                    key={`${filter.size}-${filter.location ?? ''}-${filter.slot}`}
-                  >
-                    {filter.removed ? (
-                      <Badge variant="outline">Not at the property</Badge>
-                    ) : (
-                      <Badge variant={filter.changed ? 'success' : 'warning'}>
-                        {filter.changed ? 'Changed' : 'Not changed'}
-                      </Badge>
-                    )}
-                    <span className={filter.removed ? 'font-mono line-through' : 'font-mono'}>
-                      {filterLabel(filter.removed ? { ...filter, actualSize: null } : filter)}
-                    </span>
-                    {filter.booked ? null : <Badge variant="outline">Found on site</Badge>}
-                    {/* The listed size the technician corrected: the office's
-                        record of this property is wrong until somebody fixes it. */}
-                    {filter.actualSize && !filter.removed ? (
-                      <span className="text-muted-foreground text-xs">listed as {filter.size}</span>
-                    ) : null}
-                    {filter.reason ? <span className="text-muted-foreground">{filter.reason}</span> : null}
-                    {/* How it was found, on an HVAC job (Moses, 2026-10-01). */}
-                    {filterScore(filter) ? (
-                      <span className="text-muted-foreground text-xs">{filterScore(filter)}</span>
-                    ) : null}
-                    {filter.changed && !filter.photoId && !filter.removed ? (
-                      <span className="text-warning text-xs">Photograph still uploading</span>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {/* The photographs themselves, beside the answers they evidence:
-                each filter's, and pest control's or flea treatment's where the
-                technician took one. */}
-            <ServicePhotos areaName="this job" photos={servicePhotos(servicesReport)} />
-            {servicesReport.notes ? (
-              <p className="text-sm whitespace-pre-wrap">{servicesReport.notes}</p>
-            ) : null}
-          </section>
-        ) : null}
+        {planningCollapsed ? null : done}
 
         {read.notes.length ? (
           <section className="grid gap-2" aria-label="Notes">
@@ -413,8 +427,22 @@ export function JobberVisitDetails({
             <p className="bg-muted mt-2 rounded-lg p-3 text-sm whitespace-pre-wrap">{read.raw}</p>
           </details>
         ) : null}
+        </Fold>
       </CardContent>
     </Card>
+  );
+}
+
+/** The planning sections as they are, or folded into one closed disclosure. */
+function Fold({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>;
+  return (
+    <details>
+      <summary className="text-muted-foreground cursor-pointer text-sm select-none">
+        Visit details from Jobber
+      </summary>
+      <div className="mt-3 grid gap-5">{children}</div>
+    </details>
   );
 }
 

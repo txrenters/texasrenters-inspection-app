@@ -43,7 +43,8 @@ import { useAdminMutations, useEvidenceRequests, usePropertyAreas } from '@/lib/
 // Type-only: the merge dialog is handed areas already fetched by its caller.
 import type { useInspectionAreas } from '@/lib/queries';
 
-const REVIEWABLE: ReadonlyArray<AdminInspection['status']> = [
+/** Where review and finalization are open: the panel's buttons and the page's finalize bar. */
+export const REVIEWABLE: ReadonlyArray<AdminInspection['status']> = [
   'TECHNICIAN_SUBMITTED',
   'PROCESSING',
   'REVIEW_REQUIRED',

@@ -60,8 +60,11 @@ export function ImportReportDialog({
   propertyLabel,
   replacing = false,
   evidence,
+  triggerSize = 'default',
 }: {
   inspectionId: string;
+  /** The opening button's size: `sm` beside the other buttons in a card header. */
+  triggerSize?: 'default' | 'sm';
   /** What the inspection already holds; absent means nothing is at stake. */
   evidence?: ImportTargetEvidence;
   /** Named in the drawer while it uploads, so a row is not just a spinner. */
@@ -138,7 +141,7 @@ export function ImportReportDialog({
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogTrigger asChild>
-        <Button variant="outline">
+        <Button size={triggerSize} variant="outline">
           {running ? <Spinner /> : <UploadIcon />}
           {running ? 'Import in progress' : 'Import a report'}
         </Button>

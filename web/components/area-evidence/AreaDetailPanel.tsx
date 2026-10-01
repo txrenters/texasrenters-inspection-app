@@ -1,9 +1,16 @@
 'use client';
 
 import type { AreaChecklistEntry, AreaFinding, AreaRecording } from '@texasrenters/shared';
-import { ChevronLeftIcon, ChevronRightIcon, Maximize2Icon, PlayIcon } from 'lucide-react';
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ListChecksIcon,
+  Maximize2Icon,
+  PlayIcon,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -292,6 +299,7 @@ export function AreaDetailPanel({
   // same permission as editing the inspection rather than reviewing findings.
   const canManage = permissions.has('inspections:manage');
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState(false);
 
   // One flat list across recordings and photos, so the arrow keys walk the whole
   // area's evidence rather than stopping at a section boundary.
@@ -356,8 +364,11 @@ export function AreaDetailPanel({
         <div className="min-w-0">
           <h3 className="font-semibold">{area.name}</h3>
           <p className="text-muted-foreground text-xs">
-            {area.floorName ?? 'No floor recorded'} · {area.isRequired ? 'Required' : 'Optional'} ·{' '}
-            {humanize(area.completionStatus)}
+            {/* The floor when there is one. "No floor recorded" on every
+                single-storey house said nothing a reviewer could act on. */}
+            {[area.floorName, area.isRequired ? 'Required' : 'Optional', humanize(area.completionStatus)]
+              .filter(Boolean)
+              .join(' · ')}
           </p>
         </div>
         <div className="flex items-start gap-2">
@@ -434,10 +445,18 @@ export function AreaDetailPanel({
                 Overall context - the Findings tab lists the specific work.
               </p>
             </section>
-          ) : (
+          ) : recordings.length ? (
             <EmptyTab
               body="A summary is written once the recording has been transcribed and analysed."
               title="No condition summary yet"
+            />
+          ) : (
+            // Not "yet": with no recording there is nothing to transcribe, and
+            // an occupied visit -- photographed, not filmed -- never has one.
+            // Promising a summary that will not come read as a stalled job.
+            <EmptyTab
+              body="Condition summaries are written from the walkthrough video, and this area has none. Its photographs and the Condition tab are the record."
+              title="No recording to summarise"
             />
           )}
 
@@ -586,7 +605,24 @@ export function AreaDetailPanel({
           )}
         </TabsContent>
 
-        <TabsContent value="condition">
+        <TabsContent className="space-y-2" value="condition">
+          {/* The property's checklist template, under its own name. It used to
+              open from the "Checklist · 2/7" progress under each area in the
+              list -- a reviewer clicking their scoring progress landed in an
+              editor that changes what every future visit to this property asks. */}
+          {canManage ? (
+            <div className="flex justify-end">
+              <Button
+                onClick={() => setEditingTemplate(true)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <ListChecksIcon aria-hidden />
+                Edit checklist template
+              </Button>
+            </div>
+          ) : null}
           <AreaConditionChecklist
             areaId={areaId}
             canReview={canManage}
@@ -609,6 +645,17 @@ export function AreaDetailPanel({
           />
         </TabsContent>
       </Tabs>
+
+      {editingTemplate ? (
+        <AreaChecklistDialog
+          areaId={area.propertyAreaId}
+          areaName={area.name}
+          onOpenChange={(open) => {
+            if (!open) setEditingTemplate(false);
+          }}
+          open
+        />
+      ) : null}
 
       {viewerIndex !== null && viewerIndex >= 0 ? (
         <EvidenceViewer

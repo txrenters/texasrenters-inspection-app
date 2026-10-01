@@ -12,7 +12,6 @@ import { useParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
-import { ImportReportDialog } from '@/components/inspection-report-import';
 import { AssignmentDialog } from '@/components/assignment-dialog';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InspectionChargesPanel } from '@/components/inspection-charges';
@@ -27,7 +26,7 @@ import {
 import { InspectionTabs } from '@/components/inspection-tabs';
 import { JobberVisitDetails } from '@/components/jobber-visit-details';
 import { ReportClosingNotes } from '@/components/report-closing-notes';
-import { InspectionWorkflowPanel } from '@/components/inspection-workflow';
+import { InspectionWorkflowPanel, REVIEWABLE } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { ReportShareDialog } from '@/components/report-share-dialog';
@@ -48,6 +47,7 @@ import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/form
 import { inspectionTime, jobWorked } from '@/lib/job-time';
 import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 import {
+  useAreaEvidenceSummary,
   useAssignments,
   useInspection,
   useInspectionAudit,
@@ -94,34 +94,6 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
   },
 ];
 
-/**
- * Whether anybody has recorded anything against this inspection.
- *
- * This chooses what the import prompt *says*, not whether it appears — an
- * import is offered on every inspection now, because it replaces what it
- * finds. Warning first is the whole difference between a replacement and an
- * accident.
- *
- * Areas are deliberately not counted. An inspection is created with its
- * property's approved layout snapshotted onto it, so an area says a plan
- * exists — not that somebody walked the property.
- */
-function hasEvidence(item: {
-  evidence?: { photos: number; findings: number; media?: number; responses?: number };
-}) {
-  const evidence = item.evidence;
-  // Absent rather than zero: an older API that does not send this should not
-  // be read as "nothing here", which would promise a clean import over a
-  // walkthrough it is about to overwrite.
-  if (!evidence) return true;
-  return (
-    evidence.photos > 0 ||
-    evidence.findings > 0 ||
-    (evidence.media ?? 0) > 0 ||
-    (evidence.responses ?? 0) > 0
-  );
-}
-
 function InspectionDetail() {
   const id = useParams<{ inspectionId: string }>().inspectionId;
   const permissions = usePermissions();
@@ -154,6 +126,8 @@ function InspectionDetail() {
     'DEFECTS',
     permissions.has('findings:read'),
   );
+  // The same read the Areas card makes, for the finalize bar's count.
+  const areaSummary = useAreaEvidenceSummary(id);
 
   if (inspection.isError)
     return <ErrorState error={inspection.error} retry={() => void inspection.refetch()} />;
@@ -347,12 +321,16 @@ function InspectionDetail() {
           ))}
         </ol>
 
-        {/* Four facts, and deliberately not a second panel below the first.
+        {/* Three facts, and deliberately not a second panel below the first.
               These are reference, not instrument: giving them the same bordered
               treatment as the stepper would make the page read as two equally
               important rows of boxes. Plain text on the canvas, with the labels
-              carrying the only chrome they need. */}
-        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+              carrying the only chrome they need.
+
+              The date and the unit are not repeated here: the line under the
+              property's name already says both, and five facts in a four-column
+              grid left the last alone on a row of its own. */}
+        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-3">
           <div>
             <dt className="text-muted-foreground text-xs">Assigned technician</dt>
             <dd className="mt-0.5 text-sm font-medium">
@@ -361,16 +339,6 @@ function InspectionDetail() {
             {current ? null : (
               <dd className="text-warning mt-0.5 text-xs">Required before field work can start</dd>
             )}
-          </div>
-          <div>
-            <dt className="text-muted-foreground text-xs">Scheduled</dt>
-            <dd className="mt-0.5 text-sm font-medium">{formatScheduledDate(item.scheduledAt)}</dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground text-xs">Property scope</dt>
-            <dd className="mt-0.5 text-sm font-medium">
-              {item.propertywareUnit?.name ?? 'Entire property'}
-            </dd>
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">Comparison baseline</dt>
@@ -444,6 +412,10 @@ function InspectionDetail() {
         booking={item.jobberBooking}
         pushes={item.jobberPushes}
         inJobber={Boolean(item.scheduledInJobber || item.jobberBooking)}
+        // Planning detail -- what to bring, who to call -- matters before the
+        // visit. Once the technician has submitted, it folds away so the areas
+        // are not a screen below it; what was done, and any alert, stays open.
+        planningCollapsed={item.status !== 'SCHEDULED' && item.status !== 'IN_PROGRESS'}
         action={
           // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
           !finalized &&
@@ -467,52 +439,11 @@ function InspectionDetail() {
           even while the technician was still capturing, which put an action
           nobody could take yet ahead of the work everybody came for. */}
       <div className="mt-4 space-y-4">
-        {/* Offered on every inspection, of every type, in every state.
-
-            It used to appear only on an inspection with no areas, which hid it
-            on every inspection at a property with an approved layout: areas are
-            snapshotted at creation, so a record is born with rooms and no
-            evidence. Seventeen of thirty-four were un-importable that way.
-            Counting real evidence instead fixed that and still got it wrong —
-            an import is what the office reaches for when the record here is
-            *wrong*, so refusing to overwrite refused the case that mattered.
-
-            So the import replaces what it finds: photographs, checklist grades
-            and any room the new report does not mention. That is destructive,
-            and the warning below is the only thing standing between a
-            replacement and an accident -- which is why it is worded from what
-            is actually there rather than from the type of the inspection.
-
-            It names the default and the alternative both, because replacing is
-            no longer the only outcome: a second report covering rooms the first
-            one missed can be added instead. Saying only "replaces" was true
-            until that existed, and afterwards read as a warning that the
-            destructive path was the only path -- at the exact moment somebody
-            decides whether to click. */}
-        {permissions.has('inspections:manage') ? (
-          <Alert variant={hasEvidence(item) ? 'warning' : undefined}>
-            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-              <span>
-                {hasEvidence(item)
-                  ? 'Importing a report replaces the evidence on this inspection by default — its photos, its checklist answers, and any room the new report does not cover. Recordings are kept. A follow-up report covering rooms the first one missed can be added instead, without touching the rest; the choice is made once the report has been read.'
-                  : `This ${humanize(item.inspectionType).toLowerCase()} inspection has no evidence recorded against it. Import the report if the walkthrough was done outside this app.`}
-              </span>
-              <ImportReportDialog
-                // What is standing here, so each option can say what it does to
-                // it in real numbers rather than in the abstract.
-                evidence={
-                  item.evidence
-                    ? { areas: item.evidence.areas, photos: item.evidence.photos }
-                    : undefined
-                }
-                inspectionId={id}
-                inspectionType={item.inspectionType}
-                replacing={hasEvidence(item)}
-              />
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
+        {/* "Import a report" is in the Areas card's header now, beside Add area.
+            It used to sit here in a paragraph of amber warning on every
+            inspection holding evidence -- above the areas, for an action taken
+            rarely, while the dialog itself says the same before anything
+            happens. */}
         <AreaEvidenceWorkspace inspectionId={id} />
 
         {/* The comparison moved to its own page. It was rendered here, below
@@ -632,6 +563,34 @@ function InspectionDetail() {
           </div>
         </details>
       </div>
+
+      {/* Where the review stands and the way to close it, always in reach.
+          Finalize lived three screens down, below the charges and the closing
+          notes, so the page's own count of reviewed areas and the button it
+          led to were never on screen together. Opens the same dialog as the
+          workflow panel's button, with the same pending-findings rule. */}
+      {REVIEWABLE.includes(item.status) && permissions.has('inspections:finalize') ? (
+        <div className="bg-card sticky bottom-3 z-20 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 shadow-lg">
+          <p className="text-sm">
+            {areaSummary.data ? (
+              <span className="font-medium">
+                {areaSummary.data.totals.areasReviewed} of {areaSummary.data.totals.areas} areas
+                reviewed
+              </span>
+            ) : null}
+            {pendingFindings.data?.total ? (
+              <span className="text-warning">
+                {areaSummary.data ? ' · ' : ''}
+                {pendingFindings.data.total} finding{pendingFindings.data.total === 1 ? '' : 's'}{' '}
+                awaiting review
+              </span>
+            ) : null}
+          </p>
+          <Button onClick={() => setCompleting(true)} type="button">
+            Finalize inspection
+          </Button>
+        </div>
+      ) : null}
 
       {assigning ? (
         <AssignmentDialog current={current} inspectionId={id} onClose={() => setAssigning(false)} />
