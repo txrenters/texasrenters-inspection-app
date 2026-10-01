@@ -1,11 +1,15 @@
 'use client';
 
-import { inspectionIsWalkedAsOccupied, type AreaEvidenceSummaryItem } from '@texasrenters/shared';
-import { CheckIcon, ListChecksIcon, SearchIcon } from 'lucide-react';
+import {
+  inspectionIsWalkedAsOccupied,
+  inspectionRequiresAreaRecording,
+  type AreaEvidenceSummaryItem,
+} from '@texasrenters/shared';
+import { CheckIcon, SearchIcon } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
+import { ImportReportDialog } from '@/components/inspection-report-import';
 import { AddAreasDialog, MergeAreasDialog } from '@/components/inspection-workflow';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -58,6 +62,33 @@ function countLabel(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/**
+ * Whether anybody has recorded anything against this inspection.
+ *
+ * This chooses what the import dialog *says*, not whether it is offered -- an
+ * import is offered on every inspection, because it replaces what it finds.
+ * Warning first is the whole difference between a replacement and an accident.
+ *
+ * Areas are deliberately not counted. An inspection is created with its
+ * property's approved layout snapshotted onto it, so an area says a plan
+ * exists -- not that somebody walked the property.
+ */
+function hasEvidence(item: {
+  evidence?: { photos: number; findings: number; media?: number; responses?: number };
+}) {
+  const evidence = item.evidence;
+  // Absent rather than zero: an older API that does not send this should not
+  // be read as "nothing here", which would promise a clean import over a
+  // walkthrough it is about to overwrite.
+  if (!evidence) return true;
+  return (
+    evidence.photos > 0 ||
+    evidence.findings > 0 ||
+    (evidence.media ?? 0) > 0 ||
+    (evidence.responses ?? 0) > 0
+  );
+}
+
 /** Spoken description of an area, so the list is usable without the visuals. */
 function areaAriaLabel(area: AreaEvidenceSummaryItem) {
   const parts = [
@@ -66,6 +97,10 @@ function areaAriaLabel(area: AreaEvidenceSummaryItem) {
     countLabel(area.counts.recordings, 'recording'),
     countLabel(area.counts.photos, 'photo'),
     countLabel(area.counts.findings, 'finding'),
+    // Said here now that it is part of the row rather than a button of its own.
+    area.checklistItemCount
+      ? `Checklist ${area.checklistAssessedCount} of ${area.checklistItemCount} assessed`
+      : '',
   ].filter(Boolean);
   const review = area.counts.unreviewedFindings
     ? `${countLabel(area.counts.unreviewedFindings, 'finding')} require review.`
@@ -174,7 +209,6 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
     null,
   );
 
-  const [checklistArea, setChecklistArea] = useState<{ id: string; name: string } | null>(null);
   // Announce completion for screen readers, which otherwise get no signal that
   // the right-hand panel changed.
   const [announcement, setAnnouncement] = useState('');
@@ -189,6 +223,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
 
   const totals = summary.data!.totals;
   const unassigned = summary.data!.unassigned;
+  const requiresRecording = inspectionRequiresAreaRecording(inspection?.inspectionType);
   // The open area's neighbours in the list as filtered, for moving on from an
   // area once it is reviewed without going back to the list for the next one.
   const position = filtered.findIndex((area) => area.id === selectedId);
@@ -291,6 +326,26 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               Merge duplicates
             </Button>
           ) : null}
+          {/* Offered on every inspection, of every type, in every state: an
+              import is what the office reaches for when the record here is
+              wrong, so it replaces what it finds -- or, chosen once the report
+              has been read, adds the rooms it covers. Here beside Add area
+              rather than in an amber paragraph above the areas on every
+              inspection: the dialog says what an import will do to what is
+              here before anything happens, in real numbers. */}
+          {canMerge && inspection ? (
+            <ImportReportDialog
+              evidence={
+                inspection.evidence
+                  ? { areas: inspection.evidence.areas, photos: inspection.evidence.photos }
+                  : undefined
+              }
+              inspectionId={inspectionId}
+              inspectionType={inspection.inspectionType}
+              replacing={hasEvidence(inspection)}
+              triggerSize="sm"
+            />
+          ) : null}
         </div>
       </CardHeader>
 
@@ -339,13 +394,31 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                   const checklistComplete =
                     area.checklistItemCount > 0 &&
                     area.checklistAssessedCount >= area.checklistItemCount;
+                  /**
+                   * Two lines a row where there were five or six -- name and
+                   * status, then what is in the area -- so a twenty-area
+                   * inspection reads in one screen rather than a scrolling box
+                   * of four. "No video" is said only where a video is owed;
+                   * on an occupied visit it was every row's noise.
+                   */
+                  const contents = [
+                    area.counts.recordings
+                      ? countLabel(area.counts.recordings, 'video')
+                      : requiresRecording
+                        ? 'No video'
+                        : null,
+                    countLabel(area.counts.photos, 'photo'),
+                    area.counts.findings ? countLabel(area.counts.findings, 'finding') : null,
+                    area.floorName,
+                    area.isRequired ? null : 'Optional',
+                  ].filter(Boolean);
                   return (
-                    <li className="grid gap-1" key={area.id}>
+                    <li key={area.id}>
                       <button
                         aria-label={areaAriaLabel(area)}
                         aria-selected={active}
                         className={cn(
-                          'grid w-full gap-1 rounded-lg border p-2.5 text-left transition-colors',
+                          'grid w-full gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors',
                           'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
                           active ? 'border-primary bg-primary/5' : 'hover:bg-accent/50',
                         )}
@@ -355,28 +428,30 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                       >
                         <span className="flex items-center justify-between gap-2">
                           <span className="truncate text-sm font-medium">{area.name}</span>
-                          {!area.isRequired ? (
-                            <Badge variant="outline">Optional</Badge>
+                          <Badge variant={meta.variant}>{meta.label}</Badge>
+                        </span>
+                        <span className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-xs">
+                          {contents.join(' · ')}
+                          {/* Scoring progress, not a door into the property's
+                              checklist template: that editor changes what every
+                              future visit asks, and lives in the Condition tab
+                              under its own name now. */}
+                          {area.checklistItemCount ? (
+                            <span className="inline-flex items-center gap-0.5">
+                              · Checklist {area.checklistAssessedCount}/{area.checklistItemCount}
+                              {checklistComplete ? (
+                                <CheckIcon aria-hidden className="text-success size-3" />
+                              ) : null}
+                            </span>
                           ) : null}
                         </span>
-                        {area.floorName ? (
-                          <span className="text-muted-foreground text-xs">{area.floorName}</span>
-                        ) : null}
-                        <span className="text-muted-foreground text-xs">
-                          {area.counts.recordings ? `${area.counts.recordings} video` : 'No video'} ·{' '}
-                          {countLabel(area.counts.photos, 'photo')} ·{' '}
-                          {area.counts.findings
-                            ? countLabel(area.counts.findings, 'finding')
-                            : 'No findings'}
-                        </span>
-                        <span className="flex flex-wrap items-center gap-1">
-                          <Badge variant={meta.variant}>{meta.label}</Badge>
-                          {area.counts.unreviewedFindings ? (
+                        {area.counts.unreviewedFindings ? (
+                          <span>
                             <Badge variant="warning">
                               {area.counts.unreviewedFindings} awaiting review
                             </Badge>
-                          ) : null}
-                        </span>
+                          </span>
+                        ) : null}
                         {/* The reason belongs next to the status, not a click
                             away. "Skipped" alone tells a reviewer nothing they
                             can act on; "Skipped — tenant refused access" closes
@@ -385,36 +460,6 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                           <span className="text-muted-foreground text-xs italic">
                             {area.skipReason}
                           </span>
-                        ) : null}
-                      </button>
-
-                      {/* Sibling of the row button, never nested inside it — a
-                          button within a button is invalid markup and breaks
-                          keyboard traversal. */}
-                      <button
-                        aria-label={
-                          area.checklistItemCount
-                            ? `Edit ${area.name} checklist, ${area.checklistAssessedCount} of ${area.checklistItemCount} items assessed`
-                            : `Edit ${area.name} coverage checklist, no items`
-                        }
-                        className="text-muted-foreground hover:bg-accent focus-visible:ring-ring/50 flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors focus-visible:ring-[3px] focus-visible:outline-none"
-                        onClick={() => setChecklistArea({ id: area.propertyAreaId, name: area.name })}
-                        type="button"
-                      >
-                        <ListChecksIcon aria-hidden className="size-3.5" />
-                        {/* "Not set" rather than "0": an unconfigured area still
-                            shows the technician a generated fallback, so this is
-                            a prompt to configure, not a fault.
-
-                            Once configured this reads as progress — assessed of
-                            total — because the question a reviewer actually has
-                            is whether the technician scored the room, not how
-                            many rows the checklist happens to contain. */}
-                        {area.checklistItemCount
-                          ? `Checklist · ${area.checklistAssessedCount}/${area.checklistItemCount}`
-                          : 'Checklist · not set'}
-                        {checklistComplete ? (
-                          <CheckIcon aria-hidden className="text-success size-3.5" />
                         ) : null}
                       </button>
                     </li>
@@ -488,18 +533,6 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
         />
       ) : null}
 
-      {/* One dialog at the root driven by the chosen area, rather than one
-          mounted per row. */}
-      {checklistArea ? (
-        <AreaChecklistDialog
-          areaId={checklistArea.id}
-          areaName={checklistArea.name}
-          onOpenChange={(open) => {
-            if (!open) setChecklistArea(null);
-          }}
-          open
-        />
-      ) : null}
     </Card>
   );
 }

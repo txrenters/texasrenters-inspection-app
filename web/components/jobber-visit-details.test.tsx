@@ -336,3 +336,45 @@ describe('the Jobber visit on an inspection', () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe('the Jobber visit on a submitted inspection', () => {
+  const report = {
+    services: {
+      filterChange: { done: true, reason: null, reschedule: false },
+      pestControl: { done: false, reason: 'Tenant asked not to spray, has a newborn.', reschedule: true },
+    },
+    filtersInstalled: ['20x25x4'],
+    notes: null,
+  };
+
+  it('keeps what was done and what to book again open, and folds the planning detail away', () => {
+    // A reviewer scrolled past a screen of filters to bring and gate codes to
+    // reach the areas (the office, 2026-10-02): once the technician has
+    // submitted, that is history.
+    render(
+      <JobberVisitDetails
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        planningCollapsed
+        servicesReport={report}
+        title={TITLE}
+      />,
+    );
+
+    expect(screen.getByText('Pest control to reschedule')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Services done' }).closest('details')).toBeNull();
+
+    const fold = screen.getByText('Visit details from Jobber').closest('details');
+    expect(fold).not.toBeNull();
+    expect(fold).not.toHaveAttribute('open');
+    for (const region of ['Services', 'Filters', 'Tenant', 'Access', 'Notes'])
+      expect(fold).toContainElement(screen.getByRole('region', { name: region }));
+  });
+
+  it('leaves everything open while the visit is still to be done', () => {
+    render(<JobberVisitDetails details={DETAILS} inspectionType="OCCUPIED" title={TITLE} />);
+
+    expect(screen.queryByText('Visit details from Jobber')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Tenant' }).closest('details')).toBeNull();
+  });
+});

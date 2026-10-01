@@ -1,5 +1,5 @@
 import type { AreaChecklistEntry } from '@texasrenters/shared';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AreaDetailPanel } from './AreaDetailPanel';
@@ -50,7 +50,17 @@ vi.mock('@/lib/queries', () => ({
   useInspection: () => ({ data: { finalizedAt: null } }),
   useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),
 }));
-vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
+let canManage = true;
+vi.mock('@/lib/auth', () => ({
+  usePermissions: () => ({ has: (permission: string) => permission !== 'inspections:manage' || canManage }),
+}));
+vi.mock('@/components/area-checklist/AreaChecklistDialog', () => ({
+  AreaChecklistDialog: ({ areaId, areaName }: { areaId: string; areaName: string }) => (
+    <div aria-label={`Checklist template for ${areaName}`} role="dialog">
+      {areaId}
+    </div>
+  ),
+}));
 
 const entry = (overrides: Partial<AreaChecklistEntry>): AreaChecklistEntry =>
   ({
@@ -75,7 +85,10 @@ const occupiedPair = [
   entry({ itemId: 'occ-2', label: 'Overall condition', responseType: 'CHOICE', textValue: 'Good' }),
 ];
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  canManage = true;
+});
 
 describe('the condition tab of an occupied room', () => {
   it('counts answered questions the way the panel does', () => {
@@ -105,5 +118,44 @@ describe('the condition tab of an occupied room', () => {
     expect(within(table).getByRole('columnheader', { name: 'Undamaged' })).toBeTruthy();
     expect(within(table).queryByRole('columnheader', { name: 'Answer' })).toBeNull();
     expect(screen.getByRole('tab', { name: /condition/i }).textContent).toContain('(1/1)');
+  });
+
+  it("opens the property's checklist template under its own name, for those who manage inspections", () => {
+    // It used to open from the "Checklist · 2/7" progress in the area list, so
+    // a reviewer clicking their scoring progress landed in an editor that
+    // changes what every later visit to the property asks.
+    checklist = occupiedPair;
+    render(<AreaDetailPanel areaId="area-1" inspectionId="inspection-1" onTabChange={() => {}} tab="condition" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit checklist template' }));
+    expect(screen.getByRole('dialog', { name: 'Checklist template for Entrance' }).textContent).toBe(
+      'property-area-1',
+    );
+  });
+
+  it('offers no template editor to a reviewer who cannot manage inspections', () => {
+    checklist = occupiedPair;
+    canManage = false;
+    render(<AreaDetailPanel areaId="area-1" inspectionId="inspection-1" onTabChange={() => {}} tab="condition" />);
+
+    expect(screen.queryByRole('button', { name: 'Edit checklist template' })).toBeNull();
+  });
+});
+
+describe('the overview of a room that was photographed, not filmed', () => {
+  it('says there is no recording to summarise, rather than promising a summary', () => {
+    checklist = occupiedPair;
+    render(<AreaDetailPanel areaId="area-1" inspectionId="inspection-1" onTabChange={() => {}} tab="overview" />);
+
+    expect(screen.getByText('No recording to summarise')).toBeTruthy();
+    expect(screen.queryByText('No condition summary yet')).toBeNull();
+  });
+
+  it('names the floor only when there is one', () => {
+    checklist = occupiedPair;
+    render(<AreaDetailPanel areaId="area-1" inspectionId="inspection-1" onTabChange={() => {}} tab="overview" />);
+
+    expect(screen.getByText('Optional · Completed')).toBeTruthy();
+    expect(screen.queryByText(/No floor recorded/)).toBeNull();
   });
 });
