@@ -1,4 +1,5 @@
 import { resolveApiUrl } from '@texasrenters/shared';
+import { AppState, Platform } from 'react-native';
 
 import { environment } from '../config/environment';
 import { deviceId } from './device-id';
@@ -40,6 +41,43 @@ export interface MobileSession {
 // already owns it. A second class with the same name would satisfy no
 // `instanceof` check written against the first — and the whole 401 path in
 // TexasRentersProviders branches on exactly that.
+
+/**
+ * The session is on this phone and good, but its token has run out and cannot
+ * be renewed just now: the phone is locked.
+ *
+ * Not "signed out", and must never be read as it. Answered instead of `null`
+ * so no caller mistakes it for a missing session -- `null` is what sends a
+ * technician to the sign-in screen. A request that gets this was simply not
+ * sent, and the next one made with the app on screen renews and goes.
+ */
+export class SessionUnavailableError extends Error {
+  constructor() {
+    super('The phone is locked, so the session will be renewed when the app is next open.');
+    this.name = 'SessionUnavailableError';
+  }
+}
+
+/**
+ * Whether a renewed session could be saved right now.
+ *
+ * Renewing rotates the refresh token: the server retires the old one as it
+ * issues the new one, and reads the old one being offered again as theft,
+ * ending every session on the account. So a renewal whose new token cannot be
+ * saved signs the technician out at the next attempt.
+ *
+ * That is an iPhone in a pocket. The session lives in the keychain, which iOS
+ * locks shortly after the screen, and the app keeps running behind the lock
+ * screen for the location task -- with the upload queue, the error reporter and
+ * every poll running alongside it. The office's error log held 11,838 refused
+ * keychain reads from one iPhone between 2026-09-14 and 2026-10-01, nearly all
+ * with the phone locked. An app is only ever `active` on an unlocked phone, so
+ * that is when iOS may renew. Android's keystore stays usable while the screen
+ * is locked, so it always may.
+ */
+export function sessionMaySaveNow() {
+  return Platform.OS !== 'ios' || AppState.currentState === 'active';
+}
 
 function decodeBase64Url(value: string) {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
@@ -98,6 +136,18 @@ const isExpired = (session: MobileSession, margin = RENEW_MARGIN_SECONDS) =>
 let cached: MobileSession | null | undefined;
 let inFlightRefresh: Promise<MobileSession | null> | null = null;
 
+/**
+ * What the server answered a renewal with, that the keychain would not take.
+ *
+ * By the time the answer arrives the server has already retired the refresh
+ * token it replaced, and offering that one again ends every session on the
+ * account. So the answer is used from memory at once, whether or not it could
+ * be saved, and saved the next time the keychain will take it -- a phone locked
+ * while a renewal was on its way no longer turns the next request into a
+ * replay.
+ */
+let unsaved: { session: MobileSession | null } | null = null;
+
 type Listener = (session: MobileSession | null) => void;
 const listeners = new Set<Listener>();
 
@@ -106,14 +156,40 @@ function publish(session: MobileSession | null) {
   for (const listener of listeners) listener(session);
 }
 
-async function persist(session: MobileSession | null) {
+async function save(session: MobileSession | null) {
   if (session)
     await sessionStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({ accessToken: session.accessToken, refreshToken: session.refreshToken }),
     );
   else await sessionStorage.removeItem(STORAGE_KEY);
+}
+
+async function persist(session: MobileSession | null) {
+  await save(session);
+  unsaved = null;
   publish(session);
+}
+
+async function adopt(session: MobileSession | null) {
+  publish(session);
+  try {
+    await save(session);
+    unsaved = null;
+  } catch {
+    unsaved = { session };
+  }
+}
+
+async function saveUnsaved() {
+  if (!unsaved || !sessionMaySaveNow()) return;
+  const pending = unsaved;
+  try {
+    await save(pending.session);
+    if (unsaved === pending) unsaved = null;
+  } catch {
+    // Still refused. Kept for the next call.
+  }
 }
 
 async function load(): Promise<MobileSession | null> {
@@ -157,23 +233,42 @@ function endpoint(path: string) {
  * token repeatedly — which the backend correctly treats as a stolen token and
  * answers by ending every session for the account.
  *
- * `renew: false` is for a caller that could not save a renewed session, and
- * so must not ask for one: rotation retires the old refresh token either way,
- * and offering it again later ends the session. It gets the token while the
- * token still has a little life in it, and `null` after that.
+ * Never renewed where the renewal could not be saved (`sessionMaySaveNow`):
+ * rotation retires the old refresh token either way, and offering it again
+ * later ends the session. That used to be the caller's to remember, and only
+ * the location task did -- every poll, upload and error report renewed from
+ * behind the lock screen. The token is handed out while it still has a little
+ * life in it; after that a caller that asked to renew gets
+ * `SessionUnavailableError` -- not `null`, which would read as signed out --
+ * and one that passed `renew: false` gets `null`, as it always did.
  */
 export async function getSession({ renew = true }: { renew?: boolean } = {}): Promise<
   MobileSession | null
 > {
+  await saveUnsaved();
   const current = await load();
   if (!current) return null;
   if (!isExpired(current)) return current;
-  if (!renew) return isExpired(current, UNRENEWED_MARGIN_SECONDS) ? null : current;
+  if (renew && sessionMaySaveNow()) {
+    inFlightRefresh ??= refresh(current.refreshToken).finally(() => {
+      inFlightRefresh = null;
+    });
+    return inFlightRefresh;
+  }
+  if (!isExpired(current, UNRENEWED_MARGIN_SECONDS)) return current;
+  if (!renew) return null;
+  throw new SessionUnavailableError();
+}
 
-  inFlightRefresh ??= refresh(current.refreshToken).finally(() => {
-    inFlightRefresh = null;
-  });
-  return inFlightRefresh;
+/**
+ * Who is signed in, without renewing anything.
+ *
+ * Enough to scope what is stored on the phone to its technician, which an
+ * expired token does just as well -- and asking `getSession` for it renewed the
+ * token, or failed behind the lock screen, only to read the user id.
+ */
+export async function signedInUserId(): Promise<string | null> {
+  return (await load())?.authUserId ?? null;
 }
 
 /**
@@ -193,6 +288,7 @@ export async function getSession({ renew = true }: { renew?: boolean } = {}): Pr
 const RENEW_AHEAD_SHARE = 0.4;
 
 export async function renewSessionAhead(): Promise<void> {
+  if (!sessionMaySaveNow()) return;
   const current = await load();
   if (!current?.issuedAt) return;
   const lifetime = current.expiresAt - current.issuedAt;
@@ -237,13 +333,14 @@ async function refresh(refreshToken: string): Promise<MobileSession | null> {
     // server could not answer for are the same situation from here.
     if (response.status !== 401 && response.status !== 403) return cached ?? null;
 
-    await persist(null);
+    await adopt(null);
     return null;
   }
 
   const body = (await response.json()) as { accessToken: string; refreshToken: string };
   const next = toSession(body.accessToken, body.refreshToken);
-  await persist(next);
+  // Used at once, saved when the keychain will take it: see `unsaved`.
+  await adopt(next);
   return next;
 }
 
@@ -424,4 +521,5 @@ export function onSessionChange(listener: Listener) {
 export function resetSessionCache() {
   cached = undefined;
   inFlightRefresh = null;
+  unsaved = null;
 }

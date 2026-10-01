@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
 
-import { getSession } from '../auth/session';
+import { signedInUserId } from '../auth/session';
 import { demoStorage } from './demo-storage';
 
 const CACHE_PREFIX = 'texasrenters-query-cache-v1';
@@ -146,8 +146,9 @@ function withoutVolatileQueries(state: unknown): unknown {
  * at launch and on the sign-in screen, not an error.
  */
 async function storageKey() {
-  const session = await getSession();
-  return session ? `${CACHE_PREFIX}:${session.authUserId}` : null;
+  // Who is signed in, without renewing a token to find out.
+  const userId = await signedInUserId();
+  return userId ? `${CACHE_PREFIX}:${userId}` : null;
 }
 
 /**

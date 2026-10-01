@@ -1,6 +1,14 @@
 import type { PropsWithChildren } from 'react';
-import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AppState, Platform } from 'react-native';
+import {
+  focusManager,
+  MutationCache,
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+} from '@tanstack/react-query';
 
+import { SessionUnavailableError } from '../auth/session';
 import { queryKeys } from '../features/queries';
 import { reconcileMobileState } from '../features/state-consistency';
 import { reportError } from '../lib/error-log';
@@ -37,8 +45,30 @@ function handleQueryError(client: QueryClient, error: unknown, source: string) {
     void repositories.auth.signOut().catch(() => undefined);
     return;
   }
+  // A locked phone, not a fault: the request goes when the app is next open.
+  if (error instanceof SessionUnavailableError) return;
   void reportError(error, { source });
 }
+
+/**
+ * The app is "focused" while it is on screen, and not while it is behind the
+ * lock screen or another app.
+ *
+ * Every poll here says `refetchIntervalInBackground: false`, and none of them
+ * ever stopped: react-query watches a browser window's visibility, which React
+ * Native does not have, so it read every moment as focused unless told
+ * otherwise -- and nothing told it. An iPhone keeps the app running behind the
+ * lock screen for the location task, so the dashboard, the job list and the
+ * office's requests were fetched every minute from a pocket all evening, each
+ * one needing a token the locked keychain would not give up (11,838 refused
+ * reads in the office's error log, 2026-09-14 to 2026-10-01). The web build
+ * keeps react-query's own window handling.
+ */
+if (Platform.OS !== 'web')
+  focusManager.setEventListener((setFocused) => {
+    const subscription = AppState.addEventListener('change', (state) => setFocused(state === 'active'));
+    return () => subscription.remove();
+  });
 
 const queryClient: QueryClient = new QueryClient({
   queryCache: new QueryCache({

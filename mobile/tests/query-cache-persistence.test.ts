@@ -5,6 +5,8 @@ let mockSessionUserId: string | null = 'tech-1';
 jest.mock('../src/auth/session', () => ({
   getSession: async () =>
     mockSessionUserId ? { authUserId: mockSessionUserId, accessToken: 'token' } : null,
+  // What the stored snapshot is keyed by: who is signed in, not a token.
+  signedInUserId: async () => mockSessionUserId,
   onSessionChange: () => () => undefined,
 }));
 

@@ -1,6 +1,12 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
-import { getSession, requestPasswordReset, signIn, signOut } from '../../auth/session';
+import {
+  getSession,
+  requestPasswordReset,
+  SessionUnavailableError,
+  signIn,
+  signOut,
+} from '../../auth/session';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type {
@@ -648,7 +654,17 @@ export async function requestJson(
     throw new Error('The TexasRenters API URL is not configured for this app build.');
   // Refreshes in place when the token is close to expiry. This is the only
   // thing that keeps a token alive — nothing refreshes on a timer.
-  const session = await getSession({ renew: renewSession });
+  let session: Awaited<ReturnType<typeof getSession>>;
+  try {
+    session = await getSession({ renew: renewSession });
+  } catch (error) {
+    // The phone is locked and the token has run out. Nothing was sent, which
+    // is the same "could not be reached" as no signal: a read answers from what
+    // is stored here, and a write is held for the next send.
+    if (error instanceof SessionUnavailableError)
+      throw new ApiConnectionError(error.message, 'transport');
+    throw error;
+  }
   if (!session) throw new SessionExpiredError();
   const method = (options.method ?? 'GET').toUpperCase();
   const canFallback = method === 'GET' || method === 'HEAD';
@@ -1765,8 +1781,19 @@ export class ApiUploadRepository implements UploadRepository {
         });
         return true;
       }
-      const session = await getSession();
-      if (!session) throw new SessionExpiredError();
+      /**
+       * The session, asked for only where the server is.
+       *
+       * Resuming against an upload link already held talks to Cloudflare alone
+       * and needs no token. Asking up front stopped a walkthrough the moment its
+       * token ran out on a locked phone -- exactly when the token cannot be
+       * renewed -- with the link good for most of an hour still.
+       */
+      const requireSession = async () => {
+        const session = await getSession();
+        if (!session) throw new SessionExpiredError();
+        return session;
+      };
       const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
       if (!baseUrl)
         throw new Error('The TexasRenters API URL is not configured for this app build.');
@@ -1788,10 +1815,10 @@ export class ApiUploadRepository implements UploadRepository {
         mimeType: 'video/mp4',
         filename: `${pending.roomName || 'recording'}.mp4`.replace(/\s+/g, '-').toLowerCase(),
         signal: undefined,
-        createSession: () =>
+        createSession: async () =>
           createStreamUploadSession({
             baseUrl,
-            accessToken: session.accessToken,
+            accessToken: (await requireSession()).accessToken,
             inspectionAreaId: pending.roomId,
             recordingType: pending.recordingType ?? 'PRIMARY_AREA',
             filename: `${pending.roomName || 'recording'}.mp4`,
@@ -1885,6 +1912,7 @@ export class ApiUploadRepository implements UploadRepository {
           parameters.relatedFindingId = (pending.relatedFindingId ??
             media.relatedFindingId) as string;
       }
+      const session = await requireSession();
       const task = LegacyFileSystem.createUploadTask(
         resolveApiUrl(baseUrl, endpoint),
         media.uri,
