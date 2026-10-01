@@ -122,9 +122,19 @@ const unitKey = (label: string | null | undefined) =>
   (label ?? '').toLowerCase().replace(/[^a-z0-9/]+/g, ' ').trim();
 
 /**
+ * The same, without the word naming what it is: "Unit 1/2", "Apt 1/2" and
+ * "#1/2" are all "1/2". One side of a report often writes the word and the
+ * other does not (the office, 2026-10-02: a grouped building still asked for
+ * its units).
+ */
+const bareUnitKey = (label: string | null | undefined) =>
+  unitKey(label).replace(/^(?:unit|units|apt|apartment|suite|ste|no|number)\s+/, '');
+
+/**
  * The unit the tenant report says a tenancy is in, when it names one of its
  * building's: by Propertyware's own id, or by a name, abbreviation or address
- * only one of them answers to. Null when it says nothing, or nothing certain.
+ * only one of them answers to -- as written first, and then without a word
+ * like "Unit" on either side. Null when it says nothing, or nothing certain.
  */
 export function unitFromReport<Unit extends { id: string; externalId: string; name: string; abbreviation: string | null; addressLine1: string | null }>(
   units: readonly Unit[],
@@ -134,12 +144,16 @@ export function unitFromReport<Unit extends { id: string; externalId: string; na
     const byId = units.find((unit) => unit.externalId === tenant.unitExternalId);
     if (byId) return byId;
   }
-  const wanted = unitKey(tenant.unitName);
-  if (!wanted) return null;
-  const answering = units.filter((unit) =>
-    [unit.name, unit.abbreviation, unit.addressLine1].some((label) => unitKey(label) === wanted),
-  );
-  return answering.length === 1 ? answering[0]! : null;
+  for (const key of [unitKey, bareUnitKey]) {
+    const wanted = key(tenant.unitName);
+    if (!wanted) return null;
+    const answering = units.filter((unit) =>
+      [unit.name, unit.abbreviation, unit.addressLine1].some((label) => key(label) === wanted),
+    );
+    // Two units answering is not an answer, and no looser reading makes it one.
+    if (answering.length) return answering.length === 1 ? answering[0]! : null;
+  }
+  return null;
 }
 
 /** One row of the office's sheet of visit Details for a quarter. */
@@ -1115,9 +1129,12 @@ export class TbpPlanService {
       ...(existing?.visitTitleOverriddenAt
         ? {}
         : {
-            // A unit a coordinator chose, or the report names, is the door the visit is for.
+            // A unit a coordinator chose, or the report names -- this quarter or an
+            // earlier one -- is the door the visit is for.
             visitTitle: visitTitle(
-              (unit.resolution === TbpUnitResolution.MANUAL || unit.resolution === TbpUnitResolution.REPORT_UNIT) &&
+              (unit.resolution === TbpUnitResolution.MANUAL ||
+                unit.resolution === TbpUnitResolution.REPORT_UNIT ||
+                unit.resolution === TbpUnitResolution.PRIOR_QUARTER) &&
                 unit.unit?.addressLine1
                 ? { ...tenant, addressLine1: unit.unit.addressLine1 }
                 : tenant,
@@ -1213,6 +1230,29 @@ export class TbpPlanService {
 
     if (units.length === 1)
       return { unitId: units[0].id, leaseId: null, resolution: TbpUnitResolution.SOLE_UNIT, ...named(units[0].id) };
+
+    // The unit this tenancy's visit had in an earlier quarter (the office,
+    // 2026-10-02: "why do we still have a blocker on this when we already
+    // grouped them?"). Grouping is by building and never says which door; and a
+    // unit chosen by hand was kept on that quarter's visit alone, so the same
+    // building asked again every quarter. The newest answer, while it is still
+    // one of the building's units -- the same tenancy, by its own key.
+    const earlier = await this.prisma.tbpQuarterPlanStop.findFirst({
+      where: {
+        organizationId,
+        tenantExternalId: tenant.externalId,
+        propertywareUnitId: { in: units.map((unit) => unit.id) },
+      },
+      orderBy: [{ plan: { quarterYear: 'desc' } }, { plan: { quarterNumber: 'desc' } }],
+      select: { propertywareUnitId: true },
+    });
+    if (earlier?.propertywareUnitId)
+      return {
+        unitId: earlier.propertywareUnitId,
+        leaseId: null,
+        resolution: TbpUnitResolution.PRIOR_QUARTER,
+        ...named(earlier.propertywareUnitId),
+      };
 
     // Somebody has already inspected this tenancy and named a unit. That is a
     // human answer to the same question, and it is better than none -- an HVAC

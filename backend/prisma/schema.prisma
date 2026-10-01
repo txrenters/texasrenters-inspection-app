@@ -3035,6 +3035,9 @@ enum TbpUnitResolution {
   UNRESOLVED
   /// The tenant report names the unit.
   REPORT_UNIT
+  /// The unit this tenancy's visit had in an earlier quarter: somebody chose it,
+  /// or the report named it, and it is still one of the building's.
+  PRIOR_QUARTER
 }
 
 /// One quarter's worth of benefit-package inspections, before they are real.
