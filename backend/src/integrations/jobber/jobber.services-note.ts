@@ -1,7 +1,9 @@
 import {
   filterLabel,
   filtersNotChanged,
+  filtersRemoved,
   formatPhotoStamp,
+  inspectionAssessesFilters,
   installedSizes,
   parseVisitDetails,
   type ReportableVisitService,
@@ -36,6 +38,8 @@ export function jobberServicesNote(input: {
   report: VisitServicesReport;
   /** The visit's Details, to know whether it booked an occupied inspection. */
   details: string | null;
+  /** The inspection's kind: an HVAC job answers a filter change nobody booked. */
+  inspectionType?: string | null;
   /** Whether the inspection was walked: at least one area completed rather than skipped. */
   inspectionDone: boolean;
   technicianName: string | null;
@@ -44,9 +48,15 @@ export function jobberServicesNote(input: {
   const lines: { order: number; text: string }[] = [];
   const completed: number[] = [];
 
+  const booked = parseVisitDetails(input.details).services;
+  const unbookedFilters = inspectionAssessesFilters(input.inspectionType) && !booked.filterChange;
   for (const service of Object.keys(OFFICE_NAME) as ReportableVisitService[]) {
     const outcome = input.report.services[service];
     if (!outcome) continue;
+    // An HVAC job scores its filters on the AC filter change whether or not
+    // the visit booked one (Moses, 2026-10-01). A change nobody booked is not
+    // the office's "1." to tick, so the note says nothing of it.
+    if (service === 'filterChange' && unbookedFilters) continue;
     const number = OFFICE_NUMBER[service];
     const label = number ? `${number}. ${OFFICE_NAME[service]}` : OFFICE_NAME[service];
     if (outcome.done) {
@@ -64,12 +74,23 @@ export function jobberServicesNote(input: {
        * office asked for a photograph of each register (2026-09-18); this is
        * the other half of that answer.
        */
-      if (service === 'filterChange')
+      if (service === 'filterChange') {
         for (const filter of filtersNotChanged(input.report))
           lines.push({
             order: number ?? 10,
             text: `   ${filterLabel(filter)}: NOT changed. ${filter.reason ?? ''}`.trimEnd(),
           });
+        // What the visit listed and the technician corrected: the office's
+        // record of the property's filters is wrong until somebody fixes it.
+        for (const filter of filtersRemoved(input.report))
+          lines.push({ order: number ?? 10, text: `   ${filterLabel({ ...filter, actualSize: null })}: not at the property.` });
+        for (const filter of input.report.filters ?? [])
+          if (filter.actualSize && !filter.removed)
+            lines.push({
+              order: number ?? 10,
+              text: `   Listed as ${filter.size}, actually ${filter.actualSize}.`,
+            });
+      }
     } else {
       lines.push({
         order: number ?? 10,

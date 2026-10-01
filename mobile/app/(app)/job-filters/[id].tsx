@@ -13,7 +13,15 @@ import { useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { FILTER_SIZE_PATTERN, MAX_BOOKED_FILTERS } from '@texasrenters/shared';
+import {
+  filterAssessed,
+  FILTER_SIZE_PATTERN,
+  MAX_BOOKED_FILTERS,
+  normalizeFilterSize,
+  type VisitServicesReport,
+} from '@texasrenters/shared';
+
+import { AxisRow } from '@/src/capture/AreaChecklistSheet';
 
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { HomeButton } from '@/src/components/HomeButton';
@@ -29,16 +37,23 @@ import { useDemoStore } from '@/src/stores/demo.store';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import {
   filterDeclined,
+  filterRowSettled,
   filterRows,
+  filterRulesFor,
   filtersPhoto,
   withAddedFilters,
   withFilterAnswer,
+  withFilterAssessment,
   withFilterInPhoto,
+  withFilterRemoved,
+  withFilterSize,
+  withFilterUndeclined,
   withFiltersPhoto,
   withServiceAnswer,
   withoutFilter,
   type FilterEntry,
   type FilterRow,
+  type FilterRules,
 } from '@/src/utils/job-tasks';
 
 registerIcons(CameraIcon, CheckCircle2Icon, CircleIcon, ImageIcon, MinusIcon, PlusIcon, Trash2Icon, XCircleIcon);
@@ -240,6 +255,231 @@ function AddFiltersSheet({
 /** In the photograph: answered as changed, with the photograph's key or id. */
 const inPhoto = (row: FilterRow) => Boolean(row.answer?.changed && (row.answer.photoKey || row.answer.photoId));
 
+/** The size a filter really is, when the one listed is wrong (Moses, 2026-10-01). */
+function ResizeSheet({
+  row,
+  onClose,
+  onSave,
+}: {
+  row: FilterRow | null;
+  onClose: () => void;
+  onSave: (size: string) => void;
+}) {
+  const theme = useThemeColors();
+  const [size, setSize] = useState('');
+  const valid = FILTER_SIZE_PATTERN.test(size);
+  const close = () => {
+    setSize('');
+    onClose();
+  };
+  return (
+    <BottomSheet className="max-h-[88%]" onClose={close} visible={Boolean(row)}>
+      <View className="gap-4">
+        <View className="gap-1">
+          <Text className="text-lg font-bold text-foreground">Change the size</Text>
+          <Text className="text-sm text-muted-foreground">
+            {row ? `Listed as ${row.filter.size}. The office sees both.` : ''}
+          </Text>
+        </View>
+        <TextInput
+          accessibilityLabel="The filter's real size"
+          autoCapitalize="none"
+          autoFocus
+          className="min-h-11 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
+          keyboardType="numbers-and-punctuation"
+          onChangeText={setSize}
+          placeholder="Size, like 20x25x1"
+          placeholderTextColor={theme.mutedForeground}
+          value={size}
+        />
+        {size.length && !valid ? <Text className="text-xs text-destructive">Write it like 20x25x1.</Text> : null}
+        <View className="flex-row gap-3">
+          <Button className="flex-1" label="Cancel" onPress={close} variant="secondary" />
+          <Button
+            className="flex-1"
+            disabled={!valid}
+            label="Save"
+            onPress={() => {
+              onSave(normalizeFilterSize(size));
+              setSize('');
+            }}
+          />
+        </View>
+      </View>
+    </BottomSheet>
+  );
+}
+
+/**
+ * One filter on an HVAC job: scored where it is photographed (Moses,
+ * 2026-10-01: "Keep the AC filter change and remove it from the HVAC
+ * inspection part of it. Include the questions on the AC filter change part of
+ * it.").
+ *
+ * Clean, Undamaged and Working, or a comment where it could not be scored --
+ * the rule the HVAC inspection's Filters section had. The row is a filter the
+ * house really has, so there is no "Not present": a filter the visit listed
+ * that is not there is removed, and one listed at the wrong size is corrected
+ * ("make it where I can adjust the amount of filters, remove or change as
+ * necessary"). Every tap saves only what it changed (`withFilterAssessment`).
+ */
+function HvacFilterRow({
+  row,
+  last,
+  rules,
+  photo,
+  onSave,
+  onNotChanged,
+  onResize,
+}: {
+  row: FilterRow;
+  last: boolean;
+  rules: FilterRules;
+  /** The photograph the filters share, once taken. */
+  photo: { photoKey: string | null; photoId: string | null } | null;
+  onSave: (update: (current: VisitServicesReport | null) => VisitServicesReport) => void;
+  onNotChanged: (row: FilterRow) => void;
+  onResize: (row: FilterRow) => void;
+}) {
+  const theme = useThemeColors();
+  const answer = row.answer;
+  const listed = answer?.booked !== false;
+  const removed = Boolean(answer?.removed);
+  const declined = filterDeclined(answer);
+  const scored = Boolean(answer && filterAssessed(answer));
+  const settled = filterRowSettled(row, rules);
+  const options = { booked: listed };
+
+  const status = removed
+    ? 'Not at the property'
+    : [
+        scored ? 'Scored' : 'To score',
+        declined
+          ? `not changed — ${answer?.reason ?? ''}`
+          : inPhoto(row)
+            ? 'in the photo'
+            : rules.changeAsked
+              ? photo
+                ? 'not in the photo yet'
+                : 'to photograph'
+              : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+  return (
+    <View className={`gap-2 py-3 ${last ? '' : 'border-b border-border'}`}>
+      <View className="flex-row items-center gap-3">
+        {settled && !removed ? (
+          <CheckCircle2Icon size={20} className="text-chart-3" />
+        ) : removed ? (
+          <XCircleIcon size={20} className="text-muted-foreground" />
+        ) : (
+          <CircleIcon size={18} className="text-muted-foreground" />
+        )}
+        <View className="min-w-0 flex-1">
+          <Text className={`text-sm font-semibold ${removed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+            {row.label}
+          </Text>
+          {answer?.actualSize && !removed ? (
+            <Text className="text-xs text-muted-foreground">Listed as {row.filter.size}</Text>
+          ) : null}
+          <Text numberOfLines={2} className="mt-0.5 text-xs text-muted-foreground">
+            {status}
+          </Text>
+        </View>
+      </View>
+
+      {removed ? null : (
+        <>
+          <AxisRow
+            assessment={answer}
+            label={row.label}
+            onAnswer={(axis, next) =>
+              onSave((current) => withFilterAssessment(current, row.filter, { [axis]: next }, options))
+            }
+          />
+          <TextInput
+            accessibilityLabel={`Comment on ${row.label}, or why it could not be scored`}
+            className="min-h-11 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
+            defaultValue={answer?.comment ?? ''}
+            // Keyed by the saved comment: the field is uncontrolled, so a
+            // comment saved elsewhere has to remount it to show.
+            key={`${row.filter.size}-${row.filter.slot}:${answer?.comment ?? ''}`}
+            onEndEditing={(event) => {
+              const comment = event.nativeEvent.text.trim() || null;
+              if (comment !== (answer?.comment ?? null))
+                onSave((current) => withFilterAssessment(current, row.filter, { comment }, options));
+            }}
+            placeholder="Comment, or why it could not be scored"
+            placeholderTextColor={theme.mutedForeground}
+          />
+        </>
+      )}
+
+      <View className="flex-row flex-wrap gap-x-4">
+        {removed ? (
+          <Pressable
+            accessibilityLabel={`Put ${row.label} back`}
+            accessibilityRole="button"
+            className="min-h-11 justify-center active:opacity-70"
+            onPress={() => onSave((current) => withFilterRemoved(current, row.filter, false))}
+          >
+            <Text className="text-xs font-semibold text-primary">Undo</Text>
+          </Pressable>
+        ) : (
+          <>
+            <Pressable
+              accessibilityLabel={`Change the size of ${row.label}`}
+              accessibilityRole="button"
+              className="min-h-11 justify-center active:opacity-70"
+              onPress={() => onResize(row)}
+            >
+              <Text className="text-xs font-semibold text-primary">Change size</Text>
+            </Pressable>
+            {rules.changeAsked ? (
+              declined ? (
+                <Pressable
+                  accessibilityLabel={`Undo not changed for ${row.label}`}
+                  accessibilityRole="button"
+                  className="min-h-11 justify-center active:opacity-70"
+                  onPress={() => onSave((current) => withFilterUndeclined(current, row.filter, photo))}
+                >
+                  <Text className="text-xs font-semibold text-primary">Undo not changed</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  accessibilityLabel={`${row.label} was not changed`}
+                  accessibilityRole="button"
+                  className="min-h-11 justify-center active:opacity-70"
+                  onPress={() => onNotChanged(row)}
+                >
+                  <Text className="text-xs font-semibold text-muted-foreground">Not changed</Text>
+                </Pressable>
+              )
+            ) : null}
+            <Pressable
+              accessibilityLabel={listed ? `${row.label} is not at the property` : `Remove ${row.label}`}
+              accessibilityRole="button"
+              className="min-h-11 flex-row items-center gap-1 active:opacity-70"
+              onPress={() =>
+                onSave((current) =>
+                  listed ? withFilterRemoved(current, row.filter, true) : withoutFilter(current, row.filter),
+                )
+              }
+            >
+              <Trash2Icon size={14} className="text-muted-foreground" />
+              <Text className="text-xs font-semibold text-muted-foreground">
+                {listed ? 'Not here' : 'Remove'}
+              </Text>
+            </Pressable>
+          </>
+        )}
+      </View>
+    </View>
+  );
+}
+
 export default function JobFiltersScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
   const inspection = useInspection(id);
@@ -247,6 +487,7 @@ export default function JobFiltersScreen() {
   // Asked for as the screen opens, so the camera never waits on it.
   const filtersArea = useFiltersArea(id, inspection.data?.status === 'IN_PROGRESS');
   const [notChanged, setNotChanged] = useState<FilterRow | null>(null);
+  const [resizing, setResizing] = useState<FilterRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [wholeService, setWholeService] = useState(false);
   const [opening, setOpening] = useState(false);
@@ -266,9 +507,11 @@ export default function JobFiltersScreen() {
   const item = inspection.data;
   const report = item.servicesReport ?? null;
   const rows = filterRows(item.visitDetails, report);
+  /** On an HVAC job each filter is scored too, and listed ones can be corrected (Moses, 2026-10-01). */
+  const rules = filterRulesFor(item.visitDetails, item.type);
   const photo = filtersPhoto(rows);
-  /** The filters the photograph is of: every one nobody declined. */
-  const toPhotograph = rows.filter((row) => !filterDeclined(row.answer));
+  /** The filters the photograph is of: every one nobody declined, and that is there. */
+  const toPhotograph = rows.filter((row) => !filterDeclined(row.answer) && !row.answer?.removed);
   const declinedTotal = rows.length - toPhotograph.length;
   /** Added after the photograph was taken, so not in it. */
   const missing = toPhotograph.filter((row) => !inPhoto(row));
@@ -376,15 +619,18 @@ export default function JobFiltersScreen() {
     }
   };
 
-  const photoLabel = !toPhotograph.length
-    ? rows.length
-      ? 'Every filter is marked not changed'
-      : 'Add the filters first'
-    : photo && !missing.length
-      ? 'Retake the photo'
-      : toPhotograph.length === 1
-        ? 'Photograph the filter'
-        : `Photograph all ${toPhotograph.length} filters`;
+  const photoLabel =
+    (!toPhotograph.length
+      ? rows.length
+        ? 'Every filter is marked not changed'
+        : 'Add the filters first'
+      : photo && !missing.length
+        ? 'Retake the photo'
+        : toPhotograph.length === 1
+          ? 'Photograph the filter'
+          : `Photograph all ${toPhotograph.length} filters`) +
+    // An HVAC visit that booked no change asks for the scores alone.
+    (rules.changeAsked || !toPhotograph.length ? '' : ' (optional)');
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -411,7 +657,11 @@ export default function JobFiltersScreen() {
 
         <Card className="mx-5 gap-2">
           <Text className="text-sm text-foreground">
-            Stack every filter with its size facing the camera, and take one photo of them all.
+            {rules.assess
+              ? rules.changeAsked
+                ? 'Score every filter Clean, Undamaged and Working. Then stack them with the sizes facing the camera and take one photo of them all.'
+                : 'Score every filter Clean, Undamaged and Working. A photo of them stacked is optional.'
+              : 'Stack every filter with its size facing the camera, and take one photo of them all.'}
           </Text>
           <Text className="text-xs text-muted-foreground">
             {rows.length
@@ -428,7 +678,22 @@ export default function JobFiltersScreen() {
           </Text>
         ) : null}
 
-        {rows.length ? (
+        {rows.length && rules.assess ? (
+          <Card className="mx-5 mt-4 gap-0 py-1">
+            {rows.map((row, index) => (
+              <HvacFilterRow
+                key={`${row.filter.size}-${row.filter.location}-${row.filter.slot}`}
+                last={index === rows.length - 1}
+                onNotChanged={setNotChanged}
+                onResize={setResizing}
+                onSave={save}
+                photo={photo}
+                row={row}
+                rules={rules}
+              />
+            ))}
+          </Card>
+        ) : rows.length ? (
           <Card className="mx-5 mt-4 gap-0 py-1">
             {rows.map((row, index) => {
               const answer = row.answer;
@@ -545,7 +810,7 @@ export default function JobFiltersScreen() {
           icon={<CameraIcon size={18} className="text-primary-foreground" />}
           label={photoLabel}
           onPress={() => void photograph()}
-          variant={photo && !missing.length ? 'secondary' : 'primary'}
+          variant={photo && !missing.length ? 'secondary' : rules.changeAsked ? 'primary' : 'secondary'}
         />
         {toPhotograph.length ? (
           <Button
@@ -567,6 +832,17 @@ export default function JobFiltersScreen() {
           setNotChanged(null);
         }}
         row={notChanged}
+      />
+
+      <ResizeSheet
+        onClose={() => setResizing(null)}
+        onSave={(size) => {
+          const row = resizing;
+          setResizing(null);
+          if (row)
+            save((current) => withFilterSize(current, row.filter, size, { booked: row.answer?.booked !== false }));
+        }}
+        row={resizing}
       />
 
       <AddFiltersSheet

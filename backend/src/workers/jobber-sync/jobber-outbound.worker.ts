@@ -283,6 +283,7 @@ export class JobberOutboundWorker {
         servicesReportedAt: true,
         submittedAt: true,
         jobberVisitDetails: true,
+        inspectionType: true,
         areas: { select: { completionStatus: true } },
         assignments: {
           where: { isCurrent: true },
@@ -295,6 +296,7 @@ export class JobberOutboundWorker {
     const message = jobberServicesNote({
       report: inspection.servicesReport as unknown as VisitServicesReport,
       details: inspection.jobberVisitDetails,
+      inspectionType: inspection.inspectionType,
       inspectionDone: inspection.areas.some((area) => area.completionStatus === InspectionAreaCompletionStatus.COMPLETED),
       technicianName: inspection.assignments[0]?.technician.displayName ?? null,
       recordedAt: inspection.servicesReportedAt ?? inspection.submittedAt ?? new Date(),

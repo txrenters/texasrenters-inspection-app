@@ -543,6 +543,18 @@ export class TechnicianFilterOutcomeDto {
   @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/u) photoKey?: string | null;
   /** Listed by the visit's Details, rather than found on site. */
   @IsOptional() @IsBoolean() booked?: boolean;
+  /**
+   * How the filter was found, on an HVAC job: the questions its inspection's
+   * Filters section asked, scored here now (Moses, 2026-10-01).
+   */
+  @IsOptional() @IsBoolean() isClean?: boolean | null;
+  @IsOptional() @IsBoolean() isUndamaged?: boolean | null;
+  @IsOptional() @IsBoolean() isWorking?: boolean | null;
+  @IsOptional() @IsString() @MaxLength(MAX_SERVICE_REASON) comment?: string | null;
+  /** A listed filter that is not at the property. */
+  @IsOptional() @IsBoolean() removed?: boolean;
+  /** The size actually there, when it is not the one listed. */
+  @IsOptional() @IsString() @Matches(FILTER_SIZE_PATTERN) actualSize?: string | null;
 }
 
 /** `VisitServicesReport` in shared, as it arrives. */

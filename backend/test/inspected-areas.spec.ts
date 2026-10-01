@@ -23,18 +23,32 @@ const AREAS = [
   { name: 'HVAC System', source: 'SYSTEM' },
 ];
 
+type Area = { name: string; source: string; completionStatus?: string };
+type Clause = {
+  propertyArea: { source: { in: string[] }; name?: string | { in: string[] } };
+  completionStatus?: { not: string };
+};
+
 /** What the database would answer for one area, reading the filter as Prisma does. */
-function matches(where: ReturnType<typeof inspectedAreaWhere>, area: { name: string; source: string }) {
-  const excluded = (where.NOT as { propertyArea: { source: { in: string[] }; name?: { in: string[] } } })
-    .propertyArea;
-  const hit = excluded.source.in.includes(area.source) && (!excluded.name || excluded.name.in.includes(area.name));
-  return !hit;
+function matches(where: ReturnType<typeof inspectedAreaWhere>, area: Area) {
+  const clauses = ([] as Clause[]).concat(where.NOT as Clause | Clause[]);
+  const hits = (clause: Clause) => {
+    const { source, name } = clause.propertyArea;
+    const status = area.completionStatus ?? 'PENDING';
+    return (
+      source.in.includes(area.source) &&
+      (name === undefined || (typeof name === 'string' ? name === area.name : name.in.includes(area.name))) &&
+      (!clause.completionStatus || status !== clause.completionStatus.not)
+    );
+  };
+  return !clauses.some(hits);
 }
 
 describe('the areas an inspection inspects', () => {
   it.each(Object.values(InspectionType))('agree in the database and in memory for %s', (type) => {
     const where = inspectedAreaWhere(type);
-    for (const area of AREAS) expect(matches(where, area)).toBe(isInspectedArea(type, area));
+    for (const area of [...AREAS, { name: 'Filters', source: 'SYSTEM', completionStatus: 'COMPLETED' }])
+      expect(matches(where, area)).toBe(isInspectedArea(type, area));
   });
 
   it('leaves the filter change out of a move-out, and keeps its rooms', () => {
@@ -49,8 +63,18 @@ describe('the areas an inspection inspects', () => {
   it('keeps an HVAC visit’s own sections, and still leaves the service photo areas out', () => {
     const rows = AREAS.map((propertyArea, index) => ({ id: `area-${index}`, propertyArea }));
     const names = inspectedAreas(InspectionType.HVAC, rows).map((row) => row.propertyArea.name);
-    expect(names).toEqual(expect.arrayContaining(['Filters', 'A/C unit', 'HVAC System']));
+    expect(names).toEqual(expect.arrayContaining(['A/C unit', 'HVAC System']));
     expect(names).not.toEqual(expect.arrayContaining(['AC filters']));
     expect(names).not.toContain('Pest control');
+  });
+
+  /** Moses, 2026-10-01: scored on the AC filter change now. */
+  it('leaves out an HVAC Filters section nobody submitted, and keeps one that was', () => {
+    const filters = { name: 'Filters', source: 'SYSTEM' };
+    const rows = [
+      { id: 'open', completionStatus: 'PENDING', propertyArea: filters },
+      { id: 'walked', completionStatus: 'COMPLETED', propertyArea: filters },
+    ];
+    expect(inspectedAreas(InspectionType.HVAC, rows).map((row) => row.id)).toEqual(['walked']);
   });
 });

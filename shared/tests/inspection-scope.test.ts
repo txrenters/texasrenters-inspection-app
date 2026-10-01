@@ -277,8 +277,18 @@ describe('the areas an inspection inspects', () => {
   });
 
   it('keeps an HVAC visit’s own sections, which are equipment', () => {
-    expect(isInspectedArea(InspectionType.HVAC, hvacFilters)).toBe(true);
+    expect(isInspectedArea(InspectionType.HVAC, { name: 'A/C unit', source: 'SYSTEM' })).toBe(true);
     expect(isInspectedArea(InspectionType.AC_FILTER_DELIVERY, { name: 'HVAC System', source: 'SYSTEM' })).toBe(true);
+  });
+
+  /**
+   * Moses, 2026-10-01: the filters are scored on the AC filter change, not in
+   * the HVAC inspection. A Filters section already submitted keeps its evidence.
+   */
+  it('leaves an HVAC visit’s Filters section out unless it was already submitted', () => {
+    expect(isInspectedArea(InspectionType.HVAC, hvacFilters)).toBe(false);
+    expect(isInspectedArea(InspectionType.HVAC, { ...hvacFilters, completionStatus: 'PENDING' })).toBe(false);
+    expect(isInspectedArea(InspectionType.HVAC, { ...hvacFilters, completionStatus: 'COMPLETED' })).toBe(true);
   });
 
   it('keeps a room a technician or the office added', () => {

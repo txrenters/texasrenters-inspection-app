@@ -35,6 +35,26 @@ export type HvacResponseType =
 export const HVAC_SECTIONS = ['Attic', 'Filters', 'A/C unit', 'Thermostat'] as const;
 export type HvacSection = (typeof HVAC_SECTIONS)[number];
 
+/**
+ * The section an HVAC job no longer walks as an area of its inspection.
+ *
+ * Moses, 2026-10-01: "Keep the AC filter change and remove it from the HVAC
+ * inspection part of it. Include the questions on the AC filter change part of
+ * it." The filters were asked twice on one job -- photographed on the AC filter
+ * change, then scored again as Filter 1 to 4 here, four rows whatever the
+ * house had. They are scored on the AC filter change now, one row per filter
+ * the house really has (`VisitFilterOutcome`), and an HVAC job always has that
+ * task (`jobServices`).
+ *
+ * Still a section, so an inspection that already walked it reads as it did.
+ */
+export const HVAC_FILTERS_SECTION: HvacSection = 'Filters';
+
+/** The sections a new HVAC inspection is given as areas: every one but the filters. */
+export const HVAC_WALKED_SECTIONS: readonly HvacSection[] = HVAC_SECTIONS.filter(
+  (section) => section !== HVAC_FILTERS_SECTION,
+);
+
 export interface HvacChecklistItem {
   /** The report's section, which is also the area the item is answered in. */
   section: HvacSection;
