@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { FindingReviewStatus, InspectionType, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
-import { checklistKindFor, hvacItemsForArea, hvacSectionOf } from '@texasrenters/shared';
+import { FindingReviewStatus, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
+import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import {
   checklistItemsAreOrganizationWide,
   checklistKindWhere,
+  checklistSectionFor,
   checklistSectionWhere,
 } from '../common/checklist-kind';
 import type {
@@ -173,6 +174,8 @@ export class AreaEvidenceService {
   private reviewStatusFor(input: {
     completionStatus: string;
     isRequired: boolean;
+    /** Whether this visit owes a walkthrough at all: `inspectionRequiresAreaRecording`. */
+    requiresRecording: boolean;
     recordings: number;
     photos: number;
     hasPrimaryRecording: boolean;
@@ -194,7 +197,14 @@ export class AreaEvidenceService {
     if (input.unreviewedFindings) return 'FINDINGS_NEED_REVIEW';
     // A required area without its walkthrough is incomplete even if photos and
     // decided findings exist — the primary recording is the mandated evidence.
-    if (input.isRequired && !input.hasPrimaryRecording) return 'EVIDENCE_INCOMPLETE';
+    //
+    // Only where a walkthrough is mandated. An occupied, back-to-market or HVAC
+    // visit is walked in photographs, and the handset and `completeRoom` both
+    // let the technician finish an area without filming. Asking for a video
+    // here regardless painted every area of every such inspection "Evidence
+    // incomplete", so the one status a reviewer scans for said nothing.
+    if (input.isRequired && input.requiresRecording && !input.hasPrimaryRecording)
+      return 'EVIDENCE_INCOMPLETE';
     return input.findings ? 'REVIEWED' : 'EVIDENCE_READY';
   }
 
@@ -222,10 +232,6 @@ export class AreaEvidenceService {
             source: true,
             environment: true,
             isRequired: true,
-            // Counted in the same query rather than fetched per area from the
-            // client: the list can hold thirty areas, and thirty extra requests
-            // to render a badge is not worth it.
-            _count: { select: { checklistItems: { where: { archivedAt: null } } } },
             floor: { select: { name: true } },
           },
         },
@@ -252,8 +258,11 @@ export class AreaEvidenceService {
         unassigned: { recordings: 0, photos: 0 },
       };
 
-    const [media, photoGroups, findingGroups, summaryFindings, checklistGroups] = await Promise.all(
-      [
+    const kind = checklistKindFor(inspection.inspectionType);
+    const organizationWide = checklistItemsAreOrganizationWide(kind);
+    const requiresRecording = inspectionRequiresAreaRecording(inspection.inspectionType);
+    const [media, photoGroups, findingGroups, summaryFindings, checklistItems, checklistResponses] =
+      await Promise.all([
         // Recordings are few per inspection; the rows carry the flags needed for
         // primary-presence and processing state in one pass.
         this.prisma.inspectionMedia.findMany({
@@ -284,34 +293,46 @@ export class AreaEvidenceService {
           _count: { _all: true },
         }),
         /**
-         * How many checklist items carry an actual assessment.
+         * The checklist items this visit asks, chosen as `areaEvidence` chooses
+         * them, so an area's "Checklist · 2/2" and its Condition tab count the
+         * same rows.
          *
-         * "Assessed" means at least one axis was answered. A row where the
-         * technician answered only Clean still says something about the room,
-         * and the printed reports the office issues contain exactly such
-         * partial rows — requiring all three would report real work as missing.
-         * A comment alone does not count: a note without a verdict is context,
-         * not an assessment.
+         * They used to be counted from different lists. The badge counted the
+         * area's own room items whatever the visit, so an occupied room whose
+         * two questions were both answered read "Checklist · 0/7" beside a tab
+         * saying "2 of 2 assessed": the room list is not what an occupied visit
+         * asks, and its answers are words, not the three axes the old count
+         * looked for. One read for the whole inspection, filtered per area
+         * below, keeps the summary at a constant number of queries.
          */
-        this.prisma.inspectionAreaChecklistResponse.groupBy({
-          by: ['inspectionAreaId'],
+        this.prisma.areaChecklistItem.findMany({
           where: {
-            inspectionArea: { inspectionId },
-            OR: [
-              { isClean: { not: null } },
-              { isUndamaged: { not: null } },
-              { isWorking: { not: null } },
-            ],
+            ...(organizationWide
+              ? { organizationId: user.organizationId, propertyAreaId: null }
+              : { propertyAreaId: { in: areas.map((area) => area.propertyArea.id) } }),
+            archivedAt: null,
+            ...checklistKindWhere(kind),
           },
-          _count: { _all: true },
+          select: { id: true, propertyAreaId: true, section: true, responseType: true },
         }),
-      ],
-    );
+        // Rows, not a grouped count: whether a row is an answer depends on its
+        // item, which a `groupBy` over the responses cannot see.
+        this.prisma.inspectionAreaChecklistResponse.findMany({
+          where: { inspectionArea: { inspectionId } },
+          select: {
+            inspectionAreaId: true,
+            checklistItemId: true,
+            isClean: true,
+            isUndamaged: true,
+            isWorking: true,
+            numericValue: true,
+            textValue: true,
+          },
+        }),
+      ]);
 
     const summaryAreas = new Set(summaryFindings.map((row) => row.propertyAreaId));
-    const checklistAssessedByArea = new Map(
-      checklistGroups.map((row) => [row.inspectionAreaId, row._count._all]),
-    );
+    const itemsById = new Map(checklistItems.map((item) => [item.id, item]));
     const items = areas.map((area) => {
       const areaMedia = media.filter((row) => row.inspectionAreaId === area.id);
       const areaPhotos = photoGroups.filter((row) => row.inspectionAreaId === area.id);
@@ -340,6 +361,27 @@ export class AreaEvidenceService {
       const lastEvidence = [lastMediaAt, lastPhotoAt]
         .filter((value): value is Date => Boolean(value))
         .sort((left, right) => right.getTime() - left.getTime())[0];
+      // The same narrowing `areaEvidence` applies in its query: an
+      // organization-wide list is asked whole, or one HVAC section of it.
+      const section = checklistSectionFor(kind, area.propertyArea.name);
+      const asked = checklistItems.filter(
+        (item) =>
+          (organizationWide || item.propertyAreaId === area.propertyArea.id) &&
+          (!section || item.section === section),
+      );
+      const askedIds = new Set(asked.map((item) => item.id));
+      // The Condition tab's rule (`isChecklistItemAssessed`): a reading, a line
+      // of text or a chosen option is assessed once it is given; a status item
+      // once any one axis is. A row where the technician answered only Clean
+      // still says something about the room, and the printed reports contain
+      // such partial rows; a comment alone does not count.
+      const assessed = checklistResponses.filter((response) => {
+        if (response.inspectionAreaId !== area.id || !askedIds.has(response.checklistItemId))
+          return false;
+        return itemsById.get(response.checklistItemId)?.responseType === 'STATUS'
+          ? response.isClean !== null || response.isUndamaged !== null || response.isWorking !== null
+          : response.numericValue !== null || Boolean(response.textValue);
+      }).length;
 
       return {
         id: area.id,
@@ -348,20 +390,8 @@ export class AreaEvidenceService {
         floorName: area.propertyArea.floor?.name ?? null,
         environment: area.propertyArea.environment,
         isRequired: area.propertyArea.isRequired,
-        // Optional-chained: not every select variant asks for the count, and a
-        // missing badge is not worth crashing the whole evidence list over.
-        // An HVAC section's items belong to the organization, not the area, so
-        // the area's own count is always nought; its section of the list is
-        // the number the technician was asked.
-        checklistItemCount:
-          inspection.inspectionType === InspectionType.HVAC && hvacSectionOf(area.propertyArea.name)
-            ? hvacItemsForArea(area.propertyArea.name).length
-            : (area.propertyArea._count?.checklistItems ?? 0),
-        // How much of that checklist the technician actually scored. Counted
-        // here rather than derived from the item count, because an area can
-        // carry assessments against items an administrator has since archived
-        // — the report still shows them, so the reviewer must see them too.
-        checklistAssessedCount: checklistAssessedByArea.get(area.id) ?? 0,
+        checklistItemCount: asked.length,
+        checklistAssessedCount: assessed,
         completionStatus: area.completionStatus,
         // Only meaningful alongside a SKIPPED status, and null otherwise so the
         // console never prints a stale reason against an area that was resumed.
@@ -369,6 +399,7 @@ export class AreaEvidenceService {
         reviewStatus: this.reviewStatusFor({
           completionStatus: area.completionStatus,
           isRequired: area.propertyArea.isRequired,
+          requiresRecording,
           recordings: areaMedia.length,
           photos,
           hasPrimaryRecording: areaMedia.some(
@@ -663,6 +694,7 @@ export class AreaEvidenceService {
         reviewStatus: this.reviewStatusFor({
           completionStatus: area.completionStatus,
           isRequired: area.propertyArea.isRequired,
+          requiresRecording: inspectionRequiresAreaRecording(inspection.inspectionType),
           recordings: recordings.length,
           photos: photos.length,
           hasPrimaryRecording: recordings.some(
