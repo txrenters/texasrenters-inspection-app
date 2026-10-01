@@ -80,6 +80,11 @@ import { pickPictureSize } from '@/src/media/picture-size';
 import { PHOTO_REVIEW_WINDOW_MS, reviewWindowEnd } from '@/src/media/snapshot-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
+import {
+  MAX_RECORDING_SECONDS,
+  recordingTimeLeft,
+  stoppedByLimit,
+} from '@/src/capture/recording-limit';
 
 registerIcons(
   CameraIcon,
@@ -91,8 +96,6 @@ registerIcons(
   ZapIcon,
   ZapOffIcon,
 );
-
-const MAX_RECORDING_SECONDS = 10 * 60;
 
 /**
  * How long to wait for the camera to rebind between stills and video.
@@ -304,6 +307,12 @@ export default function RoomCameraScreen() {
   const [pictureSize, setPictureSize] = useState<string | undefined>(() => rememberedPictureSize);
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
+  /**
+   * Whether the take now ending was stopped by the technician. Read once the
+   * recording settles, where `stopping` is the value from when it started --
+   * hence a ref. Tells a take the technician ended from one the limit ended.
+   */
+  const stopRequestedRef = useRef(false);
   const [seconds, setSeconds] = useState(0);
   const [torch, setTorch] = useState(false);
   const [facing, setFacing] = useState<CameraType>('back');
@@ -597,6 +606,15 @@ export default function RoomCameraScreen() {
     }
   }, [guidanceState, recording, skipsRoomSweep]);
 
+  /** Inside the last minute of the limit: the countdown shown beside the clock. */
+  const timeLeft = recording ? recordingTimeLeft(seconds) : null;
+  const inLastMinute = timeLeft !== null;
+  useEffect(() => {
+    if (!inLastMinute) return;
+    announce(`One minute of recording left. The video stops at ${MAX_RECORDING_SECONDS / 60} minutes.`);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
+  }, [inLastMinute]);
+
   // A new recording is a new sweep, so its completion is owed again.
   useEffect(() => {
     if (recording) sweepAnnouncedRef.current = false;
@@ -815,11 +833,16 @@ export default function RoomCameraScreen() {
     );
     try {
       recordingStartedAtMsRef.current = Date.now();
+      stopRequestedRef.current = false;
       const result = await camera.recordAsync({
         maxDuration: MAX_RECORDING_SECONDS,
         ...(Platform.OS === 'ios' ? { codec: 'avc1' as const } : {}),
       });
       if (!result || !mountedRef.current) return;
+      // The camera stopped itself at the limit: said, so the review screen
+      // opening mid-room is not a surprise. What was filmed is kept either way.
+      if (stoppedByLimit(secondsRef.current, stopRequestedRef.current))
+        announce(`The ${MAX_RECORDING_SECONDS / 60}-minute limit was reached. The recording was saved.`);
       const stored = persistRecording(result.uri, inspectionId, areaId);
 
       // Turn the moments marked during the walkthrough into real photos.
@@ -907,6 +930,7 @@ export default function RoomCameraScreen() {
 
   const stopRecording = () => {
     if (!recording || stopping) return;
+    stopRequestedRef.current = true;
     setStopping(true);
     announce('Recording stopped. Saving.');
     camera?.stopRecording();
@@ -1536,7 +1560,9 @@ export default function RoomCameraScreen() {
           {recording || primary === 'VIDEO' ? (
             <View
               accessibilityLabel={
-                recording ? `Recording, ${formatDuration(seconds)} elapsed` : 'Ready to record'
+                recording
+                  ? `Recording, ${formatDuration(seconds)} elapsed${timeLeft !== null ? `, ${formatDuration(timeLeft)} left` : ''}`
+                  : 'Ready to record'
               }
               accessibilityRole="timer"
               className="mb-6 flex-row items-center gap-2 rounded-full bg-black/65 px-5 py-2"
@@ -1547,6 +1573,10 @@ export default function RoomCameraScreen() {
               <Text className="text-lg font-bold text-white">
                 {formatDuration(seconds)} {recording ? 'REC' : 'READY'}
               </Text>
+              {/* The last minute before the camera stops itself, counted down. */}
+              {timeLeft !== null ? (
+                <Text className="text-base font-bold text-amber-300">{formatDuration(timeLeft)} left</Text>
+              ) : null}
             </View>
           ) : null}
           <View className="mb-6 w-full">

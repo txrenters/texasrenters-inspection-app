@@ -2,6 +2,8 @@ import type { UploadItem } from '../src/domain/models';
 import {
   chunkSizeFor,
   runStreamUpload,
+  sessionRefusalRetryable,
+  StreamSessionError,
   uploadUrlUsable,
   type StreamUploadSession,
 } from '../src/media/stream-upload-runner';
@@ -87,6 +89,42 @@ describe('falling back when Stream is not configured', () => {
     });
     await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: true });
   });
+
+  it('stops retrying a refusal that will never change, and says why', async () => {
+    // The inspection already submitted: asking every minute for good, with
+    // nothing on the handset saying why, is what this used to do (2026-10-02).
+    const message = 'Evidence can only be uploaded while the inspection is in progress.';
+    const { promise } = run({
+      createSession: jest.fn().mockRejectedValue(new StreamSessionError(message, false, 409)),
+    });
+    await expect(promise).resolves.toEqual({ kind: 'failed', retryable: false, message });
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+
+  it('retries a refusal that can clear on its own', () => {
+    for (const status of [500, 502, 504, 401, 408, 429]) expect(sessionRefusalRetryable(status)).toBe(true);
+    for (const status of [400, 403, 404, 409, 413, 415, 422]) expect(sessionRefusalRetryable(status)).toBe(false);
+  });
+});
+
+describe('a recording Cloudflare already has', () => {
+  it('is reported uploaded without sending a byte', async () => {
+    // The last chunk landed as the signal went: the phone never heard, and
+    // asking again must not send the whole video a second time.
+    const { promise, persisted } = run({
+      createSession: jest.fn().mockResolvedValue({ ...session, uploadUrl: null, expiresAt: null, uploaded: true }),
+    });
+    await expect(promise).resolves.toEqual({ kind: 'uploaded', videoId: 'video-1', streamUid: 'uid-1' });
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(persisted[0]).toMatchObject({ serverVideoId: 'video-1', streamUid: 'uid-1' });
+  });
+
+  it('is retried, not failed, when an older server answers with no link', async () => {
+    const { promise } = run({
+      createSession: jest.fn().mockResolvedValue({ ...session, uploadUrl: null, expiresAt: null }),
+    });
+    await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: true });
+  });
 });
 
 describe('session reuse', () => {
@@ -150,20 +188,39 @@ describe('progress and failure', () => {
     );
   });
 
-  it('clears a dead upload URL so the next attempt asks for a new one', async () => {
-    // Retrying an expired session against the same URL fails identically
-    // forever; the queue entry, its file and its progress all survive.
-    mockUpload.mockRejectedValue(new TusUploadError('expired', 'permanent', 404));
-    const { promise, persisted } = run({
-      item: item({
-        streamUid: 'uid-1',
-        serverVideoId: 'video-1',
-        uploadUrl: 'https://upload/old',
-        uploadUrlExpiresAt: new Date(Date.now() + 600_000).toISOString(),
-      }),
-    });
-    await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: false });
-    expect(persisted).toContainEqual({ uploadUrl: undefined, uploadUrlExpiresAt: undefined });
+  it.each([404, 410, 403])(
+    'clears a dead upload URL (%i) and tries again by itself with a new one',
+    async (status) => {
+      // Retrying an expired session against the same URL fails identically
+      // forever, so the URL goes; the queue entry, its file and its progress
+      // all survive. And the retry is automatic: this used to fail the video
+      // and wait for somebody to press Retry -- which then got no new link
+      // either, so a walkthrough paused for an hour could never be sent.
+      mockUpload.mockRejectedValue(new TusUploadError('expired', 'permanent', status));
+      const { promise, persisted } = run({
+        item: item({
+          streamUid: 'uid-1',
+          serverVideoId: 'video-1',
+          uploadUrl: 'https://upload/old',
+          uploadUrlExpiresAt: new Date(Date.now() + 600_000).toISOString(),
+        }),
+      });
+      await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: true });
+      expect(persisted).toContainEqual({ uploadUrl: undefined, uploadUrlExpiresAt: undefined });
+    },
+  );
+
+  it('waits for a person when the recording itself is the problem', async () => {
+    // No new link brings back a deleted file, and a chunk Cloudflare refuses
+    // outright is refused again: these still stop and say so.
+    for (const error of [
+      new TusUploadError('The local recording no longer exists.', 'permanent'),
+      new TusUploadError('Chunk rejected (400).', 'permanent', 400),
+    ]) {
+      mockUpload.mockRejectedValueOnce(error);
+      const { promise } = run({});
+      await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: false, message: error.message });
+    }
   });
 
   it('keeps a lost connection retryable', async () => {
