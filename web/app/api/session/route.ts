@@ -17,7 +17,7 @@ import { apiBaseUrl, applySession, clearSession } from '@/lib/session-cookies';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
-  let credentials: { email?: string; password?: string };
+  let credentials: { email?: string; password?: string; remember?: unknown };
   try {
     credentials = (await request.json()) as typeof credentials;
   } catch {
@@ -61,7 +61,9 @@ export async function POST(request: NextRequest) {
   // The tokens themselves are not returned to the page. It reads what it needs
   // from the access cookie; the refresh token stays out of script entirely.
   const response = NextResponse.json({ mustChangePassword: session.mustChangePassword });
-  applySession(response, session);
+  // Only a literal `true` remembers: anything else keeps the default, a
+  // session that ends with the browser.
+  applySession(response, session, { remember: credentials.remember === true });
   return response;
 }
 

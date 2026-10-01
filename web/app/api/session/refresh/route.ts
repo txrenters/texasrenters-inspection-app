@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { REFRESH_COOKIE } from '@/lib/session';
+import { REFRESH_COOKIE, REMEMBER_COOKIE } from '@/lib/session';
 import { apiBaseUrl, applySession, clearSession } from '@/lib/session-cookies';
 
 /**
@@ -59,6 +59,8 @@ export async function POST(request: NextRequest) {
     mustChangePassword: boolean;
   };
   const response = NextResponse.json({ mustChangePassword: session.mustChangePassword });
-  applySession(response, session);
+  // A remembered sign-in stays remembered across the rotation; the new
+  // refresh cookie would otherwise fall back to ending with the browser.
+  applySession(response, session, { remember: request.cookies.has(REMEMBER_COOKIE) });
   return response;
 }

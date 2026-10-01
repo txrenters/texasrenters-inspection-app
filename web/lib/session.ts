@@ -24,6 +24,18 @@
 export const ACCESS_COOKIE = 'tr_access';
 export const REFRESH_COOKIE = 'tr_refresh';
 
+/**
+ * Set beside a sign-in somebody asked to be remembered ("Remember me", the
+ * office, 2026-10-02).
+ *
+ * Not a credential: the value is `1` and it grants nothing. It exists because
+ * the refresh cookie is httpOnly and scoped to the session handlers, so neither
+ * this script nor `middleware.ts` can see whether one is there to renew with.
+ * This says so -- and with it, an access token that has simply run out is
+ * renewed rather than treated as a sign-out.
+ */
+export const REMEMBER_COOKIE = 'tr_remember';
+
 export interface AppSession {
   accessToken: string;
   /** Epoch seconds, read from the token so nothing has to be trusted to say. */
@@ -150,11 +162,16 @@ async function exchangeRefreshToken(): Promise<AppSession | null> {
   }
 }
 
-export async function signIn(email: string, password: string) {
+/**
+ * `remember` keeps the sign-in past closing the browser, for as long as the
+ * refresh token itself lives -- see `applySession`. Off by default: an office
+ * workstation may be shared.
+ */
+export async function signIn(email: string, password: string, remember = false) {
   const response = await fetch('/api/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, remember }),
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -194,6 +211,18 @@ export function onSessionChange(listener: (session: AppSession | null) => void) 
     const current = readCookie(ACCESS_COOKIE);
     if (current === last) return;
     last = current;
+    /**
+     * The access cookie lives exactly as long as its token, an hour. When it
+     * goes on a remembered sign-in, that is the token running out, not a
+     * sign-out -- and reporting it as one sent an idle tab back to the login
+     * page with a perfectly good refresh token still on file. Renewed instead,
+     * through `getSession`, so the cross-tab lock still guards the rotation.
+     * A renewal the API refuses clears the cookies and reports no session.
+     */
+    if (!current && readCookie(REMEMBER_COOKIE)) {
+      void getSession().then(listener);
+      return;
+    }
     listener(current ? decodeSession(current) : null);
   };
 

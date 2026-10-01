@@ -1,6 +1,15 @@
 import type { NextResponse } from 'next/server';
 
-import { ACCESS_COOKIE, REFRESH_COOKIE } from './session';
+import { ACCESS_COOKIE, REFRESH_COOKIE, REMEMBER_COOKIE } from './session';
+
+/**
+ * How long a remembered sign-in lasts without being used: the refresh token's
+ * own life on the API (`AUTH_REFRESH_TOKEN_TTL_DAYS`, 30 by default). Each
+ * renewal rotates the token and sets this again, so it is thirty days from the
+ * last use, not from signing in. A shorter token life on the API simply ends
+ * the session sooner -- the cookie outliving its token is a refresh refused.
+ */
+export const REMEMBER_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 /**
  * Server-side cookie handling for the admin session.
@@ -31,8 +40,19 @@ export interface IssuedSession {
  * refuses is plain HTTP on a non-localhost host, which is not a deployment
  * anyone should have.
  */
-export function applySession(response: NextResponse, session: IssuedSession) {
+export function applySession(
+  response: NextResponse,
+  session: IssuedSession,
+  /**
+   * "Remember me". The refresh cookie outlives the browser, for
+   * `REMEMBER_MAX_AGE_SECONDS`, with `REMEMBER_COOKIE` beside it saying so.
+   * Every other attribute is unchanged -- still httpOnly, `Secure`, and sent
+   * to the session handlers alone. Off, both are as they always were.
+   */
+  options: { remember?: boolean } = {},
+) {
   const secure = true;
+  const remember = options.remember === true;
 
   // Readable by script: lib/api.ts puts it in an Authorization header on every
   // request. Short-lived, so an exfiltrated one buys only its remaining life.
@@ -52,16 +72,28 @@ export function applySession(response: NextResponse, session: IssuedSession) {
     sameSite: 'lax',
     secure,
     path: '/api/session',
-    // Deliberately a session cookie rather than matching the refresh token's
-    // 30-day life: closing the browser ends the session on a shared machine,
-    // which is what an office workstation needs.
-    maxAge: undefined,
+    // A session cookie unless remembered, rather than matching the refresh
+    // token's 30-day life: closing the browser ends the session on a shared
+    // machine, which is what an office workstation needs by default. "Remember
+    // me" is the reader saying this machine is not shared.
+    maxAge: remember ? REMEMBER_MAX_AGE_SECONDS : undefined,
+  });
+
+  // Cleared, not merely left off, when not remembered: signing in again
+  // without the box ticked must take back an earlier "remember me" here.
+  response.cookies.set(REMEMBER_COOKIE, remember ? '1' : '', {
+    httpOnly: false,
+    sameSite: 'lax',
+    secure,
+    path: '/',
+    maxAge: remember ? REMEMBER_MAX_AGE_SECONDS : 0,
   });
 }
 
 export function clearSession(response: NextResponse) {
   response.cookies.set(ACCESS_COOKIE, '', { path: '/', maxAge: 0 });
   response.cookies.set(REFRESH_COOKIE, '', { path: '/api/session', maxAge: 0 });
+  response.cookies.set(REMEMBER_COOKIE, '', { path: '/', maxAge: 0 });
 }
 
 /**
