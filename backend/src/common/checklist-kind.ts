@@ -51,6 +51,19 @@ export function checklistSectionWhere(
   kind: ChecklistKind,
   areaName: string | null | undefined,
 ): Prisma.AreaChecklistItemWhereInput {
-  const section = kind === 'AIR_CONDITIONING' ? hvacSectionOf(areaName) : null;
+  const section = checklistSectionFor(kind, areaName);
   return section ? { section } : {};
+}
+
+/**
+ * The section `checklistSectionWhere` filters on, or null for the whole list.
+ *
+ * Exported for the area summary, which reads every area's items in one query
+ * and has to narrow them in memory exactly as this narrows a single area's.
+ */
+export function checklistSectionFor(
+  kind: ChecklistKind,
+  areaName: string | null | undefined,
+): string | null {
+  return kind === 'AIR_CONDITIONING' ? hvacSectionOf(areaName) : null;
 }

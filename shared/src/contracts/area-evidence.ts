@@ -74,20 +74,22 @@ export interface AreaEvidenceSummaryItem {
   environment: 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
   isRequired: boolean;
   /**
-   * Administrator-authored checklist items for this area, excluding archived
-   * ones. Zero means the technician sees a generated fallback list rather than
-   * nothing, so it is a prompt to configure rather than a fault.
+   * The checklist items this visit asks of the area, excluding archived ones:
+   * the same list the area's Condition tab shows. The room list for a move-in
+   * or move-out, the organization's occupied questions for an occupied or
+   * back-to-market visit, one HVAC section for an HVAC area. Zero on a room
+   * list means the technician sees a generated fallback rather than nothing, so
+   * it is a prompt to configure rather than a fault.
    */
   checklistItemCount: number;
   /**
-   * Items the technician actually assessed — at least one of Clean, Undamaged
-   * or Working answered.
+   * How many of those items are answered, by the Condition tab's rule: a
+   * reading, a line of text or a chosen option once given, a status item once
+   * any one of Clean, Undamaged or Working is.
    *
-   * Counted independently of `checklistItemCount` rather than derived from it,
-   * because an area can hold assessments against items an administrator has
-   * since archived. The report still prints those rows, so a reviewer comparing
-   * the two numbers may legitimately see assessed exceed the current item
-   * count; that is a signal the checklist changed mid-inspection, not an error.
+   * Counted against the same items as `checklistItemCount`, so the two can be
+   * read as "assessed of asked" and agree with the tab. They used to come from
+   * different lists, which read "0/7" over a fully answered occupied room.
    */
   checklistAssessedCount: number;
   completionStatus: string;

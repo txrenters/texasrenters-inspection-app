@@ -52,9 +52,10 @@ function summaryPrisma(overrides: Record<string, unknown> = {}) {
     inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
     inspectionPhoto: { groupBy: jest.fn().mockResolvedValue([]) },
     inspectionFinding: { groupBy: jest.fn().mockResolvedValue([]) },
-    // Checklist assessments are counted in the same grouped pass as everything
+    // Checklist items and answers are read in the same pass as everything
     // else, so the double has to answer for them too.
-    inspectionAreaChecklistResponse: { groupBy: jest.fn().mockResolvedValue([]) },
+    areaChecklistItem: { findMany: jest.fn().mockResolvedValue([]) },
+    inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue([]) },
     ...overrides,
   };
 }
@@ -115,6 +116,8 @@ describe('area evidence summary', () => {
     expect(prisma.inspectionMedia.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.inspectionPhoto.groupBy).toHaveBeenCalledTimes(1);
     expect(prisma.inspectionFinding.groupBy).toHaveBeenCalledTimes(2);
+    expect(prisma.areaChecklistItem.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.inspectionAreaChecklistResponse.findMany).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an inspection outside the organization', async () => {
@@ -134,8 +137,14 @@ describe('derived area review status', () => {
     findings?: unknown[];
     completionStatus?: string;
     isRequired?: boolean;
+    inspectionType?: string;
   }) {
     const prisma = summaryPrisma({
+      inspection: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: INSPECTION, inspectionType: options.inspectionType }),
+      },
       inspectionArea: {
         findMany: jest.fn().mockResolvedValue([
           area('a1', 'p1', {
@@ -152,7 +161,6 @@ describe('derived area review status', () => {
       },
       inspectionMedia: { findMany: jest.fn().mockResolvedValue(options.media ?? []) },
       inspectionPhoto: { groupBy: jest.fn().mockResolvedValue(options.photos ?? []) },
-      inspectionAreaChecklistResponse: { groupBy: jest.fn().mockResolvedValue([]) },
       inspectionFinding: {
         groupBy: jest
           .fn()
@@ -236,6 +244,142 @@ describe('derived area review status', () => {
         isRequired: false,
       }),
     ).toBe('EVIDENCE_READY');
+  });
+
+  const photographed = [
+    {
+      inspectionAreaId: 'a1',
+      captureType: 'AREA_OVERVIEW',
+      _count: { _all: 1 },
+      _max: { capturedAt: new Date() },
+    },
+  ];
+
+  it.each(['OCCUPIED', 'BACK_TO_MARKET', 'HVAC'])(
+    'does not ask a %s visit for a walkthrough it never owed',
+    async (inspectionType) => {
+      // Walked in photographs: the handset finishes these areas without filming,
+      // so a required area with only a photograph is ready, not incomplete.
+      expect(await statusFor({ photos: photographed, inspectionType })).toBe('EVIDENCE_READY');
+    },
+  );
+
+  it('still asks a move-out for its walkthrough', async () => {
+    expect(await statusFor({ photos: photographed, inspectionType: 'MOVE_OUT' })).toBe(
+      'EVIDENCE_INCOMPLETE',
+    );
+  });
+});
+
+describe('area checklist counts', () => {
+  const unanswered = {
+    isClean: null,
+    isUndamaged: null,
+    isWorking: null,
+    numericValue: null,
+    textValue: null,
+  };
+
+  async function countsFor(options: {
+    inspectionType: string;
+    areas: ReturnType<typeof area>[];
+    items: unknown[];
+    responses: unknown[];
+  }) {
+    const prisma = summaryPrisma({
+      inspection: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: INSPECTION, inspectionType: options.inspectionType }),
+      },
+      inspectionArea: { findMany: jest.fn().mockResolvedValue(options.areas) },
+      areaChecklistItem: { findMany: jest.fn().mockResolvedValue(options.items) },
+      inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue(options.responses) },
+    });
+    const result = await service(prisma).summary(user, INSPECTION);
+    return {
+      prisma,
+      counts: Object.fromEntries(
+        result.areas.map((row) => [row.id, `${row.checklistAssessedCount}/${row.checklistItemCount}`]),
+      ),
+    };
+  }
+
+  it('counts an occupied room by its answered questions, as the Condition tab does', async () => {
+    const { prisma, counts } = await countsFor({
+      inspectionType: 'OCCUPIED',
+      areas: [area('a1', 'p1'), area('a2', 'p2')],
+      items: [
+        { id: 'q1', propertyAreaId: null, section: null, responseType: 'CHOICE' },
+        { id: 'q2', propertyAreaId: null, section: null, responseType: 'CHOICE' },
+      ],
+      responses: [
+        { ...unanswered, inspectionAreaId: 'a1', checklistItemId: 'q1', textValue: 'Clean' },
+        { ...unanswered, inspectionAreaId: 'a1', checklistItemId: 'q2', textValue: 'Good' },
+      ],
+    });
+
+    // Not "0/7": the occupied questions belong to the organization, and an
+    // answer is a word rather than one of the three axes.
+    expect(counts).toEqual({ a1: '2/2', a2: '0/2' });
+    expect(prisma.areaChecklistItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: user.organizationId,
+          propertyAreaId: null,
+          kind: 'OCCUPIED',
+        }),
+      }),
+    );
+  });
+
+  it('counts a move-out room against its own items, by any one axis', async () => {
+    const { prisma, counts } = await countsFor({
+      inspectionType: 'MOVE_OUT',
+      areas: [area('a1', 'p1'), area('a2', 'p2')],
+      items: [
+        { id: 'i1', propertyAreaId: 'p1', section: null, responseType: 'STATUS' },
+        { id: 'i2', propertyAreaId: 'p1', section: null, responseType: 'STATUS' },
+        { id: 'i3', propertyAreaId: 'p2', section: null, responseType: 'STATUS' },
+      ],
+      responses: [
+        { ...unanswered, inspectionAreaId: 'a1', checklistItemId: 'i1', isClean: true },
+        // A comment alone is context, not an assessment.
+        { ...unanswered, inspectionAreaId: 'a1', checklistItemId: 'i2' },
+        // An item no longer asked -- archived since -- is not on the tab either.
+        { ...unanswered, inspectionAreaId: 'a1', checklistItemId: 'archived', isClean: true },
+        { ...unanswered, inspectionAreaId: 'a2', checklistItemId: 'i3', isWorking: false },
+      ],
+    });
+
+    expect(counts).toEqual({ a1: '1/2', a2: '1/1' });
+    expect(prisma.areaChecklistItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ propertyAreaId: { in: ['p1', 'p2'] }, kind: 'ROOM' }),
+      }),
+    );
+  });
+
+  it('counts an HVAC area against its own section of the list', async () => {
+    const named = (id: string, name: string) => {
+      const row = area(id, `p-${id}`);
+      return { ...row, propertyArea: { ...row.propertyArea, name } };
+    };
+    const { counts } = await countsFor({
+      inspectionType: 'HVAC',
+      areas: [named('attic', 'Attic'), named('stat', 'Thermostat')],
+      items: [
+        { id: 'h1', propertyAreaId: null, section: 'Attic', responseType: 'STATUS' },
+        { id: 'h2', propertyAreaId: null, section: 'Thermostat', responseType: 'STATUS' },
+        { id: 'h3', propertyAreaId: null, section: 'Thermostat', responseType: 'READING' },
+      ],
+      responses: [
+        { ...unanswered, inspectionAreaId: 'stat', checklistItemId: 'h3', numericValue: 18.5 },
+      ],
+    });
+
+    // A reading is assessed once it is given, like a ticked axis.
+    expect(counts).toEqual({ attic: '0/1', stat: '1/2' });
   });
 });
 
@@ -361,6 +505,24 @@ describe('single area evidence bundle', () => {
     expect(prisma.inspectionPhoto.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { inspectionAreaId: 'a1' } }),
     );
+  });
+
+  it.each([
+    ['OCCUPIED', 'EVIDENCE_READY'],
+    ['MOVE_OUT', 'EVIDENCE_INCOMPLETE'],
+  ])('reads a photographed %s area as %s, as the summary does', async (inspectionType, status) => {
+    const prisma = bundlePrisma({
+      inspection: { findFirst: jest.fn().mockResolvedValue({ id: INSPECTION, inspectionType }) },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    });
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    expect(bundle.area.reviewStatus).toBe(status);
   });
 
   it('refuses an area id from another inspection', async () => {
