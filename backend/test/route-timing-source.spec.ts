@@ -72,12 +72,20 @@ type State = 'answers' | 'fails' | 'unconfigured';
  * exercising them. It is tried first now, and one that answered would quietly
  * take every drive away from the routers those tests are about.
  */
-function routers(google: State, osrm: 'answers' | 'unconfigured', mapbox: State = 'unconfigured') {
-  const calls = { google: 0, mapbox: 0 };
+function routers(
+  google: State,
+  osrm: 'answers' | 'unconfigured',
+  mapbox: State = 'unconfigured',
+  /** Mapbox's matrix apart from its drive, for a matrix that fails while the drive answers. */
+  mapboxMatrix: State = mapbox,
+) {
+  const calls = { google: 0, mapbox: 0, googleMatrix: 0, mapboxMatrix: 0 };
   const googleClient = {
     configured: google !== 'unconfigured',
-    matrix: async (points: unknown[]) =>
-      google === 'answers' ? { durations: grid(points), distances: grid(points) } : null,
+    matrix: async (points: unknown[]) => {
+      calls.googleMatrix += 1;
+      return google === 'answers' ? { durations: grid(points), distances: grid(points) } : null;
+    },
     route: async (points: unknown[]) => {
       calls.google += 1;
       return google === 'answers' ? drive(points) : null;
@@ -91,6 +99,10 @@ function routers(google: State, osrm: 'answers' | 'unconfigured', mapbox: State 
   };
   const mapboxClient = {
     configured: mapbox !== 'unconfigured',
+    matrix: async (points: unknown[]) => {
+      calls.mapboxMatrix += 1;
+      return mapboxMatrix === 'answers' ? { durations: grid(points), distances: grid(points) } : null;
+    },
     route: async (points: unknown[]) => {
       calls.mapbox += 1;
       return mapbox === 'answers' ? drive(points) : null;
@@ -177,5 +189,58 @@ describe('which router timed a route', () => {
 
     expect(calls.google).toBe(1);
     expect(reused.source).toBe('GOOGLE_TRAFFIC');
+  });
+});
+
+/**
+ * The order of the day, apart from the drive through it.
+ *
+ * On 2 October the map showed a technician with three stops left, every one of
+ * them placed, and no line to any: the drive had moved to Mapbox, but the matrix
+ * that orders the stops was still Google's, Google's billing had lapsed, and
+ * with no matrix the route gave up before the drive was ever asked for.
+ */
+describe('ordering the stops', () => {
+  it('asks Mapbox for the matrix first, and never bills Google for one', async () => {
+    const { service, calls } = routers('answers', 'unconfigured', 'answers');
+
+    const route = await service.planDay('org', 'tech', DAY);
+
+    expect(calls.mapboxMatrix).toBe(1);
+    expect(calls.googleMatrix).toBe(0);
+    expect(route.legs.length).toBeGreaterThan(0);
+  });
+
+  it('still draws the route ahead when Google cannot time it', async () => {
+    // The production failure: Google configured and refusing, OSRM absent.
+    const { service } = routers('fails', 'unconfigured', 'answers');
+
+    const route = await service.planDay('org', 'tech', DAY);
+
+    expect(route.legs.length).toBeGreaterThan(0);
+    expect(route.geometry.length).toBeGreaterThan(0);
+    expect(route.source).toBe('MAPBOX_FREE_FLOW');
+  });
+
+  it('falls back to Google’s matrix when Mapbox’s does not answer', async () => {
+    const { service, calls } = routers('answers', 'unconfigured', 'answers', 'fails');
+
+    const route = await service.planDay('org', 'tech', DAY);
+
+    expect(calls.googleMatrix).toBe(1);
+    expect(route.legs.length).toBeGreaterThan(0);
+  });
+
+  it('orders by the straight line, and still draws the drive, when no matrix answers', async () => {
+    // Every matrix down, the drive still answering: an order from distance
+    // alone is far better than no route at all. From home, b is the nearer.
+    const { service, calls } = routers('fails', 'unconfigured', 'answers', 'fails');
+
+    const route = await service.planDay('org', 'tech', DAY);
+
+    expect(calls.mapbox).toBe(1);
+    expect(route.stops.map((stop) => stop.inspectionId)).toEqual(['inspection-b', 'inspection-a']);
+    expect(route.legs.length).toBe(2);
+    expect(route.source).toBe('MAPBOX_FREE_FLOW');
   });
 });
