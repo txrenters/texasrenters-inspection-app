@@ -393,6 +393,8 @@ export interface GroupTemplateGroup {
 
 export interface GroupTemplateDetail extends Omit<GroupTemplateSummary, 'groupCount' | 'propertyCount'> {
   groups: GroupTemplateGroup[];
+  /** Every member's street address, by building id: names one no longer in the package. */
+  addresses?: Record<string, string>;
 }
 
 /** A template as the Group maker saves it: its groups replace the ones it had. */

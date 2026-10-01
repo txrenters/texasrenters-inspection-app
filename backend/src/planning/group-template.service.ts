@@ -291,7 +291,10 @@ export class GroupTemplateService {
             name: true,
             color: true,
             target: true,
-            members: { orderBy: { position: 'asc' }, select: { buildingId: true } },
+            members: {
+              orderBy: { position: 'asc' },
+              select: { buildingId: true, building: { select: { addressLine1: true, name: true } } },
+            },
           },
         },
       },
@@ -300,6 +303,20 @@ export class GroupTemplateService {
     return {
       ...template,
       groups: template.groups.map(({ members, ...group }) => ({ ...group, buildingIds: members.map((member) => member.buildingId) })),
+      /**
+       * Every member's address, by building. The Group maker knows the
+       * properties still in the package; this is how it names one that is not
+       * any more -- left the package, or lost its position -- and says which
+       * group it was in, rather than only counting them (the office, 2026-10-01).
+       */
+      addresses: Object.fromEntries(
+        template.groups.flatMap((group) =>
+          group.members.map((member) => [
+            member.buildingId,
+            member.building.addressLine1?.trim() || member.building.name,
+          ]),
+        ),
+      ),
     };
   }
 

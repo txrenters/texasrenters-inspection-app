@@ -64,6 +64,7 @@ import {
   liveGroupsOf,
   liveGroupsOfTemplate,
   makerProperties,
+  missingStopLines,
   rowsToMatch,
   stateFromMatchedFile,
   stateFromTemplate,
@@ -228,10 +229,29 @@ export function GroupMakerView() {
       name: template.name,
       initial: { state, activeId: null, minutesPerProperty: template.minutesPerProperty },
     });
-    if (missing)
-      toast.warning(`${missing.toLocaleString()} ${missing === 1 ? 'property' : 'properties'} in ${template.name} left the package`, {
-        description: 'Or lost their position. They are not on the map; the template keeps them until their group is changed.',
+    if (missing.length) {
+      const one = missing.length === 1;
+      toast.warning(`${missing.length.toLocaleString()} ${one ? 'property' : 'properties'} in ${template.name} left the package`, {
+        description: (
+          <div className="grid gap-1.5">
+            <ul className="grid gap-0.5">
+              {missingStopLines(missing).map((line) => (
+                <li key={line} className="font-medium text-foreground">
+                  {line}
+                </li>
+              ))}
+            </ul>
+            <span>
+              {one ? 'Or it lost its position. It is' : 'Or they lost their position. They are'} not on the map; the
+              template keeps {one ? 'it' : 'them'} until {one ? 'its' : 'their'} group is changed.
+            </span>
+          </div>
+        ),
+        // Long enough to read the addresses, and to go and find them.
+        duration: 20_000,
+        closeButton: true,
       });
+    }
   }, [applyToView, client, detail.data, editor, made, openId]);
 
   useEffect(() => () => engine.current?.close(), []);

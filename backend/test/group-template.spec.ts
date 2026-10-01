@@ -285,3 +285,31 @@ describe('the active template', () => {
     });
   });
 });
+
+describe('a template, read', () => {
+  it('names every member by address, so a property no longer in the package can be named', async () => {
+    const findFirst = jest.fn().mockResolvedValue({
+      id: 'template-1',
+      name: 'Outside in',
+      groups: [
+        {
+          id: 'group-1',
+          position: 1,
+          name: 'Group 4',
+          color: '#e6194b',
+          target: 9,
+          members: [
+            { buildingId: 'b1', building: { addressLine1: ' 1 Main St ', name: 'Main' } },
+            { buildingId: 'b2', building: { addressLine1: null, name: 'The Oaks' } },
+          ],
+        },
+      ],
+    });
+    const service = new GroupTemplateService({ tbpGroupTemplate: { findFirst } } as unknown as PrismaService);
+
+    const template = await service.get('org-1', 'template-1');
+
+    expect(template.groups[0]).toMatchObject({ name: 'Group 4', buildingIds: ['b1', 'b2'] });
+    expect(template.addresses).toEqual({ b1: '1 Main St', b2: 'The Oaks' });
+  });
+});
