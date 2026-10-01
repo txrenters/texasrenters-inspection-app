@@ -9,11 +9,11 @@ import type {
   TechnicianTrail,
 } from '@texasrenters/shared';
 import { splitRouteAtPosition, withLivePosition } from '@texasrenters/shared';
-import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Layer, Marker, Popup, Source, type LayerProps } from 'react-map-gl/mapbox';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Layer, Marker, Popup, Source, useMap, type LayerProps } from 'react-map-gl/mapbox';
 
 import { InspectionDetailsLink } from '@/components/inspection-details-link';
-import { CameraDirector, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from '@/components/map-camera';
+import { CameraDirector, fitTo, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
 import { ConsoleMap } from '@/components/console-map';
 import { useMapStroke } from '@/components/map-colors';
@@ -541,6 +541,51 @@ const CrewRoutesLayer = memo(function CrewRoutesLayer({
   );
 });
 
+/** Past this many matches a search frames nothing useful, and the map stays where it is. */
+const MAX_FRAMED_MATCHES = 60;
+
+/**
+ * Frames what a search is showing, as it narrows (the office, 2026-10-02: "the
+ * map should show them too real time").
+ *
+ * After a pause in typing rather than on every key, and only for a search
+ * narrow enough to be worth framing. Framing counts as the reader moving the
+ * map: following a selected technician pauses -- Re-center takes it back --
+ * rather than their next position report pulling the view away from what was
+ * being looked for.
+ */
+function SearchFramer({
+  ids,
+  onFramed,
+  properties,
+}: {
+  ids: ReadonlySet<string> | null;
+  onFramed: () => void;
+  properties: readonly PropertyPosition[];
+}) {
+  const { current: map } = useMap();
+  const key = ids?.size ? [...ids].sort().join('|') : '';
+  // Read, not depended on: the list refetches without anybody searching.
+  const latest = useRef(properties);
+  latest.current = properties;
+
+  useEffect(() => {
+    if (!map || !key) return;
+    const timer = window.setTimeout(() => {
+      const wanted = new Set(key.split('|'));
+      const points = latest.current
+        .filter((property) => wanted.has(property.id))
+        .map((property) => [property.latitude, property.longitude] as [number, number]);
+      if (!points.length || points.length > MAX_FRAMED_MATCHES) return;
+      fitTo(map, points, 80);
+      onFramed();
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [key, map, onFramed]);
+
+  return null;
+}
+
 /** Stable empties, so a map handed nothing does not redraw its lines every render. */
 const NO_COLORS: ReadonlyMap<string, string> = new Map();
 const NO_TRAILS: readonly TechnicianTrail[] = [];
@@ -560,7 +605,10 @@ export function TechnicianMap({
   selectedTechnicianId = null,
   trails = NO_TRAILS,
   visits = null,
+  searchedPropertyIds = null,
 }: {
+  /** What a search on the page is showing: ringed on the map, and framed. See `PortfolioOptions.searched`. */
+  searchedPropertyIds?: ReadonlySet<string> | null;
   /** Each technician's colour, for their lines and the ring on their marker. */
   colors?: ReadonlyMap<string, string>;
   /** Everybody's planned drive for the day, dashed. The selected one's is `route`. */
@@ -724,8 +772,15 @@ export function TechnicianMap({
       // says who and what is picked.
       crew={{ colors, onSelect: selectFromMap, positions, selectedTechnicianId, tracks }}
       initialView={FALLBACK_VIEW}
-      portfolio={{ highlighted: highlightedBuildingIds, properties, selectedPropertyId, visits }}
+      portfolio={{
+        highlighted: highlightedBuildingIds,
+        properties,
+        searched: searchedPropertyIds,
+        selectedPropertyId,
+        visits,
+      }}
     >
+      <SearchFramer ids={searchedPropertyIds} onFramed={readerMovedTheMap} properties={properties} />
       <CameraDirector
         fallback={selectedStops}
         fitKey={fitKey}

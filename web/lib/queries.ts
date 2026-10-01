@@ -80,7 +80,10 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 
+import { useCallback } from 'react';
+
 import { api, apiUpload, type Page, queryString } from './api';
+import { businessDayRange } from './clock';
 import {
   beginEntityOperation,
   cancelAffectedQueries,
@@ -737,6 +740,45 @@ export const useTechnicianRoutes = (ids: readonly string[], date: string, enable
     })),
     combine: arrivedRoutes,
   });
+/**
+ * A Texas day's visits nobody is assigned to, for the technician map's
+ * "+ Add visit" (the office, 2026-10-02). Under the inspections key, so an
+ * assignment made anywhere -- including from the map -- refreshes it.
+ */
+export const useUnassignedOnDay = (date: string, enabled = true) => {
+  const range = businessDayRange(date);
+  const query = {
+    page: 1,
+    pageSize: 100,
+    unassignedOnly: true,
+    scheduledFrom: range?.from,
+    scheduledTo: range?.to,
+  };
+  return useQuery({
+    queryKey: keys.inspections(query),
+    queryFn: ({ signal }) =>
+      api<Page<AdminInspection>>(`/api/v1/admin/inspections${queryString(query)}`, { signal }),
+    enabled: enabled && Boolean(range),
+  });
+};
+/**
+ * Everything on the technician map that a change to one technician's day
+ * moves: who has what, their route -- followed and context alike, both under
+ * `technician-route` -- and their timeline. `refreshInspection` re-reads the
+ * inspection lists but not these, and the map's day refetches only every five
+ * minutes, so a visit taken off or added from the map would otherwise linger.
+ */
+export function useRefreshMapDay() {
+  const client = useQueryClient();
+  return useCallback(
+    (date: string, technicianId: string) => {
+      void client.invalidateQueries({ queryKey: keys.mapAssignments(date) });
+      void client.invalidateQueries({ queryKey: ['technician-route', technicianId, date] });
+      void client.invalidateQueries({ queryKey: keys.technicianTimeline(technicianId, date) });
+    },
+    [client],
+  );
+}
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({
     queryKey: keys.assignments(query),

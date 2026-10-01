@@ -121,6 +121,52 @@ export function businessToday(now: Date = new Date()): string {
   return now.toLocaleDateString('en-CA', { timeZone: BUSINESS_TIME_ZONE });
 }
 
+/** An instant's wall-clock reading in Texas, as if that reading were UTC. */
+function texasWallClock(instant: Date): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: BUSINESS_TIME_ZONE,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(instant)
+      .map((part) => [part.type, part.value]),
+  );
+  return Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+}
+
+/**
+ * A Texas calendar day as the two instants a list query wants: Texas midnight
+ * to the last millisecond before the next one, whatever zone the reader is in.
+ *
+ * The API's own `businessDayBounds` rule, so a list asked for here holds the
+ * same visits as the technician map's day. `dayStart`/`dayEnd` are the
+ * reader's local day, which from the Manila office is a day that ended
+ * thirteen hours before the one on the map. Null for anything not `yyyy-MM-dd`.
+ */
+export function businessDayRange(date: string): { from: string; to: string } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const naiveMidnight = Date.parse(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(naiveMidnight)) return null;
+  const start = naiveMidnight + (naiveMidnight - texasWallClock(new Date(naiveMidnight)));
+  return {
+    from: new Date(start).toISOString(),
+    to: new Date(start + 24 * 60 * 60 * 1000 - 1).toISOString(),
+  };
+}
+
 /**
  * A moment as a time of day in Texas -- "2:14 PM" -- or null if it is not one.
  *

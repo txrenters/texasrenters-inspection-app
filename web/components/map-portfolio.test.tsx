@@ -244,3 +244,56 @@ describe('leaving the rest of the portfolio off', () => {
     expect(screen.getAllByTestId('marker')).toHaveLength(1);
   });
 });
+
+describe('what a search is showing (the office, 2026-10-02)', () => {
+  /** Whether a disc wears the search ring, and whether it is dimmed, by name. */
+  const states = () =>
+    new Map(
+      screen.getAllByTestId('marker').map((marker) => {
+        const holder = marker.querySelector('[title]') as HTMLElement | null;
+        return [
+          holder?.getAttribute('title')?.split(' · ')[0],
+          {
+            ringed: Boolean(marker.querySelector('circle[stroke="#0ea5e9"]')),
+            dimmed: holder?.style.opacity === '0.25',
+          },
+        ];
+      }),
+    );
+
+  it('rings the matches and lets the rest recede', () => {
+    render(<PortfolioLayers properties={[GROUPED, LOOSE, OTHER]} searched={new Set([LOOSE.id])} />);
+
+    expect(states()).toEqual(
+      new Map([
+        ['grouped', { ringed: false, dimmed: true }],
+        ['loose-one', { ringed: true, dimmed: false }],
+        ['other-property', { ringed: false, dimmed: true }],
+      ]),
+    );
+  });
+
+  it('keeps the selected technician’s stops at full strength beside the matches', () => {
+    render(
+      <PortfolioLayers
+        highlighted={new Set([GROUPED.id])}
+        properties={[GROUPED, LOOSE, OTHER]}
+        searched={new Set([LOOSE.id])}
+      />,
+    );
+
+    expect(states().get('grouped')).toEqual({ ringed: false, dimmed: false });
+  });
+
+  it('dims nothing when the search shows nothing', () => {
+    render(<PortfolioLayers properties={[GROUPED, LOOSE]} searched={new Set()} />);
+
+    expect([...states().values()].every((state) => !state.dimmed && !state.ringed)).toBe(true);
+  });
+
+  it('draws a searched property even with the rest of the portfolio turned off', () => {
+    render(<PortfolioLayers otherProperties={false} properties={[GROUPED, OTHER]} searched={new Set([OTHER.id])} />);
+
+    expect(states().has('other-property')).toBe(true);
+  });
+});

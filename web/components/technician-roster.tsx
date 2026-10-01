@@ -8,8 +8,11 @@ import type {
   TechnicianRoute,
 } from '@texasrenters/shared';
 import { isFinishedStatus, isLocationPaused } from '@texasrenters/shared';
-import { CheckIcon, MapPinIcon } from 'lucide-react';
+import { CheckIcon, MapPinIcon, PlusIcon } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 
+import { RemoveStopButton } from '@/components/remove-stop-button';
+import { Button } from '@/components/ui/button';
 import { businessTimeOfDay } from '@/lib/clock';
 import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/format';
 import {
@@ -136,9 +139,33 @@ function Dot({ position }: { position: TechnicianPosition | null }) {
   );
 }
 
+/**
+ * "+ Add visit" under the selected technician's day, opening the page's panel
+ * in place -- in the list rather than over the map, which is where the
+ * matches are shown.
+ */
+function AddVisitSlot({ render }: { render: (close: () => void) => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  if (open) return <>{render(() => setOpen(false))}</>;
+  return (
+    <Button
+      className="mt-2 h-7 w-full gap-1 text-xs"
+      onClick={() => setOpen(true)}
+      size="sm"
+      type="button"
+      variant="outline"
+    >
+      <PlusIcon aria-hidden className="size-3.5" />
+      Add visit
+    </Button>
+  );
+}
+
 export function TechnicianRoster({
+  addVisitPanel,
   colors = null,
   entries,
+  onRemoveStop,
   onSelect,
   onSelectStop,
   route,
@@ -146,9 +173,21 @@ export function TechnicianRoster({
   selectedStopBuildingId = null,
   timeline = null,
 }: {
+  /**
+   * The selected technician's "+ Add visit" panel, given a way to close itself
+   * (the office, 2026-10-02). Absent for a reader who may neither assign nor
+   * create inspections, and then there is no button.
+   */
+  addVisitPanel?: (entry: RosterEntry, close: () => void) => ReactNode;
   /** Each person's colour on the map, beside their name, so a line on the map leads back to a row here. */
   colors?: ReadonlyMap<string, string> | null;
   entries: RosterEntry[];
+  /**
+   * Take a visit off the selected technician's day -- the "x" on each visit
+   * (the office, 2026-10-02). Absent for a reader without `inspections:assign`,
+   * and then there is no "x".
+   */
+  onRemoveStop?: (stop: AssignedStop, technician: RosterEntry, reason: string) => Promise<void>;
   onSelect: (technicianId: string | null) => void;
   /**
    * Take the map to one stop, without disturbing the technician selection.
@@ -495,6 +534,13 @@ export function TechnicianRoster({
                                 ) : null}
                               </span>
                             ) : null}
+                            {onRemoveStop && !finished ? (
+                              <RemoveStopButton
+                                onRemove={(chosen, reason) => onRemoveStop(chosen, entry, reason)}
+                                stop={stop}
+                                technicianName={entry.displayName}
+                              />
+                            ) : null}
                           </li>
                         );
                       })}
@@ -514,6 +560,12 @@ export function TechnicianRoster({
                     ) : null}
                   </>
                 )}
+
+                {/* Under the day whether it has stops or not: an empty day is
+                    exactly the one somebody wants to add to. */}
+                {addVisitPanel ? (
+                  <AddVisitSlot render={(close) => addVisitPanel(entry, close)} />
+                ) : null}
               </div>
             ) : null}
           </li>

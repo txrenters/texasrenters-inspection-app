@@ -284,6 +284,27 @@ const DISC_Z: Record<DiscKind, number> = { GROUP: 100, LOOSE: 95, OTHER: 90 };
  * A placed centre the office corrected is exact whatever the geocoder said; a
  * zip-code centre is drawn pale with a dashed rim, as in the Group maker.
  */
+/**
+ * A ring round a property a search on the page is showing (the office,
+ * 2026-10-02: "if we search those properties as we add them, the map should
+ * show them too real time"). Sky blue, which is none of the property colours'
+ * meanings, over a white edge so it reads on both roadmaps.
+ */
+function SearchHalo() {
+  return (
+    <svg
+      aria-hidden
+      className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+      height="34"
+      viewBox="0 0 34 34"
+      width="34"
+    >
+      <circle cx="17" cy="17" fill="none" r="14.5" stroke="#fff" strokeWidth="4" />
+      <circle cx="17" cy="17" fill="none" r="14.5" stroke="#0ea5e9" strokeWidth="2.5" />
+    </svg>
+  );
+}
+
 const PortfolioDisc = memo(function PortfolioDisc({
   property,
   dim,
@@ -291,6 +312,7 @@ const PortfolioDisc = memo(function PortfolioDisc({
   offset,
   open,
   onOpen,
+  searched = false,
 }: {
   property: PropertyPosition;
   dim: boolean;
@@ -299,6 +321,8 @@ const PortfolioDisc = memo(function PortfolioDisc({
   offset: [number, number] | undefined;
   open: boolean;
   onOpen: (propertyId: string) => void;
+  /** One of the properties a search on the page is showing. */
+  searched?: boolean;
 }) {
   const kind = kindOf(property);
   const approximate = !property.geofenceMoved && property.geocodePrecision === 'CENTROID';
@@ -313,7 +337,8 @@ const PortfolioDisc = memo(function PortfolioDisc({
         event.originalEvent.stopPropagation();
         onOpen(property.id);
       }}
-      style={{ zIndex: open ? 110 : DISC_Z[kind] }}
+      // A searched property over every other disc: it is what is being looked for.
+      style={{ zIndex: open ? 110 : searched ? 105 : DISC_Z[kind] }}
     >
       {/* Everything recedes rather than disappearing when somebody is
           selected: a dispatcher looking at one technician still needs to see
@@ -323,6 +348,7 @@ const PortfolioDisc = memo(function PortfolioDisc({
         style={dim ? { opacity: 0.25 } : undefined}
         title={discTitle(property, done)}
       >
+        {searched ? <SearchHalo /> : null}
         {property.tbpGroup ? (
           <GroupDisc approximate={approximate} fill={property.tbpGroup.color} ink={ink} />
         ) : kind === 'LOOSE' ? (
@@ -443,11 +469,14 @@ function PropertyDetails({
 export const PropertyLayer = memo(function PropertyLayer({
   highlighted,
   properties,
+  searched = null,
   selectedPropertyId,
   visits = null,
 }: {
   /** The day's inspections by property, where the map is about a day. See `PortfolioOptions.visits`. */
   visits?: ReadonlyMap<string, readonly PropertyVisit[]> | null;
+  /** What a search on the page is showing. See `PortfolioOptions.searched`. */
+  searched?: ReadonlySet<string> | null;
   /**
    * The selected technician's buildings, or null when nobody is selected.
    *
@@ -509,19 +538,32 @@ export const PropertyLayer = memo(function PropertyLayer({
 
   const open = openId ? (properties.find((property) => property.id === openId) ?? null) : null;
 
+  /**
+   * What recedes. While a search is showing anything, everything it is not
+   * showing -- except the selected technician's own stops, which the search is
+   * being weighed against. Otherwise, as before, everything that is not the
+   * selected technician's.
+   */
+  const searching = Boolean(searched?.size);
+  const dimmed = (propertyId: string) =>
+    searching
+      ? !searched!.has(propertyId) && !highlighted?.has(propertyId)
+      : Boolean(highlighted && !highlighted.has(propertyId));
+
   return (
     <>
       <GeofenceLayer rings={rings} />
 
       {drawn.map((property) => (
         <PortfolioDisc
-          dim={Boolean(highlighted && !highlighted.has(property.id))}
+          dim={dimmed(property.id)}
           done={allSubmitted(visits?.get(property.id))}
           key={property.id}
           offset={offsets.get(property.id)}
           onOpen={setOpenId}
           open={property.id === openId}
           property={property}
+          searched={Boolean(searched?.has(property.id))}
         />
       ))}
 
@@ -635,6 +677,12 @@ export interface PortfolioOptions {
    * that is not about one day.
    */
   visits?: ReadonlyMap<string, readonly PropertyVisit[]> | null;
+  /**
+   * The properties a search on the page is showing, as it is typed: ringed,
+   * drawn over the rest, and never dimmed -- and while there are any, the rest
+   * recede. Null or empty when nothing is being searched.
+   */
+  searched?: ReadonlySet<string> | null;
 }
 
 /** What a map says about the crew, beyond where they are. */
@@ -663,6 +711,7 @@ export interface CrewOptions {
 export function PortfolioLayers({
   properties,
   highlighted = null,
+  searched = null,
   selectedPropertyId = null,
   visits = null,
   zones = false,
@@ -684,9 +733,13 @@ export function PortfolioLayers({
         ? properties
         : properties.filter(
             (property) =>
-              property.tbpEnrolled !== false || property.id === selectedPropertyId || Boolean(highlighted?.has(property.id)),
+              property.tbpEnrolled !== false ||
+              property.id === selectedPropertyId ||
+              Boolean(highlighted?.has(property.id)) ||
+              // Searched for: hidden from the map, the search would find nothing on it.
+              Boolean(searched?.has(property.id)),
           ),
-    [highlighted, otherProperties, properties, selectedPropertyId],
+    [highlighted, otherProperties, properties, searched, selectedPropertyId],
   );
   // Worked out only while they are shown: a grid over the whole portfolio is not free.
   const territories = useMemo(
@@ -708,6 +761,7 @@ export function PortfolioLayers({
       <PropertyLayer
         highlighted={highlighted}
         properties={shown}
+        searched={searched}
         selectedPropertyId={selectedPropertyId}
         visits={visits}
       />
