@@ -176,6 +176,20 @@ export class PlanAdviceApplyDto {
   moves!: PlanAdviceMoveDto[];
 }
 
+/**
+ * The visits of a crowded day the office confirmed moving to its Monday. The
+ * day and the Monday are worked out again on the server; these only choose.
+ */
+export class LateMoveOutMoveDto {
+  /** The technician-day the move-out landed on, `YYYY-MM-DD`. */
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) date!: string;
+  @IsUUID('all') technicianId!: string;
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsUUID('all', { each: true })
+  inspectionIds!: string[];
+}
+
 /** One row of the office's sheet: the property and the services line written for it. */
 export class OfficeDetailsRowDto {
   @IsString() @MaxLength(200) address!: string;

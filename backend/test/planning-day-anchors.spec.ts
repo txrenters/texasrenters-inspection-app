@@ -63,6 +63,7 @@ function controllerWith(anchors: ReturnType<typeof anchor>[]) {
     {} as never,
     new PlanBuildGuard(),
     {} as never,
+    {} as never,
   );
 }
 

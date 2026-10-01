@@ -33,6 +33,7 @@ function controllerWith(
     {} as never,
     guard,
     {} as never,
+    {} as never,
   );
 }
 

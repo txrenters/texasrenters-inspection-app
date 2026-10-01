@@ -345,7 +345,40 @@ export const planningKeys = {
   groupTemplates: ['admin', 'planning', 'group-templates'] as const,
   groupTemplate: (id: string) => ['admin', 'planning', 'group-templates', id] as const,
   groupMakerProperties: ['admin', 'planning', 'group-maker', 'properties'] as const,
+  lateMoveOuts: (planId: string) => ['admin', 'planning', planId, 'late-move-outs'] as const,
 };
+
+/**
+ * A move-out or move-in booked onto a technician's benefit-package day after
+ * the quarter was published, with the visits to move to the Monday after (the
+ * office, 2026-10-01). See `LateMoveOutService` on the server.
+ */
+export interface LateMoveOut {
+  date: string;
+  technician: { id: string; displayName: string };
+  bookings: { inspectionId: string; kind: 'MOVE_OUT' | 'MOVE_IN'; address: string | null }[];
+  /** The day's benefit-package visits that can still be moved. */
+  visits: number;
+  /** The visits furthest from the bookings, three for each. */
+  suggested: { inspectionId: string; address: string | null; metresFromBooking: number }[];
+  /** The Monday after, kept for rescheduled visits; null when the quarter has none left. */
+  monday: string | null;
+  /** What the technician already has on that Monday. */
+  mondayLoad: number;
+}
+
+export interface LateMoveOuts {
+  conflicts: LateMoveOut[];
+  /** Whether a visit moved here reaches Jobber; off, a Jobber visit cannot be moved from the console. */
+  jobberEditsPushed: boolean;
+}
+
+export const usePlanLateMoveOuts = (planId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: planningKeys.lateMoveOuts(planId ?? ''),
+    queryFn: ({ signal }) => api<LateMoveOuts>(`${PLANNING}/quarters/${planId}/late-move-outs`, { signal }),
+    enabled: Boolean(planId) && enabled,
+  });
 
 /** A property the Group maker can put in a group: an enrolled building, its tenancies together. */
 export interface GroupMakerProperty {
@@ -675,6 +708,15 @@ export function usePlanningMutations() {
     applyAdvice: useMutation({
       mutationFn: ({ planId, moves }: { planId: string; moves: { stopId: string; toDate: string; toTechnicianId: string }[] }) =>
         post<{ applied: number; refused: RefusedMove[] }>(`/quarters/${planId}/advice/apply`, { moves }),
+      onSuccess: refresh,
+    }),
+    // A crowded day's visits to the Monday after, here and in Jobber, once the office confirmed them.
+    moveToMonday: useMutation({
+      mutationFn: ({ planId, ...input }: { planId: string; date: string; technicianId: string; inspectionIds: string[] }) =>
+        post<{ monday: string; moved: number; failed: { inspectionId: string; message: string }[] }>(
+          `/quarters/${planId}/late-move-outs/move`,
+          input,
+        ),
       onSuccess: refresh,
     }),
   };
