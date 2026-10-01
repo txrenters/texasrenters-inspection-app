@@ -214,7 +214,8 @@ export function conditionLines(checklist: AreaChecklistEntry[]): ConditionLine[]
   return lines;
 }
 
-function ConditionLines({ checklist }: { checklist: AreaChecklistEntry[] }) {
+/** What an area's checklist says, as the sheet and the viewer's review panel show it. */
+export function ConditionLines({ checklist }: { checklist: AreaChecklistEntry[] }) {
   const lines = conditionLines(checklist);
   if (!lines.length) return <p className="text-muted-foreground text-xs">No checklist</p>;
   return (

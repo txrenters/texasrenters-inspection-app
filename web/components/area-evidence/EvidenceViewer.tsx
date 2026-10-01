@@ -6,12 +6,13 @@ import {
   ChevronRight,
   Download,
   Loader2,
+  PanelRightIcon,
   X,
   ZoomInIcon,
   ZoomOutIcon,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 
 import { PhotoStamp } from '@/components/photo-stamp';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -109,6 +110,7 @@ export function EvidenceViewer({
   edges,
   onBeyond,
   onArea,
+  aside,
 }: {
   items: EvidenceViewerItem[];
   startIndex: number;
@@ -133,6 +135,12 @@ export function EvidenceViewer({
   onBeyond?: (direction: 1 | -1) => void;
   /** ↑ and ↓: straight to the previous or next area. */
   onArea?: (direction: 1 | -1) => void;
+  /**
+   * A panel beside the media -- the area's review, in `AreaPhotoViewer`.
+   * Open and closed by the caller, so the choice survives walking into the
+   * next area, which mounts a fresh viewer.
+   */
+  aside?: { content: ReactNode; open: boolean; onToggle: () => void };
 }) {
   const [index, setIndex] = useState(startIndex);
   // Bumped when a photograph arrives. The bytes live in the photo cache, which
@@ -234,6 +242,11 @@ export function EvidenceViewer({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // Typing a rejection reason in the review panel: the arrows move the
+      // caret, and Escape must not throw the half-written reason away.
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? ''))
+        return;
       if (event.key === 'Escape') onClose();
       else if (event.key === 'ArrowRight') step(1);
       else if (event.key === 'ArrowLeft') step(-1);
@@ -438,6 +451,19 @@ export function EvidenceViewer({
             <span className="max-sm:sr-only">Download</span>
           </a>
         ) : null}
+        {aside ? (
+          <Button
+            aria-pressed={aside.open}
+            className={`shrink-0 ${OVERLAY_CONTROL}`}
+            onClick={aside.onToggle}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <PanelRightIcon aria-hidden className="size-4" />
+            <span className="max-sm:sr-only">Review panel</span>
+          </Button>
+        ) : null}
         <Button
           // Focused on open so Escape and Tab both behave, and a keyboard user
           // lands on the way out rather than inside the media.
@@ -452,7 +478,8 @@ export function EvidenceViewer({
         </Button>
       </header>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center px-2 pb-4 sm:px-14">
+      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center px-2 pb-4 sm:px-14">
         {/* Shown for a moment and announced, so arriving in another area is
             noticed by everyone, not only by someone watching the title. */}
         <p aria-live="polite" className="sr-only">
@@ -572,6 +599,18 @@ export function EvidenceViewer({
           >
             <ChevronRight aria-hidden className="size-5" />
           </Button>
+        ) : null}
+      </div>
+        {/* A themed card on the dark backdrop rather than white-on-black
+            controls: the panel holds ordinary console controls -- Approve,
+            Reject, the review mark -- and they should look like themselves. */}
+        {aside?.open ? (
+          <aside
+            aria-label="Review panel"
+            className="bg-card text-card-foreground mr-2 mb-4 w-80 shrink-0 overflow-y-auto rounded-xl border p-4 sm:mr-4"
+          >
+            {aside.content}
+          </aside>
         ) : null}
       </div>
 

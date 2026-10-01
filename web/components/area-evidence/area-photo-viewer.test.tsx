@@ -1,6 +1,10 @@
-import type { AreaEvidenceBundle, AreaEvidenceSummaryItem } from '@texasrenters/shared';
+import type {
+  AreaEvidenceBundle,
+  AreaEvidenceSummaryItem,
+  AreaFinding,
+} from '@texasrenters/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AreaPhotoViewer } from './AreaPhotoViewer';
@@ -17,10 +21,12 @@ import { forgetPhotos } from './photo-cache';
  */
 
 const bundles = vi.hoisted(() => ({}) as Record<string, unknown>);
+const decisions = vi.hoisted(() => ({ approve: vi.fn(), mark: vi.fn() }));
 
 vi.mock('@/lib/api', () => ({
   apiBlob: vi.fn().mockResolvedValue(new Blob(['jpeg'], { type: 'image/jpeg' })),
 }));
+vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
 vi.mock('@/lib/queries', async () => {
   const { queryOptions, useQuery } = await import('@tanstack/react-query');
   const areaEvidenceQuery = (id: string, areaId: string) =>
@@ -32,6 +38,16 @@ vi.mock('@/lib/queries', async () => {
     areaEvidenceQuery,
     useAreaEvidence: (id: string, areaId: string | null) =>
       useQuery({ ...areaEvidenceQuery(id, areaId ?? ''), enabled: Boolean(areaId) }),
+    useInspection: () => ({ data: { finalizedAt: null } }),
+    useSetAreaReviewed: () => ({ error: null, mutate: decisions.mark }),
+    useAdminMutations: () => ({
+      approveFinding: {
+        isPending: false,
+        error: null,
+        mutateAsync: async (input: unknown) => decisions.approve(input),
+      },
+      rejectFinding: { isPending: false, error: null, mutateAsync: async () => {} },
+    }),
   };
 });
 
@@ -215,6 +231,77 @@ describe('walking photographs across areas', () => {
 
     expect((await screen.findAllByText('That was the last photo')).length).toBeGreaterThan(0);
     expect(screen.getByText('Kitchen · Photo k1')).toBeInTheDocument();
+  });
+});
+
+describe('the review panel beside the photograph', () => {
+  const leak: AreaFinding = {
+    id: 'finding-1',
+    title: 'Leak under the sink',
+    description: 'Water staining on the cabinet floor.',
+    category: 'PLUMBING',
+    findingType: 'POSSIBLE_NEW_DAMAGE',
+    severity: 'MEDIUM',
+    comparisonResult: 'POSSIBLE_NEW_DAMAGE',
+    confidence: 0.8,
+    reviewStatus: 'PENDING_REVIEW',
+    createdAt: '2026-10-01T18:00:00.000Z',
+    videoTimestampStart: 0,
+    videoTimestampEnd: 0,
+    photoCount: 1,
+    lastReview: null,
+  };
+
+  beforeEach(() => {
+    decisions.approve.mockReset();
+    decisions.mark.mockReset();
+    const kitchen = bundle('kitchen', 'Kitchen', ['k1']);
+    bundles.kitchen = {
+      ...kitchen,
+      findings: [leak],
+      counts: { ...kitchen.counts, findings: 1, unreviewedFindings: 1 },
+    };
+  });
+
+  const panel = () => screen.getByRole('complementary', { name: 'Review panel' });
+
+  it('opens from the header, with the area’s findings decided in place', async () => {
+    open('kitchen', 'k1');
+    await screen.findByText('Kitchen · Photo k1');
+    fireEvent.click(screen.getByRole('button', { name: 'Review panel' }));
+
+    expect(within(panel()).getByText('Leak under the sink')).toBeInTheDocument();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Approve' }));
+    expect(decisions.approve).toHaveBeenCalledWith({ id: 'finding-1', inspectionId: INSPECTION });
+    // The mark waits for the decision: it never stands in for one.
+    expect(within(panel()).getByRole('button', { name: 'Mark reviewed' })).toBeDisabled();
+  });
+
+  it('moves on to the next area, and stays open there', async () => {
+    open('living', 'l1');
+    await screen.findByText('Living Room · Photo l1');
+    fireEvent.click(screen.getByRole('button', { name: 'Review panel' }));
+
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Next area' }));
+
+    expect(await screen.findByText('Kitchen · Photo k1')).toBeInTheDocument();
+    expect(within(panel()).getByText('Leak under the sink')).toBeInTheDocument();
+  });
+
+  it('leaves the arrow keys alone while a rejection reason is being typed', async () => {
+    open('kitchen', 'k1');
+    await screen.findByText('Kitchen · Photo k1');
+    fireEvent.click(screen.getByRole('button', { name: 'Review panel' }));
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Reject' }));
+
+    const reason = within(panel()).getByRole('textbox', { name: 'Rejection reason' });
+    act(() => {
+      fireEvent.keyDown(reason, { key: 'ArrowLeft' });
+      fireEvent.keyDown(reason, { key: 'Escape' });
+    });
+
+    expect(screen.getByText('Kitchen · Photo k1')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 });
 
