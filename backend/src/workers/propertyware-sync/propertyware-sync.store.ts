@@ -1013,6 +1013,9 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
         state: record.state,
         postalCode: record.postalCode,
         country: record.country,
+        // Left alone when the record carries none (a test double, an older
+        // caller), rather than blanked.
+        ...(record.details ? { details: record.details as unknown as Prisma.InputJsonValue } : {}),
         ...common,
       };
       saved = await this.prisma.propertywareBuilding.upsert({

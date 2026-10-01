@@ -1,3 +1,4 @@
+import type { PropertyDetailsSnapshot } from '@texasrenters/shared';
 import { z } from 'zod';
 
 const propertywareIdSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
@@ -391,6 +392,11 @@ export const normalizedPropertywareRecordSchema = z.discriminatedUnion('entityTy
     totalArea: z.number().int().nonnegative().optional(),
     areaUnits: z.string().optional(),
     category: z.string().optional(),
+    // Built by `buildingDetails`, which already checked every field; kept as it
+    // is rather than described twice, and declared so the parse keeps it.
+    details: z
+      .custom<PropertyDetailsSnapshot>((value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value))
+      .optional(),
   }),
   normalizedBaseSchema.merge(normalizedAddressSchema).extend({
     entityType: z.literal('units'),

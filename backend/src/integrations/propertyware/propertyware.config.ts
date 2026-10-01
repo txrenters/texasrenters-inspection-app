@@ -34,6 +34,7 @@ export function getPropertywareConfig(env: NodeJS.ProcessEnv = process.env): Pro
     portfolioReportUrl: env.PROPERTYWARE_PORTFOLIO_REPORT_URL?.trim() || undefined,
     leaseReportUrl: env.PROPERTYWARE_LEASE_REPORT_URL?.trim() || undefined,
     tenantReportUrl: env.PROPERTYWARE_TENANT_REPORT_URL?.trim() || undefined,
+    ownerReportUrl: env.PROPERTYWARE_OWNER_REPORT_URL?.trim() || undefined,
     // After the 02:00 reconciliation, so tenancies match the buildings that
     // pass survived rather than the ones it was about to retire.
     tenantSyncCron: env.PROPERTYWARE_TENANT_SYNC_CRON?.trim() || '0 3 * * *',
@@ -68,6 +69,7 @@ export function getPropertywareConfig(env: NodeJS.ProcessEnv = process.env): Pro
   assertReportUrl(config.portfolioReportUrl, 'PROPERTYWARE_PORTFOLIO_REPORT_URL');
   assertReportUrl(config.leaseReportUrl, 'PROPERTYWARE_LEASE_REPORT_URL');
   assertReportUrl(config.tenantReportUrl, 'PROPERTYWARE_TENANT_REPORT_URL');
+  assertReportUrl(config.ownerReportUrl, 'PROPERTYWARE_OWNER_REPORT_URL');
   if (provider === 'live' && (!config.clientId || !config.clientSecret || !config.organizationId))
     throw new Error(
       'Propertyware live mode requires client ID, client secret, and organization ID.',

@@ -1,3 +1,5 @@
+import type { PropertyDetailsSnapshot } from '@texasrenters/shared';
+
 import type { PropertywareEntity } from './propertyware.constants';
 
 export interface PropertywareConfig {
@@ -14,6 +16,8 @@ export interface PropertywareConfig {
   /** The office tenancy report: TBP enrolment, HVAC plan, building address. */
 
   tenantReportUrl?: string;
+  /** The office's property-owner report: owners and their phones, per building. */
+  ownerReportUrl?: string;
   tenantSyncCron: string;
   requestTimeoutMs: number;
   pageSize: number;
@@ -93,6 +97,8 @@ export interface NormalizedBuilding extends NormalizedAddress {
   totalArea?: number;
   areaUnits?: string;
   category?: string;
+  /** Everything else the office keeps on the building; see `buildingDetails`. */
+  details?: PropertyDetailsSnapshot;
   isActive: boolean;
   sourceStatus: string;
   sourceCreatedAt?: string;

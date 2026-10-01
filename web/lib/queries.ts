@@ -32,6 +32,7 @@ import type {
   AdminLease,
   AdminPortfolio,
   AdminProperty,
+  PropertyPrivateDetails,
   AdminPropertyArea,
   AdminReportShare,
   AdminRole,
@@ -239,6 +240,20 @@ export const useProperty = (id: string) =>
     queryKey: keys.property(id),
     queryFn: ({ signal }) => api<AdminProperty>(`/api/v1/admin/properties/${id}`, { signal }),
     enabled: Boolean(id),
+  });
+/**
+ * A property's access codes and owner phones, only once somebody asks to see
+ * them. Not kept after the card closes (`gcTime: 0`): codes that open a home
+ * should not sit in the page's memory waiting to be read.
+ */
+export const usePropertyPrivateDetails = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: [...keys.property(id), 'private'],
+    queryFn: ({ signal }) =>
+      api<PropertyPrivateDetails>(`/api/v1/admin/properties/${id}/private-details`, { signal }),
+    enabled: Boolean(id) && enabled,
+    gcTime: 0,
+    staleTime: 0,
   });
 export const useUnits = (id: string) =>
   useQuery({
