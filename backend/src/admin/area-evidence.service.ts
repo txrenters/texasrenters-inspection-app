@@ -11,6 +11,7 @@ import type {
   AreaEvidenceBundle,
   AreaEvidenceSummary,
   AreaPhotoGroup,
+  AreaReviewMark,
   AreaReviewStatus,
 } from '@texasrenters/shared';
 
@@ -24,6 +25,35 @@ import { ROOM_SUMMARY_WHERE, readFrameMarkers } from '../technician/media-proces
 
 /** Findings awaiting a human decision. */
 const UNREVIEWED: FindingReviewStatus[] = [FindingReviewStatus.PENDING_REVIEW];
+
+/** The latest of some moments, or null when there are none. */
+function latest(moments: (Date | null | undefined)[]): Date | null {
+  return moments.reduce<Date | null>(
+    (found, moment) => (moment && (!found || moment > found) ? moment : found),
+    null,
+  );
+}
+
+/**
+ * A reviewer's mark on an area, and whether it still stands.
+ *
+ * It stands until evidence arrives after it -- a photograph taken on a return
+ * visit, a recording uploaded late. Compared with when the server *received*
+ * each piece, not when it was captured: a photograph can be taken before a
+ * review and only arrive after it, and the reviewer has still not seen it.
+ */
+function reviewMark(
+  area: { reviewedAt: Date | null; reviewedById: string | null },
+  lastReceivedAt: Date | null,
+  reviewers: Map<string, string>,
+): AreaReviewMark | null {
+  if (!area.reviewedAt) return null;
+  return {
+    at: area.reviewedAt.toISOString(),
+    byName: area.reviewedById ? (reviewers.get(area.reviewedById) ?? null) : null,
+    current: !lastReceivedAt || lastReceivedAt <= area.reviewedAt,
+  };
+}
 
 /**
  * Area-first read model over inspection evidence.
@@ -184,9 +214,23 @@ export class AreaEvidenceService {
     findings: number;
     unreviewedFindings: number;
     followUpFindings: number;
+    /** A reviewer marked the area reviewed, and no evidence has arrived since. */
+    reviewed: boolean;
   }): AreaReviewStatus {
     if (input.processingFailed) return 'FAILED';
     if (input.completionStatus === 'FAILED') return 'FAILED';
+    // A reviewer's mark settles the area -- a skip they accepted, photographs
+    // without a walkthrough they judged enough, an area with nothing wrong in
+    // it -- but never over work still open: a finding awaiting a decision, a
+    // requested re-inspection, a recording still being analysed. Without the
+    // mark, an area with no findings could never count as reviewed at all.
+    if (
+      input.reviewed &&
+      !input.followUpFindings &&
+      !input.processingPending &&
+      !input.unreviewedFindings
+    )
+      return 'REVIEWED';
     // Ahead of the evidence checks on purpose. A skipped area has no recording
     // by definition, so every downstream rule would report it as incomplete and
     // bury the fact that skipping was a decision with a reason attached.
@@ -224,6 +268,8 @@ export class AreaEvidenceService {
         id: true,
         completionStatus: true,
         skipReason: true,
+        reviewedAt: true,
+        reviewedById: true,
         propertyArea: {
           select: {
             id: true,
@@ -261,8 +307,15 @@ export class AreaEvidenceService {
     const kind = checklistKindFor(inspection.inspectionType);
     const organizationWide = checklistItemsAreOrganizationWide(kind);
     const requiresRecording = inspectionRequiresAreaRecording(inspection.inspectionType);
-    const [media, photoGroups, findingGroups, summaryFindings, checklistItems, checklistResponses] =
-      await Promise.all([
+    const [
+      media,
+      photoGroups,
+      findingGroups,
+      summaryFindings,
+      checklistItems,
+      checklistResponses,
+      reviewers,
+    ] = await Promise.all([
         // Recordings are few per inspection; the rows carry the flags needed for
         // primary-presence and processing state in one pass.
         this.prisma.inspectionMedia.findMany({
@@ -275,11 +328,14 @@ export class AreaEvidenceService {
           },
         }),
         // Photos can number in the hundreds, so they are counted, never listed.
+        // `createdAt` is when the server received one: what a review mark is
+        // compared against, since a photograph can be taken long before it
+        // arrives.
         this.prisma.inspectionPhoto.groupBy({
           by: ['inspectionAreaId', 'captureType'],
           where: { inspectionId },
           _count: { _all: true },
-          _max: { capturedAt: true },
+          _max: { capturedAt: true, createdAt: true },
         }),
         // Findings key on the catalog area, not the inspection area.
         this.prisma.inspectionFinding.groupBy({
@@ -329,6 +385,7 @@ export class AreaEvidenceService {
             textValue: true,
           },
         }),
+        this.reviewerNames(areas.map((area) => area.reviewedById)),
       ]);
 
     const summaryAreas = new Set(summaryFindings.map((row) => row.propertyAreaId));
@@ -361,6 +418,11 @@ export class AreaEvidenceService {
       const lastEvidence = [lastMediaAt, lastPhotoAt]
         .filter((value): value is Date => Boolean(value))
         .sort((left, right) => right.getTime() - left.getTime())[0];
+      const review = reviewMark(
+        area,
+        latest([lastMediaAt, ...areaPhotos.map((row) => row._max.createdAt)]),
+        reviewers,
+      );
       // The same narrowing `areaEvidence` applies in its query: an
       // organization-wide list is asked whole, or one HVAC section of it.
       const section = checklistSectionFor(kind, area.propertyArea.name);
@@ -412,7 +474,9 @@ export class AreaEvidenceService {
           findings,
           unreviewedFindings,
           followUpFindings,
+          reviewed: Boolean(review?.current),
         }),
+        review,
         counts: { recordings: areaMedia.length, photos, findings, unreviewedFindings },
         evidence: {
           primaryRecordingAvailable: areaMedia.some(
@@ -472,6 +536,8 @@ export class AreaEvidenceService {
         completionStatus: true,
         skipReason: true,
         technicianNote: true,
+        reviewedAt: true,
+        reviewedById: true,
         propertyArea: {
           select: {
             id: true,
@@ -490,7 +556,8 @@ export class AreaEvidenceService {
         'Inspection area was not found.',
       );
 
-    const [recordings, photos, findings, summaryFinding, checklistItems] = await Promise.all([
+    const [recordings, photos, findings, summaryFinding, checklistItems, reviewers] =
+      await Promise.all([
       this.prisma.inspectionMedia.findMany({
         where: { inspectionAreaId: area.id },
         orderBy: [{ recordingType: 'asc' }, { createdAt: 'asc' }],
@@ -623,6 +690,7 @@ export class AreaEvidenceService {
           },
         },
       }),
+      this.reviewerNames([area.reviewedById]),
     ]);
 
     // Poster frames only. Playback URLs are minted when a recording is opened.
@@ -681,6 +749,11 @@ export class AreaEvidenceService {
     const unreviewedFindings = findings.filter((finding) =>
       UNREVIEWED.includes(finding.reviewStatus),
     ).length;
+    const review = reviewMark(
+      area,
+      latest([...recordings.map((row) => row.createdAt), ...photos.map((photo) => photo.createdAt)]),
+      reviewers,
+    );
 
     return {
       area: {
@@ -709,7 +782,9 @@ export class AreaEvidenceService {
           followUpFindings: findings.filter(
             (finding) => finding.reviewStatus === FindingReviewStatus.REINSPECTION_REQUESTED,
           ).length,
+          reviewed: Boolean(review?.current),
         }),
+        review,
         skipReason: area.skipReason,
         technicianNote: area.technicianNote,
       },
@@ -794,13 +869,142 @@ export class AreaEvidenceService {
     };
   }
 
+  /**
+   * An administrator's "I have looked at this area", or taking it back.
+   *
+   * The review count used to move only when an area's findings were all
+   * decided, so an area with nothing wrong in it -- no finding to decide --
+   * could never count, and an occupied inspection read "0 of 20 reviewed" for
+   * good. This is the reviewer saying so directly. It decides nothing about any
+   * finding: an area with findings still awaiting a decision cannot be marked,
+   * because the mark must never stand in for the human review of AI output.
+   *
+   * Refused once the inspection is finalized (`finalizedAt`, as the checklist
+   * is), and for an area nobody recorded anything in and nobody skipped:
+   * marking that reviewed would hide a gap rather than close one. Repeating the
+   * same decision is a no-op, so a double click writes one audit row.
+   */
+  async setAreaReviewed(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    areaId: string,
+    reviewed: boolean,
+  ): Promise<{ areaId: string; review: AreaReviewMark | null }> {
+    const inspection = await this.requireInspection(user.organizationId, inspectionId);
+    if (inspection.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Areas cannot be marked reviewed after the inspection is finalized.',
+      );
+    const area = await this.prisma.inspectionArea.findFirst({
+      where: { id: areaId, inspectionId },
+      select: {
+        id: true,
+        completionStatus: true,
+        reviewedAt: true,
+        reviewedById: true,
+        propertyArea: { select: { id: true, name: true } },
+      },
+    });
+    if (!area)
+      throw new ApplicationError(
+        404,
+        'INSPECTION_AREA_NOT_FOUND',
+        'Inspection area was not found.',
+      );
+
+    const [media, photos, pending] = await Promise.all([
+      this.prisma.inspectionMedia.aggregate({
+        where: { inspectionAreaId: area.id },
+        _count: { _all: true },
+        _max: { createdAt: true },
+      }),
+      this.prisma.inspectionPhoto.aggregate({
+        where: { inspectionAreaId: area.id },
+        _count: { _all: true },
+        _max: { createdAt: true },
+      }),
+      this.prisma.inspectionFinding.count({
+        where: {
+          inspectionId,
+          propertyAreaId: area.propertyArea.id,
+          reviewStatus: { in: UNREVIEWED },
+          NOT: { ...ROOM_SUMMARY_WHERE },
+        },
+      }),
+    ]);
+    const lastReceivedAt = latest([media._max.createdAt, photos._max.createdAt]);
+
+    if (reviewed) {
+      if (!media._count._all && !photos._count._all && area.completionStatus !== 'SKIPPED')
+        throw new ApplicationError(
+          409,
+          'AREA_NOT_INSPECTED',
+          'Nothing was recorded in this area. Request evidence for it, or have the technician skip it with a reason.',
+        );
+      if (pending)
+        throw new ApplicationError(
+          409,
+          'AREA_FINDINGS_PENDING',
+          `Decide the ${pending} finding${pending === 1 ? '' : 's'} awaiting review in this area first.`,
+        );
+    }
+
+    const names = await this.reviewerNames([area.reviewedById]);
+    const standing = reviewMark(area, lastReceivedAt, names);
+    // The same decision again changes nothing. A mark evidence has overtaken is
+    // not the same decision: marking again is the reviewer catching up with it.
+    if (reviewed ? standing?.current : !area.reviewedAt) return { areaId: area.id, review: standing };
+
+    const at = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspectionArea.update({
+        where: { id: area.id },
+        data: reviewed
+          ? { reviewedAt: at, reviewedById: user.id }
+          : { reviewedAt: null, reviewedById: null },
+      });
+      // On the inspection rather than the area, so it reads in the inspection's
+      // own activity beside finalization and the rest of its review.
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: reviewed ? 'AREA_REVIEWED' : 'AREA_REVIEW_WITHDRAWN',
+          entityType: 'Inspection',
+          entityId: inspectionId,
+          metadata: { inspectionAreaId: area.id, areaName: area.propertyArea.name },
+        },
+      });
+    });
+    return {
+      areaId: area.id,
+      review: reviewed
+        ? { at: at.toISOString(), byName: user.displayName ?? null, current: true }
+        : null,
+    };
+  }
+
+  /** Display names for the people who marked areas reviewed, in one read. */
+  private async reviewerNames(ids: (string | null)[]): Promise<Map<string, string>> {
+    const wanted = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+    if (!wanted.length) return new Map();
+    const people = await this.prisma.userProfile.findMany({
+      where: { id: { in: wanted } },
+      select: { id: true, displayName: true },
+    });
+    return new Map(people.map((person) => [person.id, person.displayName]));
+  }
+
   private async requireInspection(organizationId: string, inspectionId: string) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId },
       // `inspectionType` for the checklist read in `areaEvidence`: an area
       // carries both item sets once it is marked as having a unit, and the
       // reviewer must be shown the one the technician was actually asked.
-      select: { id: true, inspectionType: true },
+      // `finalizedAt` because a finalized inspection's review is closed.
+      select: { id: true, inspectionType: true, finalizedAt: true },
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');

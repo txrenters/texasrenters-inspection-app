@@ -181,6 +181,17 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
 
   const totals = summary.data!.totals;
   const unassigned = summary.data!.unassigned;
+  // The open area's neighbours in the list as filtered, for moving on from an
+  // area once it is reviewed without going back to the list for the next one.
+  const position = filtered.findIndex((area) => area.id === selectedId);
+  const stepping = {
+    previous: position > 0,
+    next: position !== -1 && position < filtered.length - 1,
+    onStep: (direction: 1 | -1) => {
+      const target = filtered[position + direction];
+      if (target) select(target.id);
+    },
+  };
 
   return (
     <Card aria-labelledby="area-evidence-heading" className="scroll-mt-20" id="evidence">
@@ -383,6 +394,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                 areaId={selectedId}
                 inspectionId={inspectionId}
                 onOpenPhoto={(photoId) => setPhotoViewer({ areaId: selectedId, photoId })}
+                stepping={stepping}
                 onTabChange={selectTab}
                 tab={activeTab}
               />
