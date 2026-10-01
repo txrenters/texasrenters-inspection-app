@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   CameraIcon,
@@ -61,6 +62,7 @@ import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklis
 import { EvidenceRequestCard } from '@/src/components/EvidenceRequestCard';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import {
+  queryKeys,
   useEvidenceRequests,
   useFindings,
   useResolveEvidenceRequest,
@@ -76,6 +78,7 @@ import {
 } from '@/src/features/queries';
 import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
+import { ApiConnectionError } from '@/src/storage/offline-record-cache';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { areaCompletionGate, deriveAreaRequirements } from '@/src/utils/area-requirements';
 import { describeRecordingLocation } from '@/src/utils/upload-status';
@@ -120,6 +123,7 @@ const STATUS_BADGE_TONE: Record<AreaStatusDescriptor['tone'], BadgeTone> = {
 
 export default function AreaDetailScreen() {
   const { id = '', focus } = useLocalSearchParams<{ id: string; focus?: string }>();
+  const client = useQueryClient();
   const room = useRoom(id);
   const inspectionId = room.data?.inspectionId ?? '';
   const media = useRoomMedia(id);
@@ -262,6 +266,46 @@ export default function AreaDetailScreen() {
   useEffect(() => {
     scrollToFinish();
   }, [scrollToFinish]);
+
+  /**
+   * The area could not be read, and nothing of it is stored on the phone.
+   *
+   * This used to be the skeleton below, which never resolves: the office's error
+   * log has a technician opening an area four times in ninety seconds
+   * (2026-10-01, "Assigned room was not found.") and meeting a loading screen
+   * each time. An area the office removed or merged is gone for good, so the
+   * job's lists are asked again on the way back, and the screen says why.
+   */
+  if (!room.data && room.isError) {
+    const offline = room.error instanceof ApiConnectionError;
+    const leave = () => {
+      void client.invalidateQueries({ queryKey: queryKeys.roomsRoot });
+      goBack();
+    };
+    return (
+      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+        <View className="flex-1 justify-center gap-3 px-6">
+          <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
+            This area could not be opened
+          </Text>
+          <Text className="text-sm leading-5 text-muted-foreground">
+            {room.error instanceof Error ? `${room.error.message} ` : ''}
+            {offline
+              ? 'Try again when you have signal.'
+              : 'If the office changed this job’s areas, go back to see the ones it has now.'}
+          </Text>
+          <Button label="Back to the job" onPress={leave} />
+          <Button
+            busy={room.isFetching}
+            busyLabel="Trying again…"
+            label="Try again"
+            onPress={() => void room.refetch()}
+            variant="secondary"
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (room.isLoading || !room.data) {
     return (
