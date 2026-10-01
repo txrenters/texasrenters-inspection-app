@@ -257,9 +257,9 @@ export default function PlanningPage() {
         // one says nothing, and so means nothing to a server that has none.
         ...(groupTemplateId || plan?.groupTemplateId ? { groupTemplateId } : {}),
         // Both ends, so the planner fills to the number asked for rather than
-        // stopping at its own nine and treating the rest as a ceiling.
-        minStopsPerDay: stopsPerDay,
-        maxStopsPerDay: Math.max(stopsPerDay, 12),
+        // stopping at its own nine and treating the rest as a ceiling. Neither
+        // from a template, which sets each day itself: the plan keeps its own.
+        ...(stopsPerDay === null ? {} : { minStopsPerDay: stopsPerDay, maxStopsPerDay: Math.max(stopsPerDay, 12) }),
       },
       {
         onSuccess: (result) => {
@@ -860,6 +860,8 @@ export default function PlanningPage() {
         // The grouping the quarter was last built with, so a rebuild keeps it unless changed.
         groupTemplate={plan?.groupTemplate ?? null}
         groupTemplateRevision={plan?.groupTemplateRevision ?? null}
+        // The plan's own visits a day, so a rebuild reopens on it rather than on nine.
+        stopsPerDay={plan?.minStopsPerDay ?? null}
         label={choice.label}
         onBuild={build}
         onOpenChange={setChoosing}

@@ -355,6 +355,12 @@ export interface LayoutOptions {
    * the calendar, trips, and the visits nothing could take (`squeezeIn`).
    */
   presetGroups?: readonly (readonly string[])[];
+  /**
+   * How many visits each of the office's groups was drawn to hold, by its index
+   * in `presetGroups`: its target in the Group maker. A visit in no group joins
+   * one only while it is under this, rather than up to the plan's most a day.
+   */
+  presetTargets?: readonly number[];
 }
 
 const DAY_MS = 86_400_000;
@@ -626,6 +632,8 @@ interface GroupRules {
   neighbourMinutes: number;
   /** Whether a group keeps to the zone it started in, neighbours apart. */
   zoned: boolean;
+  /** The most each of the office's groups takes, by its index (`presetTargets`); `most` where absent. */
+  presetRoom?: readonly number[];
 }
 
 /**
@@ -1229,11 +1237,18 @@ function presetGroupsOf(presets: readonly (readonly string[])[], left: ReadonlyS
   return { groups, loose };
 }
 
-/** A visit into the group it adds least driving to, of those with room for it; false where none has. */
+/**
+ * A visit into the group it adds least driving to, of those with room for it; false where none has.
+ *
+ * One of the office's groups has room up to its own target -- the size it was
+ * drawn to be in the Group maker -- rather than the plan's most a day, so a
+ * group of nine drawn to hold nine stays nine (the office, 2026-10-01).
+ */
 function joinNearest(stop: PlannableStop, groups: readonly Group[], rules: GroupRules): boolean {
   let best: { group: Group; at: number; added: number } | null = null;
   for (const group of groups) {
-    if (group.path.length >= rules.most || group.onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes) continue;
+    const room = group.preset === undefined ? rules.most : (rules.presetRoom?.[group.preset] ?? rules.most);
+    if (group.path.length >= room || group.onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes) continue;
     const { at, added } = cheapestInsertion(group.path, stop, rules.cost);
     if (!overLong(added) && (!best || added < best.added)) best = { group, at, added };
   }
@@ -1406,6 +1421,7 @@ export function layoutEveryDay(
     drive,
     neighbourMinutes,
     zoned,
+    ...(options.presetTargets ? { presetRoom: options.presetTargets } : {}),
   };
 
   // The office's own groups, when the quarter is built from a template (2026-09-30).
