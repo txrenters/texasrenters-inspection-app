@@ -34,6 +34,8 @@ export interface DayStop {
   postalCode: string | null;
   lease: string | null;
   hvacPlan: string | null;
+  /** The visit's state in the plan; a visit the office left out is no day's. */
+  status?: string;
 }
 
 /** The key a day's group is known by: its date and whose day it is. */

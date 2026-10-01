@@ -14,7 +14,7 @@ import { useSettledView } from '@/components/map-portfolio';
 import { ZoneLayers } from '@/components/map-zones';
 import { Badge } from '@/components/ui/badge';
 
-import { fanOffsets, type FileGroup, type GroupFileRow } from './group-file';
+import { fanOffsets, legEnds, type FileGroup, type GroupFileRow } from './group-file';
 import { GroupBadge } from './group-file-legend';
 import {
   formatDrive,
@@ -95,17 +95,42 @@ const DIMMED = 0.2;
 /** A group as it is named in words: its own name, or its number. */
 const groupTitle = (group: FileGroup) => group.name ?? `Group ${group.label}`;
 
+/** The legs before a group's first stop: the one from its origin, when it has one. */
+const originLegs = (group: FileGroup) => (group.origin ? 1 : 0);
+
+/** Every leg of a group's drive: one between each two of its stops, and the one from its origin. */
+const legCount = (group: FileGroup) => Math.max(0, group.rows.length - 1) + originLegs(group);
+
+
+/** Whether a group's drive into this row is the one from its origin: the first stop of a group that has one. */
+const fromOrigin = (row: GroupFileRow, group: FileGroup | null) =>
+  Boolean(group?.origin) && group!.rows[0]?.rowNumber === row.rowNumber;
+
 /** What a pin says when it is clicked. */
-/** "From stop 2: 8 min · 5.1 km", the drive into this stop along the roads. */
-function LegInto({ row, leg }: { row: GroupFileRow; leg: RoadLeg | null }) {
+/** "From stop 2: 8 min · 5.1 km", the drive into this stop along the roads -- or "From home" into a day's first. */
+function LegInto({ row, leg, fromHome = false }: { row: GroupFileRow; leg: RoadLeg | null; fromHome?: boolean }) {
   if (!leg || row.stop === null) return null;
-  const slow = leg.durationS >= SLOW_LEG_S;
+  // The drive from home is not held to the 15 minutes: it is not the day's driving.
+  const slow = !fromHome && leg.durationS >= SLOW_LEG_S;
   return (
     <p className={slow ? 'text-warning font-medium' : undefined}>
-      From stop {row.stop - 1}: {formatDrive(leg.durationS)} ·{' '}
+      {fromHome ? 'From home' : `From stop ${row.stop - 1}`}: {formatDrive(leg.durationS)} ·{' '}
       <span className="text-road-distance font-medium">{formatKm(leg.distanceM)}</span>
       {slow ? ' · long leg' : null}
     </p>
+  );
+}
+
+/** Where a planned day starts: the technician's home, labelled "From" as the office calls it. */
+function HomePin() {
+  return (
+    <svg aria-hidden className="drop-shadow-sm" height="28" viewBox="0 0 66 28" width="66">
+      <rect className="fill-map-technician" height="24" rx="12" stroke="#fff" strokeWidth="2" width="62" x="2" y="2" />
+      <path d="M9.5 13.5 15 9l5.5 4.5V19a.5.5 0 0 1-.5.5h-3.25v-3.5h-3.5v3.5H10a.5.5 0 0 1-.5-.5z" fill="#fff" />
+      <text dominantBaseline="central" fill="#fff" fontFamily="system-ui, sans-serif" fontSize="12" fontWeight="700" x="25" y="14">
+        From
+      </text>
+    </svg>
   );
 }
 
@@ -138,7 +163,7 @@ function RowDetails({ row, group, leg }: { row: GroupFileRow; group: FileGroup |
               Stop {row.stop} of {group.size}
             </p>
           )}
-          <LegInto leg={leg} row={row} />
+          <LegInto fromHome={fromOrigin(row, group)} leg={leg} row={row} />
         </>
       ) : (
         <p className="text-muted-foreground">In no group</p>
@@ -181,7 +206,7 @@ function HoverDetails({ row, group, leg }: { row: GroupFileRow; group: FileGroup
         {group ? `${groupTitle(group)} · stop ${row.stop}` : 'In no group'}
         {row.approximate ? ' · approximate location' : ''}
       </p>
-      <LegInto leg={leg} row={row} />
+      <LegInto fromHome={fromOrigin(row, group)} leg={leg} row={row} />
     </div>
   );
 }
@@ -239,6 +264,8 @@ function GroupFileLayers({
 }) {
   const { box, zoom } = useSettledView();
   const casing = useMapStroke('map-route-casing');
+  /** The drive from home, in the grey of a finished leg: shown apart from the day's driving, as on every day map. */
+  const homeColor = useMapStroke('map-route-done-line');
   const warning = useMapStroke('text-destructive');
   const amber = useMapStroke('text-warning');
   /** The road itself, in the purple-blue every road distance is written in (the office, 2026-09-30). */
@@ -257,14 +284,17 @@ function GroupFileLayers({
   const open = manual ? null : (rows.find(({ row }) => row.rowNumber === openRow) ?? null);
   const hovered = manual ? (rows.find(({ row }) => row.rowNumber === hoverRow) ?? null) : null;
 
-  /** A group's road route, when it is a route of these very stops. */
+  /** A group's road route, when it is a route of these very stops -- and from its origin, when it has one. */
   const routeOf = (group: FileGroup) => {
     const view = routeViews?.get(group.key);
-    return view?.status === 'ok' && view.route.legs.length === group.rows.length - 1 ? view.route : null;
+    return view?.status === 'ok' && view.route.legs.length === legCount(group) ? view.route : null;
   };
-  /** The drive into a stop from the one before it. */
-  const legInto = (row: GroupFileRow, group: FileGroup | null): RoadLeg | null =>
-    group && row.stop !== null && row.stop > 1 ? (routeOf(group)?.legs[row.stop - 2] ?? null) : null;
+  /** The drive into a stop from the one before it, or from the group's origin into its first. */
+  const legInto = (row: GroupFileRow, group: FileGroup | null): RoadLeg | null => {
+    if (!group || row.stop === null) return null;
+    const leg = group.rows.findIndex((one) => one.rowNumber === row.rowNumber) - 1 + originLegs(group);
+    return leg < 0 ? null : (routeOf(group)?.legs[leg] ?? null);
+  };
 
   /**
    * Each leg's drive time, written halfway along it (the office, 2026-09-30:
@@ -279,10 +309,10 @@ function GroupFileLayers({
     return groups.flatMap((group) => {
       if (!legTimes.has(group.key) && !everyGroup) return [];
       const view = routeViews?.get(group.key);
-      const route = view?.status === 'ok' && view.route.legs.length === group.rows.length - 1 ? view.route : null;
+      const route = view?.status === 'ok' && view.route.legs.length === legCount(group) ? view.route : null;
       if (!route) return [];
       return route.legs.flatMap((leg, index) => {
-        const [from, to] = [group.rows[index]!, group.rows[index + 1]!];
+        const { from, to, fromStop, toStop } = legEnds(group, index);
         const [longitude, latitude] =
           road ? midpointOf(legGeometry(route, index)) : [(from.longitude + to.longitude) / 2, (from.latitude + to.latitude) / 2];
         if (!legTimes.has(group.key) && reach && !inBox({ latitude, longitude }, reach)) return [];
@@ -291,9 +321,10 @@ function GroupFileLayers({
             key: `${group.key}:${index}`,
             latitude,
             longitude,
-            from: from.stop ?? index + 1,
-            to: to.stop ?? index + 2,
+            from: fromStop,
+            to: toStop,
             leg,
+            home: fromStop === 'Home',
             color: group.color.fill,
             faded: Boolean(manual?.dimOthers && group.key !== manual.activeKey),
           },
@@ -357,42 +388,56 @@ function GroupFileLayers({
    * road is drawn.
    */
   const routes = useMemo(() => {
-    const straight = (from: GroupFileRow, to: GroupFileRow) =>
-      [
-        [from.latitude, from.longitude],
-        [to.latitude, to.longitude],
-      ] as const;
     const onRoad = (points: readonly LngLat[]) => points.map(([longitude, latitude]) => [latitude, longitude] as const);
     return featureCollection(
       groups.flatMap((group) => {
-        if (group.rows.length < 2) return [];
+        const before = originLegs(group);
+        if (group.rows.length + before < 2) return [];
         const properties = { color: group.color.fill, dim: dimOthers && group.key !== activeKey ? 1 : 0 };
         const view = routeViews?.get(group.key);
-        const route = view?.status === 'ok' && view.route.legs.length === group.rows.length - 1 ? view.route : null;
+        const route = view?.status === 'ok' && view.route.legs.length === legCount(group) ? view.route : null;
         const drawRoad = road && route !== null;
-        /** One leg's line: along the road when the road is drawn, straight when it is not. */
-        const leg = (index: number) =>
-          drawRoad ? onRoad(legGeometry(route, index)) : straight(group.rows[index]!, group.rows[index + 1]!);
+        /** One leg's line: along the road when the road is drawn, straight when it is not. Leg 0 is from the origin when there is one. */
+        const leg = (index: number) => {
+          if (drawRoad) return onRoad(legGeometry(route, index));
+          const { from, to } = legEnds(group, index);
+          return [
+            [from.latitude, from.longitude],
+            [to.latitude, to.longitude],
+          ] as const;
+        };
 
         const features = [
-          drawRoad
-            ? lineFeature(onRoad(route.geometry), { ...properties, kind: 'road' })
-            : lineFeature(
-                group.rows.map((row) => [row.latitude, row.longitude] as const),
-                { ...properties, kind: 'route' },
-              ),
+          // The drive from home, apart from the day's own driving.
+          ...(before ? [lineFeature(leg(0), { ...properties, kind: drawRoad ? 'home' : 'home-straight' })] : []),
+          ...(group.rows.length < 2
+            ? []
+            : [
+                drawRoad
+                  ? lineFeature(onRoad(route.geometry.slice(route.splits[before] ?? 0)), { ...properties, kind: 'road' })
+                  : lineFeature(
+                      group.rows.map((row) => [row.latitude, row.longitude] as const),
+                      { ...properties, kind: 'route' },
+                    ),
+              ]),
         ];
         // The file's long hop. With the road's own leg times it is the longest
         // of them; without, the longest straight step, as before.
         if (group.longHop !== null) {
           const hop = route
-            ? route.legs.reduce((longest, entry, index) => (entry.durationS > route.legs[longest]!.durationS ? index : longest), 0)
-            : group.longHop;
+            ? route.legs.reduce(
+                (longest, entry, index) =>
+                  index >= before && (longest < before || entry.durationS > route.legs[longest]!.durationS) ? index : longest,
+                before,
+              )
+            : group.longHop + before;
           features.push(lineFeature(leg(hop), { ...properties, kind: 'hop' }));
         }
+        // The drive from home is not the day's driving, and is not held to the 15 minutes.
         if (slowLegs && route)
           route.legs.forEach((entry, index) => {
-            if (entry.durationS >= SLOW_LEG_S) features.push(lineFeature(leg(index), { ...properties, kind: 'slow' }));
+            if (index >= before && entry.durationS >= SLOW_LEG_S)
+              features.push(lineFeature(leg(index), { ...properties, kind: 'slow' }));
           });
         return features;
       }),
@@ -438,7 +483,7 @@ function GroupFileLayers({
         {/* A pale casing under the colour, as every route here has: a thin line
             on its own disappears into the roads it crosses. */}
         <Layer
-          filter={['in', ['get', 'kind'], ['literal', ['route', 'road']]]}
+          filter={['in', ['get', 'kind'], ['literal', ['route', 'road', 'home', 'home-straight']]]}
           id="group-file-route-casing"
           layout={{ visibility, 'line-cap': 'round', 'line-join': 'round' }}
           paint={{
@@ -460,6 +505,23 @@ function GroupFileLayers({
             'line-opacity': dimmed(1),
             'line-width': 2,
           }}
+          type="line"
+        />
+        {/* The drive from a planned day's home to its first stop, in grey: part
+            of the day as driven, and not the day's driving the figures count.
+            Dashed when it is a straight line rather than the road. */}
+        <Layer
+          filter={['==', ['get', 'kind'], 'home']}
+          id="group-file-home-line"
+          layout={{ visibility, 'line-cap': 'round', 'line-join': 'round' }}
+          paint={{ 'line-color': homeColor, 'line-opacity': dimmed(1), 'line-width': 3 }}
+          type="line"
+        />
+        <Layer
+          filter={['==', ['get', 'kind'], 'home-straight']}
+          id="group-file-home-straight"
+          layout={{ visibility, 'line-join': 'round' }}
+          paint={{ 'line-color': homeColor, 'line-dasharray': [2, 1.5], 'line-opacity': dimmed(1), 'line-width': 2 }}
           type="line"
         />
         {/* The road itself: solid, and purple-blue whatever the group -- the
@@ -542,6 +604,26 @@ function GroupFileLayers({
         </Marker>
       ))}
 
+      {/* Where a planned day starts: under the stops, so a stop at the
+          technician's own door is still the one clicked. */}
+      {groups.flatMap((group) =>
+        group.origin
+          ? [
+              <Marker
+                anchor="bottom"
+                key={`origin-${group.key}`}
+                latitude={group.origin.latitude}
+                longitude={group.origin.longitude}
+                style={{ zIndex: 780 }}
+              >
+                <span style={faded(group) ? { opacity: DIMMED } : undefined} title={group.origin.title}>
+                  <HomePin />
+                </span>
+              </Marker>,
+            ]
+          : [],
+      )}
+
       {/* Over the pins, standing on the outline's top corner -- its
           northernmost property -- and lifted clear of that pin (11px from its
           centre), so a group's number never covers one of its own properties. */}
@@ -578,7 +660,7 @@ function GroupFileLayers({
           and letting every click through to what is under it. Amber from 15
           minutes, as the leg itself is. */}
       {legLabels.map((label) => {
-        const slow = label.leg.durationS >= SLOW_LEG_S;
+        const slow = !label.home && label.leg.durationS >= SLOW_LEG_S;
         return (
           <Marker
             anchor="center"
@@ -589,7 +671,11 @@ function GroupFileLayers({
           >
             <span
               className={`bg-card/95 rounded-full border-2 px-1.5 py-px text-[10px] leading-tight font-semibold whitespace-nowrap shadow-sm ${
-                slow ? 'border-warning text-warning' : 'border-road-distance text-foreground'
+                slow
+                  ? 'border-warning text-warning'
+                  : label.home
+                    ? 'border-muted-foreground/60 text-muted-foreground'
+                    : 'border-road-distance text-foreground'
               }`}
             >
               {/* Whose leg, when several groups are on screen: the group's own colour, as its pins are. */}

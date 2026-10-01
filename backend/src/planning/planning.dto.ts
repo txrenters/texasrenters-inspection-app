@@ -159,6 +159,11 @@ export class PlanStopEditDto {
   @IsOptional() @IsIn(TBP_INSPECTION_TYPES) inspectionType?: TbpInspectionType;
 }
 
+/** A visit clicked on the Days map, to join the day picked in the list. */
+export class PlanDayVisitDto {
+  @IsUUID('all') stopId!: string;
+}
+
 /** One move the office took from the advice, as the advice gave it. */
 export class PlanAdviceMoveDto {
   @IsUUID('all') stopId!: string;

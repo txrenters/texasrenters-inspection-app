@@ -1,14 +1,29 @@
 'use client';
 
 import { zoneNumberOf } from '@texasrenters/shared';
+import { RouteIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
+import { businessToday } from '@/lib/clock';
 import { formatDistance } from '@/lib/format';
-import type { DayMapStop } from '@/components/planning/plan-day-map';
 import {
   bookedInWords,
   dayClock,
@@ -23,6 +38,8 @@ import {
 } from '@/lib/planning';
 import {
   usePlanDayRoute,
+  usePlanningMutations,
+  type OptimizedPlanDay,
   type PlanDay,
   type PlanDayAnchor,
   type PlanDayStop,
@@ -31,7 +48,17 @@ import {
 } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
-const PlanDayMap = dynamic(() => import('@/components/planning/plan-day-map').then((module) => module.PlanDayMap), {
+import type { GroupFileRow } from './group-file';
+import { GroupBadge } from './group-file-legend';
+import { DEFAULT_MAP_DISPLAY, MapDisplaySwitches, type MapDisplay } from './group-file-view';
+import type { MapFrame } from './group-file-map';
+import type { DayStop } from './plan-day-groups';
+import { dayRouteView, planDaysFile, type DayMapEntry } from './plan-days-groups';
+import { formatDrive } from './road-routes';
+import { useFillHeight } from './use-fill-height';
+import { zoneTerritories } from './zone-territories';
+
+const PlanDaysMap = dynamic(() => import('./plan-days-map').then((module) => module.PlanDaysMap), {
   ssr: false,
   loading: () => <Skeleton className="h-full w-full rounded-lg" />,
 });
@@ -49,12 +76,6 @@ const LIMIT_TEXT: Record<LimitState, string> = {
 /** Limit colour on a figure that is otherwise ordinary text: only near and over say anything. */
 const toneOf = (state: LimitState) => (state === 'within' ? '' : LIMIT_TEXT[state]);
 
-const LIMIT_BAR: Record<LimitState, string> = {
-  within: 'bg-primary/70',
-  near: 'bg-warning',
-  over: 'bg-destructive',
-};
-
 type TimelineEntry =
   | (PlanDayStop & { kind: 'visit' })
   | (Omit<PlanDayAnchor, 'kind'> & { kind: 'booked'; booking: PlanDayAnchor['kind'] });
@@ -68,16 +89,6 @@ function dayTimeline(day: PlanDay): TimelineEntry[] {
 }
 
 const BOOKING_LABEL: Record<PlanDayAnchor['kind'], string> = { MOVE_OUT: 'Move-out', MOVE_IN: 'Move-in' };
-
-const mapStopOf = (entry: TimelineEntry): DayMapStop => ({
-  id: entry.id,
-  buildingId: entry.buildingId,
-  positionInDay: entry.positionInDay,
-  latitude: entry.latitude,
-  longitude: entry.longitude,
-  address: entry.address,
-  kind: entry.kind === 'booked' ? entry.booking : entry.inspectionType,
-});
 
 /** What the office needs to do about a move-out or move-in a day is built around, if anything. */
 export function bookedProblem(
@@ -107,6 +118,12 @@ function weekOf(date: string) {
   const monday = new Date(`${mondayOf(date)}T00:00:00Z`);
   return `Week of ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(monday)}`;
 }
+
+/** A day as the office names it: "Thu, Dec 17 · Moses Rodriguez". */
+const dayName = (day: PlanDay) => `${DAY.format(new Date(day.date))} · ${day.technician.displayName}`;
+
+/** Whether a day is behind us: its order is history, and nothing joins it. */
+const hasPassed = (day: PlanDay) => day.date.slice(0, 10) < businessToday();
 
 /**
  * The office's template group a day was laid out from: its colour and "Group 12
@@ -141,36 +158,83 @@ function zonesOf(day: PlanDay) {
 }
 
 /**
- * A figure and its bar. Against a `limit` it turns amber near it and red over it;
- * against a `scale` alone the bar only compares the day with the others.
+ * A day's figures in the list, as the Group maker writes a group's: "9 visits
+ * · 43 min drive · 26.7 km", and under it the day that makes. The drive is
+ * between its properties; the drive from home is said apart (the office,
+ * 2026-10-02), and is not in the day.
  */
-function Meter({ label, value, limit, scale, text }: { label: string; value: number; limit?: number; scale?: number; text: string }) {
-  const state = limit === undefined ? 'within' : limitState(value, limit);
-  const of = limit ?? scale ?? value;
+function DayFigures({ day, settings }: { day: PlanDay; settings: PlanSettings }) {
+  const drive = driveMinutes(day);
+  const homeMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
+  const onSite = limitState(day.onSiteMinutes, settings.maxOnSiteMinutes);
+  const longest = longestLegSeconds(day);
   return (
-    <div className="grid gap-1">
-      <div className={cn('flex items-baseline justify-between gap-2 text-xs', LIMIT_TEXT[state])}>
-        <span>{label}</span>
-        <span className="font-mono tabular-nums">{text}</span>
-      </div>
-      <div aria-hidden className="bg-muted h-1 overflow-hidden rounded-full">
-        <div className={cn('h-full rounded-full', LIMIT_BAR[state])} style={{ width: `${Math.min(100, (value / Math.max(1, of)) * 100)}%` }} />
-      </div>
-    </div>
+    <>
+      <span className="text-muted-foreground block text-xs">
+        {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
+        {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
+        {day.anchors?.length ? ` · ${bookedInWords(day.anchors, 'bare')}` : ''}
+        {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
+      </span>
+      <span className="text-muted-foreground block text-xs">
+        {drive === null ? 'Drive not measured' : `${drive} min drive`}
+        {day.totalDriveMeters ? (
+          <>
+            {' · '}
+            <span className="text-road-distance font-medium">{formatDistance(day.totalDriveMeters)}</span>
+          </>
+        ) : null}
+      </span>
+      <span className="text-muted-foreground block text-xs">
+        <span className={toneOf(onSite)}>
+          Est. day: {formatDrive(day.onSiteMinutes * 60 + (day.totalDriveSeconds ?? 0))}
+        </span>
+        {day.originKind === 'HOME' && homeMinutes !== null ? ` · ${homeMinutes} min from home` : ''}
+      </span>
+      {legOverLimit(longest, settings.maxLegMinutes) ? (
+        <span className="text-destructive block text-xs">a {Math.round(longest! / 60)} min drive between properties</span>
+      ) : null}
+    </>
   );
 }
 
+/** A day put in its best order, in words: what it did to the driving. */
+function optimizedInWords(days: readonly OptimizedPlanDay[]) {
+  const changed = days.filter((day) => day.changed);
+  const minutes = (seconds: number) => formatDrive(seconds);
+  const total = (pick: (day: OptimizedPlanDay) => number | null) => changed.reduce((sum, day) => sum + (pick(day) ?? 0), 0);
+  if (!changed.length) return null;
+  return `driving between properties ${minutes(total((day) => day.driveSecondsBefore))} → ${minutes(
+    total((day) => day.driveSecondsAfter),
+  )}; from home ${minutes(total((day) => day.homeDriveSecondsBefore))} → ${minutes(total((day) => day.homeDriveSecondsAfter))}`;
+}
+
+type MovingVisit = Extract<DayMapEntry, { kind: 'visit' }>;
+
+/**
+ * The quarter's days, as the Group maker shows a template's groups (the office,
+ * 2026-10-02): the map beside the list of days, the day picked drawn from the
+ * technician's home with every leg's drive on it, a property clicked on the map
+ * joining the day picked, and each day's route put in the order that drives
+ * least from home with one click. The day's visits and times are listed under.
+ */
 export function PlanDays({
   planId,
   days,
+  visits,
   settings,
   selectedDayId,
   onSelect,
   onOpenStop,
   rotation,
+  canChange = false,
+  canMoveVisits = false,
+  jobberEditsPushed = null,
 }: {
   planId: string;
   days: PlanDay[];
+  /** Every visit of the quarter, with no day or with one: what the map can move into a day. */
+  visits: readonly DayStop[];
   settings: PlanSettings;
   selectedDayId: string;
   onSelect: (dayId: string) => void;
@@ -178,8 +242,22 @@ export function PlanDays({
   onOpenStop?: (stopId: string) => void;
   /** Who has which zone each week, shown under each week's heading. */
   rotation?: PlanRotation | null;
+  /** May change the plan: put a day in order, place a visit not booked yet. */
+  canChange?: boolean;
+  /** May reschedule a booked visit: the planner's grant and the inspections one. */
+  canMoveVisits?: boolean;
+  /** Whether the console's edits reach Jobber; null when not known (a quarter not published). */
+  jobberEditsPushed?: boolean | null;
 }) {
   const selected = days.find((day) => day.id === selectedDayId) ?? days[0] ?? null;
+  const mutations = usePlanningMutations();
+  const [display, setDisplay] = useState<MapDisplay>(DEFAULT_MAP_DISPLAY);
+  const [fadeOthers, setFadeOthers] = useState(true);
+  const [moving, setMoving] = useState<MovingVisit | null>(null);
+  /** The map and the list fill the window on a large screen, as in the Group maker. */
+  const fill = useFillHeight<HTMLDivElement>();
+
+  const made = useMemo(() => planDaysFile(days, visits), [days, visits]);
   const weeks = useMemo(() => {
     const grouped = new Map<string, PlanDay[]>();
     for (const day of days) grouped.set(mondayOf(day.date), [...(grouped.get(mondayOf(day.date)) ?? []), day]);
@@ -190,8 +268,6 @@ export function PlanDays({
     (rotation?.crew ?? []).map((member) => [member.technicianId, member.displayName?.split(' ')[0] ?? 'Someone']),
   );
   const zonesInWeek = new Map((rotation?.weeks ?? []).map((week) => [week.weekOf, week.zones]));
-  // Driving has no limit (2026-09-17): each day's bar is against the plan's longest.
-  const longestDrive = Math.max(1, ...days.map((day) => driveMinutes(day) ?? 0));
   // Every zone on the circle, in order: with more zones than crew, one waits its turn each week.
   const ownersOf = (monday: string) => {
     const week = zonesInWeek.get(monday);
@@ -203,82 +279,284 @@ export function PlanDays({
     });
   };
 
-  return (
-    <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-      <nav
-        aria-label="Planned technician-days"
-        className="bg-card grid gap-4 rounded-xl border p-2 lg:sticky lg:top-[calc(var(--app-header-height)+1rem)] lg:max-h-[calc(100vh-var(--app-header-height)-2rem)] lg:overflow-y-auto"
-      >
-        {weeks.map(([monday, weekDays]) => (
-          <section className="grid gap-1" key={monday}>
-            <h3 className="text-muted-foreground px-2 pt-1 text-xs font-medium tracking-wide uppercase">
-              {weekOf(monday)}
-            </h3>
-            {ownersOf(monday).length ? (
-              <p className="text-muted-foreground -mt-0.5 px-2 text-xs">{ownersOf(monday).join(' · ')}</p>
-            ) : null}
-            {weekDays.map((day) => {
-              const drive = driveMinutes(day);
-              const active = selected?.id === day.id;
-              return (
-                <button
-                  aria-current={active || undefined}
-                  className={cn(
-                    'hover:bg-accent focus-visible:ring-ring/50 grid gap-2 rounded-lg px-2 py-2 text-left outline-none focus-visible:ring-[3px]',
-                    active && 'bg-accent',
-                  )}
-                  key={day.id}
-                  onClick={() => onSelect(day.id)}
-                  type="button"
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-sm font-medium">{DAY.format(new Date(day.date))}</span>
-                    <span className="text-muted-foreground truncate text-xs">{day.technician.displayName}</span>
-                  </div>
-                  {day.templateGroup ? <TemplateGroupTag className="text-xs" group={day.templateGroup} /> : null}
-                  <div className="text-muted-foreground text-xs">
-                    {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
-                    {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
-                    {day.anchors?.length ? ` · ${bookedInWords(day.anchors, 'bare')}` : ''}
-                    {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
-                    {legOverLimit(longestLegSeconds(day), settings.maxLegMinutes) ? (
-                      <span className="text-destructive">
-                        {` · a ${Math.round(longestLegSeconds(day)! / 60)} min drive between properties`}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Meter
-                      label="Inspecting"
-                      limit={settings.maxOnSiteMinutes}
-                      text={formatMinutes(day.onSiteMinutes)}
-                      value={day.onSiteMinutes}
-                    />
-                    <Meter
-                      label="Driving"
-                      scale={longestDrive}
-                      text={drive === null ? 'not measured' : `${drive} min`}
-                      value={drive ?? 0}
-                    />
-                  </div>
-                </button>
-              );
-            })}
-          </section>
-        ))}
-      </nav>
+  const route = usePlanDayRoute(planId, selected?.id);
+  const group = selected ? (made.groupOf.get(selected.id) ?? null) : null;
+  const home = route.data?.home ?? null;
+  /** The day starts at home when it was routed from there: the "From" on the map. */
+  const origin = useMemo(
+    () =>
+      selected?.originKind === 'HOME' && home
+        ? { latitude: home.latitude, longitude: home.longitude, title: `From: ${home.address ?? 'the technician’s home'}` }
+        : null,
+    [home, selected?.originKind],
+  );
+  const routeView = useMemo(
+    () => (selected && group ? dayRouteView(selected, group, route.data, origin) : undefined),
+    [group, origin, route.data, selected],
+  );
+  /** Every property's zone, with a day or not: a zone is the tenancy's, not the day's. */
+  const zones = useMemo(
+    () =>
+      display.zones ? zoneTerritories([...made.file.groups.flatMap((one) => one.rows), ...made.file.ungrouped]) : [],
+    [display.zones, made],
+  );
+  /**
+   * Framed when another day is picked, or its home arrives -- never because a
+   * click moved a visit into it: the map frames again only when the key changes.
+   */
+  const frame = useMemo<MapFrame>(
+    () => ({
+      key: `${selected?.id ?? ''}:${origin ? 'home' : ''}`,
+      points: [...(group?.rows ?? []), ...(origin ? [origin] : [])],
+    }),
+    [group, origin, selected?.id],
+  );
 
-      {selected ? <DayDetail day={selected} onOpenStop={onOpenStop} planId={planId} settings={settings} /> : null}
+  const optimizeDay = (day: PlanDay) =>
+    mutations.optimizeDay.mutate(
+      { planId, dayId: day.id },
+      {
+        onSuccess: ({ days: optimized }) => {
+          const words = optimizedInWords(optimized);
+          if (words) toast.success(`${dayName(day)} is in its best order`, { description: words });
+          else toast.info(`${dayName(day)} was already in the order that drives least from home`);
+        },
+        onError: (error) => toast.error('The route could not be optimized', { description: error.message }),
+      },
+    );
+  const optimizeEveryDay = () =>
+    mutations.optimizeDays.mutate(planId, {
+      onSuccess: ({ days: optimized }) => {
+        const changed = optimized.filter((day) => day.changed).length;
+        const words = optimizedInWords(optimized);
+        if (words)
+          toast.success(`${changed} of ${optimized.length} ${optimized.length === 1 ? 'day' : 'days'} put in a better order`, {
+            description: words,
+          });
+        else toast.info('Every day from today on was already in the order that drives least from home');
+      },
+      onError: (error) => toast.error('The routes could not be optimized', { description: error.message }),
+    });
+
+  const onRowClick = (row: GroupFileRow) => {
+    const entry = made.entries.get(row.rowNumber);
+    if (!entry || !selected) return;
+    if (entry.kind === 'booking') {
+      toast.info('A move-out or move-in is its own inspection', { description: 'Move it from the inspection, or in Jobber.' });
+      return;
+    }
+    // One of the day's own: its details, as a click on it in the list opens them.
+    if (entry.dayId === selected.id) {
+      onOpenStop?.(entry.stopId);
+      return;
+    }
+    setMoving(entry);
+  };
+  /** Why a visit cannot join the day picked from here, or null when it can. */
+  const cannotMove = (visit: MovingVisit): string | null => {
+    if (!selected) return 'Pick a day first.';
+    if (!canChange) return 'Changing the plan needs permission to publish it.';
+    if (hasPassed(selected)) return 'That day has passed, so nothing can join it.';
+    if (!visit.booked) return null;
+    if (!canMoveVisits) return 'Moving a booked visit reschedules its inspection, which needs permission to manage inspections.';
+    if (visit.technicianId !== selected.technicianId)
+      return 'A booked visit moves here only to another day of the same technician. Give it to someone else from its inspection.';
+    if (jobberEditsPushed === false)
+      return 'This visit is booked in Jobber, and the console’s edits are not sent to Jobber. Move it in Jobber.';
+    return null;
+  };
+  const move = (visit: MovingVisit) => {
+    if (!selected) return;
+    const to = dayName(selected);
+    mutations.moveToDay.mutate(
+      { planId, dayId: selected.id, stopId: visit.stopId },
+      {
+        onSuccess: ({ days: optimized }) => {
+          const joined = optimized.find((day) => day.dayId === selected.id);
+          toast.success(`${visit.address || 'The visit'} moved to ${to}`, {
+            description: [
+              visit.booked ? 'Rescheduled here and in Jobber.' : null,
+              joined?.driveSecondsAfter != null
+                ? `The day now drives ${formatDrive(joined.driveSecondsAfter)} between its properties.`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' '),
+          });
+        },
+        onError: (error) => toast.error('The visit was not moved', { description: error.message }),
+      },
+    );
+  };
+
+  const optimizingDay = mutations.optimizeDay.isPending ? mutations.optimizeDay.variables?.dayId : null;
+  const fromDay = moving?.dayId ? (days.find((day) => day.id === moving.dayId) ?? null) : null;
+  const blocked = moving ? cannotMove(moving) : null;
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p className="text-muted-foreground min-w-0 text-sm">
+          {days.length.toLocaleString()} {days.length === 1 ? 'day' : 'days'} ·{' '}
+          {made.file.placed.toLocaleString()} {made.file.placed === 1 ? 'stop' : 'stops'}
+          {made.file.ungrouped.length ? ` · ${made.file.ungrouped.length.toLocaleString()} with no day yet` : ''}
+        </p>
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm" title="Every day but the one picked, faded">
+            <Switch aria-label="Fade the other days" checked={fadeOthers} onCheckedChange={setFadeOthers} />
+            Fade the other days
+          </label>
+          <MapDisplaySwitches display={display} onChange={setDisplay} />
+          {canChange ? (
+            <Button
+              disabled={mutations.optimizeDays.isPending}
+              onClick={optimizeEveryDay}
+              size="sm"
+              title="Every day from today on, in the order that drives least from the technician’s home"
+              variant="outline"
+            >
+              {mutations.optimizeDays.isPending ? <Spinner /> : <RouteIcon />}
+              {mutations.optimizeDays.isPending ? 'Optimizing every day…' : 'Optimize every day'}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div
+        className="grid gap-3 lg:h-[36rem] lg:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_26rem]"
+        ref={fill.ref}
+        style={fill.height ? { height: fill.height } : undefined}
+      >
+        <div className="h-80 lg:h-full">
+          <PlanDaysMap
+            activeKey={selected?.id ?? null}
+            display={display}
+            fadeOthers={fadeOthers}
+            frame={frame}
+            groups={made.file.groups}
+            onPickDay={onSelect}
+            onRowClick={onRowClick}
+            origin={origin}
+            route={routeView}
+            ungrouped={made.file.ungrouped}
+            zones={zones}
+          />
+        </div>
+
+        <nav aria-label="Planned technician-days" className="bg-card min-h-0 overflow-y-auto rounded-xl border">
+          {weeks.map(([monday, weekDays]) => (
+            <section className="grid" key={monday}>
+              <h3 className="bg-card text-muted-foreground sticky top-0 z-10 border-b px-3 pt-2 pb-1 text-xs font-medium tracking-wide uppercase">
+                {weekOf(monday)}
+                {ownersOf(monday).length ? (
+                  <span className="block font-normal tracking-normal normal-case">{ownersOf(monday).join(' · ')}</span>
+                ) : null}
+              </h3>
+              <ul className="divide-y">
+                {weekDays.map((day) => {
+                  const active = selected?.id === day.id;
+                  const badge = made.groupOf.get(day.id);
+                  return (
+                    <li
+                      className={cn('flex items-center gap-2 px-3 py-2', active ? 'bg-muted' : 'hover:bg-muted/50')}
+                      key={day.id}
+                    >
+                      <button
+                        aria-current={active || undefined}
+                        className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                        onClick={() => onSelect(day.id)}
+                        type="button"
+                      >
+                        {badge ? <GroupBadge className="mt-0.5 shrink-0" group={badge} /> : null}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-baseline justify-between gap-2">
+                            <span className={cn('truncate text-sm', active && 'font-semibold')}>{DAY.format(new Date(day.date))}</span>
+                            <span className="text-muted-foreground truncate text-xs">{day.technician.displayName}</span>
+                          </span>
+                          {day.templateGroup ? <TemplateGroupTag className="text-xs" group={day.templateGroup} /> : null}
+                          <DayFigures day={day} settings={settings} />
+                        </span>
+                      </button>
+                      {canChange ? (
+                        <Button
+                          aria-label={`Optimize the route of ${dayName(day)}`}
+                          disabled={hasPassed(day) || Boolean(optimizingDay) || mutations.optimizeDays.isPending}
+                          onClick={() => optimizeDay(day)}
+                          size="icon-sm"
+                          title={
+                            hasPassed(day)
+                              ? 'This day has passed'
+                              : 'Optimize route: the order that drives least from the technician’s home'
+                          }
+                          variant="ghost"
+                        >
+                          {optimizingDay === day.id ? <Spinner /> : <RouteIcon />}
+                        </Button>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </nav>
+      </div>
+      {selected ? (
+        <p className="text-muted-foreground -mt-1 text-xs">
+          {canChange
+            ? `Click a property on the map to move its visit into ${dayName(selected)}; click one of this day’s own, or a row in its list, to see its details.`
+            : 'Click a property of this day on the map, or in the list, to see its details.'}
+        </p>
+      ) : null}
+      {route.isSuccess && !route.data.geometry.length && (group?.rows.length ?? 0) > 1 ? (
+        <p className="text-muted-foreground -mt-1 text-xs">The road could not be drawn, so the stops are joined with dashed straight lines.</p>
+      ) : null}
+
+      {selected ? <DayDetail day={selected} onOpenStop={onOpenStop} settings={settings} /> : null}
+
+      <AlertDialog onOpenChange={(open) => !open && setMoving(null)} open={moving !== null}>
+        {moving && selected ? (
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Move {moving.address || 'this visit'} to {dayName(selected)}?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {fromDay ? `It is on ${dayName(fromDay)} now.` : 'It has no day yet.'}{' '}
+                {moving.booked
+                  ? 'It is booked, so its inspection is rescheduled, here and in Jobber.'
+                  : 'It joins the day as one of its visits.'}{' '}
+                Both days are then put in the order that drives least from home.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {blocked ? <p className="text-destructive text-sm">{blocked}</p> : null}
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={Boolean(blocked) || mutations.moveToDay.isPending}
+                onClick={() => {
+                  move(moving);
+                  setMoving(null);
+                }}
+              >
+                Move here
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        ) : null}
+      </AlertDialog>
     </div>
   );
 }
 
 /** How the day's drives were measured, and what the driving shown covers. */
-function measuredText(day: PlanDay, maxLegMinutes: number) {
+function measuredText(day: PlanDay) {
   const fromHome = day.originKind === 'HOME';
+  // Said without the rule the order was chosen by: a build keeps to twenty
+  // minutes between properties, and Optimize route only drives least.
   const counted = fromHome
-    ? `The day is routed from the technician’s home, in the order that drives least with no drive over ${maxLegMinutes} min between properties where any order manages it; the driving shown is between its properties, and the drive from home is shown apart.`
-    : 'This day was built without the technician’s home, so it starts at its first job. Rebuild the plan to route days from home; the home comes from the technician’s planning profile.';
+    ? 'The day is routed from the technician’s home; the driving shown is between its properties, and the drive from home is shown apart.'
+    : 'This day was built without the technician’s home, so it starts at its first job. Optimize its route, or rebuild the plan, to route it from home; the home comes from the technician’s planning profile.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
       return `Drives measured by Google for a 9 AM start. ${counted}`;
@@ -298,18 +576,16 @@ function measuredText(day: PlanDay, maxLegMinutes: number) {
   }
 }
 
+/** The day picked: its figures, and its stops with their times, in driving order. */
 function DayDetail({
-  planId,
   day,
   settings,
   onOpenStop,
 }: {
-  planId: string;
   day: PlanDay;
   settings: PlanSettings;
   onOpenStop?: (stopId: string) => void;
 }) {
-  const route = usePlanDayRoute(planId, day.id);
   const timeline = useMemo(() => dayTimeline(day), [day]);
   const clock = useMemo(() => dayClock(timeline), [timeline]);
   const drive = driveMinutes(day);
@@ -358,25 +634,8 @@ function DayDetail({
             </dd>
           </div>
         </dl>
-        <p className="text-muted-foreground text-xs">{measuredText(day, settings.maxLegMinutes)}</p>
+        <p className="text-muted-foreground text-xs">{measuredText(day)}</p>
       </div>
-
-      <div className="h-80 lg:h-[26rem]">
-        <PlanDayMap
-          dayKey={day.id}
-          geometry={route.data?.geometry ?? []}
-          home={route.data?.home ?? null}
-          homeGeometry={route.data?.homeGeometry ?? []}
-          onSelectStop={onOpenStop}
-          stops={timeline.map(mapStopOf)}
-        />
-      </div>
-      {onOpenStop ? (
-        <p className="text-muted-foreground -mt-1 text-xs">Click a property on the map, or in the list, to see its details.</p>
-      ) : null}
-      {route.isSuccess && !route.data.geometry.length && timeline.length > 1 ? (
-        <p className="text-muted-foreground -mt-1 text-xs">The road could not be drawn, so the stops are joined with dashed straight lines.</p>
-      ) : null}
 
       <ol className="bg-card divide-border divide-y rounded-xl border">
         {clock.map((stop, index) => (

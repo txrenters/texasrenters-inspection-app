@@ -293,6 +293,22 @@ interface MeasuredCrew {
   durationSource: DriveTimeSource | null;
 }
 
+/** A day put in the order that drives least from home (`optimizeDays`), and what that did to its driving. */
+export interface OptimizedDay {
+  dayId: string;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  technicianId: string;
+  /** Whether its order is not the one it had. */
+  changed: boolean;
+  /** Between its properties, before and after; null where nothing measured it. */
+  driveSecondsBefore: number | null;
+  driveSecondsAfter: number | null;
+  /** From home to its first property, before and after. */
+  homeDriveSecondsBefore: number | null;
+  homeDriveSecondsAfter: number | null;
+}
+
 /** The matrix a day was measured with: the home first when the day has one (`homeIndex`). */
 interface DayMatrix {
   durations: number[][];
@@ -790,88 +806,199 @@ export class QuarterPlannerService {
     const maxLegSeconds = (plan?.maxLegMinutes ?? MAX_LEG_MINUTES) * 60;
     const unique = new Map(days.map((day) => [crewKey(day.date, day.technicianId), day]));
     for (const { date, technicianId } of unique.values()) {
-      const on = new Date(`${date}T00:00:00.000Z`);
-      const rows = await this.prisma.tbpQuarterPlanStop.findMany({
-        where: { planId, organizationId, status: TbpStopStatus.PLANNED, scheduledOn: on, assignedTechnicianId: technicianId },
-        select: {
-          id: true,
-          sequence: true,
-          zone: true,
-          inspectionType: true,
-          onSiteMinutes: true,
-          propertywareBuilding: { select: BUILDING_POSITION_SELECT },
-        },
-        orderBy: { sequence: 'asc' },
-      });
-      const stops: PlannableStop[] = rows.flatMap((row) =>
-        !propertyPosition(row.propertywareBuilding)
-          ? []
-          : [
-              {
-                stopId: row.id,
-                sequence: row.sequence,
-                latitude: propertyPosition(row.propertywareBuilding)!.latitude,
-                longitude: propertyPosition(row.propertywareBuilding)!.longitude,
-                inspectionType: row.inspectionType,
-                onSiteMinutes: row.onSiteMinutes ?? 0,
-                zone: zoneNumberOf(row.zone),
-              },
-            ],
-      );
-
-      // The move-outs and move-ins the day is built around are still its stops.
-      const anchors = (
-        await this.prisma.tbpQuarterPlanAnchor.findMany({
-          where: { planId, organizationId, technicianId, date: on },
-          select: {
-            inspectionId: true,
-            onSiteMinutes: true,
-            inspection: {
-              select: { inspectionType: true, propertywareBuilding: { select: BUILDING_POSITION_SELECT } },
-            },
-          },
-        })
-      ).flatMap((row) => {
-        const building = row.inspection.propertywareBuilding;
-        return !propertyPosition(building)
-          ? []
-          : [
-              anchorAsStop({
-                id: row.inspectionId,
-                date,
-                technicianId,
-                latitude: propertyPosition(building)!.latitude,
-                longitude: propertyPosition(building)!.longitude,
-                onSiteMinutes: row.onSiteMinutes,
-                kind: row.inspection.inspectionType === InspectionType.MOVE_IN ? 'MOVE_IN' : 'MOVE_OUT',
-              }),
-            ];
-      });
-
-      if (stops.length === 0 && anchors.length === 0) {
-        await this.prisma.tbpQuarterPlanDay.deleteMany({ where: { planId, organizationId, technicianId, date: on } });
+      const stops = await this.stopsOfDay(organizationId, planId, date, technicianId, [TbpStopStatus.PLANNED]);
+      if (stops.length === 0) {
+        await this.prisma.tbpQuarterPlanDay.deleteMany({
+          where: { planId, organizationId, technicianId, date: new Date(`${date}T00:00:00.000Z`) },
+        });
         continue;
       }
 
-      const crew = await this.measure(
-        { date, technicianId, stops: [...anchors, ...stops] },
-        await this.homeOf(organizationId, technicianId),
-        maxLegSeconds,
-      );
-      await this.prisma.$transaction(async (tx) => {
-        await tx.tbpQuarterPlanDay.upsert({
-          where: { planId_technicianId_date: { planId, technicianId, date: on } },
-          create: { organizationId, planId, technicianId, date: on, ...dayRow(crew) },
-          update: { ...dayRow(crew), computedAt: new Date() },
-        });
-        for (const [index, stop] of crew.stops.entries()) {
-          const data = { positionInDay: index + 1, driveSecondsForecast: whole(crew.legSeconds[index] ?? null) };
-          const anchorId = anchorIdOf(stop);
-          if (anchorId) await tx.tbpQuarterPlanAnchor.updateMany({ where: { planId, inspectionId: anchorId }, data });
-          else await tx.tbpQuarterPlanStop.update({ where: { id: stop.stopId }, data });
-        }
+      const crew = await this.measure({ date, technicianId, stops }, await this.homeOf(organizationId, technicianId), maxLegSeconds);
+      await this.writeDay(organizationId, planId, crew);
+    }
+  }
+
+  /**
+   * Put days in the order that drives least from the technician's home, and keep it.
+   *
+   * The office, 2026-10-02: the days are already grouped and stay as grouped;
+   * only the order changes, and it depends on where the technician sets out
+   * from. So each day is ordered from the technician's home for the least
+   * driving in all -- the drive from home counted in choosing the order, though
+   * the day's driving shown is still between its properties -- and the twenty-
+   * minute rule a build orders by is not applied: "just optimize the route and
+   * drive time".
+   *
+   * Booked visits are ordered with the rest. Their order is the plan's alone:
+   * Jobber books a visit for its date with no time of day and nothing reads the
+   * order from the plan, so reordering a published day moves nothing in Jobber.
+   * A day left with nothing on it is removed, as `measureDays` removes one.
+   */
+  async optimizeDays(
+    organizationId: string,
+    planId: string,
+    days: readonly { date: string; technicianId: string }[],
+  ): Promise<OptimizedDay[]> {
+    const unique = new Map(days.map((day) => [crewKey(day.date, day.technicianId), day]));
+    const optimized: OptimizedDay[] = [];
+    for (const { date, technicianId } of unique.values()) {
+      const on = new Date(`${date}T00:00:00.000Z`);
+      const before = await this.prisma.tbpQuarterPlanDay.findUnique({
+        where: { planId_technicianId_date: { planId, technicianId, date: on } },
+        select: { id: true, totalDriveSeconds: true, homeDriveSeconds: true },
+      });
+      const stops = await this.stopsOfDay(organizationId, planId, date, technicianId, [
+        TbpStopStatus.PLANNED,
+        TbpStopStatus.PUBLISHED,
+      ]);
+      if (stops.length === 0) {
+        await this.prisma.tbpQuarterPlanDay.deleteMany({ where: { planId, organizationId, technicianId, date: on } });
+        continue;
+      }
+      const order = await this.orderOfDay(organizationId, planId, date, technicianId);
+      const crew = await this.measure({ date, technicianId, stops }, await this.homeOf(organizationId, technicianId));
+      const dayId = await this.writeDay(organizationId, planId, crew);
+      optimized.push({
+        dayId,
+        date,
+        technicianId,
+        changed: crew.stops.map((stop) => stop.stopId).join(',') !== order.join(','),
+        driveSecondsBefore: before?.totalDriveSeconds ?? null,
+        driveSecondsAfter: whole(crew.totalDriveSeconds),
+        homeDriveSecondsBefore: before?.homeDriveSeconds ?? null,
+        homeDriveSecondsAfter: whole(crew.homeDriveSeconds),
       });
     }
+    return optimized;
+  }
+
+  /** Every day of a plan from `from` on, optimized as `optimizeDays` does one: days already driven are history. */
+  async optimizeQuarter(organizationId: string, planId: string, from: string): Promise<OptimizedDay[]> {
+    const days = await this.prisma.tbpQuarterPlanDay.findMany({
+      where: { planId, organizationId, date: { gte: new Date(`${from}T00:00:00.000Z`) } },
+      orderBy: [{ date: 'asc' }, { technicianId: 'asc' }],
+      select: { date: true, technicianId: true },
+    });
+    return this.optimizeDays(
+      organizationId,
+      planId,
+      days.map((day) => ({ date: day.date.toISOString().slice(0, 10), technicianId: day.technicianId })),
+    );
+  }
+
+  /**
+   * A technician-day's stops as the planner measures them: its visits in the
+   * given states, and the move-outs and move-ins the day is built around.
+   * A property Propertyware has no position for has no place in an order.
+   */
+  private async stopsOfDay(
+    organizationId: string,
+    planId: string,
+    date: string,
+    technicianId: string,
+    statuses: readonly TbpStopStatus[],
+  ): Promise<PlannableStop[]> {
+    const on = new Date(`${date}T00:00:00.000Z`);
+    const rows = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: { planId, organizationId, status: { in: [...statuses] }, scheduledOn: on, assignedTechnicianId: technicianId },
+      select: {
+        id: true,
+        sequence: true,
+        zone: true,
+        inspectionType: true,
+        onSiteMinutes: true,
+        propertywareBuilding: { select: BUILDING_POSITION_SELECT },
+      },
+      orderBy: { sequence: 'asc' },
+    });
+    const stops: PlannableStop[] = rows.flatMap((row) =>
+      !propertyPosition(row.propertywareBuilding)
+        ? []
+        : [
+            {
+              stopId: row.id,
+              sequence: row.sequence,
+              latitude: propertyPosition(row.propertywareBuilding)!.latitude,
+              longitude: propertyPosition(row.propertywareBuilding)!.longitude,
+              inspectionType: row.inspectionType,
+              onSiteMinutes: row.onSiteMinutes ?? 0,
+              zone: zoneNumberOf(row.zone),
+            },
+          ],
+    );
+
+    // The move-outs and move-ins the day is built around are still its stops.
+    const anchors = (
+      await this.prisma.tbpQuarterPlanAnchor.findMany({
+        where: { planId, organizationId, technicianId, date: on },
+        select: {
+          inspectionId: true,
+          onSiteMinutes: true,
+          inspection: {
+            select: { inspectionType: true, propertywareBuilding: { select: BUILDING_POSITION_SELECT } },
+          },
+        },
+      })
+    ).flatMap((row) => {
+      const building = row.inspection.propertywareBuilding;
+      return !propertyPosition(building)
+        ? []
+        : [
+            anchorAsStop({
+              id: row.inspectionId,
+              date,
+              technicianId,
+              latitude: propertyPosition(building)!.latitude,
+              longitude: propertyPosition(building)!.longitude,
+              onSiteMinutes: row.onSiteMinutes,
+              kind: row.inspection.inspectionType === InspectionType.MOVE_IN ? 'MOVE_IN' : 'MOVE_OUT',
+            }),
+          ];
+    });
+    return [...anchors, ...stops];
+  }
+
+  /** A day's stops in the order the plan holds them now, keyed as the measured day keys them (`anchorAsStop`). */
+  private async orderOfDay(organizationId: string, planId: string, date: string, technicianId: string) {
+    const on = new Date(`${date}T00:00:00.000Z`);
+    const [stops, anchors] = await Promise.all([
+      this.prisma.tbpQuarterPlanStop.findMany({
+        where: { planId, organizationId, scheduledOn: on, assignedTechnicianId: technicianId, positionInDay: { not: null } },
+        select: { id: true, positionInDay: true },
+      }),
+      this.prisma.tbpQuarterPlanAnchor.findMany({
+        where: { planId, organizationId, technicianId, date: on, positionInDay: { not: null } },
+        select: { inspectionId: true, positionInDay: true },
+      }),
+    ]);
+    return [
+      ...stops.map((stop) => ({ key: stop.id, at: stop.positionInDay! })),
+      ...anchors.map((anchor) => ({ key: `anchor:${anchor.inspectionId}`, at: anchor.positionInDay! })),
+    ]
+      .sort((left, right) => left.at - right.at)
+      .map((entry) => entry.key);
+  }
+
+  /** A measured day written back: its row, and each stop's place in it and drive into it. Returns the day's id. */
+  private async writeDay(organizationId: string, planId: string, crew: MeasuredCrew): Promise<string> {
+    const { technicianId } = crew;
+    const on = new Date(`${crew.date}T00:00:00.000Z`);
+    return this.prisma.$transaction(async (tx) => {
+      const day = await tx.tbpQuarterPlanDay.upsert({
+        where: { planId_technicianId_date: { planId, technicianId, date: on } },
+        create: { organizationId, planId, technicianId, date: on, ...dayRow(crew) },
+        update: { ...dayRow(crew), computedAt: new Date() },
+        select: { id: true },
+      });
+      for (const [index, stop] of crew.stops.entries()) {
+        const data = { positionInDay: index + 1, driveSecondsForecast: whole(crew.legSeconds[index] ?? null) };
+        const anchorId = anchorIdOf(stop);
+        if (anchorId) await tx.tbpQuarterPlanAnchor.updateMany({ where: { planId, inspectionId: anchorId }, data });
+        else await tx.tbpQuarterPlanStop.update({ where: { id: stop.stopId }, data });
+      }
+      return day.id;
+    });
   }
 
   /**
