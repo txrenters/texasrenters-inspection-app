@@ -68,7 +68,7 @@ export async function renderReportPdf(
   return Buffer.from(await renderToBuffer(ReportDocument({ view, images })));
 }
 
-/** `302-watercrest-harbor-ln-inspection-report.pdf` */
+/** `318-notional-harbor-ln-inspection-report.pdf` */
 export function reportFileName(report: PublicInspectionReport) {
   const base = report.property.addressLine1 || report.property.name || 'inspection';
   const slug = base

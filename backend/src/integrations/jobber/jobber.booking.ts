@@ -36,8 +36,8 @@ interface PropertyLinkRow {
  * ── TWO JOBBER PROPERTIES FOR ONE HOUSE ──────────────────────────────────────
  *
  * Sixty-two addresses exist **twice** in this office's Jobber, the same house
- * written two ways -- "1103 East Hampton Drive • Pearland, Texas • 77584" and
- * "1103 E Hampton Dr • Pearland, TX • 77584-7620". The office abbreviates the
+ * written two ways -- "1167 East Phantom Drive • Pearland, Texas • 77584" and
+ * "1167 E Phantom Dr • Pearland, TX • 77584-0108". The office abbreviates the
  * street type (Drive to Dr, Lane to Ln) and Jobber kept both records; thirteen
  * of them are already labelled "(Do not use)".
  *

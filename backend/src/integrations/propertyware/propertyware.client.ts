@@ -26,7 +26,7 @@ import type { PropertywarePage, PropertywarePageQuery } from './propertyware.typ
  * How long a single document download may take.
  *
  * Minutes, not seconds. An inspection report carries every photograph the
- * inspector took — 408 of them in one 81 MB file at 7306 Cypress Prairie — and
+ * inspector took — 408 of them in one 81 MB file for a single property — and
  * the page timeout that suits a list of records would abort every large report
  * and quietly leave only the small ones imported.
  */
@@ -231,7 +231,7 @@ export class PropertywareClient {
      *
      * These used to be fixed indices. The report was edited upstream, index 9
      * became "Balance" and index 0 became "Lease Name", and the parser went on
-     * reading `$0.00` as a building id and `Abuah - Abuah` as a status. The
+     * reading `$0.00` as a building id and a tenant's lease name as a status. The
      * `/^active/i` test then matched 0 of 448 rows, every sync logged
      * ZERO_RECORDS_WARNING, and the lease table stayed empty — a warning that
      * reads exactly like a quiet week.
@@ -431,7 +431,7 @@ export class PropertywareClient {
    * Not routed through `request`, for two reasons that are both about size. It
    * calls `response.json()`, which would parse a PDF as JSON and throw; and it
    * uses `requestTimeoutMs`, which is tuned for a page of records. These are
-   * inspection reports — 19 MB is ordinary and one at 7306 Cypress Prairie is
+   * inspection reports — 19 MB is ordinary and one property's largest is
    * **81 MB** — so the timeout is separate and generous, and a retry re-downloads
    * from the start rather than resuming.
    *

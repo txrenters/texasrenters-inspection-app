@@ -104,8 +104,8 @@ describe('what the two systems write differently', () => {
     // carried "(Do not use)" and matched nothing. A parenthetical never
     // distinguishes two real addresses, so dropping it cannot merge two places.
     const found = matchBuilding(
-      index([['3002 Thicket Path Way', '77493-4427']]),
-      addressKeyCandidates('3002 Thicket Path Way (Do not use)', null, '77493'),
+      index([['3046 Storybook Path Way', '77493-0106']]),
+      addressKeyCandidates('3046 Storybook Path Way (Do not use)', null, '77493'),
     );
     expect(found).toEqual({ outcome: 'MATCHED', buildingId: 'b0' });
   });
@@ -122,11 +122,11 @@ describe('what the two systems write differently', () => {
   });
 
   it('folds a unit Jobber puts on its own line into the street line', () => {
-    // Jobber: "5200 Weslayan Street" + "unit a201".
-    // Propertyware: "5200 Weslayan Street Unit #A201". Neither is wrong.
+    // Jobber: "5288 Facsimile Street" + "unit a201".
+    // Propertyware: "5288 Facsimile Street Unit #A201". Neither is wrong.
     const found = matchBuilding(
-      index([['5200 Weslayan Street Unit #A201', '77005-1203']]),
-      addressKeyCandidates('5200 Weslayan Street', 'unit a201', '77005'),
+      index([['5288 Facsimile Street Unit #A201', '77005-0111']]),
+      addressKeyCandidates('5288 Facsimile Street', 'unit a201', '77005'),
     );
     expect(found).toEqual({ outcome: 'MATCHED', buildingId: 'b0' });
   });
@@ -136,18 +136,18 @@ describe('what the two systems write differently', () => {
     // specific home's visits against the building.
     const found = matchBuilding(
       index([
-        ['1311 Antoine Dr', '77055'],
-        ['1311 Antoine Dr Apt 258', '77055'],
+        ['1352 Proxy Dr', '77055'],
+        ['1352 Proxy Dr Apt 258', '77055'],
       ]),
-      addressKeyCandidates('1311 Antoine Drive', 'apt 258', '77055'),
+      addressKeyCandidates('1352 Proxy Drive', 'apt 258', '77055'),
     );
     expect(found).toEqual({ outcome: 'MATCHED', buildingId: 'b1' });
   });
 
   it('still matches the building when only the building is on file', () => {
     const found = matchBuilding(
-      index([['1311 Antoine Dr', '77055']]),
-      addressKeyCandidates('1311 Antoine Drive', 'apt 258', '77055'),
+      index([['1352 Proxy Dr', '77055']]),
+      addressKeyCandidates('1352 Proxy Drive', 'apt 258', '77055'),
     );
     expect(found).toEqual({ outcome: 'MATCHED', buildingId: 'b0' });
   });
@@ -158,33 +158,33 @@ describe('what the two systems write differently', () => {
     // that looks clean.
     const found = matchBuilding(
       index([
-        ['5200 Weslayan St', '77005'],
-        ['5200 Weslayan Street Unit #A201', '77005'],
-        ['5200 Weslayan St Unit A201', '77005'],
+        ['5288 Facsimile St', '77005'],
+        ['5288 Facsimile Street Unit #A201', '77005'],
+        ['5288 Facsimile St Unit A201', '77005'],
       ]),
-      addressKeyCandidates('5200 Weslayan Street', 'unit a201', '77005'),
+      addressKeyCandidates('5288 Facsimile Street', 'unit a201', '77005'),
     );
     expect(found.outcome).toBe('AMBIGUOUS');
   });
 
   it('refuses a truncated street name rather than guessing at it', () => {
-    // "12618 Alta Vis" against "12618 Alta Vista", same ZIP. Almost certainly
+    // "12684 Decoy Vis" against "12684 Decoy Vista", same ZIP. Almost certainly
     // the same place — and still not something to decide here. A wrong link
     // sends a technician to the wrong door and files photos against somebody
     // else's property, so it goes to a person.
     const found = matchBuilding(
-      index([['12618 Alta Vista', '77354-6992']]),
-      addressKeyCandidates('12618 Alta Vis', null, '77354-6992'),
+      index([['12684 Decoy Vista', '77354-0107']]),
+      addressKeyCandidates('12684 Decoy Vis', null, '77354-0107'),
     );
     expect(found).toEqual({ outcome: 'NONE' });
   });
 
   it('refuses a missing street suffix rather than guessing at it', () => {
-    // "2455 Morgan Ridge" against "2455 Morgan Ridge Ln". Same reasoning: the
+    // "2318 Madeup Ridge" against "2318 Madeup Ridge Ln". Same reasoning: the
     // suffix is the part that distinguishes a Lane from a Drive.
     const found = matchBuilding(
-      index([['2455 Morgan Ridge Ln', '77386-3316']]),
-      addressKeyCandidates('2455 Morgan Ridge', null, '77386'),
+      index([['2318 Madeup Ridge Ln', '77386-0110']]),
+      addressKeyCandidates('2318 Madeup Ridge', null, '77386'),
     );
     expect(found).toEqual({ outcome: 'NONE' });
   });

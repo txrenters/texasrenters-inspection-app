@@ -171,7 +171,7 @@ describe('changing a draft visit in its window', () => {
     await waitFor(() => expect(editStop.mutateAsync).toHaveBeenCalledWith({ stopId: 's1', scheduledOn: '2026-10-08' }));
   });
 
-  /** 5009 N Main St: the reports hold the building, so which unit a tenancy is behind is a person's to say. */
+  /** 4815 N Fictional St: the reports hold the building, so which unit a tenancy is behind is a person's to say. */
   it('asks which unit a tenancy in a building of several is in', async () => {
     mount({
       stop: stop({
@@ -180,8 +180,8 @@ describe('changing a draft visit in its window', () => {
         blockedMessage: 'This building has several units, and Propertyware does not say which this tenancy is in. Open the visit and choose its unit.',
         unitResolution: 'UNRESOLVED',
         buildingUnits: [
-          { id: 'unit-half', name: '1/2', addressLine1: '5009 1/2 N Main St' },
-          { id: 'unit-house', name: 'House', addressLine1: '5009 N Main St' },
+          { id: 'unit-half', name: '1/2', addressLine1: '4815 1/2 N Fictional St' },
+          { id: 'unit-house', name: 'House', addressLine1: '4815 N Fictional St' },
         ],
       }),
     });
@@ -189,7 +189,7 @@ describe('changing a draft visit in its window', () => {
     const unit = screen.getByRole('button', { name: /Change the unit/ });
     expect(unit).toHaveTextContent('Choose which unit this tenancy is in');
     fireEvent.click(unit);
-    fireEvent.click(await screen.findByRole('option', { name: /5009 1\/2 N Main St/ }));
+    fireEvent.click(await screen.findByRole('option', { name: /4815 1\/2 N Fictional St/ }));
 
     await waitFor(() => expect(editStop.mutateAsync).toHaveBeenCalledWith({ stopId: 's1', propertywareUnitId: 'unit-half' }));
   });

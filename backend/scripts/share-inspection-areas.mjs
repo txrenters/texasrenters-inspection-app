@@ -9,7 +9,7 @@
  * them, by design. An inspection is a record of a walkthrough, not a live view
  * of a floor plan.
  *
- * 21223 Harbor Shore Dr is the report this came from: a move-in imported twelve
+ * One property's report is where this came from: a move-in imported twelve
  * rooms, and the occupied inspection at the same address still read "0 areas",
  * with an Add area button and nothing to add. Move-in, occupied and move-out
  * walk the same rooms — the office's own rule — so the layout one of them
@@ -18,8 +18,8 @@
  *
  * The rooms come from a **sibling inspection**, not from the property's
  * approved layout. Those differ, deliberately: an import drops rooms the report
- * does not mention, and 10051 Spotted Horse Dr had two invented test rooms on
- * its layout that must not come back one inspection over.
+ * does not mention, and one property had two invented test rooms on its
+ * layout that must not come back one inspection over.
  *
  * Untouched on purpose:
  *

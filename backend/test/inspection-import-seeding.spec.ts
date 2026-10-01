@@ -38,8 +38,8 @@ const INSPECTION_ID = '00000000-0000-4000-8000-000000000003';
 
 const building = {
   id: '00000000-0000-4000-8000-000000000004',
-  name: '17307 Nordway',
-  addressLine1: '17307 Nordway Dr',
+  name: '17351 Wireframe',
+  addressLine1: '17351 Wireframe Dr',
   city: 'Houston',
   state: 'TX',
   postalCode: '77070',
@@ -102,7 +102,7 @@ describe('reading a report into an inspection that already exists', () => {
   it('accepts an inspection that already holds evidence', async () => {
     // What the office asked for, and the reversal worth stating plainly: an
     // import is the tool for a record that is wrong, so it replaces rather than
-    // refuses. 10051 Spotted Horse Dr is the case — two test rooms nobody could
+    // refuses. One property is the case — two test rooms nobody could
     // delete, on an inspection nobody could import over.
     const { service, prisma } = build(inspection());
     prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });

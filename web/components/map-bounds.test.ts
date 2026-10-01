@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { type MapPoint, pointsToFit } from './map-bounds';
 
-/** Three real Houston-area properties. */
+/** Three Houston-area property positions, invented. */
 const HOUSTON: MapPoint[] = [
-  { latitude: 29.7264, longitude: -95.417 },
-  { latitude: 29.8657, longitude: -95.2028 },
-  { latitude: 30.1716, longitude: -95.5871 },
+  { latitude: 29.7127, longitude: -95.4009 },
+  { latitude: 29.852, longitude: -95.1867 },
+  { latitude: 30.1579, longitude: -95.571 },
 ];
 
 const IN_HOUSTON: MapPoint = { latitude: 29.75, longitude: -95.36 };
@@ -64,6 +64,6 @@ describe('pointsToFit', () => {
     // The recurring trap in this codebase: Leaflet is lat,lng while OSRM and
     // the Census geocoder are the other way round.
     const [first] = pointsToFit([HOUSTON[0]!], []);
-    expect(first).toEqual([29.7264, -95.417]);
+    expect(first).toEqual([29.7127, -95.4009]);
   });
 });

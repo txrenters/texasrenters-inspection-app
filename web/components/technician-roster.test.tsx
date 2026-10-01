@@ -27,7 +27,7 @@ import { TechnicianRoster, type RosterEntry } from './technician-roster';
 const STOP: AssignedStop = {
   inspectionId: 'inspection-1',
   buildingId: 'building-1',
-  propertyName: '10342 Mist Ln',
+  propertyName: '10458 Example Ln',
   inspectionType: 'MOVE_IN',
   status: 'SCHEDULED',
   finishedAt: null,
@@ -36,7 +36,7 @@ const STOP: AssignedStop = {
 const SECOND_STOP: AssignedStop = {
   inspectionId: 'inspection-2',
   buildingId: 'building-2',
-  propertyName: '10103 Mariposa Green Ct',
+  propertyName: '10276 Sample Green Ct',
   inspectionType: 'MOVE_OUT',
   status: 'SCHEDULED',
   finishedAt: null,
@@ -99,11 +99,11 @@ const REFUSED: TechnicianRoute = {
     {
       inspectionId: 'inspection-1',
       propertyId: 'building-1',
-      propertyName: '10342 Mist Ln',
-      addressLine1: '10342 Mist Ln',
+      propertyName: '10458 Example Ln',
+      addressLine1: '10458 Example Ln',
       city: 'Houston',
-      latitude: 29.958784,
-      longitude: -95.574255,
+      latitude: 29.945084,
+      longitude: -95.558155,
     },
   ],
   legs: [],
@@ -138,7 +138,7 @@ describe('a route the planner refused', () => {
 
     // The work is still listed -- refusing to order a day is not refusing to
     // show it.
-    expect(screen.getByText('10342 Mist Ln')).toBeInTheDocument();
+    expect(screen.getByText('10458 Example Ln')).toBeInTheDocument();
   });
 
   it('does not number stops it has not put in an order', () => {
@@ -185,20 +185,20 @@ describe('a route the planner produced', () => {
       {
         inspectionId: 'inspection-2',
         propertyId: 'building-2',
-        propertyName: '10103 Mariposa Green Ct',
-        addressLine1: '10103 Mariposa Green Ct',
+        propertyName: '10276 Sample Green Ct',
+        addressLine1: '10276 Sample Green Ct',
         city: 'Houston',
-        latitude: 29.866277,
-        longitude: -95.200871,
+        latitude: 29.852577,
+        longitude: -95.184771,
       },
       {
         inspectionId: 'inspection-1',
         propertyId: 'building-1',
-        propertyName: '10342 Mist Ln',
-        addressLine1: '10342 Mist Ln',
+        propertyName: '10458 Example Ln',
+        addressLine1: '10458 Example Ln',
         city: 'Houston',
-        latitude: 29.958784,
-        longitude: -95.574255,
+        latitude: 29.945084,
+        longitude: -95.558155,
       },
     ],
     legs: [
@@ -242,7 +242,7 @@ describe('a route the planner produced', () => {
     const DONE: AssignedStop = {
       inspectionId: 'inspection-done',
       buildingId: 'building-done',
-      propertyName: '3925 Tulane Oak Drive',
+      propertyName: '3851 Placeholder Oak Drive',
       inspectionType: 'OCCUPIED',
       status: 'TECHNICIAN_SUBMITTED',
       // 16:40 UTC is 11:40 AM in Texas.
@@ -257,7 +257,7 @@ describe('a route the planner produced', () => {
         timeline={timelineOf(projection({}), [
           {
             buildingId: 'building-done',
-            propertyName: '3925 Tulane Oak Drive',
+            propertyName: '3851 Placeholder Oak Drive',
             inspectionIds: ['inspection-done'],
             onSiteSeconds: 42 * 60,
             driveToSeconds: 12 * 60,
@@ -274,7 +274,7 @@ describe('a route the planner produced', () => {
     // The person's row counts what is done out of the whole day.
     expect(text).toMatch(/1\/3 done/);
     // Listed first, before anything still to do.
-    expect(text.indexOf('Tulane Oak')).toBeLessThan(text.indexOf('Mariposa'));
+    expect(text.indexOf('Placeholder Oak')).toBeLessThan(text.indexOf('Sample'));
   });
 
   it('shows each visit as the app recorded it: Start to Submit, and the drive between', () => {
@@ -283,25 +283,25 @@ describe('a route the planner produced', () => {
     const OAK: AssignedStop = {
       inspectionId: 'inspection-oak',
       buildingId: 'building-oak',
-      propertyName: '4226 Oak Shadows',
+      propertyName: '4371 Pretend Oaks',
       inspectionType: 'OCCUPIED',
       status: 'TECHNICIAN_SUBMITTED',
       finishedAt: '2026-09-14T15:24:00.000Z',
       startedAt: '2026-09-14T14:55:00.000Z',
       submittedAt: '2026-09-14T15:24:00.000Z',
     };
-    const CHAMBOARD: AssignedStop = {
+    const TESTVILLE: AssignedStop = {
       ...OAK,
-      inspectionId: 'inspection-chamboard',
-      buildingId: 'building-chamboard',
-      propertyName: '1150 chamboard',
+      inspectionId: 'inspection-testville',
+      buildingId: 'building-testville',
+      propertyName: '1187 testville',
       finishedAt: '2026-09-14T15:42:00.000Z',
       startedAt: '2026-09-14T15:32:00.000Z',
       submittedAt: '2026-09-14T15:42:00.000Z',
     };
     const { container } = render(
       <TechnicianRoster
-        entries={entries([OAK, CHAMBOARD, STOP])}
+        entries={entries([OAK, TESTVILLE, STOP])}
         onSelect={() => {}}
         route={PLANNED}
         selectedId="tech-1"
@@ -311,7 +311,7 @@ describe('a route the planner produced', () => {
 
     const text = container.textContent ?? '';
     expect(text).toMatch(/Done 10:24 AMStarted 9:55 AM/);
-    expect(text).toMatch(/8 min drive from 4226 Oak Shadows · 10 min on site/);
+    expect(text).toMatch(/8 min drive from 4371 Pretend Oaks · 10 min on site/);
     expect(text).toMatch(/2 done · 39 min on site · 8 min driving · 47 min total/);
     expect(text).toMatch(/Start to Submit in the app/);
     expect(text).toMatch(/Texas time/);
@@ -339,9 +339,9 @@ describe('a route the planner produced', () => {
     );
 
     // At the first stop in the route, so the second is next.
-    expect(screen.getByText(/At 10103 Mariposa Green Ct/)).toBeInTheDocument();
+    expect(screen.getByText(/At 10276 Sample Green Ct/)).toBeInTheDocument();
     expect(screen.getByText('Next')).toBeInTheDocument();
-    expect(screen.getByText('10342 Mist Ln').parentElement?.className).toMatch(/text-map-technician/);
+    expect(screen.getByText('10458 Example Ln').parentElement?.className).toMatch(/text-map-technician/);
   });
 
   it('says the times include traffic when Google drew the route', () => {
@@ -376,7 +376,7 @@ describe('a route the planner produced', () => {
   });
 
   it('lists the stops in the order the route recommends, not alphabetically', () => {
-    // `entries` is given Mist Ln first; the route puts Mariposa first. The
+    // `entries` is given Example Ln first; the route puts Sample first. The
     // panel must follow the route, or the numerals label the wrong properties.
     const { container } = render(
       <TechnicianRoster
@@ -388,7 +388,7 @@ describe('a route the planner produced', () => {
     );
 
     const text = container.textContent ?? '';
-    expect(text.indexOf('Mariposa')).toBeLessThan(text.indexOf('Mist Ln'));
+    expect(text.indexOf('Sample')).toBeLessThan(text.indexOf('Example Ln'));
   });
 
   it('shows how long they have been at the stop under way, not a drive to it', () => {
@@ -443,8 +443,8 @@ describe('a route the planner produced', () => {
 /**
  * Taking the map to one stop.
  *
- * The panel listed the day as plain text, so a dispatcher reading "21538 Duke
- * Alexander" had no way to find it among five hundred and forty-eight property
+ * The panel listed the day as plain text, so a dispatcher reading one stop's
+ * address had no way to find it among five hundred and forty-eight property
  * pins. Selecting a stop moves the map to it -- while leaving the technician
  * selected, which is what keeps their round highlighted and their route drawn.
  */
@@ -460,7 +460,7 @@ describe('choosing a stop', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /10342 Mist Ln/ }));
+    fireEvent.click(screen.getByRole('button', { name: /10458 Example Ln/ }));
     expect(onSelectStop).toHaveBeenCalledWith('building-1');
   });
 
@@ -478,7 +478,7 @@ describe('choosing a stop', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /10342 Mist Ln/ }));
+    fireEvent.click(screen.getByRole('button', { name: /10458 Example Ln/ }));
     expect(onSelectStop).toHaveBeenCalledWith(null);
   });
 
@@ -495,7 +495,7 @@ describe('choosing a stop', () => {
       />,
     );
 
-    expect(screen.queryByRole('button', { name: /10342 Mist Ln/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /10458 Example Ln/ })).toBeNull();
     expect(screen.getByText(/not on the map/)).toBeTruthy();
   });
 
@@ -503,7 +503,7 @@ describe('choosing a stop', () => {
     // The prop is optional; the panel is used without it in tests and could be
     // elsewhere, and losing the day's work would be the worse failure.
     render(<TechnicianRoster entries={entries([STOP])} onSelect={() => {}} selectedId="tech-1" />);
-    expect(screen.getByText('10342 Mist Ln')).toBeTruthy();
+    expect(screen.getByText('10458 Example Ln')).toBeTruthy();
   });
 
   it('shows the inspection type for each stop', () => {

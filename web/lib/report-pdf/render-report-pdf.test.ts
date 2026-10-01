@@ -22,8 +22,8 @@ const REPORT: PublicInspectionReport = {
     email: 'reports@texasrenters.com',
   },
   property: {
-    name: 'Watercrest',
-    addressLine1: '302 Watercrest Harbor Ln',
+    name: 'Notional',
+    addressLine1: '318 Notional Harbor Ln',
     unitName: null,
     city: 'League City',
     state: 'TX',
@@ -337,7 +337,7 @@ describe('inspection report PDF', () => {
   });
 
   it('names the download after the property', () => {
-    expect(reportFileName(REPORT)).toBe('302-watercrest-harbor-ln-inspection-report.pdf');
+    expect(reportFileName(REPORT)).toBe('318-notional-harbor-ln-inspection-report.pdf');
   });
 });
 

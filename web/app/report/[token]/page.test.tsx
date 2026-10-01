@@ -28,8 +28,8 @@ vi.mock('next/image', () => ({
 const reportWith = (checklist: PublicReportChecklistItem[]): PublicInspectionReport => ({
   brand: { name: 'TexasRenters.com' },
   property: {
-    name: '12414 Montebello Manor Lane',
-    addressLine1: '12414 Montebello Manor Lane',
+    name: '12503 Specimen Manor Lane',
+    addressLine1: '12503 Specimen Manor Lane',
     unitName: null,
     city: 'Houston',
     state: 'TX',

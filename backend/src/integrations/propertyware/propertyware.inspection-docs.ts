@@ -6,7 +6,7 @@ import { InspectionType } from '@prisma/client';
  * Propertyware keeps every file for a property against the *building*, in one
  * undifferentiated list: leasing agreements, flood certificates, renewal
  * paperwork, and — the reason this exists — the Inspect & Cloud reports the
- * office has been importing one at a time. 7306 Cypress Prairie alone holds 56
+ * office has been importing one at a time. One property alone holds 56
  * documents, thirteen of them inspections spanning 2019 to 2026.
  *
  * There is no field that says which is which. `/docs` returns a filename, a
@@ -199,9 +199,9 @@ export function classifyTemplate(template: string | null | undefined): DocumentK
    *
    * Not "Outgoing", which is the word this guessed from `Ingoing` and which no
    * report uses. Four of the first five move-outs imported on production were
-   * skipped as TEMPLATE_NOT_RECOGNISED because of it — 25303 Lynbriar Ln, 3407
-   * Nutwood Ln and 12009 Tambourine Dr all read `Inspection Template: Exit
-   * Inspection`, and `exit` was in the *filename* rules but never here.
+   * skipped as TEMPLATE_NOT_RECOGNISED because of it — three of those reports
+   * all read `Inspection Template: Exit Inspection`, and `exit` was in the
+   * *filename* rules but never here.
    *
    * The pairing is Ingoing/Exit, not Ingoing/Outgoing. `outgoing` and `moveout`
    * are kept because they cost nothing and a template could yet use them.
@@ -253,8 +253,8 @@ export function dateFromFileName(fileName: string): string | null {
   if (!digits) return null;
   const [, month, day, year] = digits;
   const asNumber = { month: Number(month), day: Number(day), year: Number(year) };
-  // A file numbered "1123 Runneburg" is an address, not a date. Rejecting an
-  // impossible one costs nothing; accepting it puts a report in 1123 AD.
+  // A file numbered "1149 Fauxburg" is an address, not a date. Rejecting an
+  // impossible one costs nothing; accepting it puts a report in 1149 AD.
   if (asNumber.month < 1 || asNumber.month > 12) return null;
   if (asNumber.day < 1 || asNumber.day > 31) return null;
   if (asNumber.year < 2000 || asNumber.year > 2100) return null;

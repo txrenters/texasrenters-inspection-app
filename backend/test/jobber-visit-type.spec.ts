@@ -32,8 +32,8 @@ describe('Jobber visit type resolution', () => {
     // Both forms appear verbatim in their Jobber calendar; the first accounted
     // for nearly half of every visit on the first live sync.
     for (const title of [
-      '16918 Wedgeside Park - Zone 1 - Q3 2026 Tenant Benefit Package',
-      '10414 Hondo Hill Rd - Zone 2 - Q3 TBP Filter Change + Pest Control',
+      '16972 Scratch Park - Zone 1 - Q3 2026 Tenant Benefit Package',
+      '10468 Dummy Hill Rd - Zone 2 - Q3 TBP Filter Change + Pest Control',
     ])
       expect(resolveVisitType(title)).toEqual({
         outcome: 'RESOLVED',
@@ -46,8 +46,8 @@ describe('Jobber visit type resolution', () => {
     for (const title of [
       '1526A Creekside Ln - 1526A - Zone 5 - Door - #43929',
       '3113A Everwood Trl - Zone 5 - General Maintenance - #43866',
-      '11203 Doric Ct - Zone 2 - Home Cleaning',
-      '4207 Hardy St - Zone 2 - Drywall Repair',
+      '11247 Stub Ct - Zone 2 - Home Cleaning',
+      '4261 Prototype St - Zone 2 - Drywall Repair',
     ])
       expect(resolveVisitType(title).outcome).toBe('UNKNOWN');
   });
@@ -149,7 +149,7 @@ describe('types the sync does not import', () => {
     // Typing it is what lets the console say *why* it was skipped. Removing the
     // keywords instead would make ~100 visits per sync look like unrecognised
     // titles needing attention.
-    expect(resolveVisitType('16918 Wedgeside Park - Zone 1 - Q3 2026 Tenant Benefit Package')).toEqual(
+    expect(resolveVisitType('16972 Scratch Park - Zone 1 - Q3 2026 Tenant Benefit Package')).toEqual(
       { outcome: 'RESOLVED', inspectionType: InspectionType.AC_FILTER_DELIVERY },
     );
     expect(isSyncedType(InspectionType.AC_FILTER_DELIVERY)).toBe(false);

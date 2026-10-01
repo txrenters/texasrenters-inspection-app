@@ -216,7 +216,7 @@ const STREET_TYPES = new Set([
   'highway', 'cv', 'cove', 'xing', 'crossing', 'bnd', 'bend', 'sq', 'square',
 ]);
 
-/** A street without its house number or street type, as a unit is labelled: "1/2 n main" for "5009 1/2 N Main St". */
+/** A street without its house number or street type, as a unit is labelled: "1/2 n fictional" for "4815 1/2 N Fictional St". */
 function unitKey(text: string): string {
   const tokens = text.toLowerCase().replace(/[^a-z0-9/]+/g, ' ').trim().split(/\s+/).filter(Boolean);
   if (tokens.length > 1 && /^\d+$/.test(tokens[0]!)) tokens.shift();
@@ -224,7 +224,7 @@ function unitKey(text: string): string {
   return tokens.join(' ');
 }
 
-/** "16x20x1 (1/2 N Main)" as the size and the unit named; a note before " - " stays with the size. */
+/** "16x20x1 (1/2 N Fictional)" as the size and the unit named; a note before " - " stays with the size. */
 function unitLabel(entry: string): { text: string; unit: string } | null {
   const match = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(entry.trim());
   if (!match) return null;
@@ -251,7 +251,7 @@ function unitLabel(entry: string): { text: string; unit: string } | null {
  * in there?
  *
  * An entry with no size but a unit label is still kept -- "reusable window AC
- * unit (no need to change - 1/4 N Main)" is how the office records a unit that
+ * unit (no need to change - 1/4 N Fictional)" is how the office records a unit that
  * has no filter to change, and `unitFilterSizes` needs it to know that unit is
  * spoken for. Drop it and that unit falls back to the whole building's sizes,
  * sending a technician to change a filter belonging to next door.
@@ -266,9 +266,9 @@ export function filterSizeEntry(entry: string): boolean {
  * One unit's filter sizes, from a building's sizes labelled by unit.
  *
  * The tenant report holds filter sizes per building, so for a building of
- * several units the office writes which unit each belongs to: 5009 N Main St's
- * are "20x20x1 (N Main)", "16x20x1 (1/2 N Main)", "14x18x1 (1/2 N Main)" and
- * "reusable window AC unit (no need to change - 1/4 N Main)". A label names a
+ * several units the office writes which unit each belongs to, as in
+ * "20x20x1 (N Fictional)", "16x20x1 (1/2 N Fictional)", "14x18x1 (1/2 N Fictional)" and
+ * "reusable window AC unit (no need to change - 1/4 N Fictional)". A label names a
  * unit when it is the unit's name, or its address without the house number and
  * street type. The unit's own sizes are kept without their label, sizes naming
  * another unit are left out, and a size with no unit label -- "(MEDIA)" is a

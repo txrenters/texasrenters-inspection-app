@@ -17,8 +17,8 @@ import { RouteService } from '../src/routing/route.service';
 /** Prisma hands back `Decimal`; only `toNumber` is ever called on it. */
 const dec = (value: number) => ({ toNumber: () => value }) as never;
 
-const HOUSTON = { latitude: 29.958784, longitude: -95.574255 };
-const MARIPOSA = { latitude: 29.866277, longitude: -95.200871 };
+const HOUSTON = { latitude: 29.945084, longitude: -95.558155 };
+const MARIPOSA = { latitude: 29.852577, longitude: -95.184771 };
 /** Mindanao. The position that started all this. */
 const PHILIPPINES = { latitude: 8.48164, longitude: 123.806345 };
 
@@ -183,7 +183,7 @@ describe('a stop OSRM will not accept', () => {
         distanceMeters: 9000,
         durationSeconds: 600,
         legs: [{ distanceMeters: 9000, durationSeconds: 600 }],
-        geometry: [[-95.574255, 29.958784]] as [number, number][],
+        geometry: [[-95.558155, 29.945084]] as [number, number][],
       }),
     };
 

@@ -14,7 +14,7 @@ import { AddAreasDialog } from './inspection-workflow';
  * shown does belong to the property.
  *
  * Found while giving nine scheduled inspections the areas they were created
- * without. One of them is at 4207 Hardy St, which carries four `SYSTEM` areas
+ * without. One of them carries four `SYSTEM` areas
  * beside its fifteen rooms — so it is exactly where the office would have met
  * this first.
  */
@@ -25,7 +25,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
   return { ...actual, ...queries };
 });
 
-/** 4207 Hardy St, trimmed: rooms, an HVAC visit's subjects, and a draft. */
+/** That property's areas, trimmed: rooms, an HVAC visit's subjects, and a draft. */
 const AREAS = [
   { id: 'a1', name: 'Kitchen', status: 'APPROVED', source: 'STANDARD_TEMPLATE', unitId: null, inspectionOrder: 1 },
   { id: 'a2', name: 'Main Bedroom', status: 'APPROVED', source: 'STANDARD_TEMPLATE', unitId: null, inspectionOrder: 2 },

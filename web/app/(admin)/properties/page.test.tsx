@@ -35,8 +35,8 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const property = (over: Record<string, unknown> = {}) => ({
   id: 'building-1',
   externalId: 'pw-1',
-  name: '4412 Wicklow Bend',
-  addressLine1: '4412 Wicklow Bend',
+  name: '4468 Chimera Bend',
+  addressLine1: '4468 Chimera Bend',
   city: 'Katy',
   state: 'TX',
   postalCode: '77494',

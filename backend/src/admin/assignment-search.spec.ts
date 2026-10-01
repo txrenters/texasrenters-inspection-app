@@ -3,8 +3,8 @@ import { assignmentPropertySearch } from './assignment-search';
 /**
  * The assignments search box does something.
  *
- * Reported with a screenshot: "3206 langley" typed into the box, and all 515
- * records still listed with 3206 Langley Bend Lane sitting eight rows down.
+ * Reported with a screenshot: a house number and street typed into the box,
+ * and all 515 records still listed with that property sitting eight rows down.
  * The box had been wired to `onSearch={() => undefined}` beside a comment
  * claiming it was omitted -- a no-op is still a function, so the toolbar drew
  * the field -- and nothing on the API read `search` either, although the
@@ -13,10 +13,10 @@ import { assignmentPropertySearch } from './assignment-search';
 
 describe('what the assignments list searches', () => {
   it('matches the address the office actually types', () => {
-    const where = assignmentPropertySearch('3206 langley');
+    const where = assignmentPropertySearch('3271 mockford');
 
     expect(where.OR).toContainEqual({
-      propertywareBuilding: { name: { contains: '3206 langley', mode: 'insensitive' } },
+      propertywareBuilding: { name: { contains: '3271 mockford', mode: 'insensitive' } },
     });
   });
 
@@ -38,7 +38,7 @@ describe('what the assignments list searches', () => {
   });
 
   it('is case-insensitive, because nobody types an address in title case', () => {
-    for (const clause of assignmentPropertySearch('LANGLEY').OR ?? []) {
+    for (const clause of assignmentPropertySearch('MOCKFORD').OR ?? []) {
       const field = Object.values(
         Object.values(clause as Record<string, Record<string, unknown>>)[0]!,
       )[0] as { mode?: string };

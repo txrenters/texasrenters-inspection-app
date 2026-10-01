@@ -55,7 +55,7 @@ const submitted = {
   id: 'notification-1',
   kind: 'INSPECTION_SUBMITTED',
   title: 'Inspection submitted',
-  body: '4226 Oak Shadows · Submitted by Moses',
+  body: '4371 Pretend Oaks · Submitted by Moses',
   inspectionId: 'inspection-1',
   occurredAt: '2026-09-15T15:00:00.000Z',
 };
@@ -142,7 +142,7 @@ describe('the console realtime connection', () => {
 
     expect(mocks.push).toHaveBeenCalledWith(submitted);
     expect(mocks.toast).toHaveBeenCalledWith('Inspection submitted', {
-      description: '4226 Oak Shadows · Submitted by Moses',
+      description: '4371 Pretend Oaks · Submitted by Moses',
     });
   });
 
@@ -154,7 +154,7 @@ describe('the console realtime connection', () => {
       areaId: 'area-1',
       areaName: 'Utility Room',
       floorName: null,
-      propertyName: '4226 Oak Shadows',
+      propertyName: '4371 Pretend Oaks',
       technicianName: 'Moses',
       occurredAt: '2026-09-15T15:00:00.000Z',
     });

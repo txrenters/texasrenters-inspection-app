@@ -46,7 +46,7 @@ const job = (overrides: Partial<RunningImport> = {}): RunningImport => ({
   state: 'READING',
   errorCode: null,
   awaitingReview: false,
-  address: '1547 Revolution Way',
+  address: '1532 Pretense Way',
   inspectionType: 'MOVE_IN',
   requestedInspectionId: 'inspection-1',
   scheduledAt: '2026-10-02T00:00:00.000Z',
@@ -71,7 +71,7 @@ function Hander() {
       onClick={() =>
         dock?.upload({
           inspectionId: 'inspection-2',
-          address: '12009 Tambourine',
+          address: '12043 Hearsay',
           file: new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' }),
         })
       }
@@ -114,7 +114,7 @@ describe('what the drawer shows', () => {
       </ImportDockProvider>,
     );
     fireEvent.click(screen.getByRole('button', { name: /hand over/i }));
-    expect(await screen.findByText('12009 Tambourine')).toBeTruthy();
+    expect(await screen.findByText('12043 Hearsay')).toBeTruthy();
   });
 
   it('starts closed, so an idle drawer does not sit over the page', () => {
@@ -124,7 +124,7 @@ describe('what the drawer shows', () => {
     // happening.
     imports = [job()];
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
+    expect(screen.queryByText('1532 Pretense Way')).toBeNull();
     expect(screen.getByRole('button', { name: /show 1 import in progress/i })).toBeTruthy();
   });
 
@@ -132,7 +132,7 @@ describe('what the drawer shows', () => {
     imports = [job()];
     render(<ImportDockProvider>page</ImportDockProvider>);
     fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
-    expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
+    expect(screen.getByText('1532 Pretense Way')).toBeTruthy();
     expect(screen.getByText(/reading the report/i)).toBeTruthy();
   });
 
@@ -149,10 +149,10 @@ describe('what the drawer shows', () => {
     render(<ImportDockProvider>page</ImportDockProvider>);
 
     fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
-    expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
+    expect(screen.getByText('1532 Pretense Way')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
-    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
+    expect(screen.queryByText('1532 Pretense Way')).toBeNull();
   });
 
   it('remembers being opened across a reload', () => {
@@ -164,7 +164,7 @@ describe('what the drawer shows', () => {
     first.unmount();
 
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
+    expect(screen.getByText('1532 Pretense Way')).toBeTruthy();
   });
 
   it('survives storage being unavailable', () => {
@@ -185,7 +185,7 @@ describe('announcing what happened', () => {
     render(<ImportDockProvider>page</ImportDockProvider>);
 
     expect(success).toHaveBeenCalledWith(
-      '1547 Revolution Way imported',
+      '1532 Pretense Way imported',
       expect.objectContaining({ description: expect.stringContaining('on the inspection now') }),
     );
   });
@@ -199,7 +199,7 @@ describe('announcing what happened', () => {
     render(<ImportDockProvider>page</ImportDockProvider>);
 
     expect(failure).toHaveBeenCalledWith(
-      '1547 Revolution Way could not be imported',
+      '1532 Pretense Way could not be imported',
       expect.objectContaining({ description: 'REPORT_NOT_READABLE' }),
     );
     expect(success).not.toHaveBeenCalled();
@@ -233,7 +233,7 @@ describe('announcing what happened', () => {
   });
 
   it('says where a report went when its own date put it on another inspection', () => {
-    // 10118 Mariposa Green Ct: an August 2023 move-in report started from the
+    // One property: an August 2023 move-in report started from the
     // next tenant's October 2026 visit. It lands on its own inspection, and the
     // one it was started from is left untouched -- which, unannounced, reads
     // as an import that went nowhere.
@@ -259,7 +259,7 @@ describe('announcing what happened', () => {
     imports = [job({ state: 'IMPORTED', requestedInspectionId: null })];
     render(<ImportDockProvider>page</ImportDockProvider>);
     expect(success).toHaveBeenCalledWith(
-      '1547 Revolution Way imported',
+      '1532 Pretense Way imported',
       expect.objectContaining({ description: expect.stringContaining('on the inspection now') }),
     );
   });

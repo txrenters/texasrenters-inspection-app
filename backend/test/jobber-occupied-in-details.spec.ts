@@ -19,7 +19,7 @@ import { visitsQuery, VISIT_DETAILS_FIELD } from '../src/integrations/jobber/job
  */
 
 const rules = visitTypeRules({});
-const TBP = '19803 Bolton Bridge Ln - Zone 1 - Q3 2026 Tenant Benefit Package';
+const TBP = '19412 Lookalike Bridge Ln - Zone 1 - Q3 2026 Tenant Benefit Package';
 
 describe('reading an occupied inspection out of a visit’s details', () => {
   it('recognises the phrase the office actually writes', () => {
@@ -69,7 +69,7 @@ describe('what the title still decides on its own', () => {
   it('does not rescue an unknown title', () => {
     // "General Maintenance" is refused today and stays refused. Details cannot
     // promote a visit nobody typed — that is a person's decision.
-    expect(resolveVisitType('7811 Blackbird Lane - Zone 4 - Turnover', rules).outcome).toBe(
+    expect(resolveVisitType('7853 Standby Lane - Zone 4 - Turnover', rules).outcome).toBe(
       'UNKNOWN',
     );
   });

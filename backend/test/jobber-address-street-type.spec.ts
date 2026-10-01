@@ -9,8 +9,8 @@ import {
 /**
  * Two systems disagreeing about whether the street type was written.
  *
- * Jobber's property record says `2455 Morgan Ridge`. Propertyware says
- * `2455 Morgan Ridge Ln`. Same house number, same street name, same ZIP+4 —
+ * Jobber's property record says `2318 Madeup Ridge`. Propertyware says
+ * `2318 Madeup Ridge Ln`. Same house number, same street name, same ZIP+4 —
  * one system simply never recorded the `Ln`, and the address key could not
  * bridge it, so a real property sat in the mapping queue waiting for somebody
  * to click Resolve on an answer that was never in doubt.
@@ -20,9 +20,9 @@ import {
  */
 
 const buildings = [
-  { id: 'morgan', addressLine1: '2455 Morgan Ridge Ln', postalCode: '77386-3316' },
-  { id: 'bayou', addressLine1: '2507 Shady Bayou Ln', postalCode: '77373-9122' },
-  { id: 'main', addressLine1: '5009 N Main St', postalCode: '77009-3620' },
+  { id: 'morgan', addressLine1: '2318 Madeup Ridge Ln', postalCode: '77386-0110' },
+  { id: 'bayou', addressLine1: '2593 Unreal Bayou Ln', postalCode: '77373-0105' },
+  { id: 'main', addressLine1: '4815 N Fictional St', postalCode: '77009-0104' },
 ];
 
 const strict = buildAddressIndex(buildings);
@@ -39,11 +39,11 @@ const match = (line1: string, postal: string, line2: string | null = null) =>
 describe('an address written without its street type', () => {
   it('matches the building that has one', () => {
     // The row from the live queue.
-    expect(match('2455 Morgan Ridge', '77386-3316')).toEqual({
+    expect(match('2318 Madeup Ridge', '77386-0110')).toEqual({
       outcome: 'MATCHED',
       buildingId: 'morgan',
     });
-    expect(match('2507 Shady Bayou', '77373-9122')).toEqual({
+    expect(match('2593 Unreal Bayou', '77373-0105')).toEqual({
       outcome: 'MATCHED',
       buildingId: 'bayou',
     });
@@ -66,7 +66,7 @@ describe('an address written without its street type', () => {
   it('still prefers the exact address when there is one', () => {
     // The strict tier decides whenever it can. A loose key can only ever gather
     // more candidates, so it must never get to overrule a precise answer.
-    expect(match('5009 N Main St', '77009-3620')).toEqual({
+    expect(match('4815 N Fictional St', '77009-0104')).toEqual({
       outcome: 'MATCHED',
       buildingId: 'main',
     });
@@ -93,11 +93,11 @@ describe('what the looser key must never do', () => {
 
   it('does not drop a word that is part of the street name', () => {
     // The trap this feature could have walked into. `Ridge` is a real USPS
-    // street type, and had it been droppable, `morgan ridge ln` would lose
-    // `ln` while `morgan ridge` lost `ridge` — and the two would stop matching
+    // street type, and had it been droppable, `madeup ridge ln` would lose
+    // `ln` while `madeup ridge` lost `ridge` — and the two would stop matching
     // each other, breaking the very row this was written for.
-    expect(looseAddressKey('2455 Morgan Ridge Ln', '77386')).toBe('2455 morgan ridge|77386');
-    expect(looseAddressKey('2455 Morgan Ridge', '77386')).toBe('2455 morgan ridge|77386');
+    expect(looseAddressKey('2318 Madeup Ridge Ln', '77386')).toBe('2318 madeup ridge|77386');
+    expect(looseAddressKey('2318 Madeup Ridge', '77386')).toBe('2318 madeup ridge|77386');
   });
 
   it('never reduces a street to its house number', () => {
@@ -109,14 +109,14 @@ describe('what the looser key must never do', () => {
   it('does not cross a ZIP boundary', () => {
     // The ZIP is doing most of the work here. Same street, one town over, is a
     // different place and must stay unmatched.
-    expect(match('2455 Morgan Ridge', '77002')).toEqual({ outcome: 'NONE' });
+    expect(match('2318 Madeup Ridge', '77002')).toEqual({ outcome: 'NONE' });
   });
 
   it('leaves a genuinely absent property unmatched', () => {
-    // `1860 White Oak Dr Apt 324` was in the live queue and is *correctly*
+    // An address like this one was in the live queue and is *correctly*
     // there: no such building exists on our side at all. Loosening the key must
     // not invent one.
-    expect(match('1860 White Oak Dr Apt 324', '77009-7557')).toEqual({ outcome: 'NONE' });
+    expect(match('1894 Mirage Oak Dr Apt 324', '77009-0109')).toEqual({ outcome: 'NONE' });
   });
 
   it('does not retry an ambiguous strict answer more loosely', () => {

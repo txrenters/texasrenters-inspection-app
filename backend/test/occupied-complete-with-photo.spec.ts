@@ -138,8 +138,8 @@ describe('completing an occupied area', () => {
 describe('completing a back-to-market area', () => {
   it('accepts a photograph, as an occupied area does', async () => {
     // The office walks a back-to-market as an occupied inspection. Until
-    // 2026-09-15 this answered ROOM_VIDEO_REQUIRED, and a technician at 418
-    // Drennan could not finish a room without filming it.
+    // 2026-09-15 this answered ROOM_VIDEO_REQUIRED, and a technician at one
+    // property could not finish a room without filming it.
     const { service, update } = build({ inspectionType: 'BACK_TO_MARKET', photos: 4 });
     await service.completeRoom(technician, ROOM_ID);
     expect(update).toHaveBeenCalled();

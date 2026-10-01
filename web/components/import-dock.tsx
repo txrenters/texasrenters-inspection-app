@@ -41,8 +41,8 @@ interface DockUpload {
 /**
  * The inspection an already-imported report is on, when that is the refusal.
  *
- * "This report has already been imported" names no place. 10118 Mariposa Green
- * Ct's move-in report sat on the next tenant's visit, and every retry said only
+ * "This report has already been imported" names no place. One property's
+ * move-in report sat on the next tenant's visit, and every retry said only
  * that, so nobody could see where it had gone. The API names the inspection;
  * this is what reads it back out.
  */

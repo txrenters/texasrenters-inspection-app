@@ -132,7 +132,7 @@ export interface ImportedReport {
  *
  * One rule for both ways a report comes in. The Propertyware backfill matched
  * on it while the console wrote a report into whichever inspection it was
- * started from, and 10118 Mariposa Green Ct is what the difference cost: an
+ * started from, and one property shows what the difference cost: an
  * August 2023 move-in report written into the next tenant's October 2026
  * visit, dated after the move-out it existed to be compared with.
  */
@@ -143,7 +143,7 @@ export const REPORT_MATCH_WINDOW_DAYS = 14;
  *
  * Inspect & Cloud writes it as `DEC-21-2023` in the page header. Not the
  * document's Propertyware timestamp: reports are uploaded whenever somebody got
- * to it, and one at 7306 Cypress Prairie was filed eight months after the walk.
+ * to it, and one property's was filed eight months after the walk.
  * Midnight UTC, which is how a `@db.Date` column holds a day.
  */
 export function reportWalkedOn(value: string | null | undefined): Date | null {

@@ -191,7 +191,7 @@ describe('filming an occupied area', () => {
   });
 
   it('accepts a photograph on a back-to-market too, which the office walks the same way', () => {
-    // Reported 2026-09-15 from 418 Drennan: a back-to-market room could not be
+    // Reported 2026-09-15 from one property: a back-to-market room could not be
     // finished without filming it.
     const gate = areaCompletionGate(
       deriveAreaRequirements({ ...room(), inspectionType: 'BACK_TO_MARKET' } as ReturnType<typeof room>, {

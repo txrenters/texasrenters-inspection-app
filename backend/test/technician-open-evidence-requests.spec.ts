@@ -38,7 +38,7 @@ function request(overrides: Record<string, unknown> = {}) {
     requestedAt: new Date('2026-08-12T09:00:00.000Z'),
     inspectionArea: { propertyArea: { name: 'Kitchen' } },
     inspection: {
-      propertywareBuilding: { name: '17307 Nordway Dr' },
+      propertywareBuilding: { name: '17351 Wireframe Dr' },
       propertywareUnit: { name: 'Unit B' },
     },
     ...overrides,
@@ -92,7 +92,7 @@ describe('open evidence requests', () => {
     // An area name alone does not tell a technician which building to drive to.
     expect(first).toMatchObject({
       roomName: 'Kitchen',
-      propertyName: '17307 Nordway Dr',
+      propertyName: '17351 Wireframe Dr',
       unitName: 'Unit B',
       inspectionId: 'inspection-1',
       roomId: 'area-1',

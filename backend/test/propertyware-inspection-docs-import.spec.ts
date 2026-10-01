@@ -52,10 +52,10 @@ function build(row: Record<string, unknown> = {}) {
         {
           id: 'doc-row-1',
           externalDocumentId: '8738505231',
-          fileName: '7306 Cypress Prairie Dr_Move In Inspection.pdf',
+          fileName: '7419 Fable Prairie Dr_Move In Inspection.pdf',
           guessedKind: InspectionType.MOVE_IN,
           buildingId: BUILDING,
-          building: { id: BUILDING, name: '7306 Cypress Prairie', addressLine1: '7306 Cypress Prairie Dr' },
+          building: { id: BUILDING, name: '7419 Fable Prairie', addressLine1: '7419 Fable Prairie Dr' },
           ...row,
         },
       ]),
@@ -127,8 +127,8 @@ describe('importing a catalogued document', () => {
   });
 
   it('matches on the report date, not on the day Propertyware received the file', async () => {
-    // Reports are uploaded whenever somebody gets to it; one at 7306 Cypress
-    // Prairie was filed eight months after the walk. Matching on the upload
+    // Reports are uploaded whenever somebody gets to it; one property's
+    // was filed eight months after the walk. Matching on the upload
     // date would miss the inspection it belongs to and create a duplicate.
     const { service, prisma } = build();
 

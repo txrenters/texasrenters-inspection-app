@@ -2,7 +2,7 @@
  * The office's HVAC inspection, as its Inspect & Cloud report walks it.
  *
  * Source: the "HVAC Inspection" template the office's reports were issued from
- * in Inspect & Cloud (10118 Mariposa Green Ct, 2024-01-05), handed over on
+ * in Inspect & Cloud (one property's report, 2024-01-05), handed over on
  * 2026-09-16 as the design the console and the handset both follow. Four
  * sections -- Attic, Filters, A/C unit, Thermostat -- each a table of items
  * scored Clean / Undamaged / Working with a comment, each item photographed, and

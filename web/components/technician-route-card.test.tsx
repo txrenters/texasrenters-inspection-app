@@ -20,8 +20,8 @@ import { TechnicianRouteCard } from './technician-route-card';
 const STOP = {
   inspectionId: 'inspection-1',
   propertyId: 'building-1',
-  propertyName: '1006 Melford Ave',
-  addressLine1: '1006 Melford Ave',
+  propertyName: '1094 Imaginary Ave',
+  addressLine1: '1094 Imaginary Ave',
   city: 'Pearland',
   latitude: 29.5638,
   longitude: -95.2861,
@@ -63,7 +63,7 @@ describe('a route the planner refused', () => {
   it('still lists the day, unnumbered', () => {
     const { container } = render(<TechnicianRouteCard displayName="Ernie" route={REFUSED} />);
 
-    expect(screen.getByText('1006 Melford Ave')).toBeInTheDocument();
+    expect(screen.getByText('1094 Imaginary Ave')).toBeInTheDocument();
     // A numeral beside an unordered stop reads as a sequence somebody chose.
     expect(container.textContent).not.toMatch(/^\s*1\s/m);
   });

@@ -24,7 +24,7 @@ import {
 
 const document = (overrides: Partial<PropertywareDocument> = {}): PropertywareDocument => ({
   id: 283969026,
-  fileName: '7306 Cypress Prairie Dr_Move In Inspection.pdf',
+  fileName: '7419 Fable Prairie Dr_Move In Inspection.pdf',
   fileType: 'application/pdf',
   description: '',
   entityType: 'BUILDING',
@@ -43,7 +43,7 @@ describe('deciding what is worth downloading', () => {
   it.each([
     'Texas_Renters.com_PM_renewal_2024.pdf',
     'PMA Renewals 2023.pdf',
-    '12419 Iris Hollow Way  Renewal  flood Ins.pdf',
+    '12457 Testbed Hollow Way  Renewal  flood Ins.pdf',
   ])('leaves %s alone', (fileName) => {
     /**
      * The rule is narrow on purpose.
@@ -71,36 +71,36 @@ describe('deciding what is worth downloading', () => {
 
 describe('guessing the type from the filename', () => {
   it.each([
-    ['7306 Cypress Prairie Dr_Move In Inspection.pdf', InspectionType.MOVE_IN],
-    ['7306 Cypress Prairie Dr_MI Inspection 07312019.pdf', InspectionType.MOVE_IN],
-    ['Move_In_Inspection_7306 Cypress Prairie Dr  (1)_08172020.pdf', InspectionType.MOVE_IN],
-    ['7306 Cypress Prairie Dr MO Inspection.pdf', InspectionType.MOVE_OUT],
-    ['Move out_Inspection_7306 Cypress Prairie Dr_08052020.pdf', InspectionType.MOVE_OUT],
-    ['7306 Cypress Prairie Dr_Occupied Inspection .pdf', InspectionType.OCCUPIED],
-    ['Occupied_Inspection_12419 Iris hollow way.pdf', InspectionType.OCCUPIED],
-    ['12419 Iris Hollow Way_Safety Inspection_052419.pdf', InspectionType.OCCUPIED],
-    ['7306 Cypress Prairie Dr_HVAC Inspection.pdf', InspectionType.HVAC],
+    ['7419 Fable Prairie Dr_Move In Inspection.pdf', InspectionType.MOVE_IN],
+    ['7419 Fable Prairie Dr_MI Inspection 07312019.pdf', InspectionType.MOVE_IN],
+    ['Move_In_Inspection_7419 Fable Prairie Dr  (1)_08172020.pdf', InspectionType.MOVE_IN],
+    ['7419 Fable Prairie Dr MO Inspection.pdf', InspectionType.MOVE_OUT],
+    ['Move out_Inspection_7419 Fable Prairie Dr_08052020.pdf', InspectionType.MOVE_OUT],
+    ['7419 Fable Prairie Dr_Occupied Inspection .pdf', InspectionType.OCCUPIED],
+    ['Occupied_Inspection_12457 Testbed hollow way.pdf', InspectionType.OCCUPIED],
+    ['12457 Testbed Hollow Way_Safety Inspection_052419.pdf', InspectionType.OCCUPIED],
+    ['7419 Fable Prairie Dr_HVAC Inspection.pdf', InspectionType.HVAC],
   ])('reads %s as %s', (fileName, expected) => {
     expect(classifyFileName(fileName)).toBe(expected);
   });
 
   it('does not read a comparison as either inspection it names', () => {
     /**
-     * `7306 Cypress Prairie Dr MOVE IN VS MOVE OUT.pdf` contains both "move
+     * `7419 Fable Prairie Dr MOVE IN VS MOVE OUT.pdf` contains both "move
      * in" and "move out", so whichever is tested first wins — and both answers
      * are wrong. It is a summary written for an owner, not a walkthrough, and
      * importing it as a move-in would attach one inspection's evidence to the
      * other's record. There were 51 of these in the survey.
      */
-    expect(classifyFileName('7306 Cypress Prairie Dr MOVE IN VS MOVE OUT.pdf')).toBe('COMPARISON');
+    expect(classifyFileName('7419 Fable Prairie Dr MOVE IN VS MOVE OUT.pdf')).toBe('COMPARISON');
     expect(isImportableKind(classifyFileName('MI vs MO 1234 Somewhere.pdf'))).toBe(false);
   });
 
   it.each([
-    ['4742 Tain Dr_EXIT inspection 03082017.pdf', InspectionType.MOVE_OUT],
-    ['1506 Spencer Glen Ln_occupiedinspection .pdf', InspectionType.OCCUPIED],
-    ['19615 Kingston Green Ln_OccupiedInspection .pdf', InspectionType.OCCUPIED],
-    ['479 Folk Crest Ln_Saftey Inspection_07012020.pdf', InspectionType.OCCUPIED],
+    ['4786 Bogus Dr_EXIT inspection 03082017.pdf', InspectionType.MOVE_OUT],
+    ['1548 Faux Glen Ln_occupiedinspection .pdf', InspectionType.OCCUPIED],
+    ['19659 Ersatz Green Ln_OccupiedInspection .pdf', InspectionType.OCCUPIED],
+    ['435 Pseudo Crest Ln_Saftey Inspection_07012020.pdf', InspectionType.OCCUPIED],
   ])('reads %s, which the first run could not', (fileName, expected) => {
     /**
      * Every one of these sat unclassified after the first real discovery run.
@@ -119,16 +119,16 @@ describe('guessing the type from the filename', () => {
     // ambiguous between a move-out and a back-to-market. Guessing either from
     // the name would invent a fact the PDF already states, so these are
     // downloaded and read instead.
-    expect(classifyFileName('13722 Lynnwood Ln_Turnover Inspection.pdf')).toBe('UNKNOWN');
-    expect(worthDownloading(classifyFileName('10542 Paula Bluff Ln TO Inspection.pdf'))).toBe(true);
+    expect(classifyFileName('13766 Simulated Ln_Turnover Inspection.pdf')).toBe('UNKNOWN');
+    expect(worthDownloading(classifyFileName('10586 Trial Bluff Ln TO Inspection.pdf'))).toBe(true);
   });
 
   it('never fetches an inspection that is somebody else’s', () => {
     // An HOA walk and a municipal compliance visit concern the property but are
     // not walkthroughs of the tenancy, and no template inside them would be
     // recognised. Skipped without paying for the download.
-    const hoa = classifyFileName('10339_solitude_acct#229042_HOA_INSPECTION_02052021.pdf');
-    const city = classifyFileName('2926 Riata Ln_City Of Houston_Inspection_Pending Items.pdf');
+    const hoa = classifyFileName('10383_makeshift_acct#123456_HOA_INSPECTION_02052021.pdf');
+    const city = classifyFileName('2968 Placebo Ln_City Of Houston_Inspection_Pending Items.pdf');
     expect(hoa).toBe('NOT_AN_INSPECTION');
     expect(city).toBe('NOT_AN_INSPECTION');
     expect(worthDownloading(hoa)).toBe(false);
@@ -169,8 +169,8 @@ describe('reading the type the report states about itself', () => {
      *
      * "Outgoing" was inferred from "Ingoing" and no report uses it. Four of the
      * first five move-outs imported on production were skipped as
-     * TEMPLATE_NOT_RECOGNISED because of that guess — 25303 Lynbriar Ln, 3407
-     * Nutwood Ln and 12009 Tambourine Dr all state `Exit Inspection`.
+     * TEMPLATE_NOT_RECOGNISED because of that guess — three of those reports
+     * all state `Exit Inspection`.
      */
     expect(classifyTemplate('Exit Inspection')).toBe(InspectionType.MOVE_OUT);
     expect(classifyTemplate('Ingoing Inspection')).toBe(InspectionType.MOVE_IN);
@@ -194,15 +194,15 @@ describe('reading the type the report states about itself', () => {
 
 describe('the date in a filename', () => {
   it('reads the office format', () => {
-    expect(dateFromFileName('7306 Cypress Prairie_Safety Inspection_031819.pdf')).toBeNull();
-    expect(dateFromFileName('Move out_Inspection_7306 Cypress Prairie_08052020.pdf')).toBe(
+    expect(dateFromFileName('7419 Fable Prairie_Safety Inspection_031819.pdf')).toBeNull();
+    expect(dateFromFileName('Move out_Inspection_7419 Fable Prairie_08052020.pdf')).toBe(
       '2020-08-05',
     );
   });
 
   it('refuses a house number that looks like a date', () => {
-    // `1123 Runneburg Rd` is an address. Read as a date it is the year 1123,
+    // `1149 Fauxburg Rd` is an address. Read as a date it is the year 1149,
     // and an inspection dated then sorts before everything and matches nothing.
-    expect(dateFromFileName('1123 Runneburg Rd_Safety Inspection.pdf')).toBeNull();
+    expect(dateFromFileName('1149 Fauxburg Rd_Safety Inspection.pdf')).toBeNull();
   });
 });

@@ -116,8 +116,8 @@ export interface StandardLayoutArea {
  *
  * ── THE NAMES ARE THE OFFICE'S, NOT OURS ─────────────────────────────────────
  *
- * Taken from a real occupied inspection: 14547 Gleaming Rose Dr, walked by
- * Moses Rodriguez on 2026-09-08 under the office's own "Occupied Inspection"
+ * Taken from a real occupied inspection, walked by Moses Rodriguez on
+ * 2026-09-08 under the office's own "Occupied Inspection"
  * template. The first version of this list guessed at half of them, and the
  * guesses were wrong in a way that matters — "Second Bedroom" where the office
  * writes "Bedroom 2", one "Exterior" where the form separates front from rear.

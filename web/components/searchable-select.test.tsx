@@ -250,7 +250,7 @@ describe('SearchableSelect selected-option visibility', () => {
  */
 describe('an option carrying a badge', () => {
   const badged = [
-    { value: 'real', label: '4412 Wicklow Bend' },
+    { value: 'real', label: '4468 Chimera Bend' },
     { value: 'demo', label: 'Demo Property 1', badge: 'Demo' },
   ];
 

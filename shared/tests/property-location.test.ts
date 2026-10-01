@@ -7,34 +7,34 @@ import {
 } from '../src/contracts/property-location.js';
 
 const HOUSTON = {
-  addressLine1: '10054 Copper Hollow Ln',
+  addressLine1: '10181 Invented Hollow Ln',
   city: 'Houston',
   state: 'TX',
-  postalCode: '77044-5594',
+  postalCode: '77044-0102',
 };
 
 describe('geocodableAddress', () => {
   it('drops the ZIP+4 suffix', () => {
     // The extra four digits identify a delivery point rather than a place, and
     // geocoders match worse with them attached than without.
-    expect(geocodableAddress(HOUSTON)).toBe('10054 Copper Hollow Ln, Houston, TX 77044');
+    expect(geocodableAddress(HOUSTON)).toBe('10181 Invented Hollow Ln, Houston, TX 77044');
   });
 
   it('keeps a plain five-digit postcode', () => {
     expect(geocodableAddress({ ...HOUSTON, postalCode: '77044' })).toBe(
-      '10054 Copper Hollow Ln, Houston, TX 77044',
+      '10181 Invented Hollow Ln, Houston, TX 77044',
     );
   });
 
   it('collapses the double spaces that hand-entered data is full of', () => {
     expect(
-      geocodableAddress({ ...HOUSTON, addressLine1: '10054  Copper   Hollow Ln ' }),
-    ).toBe('10054 Copper Hollow Ln, Houston, TX 77044');
+      geocodableAddress({ ...HOUSTON, addressLine1: '10181  Invented   Hollow Ln ' }),
+    ).toBe('10181 Invented Hollow Ln, Houston, TX 77044');
   });
 
   it('omits an empty postcode rather than leaving a dangling state', () => {
     expect(geocodableAddress({ ...HOUSTON, postalCode: '' })).toBe(
-      '10054 Copper Hollow Ln, Houston, TX',
+      '10181 Invented Hollow Ln, Houston, TX',
     );
   });
 });
@@ -65,7 +65,7 @@ describe('needsGeocoding', () => {
     // The case this whole field exists for: a corrected address must not keep
     // pointing at the old house. A wrong pin is worse than no pin — it sends
     // somebody to the wrong door with confidence.
-    expect(needsGeocoding({ ...placed, addressLine1: '10056 Copper Hollow Ln' })).toBe(true);
+    expect(needsGeocoding({ ...placed, addressLine1: '10183 Invented Hollow Ln' })).toBe(true);
   });
 
   it('does not consider a ZIP+4 correction a change', () => {
@@ -78,7 +78,7 @@ describe('needsGeocoding', () => {
 describe('replacing a coordinate that is already there', () => {
   /**
    * A real incident, 2026-09-12. A backfill moved every building from the
-   * Census geocoder to Google. For 3623 Rock Ledge Dr, Richmond, Google could
+   * Census geocoder to Google. For one address in Richmond, Google could
    * not find the street and returned the *area centroid*. The backfill wrote
    * it, because it accepted any answer Google gave, and the pin moved 7.2km
    * onto the middle of Richmond — off a perfectly good Census match on the

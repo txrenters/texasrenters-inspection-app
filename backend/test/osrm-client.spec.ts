@@ -142,8 +142,8 @@ describe('the snapping radius', () => {
   const originalFetch = global.fetch;
   const originalUrl = process.env.OSRM_URL;
 
-  const HOUSTON = { latitude: 29.958784, longitude: -95.574255 };
-  const MARIPOSA = { latitude: 29.866277, longitude: -95.200871 };
+  const HOUSTON = { latitude: 29.945084, longitude: -95.558155 };
+  const MARIPOSA = { latitude: 29.852577, longitude: -95.184771 };
 
   beforeEach(() => {
     process.env.OSRM_URL = 'http://osrm:5000';
@@ -220,7 +220,7 @@ describe('the snapping radius', () => {
     const asked = record((url) =>
       url.includes('123.806345')
         ? { status: 400, body: { code: 'NoSegment', message: 'no segment' } }
-        : { body: { code: 'Ok', waypoints: [{ location: [-95.574254, 29.958708] }] } },
+        : { body: { code: 'Ok', waypoints: [{ location: [-95.558154, 29.945008] }] } },
     );
 
     const snappable = await new OsrmClient().snappable([

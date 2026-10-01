@@ -39,8 +39,8 @@ const tenant = (sizes: string[], overrides: Record<string, unknown> = {}) => ({
   leaseName: 'Lease t1',
   startDate: null,
   zone: '2',
-  addressLine1: '6341 Del Monte Dr',
-  postalCode: '77057-3403',
+  addressLine1: '6417 Del Ejemplo Dr',
+  postalCode: '77057-0103',
   hvacFilterSizes: sizes,
   hvacFilterLocation: null,
   managementPlan: 'Standard',
@@ -263,8 +263,8 @@ describe('re-reading a quarter’s filter sizes from the tenant report', () => {
    */
   it('leaves a stop whose unit is no longer active rather than widening it to the building', async () => {
     const { service, stopUpdate } = harness(
-      [stop({ propertywareUnitId: 'unit-gone', tenant: tenant(['20x20x1 (N Main)'], { propertywareBuildingId: 'b1' }) })],
-      { units: [{ id: 'unit-other', name: '1/2 N Main', addressLine1: '5009 1/2 N Main St' }] },
+      [stop({ propertywareUnitId: 'unit-gone', tenant: tenant(['20x20x1 (N Fictional)'], { propertywareBuildingId: 'b1' }) })],
+      { units: [{ id: 'unit-other', name: '1/2 N Fictional', addressLine1: '4815 1/2 N Fictional St' }] },
     );
 
     const result = await service.refreshFilterSizes(USER, 'plan-1');
@@ -310,7 +310,7 @@ describe('re-reading a quarter’s filter sizes from the tenant report', () => {
     const result = await service.refreshFilterSizes(USER, 'plan-1');
 
     expect(result.stillMissing).toEqual([
-      { stopId: 's1', tenancyId: 't1', address: '6341 Del Monte Dr' },
+      { stopId: 's1', tenancyId: 't1', address: '6417 Del Ejemplo Dr' },
     ]);
     // Nothing to change: the stop's frozen sizes were already empty.
     expect(result.updated).toBe(0);
@@ -324,7 +324,7 @@ describe('re-reading a quarter’s filter sizes from the tenant report', () => {
    * report this tenancy as covered; it is not.
    */
   it('counts a tenancy whose only entry carries no size as still missing', async () => {
-    const note = 'reusable window AC unit (no need to change - 1/4 N Main)';
+    const note = 'reusable window AC unit (no need to change - 1/4 N Fictional)';
     const { service } = harness([stop({ tenant: tenant([note]) })]);
 
     const result = await service.refreshFilterSizes(USER, 'plan-1');

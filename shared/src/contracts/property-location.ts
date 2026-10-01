@@ -40,8 +40,8 @@ const PRECISION_RANK: Record<GeocodePrecision, number> = {
  * Whether a new answer is worth writing over the one already stored.
  *
  * A real incident, on 2026-09-12. A backfill moved every building from the
- * Census geocoder to Google, and for one address -- 3623 Rock Ledge Dr,
- * Richmond -- Google could not find the street and returned the *area centroid*
+ * Census geocoder to Google, and for one address in Richmond Google could
+ * not find the street and returned the *area centroid*
  * with `location_type: APPROXIMATE`. The backfill wrote it, because it accepted
  * any answer Google gave. The pin moved **7.2 kilometres**, from a Census match
  * on the right street to the middle of Richmond, and that is strictly worse

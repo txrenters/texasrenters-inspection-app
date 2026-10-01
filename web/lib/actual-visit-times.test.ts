@@ -23,22 +23,22 @@ const stop = (id: string, over: Partial<AssignedStop>): AssignedStop => ({
 });
 
 // Times in UTC; 14:00Z is 9:00 AM in Houston in September.
-const oak = stop('oak', { propertyName: '4226 Oak Shadows', startedAt: '2026-09-14T14:55:00Z', submittedAt: '2026-09-14T15:24:00Z' });
-const chamboard = stop('chamboard', { propertyName: '1150 chamboard', startedAt: '2026-09-14T15:32:00Z', submittedAt: '2026-09-14T15:42:00Z' });
+const oak = stop('oak', { propertyName: '4371 Pretend Oaks', startedAt: '2026-09-14T14:55:00Z', submittedAt: '2026-09-14T15:24:00Z' });
+const testville = stop('testville', { propertyName: '1187 testville', startedAt: '2026-09-14T15:32:00Z', submittedAt: '2026-09-14T15:42:00Z' });
 
 describe('the actual time of each visit', () => {
   it('is Start to Submit on site, and the drive from the previous submission', () => {
-    const visits = actualVisits([chamboard, oak]);
+    const visits = actualVisits([testville, oak]);
 
     expect(visits.get('oak')).toMatchObject({ onSiteSeconds: 29 * 60, driveSeconds: null, inProgress: false });
-    expect(visits.get('chamboard')).toEqual({
+    expect(visits.get('testville')).toEqual({
       startedAt: '2026-09-14T15:32:00Z',
       submittedAt: '2026-09-14T15:42:00Z',
       onSiteSeconds: 10 * 60,
       inProgress: false,
-      // Submitted Oak Shadows at 15:24, started chamboard at 15:32.
+      // Submitted Pretend Oaks at 15:24, started testville at 15:32.
       driveSeconds: 8 * 60,
-      fromPropertyName: '4226 Oak Shadows',
+      fromPropertyName: '4371 Pretend Oaks',
     });
   });
 
@@ -59,7 +59,7 @@ describe('the actual time of each visit', () => {
 
   it('measures a visit still under way up to now', () => {
     const underway = stop('now', { status: 'IN_PROGRESS', startedAt: '2026-09-14T16:00:00Z', submittedAt: null });
-    const visit = actualVisits([oak, chamboard, underway], Date.parse('2026-09-14T16:12:00Z')).get('now');
+    const visit = actualVisits([oak, testville, underway], Date.parse('2026-09-14T16:12:00Z')).get('now');
     expect(visit).toMatchObject({ inProgress: true, onSiteSeconds: 12 * 60, driveSeconds: 18 * 60 });
   });
 
@@ -71,7 +71,7 @@ describe('the actual time of each visit', () => {
 
 describe('the day added up', () => {
   it('adds on site and driving across the visits', () => {
-    expect(actualDayTotals(actualVisits([oak, chamboard]))).toEqual({
+    expect(actualDayTotals(actualVisits([oak, testville]))).toEqual({
       visits: 2,
       submitted: 2,
       onSiteSeconds: 39 * 60,

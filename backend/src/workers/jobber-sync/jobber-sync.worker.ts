@@ -1124,7 +1124,7 @@ export class JobberSyncWorker {
      *
      * Until the push lands, Jobber still holds the old day, technician or
      * Details, and applying them here would undo the office's edit a minute
-     * after they made it -- the Mariposa Green move-in, re-dated at 1:28 and put
+     * after they made it -- one property's move-in, re-dated at 1:28 and put
      * back at 1:30, was exactly that. Once the push is sent the two agree and
      * this reconciles as before; if it is abandoned, Jobber's copy wins again.
      * So does a change made in Jobber after the edit (`heldConsoleEdits`).

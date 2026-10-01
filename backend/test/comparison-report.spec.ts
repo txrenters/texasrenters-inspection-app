@@ -44,8 +44,8 @@ function inspectionRow(id: string, type: string, propertyAreaIds: string[], phot
     assignments: [{ technician: { displayName: 'Moses' } }],
     propertywareUnit: { name: 'Unit A' },
     propertywareBuilding: {
-      name: 'Lynbriar',
-      addressLine1: '25303 Lynbriar Ln',
+      name: 'Pretendwood',
+      addressLine1: '25347 Pretendwood Ln',
       city: 'Katy',
       state: 'TX',
       postalCode: '77494',

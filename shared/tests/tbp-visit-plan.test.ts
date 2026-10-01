@@ -145,18 +145,18 @@ describe('the services line of a planned visit', () => {
   });
 });
 
-/** 5009 N Main St: one building, three units, and the filter sizes the office labels by unit. */
+/** 4815 N Fictional St: one building, three units, and the filter sizes the office labels by unit. */
 describe('one unit’s filter sizes, from a building’s sizes labelled by unit', () => {
   const units = [
-    { name: 'House', addressLine1: '5009 N Main St' },
-    { name: '1/2', addressLine1: '5009 1/2 N Main St' },
-    { name: '1/4', addressLine1: '5009 1/4 N Main St' },
+    { name: 'House', addressLine1: '4815 N Fictional St' },
+    { name: '1/2', addressLine1: '4815 1/2 N Fictional St' },
+    { name: '1/4', addressLine1: '4815 1/4 N Fictional St' },
   ];
   const sizes = [
-    '20x20x1 (N Main)',
-    '16x20x1 (1/2 N Main)',
-    '14x18x1 (1/2 N Main)',
-    'reusable window AC unit (no need to change - 1/4 N Main)',
+    '20x20x1 (N Fictional)',
+    '16x20x1 (1/2 N Fictional)',
+    '14x18x1 (1/2 N Fictional)',
+    'reusable window AC unit (no need to change - 1/4 N Fictional)',
   ];
 
   it('keeps each unit’s own sizes, without their label', () => {
@@ -170,7 +170,7 @@ describe('one unit’s filter sizes, from a building’s sizes labelled by unit'
   });
 
   it('keeps a note that names no unit as the whole building’s', () => {
-    expect(unitFilterSizes(['16x25x4 (MEDIA)', '20x20x1 (1/2 N Main)'], units[0]!, units)).toEqual(['16x25x4 (MEDIA)']);
+    expect(unitFilterSizes(['16x25x4 (MEDIA)', '20x20x1 (1/2 N Fictional)'], units[0]!, units)).toEqual(['16x25x4 (MEDIA)']);
   });
 
   it('says nothing when the sizes are not labelled by unit', () => {

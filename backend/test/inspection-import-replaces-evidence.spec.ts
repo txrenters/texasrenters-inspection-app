@@ -7,7 +7,7 @@ import { join } from 'node:path';
  * It used to refuse an inspection holding anything, which read as caution and
  * was the opposite: an import is what the office reaches for when the record
  * here is *wrong*, so refusing to overwrite refused the case that mattered.
- * 10051 Spotted Horse Dr is the example — two test rooms invented on a property
+ * One property is the example — two test rooms invented on a property
  * layout, snapshotted onto every inspection there, undeletable through the
  * property screen while an inspection referenced them, and un-importable
  * because the inspection was not empty.
@@ -75,7 +75,7 @@ describe('an import over an inspection that already holds evidence', () => {
   });
 
   it('drops rooms the new report does not mention', () => {
-    // The Spotted Horse case: a report that does not mention a room is the
+    // The invented-test-rooms case: a report that does not mention a room is the
     // office saying that room is not part of this walkthrough. Without this the
     // test areas survive every import and stay undeletable.
     expect(COMMIT).toContain('touched.add(inspectionArea.id)');

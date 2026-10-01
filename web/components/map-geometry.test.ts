@@ -145,9 +145,9 @@ describe('a point', () => {
   });
 
   it('is exactly where it was put, with nothing rounded away', () => {
-    const feature = pointFeature(29.8657123, -95.2028456);
+    const feature = pointFeature(29.8520123, -95.1867456);
 
-    expect(feature.geometry.coordinates).toEqual([-95.2028456, 29.8657123]);
+    expect(feature.geometry.coordinates).toEqual([-95.1867456, 29.8520123]);
   });
 
   it('survives a collection, which is what a source wants', () => {

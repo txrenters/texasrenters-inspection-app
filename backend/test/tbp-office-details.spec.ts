@@ -20,7 +20,7 @@ const USER = {
   principalType: 'USER',
 } as unknown as AuthenticatedUser;
 
-const tenancy = (id: string, addressLine1: string, postalCode = '77433-8797') => ({
+const tenancy = (id: string, addressLine1: string, postalCode = '77433-0101') => ({
   id,
   externalId: `ext-${id}`,
   leaseName: `Lease ${id}`,
@@ -37,15 +37,15 @@ const tenancy = (id: string, addressLine1: string, postalCode = '77433-8797') =>
 
 describe('matching the office’s sheet to the quarter’s tenancies', () => {
   const tenancies = [
-    tenancy('t1', '19803 Bolton Bridge Ln'),
-    tenancy('t2', '2455 Morgan Ridge Ln', '77469'),
-    tenancy('t3', '5009 N Main St', '77009'),
-    tenancy('t4', '5009 N Main St', '77009'),
+    tenancy('t1', '19412 Lookalike Bridge Ln'),
+    tenancy('t2', '2318 Madeup Ridge Ln', '77469'),
+    tenancy('t3', '4815 N Fictional St', '77009'),
+    tenancy('t4', '4815 N Fictional St', '77009'),
   ];
 
   it('matches by address the way the Jobber sync does, ZIP+4 or not', () => {
     const { byTenantId, unmatched } = matchOfficeDetails(
-      [{ address: '19803 Bolton Bridge Lane', postalCode: '77433', details: 'Filter Change: 20x25x1 + Occupied Inspection' }],
+      [{ address: '19412 Lookalike Bridge Lane', postalCode: '77433', details: 'Filter Change: 20x25x1 + Occupied Inspection' }],
       tenancies,
     );
 
@@ -55,7 +55,7 @@ describe('matching the office’s sheet to the quarter’s tenancies', () => {
 
   it('matches an address one side wrote without its street type', () => {
     const { byTenantId } = matchOfficeDetails(
-      [{ address: '2455 Morgan Ridge', postalCode: '77469-1234', details: 'Filter Change + Occupied Inspection' }],
+      [{ address: '2318 Madeup Ridge', postalCode: '77469-1234', details: 'Filter Change + Occupied Inspection' }],
       tenancies,
     );
 
@@ -65,19 +65,19 @@ describe('matching the office’s sheet to the quarter’s tenancies', () => {
   /** A building with two enrolled units: the sheet row cannot say which, so neither gets it. */
   it('gives a row matching two tenancies to neither, and says so', () => {
     const { byTenantId, ambiguous } = matchOfficeDetails(
-      [{ address: '5009 N Main St', postalCode: '77009', details: 'Filter Change + Occupied Inspection' }],
+      [{ address: '4815 N Fictional St', postalCode: '77009', details: 'Filter Change + Occupied Inspection' }],
       tenancies,
     );
 
     expect(byTenantId.size).toBe(0);
-    expect(ambiguous.map((row) => row.address)).toEqual(['5009 N Main St']);
+    expect(ambiguous.map((row) => row.address)).toEqual(['4815 N Fictional St']);
   });
 
   it('keeps the first row for a tenancy and reports the second', () => {
     const { byTenantId, duplicates } = matchOfficeDetails(
       [
-        { address: '19803 Bolton Bridge Ln', postalCode: '77433', details: 'first' },
-        { address: '19803 Bolton Bridge Ln', postalCode: '77433', details: 'second' },
+        { address: '19412 Lookalike Bridge Ln', postalCode: '77433', details: 'first' },
+        { address: '19412 Lookalike Bridge Ln', postalCode: '77433', details: 'second' },
       ],
       tenancies,
     );
@@ -115,7 +115,7 @@ describe('importing the office’s sheet into a draft', () => {
         findMany: jest.fn().mockResolvedValue(
           (
             options.stops ?? [
-              { id: 's1', status: TbpStopStatus.PLANNED, inspectionId: null, inspectionType: InspectionType.HVAC, tenant: tenancy('t1', '19803 Bolton Bridge Ln') },
+              { id: 's1', status: TbpStopStatus.PLANNED, inspectionId: null, inspectionType: InspectionType.HVAC, tenant: tenancy('t1', '19412 Lookalike Bridge Ln') },
               { id: 's2', status: TbpStopStatus.PLANNED, inspectionId: null, inspectionType: InspectionType.OCCUPIED, tenant: tenancy('t2', '7 Elm St') },
               { id: 's3', status: TbpStopStatus.PUBLISHED, inspectionId: 'insp-3', inspectionType: InspectionType.OCCUPIED, tenant: tenancy('t3', '9 Oak St') },
             ]
@@ -134,8 +134,8 @@ describe('importing the office’s sheet into a draft', () => {
   };
 
   const ROWS = [
-    { address: '19803 Bolton Bridge Ln', city: 'Katy', postalCode: '77433-8797', details: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection' },
-    { address: '9 Oak St', city: 'Katy', postalCode: '77433-8797', details: 'Filter Change: 14x20x1 + Pest Control + Occupied Inspection' },
+    { address: '19412 Lookalike Bridge Ln', city: 'Katy', postalCode: '77433-0101', details: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection' },
+    { address: '9 Oak St', city: 'Katy', postalCode: '77433-0101', details: 'Filter Change: 14x20x1 + Pest Control + Occupied Inspection' },
     { address: '1 Nowhere Rd', city: 'Katy', postalCode: '77001', details: 'Filter Change + Occupied Inspection' },
     { address: '3 Blank St', city: 'Katy', postalCode: '77001', details: '   ' },
   ];
@@ -189,7 +189,7 @@ describe('importing the office’s sheet into a draft', () => {
 
     const audit = auditCreate.mock.calls[0][0].data;
     expect(audit.action).toBe('TBP_PLAN_OFFICE_DETAILS_IMPORTED');
-    expect(JSON.stringify(audit.metadata)).not.toContain('Bolton');
+    expect(JSON.stringify(audit.metadata)).not.toContain('Lookalike');
     expect(audit.metadata).toMatchObject({ rows: 3, matched: 2, unmatched: 1 });
   });
 
@@ -209,7 +209,7 @@ describe('importing the office’s sheet into a draft', () => {
           status: TbpStopStatus.PLANNED,
           inspectionId: null,
           inspectionType: InspectionType.HVAC,
-          tenant: tenancy('t1', '19803 Bolton Bridge Ln'),
+          tenant: tenancy('t1', '19412 Lookalike Bridge Ln'),
           visitDetailsOverriddenAt: new Date('2026-09-16'),
         },
       ],
@@ -251,7 +251,7 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
           onSiteMinutesOverriddenAt: stop.onSiteMinutesOverriddenAt ?? null,
           hvacFilterSizes: ['16x25x1'],
           plan: { status: stop.planStatus ?? TbpPlanStatus.DRAFT, occupiedVisitMinutes: 30, hvacVisitMinutes: 45 },
-          tenant: { ...tenancy('t1', '19803 Bolton Bridge Ln'), managementPlan: 'BX' },
+          tenant: { ...tenancy('t1', '19412 Lookalike Bridge Ln'), managementPlan: 'BX' },
         }),
         update: stopUpdate,
       },
@@ -303,12 +303,12 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
   });
 });
 
-/** 5009 N Main St: a building of three units, and a coordinator's choices on its visits. */
+/** 4815 N Fictional St: a building of three units, and a coordinator's choices on its visits. */
 describe('rebuilding a draft keeps what a coordinator edited', () => {
   const UNITS = [
-    { id: 'unit-house', externalId: '9010', name: 'House', abbreviation: '5009NMAIN', addressLine1: '5009 N Main St' },
-    { id: 'unit-half', externalId: '9012', name: '1/2', abbreviation: '50091/2NM', addressLine1: '5009 1/2 N Main St' },
-    { id: 'unit-quarter', externalId: '9014', name: '1/4', abbreviation: '50091/4NM', addressLine1: '5009 1/4 N Main St' },
+    { id: 'unit-house', externalId: '9010', name: 'House', abbreviation: '4815NFICTIONAL', addressLine1: '4815 N Fictional St' },
+    { id: 'unit-half', externalId: '9012', name: '1/2', abbreviation: '48151/2NF', addressLine1: '4815 1/2 N Fictional St' },
+    { id: 'unit-quarter', externalId: '9014', name: '1/4', abbreviation: '48151/4NF', addressLine1: '4815 1/4 N Fictional St' },
   ];
   const build = (
     existing: Record<string, unknown>,
@@ -318,15 +318,15 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     earlierUnitId: string | null = null,
   ) => {
     const tenant = {
-      ...tenancy('t1', '5009 N Main St', '77009'),
+      ...tenancy('t1', '4815 N Fictional St', '77009'),
       ...fromReport,
       managementPlan: 'Basic',
       hvacPlan: 'On our AC Plan',
       hvacFilterSizes: [
-        '20x20x1 (N Main)',
-        '16x20x1 (1/2 N Main)',
-        '14x18x1 (1/2 N Main)',
-        'reusable window AC unit (no need to change - 1/4 N Main)',
+        '20x20x1 (N Fictional)',
+        '16x20x1 (1/2 N Fictional)',
+        '14x18x1 (1/2 N Fictional)',
+        'reusable window AC unit (no need to change - 1/4 N Fictional)',
       ],
     };
     const stopUpsert = jest.fn().mockResolvedValue({});
@@ -409,7 +409,7 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     const update = stopUpsert.mock.calls[0][0].update;
     expect(update.inspectionType).toBe('HVAC');
     expect(update.visitDetails).toBe('Filter Change: 16x20x1 + HVAC Inspection\nCall the tenant first');
-    expect(update.visitTitle).toBe('5009 1/2 N Main St - Zone 1 - Q4 2026 Tenant Benefit Package');
+    expect(update.visitTitle).toBe('4815 1/2 N Fictional St - Zone 1 - Q4 2026 Tenant Benefit Package');
   });
 
   /**
@@ -475,7 +475,7 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
       propertywareUnitId: 'unit-half',
       unitResolution: 'REPORT_UNIT',
       hvacFilterSizes: ['16x20x1', '14x18x1'],
-      visitTitle: '5009 1/2 N Main St - Zone 1 - Q4 2026 Tenant Benefit Package',
+      visitTitle: '4815 1/2 N Fictional St - Zone 1 - Q4 2026 Tenant Benefit Package',
     });
   });
 
@@ -508,7 +508,7 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     expect(stopUpsert.mock.calls[0][0].update).toMatchObject({
       propertywareUnitId: 'unit-half',
       unitResolution: 'PRIOR_QUARTER',
-      visitTitle: expect.stringContaining('5009 1/2 N Main St'),
+      visitTitle: expect.stringContaining('4815 1/2 N Fictional St'),
     });
   });
 

@@ -14,7 +14,7 @@ const HOUSTON_REPLY = {
   result: {
     addressMatches: [
       {
-        matchedAddress: '10054 COPPER HOLLOW LN, HOUSTON, TX, 77044',
+        matchedAddress: '10181 INVENTED HOLLOW LN, HOUSTON, TX, 77044',
         coordinates: { x: -95.18234, y: 29.87451 },
       },
     ],
@@ -29,7 +29,7 @@ describe('parseCensusResponse', () => {
       latitude: 29.87451,
       longitude: -95.18234,
       precision: 'INTERPOLATED',
-      matchedAddress: '10054 COPPER HOLLOW LN, HOUSTON, TX, 77044',
+      matchedAddress: '10181 INVENTED HOLLOW LN, HOUSTON, TX, 77044',
       // Which geocoder answered is now stored, because it is what tells a row
       // that has already been offered a rooftop lookup from one that has not.
       source: 'CENSUS',
@@ -84,8 +84,8 @@ describe('parseCensusResponse', () => {
 describe('positions', () => {
   const BUILDING = {
     id: 'b-1',
-    name: 'Copper Hollow',
-    addressLine1: '10054 Copper Hollow Ln',
+    name: 'Invented Hollow',
+    addressLine1: '10181 Invented Hollow Ln',
     city: 'Houston',
     state: 'TX',
     postalCode: '77044',

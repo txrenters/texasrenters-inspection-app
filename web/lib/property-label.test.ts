@@ -7,8 +7,8 @@ describe('propertyOptionLabel', () => {
     // The case from the field: the property is named after its own street, so
     // "name — address" printed the same thing twice.
     expect(
-      propertyOptionLabel('10054 Copper Hollow Ln.', '10054 Copper Hollow Ln, Houston, TX 77044-5594'),
-    ).toBe('10054 Copper Hollow Ln, Houston, TX 77044-5594');
+      propertyOptionLabel('10181 Invented Hollow Ln.', '10181 Invented Hollow Ln, Houston, TX 77044-0102'),
+    ).toBe('10181 Invented Hollow Ln, Houston, TX 77044-0102');
   });
 
   it('ignores punctuation and spacing differences between the two fields', () => {

@@ -121,7 +121,7 @@ export default function HomeAddressScreen() {
               // had also been refused.
               if (save.isError) save.reset();
             }}
-            placeholder="12111 Westwold Dr, Tomball, TX 77377"
+            placeholder="123 Example St, Houston, TX 77002"
             placeholderTextColor={theme.mutedForeground}
             returnKeyType="done"
             textContentType="fullStreetAddress"

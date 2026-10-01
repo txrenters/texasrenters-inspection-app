@@ -56,12 +56,12 @@ vi.mock('react-map-gl/mapbox', () => ({
 }));
 
 const MOSES = 'tech-moses';
-const onTheFreeway = { latitude: 29.5516, longitude: -95.1449 };
-const furtherUp = { latitude: 29.5541, longitude: -95.1421 };
+const onTheFreeway = { latitude: 29.5379, longitude: -95.1288 };
+const furtherUp = { latitude: 29.5404, longitude: -95.126 };
 const property: PropertyPosition = {
   id: 'building-1',
-  name: '2914 County Road 8',
-  addressLine1: '2914 County Road 8',
+  name: '2958 Illusion Rd',
+  addressLine1: '2958 Illusion Rd',
   city: 'Pearland',
   latitude: 29.53,
   longitude: -95.28,
@@ -102,7 +102,7 @@ describe('following a technician', () => {
   it('goes to them once when they are picked', () => {
     render(<CameraDirector {...props({ focus: following, followed: onTheFreeway })} />);
 
-    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.1449, 29.5516], zoom: 15 });
+    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.1288, 29.5379], zoom: 15 });
   });
 
   it('does not move when their position is merely delivered again', () => {
@@ -136,7 +136,7 @@ describe('following a technician', () => {
     rerender(<CameraDirector {...props({ focus: following, followed: furtherUp })} />);
 
     // No `zoom` key at all: the zoom belongs to the reader once they have set it.
-    expect(map.easeTo).toHaveBeenLastCalledWith({ center: [-95.1421, 29.5541] });
+    expect(map.easeTo).toHaveBeenLastCalledWith({ center: [-95.126, 29.5404] });
   });
 
   it('stops following the moment the reader moves the map', () => {
@@ -169,7 +169,7 @@ describe('following a technician', () => {
       />,
     );
 
-    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.1421, 29.5541], zoom: 15 });
+    expect(map.easeTo).toHaveBeenCalledWith({ center: [-95.126, 29.5404], zoom: 15 });
   });
 
   it('frames their stops when they have not reported a position', () => {

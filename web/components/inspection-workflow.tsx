@@ -523,7 +523,7 @@ export function AddAreasDialog({
      * ids only went up once somebody cleared a box; this dialog sends exactly
      * what was ticked, so offering an area the server refuses turns into
      * "Select only approved areas belonging to this property" on a dialog where
-     * every area shown does belong to the property. 4207 Hardy St, which has
+     * every area shown does belong to the property. One property, which has
      * four such areas beside its fifteen rooms, is where that would have been
      * met first.
      */

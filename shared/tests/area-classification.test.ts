@@ -107,7 +107,7 @@ describe('checklistTemplateFor, against the source report', () => {
     ]);
   });
 
-  it('reproduces each room type from the 17307 Nordway report', () => {
+  it('reproduces each room type from the Nordway report', () => {
     // Transcribed from the report's own ROOM/ITEM tables. If someone edits the
     // template tables, this says which room they changed and against what.
     const expected: Record<string, string[]> = {
