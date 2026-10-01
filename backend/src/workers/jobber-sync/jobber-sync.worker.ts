@@ -630,6 +630,47 @@ export class JobberSyncWorker {
     }
 
     /**
+     * An inspection already carries this visit, whatever its row says.
+     *
+     * `Inspection.jobberVisitId` is the link; this row is bookkeeping about
+     * it. A benefit-package visit on Moses's October 1 had a linked inspection and a row
+     * still reading "not imported, no day yet" (2026-10-01), so every pass
+     * took it for a visit it had never met: Jobber moved it to Unscheduled
+     * and the inspection stayed on its day, and a day in Jobber would have
+     * tried to make a second inspection for it. The row is put right and the
+     * visit handled as the imported one it is.
+     *
+     * Its old code goes with it: "no day yet" written while nothing was
+     * imported says nothing about an inspection a person may have cancelled,
+     * and `applyChanges` would read it as one this sync took off its day.
+     */
+    const linked = await this.prisma.inspection.findFirst({
+      where: { organizationId, jobberVisitId: visit.id },
+      select: { id: true },
+    });
+    if (linked) {
+      await this.prisma.jobberVisitImport.update({
+        where: { id: record.id },
+        data: {
+          status: JobberVisitImportStatus.IMPORTED,
+          inspectionId: linked.id,
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+      this.logger.warn({
+        event: 'jobber_import_link_repaired',
+        jobberVisitId: visit.id,
+        inspectionId: linked.id,
+        was: existing?.status ?? null,
+        wasInspectionId: existing?.inspectionId ?? null,
+        wasFailureCode: existing?.failureCode ?? null,
+      });
+      await this.applyChanges(organizationId, visit, linked.id, result, { payload: existing?.payload ?? null });
+      return;
+    }
+
+    /**
      * Work that had already happened before we ever saw it.
      *
      * The window reaches seven days into the past, so a normal run sees plenty
