@@ -18,6 +18,7 @@ import {
   type PlannableStop,
   type Quarter,
   type UnplacedReason,
+  DEFAULT_DAY_LIMITS,
   MAX_LEG_MINUTES,
   MAX_STOPS_PER_DAY,
   anchorAsStop,
@@ -272,6 +273,8 @@ const UNPLACED_MESSAGE: Record<RoutingUnplacedReason, string> = {
 interface MeasuredCrew {
   date: string;
   technicianId: string;
+  /** The office's template group the day was laid out from; absent or null for one the planner grouped. */
+  templateGroupId?: string | null;
   /** In driving order. */
   stops: PlannableStop[];
   /** Seconds from the stop before, per stop; null for the first, or when nothing measured it. */
@@ -463,10 +466,18 @@ export class QuarterPlannerService {
       settings,
       options.movePublishedVisits,
     );
+    /**
+     * From a template, the template sets each day (the office, 2026-10-01), and
+     * the dialog no longer asks how many visits a day. What the day size still
+     * decides -- the days made from properties in none of its groups -- follows
+     * the office's standing rule, nine and a tenth where it is close, whatever an
+     * older console sends. The plan keeps its own size for its own grouping.
+     */
+    const daySize = template ? DEFAULT_DAY_LIMITS : settings;
     const limits: DayLimits = {
       maxOnSiteMinutes: settings.maxOnSiteMinutes,
-      minStopsPerDay: settings.minStopsPerDay,
-      maxStopsPerDay: settings.maxStopsPerDay,
+      minStopsPerDay: daySize.minStopsPerDay,
+      maxStopsPerDay: daySize.maxStopsPerDay,
       maxLegMinutes: settings.maxLegMinutes,
     };
     const zones = zoneCircle(stops, roster, settings.maxDriveMinutes);
@@ -502,7 +513,7 @@ export class QuarterPlannerService {
       homes: roster.homes,
       tripZones: zones.outOfReach,
       quarter,
-      ...(presets ? { presetGroups: presets.groups } : {}),
+      ...(presets ? { presetGroups: presets.groups, presetTargets: presets.targets } : {}),
     });
     const unplaced: RoutingSummary['unplaced'] = assignment.unplaced;
     // A day's move-outs and move-ins are routed and measured with its visits,
@@ -514,7 +525,12 @@ export class QuarterPlannerService {
         settings.maxLegMinutes * 60,
       );
     const measured: MeasuredCrew[] = [];
-    for (const crew of assignment.crews) measured.push(await measureCrew(crew));
+    for (const crew of assignment.crews)
+      measured.push({
+        ...(await measureCrew(crew)),
+        // The office's group the day is, so it is shown in that group's name and colour.
+        templateGroupId: crew.preset === undefined ? null : (template?.groups[crew.preset]?.id ?? null),
+      });
     const byHand: MeasuredCrew[] = [];
     for (const crew of placedByHand) byHand.push(await measureCrew(crew));
 
@@ -1502,6 +1518,7 @@ export class QuarterPlannerService {
               technicianId: crew.technicianId,
               date: new Date(`${crew.date}T00:00:00.000Z`),
               ...dayRow(crew),
+              templateGroupId: crew.templateGroupId ?? null,
             },
           });
 
@@ -1736,7 +1753,7 @@ export function templateStops(
   template: Pick<TemplateForPlanning, 'groups'>,
   stops: readonly PlannableStop[],
   buildings: ReadonlyMap<string, string>,
-): { groups: string[][]; notInTemplate: number } {
+): { groups: string[][]; targets: number[]; notInTemplate: number } {
   const atBuilding = new Map<string, string[]>();
   for (const stop of stops) {
     const building = buildings.get(stop.stopId);
@@ -1745,6 +1762,13 @@ export function templateStops(
   const named = new Set(template.groups.flatMap((group) => group.buildingIds));
   return {
     groups: template.groups.map((group) => group.buildingIds.flatMap((building) => atBuilding.get(building) ?? [])),
+    /**
+     * The room each group has for a property new since the template was saved:
+     * the size it was drawn to, so a group already at it takes none. A target
+     * counts properties and a group holds visits, so a building of two
+     * tenancies fills two of it.
+     */
+    targets: template.groups.map((group) => group.target),
     notInTemplate: stops.filter((stop) => !named.has(buildings.get(stop.stopId) ?? '')).length,
   };
 }

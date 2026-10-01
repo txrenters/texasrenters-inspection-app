@@ -38,7 +38,8 @@ interface TemplateRow {
   name: string;
   revision: number;
   archivedAt?: Date | null;
-  groups: { name: string; buildingIds: string[] }[];
+  /** `target` is how many properties the office drew the group to hold: its size, when not said. */
+  groups: { id?: string; name: string; target?: number; buildingIds: string[] }[];
 }
 
 interface Point {
@@ -260,8 +261,10 @@ const build = (
                 revision: template.revision,
                 archivedAt: template.archivedAt ?? null,
                 groups: template.groups.map((group, index) => ({
+                  id: group.id ?? `group-${index + 1}`,
                   position: index + 1,
                   name: group.name,
+                  target: group.target ?? group.buildingIds.length,
                   members: group.buildingIds.map((buildingId) => ({ buildingId })),
                 })),
               }
@@ -1694,6 +1697,83 @@ describe('a quarter built from a group template', () => {
 
     expect(dayOf(stopUpdate, 's1-unit-b')).toEqual(dayOf(stopUpdate, 's1'));
     expect(summary.template?.notInTemplate).toBe(0);
+  });
+
+  /**
+   * The office (2026-10-01): a group of nine drawn to hold nine stays nine. A
+   * property new since the template was saved joins a group only while it is
+   * under the size it was drawn to -- not up to the plan's most a day, which
+   * let a group of nine quietly become twelve.
+   */
+  it('lets a new property join a group only while it is under its target', async () => {
+    const full = [...tight(), stop('new', 11, 0.02, { buildingId: 'b-new' })];
+    const atTarget = build(full, { templates: [template()] });
+    await atTarget.service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+    const groupDays = new Set(['s1', 's2'].map((id) => dayOf(atTarget.stopUpdate, id)));
+    expect(groupDays.has(dayOf(atTarget.stopUpdate, 'new'))).toBe(false);
+
+    const roomy = template({
+      groups: [
+        { name: 'Odd', target: 6, buildingIds: ['b1', 'b3', 'b5', 'b7', 'b9'] },
+        { name: 'Even', buildingIds: ['b2', 'b4', 'b6', 'b8', 'b10'] },
+      ],
+    });
+    const withRoom = build(full, { templates: [roomy] });
+    await withRoom.service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+    expect(dayOf(withRoom.stopUpdate, 'new')).toEqual(dayOf(withRoom.stopUpdate, 's1'));
+  });
+
+  /**
+   * The dialog no longer asks how many a day once a template is chosen. The
+   * days it still sizes -- made from properties in none of its groups -- follow
+   * the office's standing nine, not a twelve an older console sends.
+   */
+  it('sizes the days of properties in no group at the office’s nine, whatever the plan says', async () => {
+    // Eleven new properties together, in none of the template's groups.
+    const loose = Array.from({ length: 11 }, (_, index) =>
+      stop(`n${index + 1}`, 20 + index, 3 + index * 0.05, { buildingId: `n-b${index + 1}` }),
+    );
+    const daysOf = (stopUpdate: jest.Mock) => new Set(loose.map((row) => dayOf(stopUpdate, row.id)));
+
+    const fromTemplate = build([...tight(), ...loose], { templates: [template()] });
+    await fromTemplate.service.route('org-1', 'plan-1', {
+      groupTemplateId: TEMPLATE_ID,
+      minStopsPerDay: 12,
+      maxStopsPerDay: 12,
+    });
+    expect(daysOf(fromTemplate.stopUpdate).size).toBeGreaterThan(1);
+
+    // The same twelve, asked for without a template, is honoured: one day of all eleven.
+    const ownGrouping = build(loose);
+    await ownGrouping.service.route('org-1', 'plan-1', { minStopsPerDay: 12, maxStopsPerDay: 12 });
+    expect(daysOf(ownGrouping.stopUpdate).size).toBe(1);
+  });
+
+  it('records the template group each day was laid out from, and none for a day the planner made', async () => {
+    const stops = [...tight(), ...Array.from({ length: 9 }, (_, index) => stop(`n${index + 1}`, 20 + index, 3 + index * 0.05, { buildingId: `n-b${index + 1}` }))];
+    const { service, dayCreate } = build(stops, {
+      templates: [
+        template({
+          groups: [
+            { id: 'group-odd', name: 'Odd', buildingIds: ['b1', 'b3', 'b5', 'b7', 'b9'] },
+            { id: 'group-even', name: 'Even', buildingIds: ['b2', 'b4', 'b6', 'b8', 'b10'] },
+          ],
+        }),
+      ],
+    });
+
+    await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+
+    const recorded = dayCreate.mock.calls.map((call) => call[0].data.templateGroupId).sort();
+    expect(recorded).toEqual(['group-even', 'group-odd', null].sort());
+  });
+
+  it('records no template group on a quarter the planner grouped itself', async () => {
+    const { service, dayCreate } = build(tight());
+
+    await service.route('org-1', 'plan-1', {});
+
+    expect(dayCreate.mock.calls.every((call) => call[0].data.templateGroupId === null)).toBe(true);
   });
 
   it('refuses an archived template, and writes nothing', async () => {

@@ -353,6 +353,8 @@ export class PlanningController {
           originKind: true,
           durationSource: true,
           departureAssumedAt: true,
+          // The office's template group the day was laid out from: its name and colour, as in the Group maker.
+          templateGroup: { select: { id: true, position: true, name: true, color: true } },
         },
       }),
       this.prisma.tbpQuarterPlanStop.findMany({

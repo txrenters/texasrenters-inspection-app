@@ -103,7 +103,12 @@ export interface TemplateForPlanning {
   name: string;
   revision: number;
   archivedAt: Date | null;
-  groups: { position: number; name: string; buildingIds: string[] }[];
+  /**
+   * Each group's buildings in order, with how many properties the office meant
+   * it to hold (`target`): a property new since the template was saved joins a
+   * group only while it has room under that (2026-10-01).
+   */
+  groups: { id: string; position: number; name: string; target: number; buildingIds: string[] }[];
 }
 
 /**
@@ -128,8 +133,10 @@ export async function templateForPlanning(
       groups: {
         orderBy: { position: 'asc' },
         select: {
+          id: true,
           position: true,
           name: true,
+          target: true,
           members: { orderBy: { position: 'asc' }, select: { buildingId: true } },
         },
       },
@@ -142,8 +149,10 @@ export async function templateForPlanning(
     revision: template.revision,
     archivedAt: template.archivedAt,
     groups: template.groups.map((group) => ({
+      id: group.id,
       position: group.position,
       name: group.name,
+      target: group.target,
       buildingIds: group.members.map((member) => member.buildingId),
     })),
   };

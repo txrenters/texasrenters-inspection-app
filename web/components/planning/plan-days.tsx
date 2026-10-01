@@ -110,6 +110,31 @@ function weekOf(date: string) {
   return `Week of ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(monday)}`;
 }
 
+/**
+ * The office's template group a day was laid out from: its colour and "Group 12
+ * · Katy North", as the Group maker names it (the office, 2026-10-01).
+ */
+export function TemplateGroupTag({
+  group,
+  className,
+}: {
+  group: NonNullable<PlanDay['templateGroup']>;
+  className?: string;
+}) {
+  const number = `Group ${group.position}`;
+  const name = group.name.trim();
+  return (
+    <span className={cn('flex min-w-0 items-center gap-1.5', className)}>
+      <span
+        aria-hidden
+        className="inline-block size-2.5 shrink-0 rounded-full border border-white shadow-sm"
+        style={{ backgroundColor: group.color }}
+      />
+      <span className="truncate">{name && name !== number ? `${number} · ${name}` : number}</span>
+    </span>
+  );
+}
+
 /** The zones a day's visits are in, as "Zone 2" or "Zones 1, 2". */
 function zonesOf(day: PlanDay) {
   const zones = [...new Set(day.stops.map((stop) => zoneNumberOf(stop.zone)).filter((zone): zone is string => Boolean(zone)))];
@@ -212,6 +237,7 @@ export function PlanDays({
                     <span className="text-sm font-medium">{DAY.format(new Date(day.date))}</span>
                     <span className="text-muted-foreground truncate text-xs">{day.technician.displayName}</span>
                   </div>
+                  {day.templateGroup ? <TemplateGroupTag className="text-xs" group={day.templateGroup} /> : null}
                   <div className="text-muted-foreground text-xs">
                     {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
                     {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
@@ -300,6 +326,7 @@ function DayDetail({
           <h2 className="text-base font-semibold tracking-tight">{LONG_DAY.format(new Date(day.date))}</h2>
           <span className="text-sm font-medium">{day.technician.displayName}</span>
         </div>
+        {day.templateGroup ? <TemplateGroupTag className="text-sm" group={day.templateGroup} /> : null}
         <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 xl:grid-cols-4">
           <div className="flex items-baseline gap-2">
             <dt className="text-muted-foreground">Inspecting</dt>
