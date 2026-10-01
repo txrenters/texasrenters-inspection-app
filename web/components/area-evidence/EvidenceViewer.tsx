@@ -240,7 +240,11 @@ export function EvidenceViewer({
     setZoom(MIN_ZOOM);
   }, [photoPath]);
 
-  useEffect(() => {
+  // This listener and the wheel's below are layout effects, so each is in
+  // place in the same commit as the photograph it acts on. As passive effects
+  // they could land a frame later on a busy machine, and a key or wheel turn
+  // in that frame did nothing -- or scrolled the page under the viewer.
+  useLayoutEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       // Typing a rejection reason in the review panel: the arrows move the
       // caret, and Escape must not throw the half-written reason away.
@@ -278,7 +282,7 @@ export function EvidenceViewer({
    * passive listener cannot stop the page scrolling -- or, with a trackpad
    * pinch, the browser zooming the whole console -- underneath the photograph.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = stage.current;
     if (!node || !zoomable) return;
     function onWheel(event: WheelEvent) {
