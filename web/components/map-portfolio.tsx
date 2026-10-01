@@ -2,21 +2,18 @@
 
 import type { PropertyPosition, TechnicianPosition } from '@texasrenters/shared';
 import { ONLINE_WITHIN_MS } from '@texasrenters/shared';
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Marker, Popup, Source, useMap } from 'react-map-gl/mapbox';
 
-import {
-  clusterByGrid,
-  inBox,
-  padBox,
-  ringIsLegible,
-  zoomToIsolate,
-  type Box,
-} from '@/components/map-clusters';
+import { inBox, padBox, ringIsLegible, spotOffsets, type Box } from '@/components/map-clusters';
 import { useMapStroke } from '@/components/map-colors';
+import { GroupDisc, LooseDisc, OTHER_PROPERTY_GREY, popupOffsets } from '@/components/map-discs';
 import { circleFeature, featureCollection } from '@/components/map-geometry';
+import { ZoneLayers } from '@/components/map-zones';
+import { groupColorOf, UNGROUPED_GREEN } from '@/components/planning/group-file';
+import { zoneTerritories } from '@/components/planning/zone-territories';
 import { Badge } from '@/components/ui/badge';
-import { ClusterPin, DrivingPin, PropertyPin, TechnicianPin } from '@/components/map-pins';
+import { DrivingPin, TechnicianPin } from '@/components/map-pins';
 import { useGlide } from '@/lib/map-animation';
 import { drawsAsDriving, motionOf, type Motion } from '@/lib/technician-motion';
 import { useMotionTracks } from '@/lib/use-motion-tracks';
@@ -241,25 +238,144 @@ export const GeofenceLayer = memo(function GeofenceLayer({ rings }: { rings: rea
     </Source>
   );
 });
+/** What a property is on the map: in a group, on the package in none, or the rest of the portfolio. */
+type DiscKind = 'GROUP' | 'LOOSE' | 'OTHER';
+
+const kindOf = (property: PropertyPosition): DiscKind =>
+  property.tbpGroup ? 'GROUP' : property.tbpEnrolled ? 'LOOSE' : 'OTHER';
+
+/** "Group 12 · Katy North", or just the name when it already says the number. */
+function groupLabel(group: NonNullable<PropertyPosition['tbpGroup']>) {
+  const number = `Group ${group.position}`;
+  return group.name.trim() && group.name.trim() !== number ? `${number} · ${group.name.trim()}` : number;
+}
+
+/** What hovering over a disc says, before it is clicked. */
+function discTitle(property: PropertyPosition) {
+  if (property.tbpGroup) return `${property.name} · ${groupLabel(property.tbpGroup)}`;
+  if (property.tbpEnrolled) return `${property.name} · benefit package, in no group`;
+  return property.name;
+}
+
+/** Group discs over the green ones, the green over the grey: work to plan is never under the rest. */
+const DISC_Z: Record<DiscKind, number> = { GROUP: 100, LOOSE: 95, OTHER: 90 };
 
 /**
- * Every property, grouped when the pins would overlap.
+ * One property, as the Group maker draws it: a disc in its group's colour, the
+ * maker's green for a benefit-package property in no group, and grey for the
+ * rest of the portfolio.
  *
- * Clustered because this is a portfolio of hundreds: drawn individually at
- * metropolitan zoom they merge into a green smear that reports neither where
- * the work is nor how much of it there is. Three Houston properties within 250m
- * already drew as one pin while the legend said three.
+ * A placed centre the office corrected is exact whatever the geocoder said; a
+ * zip-code centre is drawn pale with a dashed rim, as in the Group maker.
+ */
+const PortfolioDisc = memo(function PortfolioDisc({
+  property,
+  dim,
+  offset,
+  open,
+  onOpen,
+}: {
+  property: PropertyPosition;
+  dim: boolean;
+  offset: [number, number] | undefined;
+  open: boolean;
+  onOpen: (propertyId: string) => void;
+}) {
+  const kind = kindOf(property);
+  const approximate = !property.geofenceMoved && property.geocodePrecision === 'CENTROID';
+  const ink = property.tbpGroup ? (groupColorOf(property.tbpGroup.color)?.ink ?? '#fff') : '#fff';
+  return (
+    <Marker
+      anchor="center"
+      latitude={property.latitude}
+      longitude={property.longitude}
+      offset={offset}
+      onClick={(event) => {
+        event.originalEvent.stopPropagation();
+        onOpen(property.id);
+      }}
+      style={{ zIndex: open ? 110 : DISC_Z[kind] }}
+    >
+      {/* Everything recedes rather than disappearing when somebody is
+          selected: a dispatcher looking at one technician still needs to see
+          what is near them. */}
+      <span style={dim ? { opacity: 0.25 } : undefined} title={discTitle(property)}>
+        {property.tbpGroup ? (
+          <GroupDisc approximate={approximate} fill={property.tbpGroup.color} ink={ink} />
+        ) : (
+          <LooseDisc approximate={approximate} color={kind === 'LOOSE' ? UNGROUPED_GREEN : OTHER_PROPERTY_GREY} />
+        )}
+      </span>
+    </Marker>
+  );
+});
+
+/** What a disc's window says. */
+function PropertyDetails({ property }: { property: PropertyPosition }) {
+  return (
+    <div className="grid max-w-64 gap-1 text-sm">
+      <p>
+        <span className="font-medium">{property.name}</span>
+        {/* Said on the pin as well as in the list, because a reader who
+         * arrived by clicking the map never saw the list. The address is
+         * fictional and sits in the middle of the service area, so an
+         * unmarked pin is one somebody routes to. */}
+        {property.isDemo ? (
+          <>
+            {' '}
+            <Badge variant="warning">Demo</Badge>
+          </>
+        ) : null}
+        <br />
+        {property.addressLine1}
+        {property.city ? `, ${property.city}` : null}
+      </p>
+      {property.tbpGroup ? (
+        <p className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="inline-block size-3 shrink-0 rounded-full border border-white"
+            style={{ backgroundColor: property.tbpGroup.color }}
+          />
+          {groupLabel(property.tbpGroup)}
+        </p>
+      ) : property.tbpEnrolled ? (
+        <p>Benefit package, in no group</p>
+      ) : property.tbpEnrolled === false ? (
+        <p className="text-muted-foreground">Not on the benefit package</p>
+      ) : null}
+      {property.zone ? <p className="text-xs">Zone {property.zone}</p> : null}
+      {/* The number the hours come from, in words, beside the circle drawing
+       * it. Saying the centre was moved matters as much as the radius: a ring
+       * sitting off the building is a correction somebody made, not a
+       * geocoder's mistake, and without this line it reads as a bug. */}
+      <p className="text-muted-foreground text-xs">
+        On site within {property.enterRadiusMeters}m
+        {property.geofenceMoved ? ' · centre set by the office' : null}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Every property, each its own disc (the office, 2026-10-01).
  *
- * **Only properties cluster.** Technicians are the thing being watched, and
- * folding two of them into a badge would hide exactly what somebody opened the
- * map to see.
+ * This grouped pins into count badges as they came near each other. The office
+ * found the Group maker's map the better one -- every property a disc in its
+ * group's colour, at every zoom, no badges -- and asked for it on every map,
+ * with every active property and not only the benefit-package ones the Group
+ * maker shows.
  *
- * Memoised, and that is the single biggest thing on this map. Technician
- * positions arrive over the socket every few seconds, re-rendering this page
- * and everything under it. Without this, each of those frames reconciled ~40
- * cluster markers whose props had not changed — every one a real DOM element
- * the map repositions itself. None of this layer's props move when a
- * technician does.
+ * Only the discs on or near the screen are drawn: every property all the time
+ * is hundreds of real elements the map moves on every frame of a zoom, and
+ * zooming once froze for up to a second that way. The open window's disc stays
+ * drawn when panned away, so its window does not close under the reader.
+ * Keyed by property, so a zoom never throws a disc away to draw it again.
+ *
+ * Memoised, and that is the single biggest thing on the technician map:
+ * positions arrive over the socket every few seconds, re-rendering the page and
+ * everything under it, and none of this layer's props move when a technician
+ * does.
  */
 export const PropertyLayer = memo(function PropertyLayer({
   highlighted,
@@ -279,194 +395,83 @@ export const PropertyLayer = memo(function PropertyLayer({
   /** Picked from the list, so its own window opens without a second click. */
   selectedPropertyId: string | null;
 }) {
-  const { current: map } = useMap();
   const { zoom, box } = useSettledView();
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(selectedPropertyId);
   /** The selection this layer last acted on, so churn is not mistaken for a change. */
   const lastSelected = useRef<string | null>(selectedPropertyId);
 
-  const clusters = useMemo(() => clusterByGrid(properties, zoom), [properties, zoom]);
+  // Two buildings at one spot are two discs side by side, not one over the other.
+  const offsets = useMemo(() => spotOffsets(properties, (property) => property.id), [properties]);
 
-  /**
-   * Only the groups on or near the screen are drawn.
-   *
-   * Every property used to be a marker all the time. At street level that is
-   * every one of them standing alone -- 586 in production -- nearly all of them
-   * miles off-screen, each a real element the map repositions on every frame of
-   * a zoom. Scrolling the map in and out stuttered and froze for up to a
-   * second. The grouping itself is unchanged: it is still worked out from the
-   * zoom alone, so panning never reshuffles a badge.
-   *
-   * Until the map first reports where it is looking, everything is drawn --
-   * which costs nothing, because the zoom used for grouping is still the
-   * opening, country-wide one, where the whole portfolio is a handful of
-   * badges. The open window's group stays drawn even when panned out of view,
-   * so it does not close under the reader.
-   */
   const drawn = useMemo(() => {
-    if (!box) return clusters;
+    if (!box) return properties;
     const reach = padBox(box, DRAWN_BEYOND_VIEW);
-    return clusters.filter((cluster) => cluster.key === openKey || inBox(cluster, reach));
-  }, [box, clusters, openKey]);
+    return properties.filter((property) => property.id === openId || inBox(property, reach));
+  }, [box, openId, properties]);
 
-  /**
-   * The rings worth drawing: a property standing alone, and only once it is big
-   * enough on screen to be a size rather than a smudge.
-   *
-   * A badge's coordinate is the average of what it holds, so a circle drawn
-   * there would be centred on nobody's building.
-   */
+  /** The rings worth drawing: only once a property's ring is big enough on screen to be a size rather than a smudge. */
   const rings = useMemo<GeofenceRing[]>(
     () =>
-      drawn.flatMap((cluster) => {
-        const single = cluster.members.length === 1 ? cluster.members[0] : null;
-        if (!single || !ringIsLegible(single.enterRadiusMeters, single.latitude, zoom)) return [];
-        return [
-          {
-            id: single.id,
-            latitude: single.latitude,
-            longitude: single.longitude,
-            enterRadiusMeters: single.enterRadiusMeters,
-            exitRadiusMeters: single.exitRadiusMeters,
-            dim: Boolean(highlighted && !highlighted.has(single.id)),
-          },
-        ];
-      }),
+      drawn.flatMap((property) =>
+        ringIsLegible(property.enterRadiusMeters, property.latitude, zoom)
+          ? [
+              {
+                id: property.id,
+                latitude: property.latitude,
+                longitude: property.longitude,
+                enterRadiusMeters: property.enterRadiusMeters,
+                exitRadiusMeters: property.exitRadiusMeters,
+                dim: Boolean(highlighted && !highlighted.has(property.id)),
+              },
+            ]
+          : [],
+      ),
     [drawn, highlighted, zoom],
   );
 
   /**
-   * Opens the selected property's window once it is actually drawn.
-   *
-   * Depends on `clusters` as well as the selection, and that is the whole
-   * trick: selecting flies the map in, the zoom change regroups the clusters,
-   * and only then does the property stop being folded into a badge and get a
-   * marker of its own. Running on the selection alone would fire while it was
-   * still inside a cluster and find nothing to open.
-   *
-   * Falls back to the badge it is hiding in rather than opening nothing —
-   * reached when no zoom separates them, which is two records at identical
-   * coordinates. "It is here, with another" beats a click that looks lost.
+   * A property picked from the list opens its window; letting go of it closes
+   * it. **A window opened by clicking is not this effect's to close**: it runs
+   * on the selection alone, so the refetch that rebuilds the property list
+   * every few minutes leaves an open window alone.
    */
   useEffect(() => {
-    const letGo = selectedPropertyId === null;
-    const changed = selectedPropertyId !== lastSelected.current;
+    if (selectedPropertyId === lastSelected.current) return;
     lastSelected.current = selectedPropertyId;
+    setOpenId(selectedPropertyId);
+  }, [selectedPropertyId]);
 
-    /**
-     * **A window opened by clicking is not this effect's to close.**
-     *
-     * This ran on `clusters` as well as the selection and closed the window
-     * whenever nothing was selected -- so a click on a pin opened its details
-     * and the next refetch, which rebuilds the property list and with it the
-     * clusters, closed them again. On the technician map that is every few
-     * seconds, and the window was gone before it could be read. Reported as
-     * markers that cannot be clicked at all, because that is what it looked
-     * like.
-     *
-     * Only *letting go* of a selected property closes its window now; the
-     * clusters changing underneath an open one leaves it alone.
-     */
-    if (letGo) {
-      if (changed) setOpenKey(null);
-      return;
-    }
-
-    const own = clusters.find(
-      (cluster) => cluster.members.length === 1 && cluster.members[0].id === selectedPropertyId,
-    );
-    const group = clusters.find((cluster) =>
-      cluster.members.some((member) => member.id === selectedPropertyId),
-    );
-    setOpenKey(own?.key ?? group?.key ?? null);
-  }, [clusters, selectedPropertyId]);
+  const open = openId ? (properties.find((property) => property.id === openId) ?? null) : null;
 
   return (
     <>
       <GeofenceLayer rings={rings} />
 
-      {drawn.map((cluster) => {
-        const single = cluster.members.length === 1 ? cluster.members[0] : null;
-        // Everything recedes rather than disappearing when somebody is
-        // selected: a dispatcher looking at one technician still needs to see
-        // what is near them.
-        const dim = Boolean(
-          highlighted && !cluster.members.some((member) => highlighted.has(member.id)),
-        );
+      {drawn.map((property) => (
+        <PortfolioDisc
+          dim={Boolean(highlighted && !highlighted.has(property.id))}
+          key={property.id}
+          offset={offsets.get(property.id)}
+          onOpen={setOpenId}
+          open={property.id === openId}
+          property={property}
+        />
+      ))}
 
-        return (
-          <Fragment key={cluster.key}>
-            <Marker
-              anchor="bottom"
-              latitude={cluster.latitude}
-              longitude={cluster.longitude}
-              onClick={(event) => {
-                event.originalEvent.stopPropagation();
-                if (single) {
-                  setOpenKey(cluster.key);
-                  return;
-                }
-                // A badge is a request to see inside it, not a thing to read.
-                // Zoom until its members separate rather than opening a window
-                // that can only say "several".
-                const target = zoomToIsolate(cluster.members, cluster.members[0].id, zoom, 21);
-                map?.easeTo({ center: [cluster.longitude, cluster.latitude], zoom: target });
-              }}
-              style={{ zIndex: single ? 100 : 90 }}
-            >
-              <span title={single ? single.name : `${cluster.members.length} properties`}>
-                {single ? (
-                  <PropertyPin dim={dim} />
-                ) : (
-                  <ClusterPin count={cluster.members.length} dim={dim} />
-                )}
-              </span>
-            </Marker>
-
-            {openKey === cluster.key ? (
-              <Popup
-                anchor="bottom"
-                closeOnClick={false}
-                latitude={cluster.latitude}
-                longitude={cluster.longitude}
-                offset={34}
-                onClose={() => setOpenKey(null)}
-              >
-                {single ? (
-                  <>
-                    <span className="font-medium">{single.name}</span>
-                    {/* Said on the pin as well as in the list, because a reader
-                     * who arrived by clicking the map never saw the list. The
-                     * address is fictional and sits in the middle of the service
-                     * area, so an unmarked pin is one somebody routes to. */}
-                    {single.isDemo ? (
-                      <>
-                        {' '}
-                        <Badge variant="warning">Demo</Badge>
-                      </>
-                    ) : null}
-                    <br />
-                    {single.addressLine1}
-                    {single.city ? `, ${single.city}` : null}
-                    <br />
-                    {/* The number the hours come from, in words, beside the
-                     * circle drawing it. Saying the centre was moved matters
-                     * as much as the radius: a ring sitting off the building
-                     * is a correction somebody made, not a geocoder's mistake,
-                     * and without this line it reads as a bug. */}
-                    <span className="text-muted-foreground text-xs">
-                      On site within {single.enterRadiusMeters}m
-                      {single.geofenceMoved ? ' · centre set by the office' : null}
-                    </span>
-                  </>
-                ) : (
-                  <span className="font-medium">{cluster.members.length} properties here</span>
-                )}
-              </Popup>
-            ) : null}
-          </Fragment>
-        );
-      })}
+      {open ? (
+        <Popup
+          // No fixed side: Mapbox opens it wherever there is room, so a disc
+          // near the top of the map does not have its window cut off.
+          closeOnClick={false}
+          latitude={open.latitude}
+          longitude={open.longitude}
+          offset={popupOffsets(offsets.get(open.id) ?? [0, 0])}
+          onClose={() => setOpenId(null)}
+          style={{ zIndex: 900 }}
+        >
+          <PropertyDetails property={open} />
+        </Popup>
+      ) : null}
     </>
   );
 });
@@ -565,10 +570,11 @@ export interface CrewOptions {
 }
 
 /**
- * Every property, exactly as the technician map draws it.
+ * Every property, as every map in the console draws it.
  *
- * Grouped pins that open on a click, and each lone property's geofence once it
- * is big enough to read. Drawn from the
+ * A disc each, in its group's colour as in the Group maker, that opens on a
+ * click, with each property's geofence once it is big enough to read and each
+ * zone's ground when asked for. Drawn from the
  * same positions everywhere -- `propertyPosition` on the server, which puts a
  * property at the office's corrected centre when there is one -- so no map in
  * the console can show a property somewhere another map does not.
@@ -577,17 +583,49 @@ export function PortfolioLayers({
   properties,
   highlighted = null,
   selectedPropertyId = null,
-}: Required<Pick<PortfolioOptions, 'properties'>> & Omit<PortfolioOptions, 'properties'>) {
+  zones = false,
+  otherProperties = true,
+}: Required<Pick<PortfolioOptions, 'properties'>> &
+  Omit<PortfolioOptions, 'properties'> & {
+    /** Each zone's ground and fence, as the Group maker draws them. */
+    zones?: boolean;
+    /** The properties off the benefit package, grey. Off, only the package's are drawn. */
+    otherProperties?: boolean;
+  }) {
+  /**
+   * Off the package means said to be off it. A property the reader may not be
+   * told about (`tbpEnrolled` absent) stays, as does one the page is about.
+   */
+  const shown = useMemo(
+    () =>
+      otherProperties
+        ? properties
+        : properties.filter(
+            (property) =>
+              property.tbpEnrolled !== false || property.id === selectedPropertyId || Boolean(highlighted?.has(property.id)),
+          ),
+    [highlighted, otherProperties, properties, selectedPropertyId],
+  );
+  // Worked out only while they are shown: a grid over the whole portfolio is not free.
+  const territories = useMemo(
+    () =>
+      zones
+        ? zoneTerritories(properties.map((property) => ({ latitude: property.latitude, longitude: property.longitude, zone: property.zone ?? null })))
+        : [],
+    [properties, zones],
+  );
+
   return (
     <>
-      {/* No dot per property, for now (the office, 2026-09-30: "there's a lot of
-          small circles color blue on the map remove that for now"). They were
-          read as a Venn diagram that was not built right; they were in fact
-          every property at its exact position (#329). `PropertyDotsLayer`
-          still exists -- drawing it here again is the whole of bringing it back. */}
+      {/* Under the properties: a zone is the ground they stand on. */}
+      <ZoneLayers visible={zones} zones={territories} />
+      {/* No dot per property beside the discs (the office, 2026-09-30: "there's
+          a lot of small circles color blue on the map remove that for now").
+          `PropertyDotsLayer` still exists -- drawing it here again is the whole
+          of bringing it back. */}
       <PropertyLayer
         highlighted={highlighted}
-        properties={properties}
+        properties={shown}
         selectedPropertyId={selectedPropertyId}
       />
     </>

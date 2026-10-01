@@ -45,21 +45,6 @@ import { useContinuousRotation } from '@/lib/map-animation';
  */
 const SHADOW = 'drop-shadow-[0_1px_1px_rgba(0,0,0,0.35)]';
 
-/** A teardrop pin with a house in it, anchored at its point. */
-export const PropertyPin = memo(function PropertyPin({ dim = false }: { dim?: boolean }) {
-  return (
-    <svg className={SHADOW} height="32" opacity={dim ? 0.25 : 1} viewBox="0 0 24 32" width="24">
-      <path
-        className="fill-map-property"
-        d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
-        stroke="#fff"
-        strokeWidth="2"
-      />
-      <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff" />
-    </svg>
-  );
-});
-
 /**
  * A round badge with a person in it, anchored at its centre.
  *
@@ -188,53 +173,6 @@ export const DrivingPin = memo(function DrivingPin({
           transition: 'transform 700ms ease-out',
         }}
       />
-    </svg>
-  );
-});
-
-/**
- * A badge standing in for several properties too close to draw separately.
- *
- * Sized by how many it hides, in three coarse steps rather than continuously:
- * the useful signal is "a few" versus "a lot", and a smoothly growing circle
- * just makes every cluster look slightly different from every other one.
- */
-export const ClusterPin = memo(function ClusterPin({ count, dim = false }: { count: number; dim?: boolean }) {
-  const size = count < 10 ? 30 : count < 50 ? 36 : 42;
-  return (
-    <svg
-      height={size}
-      opacity={dim ? 0.25 : 1}
-      viewBox={`0 0 ${size} ${size}`}
-      width={size}
-    >
-      <circle
-        className="fill-map-property"
-        cx={size / 2}
-        cy={size / 2}
-        opacity="0.35"
-        r={size / 2 - 3}
-      />
-      <circle
-        className="fill-map-property"
-        cx={size / 2}
-        cy={size / 2}
-        r={size / 2 - 6}
-        stroke="#fff"
-        strokeWidth="2"
-      />
-      <text
-        dominantBaseline="central"
-        fill="#fff"
-        fontFamily="system-ui, sans-serif"
-        fontSize={count < 100 ? 12 : 10}
-        fontWeight="600"
-        textAnchor="middle"
-        x="50%"
-        y="50%"
-      >
-        {count}
-      </text>
     </svg>
   );
 });

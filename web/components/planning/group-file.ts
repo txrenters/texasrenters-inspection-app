@@ -15,6 +15,7 @@
  * read there and sent nowhere, the way the office's Details sheet is.
  */
 
+import { spotOffsets } from '@/components/map-clusters';
 import { parseCsv } from '@/lib/planning';
 
 import { metresBetween } from './plan-groups';
@@ -704,40 +705,11 @@ function convexHull<T extends { x: number; y: number }>(points: readonly T[]): T
   return [...half(sorted), ...half([...sorted].reverse())];
 }
 
-/** The centre-to-centre gap, in pixels, between pins fanned out from one spot. A pin is 22px across. */
-const FAN_GAP_PX = 24;
-
 /**
- * Screen offsets for rows that share one spot, so each has a pin of its own.
- *
- * Three units at one address are three rows at identical coordinates, and so
- * are two properties the file could only place at their zip code's centre.
- * Drawn where they are, the last one covers the rest at every zoom and the
- * others cannot be clicked. Fanned out in pixels rather than moved in metres,
- * because a move in metres closes up again as the map zooms out.
- *
- * Keyed by row number. A row alone at its spot has no entry.
+ * Screen offsets for rows that share one spot, so each has a pin of its own:
+ * three units at one address, or two properties placed at one zip code's
+ * centre. Keyed by row number; a row alone at its spot has no entry.
  */
 export function fanOffsets(rows: readonly GroupFileRow[]): Map<number, [number, number]> {
-  const bySpot = new Map<string, GroupFileRow[]>();
-  for (const row of rows) {
-    // Five decimals is about a metre: the same spot, not merely a near one.
-    const spot = `${row.latitude.toFixed(5)},${row.longitude.toFixed(5)}`;
-    const here = bySpot.get(spot);
-    if (here) here.push(row);
-    else bySpot.set(spot, [row]);
-  }
-
-  const offsets = new Map<number, [number, number]>();
-  for (const here of bySpot.values()) {
-    if (here.length < 2) continue;
-    // The radius at which neighbouring pins on the ring are FAN_GAP_PX apart.
-    const radius = FAN_GAP_PX / (2 * Math.sin(Math.PI / here.length));
-    here.forEach((row, index) => {
-      // From twelve o'clock, clockwise.
-      const angle = -Math.PI / 2 + (index / here.length) * 2 * Math.PI;
-      offsets.set(row.rowNumber, [Math.round(radius * Math.cos(angle)), Math.round(radius * Math.sin(angle))]);
-    });
-  }
-  return offsets;
+  return spotOffsets(rows, (row) => row.rowNumber);
 }

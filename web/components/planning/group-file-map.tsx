@@ -1,18 +1,20 @@
 'use client';
 
 import type { ExpressionSpecification } from 'mapbox-gl';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Marker, Popup, Source, useMap } from 'react-map-gl/mapbox';
 
 import { ConsoleMap } from '@/components/console-map';
 import { fitTo } from '@/components/map-camera';
 import { inBox, padBox } from '@/components/map-clusters';
 import { useMapStroke } from '@/components/map-colors';
+import { GroupDisc, LooseDisc, popupOffsets } from '@/components/map-discs';
 import { featureCollection, lineFeature } from '@/components/map-geometry';
 import { useSettledView } from '@/components/map-portfolio';
+import { ZoneLayers } from '@/components/map-zones';
 import { Badge } from '@/components/ui/badge';
 
-import { fanOffsets, UNGROUPED_GREEN, type FileGroup, type GroupFileRow } from './group-file';
+import { fanOffsets, type FileGroup, type GroupFileRow } from './group-file';
 import { GroupBadge } from './group-file-legend';
 import {
   formatDrive,
@@ -89,108 +91,6 @@ const DRAWN_BEYOND_VIEW = 0.5;
 
 /** How faint a faded group is: still there to steer by, no longer in the way. */
 const DIMMED = 0.2;
-
-/**
- * One property: a disc in its group's colour with its stop number on it.
- *
- * A property the file could only place at its zip code's centre is drawn pale
- * with a dashed rim, so a pin standing on nobody's house says so before it is
- * clicked. The drop shadow is CSS, never an SVG filter: see `map-pins.tsx` for
- * the bug a shared filter id caused.
- */
-const StopPin = memo(function StopPin({ row, fill, ink }: { row: GroupFileRow; fill: string; ink: string }) {
-  return (
-    <svg
-      aria-hidden
-      className="cursor-pointer drop-shadow-[0_1px_1px_rgba(0,0,0,0.35)]"
-      height="22"
-      viewBox="0 0 22 22"
-      width="22"
-    >
-      {row.approximate ? (
-        <>
-          <circle cx="11" cy="11" fill="#fff" r="9" />
-          <circle cx="11" cy="11" fill={fill} fillOpacity={0.35} r="9" stroke={fill} strokeDasharray="3.5 2" strokeWidth="2.5" />
-        </>
-      ) : (
-        <circle cx="11" cy="11" fill={fill} r="9" stroke="#fff" strokeWidth="2" />
-      )}
-      <text
-        dominantBaseline="central"
-        fill={row.approximate ? '#111827' : ink}
-        fontFamily="system-ui, sans-serif"
-        // A size down for two digits: a group runs to 11 stops, and "11" at the
-        // single-digit size reaches the rim.
-        fontSize={row.stop !== null && row.stop >= 10 ? 9.5 : 11}
-        fontWeight="700"
-        letterSpacing={row.stop !== null && row.stop >= 10 ? -0.4 : undefined}
-        textAnchor="middle"
-        x="50%"
-        y="50%"
-      >
-        {row.stop ?? '·'}
-      </text>
-    </svg>
-  );
-});
-
-/**
- * A property in no group: a bright green dot with a white rim, no number.
- *
- * Green and saturated so what is left to group stands out on the light
- * roadmap and the dark one alike -- grey disappeared into both (the office,
- * 2026-09-30) -- and no group colour is ever that green. A wider invisible
- * ring takes the click, because a 13px target is a small one. The
- * approximate-location rule holds here too: pale, with a dashed rim.
- */
-const UngroupedPin = memo(function UngroupedPin({ approximate }: { approximate: boolean }) {
-  return (
-    <svg aria-hidden className="cursor-pointer drop-shadow-[0_1px_1.5px_rgba(0,0,0,0.4)]" height="20" viewBox="0 0 20 20" width="20">
-      <circle cx="10" cy="10" fill="transparent" r="10" />
-      {approximate ? (
-        <>
-          <circle cx="10" cy="10" fill="#fff" r="6.5" />
-          <circle
-            cx="10"
-            cy="10"
-            fill={UNGROUPED_GREEN}
-            fillOpacity={0.35}
-            r="6.5"
-            stroke={UNGROUPED_GREEN}
-            strokeDasharray="2.5 1.8"
-            strokeWidth="2"
-          />
-        </>
-      ) : (
-        <circle cx="10" cy="10" fill={UNGROUPED_GREEN} r="6.5" stroke="#fff" strokeWidth="2" />
-      )}
-    </svg>
-  );
-});
-
-/** Clear of a pin's edge, which is 11px from its centre. */
-const PIN_CLEARANCE_PX = 12;
-
-/**
- * Where a window stands off its pin, for whichever side Mapbox opens it on.
- *
- * From the pin as drawn, which for a fanned-out pin is not its coordinate, and
- * then clear of the pin's edge on the side the window is on.
- */
-function popupOffsets([x, y]: [number, number]) {
-  const diagonal = PIN_CLEARANCE_PX * Math.SQRT1_2;
-  return {
-    center: [x, y] as [number, number],
-    top: [x, y + PIN_CLEARANCE_PX] as [number, number],
-    bottom: [x, y - PIN_CLEARANCE_PX] as [number, number],
-    left: [x + PIN_CLEARANCE_PX, y] as [number, number],
-    right: [x - PIN_CLEARANCE_PX, y] as [number, number],
-    'top-left': [x + diagonal, y + diagonal] as [number, number],
-    'top-right': [x - diagonal, y + diagonal] as [number, number],
-    'bottom-left': [x + diagonal, y - diagonal] as [number, number],
-    'bottom-right': [x - diagonal, y - diagonal] as [number, number],
-  };
-}
 
 /** A group as it is named in words: its own name, or its number. */
 const groupTitle = (group: FileGroup) => group.name ?? `Group ${group.label}`;
@@ -422,26 +322,6 @@ function GroupFileLayers({
    * colour: a source per group would be forty-odd layers re-evaluated on
    * every frame of a zoom.
    */
-  /** Every zone's ground and fence in one source, each painted from its own colour. */
-  const zoneShapes = useMemo(
-    () => ({
-      type: 'FeatureCollection' as const,
-      features: zones.flatMap((territory) => [
-        {
-          type: 'Feature' as const,
-          properties: { color: territory.color, part: 'fill' },
-          geometry: { type: 'MultiPolygon' as const, coordinates: territory.fill.map((ring) => [ring]) },
-        },
-        {
-          type: 'Feature' as const,
-          properties: { color: territory.color, part: 'fence' },
-          geometry: { type: 'MultiLineString' as const, coordinates: territory.fence },
-        },
-      ]),
-    }),
-    [zones],
-  );
-
   const dimOthers = manual?.dimOthers ?? false;
   const activeKey = manual?.activeKey ?? null;
   const outlines = useMemo(
@@ -528,31 +408,8 @@ function GroupFileLayers({
     <>
       <Frame frame={frame} />
 
-      {/* The zones first, so they lie under everything else: a faint wash for
-          each zone's ground, and its fence drawn just inside its own edge, so
-          where two zones meet both fences show side by side. */}
-      <Source data={zoneShapes} id="group-file-zones" type="geojson">
-        <Layer
-          filter={['==', ['get', 'part'], 'fill']}
-          id="group-file-zone-fill"
-          // No antialiasing: the fill is squares laid edge to edge, and an
-          // antialiased edge draws each seam as a faint line.
-          paint={{ 'fill-antialias': false, 'fill-color': ['get', 'color'], 'fill-opacity': 0.07 }}
-          type="fill"
-        />
-        <Layer
-          filter={['==', ['get', 'part'], 'fence']}
-          id="group-file-zone-fence"
-          layout={{ 'line-join': 'round' }}
-          paint={{
-            'line-color': ['get', 'color'],
-            'line-offset': 1.5,
-            'line-opacity': 0.85,
-            'line-width': 2,
-          }}
-          type="line"
-        />
-      </Source>
+      {/* The zones first, so they lie under everything else. */}
+      <ZoneLayers zones={zones} />
 
       <Source data={outlines} id="group-file-outlines" type="geojson">
         {/* Hidden rather than unmounted, like the routes: layer order is mount
@@ -677,9 +534,9 @@ function GroupFileLayers({
             }
           >
             {group ? (
-              <StopPin fill={group.color.fill} ink={group.color.ink} row={row} />
+              <GroupDisc approximate={row.approximate} fill={group.color.fill} ink={group.color.ink} label={row.stop ?? '·'} />
             ) : (
-              <UngroupedPin approximate={row.approximate} />
+              <LooseDisc approximate={row.approximate} />
             )}
           </span>
         </Marker>
@@ -746,27 +603,6 @@ function GroupFileLayers({
           </Marker>
         );
       })}
-
-      {/* "Zone N", on one of the zone's own properties and just below its pin. */}
-      {zones.map((territory) => (
-        <Marker
-          anchor="top"
-          key={`zone-${territory.zone}`}
-          latitude={territory.labelAt.latitude}
-          longitude={territory.labelAt.longitude}
-          offset={[0, 12]}
-          // Over the pins so it can be read, under the group numbers; it lets
-          // every click through to the pin beneath.
-          style={{ zIndex: 845, pointerEvents: 'none' }}
-        >
-          <span
-            className="rounded-md border-2 border-white px-1.5 py-px text-[11px] font-semibold shadow-sm"
-            style={{ backgroundColor: territory.color, color: '#fff' }}
-          >
-            Zone {territory.zone}
-          </span>
-        </Marker>
-      ))}
 
       {open ? (
         <Popup

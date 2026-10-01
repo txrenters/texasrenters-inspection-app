@@ -63,6 +63,16 @@ export interface MapPreferences {
    * thing being read, which a number in a box does not show.
    */
   groupingRadiusMeters: GroupingRadius;
+
+  /** Each zone's ground and fence under the properties, as the Group maker draws them. */
+  zones: boolean;
+
+  /**
+   * The active properties off the benefit package, as grey discs. On by
+   * default: the office asked for every active property on the technician map,
+   * not only the package's (2026-10-01). Off leaves the package's alone.
+   */
+  otherProperties: boolean;
 }
 
 /**
@@ -84,11 +94,13 @@ export interface MapPreferences {
 export const GROUPING_RADII = [0, 500, 1_000, 2_000, 3_000] as const;
 export type GroupingRadius = (typeof GROUPING_RADII)[number];
 
-/** Roadmap, flat, no circles. The plainest reading of a map full of pins. */
+/** Roadmap, flat, no circles, no zones, every property. The plainest reading of a map full of pins. */
 export const DEFAULT_PREFERENCES: MapPreferences = {
   mapType: 'roadmap',
   tilted: false,
   groupingRadiusMeters: 0,
+  zones: false,
+  otherProperties: true,
 };
 
 const STORAGE_KEY = 'texasrenters.map-preferences';
@@ -120,6 +132,9 @@ export function useMapPreferences() {
         groupingRadiusMeters: GROUPING_RADII.includes(stored.groupingRadiusMeters as GroupingRadius)
           ? (stored.groupingRadiusMeters as GroupingRadius)
           : DEFAULT_PREFERENCES.groupingRadiusMeters,
+        zones: typeof stored.zones === 'boolean' ? stored.zones : DEFAULT_PREFERENCES.zones,
+        otherProperties:
+          typeof stored.otherProperties === 'boolean' ? stored.otherProperties : DEFAULT_PREFERENCES.otherProperties,
       });
     } catch {
       // Private windows throw on access. Losing a preference is nothing; taking
@@ -145,9 +160,12 @@ export function useMapPreferences() {
 export function MapSettings({
   preferences,
   onChange,
+  portfolio = false,
 }: {
   preferences: MapPreferences;
   onChange: (next: Partial<MapPreferences>) => void;
+  /** The map draws the portfolio, so how it is drawn can be chosen here. */
+  portfolio?: boolean;
 }) {
   return (
     <DropdownMenu>
@@ -207,6 +225,24 @@ export function MapSettings({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {portfolio ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Properties</DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={preferences.zones}
+              onCheckedChange={(checked) => onChange({ zones: checked })}
+            >
+              Zones
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={preferences.otherProperties}
+              onCheckedChange={(checked) => onChange({ otherProperties: checked })}
+            >
+              Non-TBP properties
+            </DropdownMenuCheckboxItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

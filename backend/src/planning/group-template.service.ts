@@ -647,7 +647,7 @@ const notFound = () => new ApplicationError(404, 'TEMPLATE_NOT_FOUND', 'This gro
 const byOf = (user: AuthenticatedUser) => ({ userId: user.id, name: user.displayName });
 
 /** The value most of them have, the first of a tie; null when none has one. */
-function mostCommon(values: readonly (string | null)[]): string | null {
+export function mostCommon(values: readonly (string | null)[]): string | null {
   const counts = new Map<string, number>();
   for (const value of values) if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
   let best: string | null = null;
