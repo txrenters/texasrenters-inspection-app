@@ -27,7 +27,7 @@ const AXES = [
 type AxisKey = (typeof AXES)[number]['key'];
 
 /** A reading, a line of text or a chosen option: one answer rather than three verdicts. */
-const isAnswerItem = (item: AreaChecklistEntry) =>
+export const isAnswerItem = (item: AreaChecklistEntry) =>
   Boolean(item.responseType && item.responseType !== 'STATUS');
 
 /**

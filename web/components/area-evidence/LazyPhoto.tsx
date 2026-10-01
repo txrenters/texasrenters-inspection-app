@@ -42,6 +42,7 @@ export function LazyPhoto({
   photo,
   areaName,
   onOpen,
+  compact = false,
 }: {
   /*
    * Only what this actually renders, rather than a whole `AreaPhoto`.
@@ -61,6 +62,13 @@ export function LazyPhoto({
   };
   areaName: string;
   onOpen?: () => void;
+  /**
+   * A small tile, for the photo sheet: no caption under it and no capture time
+   * over it. At that size the time is cut to "Received …", and every occupied
+   * photograph's caption would read "Area overview" again. Both stay where
+   * they can be read: the button's name, and the viewer.
+   */
+  compact?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
@@ -118,7 +126,7 @@ export function LazyPhoto({
       type="button"
     >
       <span className="bg-muted relative block aspect-square overflow-hidden rounded-lg border">
-        {objectUrl ? (
+        {objectUrl && !compact ? (
           <PhotoStamp capturedAt={photo.capturedAt} source={photo.captureTimeSource} />
         ) : null}
         {objectUrl ? (
@@ -139,9 +147,11 @@ export function LazyPhoto({
           </span>
         )}
       </span>
-      <span className="text-muted-foreground truncate text-xs">
-        {photo.label || captureLabel(photo.captureType ?? 'OTHER')}
-      </span>
+      {!compact ? (
+        <span className="text-muted-foreground truncate text-xs">
+          {photo.label || captureLabel(photo.captureType ?? 'OTHER')}
+        </span>
+      ) : null}
     </button>
   );
 }
