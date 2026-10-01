@@ -56,6 +56,10 @@ function summaryPrisma(overrides: Record<string, unknown> = {}) {
     // else, so the double has to answer for them too.
     areaChecklistItem: { findMany: jest.fn().mockResolvedValue([]) },
     inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue([]) },
+    // Who marked an area reviewed, read once for the whole list.
+    userProfile: {
+      findMany: jest.fn().mockResolvedValue([{ id: user.id, displayName: 'Reviewer' }]),
+    },
     ...overrides,
   };
 }
@@ -138,6 +142,7 @@ describe('derived area review status', () => {
     completionStatus?: string;
     isRequired?: boolean;
     inspectionType?: string;
+    reviewedAt?: Date;
   }) {
     const prisma = summaryPrisma({
       inspection: {
@@ -149,6 +154,8 @@ describe('derived area review status', () => {
         findMany: jest.fn().mockResolvedValue([
           area('a1', 'p1', {
             completionStatus: options.completionStatus ?? 'COMPLETED',
+            reviewedAt: options.reviewedAt ?? null,
+            reviewedById: options.reviewedAt ? user.id : null,
             propertyArea: {
               id: 'p1',
               name: 'Foyer',
@@ -268,6 +275,214 @@ describe('derived area review status', () => {
     expect(await statusFor({ photos: photographed, inspectionType: 'MOVE_OUT' })).toBe(
       'EVIDENCE_INCOMPLETE',
     );
+  });
+
+  describe("with a reviewer's mark", () => {
+    const received = new Date('2026-10-01T17:51:30Z');
+    const before = new Date('2026-10-01T17:00:00Z');
+    const after = new Date('2026-10-02T09:00:00Z');
+    const photo = [
+      {
+        inspectionAreaId: 'a1',
+        captureType: 'AREA_OVERVIEW',
+        _count: { _all: 1 },
+        _max: { capturedAt: received, createdAt: received },
+      },
+    ];
+
+    it('counts an area with nothing to decide as reviewed', async () => {
+      // The occupied room that read "0 of 20 reviewed" for good: no findings,
+      // so nothing ever moved it past ready.
+      expect(
+        await statusFor({ photos: photo, inspectionType: 'OCCUPIED', reviewedAt: after }),
+      ).toBe('REVIEWED');
+    });
+
+    it('stops counting once evidence arrives after the mark', async () => {
+      expect(
+        await statusFor({ photos: photo, inspectionType: 'OCCUPIED', reviewedAt: before }),
+      ).toBe('EVIDENCE_READY');
+    });
+
+    it('never stands in for a finding still awaiting a decision', async () => {
+      expect(
+        await statusFor({
+          photos: photo,
+          inspectionType: 'OCCUPIED',
+          reviewedAt: after,
+          findings: [{ propertyAreaId: 'p1', reviewStatus: 'PENDING_REVIEW', _count: { _all: 1 } }],
+        }),
+      ).toBe('FINDINGS_NEED_REVIEW');
+    });
+
+    it('settles a skip the reviewer accepted', async () => {
+      expect(await statusFor({ completionStatus: 'SKIPPED', reviewedAt: after })).toBe('REVIEWED');
+    });
+
+    it('settles a walkthrough the reviewer judged unnecessary', async () => {
+      expect(
+        await statusFor({ photos: photo, inspectionType: 'MOVE_OUT', reviewedAt: after }),
+      ).toBe('REVIEWED');
+    });
+  });
+});
+
+describe('marking an area reviewed', () => {
+  const AREA = {
+    id: 'a1',
+    completionStatus: 'COMPLETED',
+    reviewedAt: null as Date | null,
+    reviewedById: null as string | null,
+    propertyArea: { id: 'p1', name: 'Living Room' },
+  };
+
+  function reviewPrisma(
+    options: {
+      finalizedAt?: Date | null;
+      area?: Partial<typeof AREA> | null;
+      photos?: number;
+      lastPhotoAt?: Date | null;
+      pending?: number;
+    } = {},
+  ) {
+    const tx = {
+      inspectionArea: { update: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    return {
+      tx,
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: INSPECTION,
+          inspectionType: 'OCCUPIED',
+          finalizedAt: options.finalizedAt ?? null,
+        }),
+      },
+      inspectionArea: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(options.area === null ? null : { ...AREA, ...options.area }),
+      },
+      inspectionMedia: {
+        aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _max: { createdAt: null } }),
+      },
+      inspectionPhoto: {
+        aggregate: jest.fn().mockResolvedValue({
+          _count: { _all: options.photos ?? 1 },
+          _max: { createdAt: options.lastPhotoAt ?? new Date('2026-10-01T17:51:30Z') },
+        }),
+      },
+      inspectionFinding: { count: jest.fn().mockResolvedValue(options.pending ?? 0) },
+      userProfile: {
+        findMany: jest.fn().mockResolvedValue([{ id: user.id, displayName: 'Reviewer' }]),
+      },
+      $transaction: jest.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
+    };
+  }
+
+  it('records who reviewed the area, and audits it on the inspection', async () => {
+    const prisma = reviewPrisma();
+
+    const result = await service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true);
+
+    expect(result.review).toMatchObject({ byName: 'Reviewer', current: true });
+    expect(prisma.tx.inspectionArea.update).toHaveBeenCalledWith({
+      where: { id: 'a1' },
+      data: { reviewedAt: expect.any(Date), reviewedById: user.id },
+    });
+    expect(prisma.tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action: 'AREA_REVIEWED',
+        entityType: 'Inspection',
+        entityId: INSPECTION,
+        metadata: { inspectionAreaId: 'a1', areaName: 'Living Room' },
+      }),
+    });
+  });
+
+  it('refuses while a finding in the area awaits a decision', async () => {
+    const prisma = reviewPrisma({ pending: 2 });
+
+    await expect(service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true)).rejects.toMatchObject(
+      { status: 409, code: 'AREA_FINDINGS_PENDING' },
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses an area nobody recorded anything in and nobody skipped', async () => {
+    const prisma = reviewPrisma({ photos: 0, lastPhotoAt: null });
+
+    await expect(service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true)).rejects.toMatchObject(
+      { status: 409, code: 'AREA_NOT_INSPECTED' },
+    );
+  });
+
+  it('accepts a skipped area with nothing in it', async () => {
+    const prisma = reviewPrisma({
+      photos: 0,
+      lastPhotoAt: null,
+      area: { completionStatus: 'SKIPPED' },
+    });
+
+    await service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true);
+
+    expect(prisma.tx.inspectionArea.update).toHaveBeenCalled();
+  });
+
+  it('refuses once the inspection is finalized', async () => {
+    const prisma = reviewPrisma({ finalizedAt: new Date() });
+
+    await expect(service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true)).rejects.toMatchObject(
+      { status: 409, code: 'INSPECTION_FINALIZED' },
+    );
+  });
+
+  it('refuses an area from another inspection', async () => {
+    const prisma = reviewPrisma({ area: null });
+
+    await expect(service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true)).rejects.toMatchObject(
+      { status: 404, code: 'INSPECTION_AREA_NOT_FOUND' },
+    );
+  });
+
+  it('writes nothing when the same mark is sent again', async () => {
+    const prisma = reviewPrisma({
+      area: { reviewedAt: new Date('2026-10-02T09:00:00Z'), reviewedById: user.id },
+    });
+
+    const result = await service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true);
+
+    expect(result.review).toMatchObject({ current: true });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('marks again once newer evidence has overtaken the mark', async () => {
+    const prisma = reviewPrisma({
+      area: { reviewedAt: new Date('2026-10-01T09:00:00Z'), reviewedById: user.id },
+    });
+
+    await service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true);
+
+    expect(prisma.tx.inspectionArea.update).toHaveBeenCalled();
+  });
+
+  it('takes a mark back, and audits that too', async () => {
+    const prisma = reviewPrisma({
+      area: { reviewedAt: new Date('2026-10-02T09:00:00Z'), reviewedById: user.id },
+    });
+
+    const result = await service(prisma).setAreaReviewed(user, INSPECTION, 'a1', false);
+
+    expect(result.review).toBeNull();
+    expect(prisma.tx.inspectionArea.update).toHaveBeenCalledWith({
+      where: { id: 'a1' },
+      data: { reviewedAt: null, reviewedById: null },
+    });
+    expect(prisma.tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'AREA_REVIEW_WITHDRAWN' }),
+    });
   });
 });
 

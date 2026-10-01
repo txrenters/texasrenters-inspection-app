@@ -1720,6 +1720,12 @@ model InspectionArea {
   // reflects what I saw" — it changes no finding's review status.
   summaryConfirmedAt   DateTime?
   summaryConfirmedById String?                           @db.Uuid
+  // An administrator's "I have looked at this area", for the review count. An
+  // area with no findings had nothing to decide, so before this it could never
+  // count as reviewed. It decides no finding, and stops counting once evidence
+  // arrives after it. Plain id, as summaryConfirmedById is.
+  reviewedAt           DateTime?
+  reviewedById         String?                           @db.Uuid
   createdAt            DateTime                          @default(now())
   updatedAt            DateTime                          @updatedAt
   inspection           Inspection                        @relation(fields: [inspectionId], references: [id])

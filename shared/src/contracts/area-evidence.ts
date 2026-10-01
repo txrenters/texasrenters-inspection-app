@@ -43,7 +43,10 @@ export type AreaReviewStatus =
   | 'ANALYSIS_PROCESSING'
   /** At least one finding is awaiting a human decision. */
   | 'FINDINGS_NEED_REVIEW'
-  /** Evidence present and every finding has been decided. */
+  /**
+   * A reviewer marked the area reviewed and nothing has arrived since, or every
+   * finding in it has been decided. Never while a finding still awaits one.
+   */
   | 'REVIEWED'
   /** A reviewer asked for re-inspection of something in this area. */
   | 'FOLLOW_UP_REQUIRED'
@@ -55,6 +58,23 @@ export interface AreaEvidenceCounts {
   photos: number;
   findings: number;
   unreviewedFindings: number;
+}
+
+/**
+ * An administrator's "I have looked at this area".
+ *
+ * Kept even once it no longer counts, so the console can say who reviewed the
+ * area before newer evidence arrived rather than silently dropping the mark.
+ */
+export interface AreaReviewMark {
+  /** When the area was marked reviewed. */
+  at: string;
+  byName: string | null;
+  /**
+   * False once evidence has arrived after the mark: it no longer counts, and
+   * the area needs looking at again.
+   */
+  current: boolean;
 }
 
 /** Presence flags a reviewer needs before deciding whether to open an area. */
@@ -94,7 +114,9 @@ export interface AreaEvidenceSummaryItem {
   checklistAssessedCount: number;
   completionStatus: string;
   reviewStatus: AreaReviewStatus;
-  /** Why the technician skipped it; null unless reviewStatus is SKIPPED. */
+  /** The reviewer's mark, null when the area has never been marked reviewed. */
+  review?: AreaReviewMark | null;
+  /** Why the technician skipped it; null unless the area was skipped. */
   skipReason?: string | null;
   counts: AreaEvidenceCounts;
   evidence: AreaEvidenceFlags;
@@ -189,6 +211,8 @@ export interface AreaEvidenceBundle {
     isRequired: boolean;
     completionStatus: string;
     reviewStatus: AreaReviewStatus;
+    /** The reviewer's mark, null when the area has never been marked reviewed. */
+    review?: AreaReviewMark | null;
     skipReason?: string | null;
     technicianNote?: string | null;
   };

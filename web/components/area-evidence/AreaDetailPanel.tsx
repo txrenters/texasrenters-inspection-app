@@ -1,7 +1,18 @@
 'use client';
 
-import type { AreaChecklistEntry, AreaFinding, AreaRecording } from '@texasrenters/shared';
-import { Maximize2Icon, PlayIcon } from 'lucide-react';
+import type {
+  AreaChecklistEntry,
+  AreaEvidenceBundle,
+  AreaFinding,
+  AreaRecording,
+} from '@texasrenters/shared';
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Maximize2Icon,
+  PlayIcon,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { ErrorState } from '@/components/states';
@@ -15,7 +26,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
 import { formatDateTime, humanize } from '@/lib/format';
-import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
+import {
+  useAdminMutations,
+  useAreaEvidence,
+  useInspection,
+  useSetAreaReviewed,
+} from '@/lib/queries';
 
 import { areaPhotoItems } from './area-photos';
 import { AreaConditionChecklist, isChecklistItemAssessed } from './AreaConditionChecklist';
@@ -347,12 +363,94 @@ function FindingRow({
   );
 }
 
+/**
+ * The reviewer's "I have looked at this area", beside its name.
+ *
+ * The review count used to move only when an area's findings were all decided,
+ * so an area with nothing wrong in it could never count. This says so directly.
+ * Never in place of a decision: while a finding in the area still awaits one,
+ * the control says so instead of offering the mark. Shown on the click
+ * (`useSetAreaReviewed` is optimistic), so there is no spinner to wait on.
+ */
+function AreaReviewControl({
+  inspectionId,
+  bundle,
+  canReview,
+  finalized,
+}: {
+  inspectionId: string;
+  bundle: AreaEvidenceBundle;
+  canReview: boolean;
+  finalized: boolean;
+}) {
+  const mark = useSetAreaReviewed(inspectionId);
+  const { area, counts } = bundle;
+  const review = area.review;
+  const standing = Boolean(review?.current) && area.reviewStatus === 'REVIEWED';
+  const by = review?.byName ? ` by ${review.byName}` : '';
+
+  if (standing && review)
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs">
+        <span className="text-success flex items-center gap-1 font-medium">
+          <CheckIcon aria-hidden className="size-3.5" />
+          Reviewed{by}
+        </span>
+        <span className="text-muted-foreground">{formatDateTime(review.at)}</span>
+        {canReview && !finalized ? (
+          <Button
+            onClick={() => mark.mutate({ areaId: area.id, reviewed: false })}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Undo
+          </Button>
+        ) : null}
+      </div>
+    );
+  if (!canReview || finalized) return null;
+
+  const nothingRecorded =
+    !counts.recordings && !counts.photos && area.completionStatus !== 'SKIPPED';
+  const blocked = counts.unreviewedFindings
+    ? `Decide the ${counts.unreviewedFindings} finding${counts.unreviewedFindings === 1 ? '' : 's'} awaiting review first`
+    : nothingRecorded
+      ? 'Nothing was recorded in this area'
+      : null;
+  return (
+    <div className="grid justify-items-end gap-1">
+      <Button
+        disabled={Boolean(blocked)}
+        onClick={() => mark.mutate({ areaId: area.id, reviewed: true })}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        <CheckIcon aria-hidden />
+        {review ? 'Review again' : 'Mark reviewed'}
+      </Button>
+      {blocked ? (
+        <span className="text-muted-foreground text-xs">{blocked}</span>
+      ) : review ? (
+        // A mark that newer evidence has overtaken: say whose, so the reviewer
+        // knows what they are catching up with.
+        <span className="text-muted-foreground text-xs">
+          New evidence since it was reviewed{by}
+        </span>
+      ) : null}
+      {mark.error ? <span className="text-destructive text-xs">{mark.error.message}</span> : null}
+    </div>
+  );
+}
+
 export function AreaDetailPanel({
   inspectionId,
   areaId,
   tab,
   onTabChange,
   onOpenPhoto,
+  stepping,
 }: {
   inspectionId: string;
   areaId: string;
@@ -365,8 +463,15 @@ export function AreaDetailPanel({
    * photograph opens in this area's own viewer.
    */
   onOpenPhoto?: (photoId: string) => void;
+  /**
+   * The neighbouring areas in the list, so a reviewer can move on from the one
+   * they have just marked without going back to the list.
+   */
+  stepping?: { previous: boolean; next: boolean; onStep: (direction: 1 | -1) => void };
 }) {
   const evidence = useAreaEvidence(inspectionId, areaId);
+  // A finalized inspection's review is closed; the mark is shown, not offered.
+  const finalized = Boolean(useInspection(inspectionId).data?.finalizedAt);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
   /**
    * Where the walkthrough should open, when the reviewer arrives from a
@@ -452,12 +557,46 @@ export function AreaDetailPanel({
 
   return (
     <div className="space-y-3">
-      <header>
-        <h3 className="font-semibold">{area.name}</h3>
-        <p className="text-muted-foreground text-xs">
-          {area.floorName ?? 'No floor recorded'} · {area.isRequired ? 'Required' : 'Optional'} ·{' '}
-          {humanize(area.completionStatus)}
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="font-semibold">{area.name}</h3>
+          <p className="text-muted-foreground text-xs">
+            {area.floorName ?? 'No floor recorded'} · {area.isRequired ? 'Required' : 'Optional'} ·{' '}
+            {humanize(area.completionStatus)}
+          </p>
+        </div>
+        <div className="flex items-start gap-2">
+          <AreaReviewControl
+            bundle={bundle}
+            canReview={canReview}
+            finalized={finalized}
+            inspectionId={inspectionId}
+          />
+          {stepping ? (
+            <div className="flex gap-1">
+              <Button
+                aria-label="Previous area"
+                disabled={!stepping.previous}
+                onClick={() => stepping.onStep(-1)}
+                size="icon"
+                type="button"
+                variant="outline"
+              >
+                <ChevronLeftIcon aria-hidden />
+              </Button>
+              <Button
+                aria-label="Next area"
+                disabled={!stepping.next}
+                onClick={() => stepping.onStep(1)}
+                size="icon"
+                type="button"
+                variant="outline"
+              >
+                <ChevronRightIcon aria-hidden />
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </header>
 
       {area.skipReason ? (

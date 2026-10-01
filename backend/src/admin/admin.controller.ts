@@ -845,6 +845,32 @@ export class AdminController {
     return this.areaEvidence.recordChecklistItem(request.user, inspectionId, areaId, itemId, body);
   }
   /**
+   * Marks an area reviewed (PUT) or takes the mark back (DELETE).
+   *
+   * `findings:review`, the permission that decides findings: this is the same
+   * reviewer's judgement about the same evidence, and it is audited.
+   */
+  @Put('inspections/:inspectionId/areas/:areaId/review')
+  @ApiTags(AREA_EVIDENCE_TAG)
+  @RequirePermissions('findings:review')
+  markAreaReviewed(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+  ) {
+    return this.areaEvidence.setAreaReviewed(request.user, inspectionId, areaId, true);
+  }
+  @Delete('inspections/:inspectionId/areas/:areaId/review')
+  @ApiTags(AREA_EVIDENCE_TAG)
+  @RequirePermissions('findings:review')
+  withdrawAreaReview(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+  ) {
+    return this.areaEvidence.setAreaReviewed(request.user, inspectionId, areaId, false);
+  }
+  /**
    * Adds approved property areas to an inspection already under way.
    *
    * `inspections:manage`, the same permission as assigning and reopening: this

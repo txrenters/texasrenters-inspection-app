@@ -47,6 +47,8 @@ vi.mock('@/lib/queries', () => ({
     approveFinding: { isPending: false, error: null, mutateAsync: async () => {} },
     rejectFinding: { isPending: false, error: null, mutateAsync: async () => {} },
   }),
+  useInspection: () => ({ data: { finalizedAt: null } }),
+  useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),
 }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
 

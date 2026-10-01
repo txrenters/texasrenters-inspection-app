@@ -53,6 +53,7 @@ import type {
   AreaChecklistEntry,
   AreaEvidenceBundle,
   AreaEvidenceSummary,
+  AreaReviewMark,
   CreatedTechnicianAccount,
   CreatedUserAccount,
   MailDeliveryResult,
@@ -445,6 +446,72 @@ export const useRecordChecklistItem = (inspectionId: string, areaId: string | nu
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId ?? '') });
       void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+    },
+  });
+};
+
+/**
+ * Marks an area reviewed, or takes the mark back.
+ *
+ * A mark shows on the click: the area reads "Reviewed" and the "X of Y
+ * reviewed" count moves at once, and the server's answer settles both a moment
+ * later. The server stays the judge -- it refuses an area with a finding still
+ * awaiting a decision -- and a refusal puts everything back as it was.
+ * Withdrawing is not guessed at: what the area falls back to depends on rules
+ * the server owns, so that waits for the refetch.
+ */
+export const useSetAreaReviewed = (inspectionId: string) => {
+  const client = useQueryClient();
+  const summaryKey = keys.areaEvidenceSummary(inspectionId);
+  return useMutation({
+    mutationFn: ({ areaId, reviewed }: { areaId: string; reviewed: boolean }) =>
+      api<{ areaId: string; review: AreaReviewMark | null }>(
+        `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/review`,
+        { method: reviewed ? 'PUT' : 'DELETE' },
+      ),
+    onMutate: async ({ areaId, reviewed }) => {
+      const areaKey = keys.areaEvidence(inspectionId, areaId);
+      // Exact: the summary key prefixes every area's, and those can keep loading.
+      await client.cancelQueries({ queryKey: summaryKey, exact: true });
+      await client.cancelQueries({ queryKey: areaKey, exact: true });
+      const previous = {
+        summary: client.getQueryData<AreaEvidenceSummary>(summaryKey),
+        area: client.getQueryData<AreaEvidenceBundle>(areaKey),
+      };
+      if (!reviewed) return previous;
+      const review: AreaReviewMark = { at: new Date().toISOString(), byName: null, current: true };
+      if (previous.summary) {
+        const before = previous.summary.areas.find((area) => area.id === areaId);
+        client.setQueryData<AreaEvidenceSummary>(summaryKey, {
+          ...previous.summary,
+          totals: {
+            ...previous.summary.totals,
+            areasReviewed:
+              previous.summary.totals.areasReviewed + (before?.reviewStatus === 'REVIEWED' ? 0 : 1),
+          },
+          areas: previous.summary.areas.map((area) =>
+            area.id === areaId ? { ...area, reviewStatus: 'REVIEWED', review } : area,
+          ),
+        });
+      }
+      if (previous.area)
+        client.setQueryData<AreaEvidenceBundle>(areaKey, {
+          ...previous.area,
+          area: { ...previous.area.area, reviewStatus: 'REVIEWED', review },
+        });
+      return previous;
+    },
+    onError: (_error, { areaId }, previous) => {
+      if (previous?.summary) client.setQueryData(summaryKey, previous.summary);
+      if (previous?.area) client.setQueryData(keys.areaEvidence(inspectionId, areaId), previous.area);
+    },
+    onSettled: (_data, _error, { areaId }) => {
+      void client.invalidateQueries({ queryKey: summaryKey, exact: true });
+      void client.invalidateQueries({
+        queryKey: keys.areaEvidence(inspectionId, areaId),
+        exact: true,
+      });
+      void client.invalidateQueries({ queryKey: ['admin', 'inspection', inspectionId, 'audit'] });
     },
   });
 };
