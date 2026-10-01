@@ -20,6 +20,7 @@ import {
   FILTER_SIZE_IN_TEXT,
   carryForwardOrder,
   detailsNamingInspection,
+  isTbpZone,
   monthOfPlan,
   previousQuarter,
   quarterLabel,
@@ -795,8 +796,12 @@ export class TbpPlanService {
     let unverified = 0;
     for (const tenancy of tenancies) {
       const { tbpEnrollment, ...rest } = tenancy;
-      if (isTbpEnrolled(tbpEnrollment)) enrolled.push(rest);
-      else if ((tbpEnrollment ?? '').trim().toLowerCase() !== 'no') unverified += 1;
+      if (isTbpEnrolled(tbpEnrollment)) {
+        // Zone 5 is not part of the benefit package (the office, 2026-10-02):
+        // no visit, so a quarter has nothing there to hold back. A visit already
+        // made for one goes with the next generation, as any tenancy's that left.
+        if (isTbpZone(rest.zone)) enrolled.push(rest);
+      } else if ((tbpEnrollment ?? '').trim().toLowerCase() !== 'no') unverified += 1;
     }
     return { enrolled, unverified };
   }

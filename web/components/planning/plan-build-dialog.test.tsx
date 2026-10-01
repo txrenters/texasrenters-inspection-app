@@ -65,6 +65,22 @@ describe('building from a group template', () => {
     expect(screen.getByText(/Each day is one of the groups of “Optimized Drive time”/)).toBeTruthy();
   });
 
+  /**
+   * The office (2026-10-02): "we don't need this zone selector if we use the
+   * template cause we already removed zone 5". A template's groups already say
+   * which properties a quarter has, so none is left out of it.
+   */
+  it('does not ask which zones, and leaves none out', () => {
+    const { onBuild, build } = open();
+    expect(legends()).toContain('Zones');
+
+    fireEvent.click(screen.getByRole('radio', { name: /Optimized Drive time/ }));
+    expect(legends()).not.toContain('Zones');
+    build();
+
+    expect(onBuild.mock.calls[0]![0]).toMatchObject({ groupTemplateId: TEMPLATE.id, excludedZones: [] });
+  });
+
   it('asks for the grouping right after who gets the visits, before the crew and the dates', () => {
     open();
 

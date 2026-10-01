@@ -32,7 +32,7 @@ function build(permissions: string[]) {
   ]);
   const prisma = {
     propertywareBuilding: {
-      findMany: jest.fn().mockResolvedValue([building('grouped'), building('ungrouped'), building('other')]),
+      findMany: jest.fn().mockResolvedValue([building('grouped'), building('ungrouped'), building('other'), building('far')]),
     },
     propertywareTenant: {
       findMany: jest.fn().mockResolvedValue([
@@ -40,6 +40,7 @@ function build(permissions: string[]) {
         { propertywareBuildingId: 'grouped', zone: '2', tbpEnrollment: 'No' },
         { propertywareBuildingId: 'ungrouped', zone: '4', tbpEnrollment: ' yes ' },
         { propertywareBuildingId: 'other', zone: 'Not Set', tbpEnrollment: 'Not Verified' },
+        { propertywareBuildingId: 'far', zone: 'Zone 5', tbpEnrollment: 'Yes' },
       ]),
     },
     tbpGroupTemplateMember: { findMany: members },
@@ -71,6 +72,13 @@ describe('a property on the map, for somebody who reads the planning', () => {
     const rows = byId(await build(['properties:read', 'planning:read']).positions());
 
     expect(rows.get('other')).toMatchObject({ tbpEnrolled: false, tbpGroup: null });
+  });
+
+  /** Zone 5 is not part of the benefit package (the office, 2026-10-02): drawn as any other property. */
+  it('says a property in zone 5 is off the package, enrolled or not', async () => {
+    const rows = byId(await build(['properties:read', 'planning:read']).positions());
+
+    expect(rows.get('far')).toMatchObject({ zone: '5', tbpEnrolled: false });
   });
 
   it('reads only the active template', async () => {

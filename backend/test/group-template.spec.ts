@@ -152,6 +152,20 @@ describe('the Group maker’s properties', () => {
     expect(withoutPosition).toBe(1);
   });
 
+  /** Zone 5 is not part of the benefit package (the office, 2026-10-02), so the Group maker has none of it to group. */
+  it('leaves out zone 5', async () => {
+    const { service } = build({
+      tenancies: [
+        tenancy({ id: 'b-main', addressLine1: '1 Main St' }),
+        tenancy({ id: 'b-far', addressLine1: '9 Far Rd' }, { zone: 'Zone 5' }),
+      ],
+    });
+
+    const { properties } = await service.properties(ORG);
+
+    expect(properties.map((property) => property.buildingId)).toEqual(['b-main']);
+  });
+
   it('draws a postcode-centre geocode as approximate, unless somebody corrected it on the ground', async () => {
     const { service } = build({
       tenancies: [
@@ -239,6 +253,16 @@ describe('saving a template', () => {
     const { service, templateUpdateMany } = build({ known: 2 });
 
     await expect(service.save(user, TEMPLATE, input)).rejects.toMatchObject({ code: 'UNKNOWN_PROPERTY' });
+    expect(templateUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a property in zone 5, and writes nothing', async () => {
+    const { service, templateUpdateMany } = build({
+      known: 3,
+      tenancies: [{ propertywareBuildingId: 'b3', zone: '5', tbpEnrollment: 'Yes' } as never],
+    });
+
+    await expect(service.save(user, TEMPLATE, input)).rejects.toMatchObject({ code: 'NOT_IN_PACKAGE_ZONE' });
     expect(templateUpdateMany).not.toHaveBeenCalled();
   });
 

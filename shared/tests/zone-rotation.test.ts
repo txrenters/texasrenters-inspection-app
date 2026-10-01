@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isRescheduleMonday,
+  isTbpZone,
   plannedVisitDaysOfQuarter,
   quarterWeekIndex,
   weekStartOf,
@@ -111,5 +112,16 @@ describe('who has which zone each week', () => {
   it('gives a different person the week off when the crew outnumbers the zones', () => {
     expect(Object.values(weeklyZoneTechnicians(crew, ['1', '2'], 0))).toEqual(['moses', 'kevin']);
     expect(Object.values(weeklyZoneTechnicians(crew, ['1', '2'], 1)).sort()).toEqual(['emanuel', 'moses']);
+  });
+});
+
+/** Zone 5 is not part of the benefit package (the office, 2026-10-02). */
+describe('isTbpZone', () => {
+  it('leaves zone 5 out, however the report writes it', () => {
+    for (const zone of ['5', 'Zone 5', ' zone 05 ']) expect(isTbpZone(zone)).toBe(false);
+  });
+
+  it('keeps every other zone, and a tenancy with no zone set', () => {
+    for (const zone of ['1', 'Zone 2', '3', '4', 'Not Set', null, undefined, '']) expect(isTbpZone(zone)).toBe(true);
   });
 });

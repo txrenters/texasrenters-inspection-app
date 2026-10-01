@@ -6,6 +6,8 @@ import {
   MAX_STOPS_PER_DAY,
   applyGroupOps,
   groupTemplateOpsSchema,
+  isTbpZone,
+  NON_TBP_ZONES,
   zoneNumberOf,
 } from '@texasrenters/shared';
 
@@ -239,7 +241,8 @@ export class GroupTemplateService {
     const byBuilding = new Map<string, { building: NonNullable<(typeof tenancies)[number]['building']>; tenancies: typeof tenancies }>();
     for (const tenancy of tenancies) {
       const building = tenancy.building;
-      if (!building || !isTbpEnrolled(tenancy.tbpEnrollment)) continue;
+      // A quarter's tenancies, and no others: zone 5 is not part of the package (2026-10-02).
+      if (!building || !isTbpEnrolled(tenancy.tbpEnrollment) || !isTbpZone(tenancy.zone)) continue;
       const entry = byBuilding.get(building.id);
       if (entry) entry.tenancies.push(tenancy);
       else byBuilding.set(building.id, { building, tenancies: [tenancy] });
@@ -480,6 +483,7 @@ export class GroupTemplateService {
         const found = await tx.propertywareBuilding.count({ where: { organizationId, id: { in: added } } });
         if (found !== added.length)
           throw new ApplicationError(422, 'UNKNOWN_PROPERTY', 'A property in this change is not one of this organization’s.');
+        await refuseOutsidePackageZones(tx, organizationId, added);
       }
       const existing = new Set(before.groups.map((group) => group.id));
       const made = after.groups.map((group) => group.id).filter((groupId) => !existing.has(groupId));
@@ -583,6 +587,7 @@ export class GroupTemplateService {
     const known = await this.prisma.propertywareBuilding.count({ where: { organizationId, id: { in: buildingIds } } });
     if (known !== buildingIds.length)
       throw new ApplicationError(422, 'UNKNOWN_PROPERTY', 'A property in this template is not one of this organization’s.');
+    await refuseOutsidePackageZones(this.prisma, organizationId, buildingIds);
   }
 
   /** One row per person per template per ten minutes of live editing, however many clicks. */
@@ -643,6 +648,38 @@ async function writeGroups(
     })),
   );
   if (members.length) await tx.tbpGroupTemplateMember.createMany({ data: members });
+}
+
+/**
+ * Refused when any of these properties is in a zone that is not part of the
+ * benefit package: every enrolled tenancy it has is in one (zone 5; the office,
+ * 2026-10-02). The Group maker no longer lists them; this keeps a template from
+ * being given one by any other way in. A property with no enrolled tenancy is
+ * not this rule's to judge.
+ */
+async function refuseOutsidePackageZones(
+  db: Pick<PrismaService, 'propertywareTenant'>,
+  organizationId: string,
+  buildingIds: readonly string[],
+) {
+  if (!buildingIds.length) return;
+  const tenancies = await db.propertywareTenant.findMany({
+    where: { organizationId, isActive: true, propertywareBuildingId: { in: [...buildingIds] } },
+    select: { propertywareBuildingId: true, zone: true, tbpEnrollment: true },
+  });
+  const zonesOf = new Map<string, (string | null)[]>();
+  for (const tenancy of tenancies)
+    if (tenancy.propertywareBuildingId && isTbpEnrolled(tenancy.tbpEnrollment))
+      zonesOf.set(tenancy.propertywareBuildingId, [...(zonesOf.get(tenancy.propertywareBuildingId) ?? []), tenancy.zone]);
+  const outside = [...zonesOf].filter(([, zones]) => !zones.some((zone) => isTbpZone(zone)));
+  if (outside.length)
+    throw new ApplicationError(
+      422,
+      'NOT_IN_PACKAGE_ZONE',
+      `Zone ${NON_TBP_ZONES.join(', ')} is not part of the benefit package, so ${
+        outside.length === 1 ? 'a property there' : `${outside.length} properties there`
+      } cannot be grouped.`,
+    );
 }
 
 const counts = (input: GroupTemplateInput) => ({
