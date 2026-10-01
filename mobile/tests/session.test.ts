@@ -9,17 +9,31 @@ jest.mock('../src/config/environment', () => ({
 }));
 
 /* eslint-disable import/first */
+import { AppState, Platform } from 'react-native';
+
 import {
   getSession,
   onSessionChange,
   renewSessionAhead,
   requestPasswordReset,
   resetSessionCache,
+  SessionUnavailableError,
+  signedInUserId,
   signIn,
   signOut,
 } from '../src/auth/session';
 import { sessionStorage } from '../src/auth/session-storage';
 /* eslint-enable import/first */
+
+/**
+ * Whether the app is on screen. React Native's test double leaves
+ * `currentState` unset, and the session renews only on a screen it can save
+ * from, so each test says which it is.
+ */
+const appIs = (state: 'active' | 'background') =>
+  Object.defineProperty(AppState, 'currentState', { value: state, configurable: true, writable: true });
+const platformIs = (os: 'ios' | 'android') =>
+  Object.defineProperty(Platform, 'OS', { value: os, configurable: true, writable: true });
 
 /** An unsigned JWT shape — nothing here verifies signatures, by design. */
 function token(claims: Record<string, unknown>) {
@@ -41,6 +55,8 @@ const ok = (body: unknown) => ({ ok: true, json: async () => body });
 beforeEach(async () => {
   fetchMock.mockReset();
   resetSessionCache();
+  platformIs('ios');
+  appIs('active');
   await sessionStorage.removeItem('texasrenters.session');
 });
 
@@ -292,6 +308,123 @@ describe('mobile session', () => {
       await renewSessionAhead();
 
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * An iPhone keeps the app running behind the lock screen, and the keychain
+   * locked. Every caller used to renew from there -- the polls, the upload
+   * queue, the error reporter -- and the renewed token could not be saved, so
+   * the next request offered the retired one, the server read it as theft and
+   * ended every session on the account, and the technician unlocked their phone
+   * to the sign-in screen. The office's error log held 11,838 refused keychain
+   * reads from one iPhone between 2026-09-14 and 2026-10-01.
+   */
+  describe('behind the lock screen', () => {
+    const soon = (seconds: number) => token({ sub: 'auth-user', exp: inSeconds(seconds) });
+    const refreshTokensSent = () =>
+      fetchMock.mock.calls
+        .filter(([url]) => String(url).includes('/auth/refresh'))
+        .map(([, init]) => (JSON.parse(String(init.body)) as { refreshToken: string }).refreshToken);
+
+    it('does not renew, and says the phone is locked rather than that nobody is signed in', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(5), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+      appIs('background');
+
+      await expect(getSession()).rejects.toBeInstanceOf(SessionUnavailableError);
+      // `renew: false` keeps its own answer.
+      expect(await getSession({ renew: false })).toBeNull();
+      expect(refreshTokensSent()).toEqual([]);
+      // Still the technician, for anything that only needs to know who.
+      expect(await signedInUserId()).toBe('auth-user');
+    });
+
+    it('hands out a token that still has some life in it, without renewing it', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(45), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+      appIs('background');
+
+      expect((await getSession())?.refreshToken).toBe('refresh-1');
+      expect(refreshTokensSent()).toEqual([]);
+    });
+
+    it('renews as soon as the app is open again', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(5), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+      appIs('background');
+      await expect(getSession()).rejects.toBeInstanceOf(SessionUnavailableError);
+
+      appIs('active');
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-2' }));
+
+      expect((await getSession())?.refreshToken).toBe('refresh-2');
+      expect(refreshTokensSent()).toEqual(['refresh-1']);
+    });
+
+    it('does not renew ahead from behind it either', async () => {
+      fetchMock.mockResolvedValueOnce(
+        ok({
+          accessToken: token({ sub: 'auth-user', iat: inSeconds(-50 * 60), exp: inSeconds(10 * 60) }),
+          refreshToken: 'refresh-1',
+        }),
+      );
+      await signIn('tech@example.com', 'password');
+      appIs('background');
+
+      await renewSessionAhead();
+
+      expect(refreshTokensSent()).toEqual([]);
+    });
+
+    it('renews on Android, whose keystore stays open behind the lock screen', async () => {
+      platformIs('android');
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(5), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+      appIs('background');
+
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-2' }));
+
+      expect((await getSession())?.refreshToken).toBe('refresh-2');
+    });
+
+    it('keeps a renewal the keychain would not take, and never offers the retired token again', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(5), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+
+      // The phone locks while the renewal is on its way: saving it is refused.
+      const write = jest
+        .spyOn(sessionStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('User interaction is not allowed.'));
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(5), refreshToken: 'refresh-2' }));
+      expect((await getSession())?.refreshToken).toBe('refresh-2');
+
+      // The next renewal offers what the server issued, not what it retired.
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-3' }));
+      await getSession();
+      expect(refreshTokensSent()).toEqual(['refresh-1', 'refresh-2']);
+      write.mockRestore();
+
+      // And it is on the phone, so a cold start has it too.
+      resetSessionCache();
+      expect((await getSession())?.refreshToken).toBe('refresh-3');
+    });
+
+    it('ends a session the server refused even while the keychain will not let go of it', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: soon(5), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+
+      const remove = jest
+        .spyOn(sessionStorage, 'removeItem')
+        .mockRejectedValueOnce(new Error('User interaction is not allowed.'));
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) });
+
+      expect(await getSession()).toBeNull();
+      remove.mockRestore();
+      // Removed for good once storage answers, so a cold start does not bring it back.
+      expect(await getSession()).toBeNull();
+      resetSessionCache();
+      expect(await getSession()).toBeNull();
     });
   });
 

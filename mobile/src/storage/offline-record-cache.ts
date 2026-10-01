@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 
-import { getSession } from '../auth/session';
+import { signedInUserId } from '../auth/session';
 import { demoStorage } from './demo-storage';
 
 const CACHE_PREFIX = 'texasrenters-offline-records-v1';
@@ -164,8 +164,9 @@ export async function updateExistingApiRecord<TSchema extends z.ZodType>(
 }
 
 async function cacheKey(key: string) {
-  const session = await getSession();
-  const userId = session?.authUserId;
+  // Who, not a token: an expired one names the same technician, and renewing
+  // here is what could not be done behind the lock screen.
+  const userId = await signedInUserId();
   if (!userId) throw new SessionExpiredError();
   return `${CACHE_PREFIX}:${userId}:${key}`;
 }
