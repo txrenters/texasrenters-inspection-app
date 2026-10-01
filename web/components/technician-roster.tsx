@@ -22,8 +22,10 @@ import {
   listDay,
   offRoadNetwork,
   onSiteSeconds,
+  routeNotDrawn,
   timingNote,
   visitTimes,
+  withoutLocation,
 } from '@/lib/route-plan';
 
 /**
@@ -135,6 +137,7 @@ function Dot({ position }: { position: TechnicianPosition | null }) {
 }
 
 export function TechnicianRoster({
+  colors = null,
   entries,
   onSelect,
   onSelectStop,
@@ -143,6 +146,8 @@ export function TechnicianRoster({
   selectedStopBuildingId = null,
   timeline = null,
 }: {
+  /** Each person's colour on the map, beside their name, so a line on the map leads back to a row here. */
+  colors?: ReadonlyMap<string, string> | null;
   entries: RosterEntry[];
   onSelect: (technicianId: string | null) => void;
   /**
@@ -177,6 +182,7 @@ export function TechnicianRoster({
   // Built once per render rather than per stop: the same answer for every row,
   // and rebuilding it inside the list would make it O(stops x refusals).
   const refused = offRoadNetwork(route);
+  const unplaced = withoutLocation(route);
   const planned = isPlanned(route);
   const projection = timeline?.projection ?? null;
 
@@ -216,7 +222,17 @@ export function TechnicianRoster({
             >
               <Dot position={entry.position} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{entry.displayName}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-sm font-medium">{entry.displayName}</span>
+                  {colors?.get(entry.technicianId) ? (
+                    <span
+                      aria-hidden
+                      className="h-1 w-3.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: colors.get(entry.technicianId) }}
+                      title="Their colour on the map"
+                    />
+                  ) : null}
+                </span>
                 <span className="text-muted-foreground block truncate text-xs">
                   {/* Where they are, when the trail puts them at one of the
                       day's properties -- the question somebody opening this
@@ -267,6 +283,17 @@ export function TechnicianRoster({
                       <p className="text-muted-foreground mb-2 text-xs">
                         No suggested order: the last reported position is not near any road we
                         can route on, so there is no start point to drive from.
+                      </p>
+                    ) : null}
+
+                    {/* Said, because the map alone shows nothing: no line,
+                        no numbers, and no way to tell an outage from a day
+                        with nowhere left to go. */}
+                    {routeNotDrawn(route) ? (
+                      <p className="text-muted-foreground mb-2 text-xs">
+                        No route line right now: the routing service did not answer, so the
+                        stops below are in no particular order. It is asked again
+                        automatically.
                       </p>
                     ) : null}
 
@@ -401,6 +428,11 @@ export function TechnicianRoster({
                                     highlights: the technician still has to go,
                                     the address simply is not on the map. */}
                                 {stop.buildingId ? null : ' · not on the map'}
+                                {/* A building, never placed: no line will ever
+                                    reach it until its address is. */}
+                                {stop.buildingId && unplaced.has(stop.inspectionId)
+                                  ? ' · no location on file'
+                                  : null}
                                 {/* A different fault from having no
                                     coordinate: this one has a position and it
                                     is nowhere a road reaches, which usually

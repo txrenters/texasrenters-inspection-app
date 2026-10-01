@@ -2,6 +2,8 @@ import type { PropertyPosition } from '@texasrenters/shared';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { PropertyVisit } from '@/lib/day-visits';
+
 /**
  * Every property on the console's maps, as the Group maker draws it.
  *
@@ -30,6 +32,12 @@ vi.mock('react-map-gl/mapbox', () => ({
   Popup: ({ children }: { children?: React.ReactNode }) => <div data-testid="popup">{children}</div>,
   Source: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   useMap: () => ({ current: undefined }),
+}));
+
+/** What the reader may do, set by each test that cares. */
+const granted = new Set<string>(['inspections:read']);
+vi.mock('@/lib/auth', () => ({
+  usePermissions: () => ({ has: (permission: string) => granted.has(permission) }),
 }));
 
 const { PortfolioLayers } = await import('./map-portfolio');
@@ -82,11 +90,21 @@ describe('a property on the map', () => {
     expect(fills().get('grouped')).toBe('#7f77dd');
   });
 
-  it('is the Group maker’s green when it is on the package in no group, and grey when it is off it', () => {
+  it('is the Group maker’s green when it is on the package in no group, and yellow when it is off it', () => {
     render(<PortfolioLayers properties={[GROUPED, LOOSE, OTHER]} />);
 
     expect(fills().get('loose-one')).toBe('#16a34a');
-    expect(fills().get('other-property')).toBe('#78716c');
+    // The office, 2026-10-02: grey was hard to find on the map.
+    expect(fills().get('other-property')).toBe('#facc15');
+  });
+
+  it('gives the yellow disc a dark edge, which a white one would lose on the light map', () => {
+    render(<PortfolioLayers properties={[LOOSE, OTHER]} />);
+
+    const edges = screen
+      .getAllByTestId('marker')
+      .map((marker) => [...marker.querySelectorAll('circle')].find((circle) => circle.getAttribute('fill') !== 'transparent')?.getAttribute('stroke'));
+    expect(edges).toEqual(['#fff', '#854d0e']);
   });
 
   it('says its group when hovered', () => {
@@ -100,6 +118,92 @@ describe('a property on the map', () => {
 
     const z = screen.getAllByTestId('marker').map((marker) => Number(marker.dataset.z));
     expect(z).toEqual([100, 95, 90]);
+  });
+});
+
+describe('a property whose inspection is in (the office, 2026-10-02)', () => {
+  const visit = (inspectionId: string, finished: boolean): PropertyVisit => ({
+    inspectionId,
+    inspectionType: 'MOVE_OUT',
+    status: finished ? 'TECHNICIAN_SUBMITTED' : 'SCHEDULED',
+    finished,
+    finishedAt: finished ? '2026-10-02T19:14:00.000Z' : null,
+    technicianName: 'A Technician',
+  });
+  /** The tick is the badge's green check. */
+  const ticked = () =>
+    new Map(
+      screen.getAllByTestId('marker').map((marker) => [
+        marker.querySelector('[title]')?.getAttribute('title')?.split(' · ')[0],
+        Boolean(marker.querySelector('path[stroke="#15803d"]')),
+      ]),
+    );
+
+  it('wears a tick once every inspection it had that day is submitted', () => {
+    render(
+      <PortfolioLayers
+        properties={[GROUPED, LOOSE, OTHER]}
+        visits={new Map([
+          [GROUPED.id, [visit('inspection-1', true)]],
+          [OTHER.id, [visit('inspection-2', true)]],
+        ])}
+      />,
+    );
+
+    expect(ticked()).toEqual(
+      new Map([
+        ['grouped', true],
+        ['loose-one', false],
+        ['other-property', true],
+      ]),
+    );
+    expect(screen.getByTitle('grouped · Group 12 · Katy North · inspection submitted')).toBeTruthy();
+  });
+
+  it('wears none while one of its inspections that day is still to do', () => {
+    render(
+      <PortfolioLayers
+        properties={[LOOSE]}
+        visits={new Map([[LOOSE.id, [visit('inspection-1', true), visit('inspection-2', false)]]])}
+      />,
+    );
+
+    expect(ticked().get('loose-one')).toBe(false);
+  });
+
+  it('lists the day’s inspections in its window, each with a button to its details', () => {
+    granted.add('inspections:read');
+    render(
+      <PortfolioLayers
+        properties={[LOOSE]}
+        selectedPropertyId={LOOSE.id}
+        visits={new Map([[LOOSE.id, [visit('inspection-1', true), visit('inspection-2', false)]]])}
+      />,
+    );
+
+    const links = screen.getAllByRole('link', { name: 'Show inspection details' });
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/inspections/inspection-1',
+      '/inspections/inspection-2',
+    ]);
+    // A new tab: the map is a live view, and leaving it would lose the day being watched.
+    expect(links.every((link) => link.getAttribute('target') === '_blank')).toBe(true);
+    expect(screen.getByTestId('popup').textContent).toContain('Move out');
+    expect(screen.getByTestId('popup').textContent).toContain('A Technician');
+  });
+
+  it('offers no button to somebody who may not read inspections', () => {
+    granted.delete('inspections:read');
+    render(
+      <PortfolioLayers
+        properties={[LOOSE]}
+        selectedPropertyId={LOOSE.id}
+        visits={new Map([[LOOSE.id, [visit('inspection-1', true)]]])}
+      />,
+    );
+
+    expect(screen.queryByRole('link', { name: 'Show inspection details' })).toBeNull();
+    granted.add('inspections:read');
   });
 });
 

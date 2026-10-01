@@ -16,21 +16,31 @@ import { OFF_ROUTE_M, projectOntoPath } from '@texasrenters/shared';
  */
 const REROUTE_ASK_EVERY_MS = 15_000;
 
-import { GroupDisc, LooseDisc, OTHER_PROPERTY_GREY } from '@/components/map-discs';
+import {
+  DoneBadge,
+  GroupDisc,
+  LooseDisc,
+  OTHER_PROPERTY_RIM,
+  OTHER_PROPERTY_YELLOW,
+} from '@/components/map-discs';
 import { PageHeader } from '@/components/page-header';
 import { UNGROUPED_GREEN } from '@/components/planning/group-file';
 import { useFillHeight } from '@/components/planning/use-fill-height';
 import { EmptyState } from '@/components/states';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
+import { visitsByProperty } from '@/lib/day-visits';
 import { formatRelative } from '@/lib/format';
 import {
   useMapAssignments,
   usePropertyLocations,
   useTechnicianLocations,
   useTechnicianRoute,
+  useTechnicianRoutes,
   useTechnicianTimeline,
+  useTechnicianTrails,
 } from '@/lib/queries';
+import { technicianColors } from '@/lib/technician-colors';
 import { PropertyList } from '@/components/property-list';
 import { buildRoster, isOnTheDay, TechnicianRoster } from '@/components/technician-roster';
 import { TechnicianDaySummary } from '@/components/technician-day-summary';
@@ -90,10 +100,36 @@ function DiscSwatch({ kind }: { kind: 'GROUP' | 'LOOSE' | 'OTHER' }) {
     <span aria-hidden="true" className="inline-flex size-4 items-center justify-center [&>svg]:size-4">
       {kind === 'GROUP' ? (
         <GroupDisc fill="#7c3aed" ink="#fff" />
+      ) : kind === 'LOOSE' ? (
+        <LooseDisc color={UNGROUPED_GREEN} />
       ) : (
-        <LooseDisc color={kind === 'LOOSE' ? UNGROUPED_GREEN : OTHER_PROPERTY_GREY} />
+        <LooseDisc color={OTHER_PROPERTY_YELLOW} rim={OTHER_PROPERTY_RIM} />
       )}
     </span>
+  );
+}
+
+/** The tick a disc wears once its inspections are in. */
+function DoneSwatch() {
+  return (
+    <span aria-hidden="true" className="inline-flex size-4 items-center justify-center">
+      <DoneBadge />
+    </span>
+  );
+}
+
+/** A technician's line: solid where they went, dashed where they are still to go. */
+function LineSwatch({ dashed = false }: { dashed?: boolean }) {
+  return (
+    <svg aria-hidden="true" className="text-foreground" height="8" viewBox="0 0 20 8" width="20">
+      <path
+        d="M1 4h18"
+        stroke="currentColor"
+        strokeDasharray={dashed ? '4 3' : undefined}
+        strokeLinecap={dashed ? 'butt' : 'round'}
+        strokeWidth={dashed ? 2 : 3}
+      />
+    </svg>
   );
 }
 
@@ -312,6 +348,38 @@ export default function TechnicianMapPage() {
     );
   }, [assignments.data, selectedId]);
 
+  /**
+   * A colour each, for the lines and the ring on each marker.
+   *
+   * Keyed on who is on the day rather than on the roster itself, which is
+   * rebuilt from every position the socket delivers: a new map of colours each
+   * time would redraw every line on the map every few seconds.
+   */
+  const dayKey = dayRoster
+    .map((entry) => entry.technicianId)
+    .sort()
+    .join('|');
+  const colors = useMemo(() => technicianColors(dayKey ? dayKey.split('|') : []), [dayKey]);
+
+  /** Who is drawn, in the same stable form, for the lines' requests. */
+  const visibleKey = visibleRoster.map((entry) => entry.technicianId).join('|');
+  const visibleIds = useMemo(() => (visibleKey ? visibleKey.split('|') : []), [visibleKey]);
+
+  /** The day the page shows is the one happening, so the live positions belong to it. */
+  const live = date === today;
+
+  /**
+   * Everybody's lines: where they went (the office, 2026-10-02: "the trailing
+   * lines") and their planned drive through the day's properties ("the lines
+   * that connects to the scheduled property"). Behind the same
+   * `technicians:locate` as the positions, which this page already requires.
+   */
+  const trails = useTechnicianTrails(visibleIds, date, live, canView);
+  const crewRoutes = useTechnicianRoutes(visibleIds, date, canView);
+
+  /** The day's inspections by property: the ticks on the discs, and the links in their windows. */
+  const visits = useMemo(() => visitsByProperty(assignments.data), [assignments.data]);
+
   const newest = positions.data?.reduce<string | null>(
     (latest, position) => (!latest || position.recordedAt > latest ? position.recordedAt : latest),
     null,
@@ -448,6 +516,7 @@ export default function TechnicianMapPage() {
                 ) : null}
 
                 <TechnicianRoster
+                  colors={colors}
                   entries={visibleRoster}
                   onSelect={selectTechnician}
                   onSelectStop={selectStop}
@@ -485,16 +554,21 @@ export default function TechnicianMapPage() {
               style={fill.height ? { height: fill.height } : undefined}
             >
               <TechnicianMap
+                colors={colors}
+                crewRoutes={crewRoutes}
                 currentInspectionIds={
                   selectedId ? (timeline.data?.projection.current?.inspectionIds ?? null) : null
                 }
                 highlightedBuildingIds={highlighted}
+                live={live}
                 onSelectTechnician={selectTechnician}
                 positions={visiblePositions}
                 properties={properties.data ?? []}
                 route={selectedId ? (route.data ?? null) : null}
                 selectedPropertyId={selectedPropertyId}
                 selectedTechnicianId={selectedId}
+                trails={trails}
+                visits={visits}
               />
 
               {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
@@ -549,6 +623,9 @@ export default function TechnicianMapPage() {
                 Property {properties.data?.length ? `(${properties.data.length})` : null}
               </LegendKey>
             )}
+            <LegendKey swatch={<DoneSwatch />}>Inspection submitted that day</LegendKey>
+            <LegendKey swatch={<LineSwatch />}>Where they drove, in their colour</LegendKey>
+            <LegendKey swatch={<LineSwatch dashed />}>Route on to the day&rsquo;s properties</LegendKey>
           </div>
         </div>
       )}

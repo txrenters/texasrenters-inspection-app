@@ -65,9 +65,16 @@ export const TechnicianPin = memo(function TechnicianPin({
   stale,
   dim = false,
   heading = null,
+  ring = null,
 }: {
   stale: boolean;
   dim?: boolean;
+  /**
+   * Their colour on the map, as a ring round the badge -- the colour of their
+   * trail and their planned route, so the line and the person are matched
+   * without a legend. Null draws none.
+   */
+  ring?: string | null;
   /**
    * Course over ground, or null to draw no arrow at all.
    *
@@ -105,6 +112,7 @@ export const TechnicianPin = memo(function TechnicianPin({
       {live ? (
         <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11" />
       ) : null}
+      {ring ? <circle cx="22" cy="22" fill="none" r="14" stroke={ring} strokeWidth="3" /> : null}
       {/* Rotated about the marker's own centre, which is also the coordinate
           the marker is anchored at -- so the arrow swings around the person
           rather than orbiting some other point.
@@ -149,10 +157,13 @@ export const DrivingPin = memo(function DrivingPin({
   dim = false,
   heading,
   stopped = false,
+  ring = null,
 }: {
   dim?: boolean;
   heading: number;
   stopped?: boolean;
+  /** Their colour on the map, as `TechnicianPin` draws it. */
+  ring?: string | null;
 }) {
   const rotation = useContinuousRotation(heading);
   return (
@@ -161,6 +172,7 @@ export const DrivingPin = memo(function DrivingPin({
         <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="13" />
       )}
       <circle cx="22" cy="22" fill="#fff" r="14.5" />
+      {ring ? <circle cx="22" cy="22" fill="none" r="16" stroke={ring} strokeWidth="3" /> : null}
       <path
         className="fill-map-technician"
         d="M22 9.5 L30 31.5 L22 26.8 L14 31.5 Z"

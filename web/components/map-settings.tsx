@@ -68,7 +68,7 @@ export interface MapPreferences {
   zones: boolean;
 
   /**
-   * The active properties off the benefit package, as grey discs. On by
+   * The active properties off the benefit package, as yellow discs. On by
    * default: the office asked for every active property on the technician map,
    * not only the package's (2026-10-01). Off leaves the package's alone.
    */

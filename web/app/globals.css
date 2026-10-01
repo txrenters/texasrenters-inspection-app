@@ -444,6 +444,20 @@
   stroke: var(--map-property);
 }
 
+/* Every marker under everything laid over the map.
+ *
+ * Mapbox puts markers in its canvas container and the page orders them with
+ * z-indexes in the hundreds -- discs at 90 to 110, the crew at 500, a route's
+ * stops at 800. Nothing between them and the map's root formed a stacking
+ * context, so those numbers competed with the map's own overlays: property
+ * discs were painted across the technician panel, the zoom buttons and the
+ * map-type menu. Isolated, the markers keep their order among themselves and
+ * stay under every overlay and every popup (a popup is drawn outside this
+ * container, in the map's root). */
+.mapboxgl-map .mapboxgl-canvas-container {
+  isolation: isolate;
+}
+
 /* Mapbox's popup, made to follow the theme.
 
  * The bubble, its tail and its close button are Mapbox's own elements, painted

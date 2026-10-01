@@ -6,17 +6,20 @@ import type {
   PropertyPosition,
   TechnicianPosition,
   TechnicianRoute,
+  TechnicianTrail,
 } from '@texasrenters/shared';
-import { splitRouteAtPosition } from '@texasrenters/shared';
+import { splitRouteAtPosition, withLivePosition } from '@texasrenters/shared';
 import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Layer, Marker, Popup, Source, type LayerProps } from 'react-map-gl/mapbox';
 
+import { InspectionDetailsLink } from '@/components/inspection-details-link';
 import { CameraDirector, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
 import { ConsoleMap } from '@/components/console-map';
 import { useMapStroke } from '@/components/map-colors';
 import { featureCollection, lineFeature } from '@/components/map-geometry';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
+import type { PropertyVisit } from '@/lib/day-visits';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
 import { formatDistance, formatDuration } from '@/lib/format';
 import { useMotionTracks } from '@/lib/use-motion-tracks';
@@ -74,11 +77,22 @@ const ROUTE_SOURCE = 'technician-routes';
  */
 const RouteLayer = memo(function RouteLayer({
   currentInspectionIds,
+  drawDriven,
   position,
   route,
 }: {
   /** The visit under way, from the location trail, so its stop can say so. */
   currentInspectionIds: readonly string[] | null;
+  /**
+   * Whether to draw the road already behind them, in grey.
+   *
+   * That grey line is the road between the stops they finished, routed after
+   * the fact -- the best the map could say about where they had been while it
+   * had no trail. With their real trail drawn it is a second, guessed version
+   * of the same drive lying under the true one, so it gives way. Still drawn
+   * for a day with no trail: location paused, or a phone that never reported.
+   */
+  drawDriven: boolean;
   /**
    * Where the technician is now, which is where the route is cut.
    *
@@ -122,7 +136,7 @@ const RouteLayer = memo(function RouteLayer({
       // The day so far, in grey and under the orange: the drive through the
       // stops already finished. They used to disappear from the map as they
       // were submitted, so an afternoon showed only what was left.
-      ...(history.length > 1
+      ...(drawDriven && history.length > 1
         ? [
             lineFeature(history, { kind: 'casing', w: 7, o: 0.6 }),
             lineFeature(history, { kind: 'line', tone: 'done', w: 4, o: 0.95 }),
@@ -131,7 +145,7 @@ const RouteLayer = memo(function RouteLayer({
       // The part of this route already driven, in the same grey as the drives
       // between finished stops -- so the line is continuous and only its colour
       // says which side of the technician it is on.
-      ...(split.travelled.length > 1
+      ...(drawDriven && split.travelled.length > 1
         ? [lineFeature(split.travelled, { kind: 'line', tone: 'done', w: 4, o: 0.9 })]
         : []),
       ...(split.ahead.length > 1
@@ -141,7 +155,7 @@ const RouteLayer = memo(function RouteLayer({
           ]
         : []),
     ]);
-  }, [route, split]);
+  }, [drawDriven, route, split]);
 
   if (!route) return null;
 
@@ -204,13 +218,16 @@ const RouteLayer = memo(function RouteLayer({
               offset={28}
               onClose={() => setOpenStop(null)}
             >
-              <div className="text-popover-foreground text-xs leading-relaxed">
-                <div className="text-sm font-medium">{stop.propertyName}</div>
-                <div className="text-muted-foreground">
-                  {stop.addressLine1}
-                  {stop.city ? `, ${stop.city}` : null}
+              <div className="text-popover-foreground grid gap-1.5 text-xs leading-relaxed">
+                <div>
+                  <div className="text-sm font-medium">{stop.propertyName}</div>
+                  <div className="text-muted-foreground">
+                    {stop.addressLine1}
+                    {stop.city ? `, ${stop.city}` : null}
+                  </div>
+                  <div className="mt-1">Done</div>
                 </div>
-                <div className="mt-1">Done</div>
+                <InspectionDetailsLink inspectionId={stop.inspectionId} />
               </div>
             </Popup>
           ) : null}
@@ -297,6 +314,7 @@ const RouteLayer = memo(function RouteLayer({
                       ) : null}
                     </div>
                   ) : null}
+                  <InspectionDetailsLink className="mt-1.5" inspectionId={stop.inspectionId} />
                 </div>
               </Popup>
             ) : null}
@@ -359,19 +377,199 @@ const AirTravelLayer = memo(function AirTravelLayer({ route }: { route: Technici
   );
 });
 
+/** A line for somebody the page gave no colour, which it never should. */
+const UNCOLOURED_LINE = '#2563eb';
+
+/**
+ * Where each technician actually went that day, in their colour (the office,
+ * 2026-10-02: "the trailing lines").
+ *
+ * The road they drove, from their own phone's fixes -- not the routed guess
+ * between finished stops that the grey line is. Solid, over a white casing
+ * that carries it across the dark roadmap; wider for the person selected, and
+ * everyone else's recedes rather than disappearing while somebody is, as the
+ * rest of the map does. Broken where the phone went quiet, so a gap reads as a
+ * gap rather than as a straight line through people's houses.
+ *
+ * On the day that is happening, each line runs on to the marker from the live
+ * position, which arrives far more often than the trail is fetched.
+ *
+ * Always mounted, even with nothing to draw: layer order is mount order, and a
+ * source that came and went would land on top of the selected route.
+ */
+const TrailLayer = memo(function TrailLayer({
+  colors,
+  live,
+  positions,
+  selectedTechnicianId,
+  trails,
+}: {
+  colors: ReadonlyMap<string, string>;
+  /** The day shown is today, so the live position is part of it. */
+  live: boolean;
+  positions: readonly TechnicianPosition[];
+  selectedTechnicianId: string | null;
+  trails: readonly TechnicianTrail[];
+}) {
+  const data = useMemo(() => {
+    const here = new Map(positions.map((position) => [position.technicianId, position]));
+    return featureCollection(
+      trails.flatMap((trail) => {
+        const selected = trail.technicianId === selectedTechnicianId;
+        const receded = Boolean(selectedTechnicianId) && !selected;
+        const color = colors.get(trail.technicianId) ?? UNCOLOURED_LINE;
+        const segments = live
+          ? withLivePosition(trail.segments, here.get(trail.technicianId))
+          : trail.segments;
+        return segments
+          .filter((segment) => segment.points.length > 1)
+          .flatMap((segment) => [
+            lineFeature(segment.points, {
+              kind: 'casing',
+              w: selected ? 8 : 5.5,
+              o: receded ? 0.2 : 0.85,
+              z: selected ? 1 : 0,
+            }),
+            lineFeature(segment.points, {
+              kind: 'line',
+              color,
+              w: selected ? 5 : 3,
+              o: receded ? 0.3 : 0.95,
+              z: selected ? 1 : 0,
+            }),
+          ]);
+      }),
+    );
+  }, [colors, live, positions, selectedTechnicianId, trails]);
+
+  return (
+    <Source data={data} id="technician-trails" type="geojson">
+      <Layer
+        filter={['==', ['get', 'kind'], 'casing']}
+        id="trail-casing"
+        // The selected person's line over everybody else's where they cross.
+        layout={{ 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'z'] }}
+        paint={{ 'line-color': '#ffffff', 'line-width': ['get', 'w'], 'line-opacity': ['get', 'o'] }}
+        type="line"
+      />
+      <Layer
+        filter={['==', ['get', 'kind'], 'line']}
+        id="trail-line"
+        layout={{ 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'z'] }}
+        paint={{
+          'line-color': ['get', 'color'],
+          'line-width': ['get', 'w'],
+          'line-opacity': ['get', 'o'],
+        }}
+        type="line"
+      />
+    </Source>
+  );
+});
+
+/**
+ * Everybody's day still ahead of them, dashed in their colour: the line on to
+ * the properties they are yet to visit (the office, 2026-10-02: "the lines that
+ * connects to the scheduled property of the scheduled day").
+ *
+ * Dashed because it is a plan, not a drive -- the solid lines are where people
+ * actually went. Cut at their live position on the day that is happening, the
+ * way the selected route is. The selected technician's own day is skipped:
+ * `RouteLayer` draws it, numbered, in the route's orange.
+ *
+ * Always mounted, for the same reason as the trails, and under them.
+ */
+const CrewRoutesLayer = memo(function CrewRoutesLayer({
+  colors,
+  live,
+  positions,
+  routes,
+  selectedTechnicianId,
+}: {
+  colors: ReadonlyMap<string, string>;
+  live: boolean;
+  positions: readonly TechnicianPosition[];
+  routes: readonly TechnicianRoute[];
+  selectedTechnicianId: string | null;
+}) {
+  const data = useMemo(() => {
+    const here = new Map(positions.map((position) => [position.technicianId, position]));
+    const receded = Boolean(selectedTechnicianId);
+    return featureCollection(
+      routes.flatMap((route) => {
+        if (route.technicianId === selectedTechnicianId || route.geometry.length < 2) return [];
+        const ahead = live
+          ? splitRouteAtPosition(route.geometry, here.get(route.technicianId) ?? null).ahead
+          : route.geometry;
+        if (ahead.length < 2) return [];
+        return [
+          lineFeature(ahead, { kind: 'casing', o: receded ? 0.2 : 0.7 }),
+          lineFeature(ahead, {
+            kind: 'line',
+            color: colors.get(route.technicianId) ?? UNCOLOURED_LINE,
+            o: receded ? 0.35 : 0.95,
+          }),
+        ];
+      }),
+    );
+  }, [colors, live, positions, routes, selectedTechnicianId]);
+
+  return (
+    <Source data={data} id="crew-routes" type="geojson">
+      <Layer
+        filter={['==', ['get', 'kind'], 'casing']}
+        id="crew-route-casing"
+        layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+        paint={{ 'line-color': '#ffffff', 'line-width': 5, 'line-opacity': ['get', 'o'] }}
+        type="line"
+      />
+      <Layer
+        filter={['==', ['get', 'kind'], 'line']}
+        id="crew-route-line"
+        layout={{ 'line-join': 'round' }}
+        paint={{
+          'line-color': ['get', 'color'],
+          'line-width': 2.5,
+          'line-opacity': ['get', 'o'],
+          // In multiples of the width, and one pattern for the whole layer:
+          // Mapbox cannot vary a dash by feature.
+          'line-dasharray': [2, 1.5],
+        }}
+        type="line"
+      />
+    </Source>
+  );
+});
+
+/** Stable empties, so a map handed nothing does not redraw its lines every render. */
+const NO_COLORS: ReadonlyMap<string, string> = new Map();
+const NO_TRAILS: readonly TechnicianTrail[] = [];
+const NO_ROUTES: readonly TechnicianRoute[] = [];
+
 export function TechnicianMap({
+  colors = NO_COLORS,
+  crewRoutes = NO_ROUTES,
   currentInspectionIds = null,
   highlightedBuildingIds = null,
+  live = true,
   onSelectTechnician,
   positions,
   properties = [],
   route = null,
   selectedPropertyId = null,
   selectedTechnicianId = null,
+  trails = NO_TRAILS,
+  visits = null,
 }: {
+  /** Each technician's colour, for their lines and the ring on their marker. */
+  colors?: ReadonlyMap<string, string>;
+  /** Everybody's planned drive for the day, dashed. The selected one's is `route`. */
+  crewRoutes?: readonly TechnicianRoute[];
   /** The selected technician's visit under way, by their location trail. */
   currentInspectionIds?: readonly string[] | null;
   highlightedBuildingIds?: ReadonlySet<string> | null;
+  /** The day shown is today: the live positions carry the lines on. */
+  live?: boolean;
   /** A technician's marker was clicked: select them, which follows them. */
   onSelectTechnician?: (technicianId: string) => void;
   positions: readonly TechnicianPosition[];
@@ -381,6 +579,10 @@ export function TechnicianMap({
   /** A property picked from the list, which the map flies to. */
   selectedPropertyId?: string | null;
   selectedTechnicianId?: string | null;
+  /** Where each technician actually went that day. */
+  trails?: readonly TechnicianTrail[];
+  /** The day's inspections by property: a tick on each disc whose are all in, and links in its window. */
+  visits?: ReadonlyMap<string, readonly PropertyVisit[]> | null;
 }) {
   /**
    * The map follows the console, not the operating system.
@@ -509,14 +711,20 @@ export function TechnicianMap({
         ? 'the property'
         : 'everyone';
 
+  // Whether the selected person's real path is on the map, which retires the
+  // routed guess at it -- see `RouteLayer`'s `drawDriven`.
+  const selectedHasTrail = trails.some(
+    (trail) => trail.technicianId === selectedTechnicianId && trail.segments.length > 0,
+  );
+
   return (
     <ConsoleMap
       // The same portfolio and the same crew every other map in the console
       // draws: this page hands over its own lists, filtered by its roster, and
       // says who and what is picked.
-      crew={{ onSelect: selectFromMap, positions, selectedTechnicianId, tracks }}
+      crew={{ colors, onSelect: selectFromMap, positions, selectedTechnicianId, tracks }}
       initialView={FALLBACK_VIEW}
-      portfolio={{ highlighted: highlightedBuildingIds, properties, selectedPropertyId }}
+      portfolio={{ highlighted: highlightedBuildingIds, properties, selectedPropertyId, visits }}
     >
       <CameraDirector
         fallback={selectedStops}
@@ -532,9 +740,27 @@ export function TechnicianMap({
 
       {/* The shared map has drawn the portfolio beneath these and draws the
           crew above them. Markers are real elements above the canvas, so
-          every pin sits above every layer regardless. */}
+          every pin sits above every layer regardless.
+
+          Lines bottom to top: the plans, then where people actually went,
+          then the selected technician's route -- the one being read. */}
+      <CrewRoutesLayer
+        colors={colors}
+        live={live}
+        positions={positions}
+        routes={crewRoutes}
+        selectedTechnicianId={selectedTechnicianId}
+      />
+      <TrailLayer
+        colors={colors}
+        live={live}
+        positions={positions}
+        selectedTechnicianId={selectedTechnicianId}
+        trails={trails}
+      />
       <RouteLayer
         currentInspectionIds={currentInspectionIds}
+        drawDriven={!selectedHasTrail}
         position={selectedPosition}
         route={route}
       />

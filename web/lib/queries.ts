@@ -11,6 +11,7 @@ import type {
   TechnicianDayTimeline,
   TechnicianRoute,
   TechnicianPosition,
+  TechnicianTrail,
   AdminAuditEvent,
   AdminBulkDeleteResult,
   AdminCharge,
@@ -72,6 +73,7 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -149,6 +151,7 @@ export const keys = {
   technicianRoute: (id: string, date: string) => ['technician-route', id, date] as const,
   technicianTimeline: (id: string, date: string) =>
     ['technician-timeline', id, date] as const,
+  technicianTrail: (id: string, date: string) => ['technician-trail', id, date] as const,
   mapAssignments: (date: string) => ['map-assignments', date] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
@@ -590,6 +593,61 @@ export const useTechnicianTimeline = (id: string, date: string, enabled = true) 
     // follow anybody.
     refetchInterval: 30_000,
     enabled,
+  });
+/**
+ * The answers that have arrived, in the order asked. A module-level function on
+ * purpose: `useQueries` re-runs `combine` only when a result changes if it is
+ * handed the same function every render, and the map page renders on every
+ * position the socket delivers.
+ */
+function arrived<T>(results: readonly { data?: T }[]): T[] {
+  return results.flatMap((result) => (result.data ? [result.data] : []));
+}
+const arrivedTrails = (results: readonly { data?: TechnicianTrail }[]) => arrived(results);
+const arrivedRoutes = (results: readonly { data?: TechnicianRoute }[]) => arrived(results);
+/**
+ * Where each technician on the map actually went that day, one request each.
+ *
+ * Every minute while the day is today -- the line grows as they drive, and the
+ * live position carries it on between fetches -- and only rarely for a day that
+ * is over, which changes only if a phone out of signal catches up.
+ */
+export const useTechnicianTrails = (ids: readonly string[], date: string, today: boolean, enabled = true) =>
+  useQueries({
+    queries: ids.map((id) => ({
+      queryKey: keys.technicianTrail(id, date),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api<TechnicianTrail>(`/api/v1/admin/technicians/${id}/trail${queryString({ date })}`, {
+          signal,
+        }),
+      refetchInterval: today ? 60_000 : (false as const),
+      staleTime: today ? 30_000 : 10 * 60_000,
+      enabled,
+    })),
+    combine: arrivedTrails,
+  });
+/**
+ * Everybody's planned drive through the day's properties, for the map's dashed
+ * lines.
+ *
+ * The same requests, under the same keys, as `useTechnicianRoute` -- so the
+ * selected technician's is one request, not two. Every minute rather than every
+ * thirty seconds: these are the context around the person being watched, and the
+ * server redraws a route only when something material changed, so a refresh
+ * that finds nothing new costs nothing.
+ */
+export const useTechnicianRoutes = (ids: readonly string[], date: string, enabled = true) =>
+  useQueries({
+    queries: ids.map((id) => ({
+      queryKey: keys.technicianRoute(id, date),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api<TechnicianRoute>(`/api/v1/admin/technicians/${id}/route${queryString({ date })}`, {
+          signal,
+        }),
+      refetchInterval: 60_000,
+      enabled,
+    })),
+    combine: arrivedRoutes,
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({

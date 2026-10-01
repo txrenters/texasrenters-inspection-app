@@ -1192,6 +1192,21 @@ export class AdminController {
     return this.timelines.dayFor(request.user, id, businessDayFromQuery(date));
   }
 
+  /**
+   * Where they actually went that day, as lines for the map. Behind the same
+   * `technicians:locate` as their live position (the office, 2026-10-02): a
+   * path is the same fact about a person, kept for the day.
+   */
+  @Get('technicians/:technicianId/trail')
+  @RequirePermissions('technicians:locate')
+  technicianTrail(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Query('date') date?: string,
+  ) {
+    return this.timelines.trailFor(request.user, id, businessDayFromQuery(date));
+  }
+
   @Get('technicians/:technicianId/route')
   @RequirePermissions('technicians:locate')
   technicianRoute(
