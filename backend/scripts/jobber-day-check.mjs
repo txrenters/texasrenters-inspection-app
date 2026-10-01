@@ -117,9 +117,23 @@ try {
   });
   const imports = await prisma.jobberVisitImport.findMany({
     where: { organizationId, jobberVisitId: { in: mine.map((row) => row.jobberVisitId).filter(Boolean) } },
-    select: { jobberVisitId: true, status: true, failureCode: true, payload: true, lastAttemptAt: true },
+    select: {
+      jobberVisitId: true,
+      status: true,
+      inspectionId: true,
+      failureCode: true,
+      payload: true,
+      lastAttemptAt: true,
+    },
   });
   const importOf = new Map(imports.map((row) => [row.jobberVisitId, row]));
+  // The last few things that happened to each, to tell a sync's change from a person's.
+  const history = await prisma.auditLog.findMany({
+    where: { organizationId, entityType: 'Inspection', entityId: { in: mine.map((row) => row.id) } },
+    orderBy: { createdAt: 'desc' },
+    select: { entityId: true, action: true, actorUserId: true, createdAt: true },
+    take: mine.length * 4,
+  });
 
   console.log(`\nIn the console on ${date}${technician ? ` for "${technician}"` : ''}: ${mine.length}`);
   for (const row of mine) {
@@ -137,9 +151,15 @@ try {
     else if (record?.lastAttemptAt && Date.now() - new Date(record.lastAttemptAt).getTime() > 3_600_000)
       verdict = `GONE FROM JOBBER? The sync has not seen this visit for ${ago(record.lastAttemptAt).replace(' ago', '')}: deleted or moved to Unscheduled.`;
     else verdict = 'In step with Jobber.';
-    console.log(`\n  ${address} -- ${row.inspectionType}, ${row.status}, ${row.assignments[0]?.technician.displayName ?? 'unassigned'}`);
+    console.log(`\n  ${address} -- ${row.inspectionType}, ${row.status}, ${row.assignments[0]?.technician.displayName ?? 'unassigned'} (made by ${row.source})`);
     if (row.jobberVisitTitle) console.log(`    Jobber title     ${row.jobberVisitTitle}`);
     if (record) console.log(`    Jobber, last seen ${ago(record.lastAttemptAt)}: ${jobberDay ?? '?'}${record.failureCode ? ` [${record.failureCode}]` : ''}`);
+    if (row.jobberVisitId)
+      console.log(
+        `    import row       ${record ? `${record.status}${record.inspectionId === row.id ? '' : record.inspectionId ? ', names ANOTHER inspection' : ', names no inspection'}` : 'none'}`,
+      );
+    for (const entry of history.filter((item) => item.entityId === row.id).slice(0, 4))
+      console.log(`    history          ${entry.createdAt.toISOString().slice(0, 16)}Z ${entry.action}${entry.actorUserId ? ' (a person)' : ''}`);
     for (const task of row.jobberOutboundTasks)
       console.log(`    console change   ${task.kind} ${task.status}, ${task.attempts} tries, queued ${ago(task.createdAt)}${task.lastError ? ` -- ${task.lastError}` : ''}`);
     console.log(`    => ${verdict}`);

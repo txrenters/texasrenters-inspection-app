@@ -163,6 +163,75 @@ describe('a visit moved to Unscheduled in Jobber', () => {
   });
 });
 
+describe('a visit an inspection carries, whose row says it was never imported', () => {
+  // A visit on Moses's October 1: a linked inspection, and a row still
+  // reading "not imported, no day yet", so Jobber's Unscheduled never reached it.
+  function processing(row: { status: JobberVisitImportStatus; inspectionId: string | null; failureCode: string | null }) {
+    const prisma = {
+      jobberVisitImport: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'row-1', payload: { id: 'visit-1' }, ...row }),
+        upsert: jest.fn().mockResolvedValue({ id: 'row-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1' }) },
+    };
+    const worker = new JobberSyncWorker(prisma as never, {} as never, {} as never) as unknown as {
+      applyChanges: jest.Mock;
+      processVisit: (
+        organizationId: string,
+        visit: JobberVisit,
+        index: Map<string, unknown>,
+        rules: Record<string, string[]>,
+        result: JobberSyncResult,
+      ) => Promise<void>;
+    };
+    worker.applyChanges = jest.fn().mockResolvedValue(undefined);
+    return { worker, prisma };
+  }
+
+  it('is put right and handled as the imported visit it is', async () => {
+    const { worker, prisma } = processing({
+      status: JobberVisitImportStatus.PENDING,
+      inspectionId: null,
+      failureCode: JOBBER_VISIT_UNSCHEDULED,
+    });
+
+    await worker.processVisit(ORG, visit(), new Map(), {}, result());
+
+    expect(prisma.inspection.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: ORG, jobberVisitId: 'visit-1' },
+      select: { id: true },
+    });
+    expect(prisma.jobberVisitImport.update).toHaveBeenCalledWith({
+      where: { id: 'row-1' },
+      data: {
+        status: JobberVisitImportStatus.IMPORTED,
+        inspectionId: 'inspection-1',
+        failureCode: null,
+        failureMessage: null,
+      },
+    });
+    // Its "no day yet" code is not passed on: it says nothing about the inspection.
+    expect(worker.applyChanges).toHaveBeenCalledWith(ORG, expect.objectContaining({ id: 'visit-1' }), 'inspection-1', expect.anything(), {
+      payload: { id: 'visit-1' },
+    });
+  });
+
+  it('is left alone when the row already names it', async () => {
+    const { worker, prisma } = processing({
+      status: JobberVisitImportStatus.IMPORTED,
+      inspectionId: 'inspection-1',
+      failureCode: null,
+    });
+
+    await worker.processVisit(ORG, visit(), new Map(), {}, result());
+
+    expect(prisma.inspection.findFirst).not.toHaveBeenCalled();
+    expect(prisma.jobberVisitImport.update).not.toHaveBeenCalled();
+    expect(worker.applyChanges).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('the sweep, for linked visits its window did not return', () => {
   type Linked = { id: string; jobberVisitId: string; jobberJobId: string | null };
   const linked = (n: number): Linked => ({ id: `inspection-${n}`, jobberVisitId: `visit-${n}`, jobberJobId: `job-${n}` });
