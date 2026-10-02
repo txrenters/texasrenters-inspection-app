@@ -795,3 +795,76 @@ describe('which move-in a move-out is compared against', () => {
     await expect(resolve({ inspection: { findFirst } })).resolves.toBeNull();
   });
 });
+
+/**
+ * The room of the move-in that the AI analysis of a move-out recording reads.
+ *
+ * It has to be the comparison's own pairing. The analysis used to read the
+ * creation-time link instead, and on 5819 Flower Gate Dr (2026-10-01) that link
+ * was empty: every finding said there was no baseline while this comparison was
+ * reading the June 2025 move-in.
+ */
+describe('the move-in room an AI analysis reads', () => {
+  const moveIn = { id: 'move-in-1', scheduledAt: new Date('2025-06-12T00:00:00.000Z') };
+
+  function prismaFor(opts: {
+    moveOut?: Record<string, unknown> | null;
+    moveIn?: typeof moveIn | null;
+    moveOutAreas?: ReturnType<typeof area>[];
+    moveInAreas?: ReturnType<typeof area>[];
+  }) {
+    return {
+      inspection: {
+        findUnique: jest.fn().mockResolvedValue(opts.moveOut === undefined ? moveOut : opts.moveOut),
+        findFirst: jest.fn().mockResolvedValue(opts.moveIn === undefined ? moveIn : opts.moveIn),
+      },
+      inspectionArea: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce(opts.moveOutAreas ?? [])
+          .mockResolvedValueOnce(opts.moveInAreas ?? []),
+      },
+    };
+  }
+
+  it('is the latest move-in and the room the comparison pairs', async () => {
+    const prisma = prismaFor({
+      moveOutAreas: [area('pa-entrance', 'Entrance'), area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen'), area('pa-entrance', 'Entrance')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await expect(service.baselineAreaFor('move-out-1', 'pa-entrance')).resolves.toEqual({
+      inspectionId: 'move-in-1',
+      scheduledAt: moveIn.scheduledAt,
+      area: { propertyAreaId: 'pa-entrance', name: 'Entrance' },
+    });
+  });
+
+  it('pairs in the move-out order, so a room an earlier one took is not offered twice', async () => {
+    // Two move-out bedrooms, one move-in bedroom matched by name: the first
+    // takes it, exactly as `generate` would, and the second has no baseline.
+    const prisma = prismaFor({
+      moveOutAreas: [area('pa-bed-a', 'Bedroom'), area('pa-bed-b', 'Bedroom')],
+      moveInAreas: [area('pa-bed-old', 'Bedroom')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await expect(service.baselineAreaFor('move-out-1', 'pa-bed-b')).resolves.toMatchObject({
+      inspectionId: 'move-in-1',
+      area: null,
+    });
+  });
+
+  it('is nothing when there is no move-in to compare against', async () => {
+    const service = new ComparisonService(prismaFor({ moveIn: null }) as never);
+    await expect(service.baselineAreaFor('move-out-1', 'pa-entrance')).resolves.toBeNull();
+  });
+
+  it('is nothing for an inspection that is not a move-out', async () => {
+    const prisma = prismaFor({ moveOut: { ...moveOut, inspectionType: 'OCCUPIED' } });
+    const service = new ComparisonService(prisma as never);
+    await expect(service.baselineAreaFor('move-out-1', 'pa-entrance')).resolves.toBeNull();
+    expect(prisma.inspection.findFirst).not.toHaveBeenCalled();
+  });
+});

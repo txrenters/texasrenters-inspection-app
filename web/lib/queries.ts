@@ -80,7 +80,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { api, apiUpload, type Page, queryString } from './api';
 import { businessDayRange } from './clock';
@@ -413,11 +413,42 @@ export const areaEvidenceQuery = (id: string, areaId: string) =>
  * previously opened area is served from cache instead of refetching, and a
  * slow response for one area can never paint over another.
  */
-export const useAreaEvidence = (id: string, areaId: string | null) =>
-  useQuery({
+export const useAreaEvidence = (id: string, areaId: string | null) => {
+  const query = useQuery({
     ...areaEvidenceQuery(id, areaId ?? ''),
     enabled: Boolean(id) && Boolean(areaId),
+    // While the AI re-runs on one of this area's recordings, so its new
+    // findings arrive without a reload. Nothing else on the bundle changes on
+    // its own.
+    refetchInterval: (current) =>
+      current.state.data?.recordings.some(
+        (recording) => recording.analysisRun?.status === 'RUNNING',
+      )
+        ? 5_000
+        : false,
   });
+  useRefreshWhenReanalysisEnds(id, query.data);
+  return query;
+};
+
+/**
+ * When an AI re-run in this area ends, everything else counting its findings is
+ * stale: the area list's "awaiting review", the page's pending total, the
+ * finalize bar and a draft comparison. The poll above reads only this area.
+ */
+function useRefreshWhenReanalysisEnds(inspectionId: string, bundle: AreaEvidenceBundle | undefined) {
+  const client = useQueryClient();
+  const running = (bundle?.recordings ?? [])
+    .filter((recording) => recording.analysisRun?.status === 'RUNNING')
+    .map((recording) => recording.id)
+    .join(',');
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && wasRunning.current !== running)
+      void verifyAffectedQueries(client, [keys.inspection(inspectionId)]);
+    wasRunning.current = running;
+  }, [client, inspectionId, running]);
+}
 
 /**
  * Records how one checklist item was found, during review.
@@ -2320,6 +2351,24 @@ export function useAdminMutations() {
             body: JSON.stringify({ atMs: body.atMs, checklistItemId: body.checklistItemId }),
           },
         ),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({
+          queryKey: keys.areaEvidence(variables.inspectionId, variables.areaId),
+        });
+      },
+    }),
+    /**
+     * Run the AI analysis of one recording again.
+     *
+     * The server answers at once and works for a few minutes. Re-reading the
+     * area picks up the recording's RUNNING state, and `useAreaEvidence` polls
+     * from there until the new findings are in.
+     */
+    reanalyzeRecording: useMutation({
+      mutationFn: ({ mediaId }: { mediaId: string; inspectionId: string; areaId: string }) =>
+        api<{ queued: boolean }>(`/api/v1/inspection-videos/${mediaId}/reanalyze`, {
+          method: 'POST',
+        }),
       onSuccess: (_data, variables) => {
         void client.invalidateQueries({
           queryKey: keys.areaEvidence(variables.inspectionId, variables.areaId),

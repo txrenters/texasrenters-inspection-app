@@ -8,6 +8,7 @@ import { Inject, Injectable, Logger, Optional, type OnModuleInit } from '@nestjs
 import {
   AiAnalysisStatus,
   AiProvider,
+  ComparisonStatus,
   FindingReviewStatus,
   InspectionStatus,
   InspectionType,
@@ -32,9 +33,111 @@ import {
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { captureTimeForFrame } from '../common/photo-capture-time';
 
-const PROMPT_VERSION = '3';
+// 4: the transcript carries its timings, the move-out baseline is the
+// comparison's move-in with its checklist, and reviewed findings are not raised
+// again on a re-run.
+const PROMPT_VERSION = '4';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
+
+/**
+ * How long one analysis call may take. The provider calls had no limit, and a
+ * call that never answered kept its recording in `inFlight` until the process
+ * restarted, refusing every retry and every re-run in the meantime.
+ */
+const ANALYSIS_TIMEOUT_MS = 180_000;
+
+/** A re-run of the analysis on a recording that already had one; see `reanalyze`. */
+export const REANALYSIS_STARTED_EVENT = 'REANALYSIS_STARTED';
+export const REANALYSIS_COMPLETED_EVENT = 'REANALYSIS_COMPLETED';
+export const REANALYSIS_FAILED_EVENT = 'REANALYSIS_FAILED';
+
+/** One spoken line of a narration, at whole seconds of the recording. */
+export type TranscriptLine = { startSeconds: number; endSeconds: number; text: string };
+
+/**
+ * A narration, with its timings when the provider gave them.
+ *
+ * `timed` is false for the single whole-recording segment stored when there
+ * were none: that line spans the entire video and says nothing about when
+ * anything was said.
+ */
+export type Transcript = { text: string; lines: TranscriptLine[]; timed: boolean };
+
+/**
+ * Whole seconds, inside the recording, for the integer columns.
+ *
+ * Deepgram reports utterance times as fractions of a second and
+ * `TranscriptSegment` stores integers; the OpenAI path already rounded, the
+ * Deepgram one wrote the fractions straight through.
+ */
+export function transcriptLines(
+  segments: ReadonlyArray<{ startSeconds: number; endSeconds: number; text: string }>,
+  durationSeconds: number,
+): TranscriptLine[] {
+  const limit = Math.max(0, Math.round(durationSeconds));
+  return segments
+    .map((segment) => {
+      const startSeconds = Math.min(limit, Math.max(0, Math.floor(segment.startSeconds)));
+      return {
+        startSeconds,
+        endSeconds: Math.min(limit, Math.max(startSeconds, Math.ceil(segment.endSeconds))),
+        text: segment.text.trim(),
+      };
+    })
+    .filter((line) => line.text.length > 0);
+}
+
+/** A transcript from its stored lines; see `Transcript.timed`. */
+export function transcriptFrom(
+  lines: TranscriptLine[],
+  durationSeconds: number,
+  text = lines.map((line) => line.text).join(' '),
+): Transcript {
+  const wholeRecording =
+    lines.length === 1 &&
+    lines[0].startSeconds === 0 &&
+    lines[0].endSeconds >= Math.round(durationSeconds);
+  return { text, lines, timed: lines.length > 0 && !wholeRecording };
+}
+
+/**
+ * The narration as the analysis reads it: one line per utterance, each opening
+ * with the seconds it was spoken at.
+ *
+ * Those seconds are what a finding's timestamp is for. The model used to get
+ * the narration as one untimed block, so it had nothing to cite: on a move-out
+ * on 2026-10-01, 39 of 49 findings came back at 0:00 and the rest at evenly
+ * spaced guesses, and a reviewer had to scrub the whole recording to find each.
+ */
+export function formatTranscript(transcript: Transcript) {
+  if (!transcript.timed) return transcript.text;
+  return transcript.lines
+    .map((line) => `[${line.startSeconds}-${line.endSeconds}s] ${line.text}`)
+    .join('\n');
+}
+
+/** "clean, DAMAGED, working" — one checklist answer, as the prompt states it. */
+function describeAnswer(answer: {
+  isClean: boolean | null;
+  isUndamaged: boolean | null;
+  isWorking: boolean | null;
+}) {
+  const axis = (value: boolean | null, yes: string, no: string) =>
+    value === null ? 'not assessed' : value ? yes : no;
+  return `${axis(answer.isClean, 'clean', 'NOT clean')}, ${axis(
+    answer.isUndamaged,
+    'undamaged',
+    'DAMAGED',
+  )}, ${axis(answer.isWorking, 'working', 'NOT working')}`;
+}
+
+/**
+ * What the analysis is told about the move-in. `established` is whether there
+ * is one to compare against at all, which decides more than the wording: a
+ * move-out finding with no baseline cannot lean toward the tenant.
+ */
+type Baseline = { text: string | null; established: boolean };
 
 /** Hard ceiling on frames cut from one recording, whatever the client asked for. */
 const MAX_EXTRACTED_FRAMES = 60;
@@ -107,8 +210,10 @@ const findingItemSchema = z.object({
     'MISSING_EVIDENCE',
     'INSUFFICIENT_DATA',
   ]),
-  videoTimestampStart: z.number().int().nonnegative().catch(0),
-  videoTimestampEnd: z.number().int().nonnegative().catch(0),
+  // Rounded rather than discarded: "12.5" is a moment in the recording, and
+  // `.int()` used to turn it into 0:00. Anything that is not a number still is.
+  videoTimestampStart: z.number().nonnegative().transform(Math.round).catch(0),
+  videoTimestampEnd: z.number().nonnegative().transform(Math.round).catch(0),
   severity: z.enum(['LOW', 'MEDIUM', 'HIGH']),
   possibleResponsibility: z.enum([
     'TENANT_REVIEW_REQUIRED',
@@ -119,6 +224,29 @@ const findingItemSchema = z.object({
   recommendedReview: z.string().min(1).max(500),
 });
 export const analysisResponseSchema = z.array(findingItemSchema).max(25);
+
+/**
+ * Takes the tenant lean off a finding that has nothing to rest it on.
+ *
+ * `TENANT_REVIEW_REQUIRED` is the AI suggesting that a deposit question exists.
+ * It cannot exist for a condition the AI itself calls pre-existing or normal
+ * wear, and on a move-out with no move-in to compare against nothing tells new
+ * damage from old at all. The prompt says so; this makes it true whatever the
+ * model answers. A person can still decide the tenant is responsible. The AI
+ * may not be the one to suggest it.
+ */
+export function withoutUnfoundedTenantLean(
+  item: z.infer<typeof findingItemSchema>,
+  moveOutWithoutBaseline: boolean,
+): z.infer<typeof findingItemSchema> {
+  if (item.possibleResponsibility !== 'TENANT_REVIEW_REQUIRED') return item;
+  const unfounded =
+    moveOutWithoutBaseline ||
+    item.findingType === 'EXISTING_CONDITION' ||
+    item.comparisonResult === 'EXISTING_CONDITION' ||
+    item.comparisonResult === 'NORMAL_WEAR';
+  return unfounded ? { ...item, possibleResponsibility: 'UNDETERMINED' } : item;
+}
 
 const openAiTextSchema = z.object({
   output: z.array(
@@ -225,50 +353,55 @@ export class MediaProcessingService implements OnModuleInit {
     });
   }
 
+  /** A recording with everything transcription and analysis read from it. */
+  private loadMedia(mediaId: string, organizationId: string) {
+    return this.prisma.inspectionMedia.findFirst({
+      where: { id: mediaId, organizationId },
+      select: {
+        id: true,
+        inspectionId: true,
+        providerMediaId: true,
+        storageKey: true,
+        // Present only for a Cloudflare Stream recording, which has no bucket
+        // object and is transcribed from a signed provider URL instead.
+        streamUid: true,
+        mimeType: true,
+        durationSeconds: true,
+        processingStatus: true,
+        // Needed to cut technician-marked frames out of the video below.
+        captureSummary: true,
+        // And to say when each of those frames was: the take's end, less its
+        // length, plus the marker.
+        recordedAt: true,
+        inspectionAreaId: true,
+        technicianId: true,
+        organizationId: true,
+        inspectionArea: {
+          select: {
+            propertyArea: {
+              select: {
+                id: true,
+                name: true,
+                floor: { select: { name: true } },
+                baselineConditions: {
+                  orderBy: { baselineInspection: { inspectedAt: 'desc' } },
+                  take: 1,
+                  select: { conditionSummary: true, knownDefects: true },
+                },
+              },
+            },
+            inspection: { select: { inspectionType: true, baselineInspectionId: true } },
+          },
+        },
+      },
+    });
+  }
+
   async process(mediaId: string, organizationId: string) {
     if (this.inFlight.has(mediaId)) return;
     this.inFlight.add(mediaId);
     try {
-      const media = await this.prisma.inspectionMedia.findFirst({
-        where: { id: mediaId, organizationId },
-        select: {
-          id: true,
-          inspectionId: true,
-          providerMediaId: true,
-          storageKey: true,
-          // Present only for a Cloudflare Stream recording, which has no bucket
-          // object and is transcribed from a signed provider URL instead.
-          streamUid: true,
-          mimeType: true,
-          durationSeconds: true,
-          processingStatus: true,
-          // Needed to cut technician-marked frames out of the video below.
-          captureSummary: true,
-          // And to say when each of those frames was: the take's end, less its
-          // length, plus the marker.
-          recordedAt: true,
-          inspectionAreaId: true,
-          technicianId: true,
-          organizationId: true,
-          inspectionArea: {
-            select: {
-              propertyArea: {
-                select: {
-                  id: true,
-                  name: true,
-                  floor: { select: { name: true } },
-                  baselineConditions: {
-                    orderBy: { baselineInspection: { inspectedAt: 'desc' } },
-                    take: 1,
-                    select: { conditionSummary: true, knownDefects: true },
-                  },
-                },
-              },
-              inspection: { select: { inspectionType: true, baselineInspectionId: true } },
-            },
-          },
-        },
-      });
+      const media = await this.loadMedia(mediaId, organizationId);
       if (!media || media.processingStatus === MediaProcessingStatus.READY) return;
 
       await this.prisma.inspectionMedia.update({
@@ -281,7 +414,9 @@ export class MediaProcessingService implements OnModuleInit {
         const transcript = await this.transcribe(media, organizationId);
         // Full transcripts belong in the protected transcription tables, not
         // operational event payloads or logs.
-        await this.event(media.id, 'TRANSCRIPTION_COMPLETED', { characters: transcript.length });
+        await this.event(media.id, 'TRANSCRIPTION_COMPLETED', {
+          characters: transcript.text.length,
+        });
 
         const findingCount = await this.analyze(media, transcript, organizationId);
         await this.event(media.id, 'ANALYSIS_COMPLETED', { findingCount });
@@ -328,6 +463,124 @@ export class MediaProcessingService implements OnModuleInit {
   }
 
   /**
+   * Run the AI analysis again on a recording that already went through it.
+   *
+   * For the office, after the analysis itself improves: `process` stops at a
+   * READY recording, so nothing analysed under an older prompt could ever be
+   * looked at again. Authorization is the caller's
+   * (`InspectionVideoService.reanalyze`).
+   *
+   * The recording keeps its status throughout. It stays playable and its area
+   * stays as it was; progress is told by REANALYSIS_* events instead, and a
+   * failed re-run leaves the earlier findings exactly where they were, because
+   * `analyze` replaces them only once a new set has passed validation. Reviewed
+   * findings are never replaced.
+   *
+   * Returns false when the recording is already being worked on. Claimed here,
+   * synchronously, so two clicks cannot both start one.
+   */
+  reanalyze(mediaId: string, organizationId: string) {
+    if (this.inFlight.has(mediaId)) return false;
+    this.inFlight.add(mediaId);
+    setImmediate(() => {
+      void withTenant(organizationId, () => this.runReanalysis(mediaId, organizationId)).catch(
+        (error) => {
+          this.inFlight.delete(mediaId);
+          this.logger.error(
+            `Unhandled re-analysis failure for media ${mediaId}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        },
+      );
+    });
+    return true;
+  }
+
+  private async runReanalysis(mediaId: string, organizationId: string) {
+    try {
+      const media = await this.loadMedia(mediaId, organizationId);
+      if (!media) return;
+      await this.event(media.id, REANALYSIS_STARTED_EVENT, {});
+      try {
+        // The stored narration when it has its timings: transcribing again
+        // costs a download of the whole video and a second bill for the same
+        // words. One without timings is transcribed again to get them.
+        const transcript =
+          (await this.storedTranscript(media.id, media.durationSeconds)) ??
+          (await this.transcribe(media, organizationId));
+        const findingCount = await this.analyze(media, transcript, organizationId);
+        // An analysis that had failed is now done; Cloudflare's own failure is
+        // not ours to clear, and is refused before this runs.
+        await this.prisma.inspectionMedia.updateMany({
+          where: {
+            id: media.id,
+            processingStatus: MediaProcessingStatus.FAILED,
+            failureCode: null,
+          },
+          data: { processingStatus: MediaProcessingStatus.READY },
+        });
+        // Before the completion is told, so a reviewer who sees it finished
+        // never opens a comparison still counting the old findings.
+        await this.refreshDraftComparison(
+          media.inspectionId,
+          media.inspectionArea.inspection.inspectionType,
+        );
+        await this.event(media.id, REANALYSIS_COMPLETED_EVENT, { findingCount });
+      } catch (error) {
+        const message =
+          error instanceof ApplicationError ? error.message : 'The analysis could not be run again.';
+        this.logger.error(
+          `Re-analysis failed for media ${media.id}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        await this.event(media.id, REANALYSIS_FAILED_EVENT, { message });
+      }
+    } finally {
+      this.inFlight.delete(mediaId);
+    }
+  }
+
+  /** The narration already stored for a recording, when it has its timings. */
+  private async storedTranscript(mediaId: string, durationSeconds: number) {
+    const job = await this.prisma.transcriptionJob.findUnique({
+      where: { inspectionMediaId: mediaId },
+      select: {
+        status: true,
+        segments: {
+          orderBy: { startSeconds: 'asc' },
+          select: { startSeconds: true, endSeconds: true, text: true },
+        },
+      },
+    });
+    if (job?.status !== TranscriptionStatus.COMPLETED || !job.segments.length) return null;
+    const transcript = transcriptFrom(transcriptLines(job.segments, durationSeconds), durationSeconds);
+    return transcript.timed ? transcript : null;
+  }
+
+  /**
+   * Keep a move-out's comparison in step with findings that changed under it.
+   *
+   * Only a draft. An approved comparison is a person's decision, which the
+   * comparison's own system trigger refuses to overwrite, and a move-out with
+   * none yet gets one when its review starts.
+   */
+  private async refreshDraftComparison(inspectionId: string, inspectionType: string) {
+    if (inspectionType !== InspectionType.MOVE_OUT || !this.comparison) return;
+    const existing = await this.prisma.inspectionComparison.findUnique({
+      where: { moveOutInspectionId: inspectionId },
+      select: { status: true },
+    });
+    if (existing?.status !== ComparisonStatus.DRAFT) return;
+    await this.comparison.generate(inspectionId).catch((error) => {
+      this.logger.warn(
+        `Comparison refresh skipped for ${inspectionId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    });
+  }
+
+  /**
    * Transcribe a Cloudflare Stream recording without touching its bytes.
    *
    * Cloudflare renders a downloadable MP4 on request; that URL goes to Deepgram,
@@ -366,20 +619,21 @@ export class MediaProcessingService implements OnModuleInit {
       mediaUrl,
       media.durationSeconds,
     );
-    const segments = result.segments ?? [
-      { startSeconds: 0, endSeconds: media.durationSeconds, text: result.text },
-    ];
+    const lines = transcriptLines(
+      result.segments ?? [{ startSeconds: 0, endSeconds: media.durationSeconds, text: result.text }],
+      media.durationSeconds,
+    );
     await this.prisma.$transaction([
       this.prisma.transcriptSegment.deleteMany({ where: { transcriptionJobId: job.id } }),
       this.prisma.transcriptSegment.createMany({
-        data: segments.map((segment) => ({ transcriptionJobId: job.id, ...segment })),
+        data: lines.map((line) => ({ transcriptionJobId: job.id, ...line })),
       }),
     ]);
     await this.prisma.transcriptionJob.update({
       where: { inspectionMediaId: media.id },
       data: { status: TranscriptionStatus.COMPLETED, language: null },
     });
-    return result.text;
+    return transcriptFrom(lines, media.durationSeconds, result.text);
   }
 
   /**
@@ -422,30 +676,27 @@ export class MediaProcessingService implements OnModuleInit {
 
     // Real timings when the model gave them; one whole-recording segment only as
     // the honest fallback, which is what this path always used to store.
-    const rows = segments.length
-      ? segments.map((segment) => ({
-          transcriptionJobId: job.id,
-          startSeconds: Math.max(0, Math.round(segment.start)),
-          endSeconds: Math.min(media.durationSeconds, Math.round(segment.end)),
-          text: segment.text.trim(),
-        }))
-      : [
-          {
-            transcriptionJobId: job.id,
-            startSeconds: 0,
-            endSeconds: media.durationSeconds,
-            text: transcript,
-          },
-        ];
+    const lines = transcriptLines(
+      segments.length
+        ? segments.map((segment) => ({
+            startSeconds: segment.start,
+            endSeconds: segment.end,
+            text: segment.text,
+          }))
+        : [{ startSeconds: 0, endSeconds: media.durationSeconds, text: transcript }],
+      media.durationSeconds,
+    );
     await this.prisma.$transaction([
       this.prisma.transcriptSegment.deleteMany({ where: { transcriptionJobId: job.id } }),
-      this.prisma.transcriptSegment.createMany({ data: rows }),
+      this.prisma.transcriptSegment.createMany({
+        data: lines.map((line) => ({ transcriptionJobId: job.id, ...line })),
+      }),
     ]);
     await this.prisma.transcriptionJob.update({
       where: { inspectionMediaId: media.id },
       data: { status: TranscriptionStatus.COMPLETED, language: null },
     });
-    return transcript;
+    return transcriptFrom(lines, media.durationSeconds, transcript);
   }
 
   private async transcribe(
@@ -546,9 +797,9 @@ export class MediaProcessingService implements OnModuleInit {
               text: openAi.text,
               segments: openAi.segments.length
                 ? openAi.segments.map((segment) => ({
-                    startSeconds: Math.max(0, Math.round(segment.start)),
-                    endSeconds: Math.min(media.durationSeconds, Math.round(segment.end)),
-                    text: segment.text.trim(),
+                    startSeconds: segment.start,
+                    endSeconds: segment.end,
+                    text: segment.text,
                   }))
                 : null,
               language: null,
@@ -559,15 +810,16 @@ export class MediaProcessingService implements OnModuleInit {
       // whole-recording segment below is the fallback, and it is why an AI
       // finding's timestamp used to be a guess — a reviewer seeking to it
       // landed at the start of the video every time.
-      const segments = result.segments ?? [
-        { startSeconds: 0, endSeconds: media.durationSeconds, text: transcript },
-      ];
+      const lines = transcriptLines(
+        result.segments ?? [{ startSeconds: 0, endSeconds: media.durationSeconds, text: transcript }],
+        media.durationSeconds,
+      );
       await this.prisma.$transaction([
         this.prisma.transcriptSegment.deleteMany({
           where: { transcriptionJobId: job.id },
         }),
         this.prisma.transcriptSegment.createMany({
-          data: segments.map((segment) => ({ transcriptionJobId: job.id, ...segment })),
+          data: lines.map((line) => ({ transcriptionJobId: job.id, ...line })),
         }),
       ]);
       await this.prisma.transcriptionJob.update({
@@ -583,7 +835,7 @@ export class MediaProcessingService implements OnModuleInit {
         { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         media.id,
       );
-      return transcript;
+      return transcriptFrom(lines, media.durationSeconds, transcript);
     } catch (error) {
       await this.prisma.transcriptionJob.update({
         where: { inspectionMediaId: media.id },
@@ -901,7 +1153,7 @@ export class MediaProcessingService implements OnModuleInit {
         inspection: { inspectionType: string; baselineInspectionId?: string | null };
       };
     },
-    transcript: string,
+    transcript: Transcript,
     organizationId: string,
   ) {
     const configuration = await this.aiSettings.resolve(organizationId);
@@ -918,13 +1170,16 @@ export class MediaProcessingService implements OnModuleInit {
     try {
       let items: z.infer<typeof analysisResponseSchema>;
       let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-      if (transcript.trim().length < 5) {
+      if (transcript.text.trim().length < 5) {
         // Nothing was said — record that as the summary without an AI call.
         items = [this.noNotableConditionSummary(media.inspectionArea.propertyArea.name)];
       } else {
-        const baselineContext = await this.baselineContext(media);
-        const assessments = await this.checklistAssessments(media.id);
-        const prompt = this.analysisPrompt(media, transcript, baselineContext, assessments);
+        const [baseline, assessments, reviewed] = await Promise.all([
+          this.baselineContext(media),
+          this.checklistAssessments(media.id),
+          this.reviewedFindings(media.id),
+        ]);
+        const prompt = this.analysisPrompt(media, transcript, baseline, assessments, reviewed);
         const result =
           configuration.provider === AiProvider.ANTHROPIC
             ? await this.anthropicText(configuration.apiKey, configuration.modelId, prompt)
@@ -940,6 +1195,12 @@ export class MediaProcessingService implements OnModuleInit {
         items = this.ensureSummaryFirst(
           parsed.data,
           media.inspectionArea.propertyArea.name,
+        ).map((item) =>
+          withoutUnfoundedTenantLean(
+            item,
+            media.inspectionArea.inspection.inspectionType === InspectionType.MOVE_OUT &&
+              !baseline.established,
+          ),
         );
       }
       // Reprocessing replaces this recording's unreviewed suggestions instead
@@ -994,40 +1255,137 @@ export class MediaProcessingService implements OnModuleInit {
   }
 
   /**
-   * Baseline for comparisons comes from the linked move-in inspection (its
-   * room summary + human-approved findings for the same area). The legacy
-   * building-level baseline tables are the fallback.
+   * What the move-in recorded about this room.
+   *
+   * A move-out reads the same move-in, and the same room in it, as the
+   * comparison: `ComparisonService.baselineAreaFor`. It used to read the link
+   * written when the move-out was created, which the comparison deliberately
+   * does not trust, and the two disagreed in the worst direction. On 5819
+   * Flower Gate Dr (2026-10-01) the link was empty, every finding said there was
+   * no baseline, and the entrance floor came back as possible new damage leaning
+   * toward the tenant, while the comparison was reading a move-in whose
+   * checklist had that floor damaged already.
+   *
+   * The move-in's checklist answers and notes come first. They are all an
+   * imported move-in has: the Inspect & Cloud importer writes no findings.
+   * Other inspection types keep the creation-time link. The legacy
+   * building-level baseline is the fallback for both.
    */
   private async baselineContext(media: {
+    inspectionId: string;
     inspectionArea: {
       propertyArea: {
         id: string;
         baselineConditions: Array<{ conditionSummary: string; knownDefects: unknown }>;
       };
-      inspection: { baselineInspectionId?: string | null };
+      inspection: { inspectionType: string; baselineInspectionId?: string | null };
     };
-  }) {
-    const baselineInspectionId = media.inspectionArea.inspection.baselineInspectionId;
-    if (baselineInspectionId) {
-      const rows = await this.prisma.inspectionFinding.findMany({
+  }): Promise<Baseline> {
+    const propertyAreaId = media.inspectionArea.propertyArea.id;
+    const moveOut = media.inspectionArea.inspection.inspectionType === InspectionType.MOVE_OUT;
+    if (moveOut && this.comparison) {
+      const baseline = await this.comparison.baselineAreaFor(media.inspectionId, propertyAreaId);
+      if (baseline?.area) {
+        const text = await this.moveInRecord(
+          baseline.inspectionId,
+          baseline.area.propertyAreaId,
+          `Move-in inspection of ${baseline.scheduledAt.toISOString().slice(0, 10)}, ${baseline.area.name}.`,
+        );
+        if (text) return { text, established: true };
+      }
+    } else {
+      const baselineInspectionId = media.inspectionArea.inspection.baselineInspectionId;
+      if (baselineInspectionId) {
+        const text = await this.moveInRecord(baselineInspectionId, propertyAreaId, null);
+        if (text) return { text, established: true };
+      }
+    }
+    const legacy = media.inspectionArea.propertyArea.baselineConditions[0];
+    return legacy
+      ? {
+          text: `- ${legacy.conditionSummary} Known defects: ${JSON.stringify(legacy.knownDefects)}`,
+          established: true,
+        }
+      : { text: null, established: false };
+  }
+
+  /**
+   * One room of a move-in as text: its checklist answers with the technician's
+   * notes, then its summary and approved findings. Null when it recorded nothing,
+   * which is no more a baseline than having no move-in.
+   */
+  private async moveInRecord(inspectionId: string, propertyAreaId: string, heading: string | null) {
+    const [answers, findings] = await Promise.all([
+      this.prisma.inspectionAreaChecklistResponse.findMany({
         where: {
-          inspectionId: baselineInspectionId,
-          propertyAreaId: media.inspectionArea.propertyArea.id,
+          inspectionArea: { inspectionId, propertyAreaId },
+          OR: [
+            { isClean: { not: null } },
+            { isUndamaged: { not: null } },
+            { isWorking: { not: null } },
+            { comment: { not: null } },
+          ],
+        },
+        orderBy: { checklistItem: { sortOrder: 'asc' } },
+        select: {
+          isClean: true,
+          isUndamaged: true,
+          isWorking: true,
+          comment: true,
+          checklistItem: { select: { label: true } },
+        },
+      }),
+      this.prisma.inspectionFinding.findMany({
+        where: {
+          inspectionId,
+          propertyAreaId,
           OR: [{ ...ROOM_SUMMARY_WHERE }, { reviewStatus: FindingReviewStatus.APPROVED }],
         },
         orderBy: { createdAt: 'desc' },
         take: 10,
         select: { title: true, description: true, findingType: true },
-      });
-      if (rows.length)
-        return rows
-          .map((row) => `- [${row.findingType}] ${row.title}: ${row.description}`)
-          .join('\n');
-    }
-    const legacy = media.inspectionArea.propertyArea.baselineConditions[0];
-    return legacy
-      ? `- ${legacy.conditionSummary} Known defects: ${JSON.stringify(legacy.knownDefects)}`
-      : null;
+      }),
+    ]);
+    if (!answers.length && !findings.length) return null;
+    return [
+      ...(heading ? [heading] : []),
+      ...(answers.length
+        ? [
+            'Recorded at move-in, item by item:',
+            ...answers.map(
+              (answer) =>
+                `- ${answer.checklistItem.label}: ${describeAnswer(answer)}${
+                  answer.comment ? ` — move-in note: ${answer.comment}` : ''
+                }`,
+            ),
+          ]
+        : []),
+      ...(findings.length
+        ? [
+            'Move-in findings:',
+            ...findings.map((row) => `- [${row.findingType}] ${row.title}: ${row.description}`),
+          ]
+        : []),
+    ].join('\n');
+  }
+
+  /**
+   * Findings on this recording that a person has already decided.
+   *
+   * A re-run keeps them, since a human decision is never replaced, so the
+   * model is told about them rather than raising each one again beside its
+   * reviewed twin. A rejection is the office saying the finding was wrong.
+   */
+  private reviewedFindings(mediaId: string) {
+    return this.prisma.inspectionFinding.findMany({
+      where: {
+        inspectionMediaId: mediaId,
+        reviewStatus: { not: FindingReviewStatus.PENDING_REVIEW },
+        NOT: { ...ROOM_SUMMARY_WHERE },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { title: true, description: true, reviewStatus: true },
+    });
   }
 
   /**
@@ -1093,8 +1451,8 @@ export class MediaProcessingService implements OnModuleInit {
         inspection: { inspectionType: string; baselineInspectionId?: string | null };
       };
     },
-    transcript: string,
-    baselineContext: string | null,
+    transcript: Transcript,
+    baseline: Baseline,
     assessments: Array<{
       label: string;
       isClean: boolean | null;
@@ -1103,31 +1461,54 @@ export class MediaProcessingService implements OnModuleInit {
       comment: string | null;
       videoTimestampSeconds: number | null;
     }> = [],
+    reviewed: Array<{ title: string; description: string; reviewStatus: string }> = [],
   ) {
     const area = media.inspectionArea.propertyArea;
-    const axis = (value: boolean | null, yes: string, no: string) =>
-      value === null ? 'not assessed' : value ? yes : no;
     const assessmentLines = assessments.map((item) => {
       const at =
         item.videoTimestampSeconds === null ? '' : ` [at ${item.videoTimestampSeconds}s]`;
       const note = item.comment ? ` — technician note: ${item.comment}` : '';
-      return `- ${item.label}: ${axis(item.isClean, 'clean', 'NOT clean')}, ${axis(
-        item.isUndamaged,
-        'undamaged',
-        'DAMAGED',
-      )}, ${axis(item.isWorking, 'working', 'NOT working')}${at}${note}`;
+      return `- ${item.label}: ${describeAnswer(item)}${at}${note}`;
     });
     const isMoveIn = media.inspectionArea.inspection.inspectionType === 'MOVE_IN';
+    const isMoveOut = media.inspectionArea.inspection.inspectionType === 'MOVE_OUT';
+    const baselineLines = isMoveIn
+      ? [
+          'This is a MOVE-IN inspection: what you extract becomes the baseline every future inspection of this room is compared against. Document the observed condition thoroughly.',
+        ]
+      : baseline.established
+        ? [
+            'Move-in baseline for this room:',
+            '<baseline>',
+            baseline.text ?? '',
+            '</baseline>',
+            ...(isMoveOut
+              ? [
+                  'Rules for using the move-in baseline:',
+                  '- A condition the move-in already recorded is pre-existing: an item it marked DAMAGED, NOT working',
+                  '  or NOT clean, a move-in note about it, or a move-in finding about the same thing. Report it as',
+                  '  findingType EXISTING_CONDITION with comparisonResult EXISTING_CONDITION, put what the move-in',
+                  '  recorded in baselineCondition, and use possibleResponsibility UNDETERMINED — unless the move-out',
+                  '  evidence shows it is clearly worse than recorded; then say exactly what changed.',
+                  '- Only a condition the move-in recorded as clean, undamaged and working can be POSSIBLE_NEW_DAMAGE.',
+                  '- When the move-in did not record the item at all, say so in baselineCondition and use',
+                  '  comparisonResult INSUFFICIENT_DATA: nothing shows whether it is new.',
+                ]
+              : []),
+          ]
+        : isMoveOut
+          ? [
+              'No move-in baseline is documented for this room, so nothing here can tell new damage from old.',
+              'Use comparisonResult INSUFFICIENT_DATA for every finding, leave baselineCondition empty, and never',
+              'use possibleResponsibility TENANT_REVIEW_REQUIRED.',
+            ]
+          : ['No move-in baseline is documented for this room.'];
     return [
       'You review property-inspection narrations for TexasRenters.',
       `Room: ${area.name}${area.floor ? ` (${area.floor.name})` : ''}.`,
       `Inspection type: ${media.inspectionArea.inspection.inspectionType}.`,
       `Video duration: ${media.durationSeconds} seconds.`,
-      isMoveIn
-        ? 'This is a MOVE-IN inspection: what you extract becomes the baseline every future inspection of this room is compared against. Document the observed condition thoroughly.'
-        : baselineContext
-          ? `Move-in baseline for this room:\n${baselineContext}`
-          : 'No move-in baseline is documented for this room.',
+      ...baselineLines,
       // Placed before the transcript on purpose: the model reads the facts it
       // must not contradict before it reads the prose it may misread.
       ...(assessmentLines.length
@@ -1150,10 +1531,24 @@ export class MediaProcessingService implements OnModuleInit {
             '  discrepancy in recommendedReview so a human can check the recording.',
           ]
         : []),
-      'Technician narration transcript follows between <transcript> tags.',
+      ...(reviewed.length
+        ? [
+            'The office has already reviewed these findings from this recording. They are kept as decided.',
+            'Do not report any of them again, and do not raise a rejected one in other words.',
+            '<reviewed>',
+            ...reviewed.map(
+              (finding) =>
+                `- ${finding.reviewStatus === 'REJECTED' ? 'REJECTED' : 'ALREADY RECORDED'}: ${finding.title} — ${finding.description}`,
+            ),
+            '</reviewed>',
+          ]
+        : []),
+      transcript.timed
+        ? 'Technician narration transcript follows between <transcript> tags, one line per utterance. Each line starts with the seconds of the recording it was spoken in, as [start-end s].'
+        : 'Technician narration transcript follows between <transcript> tags. It carries no timings.',
       'The narration may be in any language, mixed languages, or heavily accented English —',
       'interpret it faithfully and write every output field in clear English.',
-      `<transcript>${transcript}</transcript>`,
+      `<transcript>\n${formatTranscript(transcript)}\n</transcript>`,
       'Return a JSON array only (no prose).',
       `The FIRST item must always be a room summary: findingType NO_CHANGE, category "Room condition", title "${ROOM_SUMMARY_TITLE}",`,
       'description = a 2-4 sentence English summary of the narrated room condition,',
@@ -1163,14 +1558,15 @@ export class MediaProcessingService implements OnModuleInit {
       'category (short noun, e.g. Walls, Plumbing), title, description,',
       'baselineCondition (what the baseline says about this item, or empty string),',
       'comparisonResult (EXISTING_CONDITION|POSSIBLE_NEW_DAMAGE|NO_MATERIAL_CHANGE|NORMAL_WEAR|OWNER_MAINTENANCE|MISSING_EVIDENCE|INSUFFICIENT_DATA),',
-      // Findings used to come back stamped 0:00 across the board: the transcript
-      // was one untimed block, so there was nothing to cite. The assessment
-      // timestamps are exact — they are recorded by the phone at the moment the
-      // technician answers — so they are the best anchor available.
-      'videoTimestampStart and videoTimestampEnd (integer seconds within the duration):',
-      '  for a finding about a checklist item, use the [at Ns] timestamp of that item as the start',
-      '  and a few seconds later as the end; otherwise use the timing of the narration that',
-      '  supports it; use 0 only when neither is available,',
+      // Findings used to come back stamped 0:00, or at evenly spaced guesses: the
+      // transcript reached the model as one untimed block, so there was nothing
+      // to cite. Its lines now carry their seconds, and a reviewer jumps straight
+      // to the moment the technician talks about the problem.
+      'videoTimestampStart and videoTimestampEnd (integer seconds within the duration): the stretch of the',
+      '  recording where a reviewer can see what the finding is about. Take them from the transcript lines',
+      '  in which the technician talks about it — the first such line\'s start to the last one\'s end. For a',
+      '  checklist item nobody talks about, use its [at Ns] time and a few seconds after. Never estimate',
+      '  a time: when neither the transcript nor an [at Ns] gives one, use 0 for both,',
       'severity (LOW|MEDIUM|HIGH), possibleResponsibility (TENANT_REVIEW_REQUIRED|OWNER_REVIEW_REQUIRED|UNDETERMINED),',
       'confidence (0-1), recommendedReview (one actionable sentence for the human reviewer).',
       'Findings are suggestions for human review; never state conclusions about charges or fault.',
@@ -1202,6 +1598,7 @@ export class MediaProcessingService implements OnModuleInit {
         max_tokens: 4_000,
         messages: [{ role: 'user', content: prompt }],
       }),
+      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
     });
     const payload: unknown = await response.json().catch(() => null);
     if (!response.ok) throw this.analysisProviderError(response.status, payload);
@@ -1227,6 +1624,7 @@ export class MediaProcessingService implements OnModuleInit {
         reasoning: { effort: 'low' },
         input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
       }),
+      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
     });
     const payload: unknown = await response.json().catch(() => null);
     if (!response.ok) throw this.analysisProviderError(response.status, payload);

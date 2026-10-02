@@ -28,6 +28,7 @@ import { AreaReviewControl } from './AreaReviewControl';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { FindingReviewControls } from './FindingReviewControls';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
+import { ReanalyzeControl, canReanalyze } from './ReanalyzeControl';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface } from './RecordingSurface';
 
@@ -88,6 +89,7 @@ function RecordingCard({
   areaId,
   checklist,
   onSeek,
+  reanalyze,
 }: {
   recording: AreaRecording;
   activeId: string | null;
@@ -100,6 +102,8 @@ function RecordingCard({
   /** Items a captured still can be filed against. */
   checklist: AreaChecklistEntry[];
   onSeek: (seconds: number) => void;
+  /** Offered to a reviewer before finalization: see `ReanalyzeControl`. */
+  reanalyze?: { pendingFindings: number } | null;
 }) {
   const active = activeId === recording.id;
 
@@ -172,9 +176,19 @@ function RecordingCard({
         />
       ) : null}
 
-      <footer className="text-muted-foreground text-xs">
-        {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
-        {formatDateTime(recording.createdAt)}
+      <footer className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-muted-foreground text-xs">
+          {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
+          {formatDateTime(recording.createdAt)}
+        </span>
+        {reanalyze && canReanalyze(recording) ? (
+          <ReanalyzeControl
+            areaId={areaId}
+            inspectionId={inspectionId}
+            pendingFindings={reanalyze.pendingFindings}
+            recording={recording}
+          />
+        ) : null}
       </footer>
     </article>
   );
@@ -357,6 +371,17 @@ export function AreaDetailPanel({
   const additionalRecordings = recordings.filter(
     (recording) => recording.id !== primaryRecording?.id,
   );
+  // A reviewer's, and only while the inspection is open: the server refuses a
+  // re-run once it has been finalized.
+  const reanalyzeFor = (recording: AreaRecording) =>
+    canReview && !finalized
+      ? {
+          pendingFindings: findings.filter(
+            (finding) =>
+              finding.recordingId === recording.id && finding.reviewStatus === 'PENDING_REVIEW',
+          ).length,
+        }
+      : null;
 
   return (
     <div className="space-y-3">
@@ -501,6 +526,7 @@ export function AreaDetailPanel({
                     setActiveRecording(primaryRecording.id);
                     setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
                   }}
+                  reanalyze={reanalyzeFor(primaryRecording)}
                   recording={primaryRecording}
                   startSeconds={seek?.seconds ?? null}
                 />
@@ -530,6 +556,7 @@ export function AreaDetailPanel({
                           setActiveRecording(recording.id);
                           setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
                         }}
+                        reanalyze={reanalyzeFor(recording)}
                         recording={recording}
                       />
                     ))}

@@ -675,6 +675,121 @@ describe('playback', () => {
 });
 
 /**
+ * The office asks for a recording's analysis to be run again, typically after
+ * the analysis itself improved. Its findings awaiting a decision are the
+ * reviewer's queue, so it is the reviewer's to ask.
+ */
+describe('the office re-runs the analysis of a recording', () => {
+  const reviewer: AuthenticatedUser = {
+    ...technician,
+    id: '10000000-0000-4000-8000-000000000003',
+    permissions: ['findings:review'],
+  };
+
+  function harness(media: Record<string, unknown> | null = {}, queued = true) {
+    const mediaProcessing = { queue: jest.fn(), reanalyze: jest.fn().mockReturnValue(queued) };
+    const { service, prisma } = build({ mediaProcessing: mediaProcessing as never });
+    const row =
+      media === null
+        ? null
+        : {
+            id: 'media-1',
+            processingStatus: 'READY',
+            failureCode: null,
+            inspectionId: 'insp-1',
+            inspectionArea: {
+              id: AREA_ID,
+              propertyArea: { name: 'Entrance' },
+              inspection: { finalizedAt: null },
+            },
+            ...media,
+          };
+    const findFirst = jest.fn().mockResolvedValue(row);
+    const auditLog = { create: jest.fn().mockResolvedValue({}) };
+    Object.assign(prisma.inspectionMedia, { findFirst });
+    Object.assign(prisma, { auditLog });
+    return { service, mediaProcessing, findFirst, auditLog };
+  }
+
+  it('starts it and says who asked, on the inspection, naming the area', async () => {
+    const { service, mediaProcessing, auditLog, findFirst } = harness();
+
+    await expect(service.reanalyze(reviewer, 'media-1')).resolves.toEqual({ queued: true });
+
+    expect(mediaProcessing.reanalyze).toHaveBeenCalledWith('media-1', reviewer.organizationId);
+    // Scoped to the caller's organization: another one's id is simply not found.
+    expect(findFirst.mock.calls[0][0].where).toEqual({
+      id: 'media-1',
+      organizationId: reviewer.organizationId,
+    });
+    expect(auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorUserId: reviewer.id,
+        action: 'AI_REANALYSIS_REQUESTED',
+        entityType: 'Inspection',
+        entityId: 'insp-1',
+        metadata: expect.objectContaining({ inspectionMediaId: 'media-1', areaName: 'Entrance' }),
+      }),
+    });
+  });
+
+  it('records nothing when a run is already going', async () => {
+    const { service, auditLog } = harness({}, false);
+    await expect(service.reanalyze(reviewer, 'media-1')).resolves.toEqual({ queued: false });
+    expect(auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("is the reviewer's to ask, not a technician's", async () => {
+    const { service, mediaProcessing } = harness();
+    await expect(service.reanalyze(technician, 'media-1')).rejects.toMatchObject({ status: 403 });
+    expect(mediaProcessing.reanalyze).not.toHaveBeenCalled();
+  });
+
+  it('leaves a finalized inspection alone, reopened or not', async () => {
+    const { service, mediaProcessing } = harness({
+      inspectionArea: {
+        id: AREA_ID,
+        propertyArea: { name: 'Entrance' },
+        inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
+      },
+    });
+    await expect(service.reanalyze(reviewer, 'media-1')).rejects.toMatchObject({
+      status: 409,
+      code: 'INSPECTION_FINALIZED',
+    });
+    expect(mediaProcessing.reanalyze).not.toHaveBeenCalled();
+  });
+
+  it('waits for the first pass to finish', async () => {
+    const { service } = harness({ processingStatus: 'PROCESSING' });
+    await expect(service.reanalyze(reviewer, 'media-1')).rejects.toMatchObject({
+      code: 'RECORDING_STILL_PROCESSING',
+    });
+  });
+
+  it('has nothing to analyse when Cloudflare could not encode the video', async () => {
+    const { service } = harness({
+      processingStatus: 'FAILED',
+      failureCode: 'STREAM_ENCODING_FAILED',
+    });
+    await expect(service.reanalyze(reviewer, 'media-1')).rejects.toMatchObject({
+      code: 'RECORDING_NOT_PLAYABLE',
+    });
+  });
+
+  it('tries again where only the analysis had failed', async () => {
+    const { service, mediaProcessing } = harness({ processingStatus: 'FAILED', failureCode: null });
+    await expect(service.reanalyze(reviewer, 'media-1')).resolves.toEqual({ queued: true });
+    expect(mediaProcessing.reanalyze).toHaveBeenCalled();
+  });
+
+  it('answers not found for a recording outside the organization', async () => {
+    const { service } = harness(null);
+    await expect(service.reanalyze(reviewer, 'media-1')).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+/**
  * Transcription and analysis tried again where they failed.
  *
  * Nothing ever did: a provider error, or an MP4 Cloudflare took longer than

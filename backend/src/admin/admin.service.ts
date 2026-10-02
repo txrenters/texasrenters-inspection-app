@@ -1837,16 +1837,21 @@ export class AdminService {
     const evidence = { areas, findings, photos, media, responses };
 
     /**
-     * Whether this move-out has anything to compare against.
+     * The move-in this move-out is compared against, and whether there is one.
      *
      * The same predicate the comparison uses, so the page cannot promise a
      * baseline that `generate` then refuses. Undefined on every other type —
      * the question is meaningless there, and a `false` would read as an
      * assurance that something had been checked.
+     *
+     * Named on the page instead of `baselineInspection`, the link written at
+     * creation: the comparison and the AI both read this one, and the page said
+     * "No move-in baseline is linked" over a move-out whose comparison was
+     * reading a move-in all along.
      */
-    const baselineMissing =
+    const comparisonBaseline =
       inspection.inspectionType === InspectionType.MOVE_OUT
-        ? !(await this.prisma.inspection.findFirst({
+        ? await this.prisma.inspection.findFirst({
             where: baselineWhere({
               organizationId: user.organizationId,
               propertywareBuildingId: inspection.propertywareBuilding?.id ?? null,
@@ -1854,9 +1859,13 @@ export class AdminService {
               propertywareLeaseId: inspection.propertywareLease?.id ?? null,
               scheduledAt: inspection.scheduledAt,
             }),
-            select: { id: true },
-          }))
+            // The latest, as `ComparisonService.resolveBaseline` picks it.
+            orderBy: { scheduledAt: 'desc' },
+            select: { id: true, scheduledAt: true },
+          })
         : undefined;
+    const baselineMissing =
+      comparisonBaseline === undefined ? undefined : comparisonBaseline === null;
 
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
@@ -1871,6 +1880,7 @@ export class AdminService {
       ...detail,
       evidence,
       baselineMissing,
+      comparisonBaseline,
       scheduledInJobber: Boolean(jobberVisitId),
       jobberBooking: booking ? { status: booking.status, attempts: booking.attempts, lastError: booking.lastError, sentAt: booking.sentAt } : null,
       // Edits waiting for, or refused by, Jobber. A sent one is history.
@@ -1949,7 +1959,7 @@ export class AdminService {
 
     const items = rows.map((row) => {
       const areaName =
-        row.action.startsWith('AREA_REVIEW') &&
+        (row.action.startsWith('AREA_REVIEW') || row.action === 'AI_REANALYSIS_REQUESTED') &&
         row.metadata &&
         typeof row.metadata === 'object' &&
         !Array.isArray(row.metadata) &&

@@ -128,6 +128,92 @@ export class InspectionVideoService {
   ) {}
 
   /**
+   * Run the AI analysis of one recording again, for the office.
+   *
+   * Gated on `findings:review`, checked here because this controller carries no
+   * permissions guard: re-running replaces the findings still awaiting a
+   * decision, and that set is the reviewer's queue. Decided findings are never
+   * touched (`MediaProcessingService.analyze`).
+   *
+   * Refused once the inspection has been finalized, keyed on `finalizedAt` like
+   * every other evidence freeze, and while the recording is still in its first
+   * pass. A recording Cloudflare could not encode has nothing to transcribe.
+   */
+  async reanalyze(user: AuthenticatedUser, videoId: string) {
+    if (!user.permissions.includes('findings:review'))
+      throw new ApplicationError(
+        403,
+        'FORBIDDEN',
+        'You do not have permission to re-run the AI analysis.',
+      );
+    if (!this.mediaProcessing)
+      throw new ApplicationError(
+        503,
+        'MEDIA_PROCESSING_UNAVAILABLE',
+        'The analysis pipeline is not available on this server.',
+      );
+    const media = await this.prisma.inspectionMedia.findFirst({
+      where: { id: videoId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        processingStatus: true,
+        failureCode: true,
+        inspectionId: true,
+        inspectionArea: {
+          select: {
+            id: true,
+            propertyArea: { select: { name: true } },
+            inspection: { select: { finalizedAt: true } },
+          },
+        },
+      },
+    });
+    if (!media)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
+    if (media.inspectionArea.inspection.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'This inspection has been finalized; its findings are no longer re-analysed.',
+      );
+    if (
+      media.processingStatus === MediaProcessingStatus.PENDING ||
+      media.processingStatus === MediaProcessingStatus.PROCESSING
+    )
+      throw new ApplicationError(
+        409,
+        'RECORDING_STILL_PROCESSING',
+        'This recording is still being processed for the first time.',
+      );
+    if (media.failureCode === STREAM_ENCODING_FAILED)
+      throw new ApplicationError(
+        409,
+        'RECORDING_NOT_PLAYABLE',
+        'Cloudflare could not encode this recording, so there is nothing to analyse.',
+      );
+
+    const queued = this.mediaProcessing.reanalyze(media.id, user.organizationId);
+    if (queued)
+      // On the inspection, so the page's Recent activity shows who asked, with
+      // the area named the way an area's review mark is.
+      await this.prisma.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'AI_REANALYSIS_REQUESTED',
+          entityType: 'Inspection',
+          entityId: media.inspectionId,
+          metadata: {
+            inspectionMediaId: media.id,
+            inspectionAreaId: media.inspectionArea.id,
+            areaName: media.inspectionArea.propertyArea.name,
+          },
+        },
+      });
+    return { queued };
+  }
+
+  /**
    * Captures a still from a recording at a given moment, as report evidence.
    *
    * This is the reviewer's half of a mechanism that already existed and was

@@ -163,6 +163,16 @@ export interface AreaRecording {
    * the technician wanted looked at, and capture the frame themselves.
    */
   frameMarkersMs: number[];
+  /**
+   * The latest re-run of this recording's AI analysis, asked for from the
+   * console; null when nobody has. RUNNING clears itself after fifteen minutes
+   * without an end, which means it died with the server.
+   */
+  analysisRun?: {
+    status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+    at: string;
+    message?: string | null;
+  } | null;
   /** Proxy fallback for storage backends that cannot sign URLs. */
   contentPath: string;
 }

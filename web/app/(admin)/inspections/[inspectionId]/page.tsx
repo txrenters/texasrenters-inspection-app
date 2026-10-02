@@ -8,6 +8,7 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 
@@ -156,12 +157,24 @@ function InspectionDetail() {
   const finalized = item.status === 'COMPLETED' || item.status === 'CANCELLED';
   const contextualAction = primaryAction(item.status);
   const banner = attentionBanner(item.status, pendingFindings.data?.total ?? 0);
+  /**
+   * The move-in a move-out is compared against, as the comparison and the AI
+   * both choose it. The link written at creation is only the fallback for the
+   * other types: on a move-out it said "No move-in baseline is linked" while
+   * the comparison was reading a move-in all along (5819 Flower Gate Dr).
+   */
+  const baseline =
+    item.inspectionType === 'MOVE_OUT' && item.comparisonBaseline !== undefined
+      ? item.comparisonBaseline
+      : item.baselineInspection;
   const baselineLabel =
     item.inspectionType === 'MOVE_IN'
       ? 'This inspection establishes the property baseline'
-      : item.baselineInspection
-        ? `Move-in inspection · ${formatScheduledDate(item.baselineInspection.scheduledAt)}`
-        : 'No move-in baseline is linked';
+      : baseline
+        ? `Move-in inspection · ${formatScheduledDate(baseline.scheduledAt)}`
+        : item.inspectionType === 'MOVE_OUT'
+          ? 'No move-in to compare against'
+          : 'No move-in baseline is linked';
   // Recomputed on render rather than ticking: a job still running is read by
   // somebody who refreshes, and a second timer on this page earns nothing.
   const worked = jobWorked(item);
@@ -342,7 +355,15 @@ function InspectionDetail() {
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">Comparison baseline</dt>
-            <dd className="mt-0.5 text-sm font-medium">{baselineLabel}</dd>
+            <dd className="mt-0.5 text-sm font-medium">
+              {baseline && item.inspectionType !== 'MOVE_IN' ? (
+                <Link className="hover:underline" href={`/inspections/${baseline.id}`}>
+                  {baselineLabel}
+                </Link>
+              ) : (
+                baselineLabel
+              )}
+            </dd>
           </div>
           <div>
             {/* The technician's own clock: Start job on the handset to
