@@ -4,6 +4,7 @@ import type { AdminAreaComparison, ComparisonClassification } from '@texasrenter
 import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
+import { ComparisonItemsTable } from '@/components/comparison-items-table';
 import { PageSkeleton } from '@/components/states';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
@@ -35,6 +36,7 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
+import { itemTotals } from '@/lib/comparison-items';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAdminMutations, useInspectionComparison } from '@/lib/queries';
 
@@ -48,9 +50,14 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
   const comparison = useInspectionComparison(inspectionId);
   const mutations = useAdminMutations();
   const [overrideArea, setOverrideArea] = useState<AdminAreaComparison | null>(null);
+  // Rooms whose items are open. Unset means the default: open where the room
+  // needs a decision, so the reviewer lands on the evidence for it.
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
   const canManage = permissions.has('inspections:manage');
   const canReview = permissions.has('comparisons:review');
   const data = comparison.data;
+  const totals = data ? itemTotals(data.areas) : null;
+  const itemized = data?.areas.some((area) => area.items?.length) ?? false;
 
   return (
     <Card aria-labelledby="inspection-comparison-title" className="scroll-mt-20" id="comparison">
@@ -124,6 +131,19 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   </dd>
                 </div>
               ) : null}
+              {itemized && totals ? (
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <dt className="text-muted-foreground text-xs">Item by item</dt>
+                  <dd className="mt-1 text-sm font-medium">
+                    {totals.fresh} new since move-in
+                    {totals.fresh ? ` (${totals.freshRooms} room${totals.freshRooms === 1 ? '' : 's'})` : ''}
+                  </dd>
+                  <dd className="text-muted-foreground text-xs">
+                    {totals.existing} already at move-in · {totals.cleaning} need cleaning
+                    {totals.unknown ? ` · ${totals.unknown} not graded at move-in` : ''}
+                  </dd>
+                </div>
+              ) : null}
               {data.reviewedByName ? (
                 <div className="bg-muted/50 rounded-lg p-3">
                   <dt className="text-muted-foreground text-xs">Reviewed</dt>
@@ -135,47 +155,24 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
               ) : null}
             </dl>
 
+            {!itemized && data.areas.length ? (
+              <p className="text-muted-foreground text-sm">
+                This comparison was generated before rooms were compared item by item.
+                {canManage ? ' Regenerate it to see each checklist item at move-in and move-out.' : ''}
+              </p>
+            ) : null}
+
             <ul className="divide-y rounded-lg border">
               {data.areas.map((area) => (
-                <li
-                  className="flex flex-wrap items-start justify-between gap-3 p-3"
+                <AreaComparisonRow
+                  area={area}
+                  canReview={canReview}
+                  inspectionId={inspectionId}
                   key={area.id}
-                >
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <p className="text-sm font-medium">
-                      {area.areaName}
-                      {area.floorName ? (
-                        <span className="text-muted-foreground font-normal"> · {area.floorName}</span>
-                      ) : null}
-                    </p>
-                    {area.summary ? (
-                      <p className="text-muted-foreground text-sm">{area.summary}</p>
-                    ) : null}
-                    {area.originalClassification &&
-                    area.originalClassification !== area.classification ? (
-                      <p className="text-muted-foreground text-xs">
-                        Overridden from {classLabel(area.originalClassification)}
-                        {area.overrideReason ? ` - ${area.overrideReason}` : ''}
-                      </p>
-                    ) : null}
-                    <p className="text-muted-foreground text-xs">
-                      {humanize(area.matchMethod).toLowerCase()}
-                      {area.matchConfidence ? ` · ${Math.round(area.matchConfidence * 100)}%` : ''}
-                    </p>
-                  </div>
-
-                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-                    <Badge variant={CLASSIFICATION_VARIANT[area.classification] ?? 'secondary'}>
-                      {classLabel(area.classification)}
-                    </Badge>
-                    {area.requiresReview ? <Badge variant="warning">Review</Badge> : null}
-                    {canReview ? (
-                      <Button onClick={() => setOverrideArea(area)} size="sm" type="button" variant="ghost">
-                        Override
-                      </Button>
-                    ) : null}
-                  </div>
-                </li>
+                  onOverride={() => setOverrideArea(area)}
+                  onToggle={(next) => setOpened((current) => ({ ...current, [area.id]: next }))}
+                  open={opened[area.id] ?? (area.requiresReview && (area.items?.length ?? 0) > 0)}
+                />
               ))}
             </ul>
 
@@ -235,6 +232,12 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                 <AlertDescription>{mutations.reviewComparison.error.message}</AlertDescription>
               </Alert>
             ) : null}
+            {/* Regenerating could fail with nothing on screen to say so. */}
+            {mutations.generateComparison.error ? (
+              <Alert variant="destructive">
+                <AlertDescription>{mutations.generateComparison.error.message}</AlertDescription>
+              </Alert>
+            ) : null}
           </>
         )}
       </CardContent>
@@ -247,6 +250,96 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
         />
       ) : null}
     </Card>
+  );
+}
+
+/**
+ * One room's verdict, and under it the room's checklist item by item.
+ *
+ * The verdict alone was the whole row once, and on Flower Gate it read
+ * "uncertain" for thirteen rooms of fifteen. The items are what a reviewer
+ * decides from, so a room that needs a decision opens on them.
+ */
+function AreaComparisonRow({
+  area,
+  inspectionId,
+  canReview,
+  open,
+  onToggle,
+  onOverride,
+}: {
+  area: AdminAreaComparison;
+  inspectionId: string;
+  canReview: boolean;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  onOverride: () => void;
+}) {
+  const items = area.items ?? [];
+  return (
+    <li className="grid gap-3 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-sm font-medium">
+            {area.areaName}
+            {area.floorName ? (
+              <span className="text-muted-foreground font-normal"> · {area.floorName}</span>
+            ) : null}
+          </p>
+          {area.summary ? <p className="text-muted-foreground text-sm">{area.summary}</p> : null}
+          {area.originalClassification && area.originalClassification !== area.classification ? (
+            <p className="text-muted-foreground text-xs">
+              Overridden from {classLabel(area.originalClassification)}
+              {area.overrideReason ? ` - ${area.overrideReason}` : ''}
+            </p>
+          ) : null}
+          {/* About unreviewed AI output, so on screen only: never on the report. */}
+          {area.aiNote ? <p className="text-warning text-xs">{area.aiNote}</p> : null}
+          <p className="text-muted-foreground text-xs">
+            {humanize(area.matchMethod).toLowerCase()}
+            {area.matchConfidence ? ` · ${Math.round(area.matchConfidence * 100)}%` : ''}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <Badge variant={CLASSIFICATION_VARIANT[area.classification] ?? 'secondary'}>
+            {classLabel(area.classification)}
+          </Badge>
+          {area.requiresReview ? <Badge variant="warning">Review</Badge> : null}
+          {canReview ? (
+            <Button onClick={onOverride} size="sm" type="button" variant="ghost">
+              Override
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {items.length || area.moveOutAreaId ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {items.length ? (
+            <Button
+              aria-expanded={open}
+              onClick={() => onToggle(!open)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {open ? 'Hide items' : `Show ${items.length} items`}
+            </Button>
+          ) : null}
+          {area.moveOutAreaId ? (
+            <Button asChild size="sm" type="button" variant="ghost">
+              <Link href={`/inspections/${inspectionId}?area=${area.moveOutAreaId}`}>
+                Open the room&apos;s evidence
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {open && items.length ? (
+        <ComparisonItemsTable items={items} otherFindings={area.otherFindings ?? []} />
+      ) : null}
+    </li>
   );
 }
 

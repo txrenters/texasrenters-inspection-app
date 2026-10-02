@@ -25,6 +25,7 @@ import {
   type ResolvedAiConfiguration,
 } from '../admin/ai-provider-settings.service';
 import { ComparisonService } from '../admin/comparison.service';
+import { findingMatchesChecklistItem } from '../common/checklist-item-match';
 import { ApplicationError } from '../common/errors';
 import { resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor } from '../common/object-storage';
@@ -119,24 +120,11 @@ export function normalizeBox(value: unknown) {
 }
 
 /**
- * Whether a move-in photograph is of the item a finding is about: one of its
- * checklist item's keywords, or a word of the item's name, appears in the
- * finding's title or category. Imported move-ins file each photograph under a
- * checklist item ("Doors and locks", keywords door and lock), which is what
- * makes this answerable at all.
+ * Whether a move-in photograph is of the item a finding is about, by the
+ * checklist item it is filed under. The rule is shared with the move-in
+ * comparison, which shows each finding beside its item.
  */
-export function photoMatchesFinding(
-  finding: { title: string; category: string },
-  item: { label: string; keywords: string[] } | null,
-) {
-  if (!item) return false;
-  const text = `${finding.title} ${finding.category}`.toLowerCase();
-  const words = [
-    ...item.keywords,
-    ...item.label.split(/[^a-z]+/i).filter((word) => word.length > 3),
-  ].map((word) => word.toLowerCase().replace(/s$/, ''));
-  return words.some((word) => word.length > 2 && text.includes(word));
-}
+export const photoMatchesFinding = findingMatchesChecklistItem;
 
 const visibility = z.enum(['VISIBLE', 'NOT_VISIBLE', 'UNCLEAR']).catch('UNCLEAR');
 
