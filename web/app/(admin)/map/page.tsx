@@ -27,13 +27,19 @@ import { PageHeader } from '@/components/page-header';
 import { UNGROUPED_GREEN } from '@/components/planning/group-file';
 import { useFillHeight } from '@/components/planning/use-fill-height';
 import { EmptyState } from '@/components/states';
+import { toast } from 'sonner';
+
+import { AddVisitPanel } from '@/components/add-visit-panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
+import { fromDateValue } from '@/lib/date-range';
 import { visitsByProperty } from '@/lib/day-visits';
 import { formatRelative } from '@/lib/format';
 import {
+  useAdminMutations,
   useMapAssignments,
   usePropertyLocations,
+  useRefreshMapDay,
   useTechnicianLocations,
   useTechnicianRoute,
   useTechnicianRoutes,
@@ -42,12 +48,17 @@ import {
 } from '@/lib/queries';
 import { technicianColors } from '@/lib/technician-colors';
 import { PropertyList } from '@/components/property-list';
-import { buildRoster, isOnTheDay, TechnicianRoster } from '@/components/technician-roster';
+import {
+  buildRoster,
+  isOnTheDay,
+  TechnicianRoster,
+  type RosterEntry,
+} from '@/components/technician-roster';
 import { TechnicianDaySummary } from '@/components/technician-day-summary';
 import { DatePicker } from '@/components/ui/date-picker';
 import { businessToday } from '@/lib/clock';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { presenceOf, type TechnicianPresence } from '@texasrenters/shared';
+import { presenceOf, type AssignedStop, type TechnicianPresence } from '@texasrenters/shared';
 
 /**
  * `ssr: false` is not optional, and stayed so when the map moved to Google.
@@ -387,6 +398,68 @@ export default function TechnicianMapPage() {
   /** The day's inspections by property: the ticks on the discs, and the links in their windows. */
   const visits = useMemo(() => visitsByProperty(assignments.data), [assignments.data]);
 
+  /**
+   * Changing a technician's day from the map (the office, 2026-10-02): the "x"
+   * on a visit, and "+ Add visit". The same Assign and Unassign the inspection
+   * page uses -- its permission, its audit entry, its push to Jobber -- so the
+   * map is a shortcut to them and not a second set of rules.
+   */
+  const canAssign = permissions.has('inspections:assign');
+  const canCreate = permissions.has('inspections:manage');
+  const mutations = useAdminMutations();
+  const refreshMapDay = useRefreshMapDay();
+  /** What the "+ Add visit" panel is showing, for the map to light up. */
+  const [searchMatches, setSearchMatches] = useState<string[] | null>(null);
+  const searched = useMemo(() => (searchMatches ? new Set(searchMatches) : null), [searchMatches]);
+  const dateLabel = useMemo(
+    () =>
+      fromDateValue(date)?.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      }) ?? date,
+    [date],
+  );
+
+  const removeStop = useCallback(
+    async (stop: AssignedStop, technician: RosterEntry, reason: string) => {
+      await mutations.unassign.mutateAsync({ id: stop.inspectionId, reason });
+      refreshMapDay(date, technician.technicianId);
+      toast.success(`${stop.propertyName} is off ${technician.displayName}'s day`, {
+        description: 'It stays booked for the day with nobody on it.',
+      });
+    },
+    [date, mutations.unassign, refreshMapDay],
+  );
+
+  const addVisitPanel = useCallback(
+    (technician: RosterEntry, close: () => void) => (
+      <AddVisitPanel
+        canAssign={canAssign}
+        canCreate={canCreate}
+        date={date}
+        dateLabel={dateLabel}
+        onAssign={async (inspectionId) => {
+          await mutations.assign.mutateAsync({
+            id: inspectionId,
+            technicianId: technician.technicianId,
+            reason: 'Added to the day on the technician map',
+            idempotencyKey: crypto.randomUUID(),
+          });
+          refreshMapDay(date, technician.technicianId);
+          toast.success(`Added to ${technician.displayName}'s day`);
+        }}
+        onClose={close}
+        onFocusProperty={selectStop}
+        onSearchChange={setSearchMatches}
+        properties={properties.data ?? []}
+        technicianId={technician.technicianId}
+        technicianName={technician.displayName}
+      />
+    ),
+    [canAssign, canCreate, date, dateLabel, mutations.assign, properties.data, refreshMapDay, selectStop],
+  );
+
   const newest = positions.data?.reduce<string | null>(
     (latest, position) => (!latest || position.recordedAt > latest ? position.recordedAt : latest),
     null,
@@ -523,8 +596,10 @@ export default function TechnicianMapPage() {
                 ) : null}
 
                 <TechnicianRoster
+                  addVisitPanel={canAssign || canCreate ? addVisitPanel : undefined}
                   colors={colors}
                   entries={visibleRoster}
+                  onRemoveStop={canAssign ? removeStop : undefined}
                   onSelect={selectTechnician}
                   onSelectStop={selectStop}
                   timeline={selectedId ? (timeline.data ?? null) : null}
@@ -572,6 +647,7 @@ export default function TechnicianMapPage() {
                 positions={visiblePositions}
                 properties={properties.data ?? []}
                 route={selectedId ? (route.data ?? null) : null}
+                searchedPropertyIds={searched}
                 selectedPropertyId={selectedPropertyId}
                 selectedTechnicianId={selectedId}
                 trails={trails}

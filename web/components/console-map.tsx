@@ -213,6 +213,7 @@ export function ConsoleMap({
             otherProperties={preferences.otherProperties}
             properties={properties}
             selectedPropertyId={portfolioOptions.selectedPropertyId ?? null}
+            searched={portfolioOptions.searched ?? null}
             visits={portfolioOptions.visits ?? null}
             zones={preferences.zones}
           />

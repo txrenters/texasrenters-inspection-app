@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InspectionStatus } from '@prisma/client';
 import {
+  type AssignedStop,
   chooseRouteOrigin,
   type DrawnRoute,
   estimatedDriveMinutes,
@@ -19,6 +20,7 @@ import {
 
 import { PrismaService } from '../common/prisma.service';
 import { businessDayBounds } from '../common/business-day';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { GoogleRoutesClient, type GoogleRoute } from './google-routes.client';
 import { MapboxDirectionsClient } from './mapbox-directions.client';
 import type { GeoPoint, OsrmRoute } from './osrm.client';
@@ -102,6 +104,30 @@ export function toLatLngPath(
   path: readonly [number, number][],
 ): [number, number][] {
   return path.map(([longitude, latitude]) => [latitude, longitude]);
+}
+
+/**
+ * Whether the technician map may take a visit off its technician's day (the
+ * office, 2026-10-02: an "x" on each visit in the roster), which it does by
+ * unassigning it -- the same action, audit and Jobber push as the inspection
+ * page's Unassign.
+ *
+ * - Only a visit nobody has started. One under way, or handed in, is the
+ *   technician's work already, and its record is no place for a quick click.
+ * - Not a Jobber visit while console edits are not sent to Jobber: the next
+ *   sync would read Jobber's assignee and put the technician straight back,
+ *   and the "x" would quietly undo itself.
+ */
+export function removalOf(
+  inspection: { status: InspectionStatus; jobberVisitId: string | null },
+  editsReachJobber: boolean,
+): Pick<AssignedStop, 'removable' | 'notRemovableBecause'> {
+  if (isFinished(inspection.status)) return { removable: false, notRemovableBecause: 'FINISHED' };
+  if (inspection.status !== InspectionStatus.SCHEDULED)
+    return { removable: false, notRemovableBecause: 'STARTED' };
+  if (inspection.jobberVisitId && !editsReachJobber)
+    return { removable: false, notRemovableBecause: 'JOBBER_EDITS_OFF' };
+  return { removable: true, notRemovableBecause: null };
 }
 
 /**
@@ -277,6 +303,8 @@ export class RouteService {
             startedAt: true,
             submittedAt: true,
             completedAt: true,
+            // Whether the map's "x" would stick -- see `removalOf`.
+            jobberVisitId: true,
             // Both, for the same reason the route planner reads both: a real
             // inspection names a synced building, and `Property` exists only
             // where the inspection workflow happened to create one.
@@ -287,6 +315,7 @@ export class RouteService {
       },
     });
 
+    const editsReachJobber = getJobberConfig().pushEditsEnabled;
     const byTechnician = new Map<string, TechnicianAssignments>();
     for (const assignment of assignments) {
       const existing = byTechnician.get(assignment.technicianId) ?? {
@@ -315,6 +344,7 @@ export class RouteService {
           : null,
         startedAt: inspection.startedAt?.toISOString() ?? null,
         submittedAt: inspection.submittedAt?.toISOString() ?? null,
+        ...removalOf(inspection, editsReachJobber),
       });
 
       byTechnician.set(assignment.technicianId, existing);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { businessTimeOfDay, CLOCK_ZONES, msUntilNextMinute, readClock } from './clock';
+import { businessDayRange, businessTimeOfDay, CLOCK_ZONES, msUntilNextMinute, readClock } from './clock';
 
 const manila = CLOCK_ZONES.find((zone) => zone.id === 'manila')!;
 const texas = CLOCK_ZONES.find((zone) => zone.id === 'texas')!;
@@ -97,5 +97,31 @@ describe('businessTimeOfDay', () => {
     expect(businessTimeOfDay(null)).toBeNull();
     expect(businessTimeOfDay(undefined)).toBeNull();
     expect(businessTimeOfDay('not a time')).toBeNull();
+  });
+});
+
+/**
+ * A Texas day as a list query's range, the API's own `businessDayBounds` rule:
+ * the technician map's "+ Add visit" lists the day's unassigned visits with it,
+ * and the office reading it is often thirteen hours ahead in Manila.
+ */
+describe('businessDayRange', () => {
+  it('runs from Texas midnight to the last instant before the next, in daylight time', () => {
+    expect(businessDayRange('2026-10-02')).toEqual({
+      from: '2026-10-02T05:00:00.000Z',
+      to: '2026-10-03T04:59:59.999Z',
+    });
+  });
+
+  it('is an hour later in winter', () => {
+    expect(businessDayRange('2026-01-15')).toEqual({
+      from: '2026-01-15T06:00:00.000Z',
+      to: '2026-01-16T05:59:59.999Z',
+    });
+  });
+
+  it('is null for anything that is not a date', () => {
+    expect(businessDayRange('')).toBeNull();
+    expect(businessDayRange('October 2')).toBeNull();
   });
 });

@@ -483,6 +483,18 @@ export interface AssignedStop {
    */
   startedAt?: string | null;
   submittedAt?: string | null;
+  /**
+   * Whether taking this visit off the technician's day from the map would
+   * stick (the office, 2026-10-02: an "x" on each visit in the roster).
+   *
+   * Decided by the API because the console cannot see the half that matters:
+   * a Jobber visit whose console edits are not sent to Jobber is put back on
+   * the technician by the next sync, so the "x" would quietly undo itself.
+   * Optional so a console built before this still reads the response.
+   */
+  removable?: boolean;
+  /** Why not, when `removable` is false: already started, or a Jobber visit Jobber would put back. */
+  notRemovableBecause?: 'STARTED' | 'FINISHED' | 'JOBBER_EDITS_OFF' | null;
 }
 
 export interface TechnicianAssignments {

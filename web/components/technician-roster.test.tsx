@@ -532,3 +532,64 @@ describe('a technician working with a stalled location', () => {
     expect(screen.getByText(/App open · location paused since 11:02 AM/)).toBeInTheDocument();
   });
 });
+
+/**
+ * Changing the selected technician's day from the roster (the office,
+ * 2026-10-02): an "x" on each visit, and "+ Add visit" under the day.
+ */
+describe('changing a day from the roster', () => {
+  const removable = { ...STOP, removable: true, notRemovableBecause: null };
+  const done: AssignedStop = {
+    ...SECOND_STOP,
+    status: 'TECHNICIAN_SUBMITTED',
+    finishedAt: '2026-10-02T15:00:00.000Z',
+    removable: false,
+    notRemovableBecause: 'FINISHED',
+  };
+
+  it('puts an x on a visit still to do, for somebody who may unassign', () => {
+    render(
+      <TechnicianRoster
+        entries={entries([removable, done])}
+        onRemoveStop={vi.fn(async () => undefined)}
+        onSelect={() => {}}
+        selectedId="tech-1"
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: `Take ${removable.propertyName} off Ernie Saavedra's day` }),
+    ).toBeInTheDocument();
+    // Handed in: the technician's work already, not something to take back.
+    expect(
+      screen.queryByRole('button', { name: `Take ${done.propertyName} off Ernie Saavedra's day` }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('has no x for somebody who may not unassign', () => {
+    render(<TechnicianRoster entries={entries([removable])} onSelect={() => {}} selectedId="tech-1" />);
+
+    expect(screen.queryByRole('button', { name: /^Take / })).not.toBeInTheDocument();
+  });
+
+  it('opens the add-visit panel in place, even under an empty day', () => {
+    const panel = vi.fn((_entry: RosterEntry, close: () => void) => (
+      <button onClick={close} type="button">
+        Panel for the day
+      </button>
+    ));
+    render(<TechnicianRoster addVisitPanel={panel} entries={entries([])} onSelect={() => {}} selectedId="tech-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add visit' }));
+    expect(panel).toHaveBeenCalledWith(expect.objectContaining({ technicianId: 'tech-1' }), expect.any(Function));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Panel for the day' }));
+    expect(screen.getByRole('button', { name: 'Add visit' })).toBeInTheDocument();
+  });
+
+  it('has no add-visit button for somebody who may neither assign nor create', () => {
+    render(<TechnicianRoster entries={entries([removable])} onSelect={() => {}} selectedId="tech-1" />);
+
+    expect(screen.queryByRole('button', { name: 'Add visit' })).not.toBeInTheDocument();
+  });
+});

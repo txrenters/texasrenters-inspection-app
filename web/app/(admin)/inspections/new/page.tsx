@@ -159,6 +159,16 @@ function CreateInspectionForm() {
     ? (prefillType as InspectionType)
     : undefined;
   const defaultType = prefilledType ?? InspectionType.MOVE_IN;
+  /**
+   * The technician and the day, carried over from the technician map's "New
+   * visit here" (the office, 2026-10-02: add visits to a technician's day from
+   * the map). Prefills, like the type, never locks. A date not in the picker's
+   * own `YYYY-MM-DD` form is left for the coordinator to choose rather than
+   * seeding a value the picker cannot show.
+   */
+  const prefillTechnicianId = search.get('technicianId') ?? '';
+  const prefillDate = search.get('date') ?? '';
+  const prefilledDate = /^\d{4}-\d{2}-\d{2}$/.test(prefillDate) ? prefillDate : '';
   const prefill = useProperty(prefillId);
   const portfolios = usePortfolios(portfolioSearch);
   const portfolioOptions = useMemo(
@@ -189,9 +199,9 @@ function CreateInspectionForm() {
       propertyId: prefillId,
       unitId: '',
       leaseId: '',
-      technicianId: '',
+      technicianId: prefillTechnicianId,
       inspectionType: defaultType,
-      scheduledAt: '',
+      scheduledAt: prefilledDate,
       priority: 'STANDARD',
       internalNotes: '',
     },
