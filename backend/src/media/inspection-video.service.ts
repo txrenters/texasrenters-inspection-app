@@ -237,7 +237,7 @@ export class InspectionVideoService {
   async captureSnapshot(
     user: AuthenticatedUser,
     videoId: string,
-    input: { atMs: number; checklistItemId?: string; label?: string },
+    input: { atMs: number; checklistItemId?: string; label?: string; findingId?: string },
   ) {
     if (!this.mediaStorage)
       throw new ApplicationError(
@@ -273,11 +273,21 @@ export class InspectionVideoService {
         recordedAt: true,
         inspectionId: true,
         inspectionAreaId: true,
-        inspectionArea: { select: { propertyAreaId: true } },
+        inspectionArea: {
+          select: { propertyAreaId: true, inspection: { select: { finalizedAt: true } } },
+        },
       },
     });
     if (!media || !media.inspectionAreaId)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
+    // Evidence freezes at finalization (`finalizedAt`, never the status): a
+    // still added afterwards would change a report that may already be shared.
+    if (media.inspectionArea?.inspection.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'This inspection has been finalized; its evidence can no longer change.',
+      );
     if (!media.streamUid || !media.readyAt)
       throw new ApplicationError(
         409,
@@ -312,12 +322,41 @@ export class InspectionVideoService {
         );
     }
 
+    // A finding in this inspection and this room, by the same rule as a
+    // checklist item: a still filed under somebody else's finding would print
+    // under the wrong heading.
+    if (input.findingId) {
+      const finding = await this.prisma.inspectionFinding.findFirst({
+        where: {
+          id: input.findingId,
+          inspectionId: media.inspectionId,
+          propertyAreaId: media.inspectionArea!.propertyAreaId,
+        },
+        select: { id: true },
+      });
+      if (!finding)
+        throw new ApplicationError(
+          404,
+          'FINDING_NOT_FOUND',
+          'That finding does not belong to this area of the inspection.',
+        );
+    }
+
     const idempotencyKey = `${media.id}-snapshot-${atMs}`;
     const existing = await this.prisma.inspectionPhoto.findUnique({
       where: { idempotencyKey },
-      select: { id: true },
+      select: { id: true, findingId: true },
     });
-    if (existing) return { id: existing.id, atMs, reused: true };
+    if (existing) {
+      // The same frame captured before, unfiled: now it is filed. One already
+      // evidencing a finding stays with it rather than moving silently.
+      if (input.findingId && !existing.findingId)
+        await this.prisma.inspectionPhoto.update({
+          where: { id: existing.id },
+          data: { findingId: input.findingId },
+        });
+      return { id: existing.id, atMs, reused: true };
+    }
 
     const customer = this.stream.customerCode;
     if (!customer)
@@ -350,6 +389,7 @@ export class InspectionVideoService {
           inspectionId: media.inspectionId,
           inspectionAreaId: media.inspectionAreaId,
           checklistItemId: input.checklistItemId ?? null,
+          findingId: input.findingId ?? null,
           capturedById: user.id,
           provider: 'local',
           storageKey,

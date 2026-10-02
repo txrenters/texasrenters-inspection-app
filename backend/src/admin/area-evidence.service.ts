@@ -637,6 +637,10 @@ export class AreaEvidenceService {
           label: true,
           category: true,
           durationSeconds: true,
+          // As Cloudflare measured it. Phone walkthroughs are portrait, and a
+          // 16:9 frame showed them as a strip a third of its width.
+          widthPx: true,
+          heightPx: true,
           uploadStatus: true,
           processingStatus: true,
           // Which failure a FAILED is; see `recordingState`.
@@ -695,6 +699,10 @@ export class AreaEvidenceService {
           comparisonResult: true,
           baselineCondition: true,
           confidence: true,
+          // What the AI asks the reviewer to check, and whose it leans to. Both
+          // were written on every finding and never reached the screen.
+          recommendedReview: true,
+          possibleResponsibility: true,
           reviewStatus: true,
           createdAt: true,
           inspectionMediaId: true,
@@ -890,6 +898,8 @@ export class AreaEvidenceService {
         label: recording.label,
         category: recording.category,
         durationSeconds: recording.durationSeconds,
+        widthPx: recording.widthPx,
+        heightPx: recording.heightPx,
         uploadStatus: recording.uploadStatus,
         processingStatus: recordingState(recording),
         technicianName: recording.technician.displayName,
@@ -934,6 +944,8 @@ export class AreaEvidenceService {
         comparisonResult: finding.comparisonResult,
         baselineCondition: finding.baselineCondition,
         confidence: finding.confidence,
+        recommendedReview: finding.recommendedReview,
+        possibleResponsibility: finding.possibleResponsibility,
         reviewStatus: finding.reviewStatus,
         createdAt: finding.createdAt.toISOString(),
         recordingId: finding.inspectionMediaId,

@@ -142,6 +142,9 @@ export interface AreaRecording {
   label?: string | null;
   category?: string | null;
   durationSeconds: number;
+  /** As Cloudflare measured the upload; null until it has. */
+  widthPx?: number | null;
+  heightPx?: number | null;
   uploadStatus: string;
   /**
    * PENDING, PROCESSING, READY or FAILED -- and ANALYSIS_FAILED when only the
@@ -302,6 +305,13 @@ export interface AreaFinding {
   comparisonResult: string;
   baselineCondition?: string | null;
   confidence: number;
+  /** The one thing the AI asks the reviewer to check. */
+  recommendedReview?: string | null;
+  /**
+   * Whose responsibility the AI leans to: TENANT_REVIEW_REQUIRED,
+   * OWNER_REVIEW_REQUIRED or UNDETERMINED. A suggestion, never a decision.
+   */
+  possibleResponsibility?: string | null;
   reviewStatus: string;
   createdAt: string;
   /** Recording this finding was observed in, with its moment. */

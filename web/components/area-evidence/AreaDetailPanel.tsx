@@ -1,6 +1,6 @@
 'use client';
 
-import type { AreaChecklistEntry, AreaFinding, AreaRecording } from '@texasrenters/shared';
+import type { AreaChecklistEntry, AreaPhoto, AreaRecording } from '@texasrenters/shared';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -19,18 +19,20 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
+import { findingMoment, formatSeconds, nextPending } from '@/lib/finding-review';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAreaEvidence, useInspection } from '@/lib/queries';
+import { cn } from '@/lib/utils';
 
 import { areaPhotoItems } from './area-photos';
 import { AreaConditionChecklist, isChecklistItemAssessed } from './AreaConditionChecklist';
 import { AreaReviewControl } from './AreaReviewControl';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
-import { FindingReviewControls } from './FindingReviewControls';
+import { FindingsReview } from './FindingsReview';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { ReanalyzeControl, canReanalyze } from './ReanalyzeControl';
 import { RecordingMarkers } from './RecordingMarkers';
-import { RecordingSurface } from './RecordingSurface';
+import { RecordingSurface, recordingFrame } from './RecordingSurface';
 
 /** A section heading with an optional count. */
 function SectionHeading({ children, count }: { children: string; count?: number }) {
@@ -61,12 +63,6 @@ function EmptyTab({ title, body }: { title: string; body: string }) {
   );
 }
 
-function formatSeconds(total: number) {
-  const minutes = Math.floor(total / 60);
-  const seconds = Math.floor(total % 60);
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
 /**
  * One recording. Nothing is fetched until Play: the card shows the poster,
  * duration and status, and the playback URL is minted on demand. Mounting a
@@ -90,12 +86,16 @@ function RecordingCard({
   checklist,
   onSeek,
   reanalyze,
+  findingMarks = [],
 }: {
   recording: AreaRecording;
   activeId: string | null;
   onActivate: (id: string | null) => void;
   onExpand: () => void;
-  /** Opens the player at a moment, when arriving from a checklist answer. */
+  /**
+   * Opens the player at a moment: a finding, a checklist answer, a marker. It
+   * then plays at once, since the reviewer asked for that moment.
+   */
   startSeconds?: number | null;
   inspectionId: string;
   areaId: string;
@@ -104,8 +104,11 @@ function RecordingCard({
   onSeek: (seconds: number) => void;
   /** Offered to a reviewer before finalization: see `ReanalyzeControl`. */
   reanalyze?: { pendingFindings: number } | null;
+  /** This recording's findings that have a moment, to jump to from under it. */
+  findingMarks?: Array<{ id: string; title: string; start: number }>;
 }) {
   const active = activeId === recording.id;
+  const portrait = isPortrait(recording);
 
   return (
     <article className="space-y-2 rounded-lg border p-3">
@@ -121,7 +124,9 @@ function RecordingCard({
       {active ? (
         <div className="relative">
           <RecordingSurface
+            autoplay={startSeconds != null}
             mediaId={recording.id}
+            portrait={portrait}
             posterUrl={recording.thumbnailUrl}
             startSeconds={startSeconds}
             title={recording.label ?? 'Room recording'}
@@ -142,7 +147,10 @@ function RecordingCard({
         // Nothing is requested until Play. Mounting a player per recording is
         // what made this page expensive, and that is still true of an iframe.
         <button
-          className="group bg-muted focus-visible:ring-ring/50 relative block aspect-video w-full overflow-hidden rounded-lg focus-visible:ring-[3px] focus-visible:outline-none"
+          className={cn(
+            'group bg-muted focus-visible:ring-ring/50 relative block overflow-hidden rounded-lg focus-visible:ring-[3px] focus-visible:outline-none',
+            recordingFrame(portrait),
+          )}
           onClick={() => onActivate(recording.id)}
           type="button"
         >
@@ -176,6 +184,32 @@ function RecordingCard({
         />
       ) : null}
 
+      {/* Where the AI placed each finding in this recording. Shown whether or
+          not the player is open: choosing one opens it there. */}
+      {findingMarks.length ? (
+        <div className="grid gap-1.5">
+          <p className="text-muted-foreground text-xs">Findings in this recording</p>
+          <ul className="flex flex-wrap gap-1.5">
+            {findingMarks.map((mark) => (
+              <li key={mark.id}>
+                <Button
+                  className="h-7 max-w-64 text-xs"
+                  onClick={() => onSeek(mark.start)}
+                  size="sm"
+                  title={mark.title}
+                  type="button"
+                  variant="outline"
+                >
+                  <PlayIcon aria-hidden />
+                  <span className="tabular-nums">{formatSeconds(mark.start)}</span>
+                  <span className="truncate">{mark.title}</span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <footer className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-muted-foreground text-xs">
           {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
@@ -194,70 +228,9 @@ function RecordingCard({
   );
 }
 
-/** One itemized finding. The paragraph is supporting detail, not the item. */
-function FindingRow({
-  finding,
-  index,
-  inspectionId,
-  canReview,
-}: {
-  finding: AreaFinding;
-  index: number;
-  inspectionId: string;
-  canReview: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <li className="rounded-lg border">
-      <button
-        aria-expanded={expanded}
-        className="hover:bg-accent/50 focus-visible:ring-ring/50 flex w-full items-center gap-3 rounded-lg p-3 text-left transition-colors focus-visible:ring-[3px] focus-visible:outline-none"
-        onClick={() => setExpanded((value) => !value)}
-        type="button"
-      >
-        <span className="bg-muted text-muted-foreground grid size-7 shrink-0 place-items-center rounded text-xs font-semibold tabular-nums">
-          {String(index + 1).padStart(2, '0')}
-        </span>
-        <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="truncate text-sm font-medium">{finding.title}</span>
-          <span className="text-muted-foreground truncate text-xs">
-            {humanize(finding.category).toLowerCase()}
-            {finding.photoCount
-              ? ` · ${finding.photoCount} photo${finding.photoCount === 1 ? '' : 's'}`
-              : ''}
-            {finding.recordingId ? ` · video ${formatSeconds(finding.videoTimestampStart)}` : ''}
-          </span>
-        </span>
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          <StatusBadge showIcon={false} value={finding.severity} />
-          <StatusBadge showIcon={false} value={finding.reviewStatus} />
-        </span>
-      </button>
-
-      {expanded ? (
-        <div className="grid gap-2 border-t p-3">
-          <p className="text-sm">{finding.description}</p>
-          {finding.baselineCondition ? (
-            <p className="text-muted-foreground text-xs">
-              At move-in: {finding.baselineCondition}
-            </p>
-          ) : null}
-          <p className="text-muted-foreground text-xs">
-            {humanize(finding.comparisonResult).toLowerCase()} · confidence{' '}
-            {Math.round(finding.confidence * 100)}%
-          </p>
-          {canReview ? (
-            <FindingReviewControls finding={finding} inspectionId={inspectionId} />
-          ) : finding.lastReview ? (
-            <p className="text-muted-foreground text-xs">
-              {finding.lastReview.reviewerName} · {formatDateTime(finding.lastReview.createdAt)}
-              {finding.lastReview.reason ? ` · ${finding.lastReview.reason}` : ''}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-    </li>
-  );
+/** Filmed upright, by Cloudflare's measure. Unknown sizes are treated as landscape. */
+function isPortrait(recording: AreaRecording) {
+  return Boolean(recording.widthPx && recording.heightPx && recording.heightPx > recording.widthPx);
 }
 
 export function AreaDetailPanel({
@@ -290,22 +263,34 @@ export function AreaDetailPanel({
   const finalized = Boolean(useInspection(inspectionId).data?.finalizedAt);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
   /**
-   * Where the walkthrough should open, when the reviewer arrives from a
-   * checklist answer rather than pressing Play.
+   * Where a recording should open, when the reviewer arrives from a finding,
+   * a checklist answer or a marker rather than pressing Play.
    *
    * Held as an object rather than a bare number so that asking for the same
    * second twice still re-seeks: the value is part of the iframe's src, and an
    * unchanged src would leave the player exactly where the reviewer had
-   * scrubbed to.
+   * scrubbed to. It names its recording: as a bare second it applied to the
+   * walkthrough only, so a marker on an additional clip opened that clip at
+   * 0:00.
    */
-  const [seek, setSeek] = useState<{ seconds: number; nonce: number } | null>(null);
+  const [seek, setSeek] = useState<{ recordingId: string; seconds: number; nonce: number } | null>(
+    null,
+  );
+  /** The finding open in the Findings tab, whose moment the player shows. */
+  const [selectedFinding, setSelectedFinding] = useState<string | null>(null);
   // Belongs to one area, so it resets when the area does. The panel used to be
   // remounted for this, which threw away the open tab and every other piece of
   // state along with it.
   useEffect(() => {
     setActiveRecording(null);
     setSeek(null);
+    setSelectedFinding(null);
   }, [areaId]);
+  /** Open a recording at a moment, and play it from there. */
+  const seekTo = (recordingId: string, seconds: number) => {
+    setActiveRecording(recordingId);
+    setSeek((current) => ({ recordingId, seconds, nonce: (current?.nonce ?? 0) + 1 }));
+  };
   // Reviewing is a privileged decision; reading evidence is not.
   const permissions = usePermissions();
   const canReview = permissions.has('findings:review');
@@ -331,13 +316,15 @@ export function AreaDetailPanel({
             : recording.label || `Additional recording - ${bundle.area.name}`,
         caption: `${formatSeconds(recording.durationSeconds)} · ${recording.technicianName} · ${formatDateTime(recording.createdAt)}`,
         posterUrl: recording.thumbnailUrl,
+        // Full screen opens at the moment the reviewer was watching, not 0:00.
+        startSeconds: seek?.recordingId === recording.id ? seek.seconds : null,
       })),
       ...areaPhotoItems(bundle).map((photo) => ({
         ...photo,
         caption: `${bundle.area.name} · ${photo.caption}`,
       })),
     ];
-  }, [evidence.data]);
+  }, [evidence.data, seek]);
 
   // An area-level skeleton, never a whole-page loader, so a slow response can
   // never paint over the area the reviewer is looking at.
@@ -371,6 +358,33 @@ export function AreaDetailPanel({
   const additionalRecordings = recordings.filter(
     (recording) => recording.id !== primaryRecording?.id,
   );
+  // Where the AI placed each finding, per recording, for the chips under it.
+  const findingMarksFor = (recording: AreaRecording) =>
+    findings.flatMap((finding) => {
+      const moment = findingMoment(finding);
+      return moment?.recordingId === recording.id
+        ? [{ id: finding.id, title: finding.title, start: moment.start }]
+        : [];
+    }).sort((left, right) => left.start - right.start);
+  // Each finding's own photographs, shown with it in the review.
+  const photosByFinding = new Map<string, AreaPhoto[]>(
+    photoGroups.flatMap((group) => (group.findingId ? [[group.findingId, group.photos]] : [])),
+  );
+  /** Choosing a finding plays its moment; see `FindingsReview`. */
+  const selectFinding = (findingId: string | null) => {
+    setSelectedFinding(findingId);
+    const finding = findings.find((entry) => entry.id === findingId);
+    const moment = finding ? findingMoment(finding) : null;
+    if (moment) seekTo(moment.recordingId, moment.start);
+  };
+  // The recording the Findings tab plays: the one asked for, else the open
+  // finding's, else the walkthrough.
+  const selected = findings.find((finding) => finding.id === selectedFinding);
+  const reviewRecording =
+    recordings.find((recording) => recording.id === seek?.recordingId) ??
+    recordings.find((recording) => recording.id === selected?.recordingId) ??
+    primaryRecording ??
+    recordings[0];
   // A reviewer's, and only while the inspection is open: the server refuses a
   // re-run once it has been finalized.
   const reanalyzeFor = (recording: AreaRecording) =>
@@ -512,7 +526,7 @@ export function AreaDetailPanel({
               {primaryRecording ? (
                 <RecordingCard
                   activeId={activeRecording}
-                  key={`${primaryRecording.id}-${seek?.nonce ?? 0}`}
+                  key={`${primaryRecording.id}-${seek?.recordingId === primaryRecording.id ? seek.nonce : 0}`}
                   onActivate={setActiveRecording}
                   onExpand={() =>
                     setViewerIndex(
@@ -522,13 +536,11 @@ export function AreaDetailPanel({
                   areaId={bundle.area.id}
                   checklist={bundle.checklist}
                   inspectionId={inspectionId}
-                  onSeek={(seconds) => {
-                    setActiveRecording(primaryRecording.id);
-                    setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
-                  }}
+                  findingMarks={findingMarksFor(primaryRecording)}
+                  onSeek={(seconds) => seekTo(primaryRecording.id, seconds)}
                   reanalyze={reanalyzeFor(primaryRecording)}
                   recording={primaryRecording}
-                  startSeconds={seek?.seconds ?? null}
+                  startSeconds={seek?.recordingId === primaryRecording.id ? seek.seconds : null}
                 />
               ) : null}
               {additionalRecordings.length ? (
@@ -542,7 +554,7 @@ export function AreaDetailPanel({
                     {additionalRecordings.map((recording) => (
                       <RecordingCard
                         activeId={activeRecording}
-                        key={recording.id}
+                        key={`${recording.id}-${seek?.recordingId === recording.id ? seek.nonce : 0}`}
                         onActivate={setActiveRecording}
                         onExpand={() =>
                           setViewerIndex(
@@ -552,12 +564,11 @@ export function AreaDetailPanel({
                         areaId={bundle.area.id}
                         checklist={bundle.checklist}
                         inspectionId={inspectionId}
-                        onSeek={(seconds) => {
-                          setActiveRecording(recording.id);
-                          setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
-                        }}
+                        findingMarks={findingMarksFor(recording)}
+                        onSeek={(seconds) => seekTo(recording.id, seconds)}
                         reanalyze={reanalyzeFor(recording)}
                         recording={recording}
+                        startSeconds={seek?.recordingId === recording.id ? seek.seconds : null}
                       />
                     ))}
                   </div>
@@ -603,19 +614,59 @@ export function AreaDetailPanel({
           )}
         </TabsContent>
 
-        <TabsContent value="findings">
+        <TabsContent className="@container" value="findings">
           {findings.length ? (
-            <ol className="grid gap-2">
-              {findings.map((finding, index) => (
-                <FindingRow
-                  canReview={canReview}
-                  finding={finding}
-                  index={index}
-                  inspectionId={inspectionId}
-                  key={finding.id}
-                />
-              ))}
-            </ol>
+            // Side by side once the panel is wide enough for both, the player
+            // held in view while the list scrolls; stacked, player first,
+            // otherwise -- and kept to about half the window there, since a
+            // portrait walkthrough at full size pushed every finding below it.
+            <div className="grid gap-4 @2xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+              <div className="@max-2xl:mx-auto @max-2xl:w-full @max-2xl:max-w-[30vh] @2xl:sticky @2xl:top-[calc(var(--app-header-height)+0.75rem)] @2xl:self-start">
+                {reviewRecording ? (
+                  <RecordingCard
+                    activeId={activeRecording}
+                    areaId={bundle.area.id}
+                    checklist={bundle.checklist}
+                    inspectionId={inspectionId}
+                    key={`review-${reviewRecording.id}-${seek?.recordingId === reviewRecording.id ? seek.nonce : 0}`}
+                    onActivate={setActiveRecording}
+                    onExpand={() =>
+                      setViewerIndex(
+                        viewerItems.findIndex((entry) => entry.id === reviewRecording.id),
+                      )
+                    }
+                    onSeek={(seconds) => seekTo(reviewRecording.id, seconds)}
+                    recording={reviewRecording}
+                    startSeconds={seek?.recordingId === reviewRecording.id ? seek.seconds : null}
+                  />
+                ) : (
+                  <EmptyTab
+                    body="These findings came without a recording to play."
+                    title="No walkthrough recorded"
+                  />
+                )}
+              </div>
+              <FindingsReview
+                areaId={bundle.area.id}
+                areaName={area.name}
+                // Decisions close with the inspection, as everywhere else.
+                canCapture={canManage && !finalized}
+                canReview={canReview && !finalized}
+                findings={findings}
+                inspectionId={inspectionId}
+                onDecided={(findingId) => selectFinding(nextPending(findings, findingId)?.id ?? null)}
+                onOpenPhoto={
+                  onOpenPhoto ??
+                  ((photoId) =>
+                    setViewerIndex(viewerItems.findIndex((entry) => entry.id === photoId)))
+                }
+                onSeek={seekTo}
+                onSelect={selectFinding}
+                photosByFinding={photosByFinding}
+                recordings={recordings}
+                selectedId={selectedFinding}
+              />
+            </div>
           ) : (
             <EmptyTab
               body={
@@ -660,8 +711,7 @@ export function AreaDetailPanel({
               // the link would switch tabs to a player that never appears.
               primaryRecording
                 ? (seconds) => {
-                    setActiveRecording(primaryRecording.id);
-                    setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
+                    seekTo(primaryRecording.id, seconds);
                     onTabChange('recording');
                   }
                 : undefined

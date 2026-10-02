@@ -719,6 +719,8 @@ describe('single area evidence bundle', () => {
             comparisonResult: 'POSSIBLE_NEW_DAMAGE',
             baselineCondition: 'Clean at move-in.',
             confidence: 0.8,
+            recommendedReview: 'Compare with the move-in photographs before approving.',
+            possibleResponsibility: 'TENANT_REVIEW_REQUIRED',
             reviewStatus: 'PENDING_REVIEW',
             createdAt: new Date('2026-07-28T10:10:00Z'),
             inspectionMediaId: 'media-1',
@@ -778,6 +780,12 @@ describe('single area evidence bundle', () => {
     expect(bundle.findings.map((finding) => finding.id)).toEqual(['finding-1']);
     expect(bundle.findings[0].recordingId).toBe('media-1');
     expect(bundle.findings[0].videoTimestampStart).toBe(18);
+    // What the AI asks the reviewer to check, and whose it leans to: written on
+    // every finding, and now on the screen beside it.
+    expect(bundle.findings[0]).toMatchObject({
+      recommendedReview: 'Compare with the move-in photographs before approving.',
+      possibleResponsibility: 'TENANT_REVIEW_REQUIRED',
+    });
   });
 
   it('says when only the analysis of a recording failed, which still plays', async () => {

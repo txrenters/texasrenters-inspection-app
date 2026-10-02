@@ -78,4 +78,10 @@ export class CaptureSnapshotDto {
    */
   @IsOptional() @IsUUID() checklistItemId?: string;
   @IsOptional() @IsString() @MaxLength(120) label?: string;
+  /**
+   * The finding this still evidences: a reviewer picking the frame that shows
+   * it. Filed under the finding, and printed only once the finding is
+   * approved, like every finding photograph.
+   */
+  @IsOptional() @IsUUID() findingId?: string;
 }
