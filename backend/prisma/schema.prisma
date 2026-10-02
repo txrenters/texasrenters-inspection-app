@@ -253,6 +253,34 @@ enum ComparisonResult {
   INSUFFICIENT_DATA
 }
 
+/// Where a finding came from: the technician's narration, or the AI looking at
+/// the video for something nobody mentioned.
+enum FindingSource {
+  NARRATION
+  AI_VISION
+}
+
+/// Whether the AI could see a finding in the recording's frames.
+enum VisualCheckStatus {
+  VISIBLE
+  NOT_VISIBLE
+  UNCLEAR
+}
+
+/// Whether a move-in photograph of the same item shows the condition already.
+enum BaselineVisualStatus {
+  PRESENT_AT_MOVE_IN
+  NOT_AT_MOVE_IN
+  CANT_TELL
+}
+
+/// A frame the AI suggests as a finding's photograph, and what a person did with it.
+enum FrameSuggestionStatus {
+  SUGGESTED
+  ACCEPTED
+  DISMISSED
+}
+
 enum Severity {
   LOW
   MEDIUM
@@ -394,6 +422,7 @@ model Organization {
   tbpGroupTemplateMembers         TbpGroupTemplateMember[]
   leaseScheduledInspections       LeaseScheduledInspection[]
   technicianPlanningProfiles      TechnicianPlanningProfile[]
+  findingFrameSuggestions         FindingFrameSuggestion[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -435,6 +464,10 @@ model OrganizationAiSettings {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @unique @db.Uuid
   activeProvider AiProvider   @default(ANTHROPIC)
+
+  /// The AI checks each finding against the recording's frames and suggests a
+  /// photograph for it. Off until the office switches it on: it is paid for per room.
+  visualReviewEnabled Boolean @default(false)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1310,6 +1343,7 @@ model Inspection {
   assignments                InspectionAssignment[]
   areas                      InspectionArea[]
   findings                   InspectionFinding[]
+  findingFrameSuggestions    FindingFrameSuggestion[]
   reportShares               InspectionReportShare[]
   areaEvidenceRequests       AreaEvidenceRequest[]
   tbpPlanAnchors             TbpQuarterPlanAnchor[]
@@ -1830,6 +1864,7 @@ model InspectionMedia {
   transcriptionJob TranscriptionJob?
   aiJobs           AiAnalysisJob[]
   findings         InspectionFinding[]
+  frameSuggestions FindingFrameSuggestion[]
 
   // One PRIMARY_AREA video per area is enforced by a partial unique index in the
   // migration; the plain index here supports lookups by area.
@@ -1896,6 +1931,9 @@ model InspectionPhoto {
   finding          InspectionFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
   capturedBy       UserProfile        @relation(fields: [capturedById], references: [id])
   checklistItem    AreaChecklistItem? @relation(fields: [checklistItemId], references: [id], onDelete: SetNull)
+
+  /// The AI frame suggestion this photograph was accepted from, when it was.
+  frameSuggestion FindingFrameSuggestion?
 
   @@index([inspectionAreaId, checklistItemId])
   @@index([inspectionAreaId, captureType, sequenceNumber])
@@ -1988,6 +2026,16 @@ model InspectionFinding {
   confidence             Float
   recommendedReview      String
   reviewStatus           FindingReviewStatus          @default(PENDING_REVIEW)
+  source                 FindingSource                @default(NARRATION)
+  /// What the AI saw when it looked for this in the recording's frames.
+  visualStatus           VisualCheckStatus?
+  visualObservation      String?
+  visualCheckedAt        DateTime?
+  /// Whether a move-in photograph of the same item already shows it, and which
+  /// photographs were compared.
+  baselineVisualStatus   BaselineVisualStatus?
+  baselineVisualNote     String?
+  baselinePhotoIds       String[]                     @default([]) @db.Uuid
   createdAt              DateTime                     @default(now())
   updatedAt              DateTime                     @updatedAt
   inspection             Inspection                   @relation(fields: [inspectionId], references: [id])
@@ -1996,8 +2044,50 @@ model InspectionFinding {
   aiAnalysisJob          AiAnalysisJob?               @relation(fields: [aiAnalysisJobId], references: [id])
   reviews                FindingReview[]
   photos                 InspectionPhoto[]
+  frameSuggestions       FindingFrameSuggestion[]
 
   @@index([inspectionId, reviewStatus])
+}
+
+/// A frame of a recording the AI suggests as a finding's photograph.
+///
+/// Kept apart from `InspectionPhoto` until a person accepts it: a suggestion is
+/// AI output, and nothing here reaches a report. Accepting files the frame as a
+/// photograph under the finding (`photoId`), which prints once the finding is
+/// approved, like any finding photograph.
+model FindingFrameSuggestion {
+  id                String                @id @default(uuid()) @db.Uuid
+  organizationId    String                @db.Uuid
+  inspectionId      String                @db.Uuid
+  findingId         String                @db.Uuid
+  inspectionMediaId String                @db.Uuid
+  /// The moment in the recording, in milliseconds.
+  atMs              Int
+  /// 0 is the AI's best; the rest are alternatives to offer instead.
+  rank              Int                   @default(0)
+  /// Where in the frame the condition is, as fractions of the frame from the
+  /// top-left. The AI's estimate; null when it gave none.
+  boxX              Float?
+  boxY              Float?
+  boxWidth          Float?
+  boxHeight         Float?
+  observation       String?
+  status            FrameSuggestionStatus @default(SUGGESTED)
+  photoId           String?               @unique @db.Uuid
+  decidedById       String?               @db.Uuid
+  decidedAt         DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  organization      Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection        Inspection            @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  finding           InspectionFinding     @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  inspectionMedia   InspectionMedia       @relation(fields: [inspectionMediaId], references: [id], onDelete: Cascade)
+  photo             InspectionPhoto?      @relation(fields: [photoId], references: [id], onDelete: SetNull)
+
+  @@unique([findingId, inspectionMediaId, atMs])
+  @@index([inspectionId])
+  @@index([inspectionMediaId, status])
+  @@index([organizationId])
 }
 
 model InspectionReportShare {

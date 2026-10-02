@@ -81,6 +81,34 @@ export class InspectionVideoController {
 }
 
 /**
+ * The AI's suggested photographs for findings: file one, or set it aside.
+ *
+ * Reviewer-side, authorized inside the service like a snapshot: deciding which
+ * frame becomes report evidence is the office's call.
+ */
+@ApiTags('Inspection video')
+@Controller('admin/frame-suggestions')
+export class FrameSuggestionController {
+  constructor(@Inject(InspectionVideoService) private readonly service: InspectionVideoService) {}
+
+  @Post(':suggestionId/accept')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  @HttpCode(200)
+  accept(@Req() request: AuthenticatedRequest, @Param('suggestionId') suggestionId: string) {
+    return this.service.acceptFrameSuggestion(request.user, suggestionId);
+  }
+
+  @Post(':suggestionId/dismiss')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  @HttpCode(200)
+  dismiss(@Req() request: AuthenticatedRequest, @Param('suggestionId') suggestionId: string) {
+    return this.service.dismissFrameSuggestion(request.user, suggestionId);
+  }
+}
+
+/**
  * Cloudflare's callback, on its own controller because it is authenticated
  * completely differently: no bearer token, no user, only a signature over the
  * raw body. Mounting it beside the technician routes would put an unauthenticated

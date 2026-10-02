@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
+  FrameSuggestionStatus,
   InspectionAreaCompletionStatus,
   InspectionStatus,
   MediaProcessingStatus,
@@ -211,6 +212,117 @@ export class InspectionVideoService {
         },
       });
     return { queued };
+  }
+
+  /**
+   * File the AI's suggested frame as the finding's photograph.
+   *
+   * The same capture a reviewer makes by hand, with the same permission, the
+   * same refusal once the inspection is finalized, and the same rule for what
+   * prints: the photograph is the finding's, and appears once the finding is
+   * approved. The suggestion records who decided and which photograph it became.
+   */
+  async acceptFrameSuggestion(user: AuthenticatedUser, suggestionId: string) {
+    const suggestion = await this.frameSuggestion(user, suggestionId);
+    if (suggestion.status === FrameSuggestionStatus.ACCEPTED && suggestion.photoId)
+      return { id: suggestion.id, status: suggestion.status, photoId: suggestion.photoId };
+    const photo = await this.captureSnapshot(user, suggestion.inspectionMediaId, {
+      atMs: suggestion.atMs,
+      findingId: suggestion.findingId,
+    });
+    const decided = await this.prisma.findingFrameSuggestion.update({
+      where: { id: suggestion.id },
+      data: {
+        status: FrameSuggestionStatus.ACCEPTED,
+        photoId: photo.id,
+        decidedById: user.id,
+        decidedAt: new Date(),
+      },
+      select: { id: true, status: true, photoId: true },
+    });
+    await this.frameSuggestionAudit(user, 'FRAME_SUGGESTION_ACCEPTED', suggestion, photo.id);
+    return decided;
+  }
+
+  /** Not this frame. The next of the AI's suggestions is offered instead, if it had one. */
+  async dismissFrameSuggestion(user: AuthenticatedUser, suggestionId: string) {
+    const suggestion = await this.frameSuggestion(user, suggestionId);
+    if (suggestion.status === FrameSuggestionStatus.ACCEPTED)
+      throw new ApplicationError(
+        409,
+        'FRAME_SUGGESTION_ACCEPTED',
+        'This frame is already filed as the finding’s photograph.',
+      );
+    const decided = await this.prisma.findingFrameSuggestion.update({
+      where: { id: suggestion.id },
+      data: {
+        status: FrameSuggestionStatus.DISMISSED,
+        decidedById: user.id,
+        decidedAt: new Date(),
+      },
+      select: { id: true, status: true, photoId: true },
+    });
+    await this.frameSuggestionAudit(user, 'FRAME_SUGGESTION_DISMISSED', suggestion, null);
+    return decided;
+  }
+
+  /**
+   * A suggestion in the caller's organization, for someone allowed to decide
+   * what becomes report evidence, on an inspection still open.
+   */
+  private async frameSuggestion(user: AuthenticatedUser, suggestionId: string) {
+    if (!user.permissions.includes('inspections:manage'))
+      throw new ApplicationError(
+        403,
+        'FORBIDDEN',
+        'You do not have permission to capture report evidence.',
+      );
+    const suggestion = await this.prisma.findingFrameSuggestion.findFirst({
+      where: { id: suggestionId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        status: true,
+        photoId: true,
+        atMs: true,
+        findingId: true,
+        inspectionId: true,
+        inspectionMediaId: true,
+        inspection: { select: { finalizedAt: true } },
+      },
+    });
+    if (!suggestion)
+      throw new ApplicationError(404, 'FRAME_SUGGESTION_NOT_FOUND', 'That suggestion was not found.');
+    if (suggestion.inspection.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'This inspection has been finalized; its evidence can no longer change.',
+      );
+    return suggestion;
+  }
+
+  /** On the finding, so the page's Recent activity names it. */
+  private frameSuggestionAudit(
+    user: AuthenticatedUser,
+    action: string,
+    suggestion: { id: string; findingId: string; inspectionId: string; atMs: number },
+    photoId: string | null,
+  ) {
+    return this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action,
+        entityType: 'InspectionFinding',
+        entityId: suggestion.findingId,
+        metadata: {
+          inspectionId: suggestion.inspectionId,
+          frameSuggestionId: suggestion.id,
+          atMs: suggestion.atMs,
+          photoId,
+        },
+      },
+    });
   }
 
   /**

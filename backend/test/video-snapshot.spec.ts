@@ -259,3 +259,123 @@ describe('capturing a still from a recording', () => {
     expect(storage.delete).toHaveBeenCalled();
   });
 });
+
+/**
+ * The AI's suggested frame for a finding: a person files it as the finding's
+ * photograph, or sets it aside. The same permission and the same freeze as a
+ * capture by hand, because that is what accepting one is.
+ */
+describe("deciding the AI's suggested photograph", () => {
+  const SUGGESTION = '30000000-0000-4000-8000-000000000001';
+
+  function suggestionHarness(suggestion: Record<string, unknown> | null = {}) {
+    const built = build();
+    const row =
+      suggestion === null
+        ? null
+        : {
+            id: SUGGESTION,
+            status: 'SUGGESTED',
+            photoId: null,
+            atMs: 21_500,
+            findingId: FINDING,
+            inspectionId: 'insp-1',
+            inspectionMediaId: MEDIA,
+            inspection: { finalizedAt: null },
+            ...suggestion,
+          };
+    const findingFrameSuggestion = {
+      findFirst: jest.fn().mockResolvedValue(row),
+      update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+        id: SUGGESTION,
+        status: data.status,
+        photoId: data.photoId ?? null,
+      })),
+    };
+    const auditLog = { create: jest.fn().mockResolvedValue({}) };
+    Object.assign(built.prisma, { findingFrameSuggestion, auditLog });
+    return { ...built, findingFrameSuggestion, auditLog };
+  }
+
+  it('files the frame under its finding and says who did', async () => {
+    globalThis.fetch = okFetch() as never;
+    const { service, prisma, findingFrameSuggestion, auditLog } = suggestionHarness();
+
+    await expect(service.acceptFrameSuggestion(reviewer(), SUGGESTION)).resolves.toEqual({
+      id: SUGGESTION,
+      status: 'ACCEPTED',
+      photoId: 'photo-1',
+    });
+
+    // The capture a reviewer would make by hand, at the AI's moment.
+    const [[create]] = prisma.inspectionPhoto.create.mock.calls;
+    expect(create.data).toMatchObject({
+      findingId: FINDING,
+      captureType: 'VIDEO_FRAME_SNAPSHOT',
+      metadata: { videoTimestampMs: 21_500 },
+    });
+    expect(findingFrameSuggestion.update.mock.calls[0][0].data).toMatchObject({
+      status: 'ACCEPTED',
+      photoId: 'photo-1',
+      decidedById: reviewer().id,
+    });
+    expect(auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'FRAME_SUGGESTION_ACCEPTED',
+        entityType: 'InspectionFinding',
+        entityId: FINDING,
+        metadata: expect.objectContaining({ inspectionId: 'insp-1', photoId: 'photo-1' }),
+      }),
+    });
+  });
+
+  it('sets a frame aside, which files nothing', async () => {
+    const { service, prisma, findingFrameSuggestion, auditLog } = suggestionHarness();
+
+    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).resolves.toMatchObject({
+      status: 'DISMISSED',
+    });
+    expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
+    expect(findingFrameSuggestion.update.mock.calls[0][0].data.status).toBe('DISMISSED');
+    expect(auditLog.create.mock.calls[0][0].data.action).toBe('FRAME_SUGGESTION_DISMISSED');
+  });
+
+  it('will not set aside a frame already filed', async () => {
+    const { service } = suggestionHarness({ status: 'ACCEPTED', photoId: 'photo-9' });
+    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
+  it("is the office's to decide, not a technician's", async () => {
+    const { service, findingFrameSuggestion } = suggestionHarness();
+    await expect(service.acceptFrameSuggestion(reviewer([]), SUGGESTION)).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(findingFrameSuggestion.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing once the inspection is finalized', async () => {
+    const { service, findingFrameSuggestion } = suggestionHarness({
+      inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
+    });
+    await expect(service.acceptFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
+      code: 'INSPECTION_FINALIZED',
+    });
+    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
+      code: 'INSPECTION_FINALIZED',
+    });
+    expect(findingFrameSuggestion.update).not.toHaveBeenCalled();
+  });
+
+  it('answers not found outside the organization', async () => {
+    const { service, findingFrameSuggestion } = suggestionHarness(null);
+    await expect(service.acceptFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(findingFrameSuggestion.findFirst.mock.calls[0][0].where).toEqual({
+      id: SUGGESTION,
+      organizationId: ORG,
+    });
+  });
+});

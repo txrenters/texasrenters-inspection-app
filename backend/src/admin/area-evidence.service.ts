@@ -703,6 +703,31 @@ export class AreaEvidenceService {
           // were written on every finding and never reached the screen.
           recommendedReview: true,
           possibleResponsibility: true,
+          // What the AI saw in the recording, when it looked: see
+          // `VisualReviewService`.
+          source: true,
+          visualStatus: true,
+          visualObservation: true,
+          visualCheckedAt: true,
+          baselineVisualStatus: true,
+          baselineVisualNote: true,
+          baselinePhotoIds: true,
+          frameSuggestions: {
+            orderBy: [{ rank: 'asc' }, { atMs: 'asc' }],
+            select: {
+              id: true,
+              inspectionMediaId: true,
+              atMs: true,
+              rank: true,
+              boxX: true,
+              boxY: true,
+              boxWidth: true,
+              boxHeight: true,
+              observation: true,
+              status: true,
+              photoId: true,
+            },
+          },
           reviewStatus: true,
           createdAt: true,
           inspectionMediaId: true,
@@ -946,6 +971,46 @@ export class AreaEvidenceService {
         confidence: finding.confidence,
         recommendedReview: finding.recommendedReview,
         possibleResponsibility: finding.possibleResponsibility,
+        source: finding.source,
+        visual:
+          finding.visualStatus && finding.visualCheckedAt
+            ? {
+                status: finding.visualStatus,
+                observation: finding.visualObservation,
+                checkedAt: finding.visualCheckedAt.toISOString(),
+              }
+            : null,
+        baselineVisual: finding.baselineVisualStatus
+          ? {
+              status: finding.baselineVisualStatus,
+              note: finding.baselineVisualNote,
+              photos: finding.baselinePhotoIds.map((id) => ({
+                id,
+                contentPath: `/api/v1/admin/photos/${id}/content`,
+              })),
+            }
+          : null,
+        frameSuggestions: (finding.frameSuggestions ?? []).map((suggestion) => ({
+          id: suggestion.id,
+          recordingId: suggestion.inspectionMediaId,
+          atMs: suggestion.atMs,
+          rank: suggestion.rank,
+          box:
+            suggestion.boxX !== null &&
+            suggestion.boxY !== null &&
+            suggestion.boxWidth !== null &&
+            suggestion.boxHeight !== null
+              ? {
+                  x: suggestion.boxX,
+                  y: suggestion.boxY,
+                  width: suggestion.boxWidth,
+                  height: suggestion.boxHeight,
+                }
+              : null,
+          observation: suggestion.observation,
+          status: suggestion.status,
+          photoId: suggestion.photoId,
+        })),
         reviewStatus: finding.reviewStatus,
         createdAt: finding.createdAt.toISOString(),
         recordingId: finding.inspectionMediaId,

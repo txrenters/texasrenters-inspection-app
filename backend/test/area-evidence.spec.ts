@@ -802,6 +802,77 @@ describe('single area evidence bundle', () => {
     expect(bundle.area.reviewStatus).toBe('FINDINGS_NEED_REVIEW');
   });
 
+  it('says what the AI saw in the video, what the move-in showed, and which frames it suggests', async () => {
+    const prisma = bundlePrisma();
+    const [finding] = await prisma.inspectionFinding.findMany();
+    prisma.inspectionFinding.findMany.mockResolvedValue([
+      {
+        ...finding,
+        source: 'NARRATION',
+        visualStatus: 'VISIBLE',
+        visualObservation: 'Two small holes below the handle.',
+        visualCheckedAt: new Date('2026-10-03T10:00:00Z'),
+        baselineVisualStatus: 'PRESENT_AT_MOVE_IN',
+        baselineVisualNote: 'The same holes show at move-in.',
+        baselinePhotoIds: ['move-in-photo-1'],
+        frameSuggestions: [
+          {
+            id: 'suggestion-1',
+            inspectionMediaId: 'media-1',
+            atMs: 21_500,
+            rank: 0,
+            boxX: 0.36,
+            boxY: 0.6,
+            boxWidth: 0.1,
+            boxHeight: 0.06,
+            observation: 'Two small holes.',
+            status: 'SUGGESTED',
+            photoId: null,
+          },
+          {
+            id: 'suggestion-2',
+            inspectionMediaId: 'media-1',
+            atMs: 25_000,
+            rank: 1,
+            boxX: null,
+            boxY: null,
+            boxWidth: null,
+            boxHeight: null,
+            observation: null,
+            status: 'SUGGESTED',
+            photoId: null,
+          },
+        ],
+      },
+    ]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    expect(bundle.findings[0]).toMatchObject({
+      source: 'NARRATION',
+      visual: {
+        status: 'VISIBLE',
+        observation: 'Two small holes below the handle.',
+        checkedAt: '2026-10-03T10:00:00.000Z',
+      },
+      baselineVisual: {
+        status: 'PRESENT_AT_MOVE_IN',
+        note: 'The same holes show at move-in.',
+        photos: [{ id: 'move-in-photo-1', contentPath: '/api/v1/admin/photos/move-in-photo-1/content' }],
+      },
+      frameSuggestions: [
+        {
+          id: 'suggestion-1',
+          recordingId: 'media-1',
+          atMs: 21_500,
+          box: { x: 0.36, y: 0.6, width: 0.1, height: 0.06 },
+          status: 'SUGGESTED',
+        },
+        { id: 'suggestion-2', box: null },
+      ],
+    });
+  });
+
   it('says how the last re-run of the AI went, from its newest event', async () => {
     const prisma = bundlePrisma();
     const [recording] = await prisma.inspectionMedia.findMany();

@@ -97,6 +97,7 @@ import {
   UpdateAdminInspectionDto,
   UpdateAiProviderDto,
   UpdateAiRoutingDto,
+  UpdateAiVisualReviewDto,
   SetPropertyGeofenceDto,
   UpdateAreaChecklistItemDto,
   UpdateAreaMarkerDto,
@@ -1418,6 +1419,15 @@ export class AdminController {
   @RequirePermissions('ai:configure')
   updateAiRouting(@Req() request: AuthenticatedRequest, @Body() body: UpdateAiRoutingDto) {
     return this.aiSettings.setActiveProvider(request.user, body.activeProvider);
+  }
+
+  @Patch('ai/settings/visual-review')
+  @RequirePermissions('ai:configure')
+  updateAiVisualReview(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: UpdateAiVisualReviewDto,
+  ) {
+    return this.aiSettings.setVisualReview(request.user, body.enabled);
   }
 
   @Patch('ai/providers/:provider')

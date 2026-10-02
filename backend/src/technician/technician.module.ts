@@ -11,6 +11,7 @@ import { RoutingModule } from '../routing/routing.module';
 import { TimeTrackingModule } from '../time-tracking/time-tracking.module';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { MediaProcessingService } from './media-processing.service';
+import { VisualReviewService } from './visual-review.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { TechnicianController } from './technician.controller';
 import { LocationRetentionScheduler } from './location-retention.scheduler';
@@ -37,6 +38,8 @@ import { TrackingStatusStore } from './tracking-status.store';
     FloorPlanStorageService,
     InspectionMediaStorageService,
     MediaProcessingService,
+    // The AI's look at a recording's frames, after the narration's analysis.
+    VisualReviewService,
     // Lets the pipeline ask Cloudflare for a media URL when a recording lives
     // there rather than in the bucket.
     CloudflareStreamService,

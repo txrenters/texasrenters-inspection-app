@@ -9,6 +9,8 @@ import {
   frameUrl,
   nextPending,
   responsibilityLabel,
+  suggestionToOffer,
+  visualLabel,
 } from './finding-review';
 
 function finding(overrides: Partial<AreaFinding> = {}): AreaFinding {
@@ -77,6 +79,46 @@ describe('the stills shown for a finding', () => {
     expect(frameUrl('https://customer-x.cloudflarestream.com/tok/thumbnails/thumbnail.jpg', 61)).toBe(
       'https://customer-x.cloudflarestream.com/tok/thumbnails/thumbnail.jpg?time=61s&height=360',
     );
+  });
+
+  it('keep the half second of the AI’s sharpest frame', () => {
+    expect(
+      frameUrl('https://customer-x.cloudflarestream.com/tok/thumbnails/thumbnail.jpg', 21.5, 720),
+    ).toBe('https://customer-x.cloudflarestream.com/tok/thumbnails/thumbnail.jpg?time=21.5s&height=720');
+  });
+});
+
+describe('what the AI saw, in a few words', () => {
+  it('names what the video showed, and what the AI spotted itself', () => {
+    const at = '2026-10-03T10:00:00.000Z';
+    expect(visualLabel(finding({ visual: { status: 'VISIBLE', checkedAt: at } }))).toBe('Seen in video');
+    expect(visualLabel(finding({ visual: { status: 'NOT_VISIBLE', checkedAt: at } }))).toBe(
+      'Not seen in video',
+    );
+    expect(visualLabel(finding({ source: 'AI_VISION' }))).toBe('Spotted by AI');
+    expect(visualLabel(finding())).toBeNull();
+  });
+
+  it('offers the frame already filed, else the best one not set aside', () => {
+    const suggestion = (id: string, rank: number, status: 'SUGGESTED' | 'ACCEPTED' | 'DISMISSED') => ({
+      id,
+      recordingId: 'media-1',
+      atMs: 1000 * rank,
+      rank,
+      box: null,
+      status,
+    });
+    expect(
+      suggestionToOffer(
+        finding({ frameSuggestions: [suggestion('b', 1, 'SUGGESTED'), suggestion('a', 0, 'DISMISSED')] }),
+      )?.id,
+    ).toBe('b');
+    expect(
+      suggestionToOffer(
+        finding({ frameSuggestions: [suggestion('a', 0, 'SUGGESTED'), suggestion('b', 1, 'ACCEPTED')] }),
+      )?.id,
+    ).toBe('b');
+    expect(suggestionToOffer(finding({ frameSuggestions: [suggestion('a', 0, 'DISMISSED')] }))).toBeNull();
   });
 });
 

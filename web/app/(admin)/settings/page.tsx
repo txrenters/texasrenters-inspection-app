@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
 import { useAuth, usePermissions } from '@/lib/auth';
 import { formatCount, formatDate, formatRelative } from '@/lib/format';
 import { useAiSettings, useAiSettingsMutations } from '@/lib/queries';
@@ -150,6 +151,40 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <Card>
+              <CardContent className="flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0 space-y-1">
+                  <p className="text-muted-foreground text-xs font-medium">AI checks the video</p>
+                  <p className="text-sm font-medium">
+                    {aiSettings.data.visualReviewEnabled
+                      ? 'Each finding is checked against the recording'
+                      : 'Findings come from the narration only'}
+                  </p>
+                  <p className="text-muted-foreground max-w-prose text-xs">
+                    When on, the AI looks through each room&apos;s recording after the narration is
+                    analysed: whether every finding can be seen, a suggested photograph for each,
+                    whether a move-in photograph already shows it, and problems nobody mentioned.
+                    Everything stays a suggestion for review. About $0.15 a room on GPT-5.6 Sol,
+                    measured on a move-out on Oct 3, 2026.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {actions.setVisualReview.isPending ? <Spinner /> : null}
+                  <Switch
+                    aria-label="AI checks findings against the video"
+                    checked={Boolean(aiSettings.data.visualReviewEnabled)}
+                    disabled={!canManageSecrets || actions.setVisualReview.isPending}
+                    onCheckedChange={(checked) => actions.setVisualReview.mutate(checked)}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+            {actions.setVisualReview.isError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{actions.setVisualReview.error.message}</AlertDescription>
+              </Alert>
+            ) : null}
 
             <div className="grid gap-4 xl:grid-cols-2">
               {aiSettings.data.providers.map((provider) => (

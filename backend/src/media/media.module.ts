@@ -5,6 +5,7 @@ import { CloudflareStreamWebhookGuard } from './cloudflare-stream-webhook.guard'
 import { CloudflareStreamService } from './cloudflare-stream.service';
 import {
   CloudflareStreamWebhookController,
+  FrameSuggestionController,
   InspectionVideoController,
 } from './inspection-video.controller';
 import { InspectionVideoService } from './inspection-video.service';
@@ -23,7 +24,11 @@ import { TechnicianModule } from '../technician/technician.module';
   // becomes playable, and therefore where transcription and analysis have to be
   // started. TechnicianModule does not import this one, so there is no cycle.
   imports: [TechnicianModule],
-  controllers: [InspectionVideoController, CloudflareStreamWebhookController],
+  controllers: [
+    InspectionVideoController,
+    FrameSuggestionController,
+    CloudflareStreamWebhookController,
+  ],
   providers: [
     InspectionVideoService,
     CloudflareStreamService,
