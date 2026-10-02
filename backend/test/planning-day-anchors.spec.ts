@@ -45,9 +45,9 @@ const anchor = (
   },
 });
 
-function controllerWith(anchors: ReturnType<typeof anchor>[]) {
+function controllerWith(anchors: ReturnType<typeof anchor>[], days: Record<string, unknown>[] = [day]) {
   const prisma = {
-    tbpQuarterPlanDay: { findMany: jest.fn().mockResolvedValue([day]) },
+    tbpQuarterPlanDay: { findMany: jest.fn().mockResolvedValue(days) },
     tbpQuarterPlanStop: { findMany: jest.fn().mockResolvedValue([]) },
     tbpQuarterPlanAnchor: { findMany: jest.fn().mockResolvedValue(anchors) },
   };
@@ -124,5 +124,38 @@ describe('the move-outs and move-ins a planned day is built around', () => {
       ['moved', '2026-10-20', false],
       ['cancelled', '2026-10-14', true],
     ]);
+  });
+});
+
+/**
+ * The office (2026-10-03): a quarter built from a template showed its days as
+ * 1, 2, 3 in date order, so template Group 37 read as "1" -- "let's not modify
+ * the groupings label, it should stay the same as is".
+ */
+describe('the template group a day was laid out from', () => {
+  const kept = { templateGroupPosition: 37, templateGroupName: 'Katy North', templateGroupColor: '#7f77dd' };
+
+  it('is the number, name and colour the group had when the day was laid out', async () => {
+    const [result] = await controllerWith([], [{ ...day, templateGroupId: 'group-37', ...kept }]).days(request, 'plan-1');
+
+    expect(result!.templateGroup).toEqual({ id: 'group-37', position: 37, name: 'Katy North', color: '#7f77dd' });
+    // Said once, as the template group; not again as columns of the day.
+    expect(result).not.toHaveProperty('templateGroupPosition');
+  });
+
+  /** A template's save makes its groups again, which cuts the link: the day keeps its label all the same. */
+  it('stays when the template has been saved since and the link to its group is gone', async () => {
+    const [result] = await controllerWith([], [{ ...day, templateGroupId: null, ...kept }]).days(request, 'plan-1');
+
+    expect(result!.templateGroup).toEqual({ id: null, position: 37, name: 'Katy North', color: '#7f77dd' });
+  });
+
+  it('is none for a day the planner grouped itself', async () => {
+    const [result] = await controllerWith(
+      [],
+      [{ ...day, templateGroupId: null, templateGroupPosition: null, templateGroupName: null, templateGroupColor: null }],
+    ).days(request, 'plan-1');
+
+    expect(result!.templateGroup).toBeNull();
   });
 });

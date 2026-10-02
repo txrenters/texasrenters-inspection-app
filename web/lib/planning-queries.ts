@@ -174,7 +174,12 @@ export interface PlanDay {
    * and colour as in the Group maker; null for a day the planner grouped, and
    * absent from a server older than this.
    */
-  templateGroup?: { id: string; position: number; name: string; color: string } | null;
+  /**
+   * The office's template group the day was laid out from, as it was then: its
+   * number, name and colour stay when the template is saved again, and the
+   * link to the group (`id`) does not.
+   */
+  templateGroup?: { id: string | null; position: number; name: string; color: string } | null;
   stops: PlanDayStop[];
   /**
    * The move-outs and move-ins the day is built around; `onSiteMinutes` includes

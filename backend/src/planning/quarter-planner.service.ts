@@ -273,8 +273,12 @@ const UNPLACED_MESSAGE: Record<RoutingUnplacedReason, string> = {
 interface MeasuredCrew {
   date: string;
   technicianId: string;
-  /** The office's template group the day was laid out from; absent or null for one the planner grouped. */
-  templateGroupId?: string | null;
+  /**
+   * The office's template group the day was laid out from, as it is now: kept
+   * on the day, so a template saved since cannot renumber it (2026-10-03).
+   * Absent or null for a day the planner grouped.
+   */
+  templateGroup?: { id: string; position: number; name: string; color: string } | null;
   /** In driving order. */
   stops: PlannableStop[];
   /** Seconds from the stop before, per stop; null for the first, or when nothing measured it. */
@@ -559,12 +563,14 @@ export class QuarterPlannerService {
         settings.maxLegMinutes * 60,
       );
     const measured: MeasuredCrew[] = [];
-    for (const crew of assignment.crews)
+    for (const crew of assignment.crews) {
+      // The office's group the day is, so it is shown in that group's number, name and colour.
+      const group = crew.preset === undefined ? undefined : template?.groups[crew.preset];
       measured.push({
         ...(await measureCrew(crew)),
-        // The office's group the day is, so it is shown in that group's name and colour.
-        templateGroupId: crew.preset === undefined ? null : (template?.groups[crew.preset]?.id ?? null),
+        templateGroup: group ? { id: group.id, position: group.position, name: group.name, color: group.color } : null,
       });
+    }
     const byHand: MeasuredCrew[] = [];
     for (const crew of placedByHand) byHand.push(await measureCrew(crew));
 
@@ -1653,7 +1659,10 @@ export class QuarterPlannerService {
               technicianId: crew.technicianId,
               date: new Date(`${crew.date}T00:00:00.000Z`),
               ...dayRow(crew),
-              templateGroupId: crew.templateGroupId ?? null,
+              templateGroupId: crew.templateGroup?.id ?? null,
+              templateGroupPosition: crew.templateGroup?.position ?? null,
+              templateGroupName: crew.templateGroup?.name ?? null,
+              templateGroupColor: crew.templateGroup?.color ?? null,
             },
           });
 

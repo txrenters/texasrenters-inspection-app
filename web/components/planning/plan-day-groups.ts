@@ -13,7 +13,7 @@
 
 import { formatShortDay } from '@/lib/planning';
 
-import { groupColors, groupOutline, type FileGroup, type GroupFile, type GroupFileRow } from './group-file';
+import { groupColorOf, groupColors, groupOutline, type FileGroup, type GroupFile, type GroupFileRow } from './group-file';
 import { groupArea, routeMiles } from './manual-grouping';
 
 /** A plan visit, as the Groups tab needs it. */
@@ -41,6 +41,40 @@ export interface DayStop {
 /** The key a day's group is known by: its date and whose day it is. */
 export const dayKey = (date: string, technicianId: string | null) => `${date}|${technicianId ?? ''}`;
 
+/** What a day is called on the map and in the list, and its template group's colour. */
+export interface DayLabel {
+  label: string;
+  /** `#rrggbb`; null for a day of no template group. */
+  color: string | null;
+}
+
+/**
+ * Each day's label, by `dayKey` (the office, 2026-10-03: "let's not modify the
+ * groupings label, it should stay the same as is").
+ *
+ * A day laid out from a template group is that group's number, as the Group
+ * maker numbers it: Group 37 is "37" whatever date it falls on. The quarter's
+ * other days -- made from properties in none of its groups, or by hand -- are
+ * "N1", "N2"... in the order given, so none is taken for a template group.
+ * A quarter with no template day at all has no labels here: its days are
+ * numbered in the order they are worked, as they always were.
+ */
+export function dayLabels(
+  days: readonly { date: string; technicianId: string; templateGroup?: { position: number; color: string } | null }[],
+): Map<string, DayLabel> {
+  const labels = new Map<string, DayLabel>();
+  if (!days.some((day) => day.templateGroup)) return labels;
+  let extra = 0;
+  for (const day of days)
+    labels.set(
+      dayKey(day.date.slice(0, 10), day.technicianId),
+      day.templateGroup
+        ? { label: String(day.templateGroup.position), color: day.templateGroup.color }
+        : { label: `N${(extra += 1)}`, color: null },
+    );
+  return labels;
+}
+
 type Placed = DayStop & { latitude: number; longitude: number };
 
 /** A position a map can draw: 0,0 is in the Atlantic, and is what a missing one becomes. */
@@ -52,13 +86,15 @@ const placed = (stop: DayStop): stop is Placed =>
   (stop.latitude !== 0 || stop.longitude !== 0);
 
 /**
- * The quarter's days as groups, numbered in the order they are worked: by date,
- * and on one date by whose day it is. Each day's stops are in its driving
+ * The quarter's days as groups, in the order they are worked: by date, and on
+ * one date by whose day it is. Numbered in that order -- or, on a quarter built
+ * from a template, labelled and coloured as the Days list labels them
+ * (`dayLabels`, from the server's days). Each day's stops are in its driving
  * order, numbered from 1 as the day's own list numbers them. A visit with no
  * day yet has nowhere to be in a group, and is drawn on its own -- green, as
  * the Group maker draws a property in no group.
  */
-export function planDayGroups(stops: readonly DayStop[]): GroupFile {
+export function planDayGroups(stops: readonly DayStop[], labels: ReadonlyMap<string, DayLabel> = new Map()): GroupFile {
   const byDay = new Map<string, { date: string; technician: DayStop['technician']; stops: Placed[] }>();
   const loose: GroupFileRow[] = [];
   /** A row's identity on the map: its place in the plan's own list, which never repeats. */
@@ -106,14 +142,17 @@ export function planDayGroups(stops: readonly DayStop[]): GroupFile {
     return inOrder.map((stop, index) => rowOf(stop, key, index + 1));
   });
   const colors = groupColors(ordered);
+  // A day the server has no row for yet -- a visit just moved -- is one more of the quarter's extra days.
+  let extra = [...labels.values()].filter((label) => label.color === null).length;
 
   const groups = days.map(([key, day], index): FileGroup => {
     const rows = ordered[index]!;
     const outline = groupOutline(rows);
     const top = outline.reduce((highest, point) => (point[1] > highest[1] ? point : highest));
+    const named = labels.get(key);
     return {
       key,
-      label: String(index + 1),
+      label: named?.label ?? (labels.size ? `N${(extra += 1)}` : String(index + 1)),
       name: `${formatShortDay(day.date)}${day.technician ? ` · ${day.technician.displayName}` : ''}`,
       area: groupArea(rows),
       rows,
@@ -124,7 +163,7 @@ export function planDayGroups(stops: readonly DayStop[]): GroupFile {
       driveMinutes: null,
       longestHopMinutes: null,
       longHop: null,
-      color: colors[index]!,
+      color: (named?.color ? groupColorOf(named.color) : null) ?? colors[index]!,
       outline,
       labelAt: { latitude: top[1], longitude: top[0] },
     };

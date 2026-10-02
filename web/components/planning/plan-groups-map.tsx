@@ -3,12 +3,13 @@
 import { useMemo, useState } from 'react';
 
 import { MapUnavailable } from '@/components/console-map';
+import type { PlanDay } from '@/lib/planning-queries';
 
 import type { GroupOrder } from './group-file';
 import { GroupFileLegend, type LegendNoun } from './group-file-legend';
 import { GroupFileMap, type MapFrame } from './group-file-map';
 import { DEFAULT_MAP_DISPLAY, MapDisplaySwitches, type MapDisplay } from './group-file-view';
-import { planDayGroups, type DayStop } from './plan-day-groups';
+import { dayLabels, planDayGroups, type DayStop } from './plan-day-groups';
 import { useRoadRoutes, type RouteRequest } from './road-routes';
 import { useFillHeight } from './use-fill-height';
 import { zoneTerritories } from './zone-territories';
@@ -18,7 +19,9 @@ import { zoneTerritories } from './zone-territories';
  * 2026-10-01: the Group maker's map is the better one).
  *
  * Each technician-day is a group in its own colour, numbered in the order the
- * quarter is worked, with its stops numbered in the order they are driven and
+ * quarter is worked -- or, built from a template, as the Days list numbers it:
+ * its template group's number, and N1, N2... for a day of none -- with its
+ * stops numbered in the order they are driven and
  * the road between them; the list beside it is every day, which is both the
  * legend and the filter. A visit with no day yet is a green dot, as a property
  * in no group is in the Group maker.
@@ -35,8 +38,18 @@ import { zoneTerritories } from './zone-territories';
 
 const DAY_NOUN: LegendNoun = { one: 'day', many: 'days', loose: 'no day yet' };
 
-export function PlanGroupsMap({ stops }: { stops: readonly DayStop[] }) {
-  const file = useMemo(() => planDayGroups(stops), [stops]);
+/** One empty list, so a map given no days is not grouped again on every render. */
+const NO_DAYS: readonly Pick<PlanDay, 'date' | 'technicianId' | 'templateGroup'>[] = [];
+
+export function PlanGroupsMap({
+  stops,
+  days = NO_DAYS,
+}: {
+  stops: readonly DayStop[];
+  /** The server's days, for their template groups' numbers and colours. */
+  days?: readonly Pick<PlanDay, 'date' | 'technicianId' | 'templateGroup'>[];
+}) {
+  const file = useMemo(() => planDayGroups(stops, dayLabels(days)), [days, stops]);
   const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
   const [display, setDisplay] = useState<MapDisplay>(DEFAULT_MAP_DISPLAY);
   const [order, setOrder] = useState<GroupOrder>('number');

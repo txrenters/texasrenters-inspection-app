@@ -39,7 +39,7 @@ interface TemplateRow {
   revision: number;
   archivedAt?: Date | null;
   /** `target` is how many properties the office drew the group to hold: its size, when not said. */
-  groups: { id?: string; name: string; target?: number; buildingIds: string[] }[];
+  groups: { id?: string; name: string; color?: string; target?: number; buildingIds: string[] }[];
 }
 
 interface Point {
@@ -264,6 +264,7 @@ const build = (
                   id: group.id ?? `group-${index + 1}`,
                   position: index + 1,
                   name: group.name,
+                  color: group.color ?? '#7f77dd',
                   target: group.target ?? group.buildingIds.length,
                   members: group.buildingIds.map((buildingId) => ({ buildingId })),
                 })),
@@ -1805,14 +1806,19 @@ describe('a quarter built from a group template', () => {
     expect(daysOf(ownGrouping.stopUpdate).size).toBe(1);
   });
 
+  /**
+   * Its number, name and colour too, kept on the day (2026-10-03): the
+   * template's save makes its groups again, which cuts the link and can
+   * renumber them, and the day must still read as the group it was built from.
+   */
   it('records the template group each day was laid out from, and none for a day the planner made', async () => {
     const stops = [...tight(), ...Array.from({ length: 9 }, (_, index) => stop(`n${index + 1}`, 20 + index, 3 + index * 0.05, { buildingId: `n-b${index + 1}` }))];
     const { service, dayCreate } = build(stops, {
       templates: [
         template({
           groups: [
-            { id: 'group-odd', name: 'Odd', buildingIds: ['b1', 'b3', 'b5', 'b7', 'b9'] },
-            { id: 'group-even', name: 'Even', buildingIds: ['b2', 'b4', 'b6', 'b8', 'b10'] },
+            { id: 'group-odd', name: 'Odd', color: '#7f77dd', buildingIds: ['b1', 'b3', 'b5', 'b7', 'b9'] },
+            { id: 'group-even', name: 'Even', color: '#1d9e75', buildingIds: ['b2', 'b4', 'b6', 'b8', 'b10'] },
           ],
         }),
       ],
@@ -1820,8 +1826,13 @@ describe('a quarter built from a group template', () => {
 
     await service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
 
-    const recorded = dayCreate.mock.calls.map((call) => call[0].data.templateGroupId).sort();
-    expect(recorded).toEqual(['group-even', 'group-odd', null].sort());
+    const recorded = dayCreate.mock.calls
+      .map((call) => {
+        const data = call[0].data;
+        return [data.templateGroupId, data.templateGroupPosition, data.templateGroupName, data.templateGroupColor].join(' ');
+      })
+      .sort();
+    expect(recorded).toEqual(['group-even 2 Even #1d9e75', 'group-odd 1 Odd #7f77dd', '   '].sort());
   });
 
   it('records no template group on a quarter the planner grouped itself', async () => {
@@ -1830,6 +1841,7 @@ describe('a quarter built from a group template', () => {
     await service.route('org-1', 'plan-1', {});
 
     expect(dayCreate.mock.calls.every((call) => call[0].data.templateGroupId === null)).toBe(true);
+    expect(dayCreate.mock.calls.every((call) => call[0].data.templateGroupPosition === null)).toBe(true);
   });
 
   it('refuses an archived template, and writes nothing', async () => {

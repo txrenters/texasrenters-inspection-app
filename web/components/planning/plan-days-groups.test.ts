@@ -179,3 +179,37 @@ describe('where a leg runs', () => {
     expect(legEnds({ rows }, 1)).toMatchObject({ fromStop: 2, toStop: 3 });
   });
 });
+
+/** The office (2026-10-03): "let's not modify the groupings label, it should stay the same as is". */
+describe('a day built from a template group, on the Days list', () => {
+  const group = { id: null, position: 37, name: 'Katy North', color: '#7f77dd' };
+
+  it('is labelled with the group’s number, not its place in the quarter', () => {
+    const { file } = planDaysFile([day({ templateGroup: group })], []);
+
+    expect(file.groups[0]!.label).toBe('37');
+  });
+
+  it('labels the quarter’s other days N1, N2, in the order it is worked', () => {
+    const { file } = planDaysFile(
+      [
+        day({ id: 'day-1', date: '2026-12-17T00:00:00.000Z', templateGroup: group }),
+        day({ id: 'day-2', date: '2026-12-18T00:00:00.000Z', templateGroup: null }),
+        day({ id: 'day-3', date: '2026-12-21T00:00:00.000Z', templateGroup: { ...group, position: 4 } }),
+        day({ id: 'day-4', date: '2026-12-22T00:00:00.000Z', templateGroup: null }),
+      ],
+      [],
+    );
+
+    expect(file.groups.map((one) => one.label)).toEqual(['37', 'N1', '4', 'N2']);
+  });
+
+  it('numbers a quarter with no template day 1, 2, 3, as before', () => {
+    const { file } = planDaysFile(
+      [day({ id: 'day-1' }), day({ id: 'day-2', date: '2026-12-18T00:00:00.000Z' }), day({ id: 'day-3', date: '2026-12-21T00:00:00.000Z' })],
+      [],
+    );
+
+    expect(file.groups.map((one) => one.label)).toEqual(['1', '2', '3']);
+  });
+});

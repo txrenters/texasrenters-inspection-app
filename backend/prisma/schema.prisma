@@ -3598,6 +3598,14 @@ model TbpQuarterPlanDay {
   /// The office's template group the day was laid out from, shown in its name
   /// and colour; null for a day the planner grouped itself.
   templateGroupId String? @db.Uuid
+  /// That group's number, name and colour when the day was laid out, kept on
+  /// the day (the office, 2026-10-03: "let's not modify the groupings label, it
+  /// should stay the same as is"). A template's save makes its groups again, so
+  /// the link above is cut and the numbers can change; these are what the day
+  /// is shown as. Null for a day the planner grouped itself.
+  templateGroupPosition Int?
+  templateGroupName     String?
+  templateGroupColor    String?
 
   computedAt DateTime @default(now())
 

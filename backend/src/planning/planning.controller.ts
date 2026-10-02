@@ -384,8 +384,11 @@ export class PlanningController {
           originKind: true,
           durationSource: true,
           departureAssumedAt: true,
-          // The office's template group the day was laid out from: its name and colour, as in the Group maker.
-          templateGroup: { select: { id: true, position: true, name: true, color: true } },
+          // The office's template group the day was laid out from, as it was then (see below).
+          templateGroupId: true,
+          templateGroupPosition: true,
+          templateGroupName: true,
+          templateGroupColor: true,
         },
       }),
       this.prisma.tbpQuarterPlanStop.findMany({
@@ -453,8 +456,20 @@ export class PlanningController {
       planId,
       days.map((day) => day.technicianId),
     );
-    return days.map((day) => ({
+    return days.map(({ templateGroupId, templateGroupPosition, templateGroupName, templateGroupColor, ...day }) => ({
       ...day,
+      // Its number, name and colour as they were when the day was laid out, as
+      // in the Group maker: kept on the day, because the template's own groups
+      // are made again each time it is saved (the office, 2026-10-03).
+      templateGroup:
+        templateGroupPosition == null
+          ? null
+          : {
+              id: templateGroupId,
+              position: templateGroupPosition,
+              name: templateGroupName ?? '',
+              color: templateGroupColor ?? '',
+            },
       technician: groups
         ? { ...day.technician, displayName: groups.get(day.technicianId) ?? 'Day group' }
         : day.technician,
