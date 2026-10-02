@@ -572,24 +572,60 @@ describe('changing a day from the roster', () => {
     expect(screen.queryByRole('button', { name: /^Take / })).not.toBeInTheDocument();
   });
 
-  it('opens the add-visit panel in place, even under an empty day', () => {
-    const panel = vi.fn((_entry: RosterEntry, close: () => void) => (
-      <button onClick={close} type="button">
-        Panel for the day
-      </button>
-    ));
-    render(<TechnicianRoster addVisitPanel={panel} entries={entries([])} onSelect={() => {}} selectedId="tech-1" />);
+  it('offers Add visit at the top of the day, even an empty one, and hands the page the technician', () => {
+    const onAddVisit = vi.fn();
+    render(<TechnicianRoster entries={entries([])} onAddVisit={onAddVisit} onSelect={() => {}} selectedId="tech-1" />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add visit' }));
-    expect(panel).toHaveBeenCalledWith(expect.objectContaining({ technicianId: 'tech-1' }), expect.any(Function));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Panel for the day' }));
-    expect(screen.getByRole('button', { name: 'Add visit' })).toBeInTheDocument();
+    expect(onAddVisit).toHaveBeenCalledWith(expect.objectContaining({ technicianId: 'tech-1' }));
   });
 
   it('has no add-visit button for somebody who may neither assign nor create', () => {
     render(<TechnicianRoster entries={entries([removable])} onSelect={() => {}} selectedId="tech-1" />);
 
     expect(screen.queryByRole('button', { name: 'Add visit' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * "See Moses's location" (the office, 2026-10-02): once a stop was picked, the
+ * map had moved to that property, and clicking the technician's name only
+ * collapsed their list -- there was no way back to them.
+ */
+describe('back to the technician', () => {
+  it('has a button that takes the map back to them, and leaves the list open', () => {
+    const onFocusTechnician = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <TechnicianRoster
+        entries={entries([STOP])}
+        onFocusTechnician={onFocusTechnician}
+        onSelect={onSelect}
+        selectedId="tech-1"
+        selectedStopBuildingId="building-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'See Ernie’s location' }));
+
+    expect(onFocusTechnician).toHaveBeenCalledWith('tech-1');
+    // Not a selection change, so the day stays open.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByText(STOP.propertyName)).toBeInTheDocument();
+  });
+
+  it('is there but disabled when they have reported no position', () => {
+    const [entry] = entries([STOP]);
+    render(
+      <TechnicianRoster
+        entries={[{ ...entry!, position: null }]}
+        onFocusTechnician={vi.fn()}
+        onSelect={() => {}}
+        selectedId="tech-1"
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'See Ernie’s location' })).toBeDisabled();
   });
 });

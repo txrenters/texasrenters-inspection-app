@@ -1,7 +1,7 @@
 'use client';
 
 import { isFinishedStatus, type PropertyPosition } from '@texasrenters/shared';
-import { ExternalLinkIcon, SearchIcon, XIcon } from 'lucide-react';
+import { ArrowLeftIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { StatusBadge } from '@/components/status-badge';
@@ -12,7 +12,7 @@ import { useUnassignedOnDay } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 /** How many properties a search lists; the map shows every match. */
-const LISTED_PROPERTIES = 8;
+const LISTED_PROPERTIES = 20;
 
 /** Lower case, punctuation dropped, so "12 Example-Mill Rd." finds "12 example mill rd". */
 const normalise = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -33,7 +33,14 @@ const propertyText = (property: PropertyPosition) =>
   [property.name, property.addressLine1, property.city, property.postalCode].filter(Boolean).join(' ');
 
 /**
- * "+ Add visit" in the technician map's roster (the office, 2026-10-02).
+ * "+ Add visit" on the technician map (the office, 2026-10-02).
+ *
+ * The whole sidebar while it is open, in place of the technician list, with a
+ * way back to it. It began nested under the last stop of the selected day,
+ * where it was squeezed to the list's width, ran off its right edge, and sat
+ * below the fold of a list somebody had to scroll (the office: "the UI
+ * overlaps and it's not a great UX"). The map stays beside it, showing what it
+ * lists.
  *
  * Two ways to add to a technician's day, both without leaving the map:
  *
@@ -147,132 +154,152 @@ export function AddVisitPanel({
     }
   };
 
+  /** A row: what it is, which may be cut short, and what can be done with it, which never is. */
+  const row = 'grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 py-1.5 text-xs';
+
   return (
-    <section aria-label={`Add a visit to ${technicianName}'s day`} className="bg-background mt-2 grid gap-2 rounded-md border p-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium">
-          Add to {technicianName} · {dateLabel}
-        </p>
-        <Button aria-label="Close" className="size-6" onClick={onClose} size="icon-sm" type="button" variant="ghost">
-          <XIcon className="size-3.5" />
-        </Button>
-      </div>
-
-      <label className="relative block">
-        <span className="sr-only">Search a property or an address</span>
-        <SearchIcon aria-hidden className="text-muted-foreground absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-        <Input
-          autoFocus
-          className="h-8 pl-7 text-xs"
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search a property or an address"
-          value={query}
-        />
-      </label>
-
-      {error ? <p className="text-destructive text-xs">{error}</p> : null}
-
-      {canAssign ? (
-        <div className="grid gap-1">
-          <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-            Unassigned that day{unassigned.data ? ` (${visits.length})` : ''}
-          </p>
-          {unassigned.isLoading ? (
-            <p className="text-muted-foreground text-xs">Loading…</p>
-          ) : unassigned.isError ? (
-            <p className="text-destructive text-xs">The day&rsquo;s unassigned visits could not be loaded.</p>
-          ) : visits.length === 0 ? (
-            <p className="text-muted-foreground text-xs">
-              {searching ? 'None of them match.' : 'Every visit that day has somebody on it.'}
+    <section aria-label={`Add a visit to ${technicianName}'s day`} className="flex h-full min-h-0 flex-col">
+      {/* Fixed above the lists, so the search box never scrolls away from the results. */}
+      <header className="grid gap-2 border-b px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Button
+            aria-label={`Back to ${technicianName}'s day`}
+            className="size-7 shrink-0"
+            onClick={onClose}
+            size="icon-sm"
+            title="Back"
+            type="button"
+            variant="ghost"
+          >
+            <ArrowLeftIcon aria-hidden className="size-4" />
+          </Button>
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Add a visit</p>
+            <p className="text-muted-foreground truncate text-xs">
+              To {technicianName} · {dateLabel}
             </p>
-          ) : (
-            <ul className="grid gap-1">
-              {visits.map((visit) => {
-                const building = visit.propertywareBuilding;
-                return (
-                  <li className="flex items-start gap-2 text-xs" key={visit.id}>
+          </div>
+        </div>
+        <label className="relative block min-w-0">
+          <span className="sr-only">Search a property or an address</span>
+          <SearchIcon aria-hidden className="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
+          <Input
+            autoFocus
+            className="h-8 w-full pl-8 text-xs"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search a property or an address"
+            value={query}
+          />
+        </label>
+      </header>
+
+      <div className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto px-3 py-2.5">
+        {error ? <p className="text-destructive text-xs">{error}</p> : null}
+
+        {canAssign ? (
+          <div className="grid min-w-0 gap-1">
+            <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+              Unassigned that day{unassigned.data ? ` (${visits.length})` : ''}
+            </p>
+            {unassigned.isLoading ? (
+              <p className="text-muted-foreground text-xs">Loading…</p>
+            ) : unassigned.isError ? (
+              <p className="text-destructive text-xs">The day&rsquo;s unassigned visits could not be loaded.</p>
+            ) : visits.length === 0 ? (
+              <p className="text-muted-foreground text-xs">
+                {searching ? 'None of them match.' : 'Every visit that day has somebody on it.'}
+              </p>
+            ) : (
+              <ul className="divide-border grid divide-y">
+                {visits.map((visit) => {
+                  const building = visit.propertywareBuilding;
+                  return (
+                    <li className={row} key={visit.id}>
+                      <button
+                        className="hover:text-foreground min-w-0 text-left disabled:cursor-default"
+                        disabled={!building?.id}
+                        onClick={() => building?.id && onFocusProperty(building.id)}
+                        title={building?.id ? 'Show it on the map' : 'Not on the map'}
+                        type="button"
+                      >
+                        <span className="block truncate font-medium">
+                          {building?.name ?? 'Unknown property'}
+                          {visit.propertywareUnit?.name ? ` · ${visit.propertywareUnit.name}` : ''}
+                        </span>
+                        <span className="text-muted-foreground flex flex-wrap items-center gap-1">
+                          {humanize(visit.inspectionType)}
+                          <StatusBadge className="h-4 px-1 text-[10px]" showIcon={false} value={visit.status} />
+                        </span>
+                      </button>
+                      <Button
+                        className="h-7 px-2.5 text-xs"
+                        disabled={assigning !== null}
+                        onClick={() => void assign(visit.id)}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        {assigning === visit.id ? 'Assigning…' : 'Assign'}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        ) : null}
+
+        {canCreate ? (
+          <div className="grid min-w-0 gap-1">
+            <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
+              New visit{searching ? ` (${matches.length} ${matches.length === 1 ? 'property' : 'properties'})` : ''}
+            </p>
+            {!searching ? (
+              <p className="text-muted-foreground text-xs">
+                Search above for the property; the matches light up on the map.
+              </p>
+            ) : matches.length === 0 ? (
+              <p className="text-muted-foreground text-xs">No property matches.</p>
+            ) : (
+              <ul className="divide-border grid divide-y">
+                {matches.slice(0, LISTED_PROPERTIES).map((property) => (
+                  <li className={row} key={property.id}>
                     <button
-                      className="hover:text-foreground min-w-0 flex-1 text-left disabled:cursor-default"
-                      disabled={!building?.id}
-                      onClick={() => building?.id && onFocusProperty(building.id)}
-                      title={building?.id ? 'Show it on the map' : 'Not on the map'}
+                      className="hover:text-foreground min-w-0 text-left"
+                      onClick={() => onFocusProperty(property.id)}
+                      title="Show it on the map"
                       type="button"
                     >
-                      <span className="block truncate font-medium">
-                        {building?.name ?? 'Unknown property'}
-                        {visit.propertywareUnit?.name ? ` · ${visit.propertywareUnit.name}` : ''}
-                      </span>
-                      <span className="text-muted-foreground flex flex-wrap items-center gap-1">
-                        {humanize(visit.inspectionType)}
-                        <StatusBadge className="h-4 px-1 text-[10px]" showIcon={false} value={visit.status} />
+                      <span className="block truncate font-medium">{property.name}</span>
+                      <span className="text-muted-foreground block truncate">
+                        {property.addressLine1}
+                        {property.city ? `, ${property.city}` : ''}
                       </span>
                     </button>
-                    <Button
-                      className="h-7 shrink-0 px-2 text-xs"
-                      disabled={assigning !== null}
-                      onClick={() => void assign(visit.id)}
-                      size="sm"
-                      type="button"
-                      variant="outline"
+                    {/* A new tab, so the map -- and the day being planned on it -- stays put. */}
+                    <a
+                      aria-label={`New visit at ${property.name}`}
+                      className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'h-7 gap-1 px-2.5 text-xs')}
+                      href={`/inspections/new?${new URLSearchParams({ propertyId: property.id, technicianId, date }).toString()}`}
+                      rel="noopener"
+                      target="_blank"
+                      title="Opens the full form in a new tab, filled in with this property, the technician and the day"
                     >
-                      {assigning === visit.id ? 'Assigning…' : 'Assign'}
-                    </Button>
+                      New
+                      <ExternalLinkIcon aria-hidden className="size-3" />
+                    </a>
                   </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      ) : null}
-
-      {canCreate ? (
-        <div className="grid gap-1">
-          <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-            New visit{searching ? ` (${matches.length} ${matches.length === 1 ? 'property' : 'properties'})` : ''}
-          </p>
-          {!searching ? (
-            <p className="text-muted-foreground text-xs">
-              Search above for the property; the matches light up on the map.
-            </p>
-          ) : matches.length === 0 ? (
-            <p className="text-muted-foreground text-xs">No property matches.</p>
-          ) : (
-            <ul className="grid gap-1">
-              {matches.slice(0, LISTED_PROPERTIES).map((property) => (
-                <li className="flex items-start gap-2 text-xs" key={property.id}>
-                  <button
-                    className="hover:text-foreground min-w-0 flex-1 text-left"
-                    onClick={() => onFocusProperty(property.id)}
-                    title="Show it on the map"
-                    type="button"
-                  >
-                    <span className="block truncate font-medium">{property.name}</span>
-                    <span className="text-muted-foreground block truncate">
-                      {property.addressLine1}
-                      {property.city ? `, ${property.city}` : ''}
-                    </span>
-                  </button>
-                  {/* A new tab, so the map -- and the day being planned on it -- stays put. */}
-                  <a
-                    className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'h-7 shrink-0 gap-1 px-2 text-xs')}
-                    href={`/inspections/new?${new URLSearchParams({ propertyId: property.id, technicianId, date }).toString()}`}
-                    rel="noopener"
-                    target="_blank"
-                  >
-                    New visit
-                    <ExternalLinkIcon aria-hidden className="size-3" />
-                  </a>
-                </li>
-              ))}
-              {matches.length > LISTED_PROPERTIES ? (
-                <li className="text-muted-foreground text-xs">
-                  {matches.length - LISTED_PROPERTIES} more on the map; type more to narrow it down.
-                </li>
-              ) : null}
-            </ul>
-          )}
-        </div>
-      ) : null}
+                ))}
+                {matches.length > LISTED_PROPERTIES ? (
+                  <li className="text-muted-foreground py-1.5 text-xs">
+                    {matches.length - LISTED_PROPERTIES} more on the map; type more to narrow it down.
+                  </li>
+                ) : null}
+              </ul>
+            )}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

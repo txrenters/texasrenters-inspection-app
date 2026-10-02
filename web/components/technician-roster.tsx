@@ -8,8 +8,7 @@ import type {
   TechnicianRoute,
 } from '@texasrenters/shared';
 import { isFinishedStatus, isLocationPaused } from '@texasrenters/shared';
-import { CheckIcon, MapPinIcon, PlusIcon } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { CheckIcon, LocateFixedIcon, MapPinIcon, PlusIcon } from 'lucide-react';
 
 import { RemoveStopButton } from '@/components/remove-stop-button';
 import { Button } from '@/components/ui/button';
@@ -139,32 +138,62 @@ function Dot({ position }: { position: TechnicianPosition | null }) {
   );
 }
 
+/** "Alex" from "Alex Example": how the office says it, and short enough for a button. */
+const firstName = (displayName: string) => displayName.trim().split(/\s+/)[0] || displayName;
+
 /**
- * "+ Add visit" under the selected technician's day, opening the page's panel
- * in place -- in the list rather than over the map, which is where the
- * matches are shown.
+ * What can be done with the selected technician's day, above it rather than
+ * under the last stop: eight stops down is where "Add visit" used to be, and
+ * where nobody looked for it.
  */
-function AddVisitSlot({ render }: { render: (close: () => void) => ReactNode }) {
-  const [open, setOpen] = useState(false);
-  if (open) return <>{render(() => setOpen(false))}</>;
+function DayActions({
+  entry,
+  onAddVisit,
+  onFocusTechnician,
+}: {
+  entry: RosterEntry;
+  onAddVisit?: (entry: RosterEntry) => void;
+  onFocusTechnician?: (technicianId: string) => void;
+}) {
+  if (!onAddVisit && !onFocusTechnician) return null;
+  const name = firstName(entry.displayName);
   return (
-    <Button
-      className="mt-2 h-7 w-full gap-1 text-xs"
-      onClick={() => setOpen(true)}
-      size="sm"
-      type="button"
-      variant="outline"
-    >
-      <PlusIcon aria-hidden className="size-3.5" />
-      Add visit
-    </Button>
+    <div className="mb-2 flex flex-wrap gap-1.5">
+      {onFocusTechnician ? (
+        <Button
+          className="h-7 gap-1 px-2 text-xs"
+          disabled={!entry.position}
+          onClick={() => onFocusTechnician(entry.technicianId)}
+          size="sm"
+          title={entry.position ? undefined : 'No position reported yet'}
+          type="button"
+          variant="outline"
+        >
+          <LocateFixedIcon aria-hidden className="size-3.5" />
+          See {name}&rsquo;s location
+        </Button>
+      ) : null}
+      {onAddVisit ? (
+        <Button
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={() => onAddVisit(entry)}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <PlusIcon aria-hidden className="size-3.5" />
+          Add visit
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
 export function TechnicianRoster({
-  addVisitPanel,
   colors = null,
   entries,
+  onAddVisit,
+  onFocusTechnician,
   onRemoveStop,
   onSelect,
   onSelectStop,
@@ -174,11 +203,18 @@ export function TechnicianRoster({
   timeline = null,
 }: {
   /**
-   * The selected technician's "+ Add visit" panel, given a way to close itself
-   * (the office, 2026-10-02). Absent for a reader who may neither assign nor
-   * create inspections, and then there is no button.
+   * Open the page's "Add visit" panel for the selected technician (the office,
+   * 2026-10-02). Absent for a reader who may neither assign nor create
+   * inspections, and then there is no button.
    */
-  addVisitPanel?: (entry: RosterEntry, close: () => void) => ReactNode;
+  onAddVisit?: (entry: RosterEntry) => void;
+  /**
+   * Take the map back to the selected technician and follow them again, from
+   * wherever it has gone -- a stop picked from the list, a property clicked on
+   * the map (the office, 2026-10-02: "add a button saying see Moses
+   * location"). Their name toggles the list; this never does.
+   */
+  onFocusTechnician?: (technicianId: string) => void;
   /** Each person's colour on the map, beside their name, so a line on the map leads back to a row here. */
   colors?: ReadonlyMap<string, string> | null;
   entries: RosterEntry[];
@@ -305,6 +341,11 @@ export function TechnicianRoster({
                 — which is the only thing it is for. */}
             {selected ? (
               <div className="bg-muted/40 border-t px-4 py-2">
+                <DayActions
+                  entry={entry}
+                  onAddVisit={onAddVisit}
+                  onFocusTechnician={onFocusTechnician}
+                />
                 {entry.stops.length === 0 ? (
                   <p className="text-muted-foreground py-1 text-xs">
                     Nothing scheduled for this day.
@@ -560,12 +601,6 @@ export function TechnicianRoster({
                     ) : null}
                   </>
                 )}
-
-                {/* Under the day whether it has stops or not: an empty day is
-                    exactly the one somebody wants to add to. */}
-                {addVisitPanel ? (
-                  <AddVisitSlot render={(close) => addVisitPanel(entry, close)} />
-                ) : null}
               </div>
             ) : null}
           </li>
