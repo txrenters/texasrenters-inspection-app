@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   comparisonLabel,
+  decisionLabel,
+  editableFinding,
   findingMoment,
   formatMoment,
   frameTimes,
@@ -152,5 +154,40 @@ describe('the finding after a decision', () => {
   it('wraps to the top, and never offers the one just decided', () => {
     expect(nextPending(list, 'd')?.id).toBe('a');
     expect(nextPending([finding({ id: 'only' })], 'only')).toBeNull();
+  });
+});
+
+describe('the decision, in a few words', () => {
+  const review = (status: string, reasonCode: string | null = null) => ({
+    status,
+    reason: null,
+    reasonCode: reasonCode as never,
+    reviewerName: 'Ana',
+    createdAt: '2026-10-03T15:00:00.000Z',
+  });
+
+  it('names a correction and a rejection’s reason, and nothing for a plain approval', () => {
+    expect(decisionLabel(review('EDITED'))).toBe('Approved with edits');
+    expect(decisionLabel(review('REJECTED', 'WRONG_ROOM'))).toBe('Rejected · Wrong room');
+    expect(decisionLabel(review('REJECTED'))).toBe('Rejected');
+    expect(decisionLabel(review('APPROVED'))).toBeNull();
+    expect(decisionLabel(null)).toBeNull();
+  });
+});
+
+describe('the edit form, as it starts', () => {
+  it('is what the AI wrote', () => {
+    expect(editableFinding(finding())).toEqual({
+      title: 'Door hole and trim require repair',
+      description: 'A hole below the handle.',
+      severity: 'MEDIUM',
+      findingType: 'POSSIBLE_NEW_DAMAGE',
+      category: 'Door',
+    });
+  });
+
+  it('brings a value the form cannot offer to one the server takes', () => {
+    const start = editableFinding(finding({ severity: 'CRITICAL', findingType: 'UNKNOWN' }));
+    expect([start.severity, start.findingType]).toEqual(['MEDIUM', 'MAINTENANCE']);
   });
 });

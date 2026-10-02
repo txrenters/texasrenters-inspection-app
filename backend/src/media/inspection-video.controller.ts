@@ -5,7 +5,11 @@ import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 
 import { ApiAuthGuard, type AuthenticatedRequest } from '../common/auth';
 import { CloudflareStreamWebhookGuard } from './cloudflare-stream-webhook.guard';
-import { CaptureSnapshotDto, CreateUploadSessionDto } from './inspection-video.dto';
+import {
+  CaptureSnapshotDto,
+  CreateUploadSessionDto,
+  PreviewAnalysisDto,
+} from './inspection-video.dto';
 import { InspectionVideoService } from './inspection-video.service';
 
 @ApiTags('Inspection video')
@@ -77,6 +81,22 @@ export class InspectionVideoController {
   @HttpCode(202)
   reanalyze(@Req() request: AuthenticatedRequest, @Param('videoId') videoId: string) {
     return this.service.reanalyze(request.user, videoId);
+  }
+
+  /**
+   * What the analysis would find under draft house rules, stored nowhere.
+   * Authorized inside the service as configuring the AI.
+   */
+  @Post(':videoId/preview-analysis')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  @HttpCode(200)
+  previewAnalysis(
+    @Req() request: AuthenticatedRequest,
+    @Param('videoId') videoId: string,
+    @Body() body: PreviewAnalysisDto,
+  ) {
+    return this.service.previewAnalysis(request.user, videoId, body.houseRules);
   }
 }
 

@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { decisionLine } from '@/lib/finding-review';
 import { formatDateTime } from '@/lib/format';
 
 import { STATUS_META } from './area-status';
@@ -146,7 +147,7 @@ function FindingCard({
         <FindingReviewControls finding={finding} inspectionId={inspectionId} />
       ) : finding.lastReview ? (
         <p className="text-muted-foreground text-xs">
-          {finding.lastReview.reviewerName} · {formatDateTime(finding.lastReview.createdAt)}
+          {decisionLine(finding.lastReview, formatDateTime(finding.lastReview.createdAt))}
         </p>
       ) : null}
     </li>

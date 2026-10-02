@@ -45,6 +45,7 @@ import { CacheService } from '../cache/cache.service';
 import { MailService } from '../mail/mail.service';
 import {
   AdminFindingsQueryDto,
+  AiScorecardQueryDto,
   ApprovePropertyAreasDto,
   AreaComparisonOverrideDto,
   AssignmentDto,
@@ -68,6 +69,7 @@ import {
   DeletePropertyAreasDto,
   CompleteInspectionDto,
   FinalizeInspectionDto,
+  FindingEditDto,
   FindingRejectDto,
   FindingReviewDto,
   InspectionFollowUpDto,
@@ -85,6 +87,7 @@ import {
   ReopenInspectionDto,
   GrantTechnicianSkillDto,
   RevokeTechnicianSkillDto,
+  SaveAiGuidanceDto,
   SetSkillRequirementDto,
   SkillCatalogQueryDto,
   TechnicianListQueryDto,
@@ -105,6 +108,7 @@ import {
   UploadFloorPlanDto,
 } from './admin.dto';
 import { AdminService } from './admin.service';
+import { AiGuidanceService } from './ai-guidance.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonReportService } from './comparison-report.service';
@@ -167,6 +171,7 @@ export class AdminController {
     private readonly profileDeletion: ProfileDeletionService,
     private readonly access: AccessService,
     private readonly skills: TechnicianSkillsService,
+    private readonly guidance: AiGuidanceService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -668,7 +673,16 @@ export class AdminController {
     @Param('findingId') id: string,
     @Body() body: FindingRejectDto,
   ) {
-    return this.service.reviewFinding(request.user, id, 'REJECTED', body.reason);
+    return this.service.reviewFinding(request.user, id, 'REJECTED', body.reason, body.reasonCode);
+  }
+  @Post('findings/:findingId/edit')
+  @RequirePermissions('findings:review')
+  editFinding(
+    @Req() request: AuthenticatedRequest,
+    @Param('findingId') id: string,
+    @Body() body: FindingEditDto,
+  ) {
+    return this.service.editFinding(request.user, id, body);
   }
   @Post('inspections/:inspectionId/report-shares')
   @RequirePermissions('reports:share')
@@ -1428,6 +1442,32 @@ export class AdminController {
     @Body() body: UpdateAiVisualReviewDto,
   ) {
     return this.aiSettings.setVisualReview(request.user, body.enabled);
+  }
+
+  @Get('ai/guidance')
+  @RequirePermissions('integrations:read')
+  aiGuidance(@Req() request: AuthenticatedRequest) {
+    return this.guidance.history(request.user.organizationId);
+  }
+
+  @Put('ai/guidance')
+  @RequirePermissions('ai:configure')
+  saveAiGuidance(@Req() request: AuthenticatedRequest, @Body() body: SaveAiGuidanceDto) {
+    return this.guidance.save(request.user, body.text);
+  }
+
+  // Recordings to try draft rules on; a preview runs the analysis, so it is
+  // gated as configuring the AI rather than reading settings.
+  @Get('ai/guidance/samples')
+  @RequirePermissions('ai:configure')
+  aiGuidanceSamples(@Req() request: AuthenticatedRequest) {
+    return this.guidance.samples(request.user.organizationId);
+  }
+
+  @Get('ai/scorecard')
+  @RequirePermissions('integrations:read', 'findings:read')
+  aiScorecard(@Req() request: AuthenticatedRequest, @Query() query: AiScorecardQueryDto) {
+    return this.guidance.scorecard(request.user.organizationId, query.days ?? 90);
   }
 
   @Patch('ai/providers/:provider')

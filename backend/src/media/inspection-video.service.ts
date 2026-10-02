@@ -17,6 +17,7 @@ import { PrismaService } from '../common/prisma.service';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
+import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from '../technician/room-summary';
 import {
   MediaProcessingService,
   PROCESSING_FAILED_EVENT,
@@ -212,6 +213,95 @@ export class InspectionVideoService {
         },
       });
     return { queued };
+  }
+
+  /**
+   * What the analysis would say about one recording under draft house rules,
+   * beside what it said and what the office decided.
+   *
+   * Nothing is stored but the token usage: the draft is for whoever is writing
+   * the rules to judge before saving them, and the decisions on the current
+   * findings are what it is judged against. Gated as configuring the AI, since
+   * that is what it is for and it costs a model call. Reads the stored
+   * narration, so it works on a finalized inspection too: nothing there changes.
+   */
+  async previewAnalysis(user: AuthenticatedUser, videoId: string, houseRules: string) {
+    if (!user.permissions.includes('ai:configure'))
+      throw new ApplicationError(
+        403,
+        'FORBIDDEN',
+        'You do not have permission to change how the AI judges recordings.',
+      );
+    if (!this.mediaProcessing)
+      throw new ApplicationError(
+        503,
+        'MEDIA_PROCESSING_UNAVAILABLE',
+        'The analysis pipeline is not available on this server.',
+      );
+    const media = await this.prisma.inspectionMedia.findFirst({
+      where: { id: videoId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        inspectionId: true,
+        inspectionArea: { select: { propertyArea: { select: { name: true } } } },
+      },
+    });
+    if (!media)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
+    const draft = await this.mediaProcessing.previewAnalysis(
+      media.id,
+      user.organizationId,
+      houseRules,
+    );
+    // The room summary is context, not a finding anybody decides; it is
+    // returned on its own so the draft's wording can still be read.
+    const isSummary = (item: { findingType: string; title: string }) =>
+      item.findingType === ROOM_SUMMARY_WHERE.findingType && item.title === ROOM_SUMMARY_TITLE;
+    const current = await this.prisma.inspectionFinding.findMany({
+      where: { inspectionMediaId: media.id, NOT: { ...ROOM_SUMMARY_WHERE } },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        severity: true,
+        findingType: true,
+        category: true,
+        source: true,
+        reviewStatus: true,
+        videoTimestampStart: true,
+        videoTimestampEnd: true,
+        reviews: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { status: true, reason: true, reasonCode: true },
+        },
+      },
+    });
+    return {
+      mediaId: media.id,
+      inspectionId: media.inspectionId,
+      roomName: media.inspectionArea.propertyArea.name,
+      modelId: draft.modelId,
+      tokens: draft.usage.totalTokens,
+      summary: draft.items.find(isSummary)?.description ?? null,
+      draft: draft.items.filter((item) => !isSummary(item)).map((item) => ({
+        title: item.title,
+        description: item.description,
+        severity: item.severity,
+        findingType: item.findingType,
+        category: item.category,
+        comparisonResult: item.comparisonResult,
+        possibleResponsibility: item.possibleResponsibility,
+        confidence: item.confidence,
+        videoTimestampStart: item.videoTimestampStart,
+        videoTimestampEnd: item.videoTimestampEnd,
+      })),
+      current: current.map(({ reviews, ...finding }) => ({
+        ...finding,
+        lastReview: reviews[0] ?? null,
+      })),
+    };
   }
 
   /**

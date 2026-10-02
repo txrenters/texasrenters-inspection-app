@@ -18,6 +18,7 @@ import {
 } from '@prisma/client';
 import { z } from 'zod';
 
+import { AiGuidanceService } from '../admin/ai-guidance.service';
 import {
   AiProviderSettingsService,
   type AiTokenUsage,
@@ -29,6 +30,7 @@ import { resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
+import { houseRulesLines } from './house-rules';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from './room-summary';
 
@@ -62,7 +64,8 @@ import { ROOM_SUMMARY_WHERE } from './room-summary';
  */
 
 /** Recorded on the analysis job, so a finding can be traced to the prompt that wrote it. */
-export const VISUAL_PROMPT_VERSION = 'vision-1';
+/** vision-2: the office's house rules decide what counts as a problem worth spotting. */
+export const VISUAL_PROMPT_VERSION = 'vision-2';
 
 /** Frames looked at in the scan, however long the recording. */
 const MAX_SCAN_FRAMES = 90;
@@ -242,12 +245,15 @@ export function scanPrompt(input: {
   checklist: Array<{ label: string; answer: string; comment: string | null }>;
   findings: Array<{ ref: string; title: string; description: string; start: number; end: number }>;
   decided: Array<{ title: string; reviewStatus: string }>;
+  /** The office's house rules: what counts as a problem worth listing at all. */
+  houseRules?: string | null;
 }) {
   const moveIn = input.inspectionType === InspectionType.MOVE_IN;
   return [
     'You are checking a property inspection video for TexasRenters, a property manager.',
     `You see ${input.frameCount} still frames from a phone walkthrough of one room, in time order. Each frame is preceded by its label and time, like "T021 (0:21)".`,
     `Room: ${input.roomName}. Inspection type: ${input.inspectionType}.`,
+    ...houseRulesLines(input.houseRules ?? null),
     ...(input.checklist.length
       ? [
           'The technician recorded this checklist for the room (authoritative):',
@@ -323,6 +329,7 @@ export class VisualReviewService {
     @Inject(InspectionMediaStorageService)
     private readonly storage?: InspectionMediaStorageService,
     @Optional() @Inject(ComparisonService) private readonly comparison?: ComparisonService,
+    @Optional() @Inject(AiGuidanceService) private readonly guidance?: AiGuidanceService,
   ) {}
 
   /** Whether the office has switched it on. */
@@ -423,6 +430,7 @@ export class VisualReviewService {
     }));
 
     const configuration = await this.aiSettings.resolve(organizationId);
+    const houseRules = (await this.guidance?.current(organizationId)) ?? null;
     const thumbnail = this.thumbnailBase(media.streamUid);
     const times = scanTimes(media.durationSeconds);
     const scanFrames = await this.fetchFrames(thumbnail, times, SCAN_FRAME_HEIGHT);
@@ -441,6 +449,7 @@ export class VisualReviewService {
         modelId: configuration.modelId,
         promptVersion: VISUAL_PROMPT_VERSION,
         schemaVersion: '1',
+        guidanceVersion: houseRules?.version ?? null,
       },
     });
     const usage: AiTokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -467,6 +476,7 @@ export class VisualReviewService {
             })),
             findings: [...refs].map(([ref, finding]) => ({ ref, ...finding })),
             decided: decidedRows,
+            houseRules: houseRules?.text ?? null,
           }),
         },
       ];

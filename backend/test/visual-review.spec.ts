@@ -80,6 +80,7 @@ function harness(
     close?: unknown;
     baselinePhotos?: unknown[];
     customerCode?: string | null;
+    houseRules?: string | null;
   } = {},
 ) {
   const media =
@@ -261,6 +262,9 @@ function harness(
     stream as never,
     storage as never,
     comparison as never,
+    (opts.houseRules
+      ? { current: jest.fn().mockResolvedValue({ version: 2, text: opts.houseRules }) }
+      : undefined) as never,
   );
   const calls = () =>
     (global.fetch as jest.Mock).mock.calls.filter(([url]) => url === 'https://api.openai.com/v1/responses');
@@ -472,5 +476,33 @@ describe('looking at a recording', () => {
       await expect(service.review('media-1', ORGANIZATION_ID)).resolves.toBeNull();
       expect(calls()).toHaveLength(0);
     }
+  });
+});
+
+describe('the office’s house rules, in the look at the video', () => {
+  it('judges what is worth listing by them, and records the version it ran under', async () => {
+    const { service, sent, prisma } = harness({
+      houseRules: 'Dirt is a cleaning item, never damage.',
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(sent(0)[0].text).toContain(
+      '<house_rules>\nDirt is a cleaning item, never damage.\n</house_rules>',
+    );
+    expect(prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ promptVersion: 'vision-2', guidanceVersion: 2 }),
+    });
+  });
+
+  it('says nothing of rules when there are none', async () => {
+    const { service, sent, prisma } = harness();
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(sent(0)[0].text).not.toContain('<house_rules>');
+    expect(prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ guidanceVersion: null }),
+    });
   });
 });

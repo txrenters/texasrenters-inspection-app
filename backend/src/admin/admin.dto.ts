@@ -2,7 +2,10 @@ import {
   AiProvider,
   AreaCategory,
   AreaEnvironment,
+  FindingRejectReason,
+  FindingType,
   InspectionType,
+  Severity,
   SkillRequirementLevel,
 } from '@prisma/client';
 import { MAX_BOOKING_FILTER_QUANTITY } from '@texasrenters/shared';
@@ -26,8 +29,11 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
+
+import { MAX_GUIDANCE_LENGTH } from './ai-guidance.service';
 
 export class PaginationDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
@@ -470,8 +476,50 @@ export class TestMailDto {
   @IsEmail() @MaxLength(320) recipientEmail!: string;
 }
 
+/**
+ * A rejection says why: a reason from the fixed list, which the AI is later
+ * shown as a lesson, or a note in the reviewer's words. The note is required
+ * only when no reason was chosen or the reason is OTHER, and is checked
+ * whenever it is sent.
+ */
 export class FindingRejectDto {
-  @IsString() @MinLength(2) @MaxLength(1000) reason!: string;
+  @IsOptional() @IsEnum(FindingRejectReason) reasonCode?: FindingRejectReason;
+
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || undefined : value))
+  @ValidateIf(
+    (dto: FindingRejectDto) =>
+      dto.reason !== undefined || !dto.reasonCode || dto.reasonCode === FindingRejectReason.OTHER,
+  )
+  @IsString()
+  @MinLength(2)
+  @MaxLength(1000)
+  reason?: string;
+}
+
+/**
+ * The finding as the office would have written it, approved in one step.
+ *
+ * Every field is sent, changed or not, so the record of the correction says
+ * exactly what was kept. The note is the reviewer's own, for the audit trail.
+ * Bounds match what the AI itself may write, with room for a longer title.
+ */
+export class FindingEditDto {
+  @IsString() @MinLength(2) @MaxLength(200) title!: string;
+  @IsString() @MaxLength(4000) description!: string;
+  @IsEnum(Severity) severity!: Severity;
+  @IsEnum(FindingType) findingType!: FindingType;
+  @IsString() @MinLength(1) @MaxLength(80) category!: string;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string;
+}
+
+export class SaveAiGuidanceDto {
+  // Empty is allowed: it saves a version with no rules, which is how they are
+  // switched off without losing the history.
+  @IsString() @MaxLength(MAX_GUIDANCE_LENGTH) text!: string;
+}
+
+export class AiScorecardQueryDto {
+  @IsOptional() @Type(() => Number) @IsInt() @Min(7) @Max(365) days?: number;
 }
 
 export class AdminFindingsQueryDto extends PaginationDto {

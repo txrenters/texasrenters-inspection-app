@@ -27,6 +27,7 @@ vi.mock('@/lib/queries', () => ({
   useAdminMutations: () => ({
     approveFinding: { isPending: false, error: null, mutateAsync: state.approve },
     rejectFinding: { isPending: false, error: null, mutateAsync: async () => {} },
+    editFinding: { isPending: false, error: null, mutateAsync: async () => {} },
     captureSnapshot: { isPending: false, isError: false, error: null, mutate: state.capture },
     reanalyzeRecording: { isPending: false, isError: false, error: null, mutate: () => {} },
   }),

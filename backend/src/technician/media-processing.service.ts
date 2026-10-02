@@ -22,7 +22,11 @@ import { z } from 'zod';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant, withTenant } from '../database/tenant-context';
-import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
+import { AiGuidanceService } from '../admin/ai-guidance.service';
+import {
+  AiProviderSettingsService,
+  type AiTokenUsage,
+} from '../admin/ai-provider-settings.service';
 import { ComparisonService } from '../admin/comparison.service';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
@@ -33,13 +37,14 @@ import {
 } from './deepgram-transcription';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { captureTimeForFrame } from '../common/photo-capture-time';
+import { houseRulesLines } from './house-rules';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
 import { VisualReviewService } from './visual-review.service';
 
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
-// again on a re-run.
-const PROMPT_VERSION = '4';
+// again on a re-run. 5: the office's house rules and its recent decisions.
+const PROMPT_VERSION = '5';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -303,6 +308,8 @@ export class MediaProcessingService implements OnModuleInit {
     // Cloudflare account, where every recording is bucket-backed anyway.
     @Optional() @Inject(CloudflareStreamService) private readonly stream?: CloudflareStreamService,
     @Optional() @Inject(VisualReviewService) private readonly visualReview?: VisualReviewService,
+    // The office's house rules and past decisions, read into every analysis.
+    @Optional() @Inject(AiGuidanceService) private readonly guidance?: AiGuidanceService,
   ) {}
 
   /**
@@ -1193,6 +1200,7 @@ export class MediaProcessingService implements OnModuleInit {
     organizationId: string,
   ) {
     const configuration = await this.aiSettings.resolve(organizationId);
+    const guidance = (await this.guidance?.current(organizationId)) ?? null;
     const job = await this.prisma.aiAnalysisJob.create({
       data: {
         inspectionMediaId: media.id,
@@ -1201,44 +1209,17 @@ export class MediaProcessingService implements OnModuleInit {
         modelId: configuration.modelId,
         promptVersion: PROMPT_VERSION,
         schemaVersion: SCHEMA_VERSION,
+        guidanceVersion: guidance?.version ?? null,
       },
     });
     try {
-      let items: z.infer<typeof analysisResponseSchema>;
-      let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-      if (transcript.text.trim().length < 5) {
-        // Nothing was said — record that as the summary without an AI call.
-        items = [this.noNotableConditionSummary(media.inspectionArea.propertyArea.name)];
-      } else {
-        const [baseline, assessments, reviewed] = await Promise.all([
-          this.baselineContext(media),
-          this.checklistAssessments(media.id),
-          this.reviewedFindings(media.id),
-        ]);
-        const prompt = this.analysisPrompt(media, transcript, baseline, assessments, reviewed);
-        const result =
-          configuration.provider === AiProvider.ANTHROPIC
-            ? await this.anthropicText(configuration.apiKey, configuration.modelId, prompt)
-            : await this.openAiText(configuration.apiKey, configuration.modelId, prompt);
-        usage = result.usage;
-        const parsed = analysisResponseSchema.safeParse(JSON.parse(extractJsonArray(result.text)));
-        if (!parsed.success)
-          throw new ApplicationError(
-            422,
-            'INVALID_AI_FINDINGS',
-            'The AI findings did not pass validation and were discarded.',
-          );
-        items = this.ensureSummaryFirst(
-          parsed.data,
-          media.inspectionArea.propertyArea.name,
-        ).map((item) =>
-          withoutUnfoundedTenantLean(
-            item,
-            media.inspectionArea.inspection.inspectionType === InspectionType.MOVE_OUT &&
-              !baseline.established,
-          ),
-        );
-      }
+      const { items, usage } = await this.proposeFindings(
+        media,
+        transcript,
+        organizationId,
+        configuration,
+        guidance?.text ?? null,
+      );
       // Reprocessing replaces this recording's unreviewed suggestions instead
       // of stacking duplicates; human-reviewed findings are never touched. Only
       // the narration's own: what the AI spotted in the frames is the visual
@@ -1294,6 +1275,127 @@ export class MediaProcessingService implements OnModuleInit {
         .catch(() => undefined);
       throw error;
     }
+  }
+
+  /**
+   * The findings the AI proposes for one recording, written nowhere.
+   *
+   * Shared by the analysis, which stores them, and the house-rules preview,
+   * which only shows them: a preview that took a different path to its answer
+   * would not show what the rules would actually do.
+   */
+  private async proposeFindings(
+    media: {
+      id: string;
+      inspectionId: string;
+      durationSeconds: number;
+      inspectionArea: {
+        propertyArea: {
+          id: string;
+          name: string;
+          floor: { name: string } | null;
+          baselineConditions: Array<{ conditionSummary: string; knownDefects: unknown }>;
+        };
+        inspection: { inspectionType: string; baselineInspectionId?: string | null };
+      };
+    },
+    transcript: Transcript,
+    organizationId: string,
+    configuration: { provider: AiProvider; modelId: string; apiKey: string },
+    houseRules: string | null,
+    // A preview is judged against this recording's decisions, so it must not
+    // be shown them: told the office rejected a finding, the model drops it,
+    // and the draft rules look better than they are.
+    { withDecisions = true }: { withDecisions?: boolean } = {},
+  ): Promise<{ items: z.infer<typeof analysisResponseSchema>; usage: AiTokenUsage }> {
+    if (transcript.text.trim().length < 5)
+      // Nothing was said — record that as the summary without an AI call.
+      return {
+        items: [this.noNotableConditionSummary(media.inspectionArea.propertyArea.name)],
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      };
+    const [baseline, assessments, reviewed, lessons] = await Promise.all([
+      this.baselineContext(media),
+      this.checklistAssessments(media.id),
+      withDecisions ? this.reviewedFindings(media.id) : Promise.resolve([]),
+      this.guidance
+        ? this.guidance.lessons(organizationId, media.inspectionArea.propertyArea.name, media.inspectionId)
+        : Promise.resolve([]),
+    ]);
+    const prompt = this.analysisPrompt(media, transcript, baseline, assessments, reviewed, {
+      houseRules,
+      lessons,
+    });
+    const result =
+      configuration.provider === AiProvider.ANTHROPIC
+        ? await this.anthropicText(configuration.apiKey, configuration.modelId, prompt)
+        : await this.openAiText(configuration.apiKey, configuration.modelId, prompt);
+    const parsed = analysisResponseSchema.safeParse(JSON.parse(extractJsonArray(result.text)));
+    if (!parsed.success)
+      throw new ApplicationError(
+        422,
+        'INVALID_AI_FINDINGS',
+        'The AI findings did not pass validation and were discarded.',
+      );
+    return {
+      items: this.ensureSummaryFirst(parsed.data, media.inspectionArea.propertyArea.name).map(
+        (item) =>
+          withoutUnfoundedTenantLean(
+            item,
+            media.inspectionArea.inspection.inspectionType === InspectionType.MOVE_OUT &&
+              !baseline.established,
+          ),
+      ),
+      usage: result.usage,
+    };
+  }
+
+  /**
+   * What draft house rules would make of one recording, stored nowhere.
+   *
+   * For the office to try a change to the rules before saving it, on a
+   * recording whose findings it has already decided, so the draft's answer can
+   * be read against those decisions. Uses the narration already stored: a
+   * preview should cost one analysis call, not a transcription.
+   */
+  async previewAnalysis(mediaId: string, organizationId: string, houseRules: string) {
+    const media = await this.loadMedia(mediaId, organizationId);
+    if (!media)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
+    const transcript = await this.anyStoredTranscript(media.id, media.durationSeconds);
+    if (!transcript)
+      throw new ApplicationError(
+        409,
+        'NO_STORED_NARRATION',
+        'This recording has no stored narration yet. Run the AI on it first.',
+      );
+    const configuration = await this.aiSettings.resolve(organizationId);
+    const { items, usage } = await this.proposeFindings(
+      media,
+      transcript,
+      organizationId,
+      configuration,
+      houseRules.trim() || null,
+      { withDecisions: false },
+    );
+    await this.aiSettings.recordUsage(organizationId, configuration, 'GUIDANCE_PREVIEW', usage, media.id);
+    return { items, usage, modelId: configuration.modelId };
+  }
+
+  /** The stored narration, timed or not: a preview can read either. */
+  private async anyStoredTranscript(mediaId: string, durationSeconds: number) {
+    const job = await this.prisma.transcriptionJob.findUnique({
+      where: { inspectionMediaId: mediaId },
+      select: {
+        status: true,
+        segments: {
+          orderBy: { startSeconds: 'asc' },
+          select: { startSeconds: true, endSeconds: true, text: true },
+        },
+      },
+    });
+    if (job?.status !== TranscriptionStatus.COMPLETED || !job.segments.length) return null;
+    return transcriptFrom(transcriptLines(job.segments, durationSeconds), durationSeconds);
   }
 
   /**
@@ -1504,6 +1606,7 @@ export class MediaProcessingService implements OnModuleInit {
       videoTimestampSeconds: number | null;
     }> = [],
     reviewed: Array<{ title: string; description: string; reviewStatus: string }> = [],
+    teaching: { houseRules: string | null; lessons: string[] } = { houseRules: null, lessons: [] },
   ) {
     const area = media.inspectionArea.propertyArea;
     const assessmentLines = assessments.map((item) => {
@@ -1550,6 +1653,7 @@ export class MediaProcessingService implements OnModuleInit {
       `Room: ${area.name}${area.floor ? ` (${area.floor.name})` : ''}.`,
       `Inspection type: ${media.inspectionArea.inspection.inspectionType}.`,
       `Video duration: ${media.durationSeconds} seconds.`,
+      ...houseRulesLines(teaching.houseRules),
       ...baselineLines,
       // Placed before the transcript on purpose: the model reads the facts it
       // must not contradict before it reads the prose it may misread.
@@ -1583,6 +1687,15 @@ export class MediaProcessingService implements OnModuleInit {
                 `- ${finding.reviewStatus === 'REJECTED' ? 'REJECTED' : 'ALREADY RECORDED'}: ${finding.title} — ${finding.description}`,
             ),
             '</reviewed>',
+          ]
+        : []),
+      ...(teaching.lessons.length
+        ? [
+            'How the office recently decided AI findings like these, in other inspections. Learn from',
+            'them: do not raise what it rejected for the same reason, and write findings the way it corrected them.',
+            '<lessons>',
+            ...teaching.lessons,
+            '</lessons>',
           ]
         : []),
       transcript.timed

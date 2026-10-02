@@ -740,6 +740,7 @@ export class AreaEvidenceService {
             select: {
               status: true,
               reason: true,
+              reasonCode: true,
               createdAt: true,
               reviewer: { select: { displayName: true } },
             },
@@ -1021,6 +1022,7 @@ export class AreaEvidenceService {
           ? {
               status: finding.reviews[0].status,
               reason: finding.reviews[0].reason,
+              reasonCode: finding.reviews[0].reasonCode,
               reviewerName: finding.reviews[0].reviewer.displayName,
               createdAt: finding.reviews[0].createdAt.toISOString(),
             }

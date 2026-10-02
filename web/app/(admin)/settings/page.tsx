@@ -4,6 +4,8 @@ import type { AiProviderConfiguration, AiProviderName } from '@texasrenters/shar
 import { CheckIcon, ShieldCheckIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { AiHouseRules } from '@/components/ai-house-rules';
+import { AiScorecard } from '@/components/ai-scorecard';
 import { PageHeader, SectionHeader } from '@/components/page-header';
 import { PasswordInput } from '@/components/password-input';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -208,6 +210,15 @@ export default function SettingsPage() {
             </p>
           </>
         ) : null}
+      </section>
+
+      <section aria-label="Teaching the AI" className="mt-6 space-y-4">
+        <SectionHeader
+          description="The office teaches the AI two ways: house rules it reads with every recording, and its reviewers' decisions, which it is shown as examples. A rejection's reason and a correction both count."
+          title="Teaching the AI"
+        />
+        <AiHouseRules canConfigure={canManageSecrets} />
+        <AiScorecard />
       </section>
 
       <Card className="mt-6">

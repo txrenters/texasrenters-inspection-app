@@ -11,6 +11,8 @@ import {
   Min,
 } from 'class-validator';
 
+import { MAX_GUIDANCE_LENGTH } from '../admin/ai-guidance.service';
+
 /**
  * What the device declares before it is allowed to upload.
  *
@@ -84,4 +86,12 @@ export class CaptureSnapshotDto {
    * approved, like every finding photograph.
    */
   @IsOptional() @IsUUID() findingId?: string;
+}
+
+/**
+ * Draft house rules to try on one recording before saving them. Bounded as
+ * the saved rules are; empty tries the analysis with no rules at all.
+ */
+export class PreviewAnalysisDto {
+  @IsString() @MaxLength(MAX_GUIDANCE_LENGTH) houseRules!: string;
 }
