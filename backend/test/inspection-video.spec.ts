@@ -420,8 +420,43 @@ describe('stream webhook', () => {
     });
     const data = prisma.inspectionMedia.update.mock.calls[0][0].data;
     expect(data.processingStatus).toBe('FAILED');
+    // The code is what tells this failure from analysis failing, which shares
+    // the status and must not stop playback.
+    expect(data.failureCode).toBe('STREAM_ENCODING_FAILED');
     expect(data.failureMessage).toBe('Unsupported codec');
     expect(data.failedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves the pipeline's state alone when Cloudflare repeats a ready", async () => {
+    // By then the column holds transcription and analysis: READY once they
+    // finished, FAILED if they did not. PROCESSING over either left the
+    // recording "in progress" with nothing to move it on.
+    for (const status of ['READY', 'FAILED']) {
+      const { service, prisma } = build();
+      prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow(status, new Date('2026-10-01')));
+
+      await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
+
+      expect(prisma.inspectionMedia.update.mock.calls[0][0].data).not.toHaveProperty(
+        'processingStatus',
+      );
+    }
+  });
+
+  it('clears an earlier encode failure once a replacement upload is encoded', async () => {
+    // A renewed upload keeps the record and gets a new Cloudflare video. The
+    // first one's failure must not outlive it and stop playback later on.
+    const { service, prisma } = build();
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('FAILED'));
+
+    await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
+
+    expect(prisma.inspectionMedia.update.mock.calls[0][0].data).toMatchObject({
+      processingStatus: 'PROCESSING',
+      failureCode: null,
+      failureMessage: null,
+      failedAt: null,
+    });
   });
 
   it('ignores an unknown video without failing the request', async () => {
@@ -590,11 +625,28 @@ describe('playback', () => {
     const { service } = playbackHarness({
       ...readyMedia,
       processingStatus: 'FAILED',
+      failureCode: 'STREAM_ENCODING_FAILED',
       failureMessage: 'Unsupported codec',
     });
     await expect(service.getPlayback(admin, 'media-1')).resolves.toMatchObject({
       status: 'failed',
       failureMessage: 'Unsupported codec',
+    });
+  });
+
+  it('plays a recording whose analysis failed, since Cloudflare encoded it', async () => {
+    // 2026-10-01: three move-out walkthroughs said "could not be processed for
+    // playback" while Cloudflare held each of them encoded and ready. Only the
+    // transcription and AI analysis had failed, which writes the same status
+    // with no failure code.
+    const { service } = playbackHarness({
+      ...readyMedia,
+      processingStatus: 'FAILED',
+      failureCode: null,
+    });
+    await expect(service.getPlayback(admin, 'media-1')).resolves.toMatchObject({
+      status: 'ready',
+      hlsUrl: expect.stringContaining('/manifest/video.m3u8'),
     });
   });
 
@@ -619,6 +671,72 @@ describe('playback', () => {
     await expect(service.getPlayback(technician, 'media-1')).rejects.toMatchObject({
       code: 'INSPECTION_MEDIA_NOT_FOUND',
     });
+  });
+});
+
+/**
+ * Transcription and analysis tried again where they failed.
+ *
+ * Nothing ever did: a provider error, or an MP4 Cloudflare took longer than
+ * three minutes to prepare, left a walkthrough with no transcript and no
+ * findings for good (three move-out rooms, 2026-10-01).
+ */
+describe('analysis that failed is tried again', () => {
+  function harness(rows: unknown[], withPipeline = true) {
+    const mediaProcessing = { queue: jest.fn() };
+    const { service, prisma } = build(withPipeline ? { mediaProcessing } : {});
+    prisma.inspectionMedia.findMany.mockResolvedValue(rows);
+    return { service, prisma, mediaProcessing };
+  }
+  /** A failed recording, with how many runs have failed on it so far. */
+  const failed = (id: string, failures: number) => ({
+    id,
+    organizationId: 'org-1',
+    _count: { processingEvents: failures },
+  });
+
+  it('queues encoded recordings whose analysis failed a while ago', async () => {
+    const { service, prisma, mediaProcessing } = harness([failed('media-1', 1)]);
+
+    await expect(service.retryFailedAnalysis()).resolves.toEqual({ checked: 1, queued: 1 });
+
+    expect(mediaProcessing.queue).toHaveBeenCalledWith('media-1', 'org-1');
+    const { where } = prisma.inspectionMedia.findMany.mock.calls[0][0];
+    expect(where).toMatchObject({ processingStatus: 'FAILED', readyAt: { not: null } });
+    // Never a video Cloudflare could not encode: there is nothing to transcribe.
+    expect(where.OR).toEqual([
+      { failureCode: null },
+      { failureCode: { not: 'STREAM_ENCODING_FAILED' } },
+    ]);
+    // Not straight after the run that failed, which would meet the same blip.
+    expect(where.updatedAt.lt.getTime()).toBeLessThan(Date.now() - 5 * 60_000);
+  });
+
+  it('stops after three runs: a fourth needs a person', async () => {
+    // Each run is paid for, and one that fails the same way three times is not
+    // a passing blip.
+    const { service, mediaProcessing } = harness([failed('spent', 3), failed('fresh', 1)]);
+
+    await expect(service.retryFailedAnalysis()).resolves.toEqual({ checked: 2, queued: 1 });
+
+    expect(mediaProcessing.queue).toHaveBeenCalledTimes(1);
+    expect(mediaProcessing.queue).toHaveBeenCalledWith('fresh', 'org-1');
+  });
+
+  it('queues a few at a time', async () => {
+    const rows = Array.from({ length: 8 }, (_, index) => failed(`media-${index}`, 1));
+    const { service, mediaProcessing } = harness(rows);
+
+    await service.retryFailedAnalysis();
+
+    expect(mediaProcessing.queue).toHaveBeenCalledTimes(5);
+  });
+
+  it('does nothing on a deployment without the pipeline', async () => {
+    const { service, prisma } = harness([failed('media-1', 1)], false);
+
+    await expect(service.retryFailedAnalysis()).resolves.toEqual({ checked: 0, queued: 0 });
+    expect(prisma.inspectionMedia.findMany).not.toHaveBeenCalled();
   });
 });
 

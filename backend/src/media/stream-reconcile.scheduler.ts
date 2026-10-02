@@ -59,6 +59,17 @@ export class StreamReconcileScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
+      await this.reconcile();
+      // After, and on its own: it needs nothing from Cloudflare's API, so an
+      // outage that failed the reconcile is no reason to skip it.
+      await this.retryAnalysis();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async reconcile() {
+    try {
       const result = await this.videos.reconcileStuckVideos();
       // Only when it did something. A quiet sweep every five minutes would
       // bury the runs that matter.
@@ -75,8 +86,23 @@ export class StreamReconcileScheduler implements OnModuleInit, OnModuleDestroy {
         event: 'stream_reconcile_failed',
         message: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      this.running = false;
+    }
+  }
+
+  private async retryAnalysis() {
+    try {
+      const result = await this.videos.retryFailedAnalysis();
+      if (result.queued > 0)
+        this.logger.warn({
+          event: 'stream_analysis_retried',
+          ...result,
+          detail: 'Transcription and analysis queued again for recordings where they failed.',
+        });
+    } catch (error) {
+      this.logger.error({
+        event: 'stream_analysis_retry_failed',
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

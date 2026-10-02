@@ -76,6 +76,8 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   UPLOADED: { label: 'Uploaded', tone: 'success', glyph: 'success' },
   READY: { label: 'Ready', tone: 'success', glyph: 'success' },
   FAILED: { label: 'Failed', tone: 'destructive', glyph: 'destructive' },
+  // The recording plays; only the AI's transcript and suggestions are missing.
+  ANALYSIS_FAILED: { label: 'Analysis failed', tone: 'warning', glyph: 'warning' },
 
   // Review decisions. Findings and estimates are deliberately separate axes —
   // a valid finding may still have an unapproved amount.

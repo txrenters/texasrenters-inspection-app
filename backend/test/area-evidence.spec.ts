@@ -105,6 +105,35 @@ describe('area evidence summary', () => {
     expect(prisma.inspectionPhoto.groupBy).toHaveBeenCalled();
   });
 
+  it('marks an area Failed only when its video failed, not its analysis', async () => {
+    // Three move-out rooms read Failed on 2026-10-01 though Cloudflare held
+    // every walkthrough encoded and ready to play: only the transcription and
+    // AI analysis had failed, which leaves the room perfectly reviewable.
+    const recording = (inspectionAreaId: string, failureCode: string | null) => ({
+      inspectionAreaId,
+      recordingType: 'PRIMARY_AREA',
+      processingStatus: 'FAILED',
+      failureCode,
+      createdAt: new Date('2026-10-01T21:40:00Z'),
+    });
+    const prisma = summaryPrisma({
+      inspectionArea: {
+        findMany: jest.fn().mockResolvedValue([area('a1', 'p1'), area('a2', 'p2')]),
+      },
+      inspectionMedia: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([recording('a1', null), recording('a2', 'STREAM_ENCODING_FAILED')]),
+      },
+    });
+
+    const result = await service(prisma).summary(user, INSPECTION);
+
+    const status = (id: string) => result.areas.find((row) => row.id === id)?.reviewStatus;
+    expect(status('a1')).not.toBe('FAILED');
+    expect(status('a2')).toBe('FAILED');
+  });
+
   it('reads counts per area rather than once per area', async () => {
     const prisma = summaryPrisma({
       inspectionArea: {
@@ -233,7 +262,9 @@ describe('derived area review status', () => {
   it('ranks broken evidence above everything else', async () => {
     expect(
       await statusFor({
-        media: [{ ...ready, processingStatus: 'FAILED' }],
+        // A video Cloudflare could not encode. FAILED with no code is only the
+        // analysis failing, and that recording still plays.
+        media: [{ ...ready, processingStatus: 'FAILED', failureCode: 'STREAM_ENCODING_FAILED' }],
         findings: [{ propertyAreaId: 'p1', reviewStatus: 'PENDING_REVIEW', _count: { _all: 3 } }],
       }),
     ).toBe('FAILED');
@@ -745,6 +776,33 @@ describe('single area evidence bundle', () => {
     expect(bundle.findings.map((finding) => finding.id)).toEqual(['finding-1']);
     expect(bundle.findings[0].recordingId).toBe('media-1');
     expect(bundle.findings[0].videoTimestampStart).toBe(18);
+  });
+
+  it('says when only the analysis of a recording failed, which still plays', async () => {
+    const prisma = bundlePrisma();
+    const [recording] = await prisma.inspectionMedia.findMany();
+    prisma.inspectionMedia.findMany.mockResolvedValue([
+      { ...recording, processingStatus: 'FAILED', failureCode: null },
+    ]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    expect(bundle.recordings[0].processingStatus).toBe('ANALYSIS_FAILED');
+    // The finding still awaiting a decision is what the area is waiting on.
+    expect(bundle.area.reviewStatus).toBe('FINDINGS_NEED_REVIEW');
+  });
+
+  it('still calls a recording Cloudflare could not encode Failed', async () => {
+    const prisma = bundlePrisma();
+    const [recording] = await prisma.inspectionMedia.findMany();
+    prisma.inspectionMedia.findMany.mockResolvedValue([
+      { ...recording, processingStatus: 'FAILED', failureCode: 'STREAM_ENCODING_FAILED' },
+    ]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    expect(bundle.recordings[0].processingStatus).toBe('FAILED');
+    expect(bundle.area.reviewStatus).toBe('FAILED');
   });
 
   it('scopes every read to the requested area', async () => {
