@@ -72,6 +72,19 @@ describe('which move-in photographs are of the same item', () => {
   });
 });
 
+const DEFAULT_BASELINE_PHOTOS = [
+  {
+    id: 'move-in-photo-door',
+    storageKey: 'photos/door.jpg',
+    checklistItem: { label: 'Doors and locks', keywords: ['door', 'lock'] },
+  },
+  {
+    id: 'move-in-photo-window',
+    storageKey: 'photos/window.jpg',
+    checklistItem: { label: 'Windows and locks', keywords: ['window'] },
+  },
+];
+
 function harness(
   opts: {
     media?: Record<string, unknown> | null;
@@ -81,6 +94,8 @@ function harness(
     baselinePhotos?: unknown[];
     customerCode?: string | null;
     houseRules?: string | null;
+    /** The technician's own photos of this room; none unless a test is about them. */
+    roomPhotos?: unknown[];
   } = {},
 ) {
   const media =
@@ -153,19 +168,11 @@ function harness(
       ]),
     },
     inspectionPhoto: {
-      findMany: jest.fn().mockResolvedValue(
-        opts.baselinePhotos ?? [
-          {
-            id: 'move-in-photo-door',
-            storageKey: 'photos/door.jpg',
-            checklistItem: { label: 'Doors and locks', keywords: ['door', 'lock'] },
-          },
-          {
-            id: 'move-in-photo-window',
-            storageKey: 'photos/window.jpg',
-            checklistItem: { label: 'Windows and locks', keywords: ['window'] },
-          },
-        ],
+      // The room's own photos are asked for by area; the move-in's by its room.
+      findMany: jest.fn(async (args: { where: { inspectionAreaId?: string } }) =>
+        args.where.inspectionAreaId
+          ? (opts.roomPhotos ?? [])
+          : (opts.baselinePhotos ?? DEFAULT_BASELINE_PHOTOS),
       ),
     },
     aiAnalysisJob: {
@@ -491,7 +498,7 @@ describe('the office’s house rules, in the look at the video', () => {
       '<house_rules>\nDirt is a cleaning item, never damage.\n</house_rules>',
     );
     expect(prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ promptVersion: 'vision-2', guidanceVersion: 2 }),
+      data: expect.objectContaining({ promptVersion: 'vision-3', guidanceVersion: 2 }),
     });
   });
 
@@ -504,5 +511,145 @@ describe('the office’s house rules, in the look at the video', () => {
     expect(prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ guidanceVersion: null }),
     });
+  });
+});
+
+/**
+ * The technician's still photos of the room (2026-10-03): sharper than any
+ * frame of a moving phone video, shown to the scan after the frames, and cited
+ * as evidence the same way.
+ */
+describe('the technician’s photos of the room', () => {
+  const ROOM_PHOTOS = [
+    {
+      id: 'photo-door',
+      storageKey: 'photos/move-out-door.jpg',
+      label: null,
+      checklistItem: { label: 'Doors and locks' },
+    },
+    {
+      id: 'photo-outlet',
+      storageKey: 'photos/move-out-outlet.jpg',
+      label: 'Outlet by the window',
+      checklistItem: null,
+    },
+  ];
+  const only = (findings: unknown[], additional: unknown[] = []) => ({ findings, additional });
+
+  it('are shown to the scan after the frames, labelled to be cited, never the video’s own stills', async () => {
+    const { service, sent, prisma } = harness({ roomPhotos: ROOM_PHOTOS });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    const scan = sent(0);
+    expect(scan[0].text).toContain('After the frames come 2 still photographs the technician took');
+    expect(scan.map((part) => part.text)).toEqual(
+      expect.arrayContaining(['P1 (photo: Doors and locks)', 'P2 (photo: Outlet by the window)']),
+    );
+    // Four frames of a twelve-second walkthrough, then the two photographs.
+    expect(scan.filter((part) => part.type === 'input_image')).toHaveLength(6);
+    const roomQuery = prisma.inspectionPhoto.findMany.mock.calls
+      .map(([args]) => args)
+      .find((args) => args.where.inspectionAreaId);
+    expect(roomQuery).toMatchObject({
+      where: {
+        inspectionAreaId: 'inspection-area-1',
+        storageStatus: 'UPLOADED',
+        captureType: { not: 'VIDEO_FRAME_SNAPSHOT' },
+      },
+      take: 8,
+    });
+  });
+
+  it('keep a finding seen only in a photo as seen, with the photo, and offer no frame', async () => {
+    const { service, tx, sent } = harness({
+      roomPhotos: ROOM_PHOTOS,
+      scan: only([
+        { ref: 'F1', visible: 'VISIBLE', frames: ['P1'], observation: 'Two holes under the handle.' },
+        { ref: 'F2', visible: 'UNCLEAR', frames: [], observation: '' },
+      ]),
+      close: { items: [{ ref: 'F1', visible: true, box: null, observation: 'Two small holes below the handle.' }] },
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    // The close look is shown the photograph, said to be one.
+    expect(sent(1).map((part) => part.text)).toEqual(
+      expect.arrayContaining([
+        'F1: Door hole and trim require repair. Two holes under the handle. (a photograph of the room, not a frame)',
+      ]),
+    );
+    const updates = Object.fromEntries(
+      tx.inspectionFinding.update.mock.calls.map(([call]) => [call.where.id, call.data]),
+    );
+    expect(updates['finding-door']).toMatchObject({
+      visualStatus: 'VISIBLE',
+      visualObservation: 'Two small holes below the handle.',
+      visualPhotoIds: ['photo-door'],
+    });
+    expect(updates['finding-trim']).toMatchObject({ visualStatus: 'UNCLEAR', visualPhotoIds: [] });
+    expect(tx.findingFrameSuggestion.createMany).not.toHaveBeenCalled();
+  });
+
+  it('let a photo stand for a finding the sharp frame does not show, without offering that frame', async () => {
+    const { service, tx } = harness({
+      roomPhotos: ROOM_PHOTOS,
+      scan: only([{ ref: 'F1', visible: 'VISIBLE', frames: ['T004', 'P1'], observation: 'Holes.' }]),
+      close: { items: [{ ref: 'F1', visible: false, box: null, observation: '' }] },
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    const door = tx.inspectionFinding.update.mock.calls.find(([call]) => call.where.id === 'finding-door')[0];
+    expect(door.data).toMatchObject({ visualStatus: 'VISIBLE', visualPhotoIds: ['photo-door'] });
+    expect(tx.findingFrameSuggestion.createMany).not.toHaveBeenCalled();
+  });
+
+  it('call a photo sighting a sharp look does not confirm unclear', async () => {
+    const { service, tx } = harness({
+      roomPhotos: ROOM_PHOTOS,
+      scan: only([{ ref: 'F1', visible: 'VISIBLE', frames: ['P1'], observation: 'Holes.' }]),
+      close: { items: [{ ref: 'F1', visible: false, box: null, observation: '' }] },
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    const door = tx.inspectionFinding.update.mock.calls.find(([call]) => call.where.id === 'finding-door')[0];
+    expect(door.data).toMatchObject({ visualStatus: 'UNCLEAR', visualPhotoIds: [] });
+  });
+
+  it('let the AI add a problem only a photo shows, once a sharp look agrees, citing no moment', async () => {
+    const { service, tx } = harness({
+      roomPhotos: ROOM_PHOTOS,
+      scan: only(
+        [],
+        [
+          {
+            title: 'Cracked outlet cover',
+            description: 'The cover plate is split.',
+            category: 'Electrical',
+            kind: 'DAMAGE',
+            severity: 'LOW',
+            frames: ['P2'],
+            observation: 'A crack across the cover plate.',
+          },
+        ],
+      ),
+      close: { items: [{ ref: 'A1', visible: true, box: [0.4, 0.4, 0.1, 0.1], observation: 'Split cover plate.' }] },
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    const [created] = tx.inspectionFinding.createMany.mock.calls[0][0].data;
+    expect(created).toMatchObject({
+      source: 'AI_VISION',
+      title: 'Cracked outlet cover',
+      videoTimestampStart: 0,
+      videoTimestampEnd: 0,
+      visualPhotoIds: ['photo-outlet'],
+      reviewStatus: 'PENDING_REVIEW',
+      possibleResponsibility: 'UNDETERMINED',
+    });
+    expect(tx.findingFrameSuggestion.createMany).not.toHaveBeenCalled();
   });
 });

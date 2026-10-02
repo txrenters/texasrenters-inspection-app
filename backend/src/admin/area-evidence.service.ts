@@ -712,6 +712,7 @@ export class AreaEvidenceService {
           baselineVisualStatus: true,
           baselineVisualNote: true,
           baselinePhotoIds: true,
+          visualPhotoIds: true,
           frameSuggestions: {
             orderBy: [{ rank: 'asc' }, { atMs: 'asc' }],
             select: {
@@ -979,6 +980,11 @@ export class AreaEvidenceService {
                 status: finding.visualStatus,
                 observation: finding.visualObservation,
                 checkedAt: finding.visualCheckedAt.toISOString(),
+                // The technician's photos of the room it was seen in.
+                photos: finding.visualPhotoIds.map((id) => ({
+                  id,
+                  contentPath: `/api/v1/admin/photos/${id}/content`,
+                })),
               }
             : null,
         baselineVisual: finding.baselineVisualStatus

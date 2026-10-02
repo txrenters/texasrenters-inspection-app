@@ -341,6 +341,8 @@ export interface AreaFinding {
     status: 'VISIBLE' | 'NOT_VISIBLE' | 'UNCLEAR';
     observation?: string | null;
     checkedAt: string;
+    /** The technician's photos of the room the AI saw it in; sharper than the video. */
+    photos?: Array<{ id: string; contentPath: string }>;
   } | null;
   /** Whether a move-in photograph of the same item already shows it. */
   baselineVisual?: {

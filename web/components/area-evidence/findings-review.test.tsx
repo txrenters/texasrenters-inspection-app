@@ -289,3 +289,30 @@ describe('adding what the AI missed', () => {
     expect(screen.queryByRole('button', { name: 'Add a finding the AI missed' })).not.toBeInTheDocument();
   });
 });
+
+describe('the technician’s photos the AI saw a finding in', () => {
+  it('are shown beside the finding, with the label saying a photo showed it', () => {
+    open(
+      bundle([
+        finding('door', 'Door hole and trim require repair', 0, 0, {
+          visual: {
+            status: 'VISIBLE',
+            checkedAt: '2026-10-03T10:00:00.000Z',
+            observation: 'Two holes below the handle.',
+            photos: [{ id: 'photo-door', contentPath: '/api/v1/admin/photos/photo-door/content' }],
+          },
+        }),
+      ]),
+    );
+
+    const row = screen.getByRole('button', { name: /Door hole and trim require repair/ });
+    expect(within(row).getByText('Seen in a photo')).toBeInTheDocument();
+    fireEvent.click(row);
+
+    expect(screen.getByText(/Seen in the technician's photo/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Open .*Entrance/ })).toBeInTheDocument();
+    // Seen in a photo, not the video: there is no moment to ask a re-run for.
+    expect(screen.queryByText(/no time given/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Re-run the AI on the recording to place it/)).not.toBeInTheDocument();
+  });
+});

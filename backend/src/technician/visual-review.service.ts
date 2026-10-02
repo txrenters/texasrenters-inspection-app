@@ -11,6 +11,7 @@ import {
   FindingType,
   FrameSuggestionStatus,
   InspectionType,
+  PhotoCaptureType,
   PhotoStorageStatus,
   ResponsibilityClassification,
   Severity,
@@ -64,9 +65,12 @@ import { ROOM_SUMMARY_WHERE } from './room-summary';
  * photograph shows was already there, never put one on.
  */
 
-/** Recorded on the analysis job, so a finding can be traced to the prompt that wrote it. */
-/** vision-2: the office's house rules decide what counts as a problem worth spotting. */
-export const VISUAL_PROMPT_VERSION = 'vision-2';
+/**
+ * Recorded on the analysis job, so a finding can be traced to the prompt that wrote it.
+ * vision-2: the office's house rules decide what counts as a problem worth spotting.
+ * vision-3: the technician's photos of the room are looked at with the frames.
+ */
+export const VISUAL_PROMPT_VERSION = 'vision-3';
 
 /** Frames looked at in the scan, however long the recording. */
 const MAX_SCAN_FRAMES = 90;
@@ -79,6 +83,14 @@ const MAX_CLOSE_TARGETS = 15;
 const MAX_SPOTTED = 5;
 const MAX_BASELINE_PHOTOS_PER_TARGET = 2;
 const BASELINE_PHOTO_WIDTH = 1000;
+/**
+ * The technician's own photos of the room the scan is shown, at most. Sharper
+ * than any frame of a moving phone video, so a small chip or a nail hole the
+ * video blurs can still be seen; bounded because each one is paid for.
+ */
+const MAX_ROOM_PHOTOS = 8;
+/** The photos kept on a finding as where it was seen. */
+const MAX_PHOTOS_PER_FINDING = 3;
 const CALL_TIMEOUT_MS = 180_000;
 /** Long enough for every frame of one review to be fetched. */
 const FRAME_TOKEN_TTL_SECONDS = 15 * 60;
@@ -205,6 +217,8 @@ type Target = {
   category: string;
   /** Best first. */
   seconds: number[];
+  /** The technician's photos it was seen in, best first. */
+  photoIds: string[];
   observation: string;
 };
 
@@ -230,6 +244,8 @@ export function scanPrompt(input: {
   roomName: string;
   inspectionType: string;
   frameCount: number;
+  /** The technician's still photos of the room shown after the frames. */
+  photoCount?: number;
   checklist: Array<{ label: string; answer: string; comment: string | null }>;
   findings: Array<{ ref: string; title: string; description: string; start: number; end: number }>;
   decided: Array<{ title: string; reviewStatus: string }>;
@@ -240,6 +256,11 @@ export function scanPrompt(input: {
   return [
     'You are checking a property inspection video for TexasRenters, a property manager.',
     `You see ${input.frameCount} still frames from a phone walkthrough of one room, in time order. Each frame is preceded by its label and time, like "T021 (0:21)".`,
+    ...(input.photoCount
+      ? [
+          `After the frames come ${input.photoCount} still photographs the technician took in the same room, each preceded by its label, like "P1 (photo: Doors and locks)". They are sharper than the frames: use them for small details, and cite them by label exactly as you cite frames.`,
+        ]
+      : []),
     `Room: ${input.roomName}. Inspection type: ${input.inspectionType}.`,
     ...houseRulesLines(input.houseRules ?? null),
     ...(input.checklist.length
@@ -271,7 +292,7 @@ export function scanPrompt(input: {
     '',
     'Task A. For every finding, look through the frames and decide:',
     '- visible: VISIBLE if at least one frame plainly shows the condition described; NOT_VISIBLE if frames show the relevant item or surface clearly and it does not look as described; UNCLEAR if the item never appears clearly enough to tell.',
-    '- frames: up to 3 frame labels that show it best, best first. Empty unless VISIBLE.',
+    '- frames: up to 3 frame or photo labels that show it best, best first. Empty unless VISIBLE.',
     '- observation: one or two sentences on exactly what the best frame shows: the item, where it is, its approximate size, its condition. Only what can be seen; never restate the narration as if seen.',
     `Task B. List up to ${MAX_SPOTTED} other problems that are clearly visible but not covered by any finding: damage, stains, holes, chips, cracks, scuffs, missing or broken parts, torn screens, dirt or items left behind. Small details count: nail and screw holes, small chips, hairline cracks, water marks. Report only what is unmistakable in a frame, never a guess from blur.`,
     '  Each: title, description, category (a short noun such as Walls), kind (DAMAGE|CLEANING|ITEMS_LEFT|MAINTENANCE), severity (LOW|MEDIUM|HIGH), frames (best first), observation.',
@@ -421,7 +442,10 @@ export class VisualReviewService {
     const houseRules = (await this.guidance?.current(organizationId)) ?? null;
     const thumbnail = this.thumbnailBase(media.streamUid);
     const times = scanTimes(media.durationSeconds);
-    const scanFrames = await this.fetchFrames(thumbnail, times, SCAN_FRAME_HEIGHT);
+    const [scanFrames, roomPhotos] = await Promise.all([
+      this.fetchFrames(thumbnail, times, SCAN_FRAME_HEIGHT),
+      this.roomPhotos(media.inspectionAreaId),
+    ]);
     if (scanFrames.size < Math.ceil(times.length / 2))
       throw new ApplicationError(
         502,
@@ -457,6 +481,7 @@ export class VisualReviewService {
             roomName,
             inspectionType,
             frameCount: scanFrames.size,
+            photoCount: roomPhotos.length,
             checklist: answers.map((answer) => ({
               label: answer.checklistItem.label,
               answer: describeChecklistAnswer(answer),
@@ -472,6 +497,13 @@ export class VisualReviewService {
         scanParts.push({ kind: 'text', text: `${frameLabel(second)} (${clock(second)})` });
         scanParts.push({ kind: 'image', bytes, mimeType: 'image/jpeg' });
       }
+      roomPhotos.forEach((photo, index) => {
+        scanParts.push({
+          kind: 'text',
+          text: `P${index + 1} (photo${photo.label ? `: ${photo.label}` : ''})`,
+        });
+        scanParts.push({ kind: 'image', bytes: photo.bytes, mimeType: 'image/jpeg' });
+      });
       const scanReply = await this.ask(configuration, scanParts);
       add(scanReply.usage);
       const scan = scanResponseSchema.parse(parseJsonObject(scanReply.text));
@@ -479,18 +511,30 @@ export class VisualReviewService {
       const known = new Map([...scanFrames.keys()].map((second) => [frameLabel(second), second]));
       const secondsOf = (labels: string[]) =>
         labels.flatMap((label) => (known.has(label) ? [known.get(label)!] : []));
+      const photoLabels = new Map(roomPhotos.map((photo, index) => [`P${index + 1}`, photo]));
+      const photosOf = (labels: string[]) =>
+        labels.flatMap((label) => (photoLabels.has(label) ? [photoLabels.get(label)!.id] : []));
 
-      const verdicts = new Map<string, { status: VisualCheckStatus; observation: string }>();
+      const verdicts = new Map<
+        string,
+        { status: VisualCheckStatus; observation: string; photoIds: string[] }
+      >();
       const targets: Target[] = [];
       for (const entry of scan.findings) {
         const finding = refs.get(entry.ref);
         if (!finding) continue;
         const seconds = secondsOf(entry.frames);
+        const photoIds = photosOf(entry.frames);
+        // Seen, but in nothing it could name: not something to assert.
         const status =
-          entry.visible === 'VISIBLE' && !seconds.length
+          entry.visible === 'VISIBLE' && !seconds.length && !photoIds.length
             ? VisualCheckStatus.UNCLEAR
             : VisualCheckStatus[entry.visible];
-        verdicts.set(finding.id, { status, observation: entry.observation });
+        verdicts.set(finding.id, {
+          status,
+          observation: entry.observation,
+          photoIds: status === VisualCheckStatus.VISIBLE ? photoIds : [],
+        });
         if (status === VisualCheckStatus.VISIBLE)
           targets.push({
             ref: entry.ref,
@@ -499,12 +543,14 @@ export class VisualReviewService {
             title: finding.title,
             category: finding.category,
             seconds,
+            photoIds,
             observation: entry.observation,
           });
       }
       scan.additional.slice(0, MAX_SPOTTED).forEach((spotted, index) => {
         const seconds = secondsOf(spotted.frames);
-        if (seconds.length)
+        const photoIds = photosOf(spotted.frames);
+        if (seconds.length || photoIds.length)
           targets.push({
             ref: `A${index + 1}`,
             finding: null,
@@ -512,6 +558,7 @@ export class VisualReviewService {
             title: spotted.title,
             category: spotted.category,
             seconds,
+            photoIds,
             observation: spotted.observation,
           });
       });
@@ -523,6 +570,8 @@ export class VisualReviewService {
           ? await this.baselinePhotos(media.inspectionId, media.inspectionArea.propertyArea.id)
           : null;
       const sharpest = new Map<string, { atMs: number; bytes: Buffer }>();
+      // Targets the close look sees in a photo, the video never having shown them.
+      const lookedAtPhoto = new Set<string>();
       const baselineFor = new Map<string, string[]>();
       const closeParts: Part[] = [
         {
@@ -534,14 +583,18 @@ export class VisualReviewService {
         },
       ];
       for (const target of close) {
-        const frame = await this.sharpestFrame(thumbnail, target.seconds[0], media.durationSeconds);
-        if (!frame) continue;
-        sharpest.set(target.ref, frame);
+        const frame = target.seconds.length
+          ? await this.sharpestFrame(thumbnail, target.seconds[0], media.durationSeconds)
+          : null;
+        const photo = frame ? null : roomPhotos.find((entry) => entry.id === target.photoIds[0]);
+        if (!frame && !photo) continue;
+        if (frame) sharpest.set(target.ref, frame);
+        else lookedAtPhoto.add(target.ref);
         closeParts.push({
           kind: 'text',
-          text: `${target.ref}: ${target.title}. ${target.observation}`,
+          text: `${target.ref}: ${target.title}. ${target.observation}${frame ? '' : ' (a photograph of the room, not a frame)'}`,
         });
-        closeParts.push({ kind: 'image', bytes: frame.bytes, mimeType: 'image/jpeg' });
+        closeParts.push({ kind: 'image', bytes: (frame ?? photo)!.bytes, mimeType: 'image/jpeg' });
         const photos = (baseline?.photos ?? [])
           .filter((photo) => photoMatchesFinding(target, photo.checklistItem))
           .slice(0, MAX_BASELINE_PHOTOS_PER_TARGET);
@@ -556,7 +609,7 @@ export class VisualReviewService {
         if (loaded.length) baselineFor.set(target.ref, loaded);
       }
       const confirmed = new Map<string, z.infer<typeof closeResponseSchema>['items'][number]>();
-      if (sharpest.size) {
+      if (sharpest.size || lookedAtPhoto.size) {
         const closeReply = await this.ask(configuration, closeParts);
         add(closeReply.usage);
         for (const item of closeResponseSchema.parse(parseJsonObject(closeReply.text)).items)
@@ -597,9 +650,14 @@ export class VisualReviewService {
         if (!verdict) continue;
         const target = close.find((entry) => entry.finding?.id === finding.id);
         const look = target ? confirmed.get(target.ref) : undefined;
-        // Seen in the scan but not on a sharp look: not something to assert.
+        // Seen in the scan but not on a sharp look: not something to assert --
+        // unless a photograph showed it, which is sharper than either frame.
         const status =
-          verdict.status === VisualCheckStatus.VISIBLE && target && sharpest.has(target.ref) && look?.visible === false
+          verdict.status === VisualCheckStatus.VISIBLE &&
+          target &&
+          (sharpest.has(target.ref) || lookedAtPhoto.has(target.ref)) &&
+          look?.visible === false &&
+          !(sharpest.has(target.ref) && verdict.photoIds.length)
             ? VisualCheckStatus.UNCLEAR
             : verdict.status;
         const baselineStatus = look?.atMoveIn
@@ -615,6 +673,10 @@ export class VisualReviewService {
             visualStatus: status,
             visualObservation: (look?.visible ? look.observation : '') || verdict.observation || null,
             visualCheckedAt: now,
+            visualPhotoIds:
+              status === VisualCheckStatus.VISIBLE
+                ? verdict.photoIds.slice(0, MAX_PHOTOS_PER_FINDING)
+                : [],
             baselineVisualStatus: baselineStatus,
             baselineVisualNote: baselineStatus ? (look?.moveInNote ?? null) : null,
             baselinePhotoIds: baselineStatus && target ? (baselineFor.get(target.ref) ?? []) : [],
@@ -627,7 +689,14 @@ export class VisualReviewService {
               : {}),
           },
         });
-        if (target && status === VisualCheckStatus.VISIBLE)
+        // Frames to suggest only where the video showed it: a finding a photo
+        // confirmed is not offered the frame a sharp look could not see it in.
+        if (
+          target &&
+          status === VisualCheckStatus.VISIBLE &&
+          sharpest.has(target.ref) &&
+          look?.visible !== false
+        )
           suggestionsFor(
             finding.id,
             target,
@@ -640,9 +709,11 @@ export class VisualReviewService {
         if (!target.spotted) continue;
         const look = confirmed.get(target.ref);
         // Two passes must agree before the AI adds a finding of its own.
-        if (!look?.visible || !sharpest.has(target.ref)) continue;
+        if (!look?.visible || !(sharpest.has(target.ref) || lookedAtPhoto.has(target.ref))) continue;
         const id = randomUUID();
-        const second = Math.round(sharpest.get(target.ref)!.atMs / 1000);
+        const best = sharpest.get(target.ref);
+        // Seen only in a photograph: it cites no moment of the recording.
+        const second = best ? Math.round(best.atMs / 1000) : 0;
         const baselineStatus =
           look.atMoveIn === 'PRESENT'
             ? BaselineVisualStatus.PRESENT_AT_MOVE_IN
@@ -671,7 +742,7 @@ export class VisualReviewService {
           // Seen, not compared: nothing here says whether it is new.
           comparisonResult: ComparisonResult.INSUFFICIENT_DATA,
           videoTimestampStart: second,
-          videoTimestampEnd: Math.min(media.durationSeconds, second + 2),
+          videoTimestampEnd: best ? Math.min(media.durationSeconds, second + 2) : 0,
           severity: Severity[target.spotted.severity],
           // Never a tenant lean from the AI's own eyes.
           possibleResponsibility: ResponsibilityClassification.UNDETERMINED,
@@ -682,11 +753,13 @@ export class VisualReviewService {
           visualStatus: VisualCheckStatus.VISIBLE,
           visualObservation: look.observation || target.observation,
           visualCheckedAt: now,
+          visualPhotoIds: target.photoIds.slice(0, MAX_PHOTOS_PER_FINDING),
           baselineVisualStatus: baselineStatus,
           baselineVisualNote: baselineStatus ? (look.moveInNote ?? null) : null,
           baselinePhotoIds: baselineStatus ? (baselineFor.get(target.ref) ?? []) : [],
         });
-        suggestionsFor(id, target, normalizeBox(look.box), look.observation || target.observation);
+        if (best)
+          suggestionsFor(id, target, normalizeBox(look.box), look.observation || target.observation);
       }
 
       await this.prisma.$transaction(
@@ -817,6 +890,33 @@ export class VisualReviewService {
       },
     });
     return photos.length ? { scheduledAt: baseline.scheduledAt, photos } : null;
+  }
+
+  /**
+   * The technician's own photos of the room, with what each was filed under.
+   * Not the stills cut from this recording: the scan has the video already.
+   */
+  private async roomPhotos(inspectionAreaId: string) {
+    if (!this.storage) return [];
+    const rows = await this.prisma.inspectionPhoto.findMany({
+      where: {
+        inspectionAreaId,
+        storageStatus: PhotoStorageStatus.UPLOADED,
+        captureType: { not: PhotoCaptureType.VIDEO_FRAME_SNAPSHOT },
+      },
+      orderBy: [{ sequenceNumber: 'asc' }, { capturedAt: 'asc' }],
+      take: MAX_ROOM_PHOTOS,
+      select: { id: true, storageKey: true, label: true, checklistItem: { select: { label: true } } },
+    });
+    const loaded = await Promise.all(
+      rows.map(async (row) => {
+        const bytes = await this.photoBytes(row.storageKey);
+        return bytes
+          ? { id: row.id, bytes, label: row.label?.trim() || row.checklistItem?.label || null }
+          : null;
+      }),
+    );
+    return loaded.filter((photo): photo is NonNullable<typeof photo> => photo !== null);
   }
 
   /** A photograph at the width the console already caches, or null. */
