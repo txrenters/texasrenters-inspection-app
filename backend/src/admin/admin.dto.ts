@@ -512,6 +512,22 @@ export class FindingEditDto {
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
 
+/**
+ * A finding a reviewer adds: something the AI missed, at a moment of one of
+ * the area's recordings. Bounded as an AI finding is.
+ */
+export class CreateFindingDto {
+  @IsUUID() recordingId!: string;
+  /** Where in the recording it shows; omitted when it shows nowhere in particular. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(60 * 60 * 3) atSeconds?: number;
+  @IsString() @MinLength(2) @MaxLength(200) title!: string;
+  @IsString() @MaxLength(4000) description!: string;
+  @IsEnum(Severity) severity!: Severity;
+  @IsEnum(FindingType) findingType!: FindingType;
+  @IsString() @MinLength(1) @MaxLength(80) category!: string;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string;
+}
+
 export class SaveAiGuidanceDto {
   // Empty is allowed: it saves a version with no rules, which is how they are
   // switched off without losing the history.

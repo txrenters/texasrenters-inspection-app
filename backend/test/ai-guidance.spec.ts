@@ -202,9 +202,42 @@ describe('the decisions the analysis learns from', () => {
     expect(where.finding).toEqual({
       inspection: { organizationId: ORGANIZATION_ID },
       inspectionId: { not: 'inspection-now' },
+      source: { not: 'REVIEWER' },
       NOT: { findingType: 'NO_CHANGE', title: 'Room condition summary' },
     });
     expect(where.status).toEqual({ in: ['REJECTED', 'EDITED'] });
+  });
+});
+
+describe('what reviewers had to add', () => {
+  it('becomes a lesson, the same kind of room first, each title once', () => {
+    expect(
+      lessonLines([], 'Bedroom 2', [
+        { title: 'Ceiling stain above the window', roomName: 'Kitchen' },
+        { title: 'Cracked outlet cover', roomName: 'Bedroom 1' },
+        { title: 'Cracked outlet cover', roomName: 'Bedroom 3' },
+      ]),
+    ).toEqual([
+      '- Missed by the AI, added by a reviewer: "Cracked outlet cover" (Bedroom 1).',
+      '- Missed by the AI, added by a reviewer: "Ceiling stain above the window" (Kitchen).',
+    ]);
+  });
+
+  it('is read from other inspections, and never what was withdrawn', async () => {
+    const { service, prisma } = prismaFor();
+    prisma.inspectionFinding.findMany.mockResolvedValue([
+      { title: 'Cracked outlet cover', propertyArea: { name: 'Kitchen' } },
+    ]);
+
+    const lines = await service.lessons(ORGANIZATION_ID, 'Kitchen', 'inspection-now');
+
+    expect(lines).toEqual(['- Missed by the AI, added by a reviewer: "Cracked outlet cover" (Kitchen).']);
+    expect(prisma.inspectionFinding.findMany.mock.calls[0][0].where).toMatchObject({
+      source: 'REVIEWER',
+      reviewStatus: { not: 'REJECTED' },
+      inspection: { organizationId: ORGANIZATION_ID },
+      inspectionId: { not: 'inspection-now' },
+    });
   });
 });
 
@@ -261,6 +294,22 @@ describe('the scorecard', () => {
       ['vision-2', 1],
     ]);
     expect(card.window.days).toBe(30);
+  });
+
+  it('never credits the AI with what reviewers added, and counts those apart', async () => {
+    const { service, prisma } = prismaFor();
+    prisma.inspectionFinding.findMany.mockResolvedValue([
+      finding({}),
+      finding({ source: 'REVIEWER', aiAnalysisJob: null, reviews: [{ status: 'APPROVED', reasonCode: null }] }),
+      finding({ source: 'REVIEWER', aiAnalysisJob: null, reviewStatus: 'REJECTED', reviews: [{ status: 'REJECTED', reasonCode: 'OTHER' }] }),
+    ]);
+
+    const card = await service.scorecard(ORGANIZATION_ID, 30);
+
+    expect(card.totals).toEqual({ findings: 1, pending: 0, kept: 1, corrected: 0, rejected: 0 });
+    expect(card.reviewerAdded).toBe(1);
+    expect(card.bySource).not.toHaveProperty('REVIEWER');
+    expect(card.rejectReasons).toEqual({});
   });
 
   it('reads only the organization’s own findings in the period, summaries left out', async () => {

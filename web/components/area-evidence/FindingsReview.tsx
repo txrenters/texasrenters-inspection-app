@@ -1,11 +1,12 @@
 'use client';
 
 import type { AreaFinding, AreaPhoto, AreaRecording } from '@texasrenters/shared';
-import { PlayIcon } from 'lucide-react';
-import { useEffect } from 'react';
+import { PlayIcon, PlusIcon } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   comparisonLabel,
   decisionLine,
@@ -17,6 +18,7 @@ import {
 import { formatDateTime, humanize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
+import { AddFindingForm } from './AddFindingForm';
 import { AiFrameSuggestion } from './AiFrameSuggestion';
 import { FindingFrames } from './FindingFrames';
 import { FindingReviewControls } from './FindingReviewControls';
@@ -28,6 +30,7 @@ const VISUAL_VARIANT = {
   'Not seen in video': 'warning',
   'Unclear in video': 'secondary',
   'Spotted by AI': 'info',
+  'Added by a reviewer': 'secondary',
 } as const;
 
 /**
@@ -56,6 +59,7 @@ export function FindingsReview({
   areaId,
   canReview,
   canCapture,
+  playing = null,
 }: {
   findings: AreaFinding[];
   recordings: AreaRecording[];
@@ -75,7 +79,10 @@ export function FindingsReview({
   canReview: boolean;
   /** Filing a frame as evidence: `inspections:manage`, before finalization. */
   canCapture: boolean;
+  /** The recording on screen, and where it was sent to: where an added finding starts. */
+  playing?: { recordingId: string; seconds: number | null } | null;
 }) {
+  const [adding, setAdding] = useState(false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -101,12 +108,45 @@ export function FindingsReview({
   const pending = findings.filter((finding) => finding.reviewStatus === 'PENDING_REVIEW').length;
   const durations = new Map(recordings.map((recording) => [recording.id, recording.durationSeconds]));
 
+  // The recording on screen first: an added finding is about what was just seen.
+  const playable = [
+    ...recordings.filter((recording) => recording.id === playing?.recordingId),
+    ...recordings.filter((recording) => recording.id !== playing?.recordingId),
+  ];
+
   return (
     <div className="grid content-start gap-2">
       <p className="text-muted-foreground text-xs">
-        {pending ? `${pending} awaiting a decision` : 'Every finding here has been decided'} · J and
-        K move between findings
+        {!findings.length
+          ? 'No findings yet'
+          : pending
+            ? `${pending} awaiting a decision`
+            : 'Every finding here has been decided'}{' '}
+        · J and K move between findings
       </p>
+      {canReview && playable.length ? (
+        adding ? (
+          <AddFindingForm
+            areaId={areaId}
+            canCapture={canCapture}
+            inspectionId={inspectionId}
+            onAdded={(findingId) => {
+              setAdding(false);
+              onSelect(findingId);
+            }}
+            onCancel={() => setAdding(false)}
+            recordings={playable}
+            startSeconds={playing?.seconds ?? null}
+          />
+        ) : (
+          <div>
+            <Button onClick={() => setAdding(true)} size="sm" type="button" variant="outline">
+              <PlusIcon aria-hidden />
+              Add a finding the AI missed
+            </Button>
+          </div>
+        )
+      ) : null}
       <ol className="grid gap-2">
         {findings.map((finding, index) => {
           const moment = findingMoment(finding);
@@ -177,8 +217,11 @@ export function FindingsReview({
                       comparisonLabel(finding.comparisonResult),
                       lean,
                       // Once the AI has looked at the video, what it saw says
-                      // more than how sure it was of the narration.
-                      finding.visual ? null : `confidence ${Math.round(finding.confidence * 100)}%`,
+                      // more than how sure it was of the narration. A
+                      // reviewer's own finding has no confidence to give.
+                      finding.visual || finding.source === 'REVIEWER'
+                        ? null
+                        : `confidence ${Math.round(finding.confidence * 100)}%`,
                     ]
                       .filter(Boolean)
                       .join(' · ')}

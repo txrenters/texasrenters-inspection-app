@@ -1,6 +1,8 @@
 import { Test } from '@nestjs/testing';
 
 import { PrismaService } from '../src/common/prisma.service';
+import { InspectionVideoService } from '../src/media/inspection-video.service';
+import { MediaModule } from '../src/media/media.module';
 import { PlanAdvisorService } from '../src/planning/plan-advisor.service';
 import { PlanningModule } from '../src/planning/planning.module';
 import { TbpPublishService } from '../src/planning/tbp-publish.service';
@@ -30,5 +32,35 @@ describe('the planning module', () => {
     expect(moduleRef.get(PlanAdvisorService)).toBeInstanceOf(PlanAdvisorService);
     expect(moduleRef.get(TbpStopEditService)).toBeInstanceOf(TbpStopEditService);
     expect(moduleRef.get(TbpPublishService)).toBeInstanceOf(TbpPublishService);
+  });
+});
+
+/**
+ * The media module's frame capture, which files a still from a recording as a
+ * photograph ("Add photo", and accepting the AI's suggested frame).
+ *
+ * It asks for the photo storage as an optional dependency, so a module graph
+ * that cannot reach it does not fail at boot -- it hands the service nothing,
+ * and on 2026-10-03 every capture in production answered "Photo storage is not
+ * configured" with storage configured all along. Optional dependencies are the
+ * ones only this kind of test can see.
+ */
+describe('the media module', () => {
+  it('gives frame capture the photo storage', async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [MediaModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+    const service = moduleRef.get(InspectionVideoService);
+
+    // Storage is checked before permission: a caller without the permission is
+    // refused for that, not told storage is missing.
+    await expect(
+      service.captureSnapshot(
+        { id: 'user-1', organizationId: 'org-1', permissions: [] } as never,
+        'video-1',
+        { atMs: 1000 },
+      ),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

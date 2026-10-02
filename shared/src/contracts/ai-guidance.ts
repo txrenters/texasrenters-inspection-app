@@ -94,7 +94,7 @@ export interface AiAnalysisPreview {
     severity: string;
     findingType: string;
     category: string;
-    source: 'NARRATION' | 'AI_VISION';
+    source: 'NARRATION' | 'AI_VISION' | 'REVIEWER';
     reviewStatus: string;
     videoTimestampStart: number;
     videoTimestampEnd: number;
@@ -119,7 +119,10 @@ export interface AiScoreTally {
 export interface AiScorecard {
   window: { days: number; since: string; truncated: boolean };
   totals: AiScoreTally;
+  /** The AI's findings by where they came from. A reviewer's own are counted apart. */
   bySource: Partial<Record<'NARRATION' | 'AI_VISION', AiScoreTally>>;
+  /** Findings reviewers added because the AI missed them: never credited to the AI. */
+  reviewerAdded: number;
   /** Rejections by reason; UNSPECIFIED for those made before reasons were asked. */
   rejectReasons: Partial<Record<FindingRejectReason | 'UNSPECIFIED', number>>;
   /** What the AI saw in the video, against what the office then decided. */

@@ -10,6 +10,7 @@ import {
   frameTimes,
   frameUrl,
   nextPending,
+  parseMoment,
   responsibilityLabel,
   suggestionToOffer,
   visualLabel,
@@ -189,5 +190,26 @@ describe('the edit form, as it starts', () => {
   it('brings a value the form cannot offer to one the server takes', () => {
     const start = editableFinding(finding({ severity: 'CRITICAL', findingType: 'UNKNOWN' }));
     expect([start.severity, start.findingType]).toEqual(['MEDIUM', 'MAINTENANCE']);
+  });
+});
+
+describe('a moment typed as the player shows it', () => {
+  it('reads minutes and seconds, or plain seconds', () => {
+    expect(parseMoment('1:35')).toBe(95);
+    expect(parseMoment(' 12:05 ')).toBe(725);
+    expect(parseMoment('95')).toBe(95);
+  });
+
+  it('is nothing for nothing typed, or for what is not a time', () => {
+    expect(parseMoment('')).toBeNull();
+    expect(parseMoment('1:75')).toBeNull();
+    expect(parseMoment('soon')).toBeNull();
+    expect(parseMoment('-5')).toBeNull();
+  });
+});
+
+describe('a reviewer’s own finding', () => {
+  it('says so where the AI’s would say what it saw', () => {
+    expect(visualLabel({ source: 'REVIEWER', visual: null })).toBe('Added by a reviewer');
   });
 });

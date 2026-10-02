@@ -20,6 +20,7 @@ export const MAX_GUIDANCE_LENGTH = 8000;
 const LESSON_WINDOW_DAYS = 120;
 const MAX_REJECTED_LESSONS = 6;
 const MAX_EDITED_LESSONS = 4;
+const MAX_MISSED_LESSONS = 4;
 
 /** A reject reason, in words a model and a person both read the same way. */
 export const REJECT_REASON_LABEL: Record<FindingRejectReason, string> = {
@@ -52,10 +53,20 @@ function describeVersion(fields: Record<string, unknown> | undefined) {
   return `"${String(fields.title ?? '')}"${extra ? ` (${extra})` : ''}`;
 }
 
+/** The same kind of room first, keeping each group's order. */
+function sameRoomFirst<T>(rows: T[], roomName: string, roomOf: (row: T) => string) {
+  const kind = roomKind(roomName);
+  return [
+    ...rows.filter((row) => roomKind(roomOf(row)) === kind),
+    ...rows.filter((row) => roomKind(roomOf(row)) !== kind),
+  ];
+}
+
 /**
  * Lines the analysis is shown about how the office decided similar AI
  * findings: a rejection with its reason, a correction from what the AI wrote
- * to what the office kept.
+ * to what the office kept, and a finding a reviewer had to add because the AI
+ * missed it.
  *
  * Pure, and given the rows rather than querying, so the choice is testable:
  * the same kind of room first, newest first, one line per title.
@@ -69,12 +80,9 @@ export function lessonLines(
     finding: { title: string; roomName: string };
   }>,
   roomName: string,
+  missed: Array<{ title: string; roomName: string }> = [],
 ) {
-  const kind = roomKind(roomName);
-  const ordered = [
-    ...rows.filter((row) => roomKind(row.finding.roomName) === kind),
-    ...rows.filter((row) => roomKind(row.finding.roomName) !== kind),
-  ];
+  const ordered = sameRoomFirst(rows, roomName, (row) => row.finding.roomName);
   const seen = new Set<string>();
   const rejected: string[] = [];
   const edited: string[] = [];
@@ -95,7 +103,14 @@ export function lessonLines(
         );
     }
   }
-  return [...rejected, ...edited];
+  const added: string[] = [];
+  const addedTitles = new Set<string>();
+  for (const finding of sameRoomFirst(missed, roomName, (row) => row.roomName)) {
+    if (added.length >= MAX_MISSED_LESSONS || addedTitles.has(finding.title.toLowerCase())) continue;
+    addedTitles.add(finding.title.toLowerCase());
+    added.push(`- Missed by the AI, added by a reviewer: "${finding.title}" (${finding.roomName}).`);
+  }
+  return [...rejected, ...edited, ...added];
 }
 
 /**
@@ -204,37 +219,55 @@ export class AiGuidanceService {
 
   /**
    * The office's recent decisions on AI findings elsewhere, as lessons for the
-   * analysis of one room. Never this inspection's own: those are already in
-   * the prompt as decided findings.
+   * analysis of one room, and what reviewers had to add because the AI missed
+   * it. Never this inspection's own: those are already in the prompt as
+   * decided findings.
    */
   async lessons(organizationId: string, roomName: string, excludeInspectionId: string) {
     const since = new Date(Date.now() - LESSON_WINDOW_DAYS * 24 * 60 * 60_000);
-    const rows = await this.prisma.findingReview.findMany({
-      where: {
-        status: { in: [FindingReviewStatus.REJECTED, FindingReviewStatus.EDITED] },
-        createdAt: { gte: since },
-        finding: {
+    const [rows, missed] = await Promise.all([
+      this.prisma.findingReview.findMany({
+        where: {
+          status: { in: [FindingReviewStatus.REJECTED, FindingReviewStatus.EDITED] },
+          createdAt: { gte: since },
+          finding: {
+            inspection: { organizationId },
+            inspectionId: { not: excludeInspectionId },
+            // A reviewer withdrawing their own finding teaches the AI nothing.
+            source: { not: FindingSource.REVIEWER },
+            NOT: { ...ROOM_SUMMARY_WHERE },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 80,
+        select: {
+          status: true,
+          reason: true,
+          reasonCode: true,
+          editedValue: true,
+          finding: { select: { title: true, propertyArea: { select: { name: true } } } },
+        },
+      }),
+      this.prisma.inspectionFinding.findMany({
+        where: {
+          source: FindingSource.REVIEWER,
+          reviewStatus: { not: FindingReviewStatus.REJECTED },
+          createdAt: { gte: since },
           inspection: { organizationId },
           inspectionId: { not: excludeInspectionId },
-          NOT: { ...ROOM_SUMMARY_WHERE },
         },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 80,
-      select: {
-        status: true,
-        reason: true,
-        reasonCode: true,
-        editedValue: true,
-        finding: { select: { title: true, propertyArea: { select: { name: true } } } },
-      },
-    });
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+        select: { title: true, propertyArea: { select: { name: true } } },
+      }),
+    ]);
     return lessonLines(
       rows.map((row) => ({
         ...row,
         finding: { title: row.finding.title, roomName: row.finding.propertyArea.name },
       })),
       roomName,
+      missed.map((finding) => ({ title: finding.title, roomName: finding.propertyArea.name })),
     );
   }
 
@@ -346,7 +379,14 @@ export class AiGuidanceService {
     const photos = { offered: 0, accepted: 0, allDismissed: 0 };
     const timing = { narration: 0, withMoment: 0 };
 
+    let reviewerAdded = 0;
     for (const finding of findings) {
+      // What reviewers added is what the AI missed: counted apart, never as
+      // one of the AI's findings kept.
+      if (finding.source === FindingSource.REVIEWER) {
+        if (finding.reviewStatus !== FindingReviewStatus.REJECTED) reviewerAdded += 1;
+        continue;
+      }
       count(totals, finding);
       count((bySource[finding.source] ??= blank()), finding);
       const job = finding.aiAnalysisJob;
@@ -394,6 +434,7 @@ export class AiGuidanceService {
       visual,
       photos,
       timing,
+      reviewerAdded,
       byVersion: [...byVersion.values()].sort((left, right) => right.findings - left.findings),
     };
   }

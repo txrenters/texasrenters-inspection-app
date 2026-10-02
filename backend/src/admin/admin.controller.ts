@@ -63,6 +63,7 @@ import {
   CreateAreaChecklistItemDto,
   CreateChargeDto,
   CreateEvidenceRequestDto,
+  CreateFindingDto,
   CreatePropertyAreaDto,
   CreateReportShareDto,
   CreateTechnicianDto,
@@ -678,6 +679,17 @@ export class AdminController {
     @Body() body: FindingRejectDto,
   ) {
     return this.service.reviewFinding(request.user, id, 'REJECTED', body.reason, body.reasonCode);
+  }
+  /** Add what the AI missed, as an approved finding of the area. */
+  @Post('inspections/:inspectionId/areas/:areaId/findings')
+  @RequirePermissions('findings:review')
+  addFinding(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId', new ParseUUIDPipe()) inspectionId: string,
+    @Param('areaId', new ParseUUIDPipe()) areaId: string,
+    @Body() body: CreateFindingDto,
+  ) {
+    return this.service.addFinding(request.user, inspectionId, areaId, body);
   }
   @Post('findings/:findingId/edit')
   @RequirePermissions('findings:review')

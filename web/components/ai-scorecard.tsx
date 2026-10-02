@@ -178,6 +178,15 @@ function ScorecardBody({ data }: { data: Scorecard }) {
           {data.bySource.AI_VISION ? (
             <TallyLine label="Spotted by the AI in the video" tally={data.bySource.AI_VISION} />
           ) : null}
+          {data.reviewerAdded ? (
+            <p className="text-sm">
+              <span className="font-medium">Added by reviewers</span>
+              <span className="text-muted-foreground">
+                {' '}
+                · {formatCount(data.reviewerAdded)} the AI missed, never counted as its own
+              </span>
+            </p>
+          ) : null}
           <p className="text-muted-foreground text-xs">
             {formatCount(data.timing.withMoment)} of {formatCount(data.timing.narration)} narrated
             findings ({percent(data.timing.withMoment, data.timing.narration)}) point to their moment

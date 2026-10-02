@@ -62,6 +62,12 @@ import { TrackingStatusStore } from './tracking-status.store';
   // so without this nothing queued transcription or analysis for it.
   // `TechnicianLocationService` too, so the console's map can read the same
   // positions the handsets write without a second copy of the query.
-  exports: [MediaProcessingService, TechnicianLocationService],
+  //
+  // `InspectionMediaStorageService` for the media module's frame capture, which
+  // files a still from a recording as a photograph. It injected the service as
+  // optional and nothing exported it, so Nest passed undefined and every "Add
+  // photo" and accepted frame suggestion answered "Photo storage is not
+  // configured" (2026-10-03) -- with storage configured all along.
+  exports: [MediaProcessingService, TechnicianLocationService, InspectionMediaStorageService],
 })
 export class TechnicianModule {}
