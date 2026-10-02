@@ -12,8 +12,14 @@ import { StreamReconcileScheduler } from '../src/media/stream-reconcile.schedule
  * tests exist so it stays wired.
  */
 describe('recovering recordings whose webhook never arrived', () => {
-  function scheduler(reconcile: jest.Mock) {
-    return new StreamReconcileScheduler({ reconcileStuckVideos: reconcile } as never);
+  function scheduler(
+    reconcile: jest.Mock,
+    retry: jest.Mock = jest.fn().mockResolvedValue({ checked: 0, queued: 0 }),
+  ) {
+    return new StreamReconcileScheduler({
+      reconcileStuckVideos: reconcile,
+      retryFailedAnalysis: retry,
+    } as never);
   }
 
   afterEach(() => {
@@ -68,6 +74,30 @@ describe('recovering recordings whose webhook never arrived', () => {
     // An unhandled rejection out of a cron callback exits the process. A failed
     // sweep is not worth an outage.
     const instance = scheduler(jest.fn().mockRejectedValue(new Error('cloudflare unreachable')));
+
+    await expect(
+      (instance as unknown as { sweep(): Promise<void> }).sweep(),
+    ).resolves.toBeUndefined();
+  });
+
+  it('tries failed analysis again on every sweep, even when Cloudflare cannot be reached', async () => {
+    // The retry needs nothing from Cloudflare's API, so an outage that fails the
+    // reconcile is no reason to skip it.
+    const retry = jest.fn().mockResolvedValue({ checked: 1, queued: 1 });
+    const instance = scheduler(jest.fn().mockRejectedValue(new Error('cloudflare unreachable')), retry);
+    const sweep = () => (instance as unknown as { sweep(): Promise<void> }).sweep();
+
+    await sweep();
+    await sweep();
+
+    expect(retry).toHaveBeenCalledTimes(2);
+  });
+
+  it('survives a failed retry the same way', async () => {
+    const instance = scheduler(
+      jest.fn().mockResolvedValue({ checked: 0, reconciled: 0 }),
+      jest.fn().mockRejectedValue(new Error('database unavailable')),
+    );
 
     await expect(
       (instance as unknown as { sweep(): Promise<void> }).sweep(),

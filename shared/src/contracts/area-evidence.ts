@@ -143,6 +143,11 @@ export interface AreaRecording {
   category?: string | null;
   durationSeconds: number;
   uploadStatus: string;
+  /**
+   * PENDING, PROCESSING, READY or FAILED -- and ANALYSIS_FAILED when only the
+   * transcription and AI analysis failed. That recording still plays; FAILED
+   * alone means Cloudflare could not encode it.
+   */
   processingStatus: string;
   technicianName: string;
   createdAt: string;

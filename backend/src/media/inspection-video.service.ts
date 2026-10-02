@@ -16,7 +16,10 @@ import { PrismaService } from '../common/prisma.service';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
-import { MediaProcessingService } from '../technician/media-processing.service';
+import {
+  MediaProcessingService,
+  PROCESSING_FAILED_EVENT,
+} from '../technician/media-processing.service';
 
 /**
  * Limits enforced before Cloudflare is ever contacted.
@@ -70,6 +73,24 @@ const STREAM_STATE_TO_PROCESSING: Record<string, MediaProcessingStatus> = {
   ready: MediaProcessingStatus.PROCESSING,
   error: MediaProcessingStatus.FAILED,
 };
+
+/**
+ * The failure code a Cloudflare encode failure is recorded under.
+ *
+ * Transcription and analysis mark their own failure FAILED on the same
+ * `processingStatus` column, with no code. Only this one means the video itself
+ * cannot be played -- see `getPlayback`.
+ */
+export const STREAM_ENCODING_FAILED = 'STREAM_ENCODING_FAILED';
+
+/**
+ * Runs of transcription and analysis on one recording before a person has to
+ * look: the first, and two automatic retries. Each run is paid for, and one
+ * that fails the same way three times is not a passing blip.
+ */
+const MAX_ANALYSIS_ATTEMPTS = 3;
+/** How long after a failed run the next one is tried. */
+const ANALYSIS_RETRY_DELAY_MS = 10 * 60_000;
 
 export interface UploadSessionInput {
   inspectionAreaId: string;
@@ -467,6 +488,9 @@ export class InspectionVideoService {
         uploadStatus: true,
         durationSeconds: true,
         thumbnailUrl: true,
+        // Which failure a FAILED status records: Cloudflare's encode, or our
+        // own transcription and analysis. Only the first stops playback.
+        failureCode: true,
         failureMessage: true,
       },
     });
@@ -502,7 +526,16 @@ export class InspectionVideoService {
     // can still carry a readyAt from an earlier delivery, and reporting that as
     // playable would hand the reviewer a signed URL for a video Cloudflare
     // cannot serve.
-    if (media.processingStatus === MediaProcessingStatus.FAILED)
+    //
+    // But only Cloudflare's failure. Transcription and analysis mark their own
+    // failure FAILED on the same column, and this used to read that as the
+    // video failing: three walkthroughs from two move-outs on 2026-10-01 said
+    // "could not be processed for playback" while Cloudflare held every one of
+    // them encoded and ready -- evidence a reviewer, and a court, needed.
+    if (
+      media.processingStatus === MediaProcessingStatus.FAILED &&
+      media.failureCode === STREAM_ENCODING_FAILED
+    )
       return {
         videoId: media.id,
         provider: 'cloudflare_stream' as const,
@@ -636,11 +669,17 @@ export class InspectionVideoService {
     const duration = typeof payload.duration === 'number' && payload.duration > 0
       ? Math.round(payload.duration)
       : undefined;
+    // A repeat of a "ready" already recorded says nothing new about the encode,
+    // and by then the column holds our pipeline's state -- READY once analysis
+    // finished, FAILED if it did not. Writing PROCESSING over either left a
+    // recording "in progress" with nothing left to move it on, which also holds
+    // up finalizing the inspection.
+    const repeatReady = encoded && Boolean(media.readyAt);
 
     await this.prisma.inspectionMedia.update({
       where: { id: media.id },
       data: {
-        processingStatus,
+        ...(repeatReady ? {} : { processingStatus }),
         // Cloudflare having the bytes is proof the transfer finished, whatever
         // the device last managed to report before it lost signal.
         ...(state !== 'pendingupload'
@@ -652,11 +691,21 @@ export class InspectionVideoService {
         ...(payload.thumbnail ? { thumbnailUrl: payload.thumbnail } : {}),
         // Stamped once. A repeat delivery must not keep moving readyAt forward,
         // or "when did this become available" stops being answerable.
-        ...(encoded && !media.readyAt ? { readyAt: new Date() } : {}),
+        ...(encoded && !media.readyAt
+          ? {
+              readyAt: new Date(),
+              // Encoded, so an earlier encode failure -- of an upload this record
+              // has since replaced with a new one -- no longer describes it, and
+              // must not stop playback should analysis fail later.
+              failedAt: null,
+              failureCode: null,
+              failureMessage: null,
+            }
+          : {}),
         ...(failed
           ? {
               failedAt: new Date(),
-              failureCode: 'STREAM_ENCODING_FAILED',
+              failureCode: STREAM_ENCODING_FAILED,
               failureMessage: payload.status?.errorReasonText ?? 'Cloudflare could not encode this video.',
             }
           : {}),
@@ -794,6 +843,53 @@ export class InspectionVideoService {
       if (applied.accepted) reconciled += 1;
     }
     return { checked: stuck.length, reconciled };
+  }
+
+  /**
+   * Run transcription and analysis again where only they failed.
+   *
+   * The pipeline marks its failure FAILED and nothing ever tried it again: a
+   * provider error, or an MP4 Cloudflare took longer than the pipeline's three
+   * minutes to prepare, left a walkthrough with no transcript, no summary and
+   * no findings for good, and its area reading Failed. Three move-out rooms on
+   * 2026-10-01 were left that way, every one encoded and playable at Cloudflare.
+   *
+   * Only recordings Cloudflare encoded (`readyAt`) and did not itself fail, a
+   * while after the last run, and at most `MAX_ANALYSIS_ATTEMPTS` runs in all,
+   * counted from the pipeline's own failure events. A rerun replaces only the
+   * unreviewed suggestions of the run before; reviewed findings stay as they are.
+   */
+  async retryFailedAnalysis(limit = 5) {
+    if (!this.mediaProcessing) return { checked: 0, queued: 0 };
+    // Across every organization, like the boot-time recovery sweep: the
+    // failures belong to whichever tenants had them.
+    const failed = await withSystemTenant(() =>
+      this.prisma.inspectionMedia.findMany({
+        where: {
+          provider: 'cloudflare_stream',
+          processingStatus: MediaProcessingStatus.FAILED,
+          readyAt: { not: null },
+          OR: [{ failureCode: null }, { failureCode: { not: STREAM_ENCODING_FAILED } }],
+          updatedAt: { lt: new Date(Date.now() - ANALYSIS_RETRY_DELAY_MS) },
+        },
+        // Newest failures first, so recordings that have used up their runs
+        // cannot crowd out one that has not.
+        orderBy: { updatedAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          organizationId: true,
+          _count: {
+            select: { processingEvents: { where: { eventType: PROCESSING_FAILED_EVENT } } },
+          },
+        },
+      }),
+    );
+    const due = failed
+      .filter((media) => media._count.processingEvents < MAX_ANALYSIS_ATTEMPTS)
+      .slice(0, limit);
+    for (const media of due) this.mediaProcessing.queue(media.id, media.organizationId);
+    return { checked: failed.length, queued: due.length };
   }
 
   /**

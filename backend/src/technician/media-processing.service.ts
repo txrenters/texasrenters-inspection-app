@@ -67,6 +67,13 @@ export function readFrameMarkers(captureSummary: unknown, durationSeconds: numbe
  */
 export const ROOM_SUMMARY_TITLE = 'Room condition summary';
 
+/**
+ * The event a failed run of transcription and analysis leaves behind, with the
+ * reason. Also how many runs a recording has used, for the automatic retry in
+ * `InspectionVideoService.retryFailedAnalysis`.
+ */
+export const PROCESSING_FAILED_EVENT = 'PROCESSING_FAILED';
+
 /** Prisma where-fragment matching summary rows. */
 export const ROOM_SUMMARY_WHERE = { findingType: 'NO_CHANGE', title: ROOM_SUMMARY_TITLE } as const;
 
@@ -297,7 +304,7 @@ export class MediaProcessingService implements OnModuleInit {
           where: { id: media.id },
           data: { processingStatus: MediaProcessingStatus.FAILED },
         });
-        await this.event(media.id, 'PROCESSING_FAILED', { message });
+        await this.event(media.id, PROCESSING_FAILED_EVENT, { message });
       }
     } finally {
       this.inFlight.delete(mediaId);

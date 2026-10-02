@@ -20,11 +20,26 @@ import { ApplicationError } from '../common/errors';
 import { inspectedAreas } from '../common/inspected-areas';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
+import { STREAM_ENCODING_FAILED } from '../media/inspection-video.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE, readFrameMarkers } from '../technician/media-processing.service';
 
 /** Findings awaiting a human decision. */
 const UNREVIEWED: FindingReviewStatus[] = [FindingReviewStatus.PENDING_REVIEW];
+
+/**
+ * A recording's processing state, telling apart the two failures FAILED holds.
+ *
+ * Cloudflare refusing the encode leaves nothing to watch: FAILED. Our own
+ * transcription and analysis failing leaves a good recording with no AI
+ * suggestions, which a reviewer can still watch and judge: ANALYSIS_FAILED.
+ * Read as one, three move-out walkthroughs on 2026-10-01 showed Failed on a
+ * room marked Failed, though Cloudflare held every one of them ready to play.
+ */
+function recordingState(row: { processingStatus: string; failureCode: string | null }) {
+  if (row.processingStatus !== 'FAILED') return row.processingStatus;
+  return row.failureCode === STREAM_ENCODING_FAILED ? 'FAILED' : 'ANALYSIS_FAILED';
+}
 
 /** The latest of some moments, or null when there are none. */
 function latest(moments: (Date | null | undefined)[]): Date | null {
@@ -332,6 +347,8 @@ export class AreaEvidenceService {
             inspectionAreaId: true,
             recordingType: true,
             processingStatus: true,
+            // Which failure a FAILED is; see `recordingState`.
+            failureCode: true,
             createdAt: true,
           },
         }),
@@ -475,7 +492,7 @@ export class AreaEvidenceService {
           hasPrimaryRecording: areaMedia.some(
             (row) => row.recordingType === VideoRecordingType.PRIMARY_AREA,
           ),
-          processingFailed: areaMedia.some((row) => row.processingStatus === 'FAILED'),
+          processingFailed: areaMedia.some((row) => recordingState(row) === 'FAILED'),
           processingPending: areaMedia.some(
             (row) => row.processingStatus === 'PENDING' || row.processingStatus === 'PROCESSING',
           ),
@@ -578,6 +595,8 @@ export class AreaEvidenceService {
           durationSeconds: true,
           uploadStatus: true,
           processingStatus: true,
+          // Which failure a FAILED is; see `recordingState`.
+          failureCode: true,
           createdAt: true,
           // Where the technician tapped the shutter during the walkthrough.
           // Android cannot photograph while recording, so the shutter stores a
@@ -791,7 +810,7 @@ export class AreaEvidenceService {
           hasPrimaryRecording: recordings.some(
             (row) => row.recordingType === VideoRecordingType.PRIMARY_AREA,
           ),
-          processingFailed: recordings.some((row) => row.processingStatus === 'FAILED'),
+          processingFailed: recordings.some((row) => recordingState(row) === 'FAILED'),
           processingPending: recordings.some(
             (row) => row.processingStatus === 'PENDING' || row.processingStatus === 'PROCESSING',
           ),
@@ -821,7 +840,7 @@ export class AreaEvidenceService {
         category: recording.category,
         durationSeconds: recording.durationSeconds,
         uploadStatus: recording.uploadStatus,
-        processingStatus: recording.processingStatus,
+        processingStatus: recordingState(recording),
         technicianName: recording.technician.displayName,
         createdAt: recording.createdAt.toISOString(),
         thumbnailUrl: thumbnails[index],

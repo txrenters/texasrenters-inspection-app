@@ -39,4 +39,11 @@ describe('status system', () => {
     expect(STATUS_MAP.PENDING_REVIEW.tone).toBe('warning');
     expect(STATUS_MAP.NOT_STARTED.tone).toBe('muted');
   });
+
+  it('tells a recording whose analysis failed from one that failed outright', () => {
+    // The first still plays; reading both as "Failed" made three move-out
+    // walkthroughs look lost (2026-10-01).
+    expect(STATUS_MAP.ANALYSIS_FAILED).toMatchObject({ label: 'Analysis failed', tone: 'warning' });
+    expect(STATUS_MAP.FAILED.tone).toBe('destructive');
+  });
 });
