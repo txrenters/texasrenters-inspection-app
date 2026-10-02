@@ -147,13 +147,17 @@ function generatePrisma(opts: {
         .fn()
         .mockResolvedValueOnce(opts.moveOutAreas)
         .mockResolvedValueOnce(opts.moveInAreas)
-        .mockResolvedValueOnce(opts.moveOutMedia),
+        .mockResolvedValueOnce(opts.moveOutMedia)
+        // `load`, afterwards: the move-out's area rows, for opening one.
+        .mockResolvedValue([]),
     },
     inspectionFinding: {
       findMany: jest
         .fn()
         .mockResolvedValueOnce(opts.moveOutFindings)
-        .mockResolvedValueOnce(opts.moveInFindings),
+        .mockResolvedValueOnce(opts.moveInFindings)
+        // `load`, afterwards: the findings shown beside each item.
+        .mockResolvedValue([]),
     },
     inspectionAreaChecklistResponse: {
       findMany: jest
@@ -641,6 +645,8 @@ describe('comparison review + override (spec §12)', () => {
           }),
       },
       userProfile: { findUnique: jest.fn().mockResolvedValue({ displayName: 'Administrator' }) },
+      inspectionArea: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     const service = new ComparisonService(prisma as never);
@@ -699,6 +705,8 @@ describe('comparison review + override (spec §12)', () => {
         }),
       },
       userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+      inspectionArea: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     const service = new ComparisonService(prisma as never);
@@ -866,5 +874,188 @@ describe('the move-in room an AI analysis reads', () => {
     const service = new ComparisonService(prisma as never);
     await expect(service.baselineAreaFor('move-out-1', 'pa-entrance')).resolves.toBeNull();
     expect(prisma.inspection.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Item by item (2026-10-03): where both inspections graded the same checklist
+ * items, the verdict comes from the items, and the console shows each move-out
+ * finding beside the item it is about.
+ */
+describe('comparing a room item by item', () => {
+  const graded = (
+    propertyAreaId: string,
+    id: string,
+    label: string,
+    undamaged: boolean,
+    keywords: string[] = [],
+  ) => ({
+    isClean: true,
+    isUndamaged: undamaged,
+    isWorking: true,
+    comment: null,
+    checklistItem: { id, label, keywords, responseType: 'STATUS' },
+    inspectionArea: { propertyAreaId },
+  });
+
+  it('calls only the item that changed new, and keeps the items for the console', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-entrance', 'Entrance')],
+      moveInAreas: [area('pa-entrance', 'Entrance')],
+      moveOutMedia: [mediaRow('pa-entrance', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+      moveOutResponses: [
+        graded('pa-entrance', 'floor', 'Floor and coverings', false),
+        graded('pa-entrance', 'windows', 'Windows and locks', false),
+      ] as never,
+      moveInResponses: [
+        graded('pa-entrance', 'floor', 'Floor and coverings', false),
+        graded('pa-entrance', 'windows', 'Windows and locks', true),
+      ] as never,
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      classification: 'NEW_DAMAGE',
+      requiresReview: true,
+      summary:
+        'New since move-in: Windows and locks. Already damaged at move-in: Floor and coverings.',
+      metadata: {
+        items: [
+          expect.objectContaining({ label: 'Floor and coverings', change: 'ALREADY_DAMAGED' }),
+          expect.objectContaining({ label: 'Windows and locks', change: 'NEW_DAMAGE' }),
+        ],
+        aiNote: null,
+      },
+    });
+  });
+
+  it('never weighs a finding the office rejected, and reads the checklist in its own order', async () => {
+    const { prisma } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-entrance', 'Entrance')],
+      moveInAreas: [area('pa-entrance', 'Entrance')],
+      moveOutMedia: [mediaRow('pa-entrance', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(prisma.inspectionFinding.findMany.mock.calls[0][0].where).toMatchObject({
+      reviewStatus: { not: 'REJECTED' },
+    });
+    expect(prisma.inspectionAreaChecklistResponse.findMany.mock.calls[0][0].orderBy).toEqual([
+      { checklistItem: { sortOrder: 'asc' } },
+      { checklistItem: { label: 'asc' } },
+    ]);
+  });
+
+  it('shows each finding beside its item, links the room, and keeps the AI note off the summary', async () => {
+    const findMany = jest.fn().mockResolvedValue([
+      {
+        id: 'finding-floor',
+        propertyAreaId: 'pa-entrance',
+        title: 'Cracked floor tiles at the door',
+        category: 'Floor',
+        severity: 'MEDIUM',
+        findingType: 'POSSIBLE_NEW_DAMAGE',
+        reviewStatus: 'PENDING_REVIEW',
+        source: 'NARRATION',
+      },
+      {
+        id: 'finding-other',
+        propertyAreaId: 'pa-entrance',
+        title: 'Smoke alarm missing',
+        category: 'Safety',
+        severity: 'HIGH',
+        findingType: 'MAINTENANCE',
+        reviewStatus: 'APPROVED',
+        source: 'AI_VISION',
+      },
+    ]);
+    const prisma = {
+      inspectionComparison: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'comparison-1',
+          moveOutInspectionId: 'move-out-1',
+          moveInInspectionId: 'move-in-1',
+          status: 'DRAFT',
+          overallCondition: 'REQUIRES_REVIEW',
+          version: 2,
+          generator: 'DETERMINISTIC',
+          requiresReviewCount: 1,
+          summary: '',
+          reviewedById: null,
+          reviewedAt: null,
+          reviewNote: null,
+          generatedAt: new Date(),
+          areaComparisons: [
+            {
+              id: 'area-comparison-1',
+              areaName: 'Entrance',
+              floorName: null,
+              classification: 'REQUIRES_REVIEW',
+              matchMethod: 'LOCAL_AREA_ID',
+              matchConfidence: 1,
+              requiresReview: true,
+              summary: 'Already damaged at move-in: Floor and coverings.',
+              originalClassification: null,
+              overriddenAt: null,
+              overrideReason: null,
+              moveOutPropertyAreaId: 'pa-entrance',
+              metadata: {
+                items: [
+                  {
+                    itemId: 'floor',
+                    label: 'Floor and coverings',
+                    keywords: ['floor'],
+                    moveIn: { clean: true, undamaged: false, working: true, comment: null },
+                    moveOut: { clean: true, undamaged: false, working: true, comment: null },
+                    change: 'ALREADY_DAMAGED',
+                    cleaning: null,
+                  },
+                ],
+                aiNote: '1 AI finding calls damage new that the move-in already recorded.',
+              },
+            },
+          ],
+        }),
+      },
+      inspectionArea: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'inspection-area-entrance', propertyAreaId: 'pa-entrance' }]),
+      },
+      inspectionFinding: { findMany },
+      userProfile: { findUnique: jest.fn() },
+    };
+    const service = new ComparisonService(prisma as never);
+
+    const result = await service.get(user, 'move-out-1');
+
+    expect(result?.areas[0]).toMatchObject({
+      moveOutAreaId: 'inspection-area-entrance',
+      aiNote: '1 AI finding calls damage new that the move-in already recorded.',
+      items: [
+        {
+          label: 'Floor and coverings',
+          change: 'ALREADY_DAMAGED',
+          findings: [{ id: 'finding-floor', title: 'Cracked floor tiles at the door' }],
+        },
+      ],
+      otherFindings: [{ id: 'finding-other', source: 'AI_VISION' }],
+    });
+    // Read now, never the rejected ones, and only this move-out's.
+    expect(findMany.mock.calls[0][0].where).toMatchObject({
+      inspectionId: 'move-out-1',
+      reviewStatus: { not: 'REJECTED' },
+    });
+    expect(result?.areas[0]).not.toHaveProperty('items.0.keywords');
   });
 });

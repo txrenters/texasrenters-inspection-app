@@ -693,6 +693,52 @@ export interface AdminAreaComparison {
   originalClassification?: ComparisonClassification | null;
   overriddenAt?: string | null;
   overrideReason?: string | null;
+  /** The move-out's own area, to open its evidence from the comparison. */
+  moveOutAreaId?: string | null;
+  /** Each checklist item, move-in against move-out. Empty for a comparison generated before items. */
+  items?: AdminComparisonItem[];
+  /** Move-out findings about none of the items. */
+  otherFindings?: AdminComparisonFinding[];
+  /** Why the AI's findings send the room to review. Console only, never printed. */
+  aiNote?: string | null;
+}
+
+/** One checklist item's grades at one inspection. Null is "not graded". */
+export interface AdminComparisonItemSide {
+  clean: boolean | null;
+  undamaged: boolean | null;
+  working: boolean | null;
+  comment: string | null;
+}
+
+export type ComparisonItemChange =
+  | 'NEW_DAMAGE'
+  | 'ALREADY_DAMAGED'
+  | 'REPAIRED'
+  | 'NO_CHANGE'
+  | 'NO_BASELINE'
+  | 'NOT_GRADED';
+
+export interface AdminComparisonFinding {
+  id: string;
+  title: string;
+  severity: string;
+  findingType: string;
+  reviewStatus: string;
+  source: string;
+}
+
+/** One checklist item, move-in against move-out. */
+export interface AdminComparisonItem {
+  itemId: string;
+  label: string;
+  moveIn: AdminComparisonItemSide | null;
+  moveOut: AdminComparisonItemSide | null;
+  change: ComparisonItemChange;
+  /** Dirty at move-out: a cleaning matter, kept apart from damage. */
+  cleaning: 'NEEDS_CLEANING' | 'ALREADY_DIRTY' | null;
+  /** The move-out's findings about this item, read when the comparison is. */
+  findings: AdminComparisonFinding[];
 }
 
 /** Move-in vs move-out comparison for a move-out inspection (spec §12). */

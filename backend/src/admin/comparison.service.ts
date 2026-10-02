@@ -4,6 +4,7 @@ import {
   ComparisonMatchMethod,
   ComparisonResult,
   ComparisonStatus,
+  FindingReviewStatus,
   FindingType,
   InspectionStatus,
   InspectionType,
@@ -11,10 +12,18 @@ import {
 import type { Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
+import { findingMatchesChecklistItem } from '../common/checklist-item-match';
 import { ApplicationError } from '../common/errors';
 import { inspectedAreaWhere } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
-import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
+import { ROOM_SUMMARY_WHERE } from '../technician/room-summary';
+import {
+  compareItems,
+  itemVerdict,
+  type ChecklistRow,
+  type ComparedItem,
+  type FindingSignal,
+} from './comparison-items';
 
 // A move-in inspection is usable as a baseline once the technician has submitted
 // it (findings exist) — completion/finalization is not required.
@@ -82,8 +91,29 @@ type AreaMatch = { area: AreaRow; method: ComparisonMatchMethod; confidence: num
  * `damage` counts the defects. `graded` is the wider question of whether the
  * area was assessed *at all*, which is not the same as being assessed and found
  * clean -- and the difference decides whether "new" is a claim this can make.
+ * `checklist` and `findings` are the rows themselves, by area, for comparing
+ * item by item (`comparison-items.ts`).
  */
-type ConditionSignals = { damage: Map<string, number>; graded: Set<string> };
+type ConditionSignals = {
+  damage: Map<string, number>;
+  graded: Set<string>;
+  checklist: Map<string, ChecklistRow[]>;
+  findings: Map<string, FindingSignal[]>;
+};
+
+/** What `generate` keeps on an area row beside the verdict, for the console. */
+type AreaDetail = { items: ComparedItem[]; aiNote: string | null };
+
+function areaDetail(metadata: Prisma.JsonValue | null): AreaDetail | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const items = (metadata as { items?: unknown }).items;
+  if (!Array.isArray(items)) return null;
+  const aiNote = (metadata as { aiNote?: unknown }).aiNote;
+  return {
+    items: items as ComparedItem[],
+    aiNote: typeof aiNote === 'string' ? aiNote : null,
+  };
+}
 
 type AreaResult = {
   moveInPropertyAreaId: string | null;
@@ -95,6 +125,7 @@ type AreaResult = {
   matchConfidence: number;
   requiresReview: boolean;
   summary: string;
+  metadata?: Prisma.InputJsonValue;
 };
 
 /**
@@ -493,8 +524,20 @@ export class ComparisonService {
   private async loadConditionSignals(inspectionId: string): Promise<ConditionSignals> {
     const [findings, responses] = await Promise.all([
       this.prisma.inspectionFinding.findMany({
-        where: { inspectionId, NOT: { ...ROOM_SUMMARY_WHERE } },
-        select: { propertyAreaId: true, findingType: true, comparisonResult: true },
+        // A finding the office rejected is not damage. Counting it kept a room
+        // the reviewer had cleared "uncertain" on every regeneration.
+        where: {
+          inspectionId,
+          reviewStatus: { not: FindingReviewStatus.REJECTED },
+          NOT: { ...ROOM_SUMMARY_WHERE },
+        },
+        select: {
+          propertyAreaId: true,
+          findingType: true,
+          comparisonResult: true,
+          title: true,
+          category: true,
+        },
       }),
       this.prisma.inspectionAreaChecklistResponse.findMany({
         where: {
@@ -506,21 +549,39 @@ export class ComparisonService {
           ],
         },
         select: {
+          isClean: true,
           isUndamaged: true,
           isWorking: true,
+          comment: true,
+          checklistItem: {
+            select: { id: true, label: true, keywords: true, responseType: true },
+          },
           inspectionArea: { select: { propertyAreaId: true } },
         },
+        // In the checklist's own order, so the items read as the form does.
+        orderBy: [{ checklistItem: { sortOrder: 'asc' } }, { checklistItem: { label: 'asc' } }],
       }),
     ]);
 
     const damage = new Map<string, number>();
     const graded = new Set<string>();
+    const checklist = new Map<string, ChecklistRow[]>();
+    const findingsByArea = new Map<string, FindingSignal[]>();
     const addDamage = (propertyAreaId: string) =>
       damage.set(propertyAreaId, (damage.get(propertyAreaId) ?? 0) + 1);
 
     for (const row of findings) {
       // A finding of any type means somebody assessed this area.
       graded.add(row.propertyAreaId);
+      findingsByArea.set(row.propertyAreaId, [
+        ...(findingsByArea.get(row.propertyAreaId) ?? []),
+        {
+          title: row.title,
+          category: row.category,
+          findingType: row.findingType,
+          comparisonResult: row.comparisonResult,
+        },
+      ]);
       if (
         row.findingType === FindingType.POSSIBLE_NEW_DAMAGE ||
         row.comparisonResult === ComparisonResult.POSSIBLE_NEW_DAMAGE
@@ -531,8 +592,10 @@ export class ComparisonService {
       const propertyAreaId = row.inspectionArea.propertyAreaId;
       graded.add(propertyAreaId);
       if (row.isUndamaged === false || row.isWorking === false) addDamage(propertyAreaId);
+      if (row.checklistItem)
+        checklist.set(propertyAreaId, [...(checklist.get(propertyAreaId) ?? []), row]);
     }
-    return { damage, graded };
+    return { damage, graded, checklist, findings: findingsByArea };
   }
 
   /**
@@ -638,13 +701,37 @@ export class ComparisonService {
       const miDamage = match ? (moveInCondition.damage.get(match.area.propertyAreaId) ?? 0) : 0;
       const moEvidence = moveOutEvidence.get(mo.propertyAreaId) ?? 0;
       const baselineGraded = match ? moveInCondition.graded.has(match.area.propertyAreaId) : false;
-      const { classification, requiresReview, summary } = this.classify(
+      let { classification, requiresReview, summary } = this.classify(
         match,
         moDamage,
         miDamage,
         moEvidence,
         baselineGraded,
       );
+      // Item by item where both inspections graded the same items, which a
+      // matched room with move-out evidence nearly always has. The counting
+      // above stays the answer only where they did not.
+      const items = match
+        ? compareItems(
+            moveInCondition.checklist.get(match.area.propertyAreaId) ?? [],
+            moveOutCondition.checklist.get(mo.propertyAreaId) ?? [],
+          )
+        : [];
+      let aiNote: string | null = null;
+      const verdict =
+        match && moEvidence > 0
+          ? itemVerdict(
+              items,
+              moveOutCondition.findings.get(mo.propertyAreaId) ?? [],
+              match.method === ComparisonMatchMethod.AREA_CATEGORY,
+            )
+          : null;
+      if (verdict) {
+        classification = ComparisonClassification[verdict.classification];
+        requiresReview = verdict.requiresReview;
+        summary = verdict.summary;
+        aiNote = verdict.aiNote;
+      }
       results.push({
         moveInPropertyAreaId: match?.area.propertyAreaId ?? null,
         moveOutPropertyAreaId: mo.propertyAreaId,
@@ -655,6 +742,7 @@ export class ComparisonService {
         matchConfidence: match?.confidence ?? 0,
         requiresReview,
         summary,
+        ...(items.length ? { metadata: { items, aiNote } as unknown as Prisma.InputJsonValue } : {}),
       });
     }
 
@@ -840,12 +928,40 @@ export class ComparisonService {
       },
     });
     if (!record) return null;
-    const reviewer = record.reviewedById
-      ? await this.prisma.userProfile.findUnique({
-          where: { id: record.reviewedById },
-          select: { displayName: true },
-        })
-      : null;
+    const [reviewer, moveOutAreas, findings] = await Promise.all([
+      record.reviewedById
+        ? this.prisma.userProfile.findUnique({
+            where: { id: record.reviewedById },
+            select: { displayName: true },
+          })
+        : Promise.resolve(null),
+      // The move-out's own area rows, so the console can open one from here.
+      this.prisma.inspectionArea.findMany({
+        where: { inspectionId: record.moveOutInspectionId },
+        select: { id: true, propertyAreaId: true },
+      }),
+      // Read now rather than kept with the comparison: a re-run of the AI
+      // replaces undecided findings, and decisions move on after generation.
+      this.prisma.inspectionFinding.findMany({
+        where: {
+          inspectionId: record.moveOutInspectionId,
+          reviewStatus: { not: FindingReviewStatus.REJECTED },
+          NOT: { ...ROOM_SUMMARY_WHERE },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          propertyAreaId: true,
+          title: true,
+          category: true,
+          severity: true,
+          findingType: true,
+          reviewStatus: true,
+          source: true,
+        },
+      }),
+    ]);
+    const areaIdFor = new Map(moveOutAreas.map((area) => [area.propertyAreaId, area.id]));
     return {
       id: record.id,
       moveOutInspectionId: record.moveOutInspectionId,
@@ -872,7 +988,58 @@ export class ComparisonService {
         originalClassification: area.originalClassification,
         overriddenAt: area.overriddenAt,
         overrideReason: area.overrideReason,
+        moveOutAreaId: area.moveOutPropertyAreaId
+          ? (areaIdFor.get(area.moveOutPropertyAreaId) ?? null)
+          : null,
+        ...this.itemDetail(
+          areaDetail(area.metadata),
+          area.moveOutPropertyAreaId
+            ? findings.filter((finding) => finding.propertyAreaId === area.moveOutPropertyAreaId)
+            : [],
+        ),
       })),
+    };
+  }
+
+  /**
+   * An area's items as the console shows them, each with the move-out findings
+   * about it, and the findings about no item listed apart.
+   */
+  private itemDetail(
+    detail: AreaDetail | null,
+    findings: Array<{
+      id: string;
+      title: string;
+      category: string;
+      severity: string;
+      findingType: string;
+      reviewStatus: string;
+      source: string;
+    }>,
+  ) {
+    const strip = (finding: (typeof findings)[number]) => ({
+      id: finding.id,
+      title: finding.title,
+      severity: finding.severity,
+      findingType: finding.findingType,
+      reviewStatus: finding.reviewStatus,
+      source: finding.source,
+    });
+    if (!detail) return { items: [], otherFindings: findings.map(strip), aiNote: null };
+    const placed = new Set<(typeof findings)[number]>();
+    const items = detail.items.map(({ keywords, ...item }) => {
+      const about = findings.filter(
+        (finding) =>
+          !placed.has(finding) &&
+          findingMatchesChecklistItem(finding, { label: item.label, keywords: keywords ?? [] }),
+      );
+      for (const finding of about) placed.add(finding);
+      return { ...item, findings: about.map(strip) };
+    });
+    return {
+      items,
+      otherFindings: findings.filter((finding) => !placed.has(finding)).map(strip),
+      aiNote: detail.aiNote,
     };
   }
 
