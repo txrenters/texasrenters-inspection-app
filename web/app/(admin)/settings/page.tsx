@@ -165,9 +165,10 @@ export default function SettingsPage() {
                       : 'Findings come from the narration only'}
                   </p>
                   <p className="text-muted-foreground max-w-prose text-xs">
-                    When on, the AI looks through each room&apos;s recording after the narration is
-                    analysed: whether every finding can be seen, a suggested photograph for each,
-                    whether a move-in photograph already shows it, and problems nobody mentioned.
+                    When on, the AI looks through each room&apos;s recording, and the
+                    technician&apos;s photos of the room, after the narration is analysed: whether
+                    every finding can be seen, a suggested photograph for each, whether a move-in
+                    photograph already shows it, and problems nobody mentioned.
                     Everything stays a suggestion for review. About $0.15 a room on GPT-5.6 Sol,
                     measured on a move-out on Oct 3, 2026.
                   </p>

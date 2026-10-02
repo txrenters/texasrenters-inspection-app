@@ -2097,6 +2097,8 @@ model InspectionFinding {
   visualStatus           VisualCheckStatus?
   visualObservation      String?
   visualCheckedAt        DateTime?
+  /// The technician's photos of the room the AI saw it in: sharper than the video.
+  visualPhotoIds         String[]                     @default([]) @db.Uuid
   /// Whether a move-in photograph of the same item already shows it, and which
   /// photographs were compared.
   baselineVisualStatus   BaselineVisualStatus?

@@ -102,12 +102,17 @@ export function comparisonLabel(result: string) {
 }
 
 /** What the AI saw when it looked for a finding in the recording, in a few words. */
-export function visualLabel(finding: Pick<AreaFinding, 'source' | 'visual'>) {
+export function visualLabel(
+  finding: Pick<AreaFinding, 'source' | 'visual'> & Pick<Partial<AreaFinding>, 'frameSuggestions'>,
+) {
   if (finding.source === 'AI_VISION') return 'Spotted by AI';
   if (finding.source === 'REVIEWER') return 'Added by a reviewer';
   switch (finding.visual?.status) {
     case 'VISIBLE':
-      return 'Seen in video';
+      // A sharp photograph showed it where no frame of the video could.
+      return finding.visual.photos?.length && !finding.frameSuggestions?.length
+        ? 'Seen in a photo'
+        : 'Seen in video';
     case 'NOT_VISIBLE':
       return 'Not seen in video';
     case 'UNCLEAR':

@@ -27,6 +27,7 @@ import { LazyPhoto } from './LazyPhoto';
 /** How each "in the video" label reads at a glance. */
 const VISUAL_VARIANT = {
   'Seen in video': 'success',
+  'Seen in a photo': 'success',
   'Not seen in video': 'warning',
   'Unclear in video': 'secondary',
   'Spotted by AI': 'info',
@@ -177,7 +178,8 @@ export function FindingsReview({
                         · <PlayIcon aria-hidden className="size-3" />
                         {formatMoment(moment)}
                       </span>
-                    ) : finding.recordingId ? (
+                    ) : finding.recordingId && !finding.visual?.photos?.length ? (
+                      // A finding a photo showed has no moment to give.
                       <span className="shrink-0">· no time given</span>
                     ) : null}
                     {finding.photoCount ? (
@@ -226,6 +228,25 @@ export function FindingsReview({
                       .filter(Boolean)
                       .join(' · ')}
                   </p>
+                  {finding.visual?.photos?.length ? (
+                    <div className="grid gap-1.5">
+                      <p className="text-muted-foreground text-xs">
+                        Seen in the technician&apos;s photo
+                        {finding.visual.photos.length === 1 ? '' : 's'}
+                      </p>
+                      <div className="grid max-w-72 grid-cols-3 gap-1.5">
+                        {finding.visual.photos.map((photo) => (
+                          <LazyPhoto
+                            areaName={areaName}
+                            compact
+                            key={photo.id}
+                            onOpen={onOpenPhoto ? () => onOpenPhoto(photo.id) : undefined}
+                            photo={photo}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   {finding.visual && finding.visual.status !== 'VISIBLE' && finding.visual.observation ? (
                     <p className="text-sm">
                       <span className="text-muted-foreground">In the video: </span>
@@ -249,7 +270,7 @@ export function FindingsReview({
                       moment={moment}
                       onSeek={(seconds) => onSeek(moment.recordingId, seconds)}
                     />
-                  ) : finding.recordingId ? (
+                  ) : finding.recordingId && !finding.visual?.photos?.length ? (
                     <p className="text-muted-foreground text-xs">
                       The AI gave no time for this finding. Re-run the AI on the recording to
                       place it.

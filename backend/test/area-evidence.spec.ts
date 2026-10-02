@@ -815,6 +815,7 @@ describe('single area evidence bundle', () => {
         baselineVisualStatus: 'PRESENT_AT_MOVE_IN',
         baselineVisualNote: 'The same holes show at move-in.',
         baselinePhotoIds: ['move-in-photo-1'],
+        visualPhotoIds: ['move-out-photo-door'],
         frameSuggestions: [
           {
             id: 'suggestion-1',
@@ -854,6 +855,10 @@ describe('single area evidence bundle', () => {
         status: 'VISIBLE',
         observation: 'Two small holes below the handle.',
         checkedAt: '2026-10-03T10:00:00.000Z',
+        // The technician's own photo of the room it was seen in.
+        photos: [
+          { id: 'move-out-photo-door', contentPath: '/api/v1/admin/photos/move-out-photo-door/content' },
+        ],
       },
       baselineVisual: {
         status: 'PRESENT_AT_MOVE_IN',

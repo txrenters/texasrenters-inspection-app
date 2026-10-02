@@ -213,3 +213,27 @@ describe('a reviewer’s own finding', () => {
     expect(visualLabel({ source: 'REVIEWER', visual: null })).toBe('Added by a reviewer');
   });
 });
+
+describe('a finding seen in the technician’s photo', () => {
+  const at = '2026-10-03T10:00:00.000Z';
+  const photos = [{ id: 'photo-door', contentPath: '/api/v1/admin/photos/photo-door/content' }];
+
+  it('says a photo showed it when no frame of the video could', () => {
+    expect(
+      visualLabel(finding({ visual: { status: 'VISIBLE', checkedAt: at, photos }, frameSuggestions: [] })),
+    ).toBe('Seen in a photo');
+  });
+
+  it('still says the video, when a frame of it is offered too', () => {
+    expect(
+      visualLabel(
+        finding({
+          visual: { status: 'VISIBLE', checkedAt: at, photos },
+          frameSuggestions: [
+            { id: 's1', recordingId: 'media-1', atMs: 21_000, rank: 0, box: null, status: 'SUGGESTED' },
+          ],
+        }),
+      ),
+    ).toBe('Seen in video');
+  });
+});
