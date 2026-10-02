@@ -2,7 +2,7 @@
  * The zones as areas on the map: each zone's territory, fenced.
  *
  * A zone is not a place anyone drew. It is a number on each tenancy in
- * Propertyware -- the week of the crew's rotation that tenancy falls in -- and
+ * Propertyware -- the turn of the crew's rotation that tenancy falls in -- and
  * nothing in the system says where one ends and the next begins. So the fence
  * is drawn from the properties: every spot within `reachMeters` of a property
  * belongs to the zone of the property nearest it. The zones never overlap, a

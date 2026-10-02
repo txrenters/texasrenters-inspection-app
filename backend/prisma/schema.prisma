@@ -3533,8 +3533,9 @@ model TechnicianPlanningProfile {
 
   /// Place in the benefit-package crew's zone rotation, from 1; null is not on
   /// the crew. The office's crew (2026-09-16) -- Moses, Kevin and Emanuel --
-  /// take the quarter's visits, both kinds, one zone a week each, and all move
-  /// one zone on each week: whoever is 1 starts the quarter on the first zone.
+  /// take the quarter's visits, both kinds, one zone a day each, and all move
+  /// one zone on each planned day (2026-10-03; it was weekly): whoever is 1
+  /// starts the quarter on the first zone.
   tbpZoneOrder Int?
 
   /// The technician who handles move-outs: Moses (the office, 2026-09-17). On a

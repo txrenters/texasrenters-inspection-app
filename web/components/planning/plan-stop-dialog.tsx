@@ -35,14 +35,13 @@ const MONTH_OF_QUARTER = ['first', 'second', 'third'];
 
 /**
  * Its visit last quarter, and the month of that quarter it was in: "Jul 14 ·
- * the quarter's first month". That month orders the visits -- last quarter's
- * first month is taken up first -- and, since 2026-09-20, no longer holds this
- * one back to that month of this quarter. The month recorded with the visit
- * wins over the day's: a plan may start early, so 25 September can be a first
- * month.
+ * the quarter's first month". The month recorded with the visit wins over the
+ * day's: a plan may start early, so 25 September can be a first month. It no
+ * longer orders this quarter's visits: each zone is taken up from the group
+ * furthest from downtown Houston (the office, 2026-10-03).
  */
 function lastVisitText(previousVisitOn: string | null | undefined, previousVisitMonth?: number | null) {
-  if (!previousVisitOn) return 'None: it is taken up with the second month’s';
+  if (!previousVisitOn) return 'None';
   const day = previousVisitOn.slice(0, 10);
   return `${formatShortDay(day)} · the quarter's ${MONTH_OF_QUARTER[(previousVisitMonth ?? monthOfQuarter(day)) - 1]} month`;
 }

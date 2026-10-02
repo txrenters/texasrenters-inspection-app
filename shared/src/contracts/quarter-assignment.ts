@@ -34,12 +34,16 @@
  *   from home is not a leg between properties and is not held to it.
  * - **The whole crew, every planned day, from the first** (2026-09-18), until
  *   every visit has a day: "all 3 should have schedules per day, it doesn't
- *   matter if they can finish all the TBP in a month". So a month's visits are
- *   done in its first weeks, a group a day each, in last quarter's order.
- * - **Each crew member has one zone a week** (`zoneTechnicians`, from
- *   `weeklyZoneTechnicians`): their day is a group of their zone of the week
- *   while it has any, then of the zone nobody has that week, then of the zone
- *   nearest their home.
+ *   matter if they can finish all the TBP in a month". So the visits are done
+ *   in the plan's first weeks, a group a day each.
+ * - **The zones go round daily, from the outside in** (2026-10-03): "zone 1
+ *   today, tomorrow should be zone 2 then zone 3 then zone 4 then back to zone
+ *   1, and we schedule them from the furthest to the closest marking Houston
+ *   the closest". Each crew member starts on their zone of the first day
+ *   (`zoneTechnicians`) and moves one zone round the circle each planned day,
+ *   past a zone with nothing left for them; within the zone, the group whose
+ *   middle is furthest from downtown Houston (`DOWNTOWN_HOUSTON`) goes first.
+ *   This replaced a zone of the week and last quarter's order.
  * - **A property within five minutes of a group joins it**, whatever zone it is
  *   in (`NEIGHBOUR_MINUTES`): "we will still follow the zoning but if there's a
  *   property that is near ... like 5 mins away then let's add it to the group
@@ -51,11 +55,11 @@
  *   can finish it in a month then that's good, we don't realy need to fill out
  *   all the month on each quarter". Every visit is laid out over every planned
  *   day at once, days are filled from the plan's first, and the quarter ends
- *   when the visits do. A property is still taken up in the order of its last
- *   quarter -- the month it was visited in orders it (`month`), it no longer
- *   holds it back -- so the visits done first last quarter are done first
- *   again. This replaced a month-by-month layout (2026-09-18) that left the end
- *   of each month a handful of visits, and days of one and two with it.
+ *   when the visits do. The month a property was visited in last quarter
+ *   (`month`) no longer holds it back; with its place in last quarter's order,
+ *   it now only settles a tie between two groups as far out. This replaced a
+ *   month-by-month layout (2026-09-18) that left the end of each month a
+ *   handful of visits, and days of one and two with it.
  * - **A visit with nowhere left to go joins the day that adds least driving**
  *   (`squeezeIn`, 2026-09-20): sooner a fuller day than a tenancy nobody
  *   visits. Only after everything else, and still never more than the
@@ -70,6 +74,7 @@
 
 import type { Quarter } from './quarter-plan.js';
 import { haversineMeters } from './route-plan.js';
+import { byZoneNumber } from './zone-rotation.js';
 
 /** A stop that can be placed: it has a rotation position, a location and a length. */
 export interface PlannableStop {
@@ -107,10 +112,27 @@ export interface PlannableDay {
    */
   qualified?: Readonly<Record<string, readonly string[]>>;
   /**
-   * Who has each zone that day, `zone -> technician`: whose zone each day of
-   * theirs is in. Absent: days are not given out by zone.
+   * Who has each zone that day, `zone -> technician`, by the calendar: the
+   * plan's planned days counted round the circle. The first day a crew member
+   * appears in a layout, it says which zone they start on; from then on they
+   * move one zone a planned day themselves, past zones with nothing left (see
+   * `layoutEveryDay`). Absent: days are not given out by zone.
    */
   zoneTechnicians?: Readonly<Record<string, string>>;
+}
+
+/**
+ * Where "furthest" is measured from: downtown Houston, City Hall (the office,
+ * 2026-10-03: "from the furthest to the closest marking Houston the closest").
+ */
+export const DOWNTOWN_HOUSTON: Readonly<{ latitude: number; longitude: number }> = {
+  latitude: 29.7604,
+  longitude: -95.3698,
+};
+
+/** How far a group's middle is from downtown Houston, in metres: further goes first. */
+export function metresFromDowntown(path: readonly { latitude: number; longitude: number }[]): number {
+  return path.length ? haversineMeters(middleOf(path), DOWNTOWN_HOUSTON) : 0;
 }
 
 export interface DayLimits {
@@ -334,7 +356,7 @@ export interface LayoutOptions {
    * takes the visits nearest it, from any zone.
    */
   anchors?: readonly DayAnchor[];
-  /** Where each crew member lives: for the zone nearest home, and who makes a trip. */
+  /** Where each crew member lives: for who makes a trip, and the trip's first day. */
   homes?: ReadonlyMap<string, Point>;
   /** Zones too far for a day's drive from home, laid out as trips. */
   tripZones?: readonly string[];
@@ -362,7 +384,7 @@ export interface LayoutOptions {
    * (`presetAroundAnchors`). Visits in no group -- a building new since the
    * template was saved -- join the group they add least driving to, or make
    * days of their own where there are a day's worth (`looseIntoGroups`).
-   * Everything after the grouping is the same: the zone of the week, the crew,
+   * Everything after the grouping is the same: the zone of the day, the crew,
    * the calendar, trips, and the visits nothing could take (`squeezeIn`).
    */
   presetGroups?: readonly (readonly string[])[];
@@ -1027,31 +1049,24 @@ function groupsOf(pool: readonly PlannableStop[], rules: GroupRules): Group[] {
 }
 
 /**
- * The group a crew member's day takes: the first in last quarter's order of
- * their zone of the week while it has one, then of the zone nobody has that
- * week, then of the zone nearest their home -- or, with no home on file, the
- * zone with most visits left.
+ * The zone a crew member's day is in: the first round the circle from `start`
+ * that still has a group they can take, one nobody else has today before one
+ * somebody does. A zone with nothing left is passed, so once zone 3 runs out
+ * the days go 1, 2, 4, 1, 2, 4 rather than doubling up on zone 4.
  */
-function groupFor(
-  day: PlannableDay,
-  technicianId: string,
-  groups: readonly Group[],
-  home: Point | undefined,
-  rank: (group: Group) => number,
-): Group {
-  const owners = day.zoneTechnicians ?? {};
-  const inZone = (zone: string) =>
-    groups.filter((group) => (group.zone ?? '') === zone).sort((left, right) => rank(left) - rank(right));
-  const zones = [...new Set(groups.map((group) => group.zone ?? ''))];
-  const own = Object.keys(owners).find((zone) => owners[zone] === technicianId);
-  if (own !== undefined && zones.includes(own)) return inZone(own)[0]!;
-  const idle = zones.filter((zone) => owners[zone] === undefined);
-  const choices = idle.length ? idle : zones;
-  const score = (zone: string) => {
-    const members = inZone(zone).flatMap((group) => group.path);
-    return home ? Math.min(...members.map((stop) => haversineMeters(home, stop))) : -members.length;
-  };
-  return inZone(choices.sort((left, right) => score(left) - score(right) || left.localeCompare(right))[0]!)[0]!;
+function zoneRoundTheCircle(
+  circle: readonly string[],
+  start: number,
+  available: ReadonlySet<string>,
+  takenToday: ReadonlySet<string>,
+): string {
+  const around = circle.map((_, step) => circle[(((start + step) % circle.length) + circle.length) % circle.length]!);
+  return (
+    around.find((zone) => available.has(zone) && !takenToday.has(zone)) ??
+    around.find((zone) => available.has(zone)) ??
+    // Only groups in a zone off the circle are left: the lowest of those.
+    [...available].sort(byZoneNumber)[0]!
+  );
 }
 
 /** The first run of `count` planned days in a row -- no weekend or closed day between -- that `usable` accepts. */
@@ -1178,7 +1193,7 @@ function squeezeIn(
   }
 }
 
-/** The zone most of a group's visits are in, which it counts as for the zone of the week; the earliest visit's settles a tie. */
+/** The zone most of a group's visits are in, which it counts as for the zone of the day; the earliest visit's settles a tie. */
 function mainZone(path: readonly PlannableStop[]): string {
   const counts = new Map<string, number>();
   for (const stop of path) counts.set(zoneOf(stop), (counts.get(zoneOf(stop)) ?? 0) + 1);
@@ -1345,9 +1360,11 @@ function presetAroundAnchors(
  * 1. Then day by day. First each crew member with a move-out or move-in that
  *    day, whose day takes the visits nearest it from any zone, three fewer for
  *    each (`fillAroundAnchors`). Then everyone else takes a group of what is
- *    left (`groupsOf`): of their zone of the week while it has one, then of the
- *    zone nobody has, then of the zone nearest home, and in each zone the group
- *    holding the visit first in last quarter's order (`groupFor`).
+ *    left (`groupsOf`): of the zone after the one they last worked -- their
+ *    zone of the day on the first -- passing a zone with nothing left for them
+ *    and one somebody else has that day while another has work
+ *    (`zoneRoundTheCircle`), and in the zone the group furthest from downtown
+ *    Houston (`metresFromDowntown`).
  *
  * The groups are made once from everything left, and made again only after a
  * move-out's day took visits out of them. From a group template
@@ -1376,10 +1393,10 @@ export function layoutEveryDay(
     return { placed: [], crews: [], unplaced, skippedAnchors, capacity };
   }
 
-  // Last quarter's order: whoever was first then is first now, and the month of
-  // the quarter they were visited in before the place within it. A visit with no
-  // month -- new this quarter -- goes with the second month's, so it is neither
-  // always first nor always last (2026-09-20).
+  // Last quarter's order: the month of the quarter they were visited in before
+  // the place within it. A visit with no month -- new this quarter -- goes with
+  // the second month's, so it is neither always first nor always last
+  // (2026-09-20). Groups are grown in it; it only breaks a tie in which is taken.
   const before = new Map(stops.map((stop, index) => [stop.stopId, options.rotation?.position.get(stop.stopId) ?? index]));
   const ordered = [...stops].sort(
     (left, right) =>
@@ -1387,7 +1404,7 @@ export function layoutEveryDay(
       before.get(left.stopId)! - before.get(right.stopId)! ||
       left.sequence - right.sequence,
   );
-  // Where each visit comes in that order: which group a day takes first (`rank`).
+  // Where each visit comes in that order: between two groups as far out, which a day takes first (`rank`).
   const place = new Map(ordered.map((stop, index) => [stop.stopId, index]));
   const left = new Set<PlannableStop>();
   for (const stop of ordered) {
@@ -1501,9 +1518,27 @@ export function layoutEveryDay(
   }
 
   // 1. Every crew member, every planned day, until nothing is left: the day's
-  // move-outs first, then a group each -- whoever still has one in their own
-  // zone before anyone helping out.
-  const rank = (group: Group) => Math.min(...group.path.map((stop) => place.get(stop.stopId)!));
+  // move-outs first, then a group each, a zone a day round the circle.
+  //
+  // Within a zone, the group furthest from downtown Houston first, working
+  // inwards (the office, 2026-10-03). Last quarter's order only breaks a tie.
+  const rank = (group: Group) =>
+    -metresFromDowntown(group.path) + Math.min(...group.path.map((stop) => place.get(stop.stopId)!)) * 1e-6;
+  // The zones round the circle, by number -- with trips' zones already taken out.
+  const circle = [...new Set([...left].map(zoneOf))].sort(byZoneNumber);
+  // Where on the circle each crew member's last group was, so their next day is
+  // the zone after it. A move-out's day takes the group nearest the move-out,
+  // whatever its zone, and does not move them on.
+  const turnOf = new Map<string, number>();
+  const startOf = (technicianId: string, day: PlannableDay) => {
+    const known = turnOf.get(technicianId);
+    if (known !== undefined) return known + 1;
+    // The first day they appear: the calendar's zone for them that day, or
+    // their place in the crew.
+    const owners = day.zoneTechnicians ?? {};
+    const own = Object.keys(owners).find((zone) => owners[zone] === technicianId);
+    return own !== undefined && circle.includes(own) ? circle.indexOf(own) : Math.max(0, crew.indexOf(technicianId));
+  };
   // What is left, grouped: kept while days take whole groups of it, made again when a move-out's day breaks one.
   // From a template, the office's groups -- made once, and never made again.
   let groups: Group[] | null = presets ? looseIntoGroups(presets.loose, presets.groups, rules) : null;
@@ -1567,14 +1602,26 @@ export function layoutEveryDay(
     const others = free.filter((technicianId) => !anchored.has(crewKey(day.date, technicianId)));
     if (others.length === 0 || left.size === 0) continue;
     const today: Group[] = (groups ??= groupsOf([...left], rules));
-    const owners = day.zoneTechnicians ?? {};
     const canTake = (technicianId: string, group: Group) => group.path.every((stop) => qualified(day, technicianId, stop));
-    const hasOwnZone = (technicianId: string) =>
-      today.some((group) => owners[group.zone ?? ''] === technicianId && canTake(technicianId, group));
-    for (const technicianId of [...others.filter(hasOwnZone), ...others.filter((technicianId) => !hasOwnZone(technicianId))]) {
+    // Zones somebody has already been given today, so two people are not in one while another has work.
+    const takenToday = new Set<string>();
+    // Whose own turn's zone still has a group for them goes first, so nobody
+    // moving on past an empty zone takes the group of the person whose turn it is.
+    const turnZone = (technicianId: string) =>
+      circle.length ? circle[((startOf(technicianId, day) % circle.length) + circle.length) % circle.length] : undefined;
+    const hasOwnTurn = (technicianId: string) =>
+      today.some((group) => (group.zone ?? '') === turnZone(technicianId) && canTake(technicianId, group));
+    for (const technicianId of [...others.filter(hasOwnTurn), ...others.filter((technicianId) => !hasOwnTurn(technicianId))]) {
       const theirs = today.filter((group) => canTake(technicianId, group));
       if (theirs.length === 0) continue;
-      const group = groupFor(day, technicianId, theirs, options.homes?.get(technicianId), rank);
+      const zone = circle.length
+        ? zoneRoundTheCircle(circle, startOf(technicianId, day), new Set(theirs.map((one) => one.zone ?? '')), takenToday)
+        : (theirs[0]!.zone ?? '');
+      takenToday.add(zone);
+      if (circle.includes(zone)) turnOf.set(technicianId, circle.indexOf(zone));
+      const group = theirs
+        .filter((one) => (one.zone ?? '') === zone)
+        .sort((one, other) => rank(one) - rank(other))[0]!;
       today.splice(today.indexOf(group), 1);
       for (const visit of group.path) left.delete(visit);
       crews.push({

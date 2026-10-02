@@ -1,13 +1,14 @@
 import { quarterStart, workingDaysOfQuarter, type Quarter } from './quarter-plan.js';
 
 /**
- * How the office gives out a quarter's benefit-package days (2026-09-16).
+ * How the office gives out a quarter's benefit-package days.
  *
  * The crew -- Moses, Kevin and Emanuel, in the office's order -- each work one
- * zone a week, and everyone moves one zone round the circle each week: if Moses
- * is on zone 1 this week, Kevin is on 2 and Emanuel on 3, and next week Moses is
- * on 2, Kevin on 3 and Emanuel on 4. Nobody crosses town, and a tenant sees
- * whoever has their part of it that week.
+ * zone a day, and everyone moves one zone round the circle each planned day: if
+ * Moses is on zone 1 today, Kevin is on 2 and Emanuel on 3, and tomorrow Moses
+ * is on 2, Kevin on 3 and Emanuel on 4 (the office, 2026-10-03: "zone 1 today,
+ * tomorrow should be zone 2 then zone 3 then zone 4 then back to zone 1"). It
+ * was a zone a week from 2026-09-16. Nobody crosses town in a day.
  *
  * Mondays are kept free of planned visits from the plan's second week on: that
  * is where the office puts the visits rescheduled from the week before. The
@@ -104,23 +105,28 @@ export function rescheduleMondaysOfQuarter(
 }
 
 /**
- * Who works which zone in a week of the quarter, as `zone -> technician`.
+ * Who works which zone on a planned day of the quarter, as `zone -> technician`.
  *
  * The crew goes round the zones in order, one zone each, and all move one zone
- * on each week. With more zones than people, one zone a week has nobody -- a
- * different one each week -- and its visits go to the nearest day it does. With
- * more people than zones, one person a week has no zone, again in turn.
+ * on each planned day. `day` counts the plan's planned days from 0
+ * (`plannedVisitDaysOfQuarter`): a holiday or a Monday kept for rescheduled
+ * visits is not a turn. With more zones than people, one zone a day has nobody
+ * -- a different one each day; with more people than zones, one person a day
+ * has no zone of their own, again in turn.
+ *
+ * It is where each starts. The layout then moves each on from the zone they
+ * last worked, past a zone with nothing left in it (`layoutEveryDay`).
  */
-export function weeklyZoneTechnicians(
+export function dailyZoneTechnicians(
   crew: readonly string[],
   zones: readonly string[],
-  week: number,
+  day: number,
 ): Record<string, string> {
   const owners: Record<string, string> = {};
   const slots = Math.max(crew.length, zones.length);
   if (slots === 0) return owners;
   crew.forEach((technicianId, position) => {
-    const slot = (((position + week) % slots) + slots) % slots;
+    const slot = (((position + day) % slots) + slots) % slots;
     if (slot < zones.length) owners[zones[slot]!] = technicianId;
   });
   return owners;
