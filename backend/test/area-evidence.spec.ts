@@ -446,7 +446,7 @@ describe('marking an area reviewed', () => {
         action: 'AREA_REVIEWED',
         entityType: 'Inspection',
         entityId: INSPECTION,
-        metadata: { inspectionAreaId: 'a1', areaName: 'Living Room' },
+        metadata: { inspectionAreaId: 'a1', areaName: 'Living Room', afterFinalization: false },
       }),
     });
   });
@@ -480,12 +480,20 @@ describe('marking an area reviewed', () => {
     expect(prisma.tx.inspectionArea.update).toHaveBeenCalled();
   });
 
-  it('refuses once the inspection is finalized', async () => {
-    const prisma = reviewPrisma({ finalizedAt: new Date() });
+  // The office reviews after the visit is closed: finalizing (or the
+  // technician ending the job) closes it in Jobber and stops the paid time,
+  // and reopening to review would undo both (2026-10-03).
+  it('is the office’s to mark after finalization too, and says so in the audit', async () => {
+    const prisma = reviewPrisma({ finalizedAt: new Date('2026-10-02T16:45:36Z') });
 
-    await expect(service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true)).rejects.toMatchObject(
-      { status: 409, code: 'INSPECTION_FINALIZED' },
-    );
+    await service(prisma).setAreaReviewed(user, INSPECTION, 'a1', true);
+
+    expect(prisma.tx.inspectionArea.update).toHaveBeenCalled();
+    expect(prisma.tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({ afterFinalization: true }),
+      }),
+    });
   });
 
   it('refuses an area from another inspection', async () => {

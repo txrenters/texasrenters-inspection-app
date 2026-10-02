@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { findingMoment, formatSeconds, nextPending } from '@/lib/finding-review';
 import { formatDateTime, humanize } from '@/lib/format';
-import { useAreaEvidence, useInspection } from '@/lib/queries';
+import { useAreaEvidence } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 import { areaPhotoItems } from './area-photos';
@@ -102,8 +102,8 @@ function RecordingCard({
   /** Items a captured still can be filed against. */
   checklist: AreaChecklistEntry[];
   onSeek: (seconds: number) => void;
-  /** Offered to a reviewer, locked once finalized: see `ReanalyzeControl`. */
-  reanalyze?: { pendingFindings: number; lockedReason: string | null } | null;
+  /** Offered to a reviewer: see `ReanalyzeControl`. */
+  reanalyze?: { pendingFindings: number } | null;
   /** This recording's findings that have a moment, to jump to from under it. */
   findingMarks?: Array<{ id: string; title: string; start: number }>;
 }) {
@@ -125,7 +125,6 @@ function RecordingCard({
             <ReanalyzeControl
               areaId={areaId}
               inspectionId={inspectionId}
-              lockedReason={reanalyze.lockedReason}
               pendingFindings={reanalyze.pendingFindings}
               recording={recording}
             />
@@ -263,9 +262,14 @@ export function AreaDetailPanel({
   stepping?: { previous: boolean; next: boolean; onStep: (direction: 1 | -1) => void };
 }) {
   const evidence = useAreaEvidence(inspectionId, areaId);
-  // A finalized inspection's review is closed; the mark is shown, not offered.
-  const inspection = useInspection(inspectionId).data;
-  const finalized = Boolean(inspection?.finalizedAt);
+  /**
+   * Finalized or not, the findings stay the office's to decide (2026-10-03).
+   * Finalizing -- like the technician ending the job -- closes the visit: its
+   * Jobber completion and the technician's paid time. Reviewing the AI's
+   * findings for the reports and the move-in comparison comes after, and
+   * reopening to get at it would undo both. What finalization still freezes is
+   * what was captured: the checklist answers (the Condition tab) and the rooms.
+   */
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
   /**
    * Where a recording should open, when the reviewer arrives from a finding,
@@ -390,8 +394,8 @@ export function AreaDetailPanel({
     recordings.find((recording) => recording.id === selected?.recordingId) ??
     primaryRecording ??
     recordings[0];
-  // A reviewer's. Once finalized it is shown locked, saying why, because the
-  // server refuses the re-run then; hiding it read as the button being removed.
+  // A reviewer's, finalized or not: a re-run writes findings, never the
+  // inspection's status.
   const reanalyzeFor = (recording: AreaRecording) =>
     canReview
       ? {
@@ -399,11 +403,6 @@ export function AreaDetailPanel({
             (finding) =>
               finding.recordingId === recording.id && finding.reviewStatus === 'PENDING_REVIEW',
           ).length,
-          lockedReason: inspection?.finalizedAt
-            ? `This inspection was finalized ${formatDateTime(inspection.finalizedAt)}${
-                inspection.finalizedBy ? ` by ${inspection.finalizedBy.displayName}` : ''
-              }. Its findings are frozen, so the AI cannot run on its recordings again.`
-            : null,
         }
       : null;
 
@@ -424,7 +423,6 @@ export function AreaDetailPanel({
           <AreaReviewControl
             bundle={bundle}
             canReview={canReview}
-            finalized={finalized}
             inspectionId={inspectionId}
           />
           {stepping ? (
@@ -627,7 +625,7 @@ export function AreaDetailPanel({
         <TabsContent className="@container" value="findings">
           {/* With no findings yet, still shown to someone who can add one the
               AI missed: that is exactly the room it missed something in. */}
-          {findings.length || (canReview && !finalized && recordings.length) ? (
+          {findings.length || (canReview && recordings.length) ? (
             // Side by side once the panel is wide enough for both, the player
             // held in view while the list scrolls; stacked, player first,
             // otherwise -- and kept to about half the window there, since a
@@ -663,9 +661,10 @@ export function AreaDetailPanel({
               <FindingsReview
                 areaId={bundle.area.id}
                 areaName={area.name}
-                // Decisions close with the inspection, as everywhere else.
-                canCapture={canManage && !finalized}
-                canReview={canReview && !finalized}
+                // Open after finalization too: the stills filed here are the
+                // findings' own, and the server allows exactly those.
+                canCapture={canManage}
+                canReview={canReview}
                 findings={findings}
                 inspectionId={inspectionId}
                 onDecided={(findingId) => selectFinding(nextPending(findings, findingId)?.id ?? null)}

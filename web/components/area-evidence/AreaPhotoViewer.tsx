@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePermissions } from '@/lib/auth';
-import { areaEvidenceQuery, useAreaEvidence, useInspection } from '@/lib/queries';
+import { areaEvidenceQuery, useAreaEvidence } from '@/lib/queries';
 
 import { areaPhotoItems, nextAreaWithPhotos } from './area-photos';
 import { EvidenceViewer } from './EvidenceViewer';
@@ -74,7 +74,6 @@ export function AreaPhotoViewer({
     () => typeof window !== 'undefined' && Boolean(window.matchMedia?.(PANEL_BY_DEFAULT).matches),
   );
   const canReview = usePermissions().has('findings:review');
-  const finalized = Boolean(useInspection(inspectionId).data?.finalizedAt);
 
   const previous = nextAreaWithPhotos(areas, at.areaId, -1);
   const next = nextAreaWithPhotos(areas, at.areaId, 1);
@@ -159,7 +158,6 @@ export function AreaPhotoViewer({
                 <ReviewPanel
                   bundle={current.data}
                   canReview={canReview}
-                  finalized={finalized}
                   inspectionId={inspectionId}
                   onNextArea={next ? () => void cross(1, 'first') : undefined}
                 />

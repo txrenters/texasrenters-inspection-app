@@ -141,11 +141,14 @@ describe('marking an area reviewed', () => {
     expect(screen.getByText('New evidence since it was reviewed by Ernie')).toBeInTheDocument();
   });
 
-  it('offers nothing once the inspection is finalized', () => {
+  // The office reviews after the visit is closed; reopening to do it would mark
+  // the Jobber visit incomplete and restart the technician's paid time.
+  it('offers the mark on a finalized inspection too', () => {
     state.finalizedAt = '2026-10-02T10:00:00.000Z';
     open(bundle());
 
-    expect(screen.queryByRole('button', { name: 'Mark reviewed' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark reviewed' }));
+    expect(state.mutate).toHaveBeenCalledWith({ areaId: 'area-1', reviewed: true });
   });
 
   it('offers nothing to someone who may not decide findings', () => {

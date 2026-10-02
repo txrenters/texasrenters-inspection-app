@@ -44,13 +44,12 @@ function recording(overrides: Partial<AreaRecording> = {}): AreaRecording {
   };
 }
 
-function show(data: AreaRecording, pendingFindings = 5, lockedReason: string | null = null) {
+function show(data: AreaRecording, pendingFindings = 5) {
   render(
     <>
       <ReanalyzeControl
         areaId="area-1"
         inspectionId="inspection-1"
-        lockedReason={lockedReason}
         pendingFindings={pendingFindings}
         recording={data}
       />
@@ -110,16 +109,6 @@ describe('re-running the AI on a recording', () => {
     expect(screen.getByRole('button', { name: 'Re-run AI' })).toBeTruthy();
   });
 
-  // Once finalized it used to disappear, which read as the button having been
-  // removed. It stays, and says why it cannot run.
-  it('is shown locked on a finalized inspection, and says why instead of running', () => {
-    show(recording(), 5, 'This inspection was finalized Oct 2, 2026 by Kimson.');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Re-run AI' }));
-    expect(screen.getByText('This inspection was finalized Oct 2, 2026 by Kimson.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
-    expect(state.mutate).not.toHaveBeenCalled();
-  });
 });
 
 describe('which recordings can be re-run', () => {

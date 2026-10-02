@@ -1053,10 +1053,12 @@ export class AreaEvidenceService {
    * finding: an area with findings still awaiting a decision cannot be marked,
    * because the mark must never stand in for the human review of AI output.
    *
-   * Refused once the inspection is finalized (`finalizedAt`, as the checklist
-   * is), and for an area nobody recorded anything in and nobody skipped:
-   * marking that reviewed would hide a gap rather than close one. Repeating the
-   * same decision is a no-op, so a double click writes one audit row.
+   * Allowed after finalization, as deciding the findings is (see
+   * `AdminService.reviewFinding`): it is the office's review, which goes on
+   * after the visit is closed. Refused for an area nobody recorded anything in
+   * and nobody skipped: marking that reviewed would hide a gap rather than
+   * close one. Repeating the same decision is a no-op, so a double click writes
+   * one audit row.
    */
   async setAreaReviewed(
     user: AuthenticatedUser,
@@ -1065,12 +1067,6 @@ export class AreaEvidenceService {
     reviewed: boolean,
   ): Promise<{ areaId: string; review: AreaReviewMark | null }> {
     const inspection = await this.requireInspection(user.organizationId, inspectionId);
-    if (inspection.finalizedAt)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_FINALIZED',
-        'Areas cannot be marked reviewed after the inspection is finalized.',
-      );
     const area = await this.prisma.inspectionArea.findFirst({
       where: { id: areaId, inspectionId },
       select: {
@@ -1148,7 +1144,11 @@ export class AreaEvidenceService {
           action: reviewed ? 'AREA_REVIEWED' : 'AREA_REVIEW_WITHDRAWN',
           entityType: 'Inspection',
           entityId: inspectionId,
-          metadata: { inspectionAreaId: area.id, areaName: area.propertyArea.name },
+          metadata: {
+            inspectionAreaId: area.id,
+            areaName: area.propertyArea.name,
+            afterFinalization: Boolean(inspection.finalizedAt),
+          },
         },
       });
     });
@@ -1177,7 +1177,7 @@ export class AreaEvidenceService {
       // `inspectionType` for the checklist read in `areaEvidence`: an area
       // carries both item sets once it is marked as having a unit, and the
       // reviewer must be shown the one the technician was actually asked.
-      // `finalizedAt` because a finalized inspection's review is closed.
+      // `finalizedAt` because a finalized inspection's checklist is frozen.
       select: { id: true, inspectionType: true, finalizedAt: true },
     });
     if (!inspection)

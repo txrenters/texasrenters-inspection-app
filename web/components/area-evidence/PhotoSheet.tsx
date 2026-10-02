@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
-import { areaEvidenceQuery, useInspection } from '@/lib/queries';
+import { areaEvidenceQuery } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 import { STATUS_META } from './area-status';
@@ -47,7 +47,6 @@ export function PhotoSheet({
   onOpenArea: (areaId: string) => void;
 }) {
   const canReview = usePermissions().has('findings:review');
-  const finalized = Boolean(useInspection(inspectionId).data?.finalizedAt);
   const bundles = useQueries({
     queries: areas.map((area) => areaEvidenceQuery(inspectionId, area.id)),
   });
@@ -66,7 +65,6 @@ export function PhotoSheet({
           area={area}
           bundle={bundles[index]?.data}
           canReview={canReview}
-          finalized={finalized}
           inspectionId={inspectionId}
           key={area.id}
           onOpenArea={onOpenArea}
@@ -82,7 +80,6 @@ function SheetRow({
   area,
   bundle,
   canReview,
-  finalized,
   onOpenPhoto,
   onOpenArea,
 }: {
@@ -90,7 +87,6 @@ function SheetRow({
   area: AreaEvidenceSummaryItem;
   bundle: AreaEvidenceBundle | undefined;
   canReview: boolean;
-  finalized: boolean;
   onOpenPhoto: (areaId: string, photoId: string) => void;
   onOpenArea: (areaId: string) => void;
 }) {
@@ -164,7 +160,6 @@ function SheetRow({
             align="start"
             bundle={bundle}
             canReview={canReview}
-            finalized={finalized}
             inspectionId={inspectionId}
           />
         ) : null}
