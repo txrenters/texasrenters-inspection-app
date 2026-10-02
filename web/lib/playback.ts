@@ -52,7 +52,12 @@ export function withStartTime(iframeUrl: string, startSeconds?: number | null) {
  */
 export function resolvePlayback(
   playback: VideoPlayback | undefined,
-  options: { startSeconds?: number | null } = {},
+  /**
+   * `autoplay` for a reviewer who asked for a moment: they clicked a finding
+   * to hear the technician describe it, and a paused player would make them
+   * press play on every one.
+   */
+  options: { startSeconds?: number | null; autoplay?: boolean } = {},
 ): PlaybackState {
   if (!playback) return { kind: 'unavailable', message: 'This recording could not be loaded.' };
 
@@ -83,9 +88,10 @@ export function resolvePlayback(
   if (!playback.iframeUrl)
     return { kind: 'unavailable', message: 'No playback URL was returned for this recording.' };
 
+  const src = withStartTime(playback.iframeUrl, options.startSeconds);
   return {
     kind: 'stream',
-    src: withStartTime(playback.iframeUrl, options.startSeconds),
+    src: options.autoplay ? `${src}${src.includes('?') ? '&' : '?'}autoplay=true` : src,
     poster: playback.thumbnailUrl,
   };
 }

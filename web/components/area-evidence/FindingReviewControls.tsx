@@ -22,9 +22,12 @@ import { useAdminMutations } from '@/lib/queries';
 export function FindingReviewControls({
   finding,
   inspectionId,
+  onDecided,
 }: {
   finding: AreaFinding;
   inspectionId: string;
+  /** After a decision is saved: the findings review moves on to the next one. */
+  onDecided?: () => void;
 }) {
   const { approveFinding, rejectFinding } = useAdminMutations();
   const [rejecting, setRejecting] = useState(false);
@@ -69,7 +72,10 @@ export function FindingReviewControls({
             onClick={() =>
               void rejectFinding
                 .mutateAsync({ id: finding.id, inspectionId, reason: reason.trim() })
-                .then(() => setRejecting(false))
+                .then(() => {
+                  setRejecting(false);
+                  onDecided?.();
+                })
                 .catch(() => undefined)
             }
             size="sm"
@@ -94,7 +100,10 @@ export function FindingReviewControls({
         <Button
           disabled={busy}
           onClick={() =>
-            void approveFinding.mutateAsync({ id: finding.id, inspectionId }).catch(() => undefined)
+            void approveFinding
+              .mutateAsync({ id: finding.id, inspectionId })
+              .then(() => onDecided?.())
+              .catch(() => undefined)
           }
           size="sm"
           type="button"

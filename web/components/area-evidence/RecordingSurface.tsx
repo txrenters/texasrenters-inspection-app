@@ -7,6 +7,18 @@ import { Button } from '@/components/ui/button';
 import { apiBlob } from '@/lib/api';
 import { resolvePlayback } from '@/lib/playback';
 import { useVideoPlayback } from '@/lib/queries';
+import { cn } from '@/lib/utils';
+
+/**
+ * The box a recording plays in, by orientation.
+ *
+ * Upright at 9:16, at most as tall as most of the window, centred: a phone
+ * walkthrough in a 16:9 box was a strip a third of its width between black
+ * bars. Landscape keeps 16:9 at full width.
+ */
+export function recordingFrame(portrait: boolean) {
+  return portrait ? 'mx-auto aspect-[9/16] w-full max-w-[42vh]' : 'aspect-video w-full max-w-full';
+}
 
 /**
  * Plays one inspection recording.
@@ -29,15 +41,21 @@ export function RecordingSurface({
   title,
   posterUrl,
   startSeconds,
+  autoplay,
+  portrait = false,
 }: {
   mediaId: string;
   title: string;
   posterUrl?: string | null;
   /** Seek target, for opening a recording at the finding that references it. */
   startSeconds?: number | null;
+  /** Start playing at once: the reviewer asked for this moment. */
+  autoplay?: boolean;
+  /** Filmed upright, as phone walkthroughs are: framed to fit, not letterboxed into 16:9. */
+  portrait?: boolean;
 }) {
   const playback = useVideoPlayback(mediaId);
-  const state = resolvePlayback(playback.data, { startSeconds });
+  const state = resolvePlayback(playback.data, { startSeconds, autoplay });
 
   if (playback.isLoading)
     return <Notice icon={<Loader2Icon aria-hidden className="size-5 animate-spin" />} message="Loading recording…" />;
@@ -77,9 +95,9 @@ export function RecordingSurface({
   if (state.kind === 'legacy') return <LegacyRecording contentPath={state.contentPath} title={title} poster={posterUrl} />;
 
   return (
-    <div className="relative aspect-video w-full max-w-full overflow-hidden rounded-lg bg-black">
+    <div className={cn('relative overflow-hidden rounded-lg bg-black', recordingFrame(portrait))}>
       <iframe
-        allow="accelerometer; gyroscope; encrypted-media; picture-in-picture;"
+        allow="accelerometer; autoplay; gyroscope; encrypted-media; picture-in-picture;"
         allowFullScreen
         className="absolute inset-0 size-full border-0"
         src={state.src}

@@ -53,6 +53,15 @@ describe('resolving what to render', () => {
     expect(state.kind === 'stream' && state.src).toContain('startTime=45s');
   });
 
+  it('plays at once when the reviewer asked for a moment, and waits otherwise', () => {
+    const asked = resolvePlayback(ready, { startSeconds: 45, autoplay: true });
+    expect(asked.kind === 'stream' && asked.src).toBe(
+      'https://customer-abc.cloudflarestream.com/signed.token/iframe?startTime=45s&autoplay=true',
+    );
+    const opened = resolvePlayback(ready);
+    expect(opened.kind === 'stream' && opened.src).not.toContain('autoplay');
+  });
+
   it('reports processing rather than showing a broken player', () => {
     // A reviewer opening an area minutes after the technician left should be
     // told to wait, not shown a failure.

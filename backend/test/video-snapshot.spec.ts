@@ -10,6 +10,7 @@ const MEDIA = '20000000-0000-4000-8000-000000000001';
 const AREA = '20000000-0000-4000-8000-000000000002';
 const PROPERTY_AREA = '20000000-0000-4000-8000-000000000003';
 const ITEM = '20000000-0000-4000-8000-000000000004';
+const FINDING = '20000000-0000-4000-8000-000000000005';
 
 function reviewer(
   permissions: AuthenticatedUser['permissions'] = ['inspections:manage'],
@@ -35,17 +36,20 @@ function build({
     durationSeconds: 120,
     inspectionId: 'insp-1',
     inspectionAreaId: AREA,
-    inspectionArea: { propertyAreaId: PROPERTY_AREA },
+    inspectionArea: { propertyAreaId: PROPERTY_AREA, inspection: { finalizedAt: null } },
   } as Record<string, unknown> | null,
   item = { id: ITEM } as { id: string } | null,
-  existingPhoto = null as { id: string } | null,
+  finding = { id: FINDING } as { id: string } | null,
+  existingPhoto = null as { id: string; findingId?: string | null } | null,
 } = {}) {
   const prisma = {
     inspectionMedia: { findFirst: jest.fn().mockResolvedValue(media) },
     areaChecklistItem: { findFirst: jest.fn().mockResolvedValue(item) },
+    inspectionFinding: { findFirst: jest.fn().mockResolvedValue(finding) },
     inspectionPhoto: {
       findUnique: jest.fn().mockResolvedValue(existingPhoto),
       create: jest.fn().mockResolvedValue({ id: 'photo-1' }),
+      update: jest.fn().mockResolvedValue({}),
     },
   };
   const stream = {
@@ -158,7 +162,7 @@ describe('capturing a still from a recording', () => {
         durationSeconds: 60,
         inspectionId: 'insp-1',
         inspectionAreaId: AREA,
-        inspectionArea: { propertyAreaId: PROPERTY_AREA },
+        inspectionArea: { propertyAreaId: PROPERTY_AREA, inspection: { finalizedAt: null } },
       },
     });
 
@@ -166,6 +170,84 @@ describe('capturing a still from a recording', () => {
       status: 409,
       code: 'RECORDING_NOT_READY',
     });
+  });
+
+  /**
+   * A reviewer picking the frame that shows a finding: the still is filed
+   * under it, and like every finding photograph it prints only once the
+   * finding is approved.
+   */
+  it('files the still under the finding it shows', async () => {
+    globalThis.fetch = okFetch() as never;
+    const { prisma, service } = build();
+
+    await service.captureSnapshot(reviewer(), MEDIA, { atMs: 61_000, findingId: FINDING });
+
+    const [[lookup]] = prisma.inspectionFinding.findFirst.mock.calls;
+    // This inspection and this room: never somebody else's finding.
+    expect(lookup.where).toEqual({
+      id: FINDING,
+      inspectionId: 'insp-1',
+      propertyAreaId: PROPERTY_AREA,
+    });
+    const [[create]] = prisma.inspectionPhoto.create.mock.calls;
+    expect(create.data).toMatchObject({ findingId: FINDING, captureType: 'VIDEO_FRAME_SNAPSHOT' });
+  });
+
+  it('refuses a finding from another room or inspection', async () => {
+    const { prisma, service } = build({ finding: null });
+
+    await expect(
+      service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000, findingId: FINDING }),
+    ).rejects.toMatchObject({ status: 404, code: 'FINDING_NOT_FOUND' });
+    expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
+  });
+
+  it('files an earlier unfiled capture of the same frame instead of making a second', async () => {
+    const { prisma, service } = build({ existingPhoto: { id: 'photo-existing', findingId: null } });
+
+    await expect(
+      service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000, findingId: FINDING }),
+    ).resolves.toMatchObject({ id: 'photo-existing', reused: true });
+    expect(prisma.inspectionPhoto.update).toHaveBeenCalledWith({
+      where: { id: 'photo-existing' },
+      data: { findingId: FINDING },
+    });
+    expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
+  });
+
+  it('leaves a frame already filed under another finding where it is', async () => {
+    const { prisma, service } = build({
+      existingPhoto: { id: 'photo-existing', findingId: 'some-other-finding' },
+    });
+
+    await service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000, findingId: FINDING });
+    expect(prisma.inspectionPhoto.update).not.toHaveBeenCalled();
+  });
+
+  it('adds nothing to an inspection that has been finalized', async () => {
+    // Evidence freezes at finalization: a still added afterwards would change
+    // a report that may already be shared.
+    const { prisma, service } = build({
+      media: {
+        id: MEDIA,
+        streamUid: 'uid-1',
+        readyAt: new Date(),
+        durationSeconds: 120,
+        inspectionId: 'insp-1',
+        inspectionAreaId: AREA,
+        inspectionArea: {
+          propertyAreaId: PROPERTY_AREA,
+          inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
+        },
+      },
+    });
+
+    await expect(service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000 })).rejects.toMatchObject({
+      status: 409,
+      code: 'INSPECTION_FINALIZED',
+    });
+    expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
   });
 
   it('does not leave orphaned bytes when the row cannot be written', async () => {

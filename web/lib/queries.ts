@@ -2343,12 +2343,18 @@ export function useAdminMutations() {
         areaId: string;
         atMs: number;
         checklistItemId?: string;
+        /** The finding the still shows; it is filed under it. */
+        findingId?: string;
       }) =>
         api<{ id: string; atMs: number; reused: boolean }>(
           `/api/v1/inspection-videos/${mediaId}/snapshot`,
           {
             method: 'POST',
-            body: JSON.stringify({ atMs: body.atMs, checklistItemId: body.checklistItemId }),
+            body: JSON.stringify({
+              atMs: body.atMs,
+              checklistItemId: body.checklistItemId,
+              findingId: body.findingId,
+            }),
           },
         ),
       onSuccess: (_data, variables) => {
