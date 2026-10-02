@@ -3,7 +3,8 @@
  * the components so they are testable without a browser.
  */
 
-import type { AreaFinding } from '@texasrenters/shared';
+import type { AreaFinding, FindingEditInput } from '@texasrenters/shared';
+import { rejectReasonLabel } from '@texasrenters/shared';
 
 /** Where in which recording a finding is, when the AI could say. */
 export type FindingMoment = { recordingId: string; start: number; end: number };
@@ -150,4 +151,62 @@ export function nextPending(findings: AreaFinding[], afterId: string | null) {
   const from = findings.findIndex((finding) => finding.id === afterId);
   const ordered = [...findings.slice(from + 1), ...findings.slice(0, Math.max(0, from))];
   return ordered.find((finding) => finding.reviewStatus === 'PENDING_REVIEW') ?? null;
+}
+
+/**
+ * The decision on a finding, in a few words: "Approved with edits",
+ * "Rejected · Normal wear". Null for a plain approval, which says nothing the
+ * status does not.
+ */
+export function decisionLabel(lastReview: AreaFinding['lastReview']) {
+  if (!lastReview) return null;
+  if (lastReview.status === 'EDITED') return 'Approved with edits';
+  if (lastReview.status === 'REJECTED') {
+    const reason = rejectReasonLabel(lastReview.reasonCode);
+    return reason ? `Rejected · ${reason}` : 'Rejected';
+  }
+  return null;
+}
+
+/**
+ * Who decided, when, and why, for a decided finding: one line under it.
+ * The reviewer's own note is kept last, as they wrote it.
+ */
+export function decisionLine(lastReview: NonNullable<AreaFinding['lastReview']>, when: string) {
+  return [decisionLabel(lastReview), lastReview.reviewerName, when, lastReview.reason]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+export type FindingSeverity = FindingEditInput['severity'];
+export type FindingKind = FindingEditInput['findingType'];
+
+export const SEVERITY_CHOICES: ReadonlyArray<{ value: FindingSeverity; label: string }> = [
+  { value: 'LOW', label: 'Low' },
+  { value: 'MEDIUM', label: 'Medium' },
+  { value: 'HIGH', label: 'High' },
+];
+
+export const FINDING_KIND_CHOICES: ReadonlyArray<{ value: FindingKind; label: string }> = [
+  { value: 'POSSIBLE_NEW_DAMAGE', label: 'New damage' },
+  { value: 'EXISTING_CONDITION', label: 'Existing' },
+  { value: 'MAINTENANCE', label: 'Maintenance' },
+  { value: 'NO_CHANGE', label: 'No change' },
+];
+
+/**
+ * A finding as the edit form starts it: what the AI wrote, with anything the
+ * form cannot offer (an unknown severity or type) brought to the nearest choice
+ * rather than sent back as something the server refuses.
+ */
+export function editableFinding(finding: AreaFinding): FindingEditInput {
+  const severity = SEVERITY_CHOICES.find((choice) => choice.value === finding.severity);
+  const kind = FINDING_KIND_CHOICES.find((choice) => choice.value === finding.findingType);
+  return {
+    title: finding.title,
+    description: finding.description,
+    severity: severity?.value ?? 'MEDIUM',
+    findingType: kind?.value ?? 'MAINTENANCE',
+    category: finding.category,
+  };
 }

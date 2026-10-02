@@ -8,6 +8,7 @@ import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import {
   comparisonLabel,
+  decisionLine,
   findingMoment,
   formatMoment,
   responsibilityLabel,
@@ -234,9 +235,10 @@ export function FindingsReview({
                     />
                   ) : finding.lastReview ? (
                     <p className="text-muted-foreground text-xs">
-                      {finding.lastReview.reviewerName} ·{' '}
-                      {formatDateTime(finding.lastReview.createdAt)}
-                      {finding.lastReview.reason ? ` · ${finding.lastReview.reason}` : ''}
+                      {decisionLine(
+                        finding.lastReview,
+                        formatDateTime(finding.lastReview.createdAt),
+                      )}
                     </p>
                   ) : null}
                 </div>

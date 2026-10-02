@@ -1,4 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import type { FindingRejectReason, FindingType, Severity } from '@prisma/client';
 import {
   EvidenceRequestStatus,
   FindingReviewStatus,
@@ -4336,6 +4337,7 @@ export class AdminService {
             select: {
               status: true,
               reason: true,
+              reasonCode: true,
               createdAt: true,
               reviewer: { select: { displayName: true } },
             },
@@ -4369,6 +4371,7 @@ export class AdminService {
           ? {
               status: record.reviews[0].status,
               reason: record.reviews[0].reason,
+              reasonCode: record.reviews[0].reasonCode,
               reviewerName: record.reviews[0].reviewer.displayName,
               createdAt: record.reviews[0].createdAt,
             }
@@ -4384,7 +4387,10 @@ export class AdminService {
     findingId: string,
     status: 'APPROVED' | 'REJECTED',
     reason?: string,
+    // Only a rejection carries one; it is what the AI is later shown as a lesson.
+    reasonCode?: FindingRejectReason,
   ) {
+    const code = status === 'REJECTED' ? (reasonCode ?? null) : null;
     const outcome = await this.prisma.$transaction(async (tx) => {
       const finding = await tx.inspectionFinding.findFirst({
         where: { id: findingId, inspection: { organizationId: user.organizationId } },
@@ -4396,7 +4402,13 @@ export class AdminService {
       // Re-sending the same decision is a no-op so review clicks are idempotent.
       if (finding.reviewStatus === nextStatus) return { finding, review: null };
       const review = await tx.findingReview.create({
-        data: { findingId: finding.id, reviewerId: user.id, status: nextStatus, reason },
+        data: {
+          findingId: finding.id,
+          reviewerId: user.id,
+          status: nextStatus,
+          reason,
+          reasonCode: code,
+        },
       });
       const updated = await tx.inspectionFinding.update({
         where: { id: finding.id },
@@ -4408,7 +4420,12 @@ export class AdminService {
         user,
         status === 'APPROVED' ? 'FINDING_APPROVED' : 'FINDING_REJECTED',
         finding.id,
-        { inspectionId: finding.inspectionId, reason: reason ?? null, reviewId: review.id },
+        {
+          inspectionId: finding.inspectionId,
+          reason: reason ?? null,
+          reasonCode: code,
+          reviewId: review.id,
+        },
         'InspectionFinding',
       );
       return { finding: updated, review };
@@ -4418,6 +4435,130 @@ export class AdminService {
       organizationId: user.organizationId,
     });
     return outcome.finding;
+  }
+
+  /**
+   * Correct an AI finding and approve it in one step, rather than rejecting a
+   * finding that was nearly right and writing it again by hand.
+   *
+   * Only a finding still waiting for review: a decided one is changed by
+   * deciding it again, so the record of who kept what stays a sequence of
+   * whole decisions. The correction is kept beside the decision, before and
+   * after, which is what the AI is later shown as a lesson. Refused once the
+   * inspection is finalized, because the report it feeds is frozen.
+   */
+  async editFinding(
+    user: AuthenticatedUser,
+    findingId: string,
+    input: {
+      title: string;
+      description: string;
+      severity: Severity;
+      findingType: FindingType;
+      category: string;
+      note?: string;
+    },
+  ) {
+    const after = {
+      title: input.title.trim(),
+      description: input.description.trim(),
+      severity: input.severity,
+      findingType: input.findingType,
+      category: input.category.trim(),
+    };
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const finding = await tx.inspectionFinding.findFirst({
+        where: { id: findingId, inspection: { organizationId: user.organizationId } },
+        select: {
+          id: true,
+          inspectionId: true,
+          reviewStatus: true,
+          title: true,
+          description: true,
+          severity: true,
+          findingType: true,
+          category: true,
+          inspection: { select: { finalizedAt: true } },
+        },
+      });
+      if (!finding) throw new ApplicationError(404, 'FINDING_NOT_FOUND', 'Finding was not found.');
+      if (finding.inspection.finalizedAt)
+        throw new ApplicationError(
+          409,
+          'INSPECTION_FINALIZED',
+          'This inspection is finalized, so its findings can no longer be changed.',
+        );
+      if (finding.reviewStatus !== FindingReviewStatus.PENDING_REVIEW)
+        throw new ApplicationError(
+          409,
+          'FINDING_ALREADY_DECIDED',
+          'This finding was already decided. Reload to see the decision.',
+        );
+      const before = {
+        title: finding.title,
+        description: finding.description,
+        severity: finding.severity,
+        findingType: finding.findingType,
+        category: finding.category,
+      };
+      const changed = (Object.keys(after) as Array<keyof typeof after>).filter(
+        (field) => before[field] !== after[field],
+      );
+      const note = input.note?.trim() || null;
+      // Conditional on the status read above, so two reviewers correcting the
+      // same finding at once cannot both win: the second waits on the row,
+      // finds it decided, and is told so.
+      const claimed = await tx.inspectionFinding.updateMany({
+        where: { id: finding.id, reviewStatus: FindingReviewStatus.PENDING_REVIEW },
+        // APPROVED, not EDITED: an approved finding is what the report, the
+        // charges and the area's status read, and this one is approved.
+        data: { ...after, reviewStatus: FindingReviewStatus.APPROVED },
+      });
+      if (claimed.count === 0)
+        throw new ApplicationError(
+          409,
+          'FINDING_ALREADY_DECIDED',
+          'This finding was already decided. Reload to see the decision.',
+        );
+      // Nothing changed is an approval, recorded as one rather than as a
+      // correction that taught the AI nothing.
+      const review = await tx.findingReview.create({
+        data: {
+          findingId: finding.id,
+          reviewerId: user.id,
+          status: changed.length ? FindingReviewStatus.EDITED : FindingReviewStatus.APPROVED,
+          reason: note,
+          editedValue: changed.length ? { before, after, changed } : undefined,
+        },
+      });
+      const updated = await tx.inspectionFinding.findUniqueOrThrow({
+        where: { id: finding.id },
+        select: {
+          id: true,
+          inspectionId: true,
+          reviewStatus: true,
+          title: true,
+          description: true,
+          severity: true,
+          findingType: true,
+          category: true,
+        },
+      });
+      await this.audit(
+        tx,
+        user,
+        changed.length ? 'FINDING_EDITED' : 'FINDING_APPROVED',
+        finding.id,
+        { inspectionId: finding.inspectionId, changed, reason: note, reviewId: review.id },
+        'InspectionFinding',
+      );
+      return updated;
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return outcome;
   }
 
   /**

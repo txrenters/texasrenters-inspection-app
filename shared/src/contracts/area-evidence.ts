@@ -12,6 +12,8 @@
  * recording, every photo and every finding for the whole inspection up front.
  */
 
+import type { FindingRejectReason } from './ai-guidance.js';
+
 /**
  * Where an area stands in the capture → analysis → review pipeline.
  *
@@ -356,6 +358,8 @@ export interface AreaFinding {
   lastReview?: {
     status: string;
     reason?: string | null;
+    /** Why a rejection was made, when the reviewer chose a reason. */
+    reasonCode?: FindingRejectReason | null;
     reviewerName: string;
     createdAt: string;
   } | null;

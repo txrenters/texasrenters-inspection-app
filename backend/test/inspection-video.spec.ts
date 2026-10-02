@@ -790,6 +790,133 @@ describe('the office re-runs the analysis of a recording', () => {
 });
 
 /**
+ * Draft house rules tried on a recording the office already decided. Nothing
+ * but the usage is stored; the draft is set beside the decisions.
+ */
+describe('the office tries draft house rules on a recording', () => {
+  const configurer: AuthenticatedUser = {
+    ...technician,
+    id: '10000000-0000-4000-8000-000000000004',
+    permissions: ['ai:configure', 'findings:review'],
+  };
+  const DRAFT_ITEM = {
+    title: 'Scuffed paint by the door',
+    description: 'Light scuffs.',
+    severity: 'LOW',
+    findingType: 'MAINTENANCE',
+    category: 'Walls',
+    baselineCondition: '',
+    comparisonResult: 'NORMAL_WEAR',
+    possibleResponsibility: 'UNDETERMINED',
+    confidence: 0.7,
+    recommendedReview: 'Check the paint.',
+    videoTimestampStart: 18,
+    videoTimestampEnd: 24,
+  };
+
+  function harness(media: Record<string, unknown> | null = {}) {
+    const mediaProcessing = {
+      queue: jest.fn(),
+      previewAnalysis: jest.fn().mockResolvedValue({
+        items: [
+          {
+            ...DRAFT_ITEM,
+            title: 'Room condition summary',
+            findingType: 'NO_CHANGE',
+            description: 'The entrance is in fair condition.',
+          },
+          DRAFT_ITEM,
+        ],
+        usage: { inputTokens: 900, outputTokens: 300, totalTokens: 1200 },
+        modelId: 'gpt-5.6-sol',
+      }),
+    };
+    const { service, prisma } = build({ mediaProcessing: mediaProcessing as never });
+    const row =
+      media === null
+        ? null
+        : {
+            id: 'media-1',
+            inspectionId: 'insp-1',
+            inspectionArea: { propertyArea: { name: 'Entrance' } },
+            ...media,
+          };
+    const findFirst = jest.fn().mockResolvedValue(row);
+    const findMany = jest.fn().mockResolvedValue([
+      {
+        id: 'finding-1',
+        title: 'Damaged wall by the door',
+        description: 'A scuff.',
+        severity: 'HIGH',
+        findingType: 'POSSIBLE_NEW_DAMAGE',
+        category: 'Walls',
+        source: 'NARRATION',
+        reviewStatus: 'REJECTED',
+        videoTimestampStart: 18,
+        videoTimestampEnd: 24,
+        reviews: [{ status: 'REJECTED', reason: null, reasonCode: 'NORMAL_WEAR' }],
+      },
+    ]);
+    Object.assign(prisma.inspectionMedia, { findFirst });
+    Object.assign(prisma, { inspectionFinding: { findMany } });
+    return { service, mediaProcessing, findFirst, findMany };
+  }
+
+  it('sets the draft beside what was found and decided, the room summary apart', async () => {
+    const { service, mediaProcessing, findFirst, findMany } = harness();
+
+    const result = await service.previewAnalysis(configurer, 'media-1', 'Scuffs are normal wear.');
+
+    expect(mediaProcessing.previewAnalysis).toHaveBeenCalledWith(
+      'media-1',
+      configurer.organizationId,
+      'Scuffs are normal wear.',
+    );
+    expect(findFirst.mock.calls[0][0].where).toEqual({
+      id: 'media-1',
+      organizationId: configurer.organizationId,
+    });
+    expect(findMany.mock.calls[0][0].where).toEqual({
+      inspectionMediaId: 'media-1',
+      NOT: { findingType: 'NO_CHANGE', title: 'Room condition summary' },
+    });
+    expect(result).toMatchObject({
+      roomName: 'Entrance',
+      modelId: 'gpt-5.6-sol',
+      tokens: 1200,
+      summary: 'The entrance is in fair condition.',
+      draft: [{ title: 'Scuffed paint by the door', severity: 'LOW', videoTimestampStart: 18 }],
+      current: [
+        {
+          id: 'finding-1',
+          reviewStatus: 'REJECTED',
+          lastReview: { status: 'REJECTED', reasonCode: 'NORMAL_WEAR' },
+        },
+      ],
+    });
+  });
+
+  it('is for whoever configures the AI, not every reviewer', async () => {
+    const { service, mediaProcessing } = harness();
+    const reviewer: AuthenticatedUser = { ...configurer, permissions: ['findings:review'] };
+
+    await expect(service.previewAnalysis(reviewer, 'media-1', 'Rules.')).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(mediaProcessing.previewAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('answers not found for a recording outside the organization', async () => {
+    const { service, mediaProcessing } = harness(null);
+
+    await expect(service.previewAnalysis(configurer, 'media-1', 'Rules.')).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(mediaProcessing.previewAnalysis).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * Transcription and analysis tried again where they failed.
  *
  * Nothing ever did: a provider error, or an MP4 Cloudflare took longer than

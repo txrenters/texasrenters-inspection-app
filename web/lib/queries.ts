@@ -44,11 +44,18 @@ import type {
   ComparisonReport,
   AdminUser,
   AdminUserDetail,
+  AiAnalysisPreview,
+  AiGuidanceHistory,
+  AiGuidanceSample,
+  AiGuidanceSaveResult,
   AiProviderName,
   ApiClientRevocation,
   ApiClientSummary,
   ApiDocument,
   IssuedApiKey,
+  AiScorecard,
+  FindingEditInput,
+  FindingRejectReason,
   AiSettings,
   AreaChecklistEntry,
   AreaEvidenceBundle,
@@ -187,6 +194,9 @@ export const keys = {
   jobberVisitImports: ['admin', 'jobber', 'visit-imports'] as const,
   jobberAssignees: ['admin', 'jobber', 'assignee-queue'] as const,
   aiSettings: ['admin', 'ai-settings'] as const,
+  aiGuidance: ['admin', 'ai-guidance'] as const,
+  aiGuidanceSamples: ['admin', 'ai-guidance', 'samples'] as const,
+  aiScorecard: (days: number) => ['admin', 'ai-scorecard', days] as const,
   openApiDocument: ['admin', 'system', 'openapi'] as const,
   apiClientsRoot: ['admin', 'api-clients'] as const,
   apiClients: (query: object) => ['admin', 'api-clients', query] as const,
@@ -1265,6 +1275,54 @@ export const useAiSettings = () =>
     queryKey: keys.aiSettings,
     queryFn: ({ signal }) => api<AiSettings>('/api/v1/admin/ai/settings', { signal }),
   });
+
+/** The office's house rules for the AI, and the versions before them. */
+export const useAiGuidance = () =>
+  useQuery({
+    queryKey: keys.aiGuidance,
+    queryFn: ({ signal }) => api<AiGuidanceHistory>('/api/v1/admin/ai/guidance', { signal }),
+  });
+
+/** Recordings with decided findings, to try draft rules on. Only asked for when shown. */
+export const useAiGuidanceSamples = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.aiGuidanceSamples,
+    queryFn: ({ signal }) =>
+      api<AiGuidanceSample[]>('/api/v1/admin/ai/guidance/samples', { signal }),
+    enabled,
+  });
+
+/** How the AI's findings fared with the office over the last `days`. */
+export const useAiScorecard = (days: number) =>
+  useQuery({
+    queryKey: keys.aiScorecard(days),
+    queryFn: ({ signal }) => api<AiScorecard>(`/api/v1/admin/ai/scorecard?days=${days}`, { signal }),
+  });
+
+export function useAiGuidanceMutations() {
+  const client = useQueryClient();
+  return {
+    save: useMutation({
+      mutationFn: (text: string) =>
+        api<AiGuidanceSaveResult>('/api/v1/admin/ai/guidance', {
+          method: 'PUT',
+          body: JSON.stringify({ text }),
+        }),
+      onSuccess: (data) => client.setQueryData(keys.aiGuidance, data),
+    }),
+    /**
+     * What the analysis would find in one recording under these rules. Costs a
+     * model call and stores nothing but the usage.
+     */
+    preview: useMutation({
+      mutationFn: ({ mediaId, houseRules }: { mediaId: string; houseRules: string }) =>
+        api<AiAnalysisPreview>(`/api/v1/inspection-videos/${mediaId}/preview-analysis`, {
+          method: 'POST',
+          body: JSON.stringify({ houseRules }),
+        }),
+    }),
+  };
+}
 
 export function useAiSettingsMutations() {
   const client = useQueryClient();
@@ -2652,10 +2710,19 @@ export function useAdminMutations() {
       },
     }),
     rejectFinding: useMutation({
-      mutationFn: ({ id, reason }: { id: string; inspectionId: string; reason: string }) =>
+      mutationFn: ({
+        id,
+        reason,
+        reasonCode,
+      }: {
+        id: string;
+        inspectionId: string;
+        reason?: string;
+        reasonCode?: FindingRejectReason;
+      }) =>
         api<AdminInspectionFinding>(`/api/v1/admin/findings/${id}/reject`, {
           method: 'POST',
-          body: JSON.stringify({ reason }),
+          body: JSON.stringify({ reason, reasonCode }),
         }),
       onSuccess: (data, variables) => {
         mergeAuthoritativeEntity(client, keys.all, data);
@@ -2664,6 +2731,35 @@ export function useAdminMutations() {
           ['admin', 'inspection', variables.inspectionId, 'audit'],
           // Counts and the derived area review status both move with a
           // decision; the prefix covers the summary and every cached area.
+          keys.areaEvidenceSummary(variables.inspectionId),
+        ]);
+      },
+    }),
+    /**
+     * Correct a finding and approve it in one step. The correction is kept
+     * beside the approval, which the AI is later shown as a lesson.
+     */
+    editFinding: useMutation({
+      mutationFn: ({
+        id,
+        ...input
+      }: FindingEditInput & { id: string; inspectionId: string }) =>
+        api<AdminInspectionFinding>(`/api/v1/admin/findings/${id}/edit`, {
+          method: 'POST',
+          body: JSON.stringify({
+            title: input.title,
+            description: input.description,
+            severity: input.severity,
+            findingType: input.findingType,
+            category: input.category,
+            note: input.note,
+          }),
+        }),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [
+          ['admin', 'inspection', variables.inspectionId, 'findings'],
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
           keys.areaEvidenceSummary(variables.inspectionId),
         ]);
       },

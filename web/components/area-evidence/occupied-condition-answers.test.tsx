@@ -46,6 +46,7 @@ vi.mock('@/lib/queries', () => ({
   useAdminMutations: () => ({
     approveFinding: { isPending: false, error: null, mutateAsync: async () => {} },
     rejectFinding: { isPending: false, error: null, mutateAsync: async () => {} },
+    editFinding: { isPending: false, error: null, mutateAsync: async () => {} },
   }),
   useInspection: () => ({ data: { finalizedAt: null } }),
   useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),

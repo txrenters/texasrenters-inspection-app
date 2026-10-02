@@ -1,4 +1,5 @@
 import type { InspectionType } from '../enums/index.js';
+import type { FindingRejectReason } from './ai-guidance.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
 import type { JobberBookingStatus } from './visit-details-writer.js';
@@ -1175,6 +1176,7 @@ export interface AdminInspectionFinding {
   lastReview?: {
     status: string;
     reason?: string | null;
+    reasonCode?: FindingRejectReason | null;
     reviewerName: string;
     createdAt: string;
   } | null;

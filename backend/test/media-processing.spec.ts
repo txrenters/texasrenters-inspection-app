@@ -410,6 +410,8 @@ function reanalysisHarness(
     analysis?: 'ok' | 'invalid';
     /** The AI's look at the frames; absent unless a test is about it. */
     visualReview?: { enabled: jest.Mock; review: jest.Mock };
+    /** The office's house rules and lessons; absent unless a test is about them. */
+    guidance?: { current: jest.Mock; lessons: jest.Mock };
   } = {},
 ) {
   const media = {
@@ -513,6 +515,7 @@ function reanalysisHarness(
     comparison as never,
     undefined,
     opts.visualReview as never,
+    opts.guidance as never,
   );
   /** The analysis prompt, as sent. */
   const prompt = () => {
@@ -538,7 +541,7 @@ function reanalysisHarness(
     }
     throw new Error('The re-run never finished.');
   };
-  return { service, prisma, comparison, prompt, events, settled };
+  return { service, prisma, comparison, aiSettings, prompt, events, settled };
 }
 
 const TIMED_NARRATION = [
@@ -760,5 +763,111 @@ describe('the AI looking at the video, after the narration', () => {
     expect(harness.prisma.inspectionFinding.deleteMany).toHaveBeenCalledWith({
       where: { inspectionMediaId: 'media-1', reviewStatus: 'PENDING_REVIEW', source: 'NARRATION' },
     });
+  });
+});
+
+describe('the office teaches the analysis', () => {
+  const guidance = (text: string | null) => ({
+    current: jest.fn().mockResolvedValue(
+      text === null ? null : { version: 3, text, createdAt: new Date('2026-10-03T00:00:00Z') },
+    ),
+    lessons: jest
+      .fn()
+      .mockResolvedValue([
+        '- Rejected as normal wear and tear: "Small nail holes in wall" (Bedroom 2).',
+      ]),
+  });
+
+  it('reads the house rules and the office’s recent decisions into the prompt', async () => {
+    const teaching = guidance('Small nail holes from pictures are normal wear, never damage.');
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION, guidance: teaching });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    const prompt = harness.prompt();
+    expect(prompt).toContain(
+      '<house_rules>\nSmall nail holes from pictures are normal wear, never damage.\n</house_rules>',
+    );
+    expect(prompt).toContain('every finding stays a suggestion for review');
+    expect(prompt).toContain(
+      '<lessons>\n- Rejected as normal wear and tear: "Small nail holes in wall" (Bedroom 2).\n</lessons>',
+    );
+    // Lessons come from other inspections, chosen for this room.
+    expect(teaching.lessons).toHaveBeenCalledWith(ORGANIZATION_ID, 'Entrance', 'move-out-1');
+    // The analysis records the rules it ran under, for the scorecard.
+    expect(harness.prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ promptVersion: '5', guidanceVersion: 3 }),
+    });
+  });
+
+  it('says nothing about rules the office has not written', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.prompt()).not.toContain('<house_rules>');
+    expect(harness.prompt()).not.toContain('<lessons>');
+    expect(harness.prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ guidanceVersion: null }),
+    });
+  });
+});
+
+describe('trying draft house rules on a recording', () => {
+  const decided = [
+    { title: 'Scuffed wall near window', description: 'Long scuff.', reviewStatus: 'REJECTED' },
+  ];
+
+  it('runs the analysis under the draft and stores nothing but the usage', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION, reviewed: decided });
+
+    const result = await harness.service.previewAnalysis(
+      'media-1',
+      ORGANIZATION_ID,
+      '  Scuffs are normal wear.  ',
+    );
+
+    expect(result.items.map((item) => item.title)).toContain('Scuffed wall near window');
+    expect(result.modelId).toBe('gpt-5.6-terra');
+    expect(harness.prompt()).toContain('<house_rules>\nScuffs are normal wear.\n</house_rules>');
+    expect(harness.prisma.inspectionFinding.deleteMany).not.toHaveBeenCalled();
+    expect(harness.prisma.inspectionFinding.createMany).not.toHaveBeenCalled();
+    expect(harness.prisma.aiAnalysisJob.create).not.toHaveBeenCalled();
+    expect(harness.aiSettings.recordUsage).toHaveBeenCalledWith(
+      ORGANIZATION_ID,
+      expect.objectContaining({ modelId: 'gpt-5.6-terra' }),
+      'GUIDANCE_PREVIEW',
+      expect.objectContaining({ totalTokens: 1200 }),
+      'media-1',
+    );
+  });
+
+  it('is not shown the decisions it is judged against', async () => {
+    // Told the office rejected the scuff, the model would leave it out and the
+    // draft would get the credit.
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION, reviewed: decided });
+
+    await harness.service.previewAnalysis('media-1', ORGANIZATION_ID, 'Scuffs are normal wear.');
+
+    expect(harness.prompt()).not.toContain('<reviewed>');
+  });
+
+  it('tries the analysis with no rules at all when the draft is empty', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION });
+
+    await harness.service.previewAnalysis('media-1', ORGANIZATION_ID, '   ');
+
+    expect(harness.prompt()).not.toContain('<house_rules>');
+  });
+
+  it('needs a stored narration, rather than transcribing again', async () => {
+    const harness = reanalysisHarness();
+
+    await expect(
+      harness.service.previewAnalysis('media-1', ORGANIZATION_ID, 'Scuffs are normal wear.'),
+    ).rejects.toMatchObject({ code: 'NO_STORED_NARRATION' });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

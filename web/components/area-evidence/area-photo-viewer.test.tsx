@@ -47,6 +47,7 @@ vi.mock('@/lib/queries', async () => {
         mutateAsync: async (input: unknown) => decisions.approve(input),
       },
       rejectFinding: { isPending: false, error: null, mutateAsync: async () => {} },
+      editFinding: { isPending: false, error: null, mutateAsync: async () => {} },
     }),
   };
 });

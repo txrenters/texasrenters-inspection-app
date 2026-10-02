@@ -281,6 +281,17 @@ enum FrameSuggestionStatus {
   DISMISSED
 }
 
+/// Why the office rejected an AI finding, as a reason the AI can learn from.
+enum FindingRejectReason {
+  NOT_IN_VIDEO
+  ALREADY_AT_MOVE_IN
+  NORMAL_WEAR
+  DUPLICATE
+  WRONG_ROOM
+  NOT_A_PROBLEM
+  OTHER
+}
+
 enum Severity {
   LOW
   MEDIUM
@@ -423,6 +434,7 @@ model Organization {
   leaseScheduledInspections       LeaseScheduledInspection[]
   technicianPlanningProfiles      TechnicianPlanningProfile[]
   findingFrameSuggestions         FindingFrameSuggestion[]
+  aiGuidanceVersions              AiGuidanceVersion[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -505,6 +517,21 @@ model AiUsageEvent {
 
   @@index([organizationId, provider, createdAt])
   @@index([sourceId])
+}
+
+/// The office's house rules for the AI: what counts as damage, wear, cleaning.
+/// Every save is a new version; the newest is the one in use, and each analysis
+/// records the version it ran under.
+model AiGuidanceVersion {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  version        Int
+  text           String
+  createdById    String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, version])
 }
 
 model UserProfile {
@@ -1999,6 +2026,8 @@ model AiAnalysisJob {
   modelId           String
   promptVersion     String
   schemaVersion     String
+  /// The house-rules version the run was given; null for none.
+  guidanceVersion   Int?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   inspectionMedia   InspectionMedia     @relation(fields: [inspectionMediaId], references: [id])
@@ -2113,6 +2142,8 @@ model FindingReview {
   reviewerId  String              @db.Uuid
   status      FindingReviewStatus
   reason      String?
+  /// Why a rejection was made, from a fixed list the AI is shown as lessons.
+  reasonCode  FindingRejectReason?
   editedValue Json?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt

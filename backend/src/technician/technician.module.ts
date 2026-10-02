@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, RolesGuard } from '../common/auth';
 import { AreaChecklistAiService } from '../admin/area-checklist-ai.service';
+import { AiGuidanceService } from '../admin/ai-guidance.service';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { ChargeService } from '../admin/charge.service';
 import { ComparisonService } from '../admin/comparison.service';
@@ -44,6 +45,9 @@ import { TrackingStatusStore } from './tracking-status.store';
     // there rather than in the bucket.
     CloudflareStreamService,
     AiProviderSettingsService,
+    // The office's house rules and its recent decisions, which both the
+    // narration's analysis and the look at the video are given. Prisma only.
+    AiGuidanceService,
     // Stateless and dependency-free, so it is provided here rather than
     // imported from AdminModule — which imports MediaModule, which imports this
     // one. A second instance costs nothing and avoids the cycle.
