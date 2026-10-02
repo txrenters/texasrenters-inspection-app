@@ -1,7 +1,7 @@
 'use client';
 
 import type { AreaRecording } from '@texasrenters/shared';
-import { LockIcon, SparklesIcon } from 'lucide-react';
+import { SparklesIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -31,24 +31,22 @@ export function canReanalyze(recording: AreaRecording) {
  * how many. Decided findings stay as they are.
  *
  * It used to sit at the foot of the card, under a player that fills the panel,
- * and it vanished outright once the inspection was finalized -- which read as
- * the button having been removed. A finalized inspection now shows it locked,
- * and pressing it says why, since the server refuses that re-run.
+ * and vanished once the inspection was finalized -- which read as the button
+ * having been removed. It runs on a finalized inspection now: a re-run writes
+ * findings, never the inspection's status, so the visit stays closed in Jobber
+ * and the technician's time stands.
  */
 export function ReanalyzeControl({
   recording,
   inspectionId,
   areaId,
   pendingFindings,
-  lockedReason = null,
 }: {
   recording: AreaRecording;
   inspectionId: string;
   areaId: string;
   /** This recording's findings still awaiting a decision, which a re-run replaces. */
   pendingFindings: number;
-  /** Why it cannot run here, said instead of running: a finalized inspection. */
-  lockedReason?: string | null;
 }) {
   const mutation = useAdminMutations().reanalyzeRecording;
   const [open, setOpen] = useState(false);
@@ -71,41 +69,33 @@ export function ReanalyzeControl({
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>
         <Button className="h-7 text-xs" size="sm" type="button" variant="outline">
-          {lockedReason ? <LockIcon aria-hidden /> : <SparklesIcon aria-hidden />}
+          <SparklesIcon aria-hidden />
           Re-run AI
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="grid gap-3 text-sm">
-        {lockedReason ? (
-          <p className="text-muted-foreground">{lockedReason}</p>
-        ) : (
-          <>
-            <p className="font-medium">Run the AI on this recording again?</p>
-            <p className="text-muted-foreground">
-              {pendingFindings
-                ? `Replaces the ${pendingFindings} finding${pendingFindings === 1 ? '' : 's'} still awaiting a decision. Decided ones stay.`
-                : 'Findings already decided stay as they are.'}
-            </p>
-            {mutation.isError ? (
-              <p className="text-destructive">{mutation.error.message}</p>
-            ) : null}
-            <div className="flex justify-end gap-2">
-              <Button
-                disabled={mutation.isPending}
-                onClick={() => setOpen(false)}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                Cancel
-              </Button>
-              <Button disabled={mutation.isPending} onClick={start} size="sm" type="button">
-                {mutation.isPending ? <Spinner /> : null}
-                Re-run
-              </Button>
-            </div>
-          </>
-        )}
+        <p className="font-medium">Run the AI on this recording again?</p>
+        <p className="text-muted-foreground">
+          {pendingFindings
+            ? `Replaces the ${pendingFindings} finding${pendingFindings === 1 ? '' : 's'} still awaiting a decision. Decided ones stay.`
+            : 'Findings already decided stay as they are.'}
+        </p>
+        {mutation.isError ? <p className="text-destructive">{mutation.error.message}</p> : null}
+        <div className="flex justify-end gap-2">
+          <Button
+            disabled={mutation.isPending}
+            onClick={() => setOpen(false)}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Cancel
+          </Button>
+          <Button disabled={mutation.isPending} onClick={start} size="sm" type="button">
+            {mutation.isPending ? <Spinner /> : null}
+            Re-run
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

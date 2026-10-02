@@ -348,8 +348,9 @@ export class VisualReviewService {
 
   /**
    * Look at one recording. Null when there is nothing to look at: no Stream
-   * video, not encoded, too short, or an inspection already finalized, whose
-   * findings are frozen.
+   * video, not encoded, or too short. A finalized inspection is looked at too:
+   * its findings are still the office's to decide (see
+   * `AdminService.reviewFinding`), and no decision already taken is changed.
    */
   async review(mediaId: string, organizationId: string) {
     const media = await this.prisma.inspectionMedia.findFirst({
@@ -364,13 +365,12 @@ export class VisualReviewService {
         inspectionArea: {
           select: {
             propertyArea: { select: { id: true, name: true } },
-            inspection: { select: { inspectionType: true, finalizedAt: true } },
+            inspection: { select: { inspectionType: true } },
           },
         },
       },
     });
     if (!media?.streamUid || !media.readyAt || media.durationSeconds < 2) return null;
-    if (media.inspectionArea.inspection.finalizedAt) return null;
     if (!this.stream?.customerCode) return null;
 
     const inspectionType = media.inspectionArea.inspection.inspectionType;

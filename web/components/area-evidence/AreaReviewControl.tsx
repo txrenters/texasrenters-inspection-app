@@ -18,18 +18,21 @@ import { cn } from '@/lib/utils';
  * (`useSetAreaReviewed` is optimistic), so there is no spinner to wait on.
  *
  * Beside the area's name in its panel, and on each row of the photo sheet.
+ *
+ * Offered on a finalized inspection too (2026-10-03). The office reviews after
+ * the visit is closed -- for the reports and the move-in comparison -- and
+ * reopening to do it would mark the Jobber visit incomplete and restart the
+ * technician's paid time.
  */
 export function AreaReviewControl({
   inspectionId,
   bundle,
   canReview,
-  finalized,
   align = 'end',
 }: {
   inspectionId: string;
   bundle: AreaEvidenceBundle;
   canReview: boolean;
-  finalized: boolean;
   /** Which edge it sits against: the panel's header right, a sheet row's left. */
   align?: 'start' | 'end';
 }) {
@@ -52,7 +55,7 @@ export function AreaReviewControl({
           Reviewed{by}
         </span>
         <span className="text-muted-foreground">{formatDateTime(review.at)}</span>
-        {canReview && !finalized ? (
+        {canReview ? (
           <Button
             onClick={() => mark.mutate({ areaId: area.id, reviewed: false })}
             size="sm"
@@ -64,7 +67,7 @@ export function AreaReviewControl({
         ) : null}
       </div>
     );
-  if (!canReview || finalized) return null;
+  if (!canReview) return null;
 
   const nothingRecorded =
     !counts.recordings && !counts.photos && area.completionStatus !== 'SKIPPED';

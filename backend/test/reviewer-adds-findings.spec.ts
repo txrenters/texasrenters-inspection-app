@@ -149,7 +149,7 @@ describe('a reviewer adding what the AI missed', () => {
     expect(tx.inspectionFinding.create).not.toHaveBeenCalled();
   });
 
-  it('never on another organization’s area, or a finalized inspection', async () => {
+  it('never on another organization’s area', async () => {
     const missing = build({ area: null });
     await expect(missing.service.addFinding(user, 'insp-1', 'area-1', INPUT)).rejects.toMatchObject({
       code: 'INSPECTION_AREA_NOT_FOUND',
@@ -159,19 +159,29 @@ describe('a reviewer adding what the AI missed', () => {
         where: { id: 'area-1', inspectionId: 'insp-1', inspection: { organizationId: user.organizationId } },
       }),
     );
+  });
 
+  // Reviewing goes on after the visit is closed (2026-10-03): the office adds
+  // what the AI missed while preparing the reports, without reopening.
+  it('is added after finalization too, and the audit says it was', async () => {
     const finalized = build({
       area: {
         id: 'area-1',
         propertyAreaId: 'pa-living',
         propertyArea: { name: 'Living Room' },
-        inspection: { finalizedAt: new Date() },
+        inspection: { finalizedAt: new Date('2026-10-02T16:45:36Z') },
       },
     });
-    await expect(finalized.service.addFinding(user, 'insp-1', 'area-1', INPUT)).rejects.toMatchObject({
-      code: 'INSPECTION_FINALIZED',
+
+    await finalized.service.addFinding(user, 'insp-1', 'area-1', INPUT);
+
+    expect(finalized.tx.inspectionFinding.create).toHaveBeenCalled();
+    expect(finalized.tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'FINDING_ADDED',
+        metadata: expect.objectContaining({ afterFinalization: true }),
+      }),
     });
-    expect(finalized.tx.inspectionFinding.create).not.toHaveBeenCalled();
   });
 
   it('takes only the severities and types an AI finding may have', async () => {

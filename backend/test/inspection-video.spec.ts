@@ -745,19 +745,23 @@ describe('the office re-runs the analysis of a recording', () => {
     expect(mediaProcessing.reanalyze).not.toHaveBeenCalled();
   });
 
-  it('leaves a finalized inspection alone, reopened or not', async () => {
-    const { service, mediaProcessing } = harness({
+  // The office reviews findings after the visit is closed, without reopening
+  // it (2026-10-03). A re-run writes findings, never the inspection's status.
+  it('runs on a finalized inspection too, and the audit says it was', async () => {
+    const { service, mediaProcessing, auditLog } = harness({
       inspectionArea: {
         id: AREA_ID,
         propertyArea: { name: 'Entrance' },
         inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
       },
     });
-    await expect(service.reanalyze(reviewer, 'media-1')).rejects.toMatchObject({
-      status: 409,
-      code: 'INSPECTION_FINALIZED',
+    await expect(service.reanalyze(reviewer, 'media-1')).resolves.toEqual({ queued: true });
+    expect(mediaProcessing.reanalyze).toHaveBeenCalledWith('media-1', reviewer.organizationId);
+    expect(auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({ afterFinalization: true }),
+      }),
     });
-    expect(mediaProcessing.reanalyze).not.toHaveBeenCalled();
   });
 
   it('waits for the first pass to finish', async () => {

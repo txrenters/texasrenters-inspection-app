@@ -225,29 +225,43 @@ describe('capturing a still from a recording', () => {
     expect(prisma.inspectionPhoto.update).not.toHaveBeenCalled();
   });
 
-  it('adds nothing to an inspection that has been finalized', async () => {
-    // Evidence freezes at finalization: a still added afterwards would change
-    // a report that may already be shared.
-    const { prisma, service } = build({
-      media: {
-        id: MEDIA,
-        streamUid: 'uid-1',
-        readyAt: new Date(),
-        durationSeconds: 120,
-        inspectionId: 'insp-1',
-        inspectionAreaId: AREA,
-        inspectionArea: {
-          propertyAreaId: PROPERTY_AREA,
-          inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
-        },
-      },
-    });
+  const FINALIZED_MEDIA = {
+    id: MEDIA,
+    streamUid: 'uid-1',
+    readyAt: new Date(),
+    durationSeconds: 120,
+    inspectionId: 'insp-1',
+    inspectionAreaId: AREA,
+    inspectionArea: {
+      propertyAreaId: PROPERTY_AREA,
+      inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
+    },
+  };
+
+  it('adds no room or checklist still to an inspection that has been finalized', async () => {
+    // What was captured for the room and its checklist freezes at finalization.
+    const { prisma, service } = build({ media: FINALIZED_MEDIA });
 
     await expect(service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000 })).rejects.toMatchObject({
       status: 409,
       code: 'INSPECTION_FINALIZED',
     });
+    await expect(
+      service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000, findingId: FINDING, checklistItemId: ITEM }),
+    ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_FINALIZED' });
     expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
+  });
+
+  // Findings are decided after the visit is closed (2026-10-03), and a
+  // finding's still is part of deciding it: it prints once it is approved.
+  it('files a still under a finding of a finalized inspection', async () => {
+    globalThis.fetch = okFetch() as never;
+    const { prisma, service } = build({ media: FINALIZED_MEDIA });
+
+    await expect(
+      service.captureSnapshot(reviewer(), MEDIA, { atMs: 1000, findingId: FINDING }),
+    ).resolves.toMatchObject({ reused: false });
+    expect(prisma.inspectionPhoto.create.mock.calls[0][0].data).toMatchObject({ findingId: FINDING });
   });
 
   it('does not leave orphaned bytes when the row cannot be written', async () => {
@@ -262,8 +276,8 @@ describe('capturing a still from a recording', () => {
 
 /**
  * The AI's suggested frame for a finding: a person files it as the finding's
- * photograph, or sets it aside. The same permission and the same freeze as a
- * capture by hand, because that is what accepting one is.
+ * photograph, or sets it aside. The same permission as a capture by hand,
+ * because that is what accepting one is.
  */
 describe("deciding the AI's suggested photograph", () => {
   const SUGGESTION = '30000000-0000-4000-8000-000000000001';
@@ -281,7 +295,6 @@ describe("deciding the AI's suggested photograph", () => {
             findingId: FINDING,
             inspectionId: 'insp-1',
             inspectionMediaId: MEDIA,
-            inspection: { finalizedAt: null },
             ...suggestion,
           };
     const findingFrameSuggestion = {
@@ -355,17 +368,13 @@ describe("deciding the AI's suggested photograph", () => {
     expect(findingFrameSuggestion.findFirst).not.toHaveBeenCalled();
   });
 
-  it('changes nothing once the inspection is finalized', async () => {
-    const { service, findingFrameSuggestion } = suggestionHarness({
-      inspection: { finalizedAt: new Date('2026-10-02T15:00:00.000Z') },
+  it('is decided on a finalized inspection too: it is always a finding’s still', async () => {
+    const { service, findingFrameSuggestion } = suggestionHarness();
+    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).resolves.toMatchObject({
+      status: 'DISMISSED',
     });
-    await expect(service.acceptFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
-      code: 'INSPECTION_FINALIZED',
-    });
-    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
-      code: 'INSPECTION_FINALIZED',
-    });
-    expect(findingFrameSuggestion.update).not.toHaveBeenCalled();
+    // Nothing about the inspection is read to decide it any more.
+    expect(findingFrameSuggestion.findFirst.mock.calls[0][0].select.inspection).toBeUndefined();
   });
 
   it('answers not found outside the organization', async () => {

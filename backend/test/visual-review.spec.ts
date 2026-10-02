@@ -463,26 +463,37 @@ describe('looking at a recording', () => {
     });
   });
 
-  it('has nothing to look at without an encoded Stream video, or once the inspection is finalized', async () => {
+  it('has nothing to look at without an encoded Stream video', async () => {
     for (const media of [
       null,
       { id: 'media-1', streamUid: null, readyAt: new Date(), durationSeconds: 60 },
       { id: 'media-1', streamUid: 'uid', readyAt: null, durationSeconds: 60 },
-      {
-        id: 'media-1',
-        streamUid: 'uid',
-        readyAt: new Date(),
-        durationSeconds: 60,
-        inspectionArea: {
-          propertyArea: { id: 'pa', name: 'Entrance' },
-          inspection: { inspectionType: 'MOVE_OUT', finalizedAt: new Date() },
-        },
-      },
     ]) {
       const { service, calls } = harness({ media });
       await expect(service.review('media-1', ORGANIZATION_ID)).resolves.toBeNull();
       expect(calls()).toHaveLength(0);
     }
+  });
+
+  // A re-run on a finalized inspection looks at the video too: the office
+  // decides its findings after the visit is closed (2026-10-03).
+  it('looks at a finalized inspection’s recording too', async () => {
+    const { service, calls } = harness({
+      media: {
+        id: 'media-1',
+        inspectionId: 'move-out-1',
+        streamUid: 'uid-1',
+        readyAt: new Date(),
+        durationSeconds: 12,
+        inspectionAreaId: 'inspection-area-1',
+        inspectionArea: {
+          propertyArea: { id: 'pa-entrance', name: 'Entrance' },
+          inspection: { inspectionType: 'MOVE_OUT', finalizedAt: new Date('2026-10-02T16:45:36Z') },
+        },
+      },
+    });
+    await expect(service.review('media-1', ORGANIZATION_ID)).resolves.not.toBeNull();
+    expect(calls().length).toBeGreaterThan(0);
   });
 });
 
