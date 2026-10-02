@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { dayKey, planDayGroups, type DayStop } from './plan-day-groups';
+import { dayKey, dayLabels, planDayGroups, type DayStop } from './plan-day-groups';
 
 /**
  * A quarter's days on the Groups tab, as the Group maker draws a template (the
@@ -131,5 +131,53 @@ describe('every pin on the map', () => {
     const numbers = [...file.groups.flatMap((group) => group.rows), ...file.ungrouped].map((row) => row.rowNumber);
 
     expect(new Set(numbers).size).toBe(numbers.length);
+  });
+});
+
+/**
+ * The office (2026-10-03): template Group 37, laid out on December 17, read as
+ * "1" -- its place in the quarter -- and "let's not modify the groupings label,
+ * it should stay the same as is".
+ */
+describe('a quarter built from a template', () => {
+  const group = (position: number, color = '#7f77dd') => ({ position, color });
+  const days = [
+    { date: '2026-12-17T00:00:00.000Z', technicianId: MOSES.id, templateGroup: group(37) },
+    { date: '2026-12-18T00:00:00.000Z', technicianId: MOSES.id, templateGroup: null },
+    { date: '2026-12-21T00:00:00.000Z', technicianId: MOSES.id, templateGroup: group(4, '#1d9e75') },
+    { date: '2026-12-22T00:00:00.000Z', technicianId: MOSES.id, templateGroup: null },
+  ];
+
+  it('labels each day with its template group’s number, and the days of none N1, N2 in order', () => {
+    const labels = dayLabels(days);
+
+    expect([...labels.entries()]).toEqual([
+      [dayKey('2026-12-17', MOSES.id), { label: '37', color: '#7f77dd' }],
+      [dayKey('2026-12-18', MOSES.id), { label: 'N1', color: null }],
+      [dayKey('2026-12-21', MOSES.id), { label: '4', color: '#1d9e75' }],
+      [dayKey('2026-12-22', MOSES.id), { label: 'N2', color: null }],
+    ]);
+  });
+
+  it('labels nothing on a quarter with no template day, which keeps its own numbers', () => {
+    expect(dayLabels(days.map((day) => ({ ...day, templateGroup: null })))).toEqual(new Map());
+    expect(planDayGroups([stop('2026-10-06', MOSES, 1), stop('2026-10-07', MOSES, 1)], new Map()).groups.map((one) => one.label)).toEqual(['1', '2']);
+  });
+
+  it('draws the Groups tab’s days with those labels, in the template group’s colour', () => {
+    const file = planDayGroups(
+      [stop('2026-12-17', MOSES, 1), stop('2026-12-18', MOSES, 1), stop('2026-12-21', MOSES, 1), stop('2026-12-22', MOSES, 1)],
+      dayLabels(days),
+    );
+
+    expect(file.groups.map((one) => one.label)).toEqual(['37', 'N1', '4', 'N2']);
+    expect(file.groups[0]!.color.fill).toBe('#7f77dd');
+    expect(file.groups[2]!.color.fill).toBe('#1d9e75');
+  });
+
+  it('gives a day the server has no row for yet the next N, never a template group’s number', () => {
+    const file = planDayGroups([stop('2026-12-17', MOSES, 1), stop('2026-12-23', KEVIN, 1)], dayLabels(days));
+
+    expect(file.groups.map((one) => one.label)).toEqual(['37', 'N3']);
   });
 });

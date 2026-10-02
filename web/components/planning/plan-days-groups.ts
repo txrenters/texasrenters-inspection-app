@@ -16,7 +16,7 @@ import type { PlanDay, PlanDayRoute } from '@/lib/planning-queries';
 
 import { groupColorOf, groupColors, groupOutline, type FileGroup, type GroupFile, type GroupFileRow } from './group-file';
 import { groupArea, routeMiles } from './manual-grouping';
-import type { DayStop } from './plan-day-groups';
+import { dayKey, dayLabels, type DayStop } from './plan-day-groups';
 import { splitAtWaypoints, type LngLat, type RoadLeg, type RouteView } from './road-routes';
 
 /** What a property on the Days map is, for a click on it. */
@@ -73,7 +73,8 @@ export function dayStopsInOrder(day: PlanDay) {
 /**
  * Every day as a group, numbered in the order the quarter is worked, and the
  * visits with no day yet as properties in no group -- green, as the Group maker
- * draws them. A day built from a template keeps its template group's colour.
+ * draws them. A day built from a template keeps its template group's number
+ * and colour, and the quarter's other days are N1, N2... (`dayLabels`).
  */
 export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[]): PlanDaysFile {
   const detailsOf = new Map(visits.map((visit) => [visit.id, visit]));
@@ -129,6 +130,7 @@ export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[
     }),
   );
   const palette = groupColors(ordered);
+  const labels = dayLabels(days);
 
   const groups = days.map((day, index): FileGroup => {
     const rows = ordered[index]!;
@@ -138,7 +140,7 @@ export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[
       : ([rows[0]?.longitude ?? 0, rows[0]?.latitude ?? 0] as [number, number]);
     return {
       key: day.id,
-      label: String(index + 1),
+      label: labels.get(dayKey(day.date.slice(0, 10), day.technicianId))?.label ?? String(index + 1),
       name: `${formatShortDay(day.date.slice(0, 10))} · ${day.technician.displayName}`,
       area: groupArea(rows),
       rows,

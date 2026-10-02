@@ -700,7 +700,9 @@ export default function PlanningPage() {
                 <div className="grid gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-muted-foreground text-xs">
-                      Each day of the quarter as a group, numbered in the order it is worked, its stops in driving order.
+                      Each day of the quarter as a group, its stops in driving order: numbered in the order it is
+                      worked, or with its template group&rsquo;s number when the quarter was built from a template
+                      (N1, N2&hellip; for a day of none).
                       To see a file of properties already split into groups on this map instead, choose it here: it is
                       read in this browser and sent nowhere.
                       {groupFiles.serverProblem
@@ -716,7 +718,7 @@ export default function PlanningPage() {
                       <GroupFilePicker label="Map a groups file" onLoad={groupFiles.choose} />
                     </div>
                   </div>
-                  <PlanGroupsMap stops={dayStops} />
+                  <PlanGroupsMap days={days.data} stops={dayStops} />
                 </div>
               )}
             </TabsContent>
