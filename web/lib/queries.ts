@@ -1278,6 +1278,15 @@ export function useAiSettingsMutations() {
         }),
       onSuccess: refresh,
     }),
+    /** Whether the AI checks findings against the recording's frames. */
+    setVisualReview: useMutation({
+      mutationFn: (enabled: boolean) =>
+        api<AiSettings>('/api/v1/admin/ai/settings/visual-review', {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled }),
+        }),
+      onSuccess: refresh,
+    }),
     updateProvider: useMutation({
       mutationFn: ({
         provider,
@@ -2361,6 +2370,33 @@ export function useAdminMutations() {
         void client.invalidateQueries({
           queryKey: keys.areaEvidence(variables.inspectionId, variables.areaId),
         });
+      },
+    }),
+    /**
+     * File the AI's suggested frame as the finding's photograph, or set it
+     * aside. Either changes what the area shows, and an accepted frame is a
+     * new photograph in a group the client does not compute, so the area is
+     * read again rather than patched.
+     */
+    decideFrameSuggestion: useMutation({
+      mutationFn: ({
+        suggestionId,
+        decision,
+      }: {
+        suggestionId: string;
+        decision: 'accept' | 'dismiss';
+        inspectionId: string;
+        areaId: string;
+      }) =>
+        api<{ id: string; status: string; photoId: string | null }>(
+          `/api/v1/admin/frame-suggestions/${suggestionId}/${decision}`,
+          { method: 'POST' },
+        ),
+      onSuccess: (_data, variables) => {
+        void verifyAffectedQueries(client, [
+          keys.areaEvidence(variables.inspectionId, variables.areaId),
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
+        ]);
       },
     }),
     /**

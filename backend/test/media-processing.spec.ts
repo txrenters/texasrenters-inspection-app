@@ -408,6 +408,8 @@ function reanalysisHarness(
     comparisonStatus?: string | null;
     finding?: Record<string, unknown>;
     analysis?: 'ok' | 'invalid';
+    /** The AI's look at the frames; absent unless a test is about it. */
+    visualReview?: { enabled: jest.Mock; review: jest.Mock };
   } = {},
 ) {
   const media = {
@@ -509,6 +511,8 @@ function reanalysisHarness(
     { get: jest.fn() } as never,
     aiSettings as never,
     comparison as never,
+    undefined,
+    opts.visualReview as never,
   );
   /** The analysis prompt, as sent. */
   const prompt = () => {
@@ -646,7 +650,7 @@ describe('re-running the analysis on a recording', () => {
     expect(prompt).toContain('ALREADY RECORDED: Door hole and trim require repair');
     expect(prompt).toContain('REJECTED: Window screen missing');
     expect(harness.prisma.inspectionFinding.deleteMany).toHaveBeenCalledWith({
-      where: { inspectionMediaId: 'media-1', reviewStatus: 'PENDING_REVIEW' },
+      where: { inspectionMediaId: 'media-1', reviewStatus: 'PENDING_REVIEW', source: 'NARRATION' },
     });
   });
 
@@ -686,5 +690,75 @@ describe('re-running the analysis on a recording', () => {
     approved.service.reanalyze('media-1', ORGANIZATION_ID);
     await approved.settled();
     expect(approved.comparison.generate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the AI looking at the video, after the narration', () => {
+  const visual = (enabled: boolean, review: jest.Mock) => ({
+    enabled: jest.fn().mockResolvedValue(enabled),
+    review,
+  });
+
+  it('looks once the narration is analysed, when the office has switched it on', async () => {
+    const review = jest
+      .fn()
+      .mockResolvedValue({ checked: 2, suggested: 3, spotted: 1, usage: { totalTokens: 21_000 } });
+    const harness = reanalysisHarness({
+      storedSegments: TIMED_NARRATION,
+      visualReview: visual(true, review),
+    });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(review).toHaveBeenCalledWith('media-1', ORGANIZATION_ID);
+    expect(harness.events()).toEqual([
+      'REANALYSIS_STARTED',
+      'VISUAL_REVIEW_COMPLETED',
+      'REANALYSIS_COMPLETED',
+    ]);
+  });
+
+  it('does not look while it is switched off', async () => {
+    const review = jest.fn();
+    const harness = reanalysisHarness({
+      storedSegments: TIMED_NARRATION,
+      visualReview: visual(false, review),
+    });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(review).not.toHaveBeenCalled();
+    expect(harness.events()).toEqual(['REANALYSIS_STARTED', 'REANALYSIS_COMPLETED']);
+  });
+
+  it('never fails the run: the narration’s findings stand when the look at the video does not', async () => {
+    const review = jest.fn().mockRejectedValue(new Error('provider down'));
+    const harness = reanalysisHarness({
+      storedSegments: TIMED_NARRATION,
+      visualReview: visual(true, review),
+    });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.events()).toEqual([
+      'REANALYSIS_STARTED',
+      'VISUAL_REVIEW_FAILED',
+      'REANALYSIS_COMPLETED',
+    ]);
+    expect(harness.prisma.inspectionFinding.createMany).toHaveBeenCalled();
+  });
+
+  it('replaces only the narration’s own undecided findings, not what the AI spotted', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.prisma.inspectionFinding.deleteMany).toHaveBeenCalledWith({
+      where: { inspectionMediaId: 'media-1', reviewStatus: 'PENDING_REVIEW', source: 'NARRATION' },
+    });
   });
 });

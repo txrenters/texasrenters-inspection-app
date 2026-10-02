@@ -291,6 +291,23 @@ export interface AreaChecklistEntry {
 }
 
 /**
+ * A frame the AI suggests as a finding's photograph. A suggestion until a
+ * person accepts it, which files it under the finding.
+ */
+export interface AreaFrameSuggestion {
+  id: string;
+  recordingId: string;
+  atMs: number;
+  /** 0 is the AI's best. */
+  rank: number;
+  /** Where in the frame, as fractions from the top-left. The AI's estimate. */
+  box: { x: number; y: number; width: number; height: number } | null;
+  observation?: string | null;
+  status: 'SUGGESTED' | 'ACCEPTED' | 'DISMISSED';
+  photoId?: string | null;
+}
+
+/**
  * One reviewable finding. Estimate fields are optional and arrive only for
  * viewers permitted to see them; a finding's review state and the state of any
  * proposed amount are deliberately independent.
@@ -312,6 +329,23 @@ export interface AreaFinding {
    * OWNER_REVIEW_REQUIRED or UNDETERMINED. A suggestion, never a decision.
    */
   possibleResponsibility?: string | null;
+  /** NARRATION, or AI_VISION for a problem the AI saw that nobody mentioned. */
+  source?: 'NARRATION' | 'AI_VISION';
+  /** What the AI saw when it looked for this in the recording. Null when it has not looked. */
+  visual?: {
+    status: 'VISIBLE' | 'NOT_VISIBLE' | 'UNCLEAR';
+    observation?: string | null;
+    checkedAt: string;
+  } | null;
+  /** Whether a move-in photograph of the same item already shows it. */
+  baselineVisual?: {
+    status: 'PRESENT_AT_MOVE_IN' | 'NOT_AT_MOVE_IN' | 'CANT_TELL';
+    note?: string | null;
+    /** The move-in photographs compared, to show beside it. */
+    photos: Array<{ id: string; contentPath: string }>;
+  } | null;
+  /** Frames the AI suggests as this finding's photograph, best first. */
+  frameSuggestions?: AreaFrameSuggestion[];
   reviewStatus: string;
   createdAt: string;
   /** Recording this finding was observed in, with its moment. */

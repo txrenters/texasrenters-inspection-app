@@ -5,18 +5,29 @@ import { PlayIcon } from 'lucide-react';
 import { useEffect } from 'react';
 
 import { StatusBadge } from '@/components/status-badge';
+import { Badge } from '@/components/ui/badge';
 import {
   comparisonLabel,
   findingMoment,
   formatMoment,
   responsibilityLabel,
+  visualLabel,
 } from '@/lib/finding-review';
 import { formatDateTime, humanize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
+import { AiFrameSuggestion } from './AiFrameSuggestion';
 import { FindingFrames } from './FindingFrames';
 import { FindingReviewControls } from './FindingReviewControls';
 import { LazyPhoto } from './LazyPhoto';
+
+/** How each "in the video" label reads at a glance. */
+const VISUAL_VARIANT = {
+  'Seen in video': 'success',
+  'Not seen in video': 'warning',
+  'Unclear in video': 'secondary',
+  'Spotted by AI': 'info',
+} as const;
 
 /**
  * An area's findings, beside the recording they came from.
@@ -101,6 +112,7 @@ export function FindingsReview({
           const selected = finding.id === selectedId;
           const photos = photosByFinding.get(finding.id) ?? [];
           const lean = responsibilityLabel(finding.possibleResponsibility);
+          const seen = visualLabel(finding);
           return (
             <li
               className={cn('rounded-lg border', selected && 'border-primary/60 ring-primary/30 ring-1')}
@@ -132,6 +144,11 @@ export function FindingsReview({
                         · {finding.photoCount} photo{finding.photoCount === 1 ? '' : 's'}
                       </span>
                     ) : null}
+                    {seen ? (
+                      <Badge className="ml-1 shrink-0" variant={VISUAL_VARIANT[seen]}>
+                        {seen}
+                      </Badge>
+                    ) : null}
                   </span>
                 </span>
                 <span className="flex shrink-0 flex-col items-end gap-1">
@@ -158,11 +175,28 @@ export function FindingsReview({
                     {[
                       comparisonLabel(finding.comparisonResult),
                       lean,
-                      `confidence ${Math.round(finding.confidence * 100)}%`,
+                      // Once the AI has looked at the video, what it saw says
+                      // more than how sure it was of the narration.
+                      finding.visual ? null : `confidence ${Math.round(finding.confidence * 100)}%`,
                     ]
                       .filter(Boolean)
                       .join(' · ')}
                   </p>
+                  {finding.visual && finding.visual.status !== 'VISIBLE' && finding.visual.observation ? (
+                    <p className="text-sm">
+                      <span className="text-muted-foreground">In the video: </span>
+                      {finding.visual.observation}
+                    </p>
+                  ) : null}
+
+                  <AiFrameSuggestion
+                    areaId={areaId}
+                    areaName={areaName}
+                    canDecide={canCapture}
+                    finding={finding}
+                    inspectionId={inspectionId}
+                    onSeek={onSeek}
+                  />
 
                   {moment ? (
                     <FindingFrames

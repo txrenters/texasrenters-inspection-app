@@ -65,7 +65,9 @@ export function frameTimes(
  */
 export function frameUrl(thumbnailUrl: string, seconds: number, height = 360) {
   const url = new URL(thumbnailUrl);
-  url.searchParams.set('time', `${Math.max(0, Math.floor(seconds))}s`);
+  const at = Math.max(0, seconds);
+  // Whole seconds as they are; the AI's sharpest frame can sit half a second off.
+  url.searchParams.set('time', `${Number.isInteger(at) ? at : at.toFixed(1)}s`);
   url.searchParams.set('height', String(height));
   return url.toString();
 }
@@ -96,6 +98,41 @@ export function comparisonLabel(result: string) {
     default:
       return result.toLowerCase().replace(/_/g, ' ');
   }
+}
+
+/** What the AI saw when it looked for a finding in the recording, in a few words. */
+export function visualLabel(finding: Pick<AreaFinding, 'source' | 'visual'>) {
+  if (finding.source === 'AI_VISION') return 'Spotted by AI';
+  switch (finding.visual?.status) {
+    case 'VISIBLE':
+      return 'Seen in video';
+    case 'NOT_VISIBLE':
+      return 'Not seen in video';
+    case 'UNCLEAR':
+      return 'Unclear in video';
+    default:
+      return null;
+  }
+}
+
+/** What a move-in photograph of the same item shows, in a few words. */
+export function baselineVisualLabel(status: string) {
+  if (status === 'PRESENT_AT_MOVE_IN') return 'The move-in photo shows it too';
+  if (status === 'NOT_AT_MOVE_IN') return 'Not in the move-in photo';
+  return 'The move-in photo cannot tell';
+}
+
+/**
+ * The frame to offer: the one already filed, else the AI's best not yet set
+ * aside. Null when every suggestion was dismissed, or there were none.
+ */
+export function suggestionToOffer(finding: Pick<AreaFinding, 'frameSuggestions'>) {
+  const suggestions = [...(finding.frameSuggestions ?? [])].sort((a, b) => a.rank - b.rank);
+  return (
+    suggestions.find((suggestion) => suggestion.status === 'ACCEPTED') ??
+    suggestions.find((suggestion) => suggestion.status === 'SUGGESTED') ??
+    null
+  );
 }
 
 /** The AI's lean, worded as the suggestion it is. Null when it has none. */

@@ -10,6 +10,7 @@ import {
   AiProvider,
   ComparisonStatus,
   FindingReviewStatus,
+  FindingSource,
   InspectionStatus,
   InspectionType,
   MediaProcessingStatus,
@@ -32,6 +33,8 @@ import {
 } from './deepgram-transcription';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { captureTimeForFrame } from '../common/photo-capture-time';
+import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
+import { VisualReviewService } from './visual-review.service';
 
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
@@ -51,6 +54,10 @@ const ANALYSIS_TIMEOUT_MS = 180_000;
 export const REANALYSIS_STARTED_EVENT = 'REANALYSIS_STARTED';
 export const REANALYSIS_COMPLETED_EVENT = 'REANALYSIS_COMPLETED';
 export const REANALYSIS_FAILED_EVENT = 'REANALYSIS_FAILED';
+
+/** The AI's look at the recording's frames; see `VisualReviewService`. */
+export const VISUAL_REVIEW_COMPLETED_EVENT = 'VISUAL_REVIEW_COMPLETED';
+export const VISUAL_REVIEW_FAILED_EVENT = 'VISUAL_REVIEW_FAILED';
 
 /** One spoken line of a narration, at whole seconds of the recording. */
 export type TranscriptLine = { startSeconds: number; endSeconds: number; text: string };
@@ -163,12 +170,7 @@ export function readFrameMarkers(captureSummary: unknown, durationSeconds: numbe
     .slice(0, MAX_EXTRACTED_FRAMES);
 }
 
-/**
- * Marker for the informational per-room AI summary. Summaries are context for
- * reviewers, not chargeable findings: queries exclude them from the review
- * queue and from every pending-review count/gate.
- */
-export const ROOM_SUMMARY_TITLE = 'Room condition summary';
+export { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE };
 
 /**
  * The event a failed run of transcription and analysis leaves behind, with the
@@ -176,9 +178,6 @@ export const ROOM_SUMMARY_TITLE = 'Room condition summary';
  * `InspectionVideoService.retryFailedAnalysis`.
  */
 export const PROCESSING_FAILED_EVENT = 'PROCESSING_FAILED';
-
-/** Prisma where-fragment matching summary rows. */
-export const ROOM_SUMMARY_WHERE = { findingType: 'NO_CHANGE', title: ROOM_SUMMARY_TITLE } as const;
 
 // Biases the speech model toward inspection vocabulary; helps with accented
 // and non-native English narration. Language itself is auto-detected.
@@ -303,7 +302,40 @@ export class MediaProcessingService implements OnModuleInit {
     // Optional so the pipeline still constructs on a deployment with no
     // Cloudflare account, where every recording is bucket-backed anyway.
     @Optional() @Inject(CloudflareStreamService) private readonly stream?: CloudflareStreamService,
+    @Optional() @Inject(VisualReviewService) private readonly visualReview?: VisualReviewService,
   ) {}
+
+  /**
+   * The AI's look at the recording itself, when the office has switched it on.
+   *
+   * Never fails the pipeline: the narration's findings are already stored, and
+   * a recording whose frames could not be looked at is still reviewable the way
+   * every recording was before this existed. The outcome is an event either way.
+   */
+  private async lookAtTheVideo(mediaId: string, organizationId: string) {
+    if (!this.visualReview) return;
+    try {
+      if (!(await this.visualReview.enabled(organizationId))) return;
+      const result = await this.visualReview.review(mediaId, organizationId);
+      if (result)
+        await this.event(mediaId, VISUAL_REVIEW_COMPLETED_EVENT, {
+          checked: result.checked,
+          suggested: result.suggested,
+          spotted: result.spotted,
+          tokens: result.usage.totalTokens,
+        });
+    } catch (error) {
+      this.logger.warn(
+        `Visual review failed for media ${mediaId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      await this.event(mediaId, VISUAL_REVIEW_FAILED_EVENT, {
+        message:
+          error instanceof ApplicationError
+            ? error.message
+            : 'The AI could not look at this recording.',
+      });
+    }
+  }
 
   /** Recover recordings that were uploaded before this pipeline existed or
    *  whose processing died with the server (stuck PENDING/PROCESSING). */
@@ -420,6 +452,9 @@ export class MediaProcessingService implements OnModuleInit {
 
         const findingCount = await this.analyze(media, transcript, organizationId);
         await this.event(media.id, 'ANALYSIS_COMPLETED', { findingCount });
+        // Before READY, so the inspection reaches review with the AI's look at
+        // the video already beside each finding.
+        await this.lookAtTheVideo(media.id, organizationId);
 
         await this.prisma.inspectionMedia.update({
           where: { id: media.id },
@@ -509,6 +544,7 @@ export class MediaProcessingService implements OnModuleInit {
           (await this.storedTranscript(media.id, media.durationSeconds)) ??
           (await this.transcribe(media, organizationId));
         const findingCount = await this.analyze(media, transcript, organizationId);
+        await this.lookAtTheVideo(media.id, organizationId);
         // An analysis that had failed is now done; Cloudflare's own failure is
         // not ours to clear, and is refused before this runs.
         await this.prisma.inspectionMedia.updateMany({
@@ -1204,9 +1240,15 @@ export class MediaProcessingService implements OnModuleInit {
         );
       }
       // Reprocessing replaces this recording's unreviewed suggestions instead
-      // of stacking duplicates; human-reviewed findings are never touched.
+      // of stacking duplicates; human-reviewed findings are never touched. Only
+      // the narration's own: what the AI spotted in the frames is the visual
+      // review's to replace, and it may not run this time.
       await this.prisma.inspectionFinding.deleteMany({
-        where: { inspectionMediaId: media.id, reviewStatus: FindingReviewStatus.PENDING_REVIEW },
+        where: {
+          inspectionMediaId: media.id,
+          reviewStatus: FindingReviewStatus.PENDING_REVIEW,
+          source: FindingSource.NARRATION,
+        },
       });
       if (items.length)
         await this.prisma.inspectionFinding.createMany({

@@ -124,6 +124,7 @@ export class AiProviderSettingsService {
     const activeProvider = routing?.activeProvider ?? this.environmentProvider();
     return {
       activeProvider,
+      visualReviewEnabled: routing?.visualReviewEnabled ?? false,
       keyStorageAvailable: Boolean(this.encryptionKey(false)),
       usageWindow: { startsAt: monthStart.toISOString(), endsAt: this.monthEnd().toISOString() },
       providers: ([AiProvider.ANTHROPIC, AiProvider.OPENAI] as const).map((provider) => {
@@ -172,6 +173,37 @@ export class AiProviderSettingsService {
     });
     await this.audit(user, 'AI_ACTIVE_PROVIDER_CHANGED', { provider });
     return this.settings(user.organizationId);
+  }
+
+  /**
+   * Whether the AI checks findings against the recording's frames.
+   *
+   * Off by default: it sends every recording's frames to the provider and is
+   * paid for per room (about $0.15 a room on GPT-5.6 Sol, measured on a
+   * move-out on 2026-10-03), so the office switches it on deliberately.
+   */
+  async setVisualReview(user: AuthenticatedUser, enabled: boolean) {
+    await this.prisma.organizationAiSettings.upsert({
+      where: { organizationId: user.organizationId },
+      // The provider in effect, not the column default: creating this row must
+      // not quietly move the analysis to another provider.
+      create: {
+        organizationId: user.organizationId,
+        activeProvider: this.environmentProvider(),
+        visualReviewEnabled: enabled,
+      },
+      update: { visualReviewEnabled: enabled },
+    });
+    await this.audit(user, 'AI_VISUAL_REVIEW_CHANGED', { enabled });
+    return this.settings(user.organizationId);
+  }
+
+  async visualReviewEnabled(organizationId: string) {
+    const routing = await this.prisma.organizationAiSettings.findUnique({
+      where: { organizationId },
+      select: { visualReviewEnabled: true },
+    });
+    return routing?.visualReviewEnabled ?? false;
   }
 
   async updateProvider(user: AuthenticatedUser, provider: AiProvider, input: UpdateAiProviderDto) {

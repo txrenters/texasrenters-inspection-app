@@ -1249,6 +1249,8 @@ export interface AiProviderConfiguration {
 
 export interface AiSettings {
   activeProvider: AiProviderName;
+  /** The AI checks findings against the recording's frames; off until switched on. */
+  visualReviewEnabled?: boolean;
   keyStorageAvailable: boolean;
   usageWindow: { startsAt: string; endsAt: string };
   providers: AiProviderConfiguration[];

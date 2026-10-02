@@ -550,6 +550,10 @@ export class UpdateAiRoutingDto {
   @IsEnum(AiProvider) activeProvider!: AiProvider;
 }
 
+export class UpdateAiVisualReviewDto {
+  @IsBoolean() enabled!: boolean;
+}
+
 export class UpdateAiProviderDto {
   @IsString() @MinLength(2) @MaxLength(120) modelId!: string;
   @IsOptional() @IsString() @MinLength(20) @MaxLength(500) apiKey?: string;

@@ -63,6 +63,50 @@ describe('AI provider settings security', () => {
   });
 });
 
+/**
+ * The AI looking at each recording's frames is paid for per room, so it is off
+ * until the office switches it on, and switching it is on the record.
+ */
+describe('switching the AI look at the video', () => {
+  const user = {
+    id: '00000000-0000-4000-8000-000000000001',
+    organizationId: '00000000-0000-4000-8000-000000000002',
+  } as AuthenticatedUser;
+  const originalProvider = process.env.FLOOR_PLAN_EXTRACTION_PROVIDER;
+  afterAll(() => {
+    if (originalProvider === undefined) delete process.env.FLOOR_PLAN_EXTRACTION_PROVIDER;
+    else process.env.FLOOR_PLAN_EXTRACTION_PROVIDER = originalProvider;
+  });
+
+  it('is off for an organization that never chose', async () => {
+    const service = new AiProviderSettingsService(prismaMock() as unknown as PrismaService);
+    await expect(service.visualReviewEnabled(user.organizationId)).resolves.toBe(false);
+    await expect(service.settings(user.organizationId)).resolves.toMatchObject({
+      visualReviewEnabled: false,
+    });
+  });
+
+  it('switches on, on the record, without moving the analysis to another provider', async () => {
+    process.env.FLOOR_PLAN_EXTRACTION_PROVIDER = 'openai';
+    const prisma = prismaMock();
+    const service = new AiProviderSettingsService(prisma as unknown as PrismaService);
+
+    await service.setVisualReview(user, true);
+
+    const [[upsert]] = prisma.organizationAiSettings.upsert.mock.calls;
+    expect(upsert.update).toEqual({ visualReviewEnabled: true });
+    // A first row takes the provider already in effect, not the column default.
+    expect(upsert.create).toMatchObject({
+      activeProvider: AiProvider.OPENAI,
+      visualReviewEnabled: true,
+    });
+    expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'AI_VISUAL_REVIEW_CHANGED',
+      metadata: { enabled: true },
+    });
+  });
+});
+
 function prismaMock() {
   return {
     organizationAiSettings: {
