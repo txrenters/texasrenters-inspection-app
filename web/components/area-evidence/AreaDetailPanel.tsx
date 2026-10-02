@@ -30,7 +30,7 @@ import { AreaReviewControl } from './AreaReviewControl';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { FindingsReview } from './FindingsReview';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
-import { ReanalyzeControl, canReanalyze } from './ReanalyzeControl';
+import { ReanalyzeControl, ReanalyzeStatus, canReanalyze } from './ReanalyzeControl';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface, recordingFrame } from './RecordingSurface';
 
@@ -102,8 +102,8 @@ function RecordingCard({
   /** Items a captured still can be filed against. */
   checklist: AreaChecklistEntry[];
   onSeek: (seconds: number) => void;
-  /** Offered to a reviewer before finalization: see `ReanalyzeControl`. */
-  reanalyze?: { pendingFindings: number } | null;
+  /** Offered to a reviewer, locked once finalized: see `ReanalyzeControl`. */
+  reanalyze?: { pendingFindings: number; lockedReason: string | null } | null;
   /** This recording's findings that have a moment, to jump to from under it. */
   findingMarks?: Array<{ id: string; title: string; start: number }>;
 }) {
@@ -112,14 +112,28 @@ function RecordingCard({
 
   return (
     <article className="space-y-2 rounded-lg border p-3">
-      <header className="flex items-center justify-between gap-2">
+      {/* Wraps rather than truncating the name: beside the findings the card
+          is narrow, and "Primary …" told the reviewer nothing. */}
+      <header className="flex flex-wrap items-center justify-between gap-2">
         <p className="truncate text-sm font-medium">
           {recording.recordingType === 'PRIMARY_AREA'
             ? 'Primary recording'
             : recording.label || 'Additional recording'}
         </p>
-        <StatusBadge value={recording.processingStatus} />
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {reanalyze && canReanalyze(recording) ? (
+            <ReanalyzeControl
+              areaId={areaId}
+              inspectionId={inspectionId}
+              lockedReason={reanalyze.lockedReason}
+              pendingFindings={reanalyze.pendingFindings}
+              recording={recording}
+            />
+          ) : null}
+          <StatusBadge value={recording.processingStatus} />
+        </div>
       </header>
+      {reanalyze ? <ReanalyzeStatus recording={recording} /> : null}
 
       {active ? (
         <div className="relative">
@@ -210,19 +224,9 @@ function RecordingCard({
         </div>
       ) : null}
 
-      <footer className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-muted-foreground text-xs">
-          {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
-          {formatDateTime(recording.createdAt)}
-        </span>
-        {reanalyze && canReanalyze(recording) ? (
-          <ReanalyzeControl
-            areaId={areaId}
-            inspectionId={inspectionId}
-            pendingFindings={reanalyze.pendingFindings}
-            recording={recording}
-          />
-        ) : null}
+      <footer className="text-muted-foreground text-xs">
+        {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
+        {formatDateTime(recording.createdAt)}
       </footer>
     </article>
   );
@@ -260,7 +264,8 @@ export function AreaDetailPanel({
 }) {
   const evidence = useAreaEvidence(inspectionId, areaId);
   // A finalized inspection's review is closed; the mark is shown, not offered.
-  const finalized = Boolean(useInspection(inspectionId).data?.finalizedAt);
+  const inspection = useInspection(inspectionId).data;
+  const finalized = Boolean(inspection?.finalizedAt);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
   /**
    * Where a recording should open, when the reviewer arrives from a finding,
@@ -385,15 +390,20 @@ export function AreaDetailPanel({
     recordings.find((recording) => recording.id === selected?.recordingId) ??
     primaryRecording ??
     recordings[0];
-  // A reviewer's, and only while the inspection is open: the server refuses a
-  // re-run once it has been finalized.
+  // A reviewer's. Once finalized it is shown locked, saying why, because the
+  // server refuses the re-run then; hiding it read as the button being removed.
   const reanalyzeFor = (recording: AreaRecording) =>
-    canReview && !finalized
+    canReview
       ? {
           pendingFindings: findings.filter(
             (finding) =>
               finding.recordingId === recording.id && finding.reviewStatus === 'PENDING_REVIEW',
           ).length,
+          lockedReason: inspection?.finalizedAt
+            ? `This inspection was finalized ${formatDateTime(inspection.finalizedAt)}${
+                inspection.finalizedBy ? ` by ${inspection.finalizedBy.displayName}` : ''
+              }. Its findings are frozen, so the AI cannot run on its recordings again.`
+            : null,
         }
       : null;
 
@@ -638,6 +648,8 @@ export function AreaDetailPanel({
                       )
                     }
                     onSeek={(seconds) => seekTo(reviewRecording.id, seconds)}
+                    // Here too: the findings it replaces are the ones beside it.
+                    reanalyze={reanalyzeFor(reviewRecording)}
                     recording={reviewRecording}
                     startSeconds={seek?.recordingId === reviewRecording.id ? seek.seconds : null}
                   />
