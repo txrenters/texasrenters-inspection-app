@@ -13,6 +13,7 @@ import { RoutingModule } from '../routing/routing.module';
 import { PropertyGeocodeScheduler } from './property-geocode.scheduler';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianTimelineService } from '../technician/technician-timeline.service';
+import { AiEvaluationService } from './ai-evaluation.service';
 import { AiGuidanceService } from './ai-guidance.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
@@ -54,6 +55,9 @@ import { TechnicianSkillsService } from './technician-skills.service';
     AccessService,
     AreaEvidenceService,
     AiGuidanceService,
+    // Test runs of the AI against the office's decisions; reads the pipeline
+    // TechnicianModule exports.
+    AiEvaluationService,
     AiProviderSettingsService,
     ChargeService,
     ComparisonService,

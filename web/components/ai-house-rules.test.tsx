@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   save: vi.fn(),
   preview: vi.fn(),
   previewData: undefined as AiAnalysisPreview | undefined,
+  testRun: vi.fn(),
 }));
 
 vi.mock('@/lib/queries', () => ({
@@ -50,6 +51,14 @@ vi.mock('@/lib/queries', () => ({
       data: state.previewData,
       variables: undefined,
     },
+    startTestRun: {
+      mutate: state.testRun,
+      isPending: false,
+      isSuccess: false,
+      isError: false,
+      error: null,
+      data: undefined,
+    },
   }),
 }));
 
@@ -66,6 +75,7 @@ beforeEach(() => {
   state.previewData = undefined;
   state.save.mockReset();
   state.preview.mockReset();
+  state.testRun.mockReset();
 });
 
 describe('the house rules card', () => {
@@ -118,6 +128,20 @@ describe('the house rules card', () => {
     expect(screen.getByRole('textbox', { name: 'House rules' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /Save as version/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Try on a recording' })).not.toBeInTheDocument();
+  });
+});
+
+describe('testing the rules on the recent recordings', () => {
+  it('runs the rules as typed, unsaved, on every recent decided recording', () => {
+    render(<AiHouseRules canConfigure />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'House rules' }), {
+      target: { value: 'Scuffs are normal wear.' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test on recent recordings' }));
+
+    expect(state.testRun).toHaveBeenCalledWith('Scuffs are normal wear.');
+    expect(state.save).not.toHaveBeenCalled();
   });
 });
 

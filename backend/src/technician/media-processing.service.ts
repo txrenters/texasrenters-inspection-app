@@ -44,7 +44,7 @@ import { VisualReviewService } from './visual-review.service';
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
 // again on a re-run. 5: the office's house rules and its recent decisions.
-const PROMPT_VERSION = '5';
+export const PROMPT_VERSION = '5';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -1358,7 +1358,13 @@ export class MediaProcessingService implements OnModuleInit {
    * be read against those decisions. Uses the narration already stored: a
    * preview should cost one analysis call, not a transcription.
    */
-  async previewAnalysis(mediaId: string, organizationId: string, houseRules: string) {
+  async previewAnalysis(
+    mediaId: string,
+    organizationId: string,
+    houseRules: string,
+    // How the usage is recorded: one trial, or one recording of a test-set run.
+    operation: 'GUIDANCE_PREVIEW' | 'AI_EVALUATION' = 'GUIDANCE_PREVIEW',
+  ) {
     const media = await this.loadMedia(mediaId, organizationId);
     if (!media)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
@@ -1378,7 +1384,7 @@ export class MediaProcessingService implements OnModuleInit {
       houseRules.trim() || null,
       { withDecisions: false },
     );
-    await this.aiSettings.recordUsage(organizationId, configuration, 'GUIDANCE_PREVIEW', usage, media.id);
+    await this.aiSettings.recordUsage(organizationId, configuration, operation, usage, media.id);
     return { items, usage, modelId: configuration.modelId };
   }
 
