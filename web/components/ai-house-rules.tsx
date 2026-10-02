@@ -36,7 +36,7 @@ import { useAiGuidance, useAiGuidanceMutations, useAiGuidanceSamples } from '@/l
  */
 export function AiHouseRules({ canConfigure }: { canConfigure: boolean }) {
   const guidance = useAiGuidance();
-  const { save, preview } = useAiGuidanceMutations();
+  const { save, preview, startTestRun } = useAiGuidanceMutations();
   const saved = guidance.data?.current.text ?? '';
   const version = guidance.data?.current.version ?? 0;
   // From the rules already cached, when the page is opened again.
@@ -132,6 +132,17 @@ export function AiHouseRules({ canConfigure }: { canConfigure: boolean }) {
                   >
                     {trying ? 'Hide the trial' : 'Try on a recording'}
                   </Button>
+                  {/* The rules as typed, on every recent decided recording at once. */}
+                  <Button
+                    disabled={startTestRun.isPending}
+                    onClick={() => startTestRun.mutate(text)}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    {startTestRun.isPending ? <Spinner /> : null}
+                    Test on recent recordings
+                  </Button>
                 </>
               ) : (
                 <p className="text-muted-foreground text-xs">
@@ -152,6 +163,17 @@ export function AiHouseRules({ canConfigure }: { canConfigure: boolean }) {
                     } kept, so the scorecard can compare them.`
                   : ''}
               </p>
+            ) : null}
+            {startTestRun.isSuccess ? (
+              <p className="text-muted-foreground text-xs" role="status">
+                Test run started on {startTestRun.data.recordingCount} recordings. Its results
+                appear under Test runs as each recording finishes.
+              </p>
+            ) : null}
+            {startTestRun.isError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{startTestRun.error.message}</AlertDescription>
+              </Alert>
             ) : null}
             {save.isError ? (
               <Alert variant="destructive">

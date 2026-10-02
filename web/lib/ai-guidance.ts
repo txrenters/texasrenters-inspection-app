@@ -4,40 +4,17 @@
  * without a browser.
  */
 
-import type { AiAnalysisPreview, AiScoreTally } from '@texasrenters/shared';
-import { rejectReasonLabel } from '@texasrenters/shared';
+import type {
+  AiAnalysisPreview,
+  AiEvaluationRunSummary,
+  AiScoreTally,
+} from '@texasrenters/shared';
+import { pairFindings, rejectReasonLabel } from '@texasrenters/shared';
+
+export { titleSimilarity } from '@texasrenters/shared';
 
 type CurrentFinding = AiAnalysisPreview['current'][number];
 type DraftFinding = AiAnalysisPreview['draft'][number];
-
-/** Words that say nothing about which problem a title names. */
-const FILLER = new Set([
-  'the', 'and', 'with', 'from', 'near', 'on', 'in', 'at', 'of', 'to', 'a', 'an',
-  'possible', 'minor', 'small', 'some', 'room', 'area', 'visible', 'noted',
-]);
-
-function words(title: string) {
-  return new Set(
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]+/g, ' ')
-      .split(/\s+/)
-      .map((word) => word.replace(/s$/, ''))
-      .filter((word) => word.length > 2 && !FILLER.has(word)),
-  );
-}
-
-/** How alike two titles are, 0 to 1: shared words over all words. */
-export function titleSimilarity(left: string, right: string) {
-  const a = words(left);
-  const b = words(right);
-  if (!a.size || !b.size) return 0;
-  let shared = 0;
-  for (const word of a) if (b.has(word)) shared += 1;
-  return shared / (a.size + b.size - shared);
-}
-
-const SAME_FINDING = 0.34;
 
 export type PreviewComparison = {
   /** A finding the draft still makes, beside the draft's wording of it. */
@@ -50,31 +27,26 @@ export type PreviewComparison = {
 
 /**
  * Pair each current finding with the draft finding naming the same problem,
- * best pairs first, each used once. Titles are all there is to go on: the
- * draft has no ids, and the AI rewords freely between runs.
+ * by the rule the test-set run uses (`pairFindings`): the draft has no ids, and
+ * the AI rewords freely between runs.
  */
 export function comparePreview(preview: Pick<AiAnalysisPreview, 'current' | 'draft'>) {
-  const pairs: Array<{ current: number; draft: number; score: number }> = [];
-  preview.current.forEach((current, currentIndex) =>
-    preview.draft.forEach((draft, draftIndex) => {
-      const score = titleSimilarity(current.title, draft.title);
-      if (score >= SAME_FINDING) pairs.push({ current: currentIndex, draft: draftIndex, score });
-    }),
-  );
-  pairs.sort((left, right) => right.score - left.score);
-  const usedCurrent = new Set<number>();
-  const usedDraft = new Set<number>();
-  const matched: PreviewComparison['matched'] = [];
-  for (const pair of pairs) {
-    if (usedCurrent.has(pair.current) || usedDraft.has(pair.draft)) continue;
-    usedCurrent.add(pair.current);
-    usedDraft.add(pair.draft);
-    matched.push({ current: preview.current[pair.current], draft: preview.draft[pair.draft] });
-  }
+  const view = (finding: CurrentFinding | DraftFinding) => ({
+    titles: [finding.title],
+    category: finding.category,
+    startSeconds: finding.videoTimestampStart,
+  });
+  const { pairs, unpairedLeft, unpairedRight } = pairFindings(preview.current, preview.draft, {
+    left: view,
+    right: view,
+  });
   return {
-    matched,
-    dropped: preview.current.filter((_, index) => !usedCurrent.has(index)),
-    added: preview.draft.filter((_, index) => !usedDraft.has(index)),
+    matched: pairs.map(([current, draft]) => ({
+      current: preview.current[current],
+      draft: preview.draft[draft],
+    })),
+    dropped: unpairedLeft.map((index) => preview.current[index]),
+    added: unpairedRight.map((index) => preview.draft[index]),
   } satisfies PreviewComparison;
 }
 
@@ -133,6 +105,21 @@ export function decidedShares(tally: AiScoreTally) {
 /** A rejection reason as the scorecard lists it. */
 export function rejectReasonRow(code: string) {
   return code === 'UNSPECIFIED' ? 'No reason chosen' : (rejectReasonLabel(code) ?? code);
+}
+
+/** "18 of 22 (82%)", or "none" when there was nothing to count. */
+export function outOf(part: number, whole: number) {
+  if (!whole) return 'none';
+  return `${part} of ${whole} (${Math.round((part / whole) * 100)}%)`;
+}
+
+/** Which rules a test run tried, in a few words. */
+export function runRulesLabel(
+  run: Pick<AiEvaluationRunSummary, 'guidanceVersion' | 'houseRulesLength'>,
+) {
+  if (run.guidanceVersion) return `Saved rules, version ${run.guidanceVersion}`;
+  if (!run.houseRulesLength) return 'No house rules';
+  return `Draft rules (${run.houseRulesLength.toLocaleString('en-US')} characters)`;
 }
 
 /**

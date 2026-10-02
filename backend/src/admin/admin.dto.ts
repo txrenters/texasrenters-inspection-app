@@ -518,6 +518,12 @@ export class SaveAiGuidanceDto {
   @IsString() @MaxLength(MAX_GUIDANCE_LENGTH) text!: string;
 }
 
+/** Rules to test on the recent decided recordings: a draft, or the saved ones as they are. */
+export class StartAiEvaluationDto {
+  @IsString() @MaxLength(MAX_GUIDANCE_LENGTH) houseRules!: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(3) @Max(20) size?: number;
+}
+
 export class AiScorecardQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(7) @Max(365) days?: number;
 }

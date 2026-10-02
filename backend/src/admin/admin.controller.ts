@@ -11,6 +11,7 @@ import {
   Optional,
   Patch,
   ParseEnumPipe,
+  ParseUUIDPipe,
   Post,
   Put,
   Query,
@@ -88,6 +89,7 @@ import {
   GrantTechnicianSkillDto,
   RevokeTechnicianSkillDto,
   SaveAiGuidanceDto,
+  StartAiEvaluationDto,
   SetSkillRequirementDto,
   SkillCatalogQueryDto,
   TechnicianListQueryDto,
@@ -108,6 +110,7 @@ import {
   UploadFloorPlanDto,
 } from './admin.dto';
 import { AdminService } from './admin.service';
+import { AiEvaluationService } from './ai-evaluation.service';
 import { AiGuidanceService } from './ai-guidance.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
@@ -172,6 +175,7 @@ export class AdminController {
     private readonly access: AccessService,
     private readonly skills: TechnicianSkillsService,
     private readonly guidance: AiGuidanceService,
+    private readonly evaluations: AiEvaluationService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -1462,6 +1466,30 @@ export class AdminController {
   @RequirePermissions('ai:configure')
   aiGuidanceSamples(@Req() request: AuthenticatedRequest) {
     return this.guidance.samples(request.user.organizationId);
+  }
+
+  /**
+   * Run the analysis on the recent recordings the office decided, under the
+   * rules given, and score it against those decisions. Answers at once; the
+   * run takes minutes and its progress is read below. One analysis per
+   * recording is billed, so it is configuring the AI, not reading it.
+   */
+  @Post('ai/evaluations')
+  @RequirePermissions('ai:configure')
+  startAiEvaluation(@Req() request: AuthenticatedRequest, @Body() body: StartAiEvaluationDto) {
+    return this.evaluations.start(request.user, body);
+  }
+
+  @Get('ai/evaluations')
+  @RequirePermissions('integrations:read', 'findings:read')
+  aiEvaluations(@Req() request: AuthenticatedRequest) {
+    return this.evaluations.list(request.user.organizationId);
+  }
+
+  @Get('ai/evaluations/:runId')
+  @RequirePermissions('integrations:read', 'findings:read')
+  aiEvaluation(@Req() request: AuthenticatedRequest, @Param('runId', new ParseUUIDPipe()) id: string) {
+    return this.evaluations.get(request.user.organizationId, id);
   }
 
   @Get('ai/scorecard')

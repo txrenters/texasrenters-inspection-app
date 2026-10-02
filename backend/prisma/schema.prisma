@@ -435,6 +435,7 @@ model Organization {
   technicianPlanningProfiles      TechnicianPlanningProfile[]
   findingFrameSuggestions         FindingFrameSuggestion[]
   aiGuidanceVersions              AiGuidanceVersion[]
+  aiEvaluationRuns                AiEvaluationRun[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -532,6 +533,40 @@ model AiGuidanceVersion {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, version])
+}
+
+enum AiEvaluationStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+/// The AI's analysis run on a set of recordings the office already decided,
+/// scored against those decisions. Nothing it proposes is stored as a finding:
+/// a run is how a change to the house rules is measured before it is saved.
+model AiEvaluationRun {
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @db.Uuid
+  status          AiEvaluationStatus @default(RUNNING)
+  /// The saved version the rules were, or null for a draft.
+  guidanceVersion Int?
+  houseRules      String
+  promptVersion   String
+  modelId         String?
+  recordingCount  Int
+  completedCount  Int                @default(0)
+  /// Found, missed, repeated and timing, summed over the recordings.
+  totals          Json?
+  /// One entry per recording, written as each finishes.
+  results         Json?
+  tokens          Int                @default(0)
+  error           String?
+  startedById     String?            @db.Uuid
+  startedAt       DateTime           @default(now())
+  completedAt     DateTime?
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, startedAt])
 }
 
 model UserProfile {

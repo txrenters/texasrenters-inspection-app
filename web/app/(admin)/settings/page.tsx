@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 
 import { AiHouseRules } from '@/components/ai-house-rules';
 import { AiScorecard } from '@/components/ai-scorecard';
+import { AiTestRuns } from '@/components/ai-test-runs';
 import { PageHeader, SectionHeader } from '@/components/page-header';
 import { PasswordInput } from '@/components/password-input';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -218,6 +219,7 @@ export default function SettingsPage() {
           title="Teaching the AI"
         />
         <AiHouseRules canConfigure={canManageSecrets} />
+        <AiTestRuns />
         <AiScorecard />
       </section>
 

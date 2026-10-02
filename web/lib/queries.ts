@@ -45,6 +45,8 @@ import type {
   AdminUser,
   AdminUserDetail,
   AiAnalysisPreview,
+  AiEvaluationRun,
+  AiEvaluationRunSummary,
   AiGuidanceHistory,
   AiGuidanceSample,
   AiGuidanceSaveResult,
@@ -197,6 +199,8 @@ export const keys = {
   aiGuidance: ['admin', 'ai-guidance'] as const,
   aiGuidanceSamples: ['admin', 'ai-guidance', 'samples'] as const,
   aiScorecard: (days: number) => ['admin', 'ai-scorecard', days] as const,
+  aiEvaluations: ['admin', 'ai-evaluations'] as const,
+  aiEvaluation: (id: string) => ['admin', 'ai-evaluations', id] as const,
   openApiDocument: ['admin', 'system', 'openapi'] as const,
   apiClientsRoot: ['admin', 'api-clients'] as const,
   apiClients: (query: object) => ['admin', 'api-clients', query] as const,
@@ -1299,6 +1303,27 @@ export const useAiScorecard = (days: number) =>
     queryFn: ({ signal }) => api<AiScorecard>(`/api/v1/admin/ai/scorecard?days=${days}`, { signal }),
   });
 
+/**
+ * The recent test runs. Asked again every few seconds while one is running, so
+ * its progress shows without anybody refreshing.
+ */
+export const useAiEvaluations = () =>
+  useQuery({
+    queryKey: keys.aiEvaluations,
+    queryFn: ({ signal }) => api<AiEvaluationRunSummary[]>('/api/v1/admin/ai/evaluations', { signal }),
+    refetchInterval: (query) =>
+      query.state.data?.some((run) => run.status === 'RUNNING') ? 4000 : false,
+  });
+
+/** One run with each recording's result, asked for when it is opened. */
+export const useAiEvaluation = (id: string | null) =>
+  useQuery({
+    queryKey: keys.aiEvaluation(id ?? ''),
+    queryFn: ({ signal }) => api<AiEvaluationRun>(`/api/v1/admin/ai/evaluations/${id}`, { signal }),
+    enabled: Boolean(id),
+    refetchInterval: (query) => (query.state.data?.status === 'RUNNING' ? 4000 : false),
+  });
+
 export function useAiGuidanceMutations() {
   const client = useQueryClient();
   return {
@@ -1320,6 +1345,18 @@ export function useAiGuidanceMutations() {
           method: 'POST',
           body: JSON.stringify({ houseRules }),
         }),
+    }),
+    /**
+     * Run the rules as typed on the recent recordings the office decided. One
+     * analysis per recording; the run goes on after this answers.
+     */
+    startTestRun: useMutation({
+      mutationFn: (houseRules: string) =>
+        api<AiEvaluationRun>('/api/v1/admin/ai/evaluations', {
+          method: 'POST',
+          body: JSON.stringify({ houseRules }),
+        }),
+      onSuccess: () => void client.invalidateQueries({ queryKey: keys.aiEvaluations }),
     }),
   };
 }

@@ -151,3 +151,71 @@ export interface FindingEditInput {
   category: string;
   note?: string;
 }
+
+/**
+ * A test run: the AI's analysis on the recent recordings the office decided,
+ * under the rules tried, scored against those decisions (2026-10-03).
+ */
+export type AiEvaluationStatus = 'RUNNING' | 'COMPLETED' | 'FAILED';
+
+export interface AiEvaluationTotals {
+  recordings: number;
+  /** Recordings the analysis could not run on. */
+  failed: number;
+  /** Findings the office kept, and how many the run found again. */
+  kept: number;
+  found: number;
+  /** Findings the office rejected, and how many the run raised again. */
+  rejected: number;
+  repeated: number;
+  /** Findings the office never decided either way. */
+  added: number;
+  /** Found findings with a moment a reviewer confirmed, and how many the run placed within 5 seconds. */
+  timed: number;
+  onTime: number;
+}
+
+export interface AiEvaluationRunSummary {
+  id: string;
+  status: AiEvaluationStatus;
+  error: string | null;
+  /** The saved version tried, or null for a draft. */
+  guidanceVersion: number | null;
+  houseRulesLength: number;
+  promptVersion: string;
+  modelId: string | null;
+  recordingCount: number;
+  completedCount: number;
+  totals: AiEvaluationTotals | null;
+  tokens: number;
+  startedAt: string;
+  completedAt: string | null;
+  startedByName: string | null;
+}
+
+export interface AiEvaluationRecordingResult {
+  mediaId: string;
+  inspectionId: string;
+  roomName: string;
+  propertyName: string | null;
+  inspectionType: string;
+  recordedAt: string;
+  score: {
+    kept: number;
+    found: number;
+    missed: Array<{ id: string; title: string }>;
+    rejected: number;
+    repeated: Array<{ id: string; title: string; reasonCode: string | null }>;
+    added: Array<{ title: string }>;
+    timed: number;
+    onTime: number;
+  } | null;
+  error: string | null;
+  tokens: number;
+}
+
+export interface AiEvaluationRun extends AiEvaluationRunSummary {
+  /** The rules as they were tried. */
+  houseRules: string;
+  results: AiEvaluationRecordingResult[];
+}
