@@ -149,3 +149,88 @@ describe('trailMeters', () => {
     expect(trailMeters(segments)).toBeLessThan(230);
   });
 });
+
+/**
+ * Standing still, as a phone indoors reports it: tens of metres of wander in
+ * every direction. Drawn fix by fix it was a scribble across the property and
+ * the street (the office, 2026-10-02: "fix this extra drawing of the lines it
+ * makes the map messy").
+ */
+describe('a stay', () => {
+  /** The house, 1.1 km north of the start. */
+  const HOUSE = 0.01;
+  /** Each within about 80 m of the house, up to 150 m from one another. */
+  const WANDER: [number, number][] = [
+    [0.0004, -0.0005],
+    [-0.0003, 0.0006],
+    [0.0005, 0.0002],
+    [-0.0005, -0.0004],
+    [0.0001, 0.0006],
+    [-0.0002, -0.0006],
+    [0.0005, -0.0001],
+    [-0.0004, 0.0003],
+  ];
+  const near = (point: [number, number], north: number, east = 0) =>
+    Math.abs(point[0] - (START.latitude + north)) < 0.0009 && Math.abs(point[1] - (START.longitude + east)) < 0.001;
+
+  /** Drive in, half an hour at the house, drive on north. */
+  function day(during: (minute: number) => TrailFix) {
+    return [
+      fix(0, 0),
+      fix(1, 0.0025),
+      fix(2, 0.005),
+      fix(3, 0.0075),
+      fix(4, HOUSE),
+      ...Array.from({ length: 30 }, (_, index) => during(5 + index)),
+      fix(36, 0.0115),
+      fix(37, 0.0135),
+      fix(38, 0.0155),
+    ];
+  }
+
+  it('is drawn as one point, however far the phone wandered', () => {
+    const segments = trailSegments(
+      day((minute) => {
+        const [north, east] = WANDER[minute % WANDER.length]!;
+        return fix(minute, HOUSE + north, { longitude: START.longitude + east });
+      }),
+    );
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0]!.points.filter((point) => near(point, HOUSE)).length).toBeLessThanOrEqual(1);
+    // No scribble: the line is about as long as the drive itself, 1.7 km --
+    // drawn fix by fix the wander alone added kilometres.
+    expect(trailMeters(segments)).toBeLessThan(1900);
+  });
+
+  it('leaves out a fix thrown across the street and back', () => {
+    const segments = trailSegments(
+      day((minute) =>
+        minute === 20
+          ? fix(minute, HOUSE, { longitude: START.longitude + 0.002 })
+          : fix(minute, HOUSE + (minute % 2 ? 0.0001 : -0.0001)),
+      ),
+    );
+
+    expect(segments[0]!.points.some((point) => near(point, HOUSE, 0.002))).toBe(false);
+  });
+
+  it('keeps a short wait fix by fix: a minute at a light is not a stay', () => {
+    const segments = trailSegments([
+      fix(0, 0),
+      fix(1, 0.003),
+      fix(1.25, 0.0032, { longitude: START.longitude + 0.0003 }),
+      fix(1.5, 0.0031, { longitude: START.longitude - 0.0003 }),
+      fix(2, 0.0034, { longitude: START.longitude + 0.0003 }),
+      fix(3, 0.007),
+    ]);
+
+    expect(segments[0]!.points.filter((point) => near(point, 0.0032)).length).toBeGreaterThan(1);
+  });
+
+  it('is not drawn out to every live fix while they are still there', () => {
+    const segments = trailSegments([fix(0, 0), fix(1, 0.003), fix(2, 0.006)]);
+    // A minute later, 40 m from where the line ends: still there.
+    expect(withLivePosition(segments, fix(3, 0.00636))).toBe(segments);
+  });
+});
