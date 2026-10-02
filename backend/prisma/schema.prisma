@@ -258,6 +258,8 @@ enum ComparisonResult {
 enum FindingSource {
   NARRATION
   AI_VISION
+  /// Written by a reviewer: something the AI missed.
+  REVIEWER
 }
 
 /// Whether the AI could see a finding in the recording's frames.

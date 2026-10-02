@@ -44,7 +44,7 @@ import { VisualReviewService } from './visual-review.service';
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
 // again on a re-run. 5: the office's house rules and its recent decisions.
-export const PROMPT_VERSION = '5';
+export const PROMPT_VERSION = '6';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -1698,7 +1698,8 @@ export class MediaProcessingService implements OnModuleInit {
       ...(teaching.lessons.length
         ? [
             'How the office recently decided AI findings like these, in other inspections. Learn from',
-            'them: do not raise what it rejected for the same reason, and write findings the way it corrected them.',
+            'them: do not raise what it rejected for the same reason, write findings the way it corrected them,',
+            'and listen for what reviewers had to add because the analysis missed it.',
             '<lessons>',
             ...teaching.lessons,
             '</lessons>',

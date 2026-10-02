@@ -2437,6 +2437,46 @@ export function useAdminMutations() {
      * lands in a group the client does not compute, and re-reading is cheaper
      * than reproducing that grouping here.
      */
+    /**
+     * A finding the AI missed, written by the reviewer who saw it at a moment
+     * of one of the area's recordings. Approved as it is written.
+     */
+    addFinding: useMutation({
+      mutationFn: ({
+        inspectionId,
+        areaId,
+        ...input
+      }: FindingEditInput & {
+        inspectionId: string;
+        areaId: string;
+        recordingId: string;
+        atSeconds?: number;
+      }) =>
+        api<{ id: string; inspectionId: string; reviewStatus: string; title: string }>(
+          `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/findings`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              recordingId: input.recordingId,
+              atSeconds: input.atSeconds,
+              title: input.title,
+              description: input.description,
+              severity: input.severity,
+              findingType: input.findingType,
+              category: input.category,
+              note: input.note,
+            }),
+          },
+        ),
+      onSuccess: (_data, variables) => {
+        void verifyAffectedQueries(client, [
+          keys.areaEvidence(variables.inspectionId, variables.areaId),
+          keys.areaEvidenceSummary(variables.inspectionId),
+          ['admin', 'inspection', variables.inspectionId, 'findings'],
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
+        ]);
+      },
+    }),
     captureSnapshot: useMutation({
       mutationFn: ({
         mediaId,

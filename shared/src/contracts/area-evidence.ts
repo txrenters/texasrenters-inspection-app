@@ -331,8 +331,11 @@ export interface AreaFinding {
    * OWNER_REVIEW_REQUIRED or UNDETERMINED. A suggestion, never a decision.
    */
   possibleResponsibility?: string | null;
-  /** NARRATION, or AI_VISION for a problem the AI saw that nobody mentioned. */
-  source?: 'NARRATION' | 'AI_VISION';
+  /**
+   * NARRATION; AI_VISION for a problem the AI saw that nobody mentioned;
+   * REVIEWER for one a reviewer added because the AI missed it.
+   */
+  source?: 'NARRATION' | 'AI_VISION' | 'REVIEWER';
   /** What the AI saw when it looked for this in the recording. Null when it has not looked. */
   visual?: {
     status: 'VISIBLE' | 'NOT_VISIBLE' | 'UNCLEAR';

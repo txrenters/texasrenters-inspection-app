@@ -797,7 +797,7 @@ describe('the office teaches the analysis', () => {
     expect(teaching.lessons).toHaveBeenCalledWith(ORGANIZATION_ID, 'Entrance', 'move-out-1');
     // The analysis records the rules it ran under, for the scorecard.
     expect(harness.prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ promptVersion: '5', guidanceVersion: 3 }),
+      data: expect.objectContaining({ promptVersion: '6', guidanceVersion: 3 }),
     });
   });
 

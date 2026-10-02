@@ -104,6 +104,7 @@ export function comparisonLabel(result: string) {
 /** What the AI saw when it looked for a finding in the recording, in a few words. */
 export function visualLabel(finding: Pick<AreaFinding, 'source' | 'visual'>) {
   if (finding.source === 'AI_VISION') return 'Spotted by AI';
+  if (finding.source === 'REVIEWER') return 'Added by a reviewer';
   switch (finding.visual?.status) {
     case 'VISIBLE':
       return 'Seen in video';
@@ -134,6 +135,19 @@ export function suggestionToOffer(finding: Pick<AreaFinding, 'frameSuggestions'>
     suggestions.find((suggestion) => suggestion.status === 'SUGGESTED') ??
     null
   );
+}
+
+/**
+ * A moment typed as the player shows it, "1:35" or "95", in whole seconds.
+ * Null for anything else, and for nothing typed.
+ */
+export function parseMoment(text: string) {
+  const value = text.trim();
+  if (!value) return null;
+  const clock = /^(\d{1,3}):([0-5]\d)$/.exec(value);
+  if (clock) return Number(clock[1]) * 60 + Number(clock[2]);
+  if (/^\d{1,5}$/.test(value)) return Number(value);
+  return null;
 }
 
 /** The AI's lean, worded as the suggestion it is. Null when it has none. */

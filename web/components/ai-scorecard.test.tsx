@@ -43,6 +43,7 @@ const CARD: Scorecard = {
   },
   photos: { offered: 6, accepted: 4, allDismissed: 1 },
   timing: { narration: 20, withMoment: 17 },
+  reviewerAdded: 3,
   byVersion: [
     { ...tally({ findings: 14, kept: 7, corrected: 2, rejected: 3 }), promptVersion: '5', modelId: 'gpt-5.6-sol', guidanceVersion: 2 },
     { ...tally({ findings: 10, kept: 3, corrected: 3, rejected: 2 }), promptVersion: '4', modelId: 'gpt-5.6-sol', guidanceVersion: null },
@@ -69,6 +70,12 @@ describe('the AI scorecard', () => {
 
     expect(screen.getByLabelText('Normal wear: 3')).toBeInTheDocument();
     expect(screen.getByLabelText('No reason chosen: 2')).toBeInTheDocument();
+  });
+
+  it('counts what reviewers added apart from the AI’s own', () => {
+    render(<AiScorecard />);
+
+    expect(screen.getByText(/3 the AI missed, never counted as its own/)).toBeInTheDocument();
   });
 
   it('compares the versions that wrote the findings, house rules included', () => {

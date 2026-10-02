@@ -615,7 +615,9 @@ export function AreaDetailPanel({
         </TabsContent>
 
         <TabsContent className="@container" value="findings">
-          {findings.length ? (
+          {/* With no findings yet, still shown to someone who can add one the
+              AI missed: that is exactly the room it missed something in. */}
+          {findings.length || (canReview && !finalized && recordings.length) ? (
             // Side by side once the panel is wide enough for both, the player
             // held in view while the list scrolls; stacked, player first,
             // otherwise -- and kept to about half the window there, since a
@@ -663,6 +665,14 @@ export function AreaDetailPanel({
                 onSeek={seekTo}
                 onSelect={selectFinding}
                 photosByFinding={photosByFinding}
+                playing={
+                  reviewRecording
+                    ? {
+                        recordingId: reviewRecording.id,
+                        seconds: seek?.recordingId === reviewRecording.id ? seek.seconds : null,
+                      }
+                    : null
+                }
                 recordings={recordings}
                 selectedId={selectedFinding}
               />

@@ -28,6 +28,7 @@ vi.mock('@/lib/queries', () => ({
     approveFinding: { isPending: false, error: null, mutateAsync: state.approve },
     rejectFinding: { isPending: false, error: null, mutateAsync: async () => {} },
     editFinding: { isPending: false, error: null, mutateAsync: async () => {} },
+    addFinding: { isPending: false, error: null, mutateAsync: async () => ({ id: 'finding-new' }) },
     captureSnapshot: { isPending: false, isError: false, error: null, mutate: state.capture },
     reanalyzeRecording: { isPending: false, isError: false, error: null, mutate: () => {} },
   }),
@@ -267,5 +268,24 @@ describe('the recording tab', () => {
     expect(player()?.getAttribute('src')).toBe(
       'https://customer-x.cloudflarestream.com/clip.tok/iframe?startTime=12s&autoplay=true',
     );
+  });
+});
+
+describe('adding what the AI missed', () => {
+  it('is offered even in a room with no findings, starting at the moment on screen', () => {
+    open(bundle([]));
+
+    expect(screen.getByText(/No findings yet/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a finding the AI missed' }));
+
+    const form = screen.getByRole('region', { name: 'Add a finding' });
+    expect(within(form).getByRole('textbox', { name: 'Moment in the recording' })).toHaveValue('');
+  });
+
+  it('is not offered once the inspection is finalized', () => {
+    state.finalizedAt = '2026-10-03T15:00:00.000Z';
+    open(bundle([finding('f1', 'Door hole', 18, 24)]));
+
+    expect(screen.queryByRole('button', { name: 'Add a finding the AI missed' })).not.toBeInTheDocument();
   });
 });

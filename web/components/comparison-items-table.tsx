@@ -19,7 +19,11 @@ function FindingLine({ finding }: { finding: AdminComparisonFinding }) {
     <li className="text-muted-foreground text-xs">
       <span className="text-foreground">{finding.title}</span>
       {' · '}
-      {finding.source === 'AI_VISION' ? 'spotted by AI' : 'AI finding'}
+      {finding.source === 'AI_VISION'
+        ? 'spotted by AI'
+        : finding.source === 'REVIEWER'
+          ? 'added by a reviewer'
+          : 'AI finding'}
       {' · '}
       {findingStatus(finding.reviewStatus)}
     </li>

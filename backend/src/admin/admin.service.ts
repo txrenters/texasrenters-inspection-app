@@ -1,8 +1,10 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { FindingRejectReason, FindingType, Severity } from '@prisma/client';
 import {
+  ComparisonResult,
   EvidenceRequestStatus,
   FindingReviewStatus,
+  FindingSource,
   InspectionStatus,
   InspectionType,
   JobberConnectionStatus,
@@ -12,6 +14,7 @@ import {
   MediaProcessingStatus,
   Prisma,
   PropertyAreaStatus,
+  ResponsibilityClassification,
   UserRole,
   VideoRecordingType,
 } from '@prisma/client';
@@ -341,6 +344,18 @@ const ADMIN_TRANSACTION_OPTIONS = {
   maxWait: 5_000,
   timeout: 15_000,
 } as const;
+
+/**
+ * What a reviewer's finding says against the move-in, from its type. The
+ * reviewer says what it is; this is only the same thing in the comparison's
+ * terms, so the report and the comparison read it as they read any finding.
+ */
+const REVIEWER_COMPARISON: Record<FindingType, ComparisonResult> = {
+  POSSIBLE_NEW_DAMAGE: ComparisonResult.POSSIBLE_NEW_DAMAGE,
+  EXISTING_CONDITION: ComparisonResult.EXISTING_CONDITION,
+  MAINTENANCE: ComparisonResult.OWNER_MAINTENANCE,
+  NO_CHANGE: ComparisonResult.NO_MATERIAL_CHANGE,
+};
 
 /**
  * Ceiling on one bulk-delete request.
@@ -4435,6 +4450,115 @@ export class AdminService {
       organizationId: user.organizationId,
     });
     return outcome.finding;
+  }
+
+  /**
+   * Add a finding the AI missed, written by the reviewer who saw it.
+   *
+   * A person's finding, so it is decided as it is written: approved, with the
+   * approval recorded and audited, never waiting in the AI's review queue. It
+   * belongs to one of the area's recordings at the moment given, which is what
+   * lets its frame be filed as its photograph and the AI be shown later what
+   * it missed. The tenant lean is left undetermined: who pays is decided on
+   * the charge, by a person, as for every finding. Refused once the
+   * inspection is finalized, because the report it feeds is frozen.
+   */
+  async addFinding(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    areaId: string,
+    input: {
+      recordingId: string;
+      atSeconds?: number;
+      title: string;
+      description: string;
+      severity: Severity;
+      findingType: FindingType;
+      category: string;
+      note?: string;
+    },
+  ) {
+    const created = await this.prisma.$transaction(async (tx) => {
+      const area = await tx.inspectionArea.findFirst({
+        where: { id: areaId, inspectionId, inspection: { organizationId: user.organizationId } },
+        select: {
+          id: true,
+          propertyAreaId: true,
+          propertyArea: { select: { name: true } },
+          inspection: { select: { finalizedAt: true } },
+        },
+      });
+      if (!area)
+        throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'That area was not found.');
+      if (area.inspection.finalizedAt)
+        throw new ApplicationError(
+          409,
+          'INSPECTION_FINALIZED',
+          'This inspection is finalized, so its findings can no longer be changed.',
+        );
+      const media = await tx.inspectionMedia.findFirst({
+        where: { id: input.recordingId, inspectionAreaId: area.id, organizationId: user.organizationId },
+        select: { id: true, durationSeconds: true },
+      });
+      if (!media)
+        throw new ApplicationError(
+          404,
+          'INSPECTION_MEDIA_NOT_FOUND',
+          'That recording is not one of this area’s.',
+        );
+      const at =
+        input.atSeconds === undefined
+          ? 0
+          : Math.min(Math.max(0, Math.round(input.atSeconds)), Math.max(0, media.durationSeconds));
+      const note = input.note?.trim() || null;
+      const finding = await tx.inspectionFinding.create({
+        data: {
+          inspectionId,
+          propertyAreaId: area.propertyAreaId,
+          inspectionMediaId: media.id,
+          source: FindingSource.REVIEWER,
+          findingType: input.findingType,
+          category: input.category.trim(),
+          title: input.title.trim(),
+          description: input.description.trim(),
+          baselineCondition: '',
+          comparisonResult: REVIEWER_COMPARISON[input.findingType],
+          videoTimestampStart: at,
+          videoTimestampEnd: at,
+          severity: input.severity,
+          possibleResponsibility: ResponsibilityClassification.UNDETERMINED,
+          confidence: 1,
+          recommendedReview: '',
+          reviewStatus: FindingReviewStatus.APPROVED,
+        },
+        select: { id: true, inspectionId: true, reviewStatus: true, title: true },
+      });
+      const review = await tx.findingReview.create({
+        data: {
+          findingId: finding.id,
+          reviewerId: user.id,
+          status: FindingReviewStatus.APPROVED,
+          reason: note,
+        },
+        select: { id: true },
+      });
+      // On the inspection, so its Recent activity says who added what, where.
+      await this.audit(tx, user, 'FINDING_ADDED', inspectionId, {
+        findingId: finding.id,
+        inspectionAreaId: area.id,
+        areaName: area.propertyArea.name,
+        severity: input.severity,
+        findingType: input.findingType,
+        atSeconds: input.atSeconds === undefined ? null : at,
+        reviewId: review.id,
+      });
+      return finding;
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return created;
   }
 
   /**
