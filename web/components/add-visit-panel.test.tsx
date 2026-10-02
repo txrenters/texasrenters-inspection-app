@@ -163,3 +163,11 @@ it('lets go of the map when it closes', () => {
 
   expect(props.onSearchChange).toHaveBeenLastCalledWith(null);
 });
+
+it('goes back to the technician list from its back button', () => {
+  const { props } = renderPanel();
+
+  fireEvent.click(screen.getByRole('button', { name: "Back to A Technician's day" }));
+
+  expect(props.onClose).toHaveBeenCalled();
+});

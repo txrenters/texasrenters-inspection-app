@@ -555,10 +555,16 @@ const MAX_FRAMED_MATCHES = 60;
  * being looked for.
  */
 function SearchFramer({
+  hudShown,
   ids,
   onFramed,
   properties,
 }: {
+  /**
+   * The technician panel is along the bottom, with Re-center above it: frame
+   * the matches clear of both, or the nearest ones land underneath them.
+   */
+  hudShown: boolean;
   ids: ReadonlySet<string> | null;
   onFramed: () => void;
   properties: readonly PropertyPosition[];
@@ -577,11 +583,11 @@ function SearchFramer({
         .filter((property) => wanted.has(property.id))
         .map((property) => [property.latitude, property.longitude] as [number, number]);
       if (!points.length || points.length > MAX_FRAMED_MATCHES) return;
-      fitTo(map, points, 80);
+      fitTo(map, points, { top: 70, left: 60, right: 70, bottom: hudShown ? 230 : 90 });
       onFramed();
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [key, map, onFramed]);
+  }, [hudShown, key, map, onFramed]);
 
   return null;
 }
@@ -606,7 +612,21 @@ export function TechnicianMap({
   trails = NO_TRAILS,
   visits = null,
   searchedPropertyIds = null,
+  followRequest = 0,
+  onFocusTechnician,
 }: {
+  /**
+   * Goes up each time the page asks for the selected technician again, from
+   * wherever the map is ("See Moses's location"). The map focuses them,
+   * follows them, and drops any property it was showing.
+   */
+  followRequest?: number;
+  /**
+   * Back to a technician without touching the page's selection otherwise --
+   * their own marker clicked while one of their stops is shown. The page
+   * clears the stop; without it, the marker re-centres on the stop.
+   */
+  onFocusTechnician?: (technicianId: string) => void;
   /** What a search on the page is showing: ringed on the map, and framed. See `PortfolioOptions.searched`. */
   searchedPropertyIds?: ReadonlySet<string> | null;
   /** Each technician's colour, for their lines and the ring on their marker. */
@@ -735,11 +755,28 @@ export function TechnicianMap({
    */
   const selectFromMap = useCallback(
     (technicianId: string) => {
-      if (technicianId === selectedTechnicianId) recenter();
-      else onSelectTechnician?.(technicianId);
+      if (technicianId !== selectedTechnicianId) onSelectTechnician?.(technicianId);
+      // Clicking the person the map is about, while it is showing one of
+      // their stops: back to them. Re-centring would have centred on the stop
+      // again -- the camera's subject was the property -- which is how the
+      // office ended up with no way back to Moses but collapsing his list.
+      else if (focus.kind === 'PROPERTY' && onFocusTechnician) onFocusTechnician(technicianId);
+      else recenter();
     },
-    [onSelectTechnician, recenter, selectedTechnicianId],
+    [focus.kind, onFocusTechnician, onSelectTechnician, recenter, selectedTechnicianId],
   );
+
+  /**
+   * The page asking for the selected technician again -- "See Moses's
+   * location". Acted on each time the count goes up, so pressing it after
+   * panning away still brings them back; never on mount, which is 0.
+   */
+  useEffect(() => {
+    if (!followRequest || !selectedTechnicianId) return;
+    setFocus({ kind: 'TECHNICIAN', technicianId: selectedTechnicianId });
+    recenter();
+    // On the request alone: the technician is read, not depended on.
+  }, [followRequest]);
 
   // The first stop still ahead of them, by the same rule the route layer uses
   // to colour its next stop.
@@ -780,7 +817,12 @@ export function TechnicianMap({
         visits,
       }}
     >
-      <SearchFramer ids={searchedPropertyIds} onFramed={readerMovedTheMap} properties={properties} />
+      <SearchFramer
+        hudShown={Boolean(selectedPosition)}
+        ids={searchedPropertyIds}
+        onFramed={readerMovedTheMap}
+        properties={properties}
+      />
       <CameraDirector
         fallback={selectedStops}
         fitKey={fitKey}
@@ -824,27 +866,35 @@ export function TechnicianMap({
       {/* Inside the map rather than over it, so they stay on screen in
           fullscreen. Lifted clear of the bottom edge, which belongs to
           Mapbox's logo and attribution -- both of which have to stay
-          readable. */}
-      <div {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }} className="absolute right-0 bottom-6 z-10">
-        <RecenterControl
-          following={focus.kind === 'TECHNICIAN' && Boolean(selectedPosition)}
-          onRecenter={recenter}
-          readerMoved={readerMoved}
-          subject={recenterSubject}
-        />
-      </div>
-      {selectedPosition ? (
-        <div
-          {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }}
-          className="absolute bottom-6 left-1/2 z-10 -translate-x-1/2"
-        >
-          <TechnicianHud
-            nextStop={nextStop}
-            position={selectedPosition}
-            track={tracks.get(selectedPosition.technicianId) ?? []}
+          readable.
+
+          One column, Re-center above the technician panel: side by side they
+          overlapped as soon as the map was narrower than both, which beside
+          the sidebar it always is -- "Following" was half under the panel.
+          The column passes the pointer through its empty space, so the map
+          under it still drags. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex flex-col items-end">
+        <div {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }} className="pointer-events-auto">
+          <RecenterControl
+            following={focus.kind === 'TECHNICIAN' && Boolean(selectedPosition)}
+            onRecenter={recenter}
+            readerMoved={readerMoved}
+            subject={recenterSubject}
           />
         </div>
-      ) : null}
+        {selectedPosition ? (
+          <div
+            {...{ [MAP_OVERLAY_ATTRIBUTE]: '' }}
+            className="pointer-events-auto max-w-full self-center"
+          >
+            <TechnicianHud
+              nextStop={nextStop}
+              position={selectedPosition}
+              track={tracks.get(selectedPosition.technicianId) ?? []}
+            />
+          </div>
+        ) : null}
+      </div>
     </ConsoleMap>
   );
 }

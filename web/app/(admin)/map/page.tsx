@@ -205,12 +205,35 @@ export default function TechnicianMapPage() {
   // position arrives over the socket, which is every few seconds. With the list
   // now able to grow to every property, re-rendering all of them on that
   // cadence is a cost with no reader.
+  /**
+   * Whose day the "Add visit" panel is adding to, while it is open in place of
+   * the technician list (the office, 2026-10-02: nested under the last stop it
+   * overflowed the sidebar). Null when the list is showing.
+   */
+  const [addingFor, setAddingFor] = useState<RosterEntry | null>(null);
+
   const selectTechnician = useCallback((technicianId: string | null) => {
     setSelectedId(technicianId);
     // Cleared whichever way the selection went. Deselecting used to leave a
     // focused stop behind, pointing at a property whose list had just
     // collapsed.
     setSelectedPropertyId(null);
+    // A panel adding to somebody no longer selected would add to the wrong day.
+    setAddingFor((current) => (current?.technicianId === technicianId ? current : null));
+  }, []);
+
+  /**
+   * Back to the selected technician, and following them again, from wherever
+   * the map has gone (the office, 2026-10-02: "add a button saying see Moses
+   * location" -- once a stop was picked, their name only collapsed the list).
+   * The count is a request the map acts on each time it goes up, so a second
+   * press after panning away still brings them back.
+   */
+  const [followRequest, setFollowRequest] = useState(0);
+  const focusTechnician = useCallback((technicianId: string) => {
+    setSelectedId(technicianId);
+    setSelectedPropertyId(null);
+    setFollowRequest((count) => count + 1);
   }, []);
 
   const selectProperty = useCallback((propertyId: string | null) => {
@@ -432,32 +455,18 @@ export default function TechnicianMapPage() {
     [date, mutations.unassign, refreshMapDay],
   );
 
-  const addVisitPanel = useCallback(
-    (technician: RosterEntry, close: () => void) => (
-      <AddVisitPanel
-        canAssign={canAssign}
-        canCreate={canCreate}
-        date={date}
-        dateLabel={dateLabel}
-        onAssign={async (inspectionId) => {
-          await mutations.assign.mutateAsync({
-            id: inspectionId,
-            technicianId: technician.technicianId,
-            reason: 'Added to the day on the technician map',
-            idempotencyKey: crypto.randomUUID(),
-          });
-          refreshMapDay(date, technician.technicianId);
-          toast.success(`Added to ${technician.displayName}'s day`);
-        }}
-        onClose={close}
-        onFocusProperty={selectStop}
-        onSearchChange={setSearchMatches}
-        properties={properties.data ?? []}
-        technicianId={technician.technicianId}
-        technicianName={technician.displayName}
-      />
-    ),
-    [canAssign, canCreate, date, dateLabel, mutations.assign, properties.data, refreshMapDay, selectStop],
+  const assignToDay = useCallback(
+    async (technician: RosterEntry, inspectionId: string) => {
+      await mutations.assign.mutateAsync({
+        id: inspectionId,
+        technicianId: technician.technicianId,
+        reason: 'Added to the day on the technician map',
+        idempotencyKey: crypto.randomUUID(),
+      });
+      refreshMapDay(date, technician.technicianId);
+      toast.success(`Added to ${technician.displayName}'s day`);
+    },
+    [date, mutations.assign, refreshMapDay],
   );
 
   const newest = positions.data?.reduce<string | null>(
@@ -580,10 +589,30 @@ export default function TechnicianMapPage() {
                     // and a highlight left over from a different date would be
                     // quietly wrong.
                     setSelectedId(null);
+                    setAddingFor(null);
                   }}
                   value={date}
                 />
               </div>
+              {addingFor ? (
+                /* The whole sidebar, not a box inside the list: the panel
+                   scrolls its own results under a search box that stays put. */
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <AddVisitPanel
+                    canAssign={canAssign}
+                    canCreate={canCreate}
+                    date={date}
+                    dateLabel={dateLabel}
+                    onAssign={(inspectionId) => assignToDay(addingFor, inspectionId)}
+                    onClose={() => setAddingFor(null)}
+                    onFocusProperty={selectStop}
+                    onSearchChange={setSearchMatches}
+                    properties={properties.data ?? []}
+                    technicianId={addingFor.technicianId}
+                    technicianName={addingFor.displayName}
+                  />
+                </div>
+              ) : (
               <div className="min-h-0 flex-1 overflow-y-auto">
                 {/* Above the list, because it describes the person whose row
                     is open rather than any one stop in it. Only when somebody
@@ -596,9 +625,10 @@ export default function TechnicianMapPage() {
                 ) : null}
 
                 <TechnicianRoster
-                  addVisitPanel={canAssign || canCreate ? addVisitPanel : undefined}
                   colors={colors}
                   entries={visibleRoster}
+                  onAddVisit={canAssign || canCreate ? setAddingFor : undefined}
+                  onFocusTechnician={focusTechnician}
                   onRemoveStop={canAssign ? removeStop : undefined}
                   onSelect={selectTechnician}
                   onSelectStop={selectStop}
@@ -608,6 +638,7 @@ export default function TechnicianMapPage() {
                   selectedStopBuildingId={selectedPropertyId}
                 />
               </div>
+              )}
                 </TabsContent>
 
                 {/* Selecting one takes the map to it, exactly as the roster
@@ -641,8 +672,10 @@ export default function TechnicianMapPage() {
                 currentInspectionIds={
                   selectedId ? (timeline.data?.projection.current?.inspectionIds ?? null) : null
                 }
+                followRequest={followRequest}
                 highlightedBuildingIds={highlighted}
                 live={live}
+                onFocusTechnician={focusTechnician}
                 onSelectTechnician={selectTechnician}
                 positions={visiblePositions}
                 properties={properties.data ?? []}
