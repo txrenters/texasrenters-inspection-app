@@ -297,15 +297,17 @@ export interface PlanDayRoute {
   legs: { durationSeconds: number; distanceMeters: number }[];
 }
 
-/** Who has which zone in each week of the quarter (the office's crew, 2026-09-16). */
+/**
+ * The crew a quarter goes out with and the zones it goes round. Each crew member
+ * has a zone a day, moving one on each day (the office, 2026-10-03); which zone a
+ * day is in is the day's own.
+ */
 export interface PlanRotation {
   /** In the order the zones go round. */
   crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
   zones: string[];
   /** Zones nobody on the crew lives within the day's drive of. */
   outOfReach: string[];
-  /** `weekOf` is the week's Monday, `YYYY-MM-DD`. */
-  weeks: { weekOf: string; zones: { zone: string; technicianId: string }[] }[];
 }
 
 /** A technician a visit can be given to, the benefit-package crew first. */

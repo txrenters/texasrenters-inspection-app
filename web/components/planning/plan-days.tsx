@@ -43,7 +43,6 @@ import {
   type PlanDay,
   type PlanDayAnchor,
   type PlanDayStop,
-  type PlanRotation,
   type PlanSettings,
 } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
@@ -226,7 +225,6 @@ export function PlanDays({
   selectedDayId,
   onSelect,
   onOpenStop,
-  rotation,
   canChange = false,
   canMoveVisits = false,
   jobberEditsPushed = null,
@@ -240,8 +238,6 @@ export function PlanDays({
   onSelect: (dayId: string) => void;
   /** A stop's pin or row was clicked: open its details. */
   onOpenStop?: (stopId: string) => void;
-  /** Who has which zone each week, shown under each week's heading. */
-  rotation?: PlanRotation | null;
   /** May change the plan: put a day in order, place a visit not booked yet. */
   canChange?: boolean;
   /** May reschedule a booked visit: the planner's grant and the inspections one. */
@@ -263,21 +259,6 @@ export function PlanDays({
     for (const day of days) grouped.set(mondayOf(day.date), [...(grouped.get(mondayOf(day.date)) ?? []), day]);
     return [...grouped.entries()];
   }, [days]);
-  // First names, as the office says them: "Zone 1 Moses".
-  const firstNames = new Map(
-    (rotation?.crew ?? []).map((member) => [member.technicianId, member.displayName?.split(' ')[0] ?? 'Someone']),
-  );
-  const zonesInWeek = new Map((rotation?.weeks ?? []).map((week) => [week.weekOf, week.zones]));
-  // Every zone on the circle, in order: with more zones than crew, one waits its turn each week.
-  const ownersOf = (monday: string) => {
-    const week = zonesInWeek.get(monday);
-    if (!week) return [];
-    const owners = new Map(week.map((entry) => [entry.zone, entry.technicianId]));
-    return (rotation?.zones ?? []).map((zone) => {
-      const owner = owners.get(zone);
-      return `Zone ${zone} ${owner ? (firstNames.get(owner) ?? 'Someone') : 'no one'}`;
-    });
-  };
 
   const route = usePlanDayRoute(planId, selected?.id);
   const group = selected ? (made.groupOf.get(selected.id) ?? null) : null;
@@ -448,9 +429,6 @@ export function PlanDays({
             <section className="grid" key={monday}>
               <h3 className="bg-card text-muted-foreground sticky top-0 z-10 border-b px-3 pt-2 pb-1 text-xs font-medium tracking-wide uppercase">
                 {weekOf(monday)}
-                {ownersOf(monday).length ? (
-                  <span className="block font-normal tracking-normal normal-case">{ownersOf(monday).join(' · ')}</span>
-                ) : null}
               </h3>
               <ul className="divide-y">
                 {weekDays.map((day) => {

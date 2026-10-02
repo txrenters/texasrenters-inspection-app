@@ -215,7 +215,6 @@ describe('changing a draft visit in its window', () => {
     expect(screen.queryByRole('button', { name: /^Change / })).toBeNull();
   });
 
-  /** The month of last quarter a visit was in orders it this quarter (2026-09-20). */
   it('says the day of last quarter’s visit and the month of that quarter it was in', () => {
     mount({ stop: stop({ previousVisitOn: '2026-08-11T00:00:00.000Z' }) });
     expect(screen.getByText("Aug 11 · the quarter's second month")).toBeTruthy();
@@ -227,9 +226,10 @@ describe('changing a draft visit in its window', () => {
     expect(screen.getByText("Sep 25 · the quarter's first month")).toBeTruthy();
   });
 
-  it('says a visit new this quarter is taken up with the second month’s', () => {
+  /** Furthest from downtown Houston first (2026-10-03): a new visit is not held for any month. */
+  it('says a visit new this quarter had none', () => {
     mount({ stop: stop({ previousVisitOn: null, previousSequence: null, orderSource: 'NEW_ENROLLMENT' }) });
-    expect(screen.getByText('None: it is taken up with the second month’s')).toBeTruthy();
+    expect(screen.getByText('None')).toBeTruthy();
   });
 });
 

@@ -335,8 +335,8 @@ export function PlanBuildDialog({
           )}
           {sendUnassigned ? null : (
             <p className="text-muted-foreground text-xs">
-              {count} chosen. Each works every day until the month&rsquo;s visits are done, starting in a zone of
-              their own each week.
+              {count} chosen. Each works every day until the month&rsquo;s visits are done, in a zone of their
+              own each day, moving one zone on each day.
             </p>
           )}
         </fieldset>

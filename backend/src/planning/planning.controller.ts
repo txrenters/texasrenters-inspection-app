@@ -502,11 +502,11 @@ export class PlanningController {
   }
 
   /**
-   * Who has which zone in each week of the plan's quarter.
+   * The crew the plan's quarter goes out with and the zones it goes round.
    *
-   * The office's crew each has one zone a week and moves one zone on each week
-   * (2026-09-16). The page shows it beside the days, so a coordinator can see
-   * why a visit went to whom.
+   * The office's crew each has one zone a day and moves one zone on each
+   * planned day (2026-10-03). The page shows who goes out, and the zones too far
+   * for a day's drive, so a coordinator can see why a visit went to whom.
    */
   @Get('quarters/:planId/rotation')
   @RequirePermissions('planning:read')

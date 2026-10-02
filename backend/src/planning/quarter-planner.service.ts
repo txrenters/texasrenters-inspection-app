@@ -25,6 +25,7 @@ import {
   anchorIdOf,
   byZoneNumber,
   crewKey,
+  dailyZoneTechnicians,
   estimatedDriveMinutes,
   haversineMeters,
   layoutEveryDay,
@@ -35,12 +36,9 @@ import {
   quarterFirstDay,
   quarterLabel,
   quarterStart,
-  quarterWeekIndex,
   rescheduleMondaysOfQuarter,
   shortestOpenPathOrder,
   shortestRouteOrder,
-  weekStartOf,
-  weeklyZoneTechnicians,
   zoneNumberOf,
 } from '@texasrenters/shared';
 
@@ -249,7 +247,7 @@ export interface RoutingSummary {
   } | null;
 }
 
-/** Who has which zone in each week of a plan's quarter, for the console. */
+/** The crew and the zones it goes round, for the console. */
 export interface PlanRotation {
   /** The benefit-package crew, in the order the zones go round. */
   crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
@@ -257,7 +255,6 @@ export interface PlanRotation {
   zones: string[];
   /** Zones too far for a day's drive from every crew member's home: each is a trip. */
   outOfReach: string[];
-  weeks: { weekOf: string; zones: { zone: string; technicianId: string }[] }[];
 }
 
 /** What a stop routing could not place says, on the stop. */
@@ -376,17 +373,17 @@ export class QuarterPlannerService {
    *   the planning profiles, from the plan's first day -- up to fifteen days
    *   either side of the quarter's -- and never on a day already gone;
    * - the whole crew works every planned day from the plan's first until every
-   *   visit has a day, in last quarter's order -- the month of the quarter a
-   *   property was visited in orders it, it does not hold it back, and the days
-   *   left at the end of the quarter stay empty (`layoutEveryDay`, 2026-09-20:
-   *   "if they can finish it in a month then that's good");
+   *   visit has a day, and the days left at the end of the quarter stay empty
+   *   (`layoutEveryDay`, 2026-09-20: "if they can finish it in a month then
+   *   that's good");
    * - the visits are grouped into days of `minStopsPerDay`, nine, each as tight
    *   as the properties allow, and never more than `maxLegMinutes`, twenty, from
    *   one property to the next -- by the estimate as the days are laid out, and
    *   on Google's drives as each day is ordered;
-   * - each has one zone a week, moving one zone on each week, and takes a group
-   *   of it (`weeklyZoneTechnicians`); a property within five minutes of a
-   *   group joins it whatever its zone;
+   * - each has one zone a day, moving one zone on each planned day and past a
+   *   zone with nothing left, and takes the group of it furthest from downtown
+   *   Houston (`dailyZoneTechnicians`, 2026-10-03); a property within five
+   *   minutes of a group joins it whatever its zone;
    * - at most `maxOnSiteMinutes` inspecting;
    * - a zone too far for a day's drive from any home is a trip: back-to-back
    *   days of the crew member nearest it, the first driven from home and the
@@ -500,16 +497,16 @@ export class QuarterPlannerService {
       maxLegMinutes: settings.maxLegMinutes,
     };
     const zones = zoneCircle(stops, roster, settings.maxDriveMinutes);
+    // Every planned day of the quarter, gone or not: the zones turn once a
+    // planned day from its first, so a rebuild today starts where today's turn is.
+    const plannedDays = plannedVisitDaysOfQuarter(quarter, settings.holidays, settings.startsOn);
     const days = await this.availability(
       organizationId,
-      quarter,
-      plannedVisitDaysOfQuarter(quarter, settings.holidays, settings.startsOn).filter(
-        (date) => !options.today || date >= options.today,
-      ),
+      plannedDays.filter((date) => !options.today || date >= options.today),
       stops,
       roster,
       zones.circle,
-      settings.startsOn,
+      plannedDays,
     );
     const homes = await this.homesWith(organizationId, roster, pins);
 
@@ -520,8 +517,8 @@ export class QuarterPlannerService {
     const free = stops.filter((stop) => !pinned.has(stop.stopId));
     const placedByHand = pinnedCrews(stops, pins);
 
-    // In last quarter's order. A zone too far for a day's drive from any home is
-    // a trip for the crew member living nearest it (the office, 2026-09-18).
+    // A zone too far for a day's drive from any home is a trip for the crew
+    // member living nearest it (the office, 2026-09-18).
     // A quarter sent out to nobody has day groups, not people: nobody's day can be
     // built around anybody's move-out until the office hands the days out in Jobber.
     const booked = settings.jobberUnassigned
@@ -532,14 +529,13 @@ export class QuarterPlannerService {
     const rescheduleMondays = presets
       ? await this.availability(
           organizationId,
-          quarter,
           rescheduleMondaysOfQuarter(quarter, settings.holidays, settings.startsOn).filter(
             (date) => !options.today || date >= options.today,
           ),
           stops,
           roster,
           zones.circle,
-          settings.startsOn,
+          plannedDays,
         )
       : [];
     const assignment = layoutEveryDay(free, days, {
@@ -660,13 +656,6 @@ export class QuarterPlannerService {
   }
 
   /**
-   * Who has which zone in each week of a plan's quarter, for the console.
-   *
-   * Worked out as routing works it out -- the same crew, zones and reach -- so
-   * the page shows the rotation the days were laid out with, as long as the
-   * crew has not changed since. Reads only: it never blocks a stop.
-   */
-  /**
    * The names a quarter sent out to nobody shows instead of its crew's, or
    * null for a quarter whose days belong to people. See `dayGroupNames`.
    */
@@ -703,22 +692,25 @@ export class QuarterPlannerService {
     return activeTemplateId(this.prisma, organizationId);
   }
 
+  /**
+   * The crew a plan's quarter goes out with and the zones it goes round, for the console.
+   *
+   * Worked out as routing works it out -- the same crew, zones and reach -- so
+   * the page shows what the days were laid out with, as long as the crew has
+   * not changed since. Reads only: it never blocks a stop. Which zone a day is
+   * in is the day's own: the zones turn daily (2026-10-03), so a week has none.
+   */
   async rotation(organizationId: string, planId: string): Promise<PlanRotation> {
     const plan = await this.prisma.tbpQuarterPlan.findFirst({
       where: { id: planId, organizationId },
       select: {
-        quarterYear: true,
-        quarterNumber: true,
         maxDriveMinutes: true,
-        holidays: true,
         excludedZones: true,
-        startsOn: true,
         crewTechnicianIds: true,
         jobberUnassigned: true,
       },
     });
     if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
-    const quarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
 
     const rows = await this.prisma.tbpQuarterPlanStop.findMany({
       where: { planId, organizationId, status: { not: TbpStopStatus.EXCLUDED } },
@@ -749,7 +741,6 @@ export class QuarterPlannerService {
     );
     const roster = forUnassigned(await this.roster(organizationId, plan.crewTechnicianIds), plan.jobberUnassigned);
     const zones = zoneCircle(stops, roster, plan.maxDriveMinutes);
-    const startsOn = plan.startsOn ? isoDay(plan.startsOn) : null;
     const people = roster.technicianIds.length
       ? await this.prisma.userProfile.findMany({
           where: { id: { in: roster.technicianIds } },
@@ -760,13 +751,6 @@ export class QuarterPlannerService {
     // Nobody's days on a quarter sent out to nobody: see `dayGroupNames`.
     if (plan.jobberUnassigned) for (const [id, group] of dayGroupNames(roster.technicianIds)) names.set(id, group);
 
-    const weeks = new Map<string, Record<string, string>>();
-    for (const date of plannedVisitDaysOfQuarter(quarter, plan.holidays, startsOn)) {
-      const weekOf = weekStartOf(date);
-      if (!weeks.has(weekOf))
-        weeks.set(weekOf, weeklyZoneTechnicians(roster.technicianIds, zones.circle, quarterWeekIndex(date, quarter, startsOn)));
-    }
-
     return {
       crew: roster.technicianIds.map((technicianId) => ({
         technicianId,
@@ -775,12 +759,6 @@ export class QuarterPlannerService {
       })),
       zones: zones.circle,
       outOfReach: zones.outOfReach,
-      weeks: [...weeks.entries()].map(([weekOf, owners]) => ({
-        weekOf,
-        zones: Object.entries(owners)
-          .map(([zone, technicianId]) => ({ zone, technicianId }))
-          .sort((left, right) => byZoneNumber(left.zone, right.zone)),
-      })),
     };
   }
 
@@ -1307,30 +1285,33 @@ export class QuarterPlannerService {
    * Who can work each planned day, per zone and kind of visit.
    *
    * The whole crew works every planned day (the office, 2026-09-18). Each day's
-   * zones come from the week it falls in -- the crew each has one zone, and all
-   * move one zone on each week -- and say where each starts, not who works.
-   * Qualification still applies on top, per date and per kind of visit, because
-   * a certificate lapsing mid-quarter must take away the later days and leave
-   * the earlier ones alone.
+   * zones come from its turn -- its place among the quarter's planned days,
+   * `plannedDays`, whether or not it is being laid out: the crew each has one
+   * zone, and all move one zone on each planned day (2026-10-03) -- and say
+   * where each starts, not who works. A day that is not a planned day, a Monday
+   * kept for rescheduled visits, has no turn and no zones. Qualification still
+   * applies on top, per date and per kind of visit, because a certificate
+   * lapsing mid-quarter must take away the later days and leave the earlier
+   * ones alone.
    */
   private async availability(
     organizationId: string,
-    quarter: Quarter,
     dates: readonly string[],
     stops: readonly PlannableStop[],
     roster: Roster,
     circle: readonly string[],
-    startsOn: string | null,
+    plannedDays: readonly string[],
   ): Promise<PlannableDay[]> {
     const types = [...new Set(stops.map((stop) => stop.inspectionType as InspectionType))];
     const asDates = dates.map((date) => new Date(`${date}T00:00:00.000Z`));
     const calendars = new Map<InspectionType, Awaited<ReturnType<TechnicianSkillsService['qualificationCalendar']>>>();
     for (const type of types) calendars.set(type, await this.skills.qualificationCalendar(organizationId, type, asDates));
 
+    const turnOf = new Map(plannedDays.map((date, turn) => [date, turn]));
     return dates.map((date) => {
-      const zoneTechnicians = circle.length
-        ? weeklyZoneTechnicians(roster.technicianIds, circle, quarterWeekIndex(date, quarter, startsOn))
-        : undefined;
+      const turn = turnOf.get(date);
+      const zoneTechnicians =
+        circle.length && turn !== undefined ? dailyZoneTechnicians(roster.technicianIds, circle, turn) : undefined;
       const working = [...roster.technicianIds];
       const qualified: Record<string, string[]> = {};
       for (const [type, calendar] of calendars) {
@@ -1990,7 +1971,7 @@ function zoneMiddles(stops: readonly PlannableStop[]): Map<string, GeoPoint> {
 /**
  * Every stop with a zone: its own, or for the few the tenant report leaves
  * without one ("Not Set"), the zone whose middle is nearest -- so it is still
- * worked by whoever has that part of town that week.
+ * worked by whoever has that part of town that day.
  */
 export function withZones<T extends PlannableStop>(stops: readonly T[]): T[] {
   const middles = zoneMiddles(stops);

@@ -66,16 +66,16 @@ import { useUrlState } from '@/lib/url-state';
 /**
  * A quarter of Tenant Benefit Package visits, before and after it is booked.
  *
- * The office's rules, as the planner applies them: whoever was first last
- * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
+ * The office's rules, as the planner applies them: Q2 and Q4 visits are HVAC inspections for tenancies
  * on the HVAC plan; the visits are grouped into days of nine for the least
  * driving, never more than twenty minutes from one property to the next, and a
  * tenth where it is within five minutes of the day (2026-09-19 and -20); a day
  * short of nine fills from the fuller days near it; everyone chosen works every
  * day from the plan's first until every visit has a day -- the quarter is
  * finished as early as the crew can and the days after that stay empty
- * (2026-09-20) -- each taking a group in their zone of the week and moving on
- * each week, with a property within five minutes of a group joining it; a zone too far for a day's drive
+ * (2026-09-20) -- each taking a group in a zone of their own each day and moving
+ * one zone on each day, the group furthest from downtown Houston first
+ * (2026-10-03), with a property within five minutes of a group joining it; a zone too far for a day's drive
  * is a trip of days in a row for whoever lives nearest; visits go on weekdays
  * that are not US holidays, with Mondays from the second week kept for
  * rescheduled visits. Building a quarter asks two things only -- who goes out,
@@ -511,7 +511,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next; a day takes a 10th while that property is within 5 minutes of it, and a day short of 9 fills from the fuller days near it, so none is left with one or two. Everyone chosen works every day from the plan's first until every visit has a day: the quarter is finished as early as the crew can, and the days left at the end of it stay empty. Visits are taken up in last quarter's order, the month of the quarter they were visited in first. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next; a day takes a 10th while that property is within 5 minutes of it, and a day short of 9 fills from the fuller days near it, so none is left with one or two. Everyone chosen works every day from the plan's first until every visit has a day: the quarter is finished as early as the crew can, and the days left at the end of it stay empty. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in a zone of their own each day and moves to the next zone the day after, skipping a zone with nothing left; in each zone the group furthest from downtown Houston goes first, working in. A property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -643,11 +643,11 @@ export default function PlanningPage() {
                   plan.jobberUnassigned
                     ? `nobody: sent out unassigned, to hand out in Jobber · ${rotation.data.crew.length} day ${
                         rotation.data.crew.length === 1 ? 'group' : 'groups'
-                      } at a time, a zone each, moving weekly`
+                      } at a time, a zone each, moving daily`
                     : rotation.data.crew.length
                       ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · ${
                           plan.crewTechnicianIds?.length ? 'chosen for this plan' : 'the crew on the planning profiles'
-                        } · a zone each, moving weekly`
+                        } · a zone each, moving daily`
                       : 'nobody yet: choose who goes out when you rebuild'
                 }
               />
@@ -739,7 +739,6 @@ export default function PlanningPage() {
                   days={days.data}
                   jobberEditsPushed={lateMoveOuts.data?.jobberEditsPushed ?? null}
                   onOpenStop={setOpenStopId}
-                  rotation={rotation.data ?? null}
                   onSelect={(day) => setState({ day })}
                   planId={plan.id}
                   selectedDayId={state.day}

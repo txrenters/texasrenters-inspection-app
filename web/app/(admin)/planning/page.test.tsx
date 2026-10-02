@@ -218,24 +218,6 @@ function mount({
       ],
       zones: ['1', '2', '3', '4'],
       outOfReach: ['5'],
-      weeks: [
-        {
-          weekOf: '2026-09-28',
-          zones: [
-            { zone: '1', technicianId: 'tech-1' },
-            { zone: '2', technicianId: 'tech-2' },
-            { zone: '3', technicianId: 'tech-3' },
-          ],
-        },
-        {
-          weekOf: '2026-10-05',
-          zones: [
-            { zone: '2', technicianId: 'tech-1' },
-            { zone: '3', technicianId: 'tech-2' },
-            { zone: '4', technicianId: 'tech-3' },
-          ],
-        },
-      ],
     },
   });
   hooks.usePlanTechnicians.mockReturnValue({ data: TECHNICIANS, isLoading: false });
@@ -1246,13 +1228,13 @@ describe('the benefit package plan page', () => {
     expect(within(dialog).getByRole('heading', { name: 's3 Any St' })).toBeTruthy();
   });
 
-  /** The office's rules (2026-09-16): a zone each a week, moving weekly; Mondays kept for reschedules. */
-  it('shows the crew, who has which zone each week, and the Mondays kept for reschedules', () => {
+  /** The office's rules: a zone each a day, moving daily (2026-10-03); Mondays kept for reschedules. */
+  it('shows the crew, the zone each day is in, and the Mondays kept for reschedules', () => {
     mount();
 
-    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · the crew on the planning profiles · a zone each, moving weekly')).toBeTruthy();
-    // Four zones and three people: the zone nobody has this week waits its turn.
-    expect(screen.getByText('Zone 1 Moses · Zone 2 Kevin · Zone 3 Emanuel · Zone 4 no one')).toBeTruthy();
+    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · the crew on the planning profiles · a zone each, moving daily')).toBeTruthy();
+    // The zones turn daily, so a week heading names nobody's zone: each day says its own.
+    expect(screen.queryByText(/Zone 1 Moses/)).toBeNull();
     // Too far for a day's drive, so a trip -- planned when the quarter is rebuilt.
     expect(screen.getByText('Zone 5: a trip for whoever lives nearest, planned at the next Rebuild')).toBeTruthy();
     expect(screen.getByText('kept free for rescheduled visits from week 2')).toBeTruthy();

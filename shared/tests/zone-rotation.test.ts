@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  dailyZoneTechnicians,
   isRescheduleMonday,
   isTbpZone,
   plannedVisitDaysOfQuarter,
   quarterWeekIndex,
   weekStartOf,
-  weeklyZoneTechnicians,
   zoneNumberOf,
 } from '../src/contracts/zone-rotation.js';
 import { workingDaysOfQuarter } from '../src/contracts/quarter-plan.js';
@@ -86,32 +86,42 @@ describe('the Mondays kept for rescheduled visits', () => {
 });
 
 /**
- * The office's example (2026-09-16): Moses on zone 1, Kevin on 2, Emanuel on 3,
- * and everyone moves one zone on each week.
+ * The office's example (2026-09-16), a day at a time since 2026-10-03: Moses on
+ * zone 1, Kevin on 2, Emanuel on 3, and everyone moves one zone on each planned day.
  */
-describe('who has which zone each week', () => {
+describe('who starts in which zone each day', () => {
   const crew = ['moses', 'kevin', 'emanuel'];
 
   it('starts the crew on the first zones, in order', () => {
-    expect(weeklyZoneTechnicians(crew, ['1', '2', '3', '4'], 0)).toEqual({ '1': 'moses', '2': 'kevin', '3': 'emanuel' });
+    expect(dailyZoneTechnicians(crew, ['1', '2', '3', '4'], 0)).toEqual({ '1': 'moses', '2': 'kevin', '3': 'emanuel' });
   });
 
-  it('moves everyone one zone on each week, round the circle', () => {
-    expect(weeklyZoneTechnicians(crew, ['1', '2', '3', '4'], 1)).toEqual({ '2': 'moses', '3': 'kevin', '4': 'emanuel' });
-    expect(weeklyZoneTechnicians(crew, ['1', '2', '3', '4'], 3)).toEqual({ '4': 'moses', '1': 'kevin', '2': 'emanuel' });
-    expect(weeklyZoneTechnicians(crew, ['1', '2', '3', '4'], 4)).toEqual(weeklyZoneTechnicians(crew, ['1', '2', '3', '4'], 0));
+  it('moves everyone one zone on each planned day, round the circle', () => {
+    expect(dailyZoneTechnicians(crew, ['1', '2', '3', '4'], 1)).toEqual({ '2': 'moses', '3': 'kevin', '4': 'emanuel' });
+    expect(dailyZoneTechnicians(crew, ['1', '2', '3', '4'], 3)).toEqual({ '4': 'moses', '1': 'kevin', '2': 'emanuel' });
+    expect(dailyZoneTechnicians(crew, ['1', '2', '3', '4'], 4)).toEqual(dailyZoneTechnicians(crew, ['1', '2', '3', '4'], 0));
   });
 
-  it('leaves a different zone without anybody each week when zones outnumber the crew', () => {
-    const empty = [0, 1, 2, 3].map((week) =>
-      ['1', '2', '3', '4'].find((zone) => !(zone in weeklyZoneTechnicians(crew, ['1', '2', '3', '4'], week))),
+  it('takes one person round the four zones on four days running', () => {
+    expect([0, 1, 2, 3, 4].map((day) => Object.keys(dailyZoneTechnicians(['moses'], ['1', '2', '3', '4'], day)))).toEqual([
+      ['1'],
+      ['2'],
+      ['3'],
+      ['4'],
+      ['1'],
+    ]);
+  });
+
+  it('leaves a different zone without anybody each day when zones outnumber the crew', () => {
+    const empty = [0, 1, 2, 3].map((day) =>
+      ['1', '2', '3', '4'].find((zone) => !(zone in dailyZoneTechnicians(crew, ['1', '2', '3', '4'], day))),
     );
     expect(empty).toEqual(['4', '1', '2', '3']);
   });
 
-  it('gives a different person the week off when the crew outnumbers the zones', () => {
-    expect(Object.values(weeklyZoneTechnicians(crew, ['1', '2'], 0))).toEqual(['moses', 'kevin']);
-    expect(Object.values(weeklyZoneTechnicians(crew, ['1', '2'], 1)).sort()).toEqual(['emanuel', 'moses']);
+  it('gives a different person no zone of their own each day when the crew outnumbers the zones', () => {
+    expect(Object.values(dailyZoneTechnicians(crew, ['1', '2'], 0))).toEqual(['moses', 'kevin']);
+    expect(Object.values(dailyZoneTechnicians(crew, ['1', '2'], 1)).sort()).toEqual(['emanuel', 'moses']);
   });
 });
 

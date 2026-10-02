@@ -30,7 +30,6 @@ const ROTATION: PlanRotation = {
   ],
   zones: ['1', '2', '3', '4'],
   outOfReach: ['5'],
-  weeks: [],
 };
 
 const day = (id: string, date: string, technicianId: string, displayName: string, stopCount: number, zone: string) =>

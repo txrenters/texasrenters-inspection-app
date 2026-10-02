@@ -1326,39 +1326,69 @@ describe('no drive over twenty minutes between two properties', () => {
 });
 
 /**
- * The office's rules (2026-09-16): Moses, Kevin and Emanuel each have one zone a
- * week and all move one zone on each week; Mondays from the quarter's second
- * week are kept for rescheduled visits.
+ * The office's rules: Moses, Kevin and Emanuel each have one zone a day and all
+ * move one zone on each planned day (2026-10-03; a zone a week from 2026-09-16);
+ * Mondays from the quarter's second week are kept for rescheduled visits.
  */
-describe('zones, weeks and Mondays', () => {
+describe('zones, days and Mondays', () => {
   const CREW = [
     { technicianId: 'moses', isPlannable: true, tbpZoneOrder: 1 },
     { technicianId: 'kevin', isPlannable: true, tbpZoneOrder: 2 },
     { technicianId: 'emanuel', isPlannable: true, tbpZoneOrder: 3 },
   ];
 
-  it('starts each crew member in their zone of the week, and moves everyone one zone on each week', async () => {
-    // Thursday 1 October is in the first week and Tuesday 6 October in the
-    // second. Eighteen visits a zone are two days of nine, so each zone has a
-    // day in both weeks.
+  /** Eighteen visits a zone are two days of nine, so each zone has a day on both days. */
+  const twoZones = () => {
     const zone = (name: string, offset: number) =>
       Array.from({ length: 18 }, (_, index) => stop(`z${name}-${index + 1}`, 0, offset + index * 0.01, { zone: name }));
-    const stops = [...zone('1', 0), ...zone('2', 5)].map((row, index) => ({ ...row, sequence: index + 1 }));
+    return [...zone('1', 0), ...zone('2', 5)].map((row, index) => ({ ...row, sequence: index + 1 }));
+  };
+  const ownersOf = (stops: ReturnType<typeof twoZones>, stopUpdate: jest.Mock) =>
+    [
+      ...new Set(
+        stops.map((row) => {
+          const update = updateFor(stopUpdate, row.id);
+          return `zone ${row.zone} on ${(update?.scheduledOn as Date).toISOString().slice(0, 10)}: ${String(update?.assignedTechnicianId)}`;
+        }),
+      ),
+    ].sort();
+
+  it('starts each crew member in their zone for the day, and moves everyone one zone on each planned day', async () => {
+    // Friday 2 October is the planned day after Thursday 1 October.
+    const stops = twoZones();
     const { service, stopUpdate } = build(stops, { technicians: CREW.slice(0, 2) });
 
-    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-06') });
+    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
 
-    // Two zones and two people: the first week Moses has 1 and Kevin 2, and the
-    // week after the other way round.
-    const owners = stops.map((row) => {
-      const update = updateFor(stopUpdate, row.id);
-      return `zone ${row.zone} on ${(update?.scheduledOn as Date).toISOString().slice(0, 10)}: ${String(update?.assignedTechnicianId)}`;
-    });
-    expect([...new Set(owners)].sort()).toEqual([
+    // Two zones and two people: the first day Moses has 1 and Kevin 2, and the
+    // day after the other way round.
+    expect(ownersOf(stops, stopUpdate)).toEqual([
       'zone 1 on 2026-10-01: moses',
-      'zone 1 on 2026-10-06: kevin',
+      'zone 1 on 2026-10-02: kevin',
       'zone 2 on 2026-10-01: kevin',
-      'zone 2 on 2026-10-06: moses',
+      'zone 2 on 2026-10-02: moses',
+    ]);
+  });
+
+  it('counts the turns from the quarter’s first planned day when it is rebuilt part way through', async () => {
+    // Today, Friday 2 October, is the quarter's second planned day: its turn is
+    // the second, as on the day it was first built, and not the first again.
+    // Tuesday 6 October is the next planned day: Monday the 5th is kept.
+    const stops = twoZones();
+    const { service, stopUpdate } = build(stops, { technicians: CREW.slice(0, 2) });
+
+    await service.route(
+      'org-1',
+      'plan-1',
+      { holidays: onlyOn('2026-10-01', '2026-10-02', '2026-10-06') },
+      { today: '2026-10-02' },
+    );
+
+    expect(ownersOf(stops, stopUpdate)).toEqual([
+      'zone 1 on 2026-10-02: kevin',
+      'zone 1 on 2026-10-06: moses',
+      'zone 2 on 2026-10-02: moses',
+      'zone 2 on 2026-10-06: kevin',
     ]);
   });
 
@@ -1404,7 +1434,7 @@ describe('zones, weeks and Mondays', () => {
     expect(updateFor(stopUpdate, 'unzoned')?.assignedTechnicianId).toBe('kevin');
   });
 
-  it('tells the console who has which zone each week', async () => {
+  it('tells the console the crew and the zones it goes round', async () => {
     const homes = CREW.map((row) => ({ ...row, homeLatitude: 29.7, homeLongitude: -95.37 }));
     const { service } = build(
       [stop('a', 1, 0, { zone: '1' }), stop('b', 2, 5, { zone: 'Zone 2' }), stop('c', 3, 180, { zone: '5' })],
@@ -1416,20 +1446,8 @@ describe('zones, weeks and Mondays', () => {
     expect(rotation.crew.map((member) => member.displayName)).toEqual(['Name of moses', 'Name of kevin', 'Name of emanuel']);
     expect(rotation.zones).toEqual(['1', '2']);
     expect(rotation.outOfReach).toEqual(['5']);
-    expect(rotation.weeks[0]).toEqual({
-      weekOf: '2026-09-28',
-      zones: [
-        { zone: '1', technicianId: 'moses' },
-        { zone: '2', technicianId: 'kevin' },
-      ],
-    });
-    expect(rotation.weeks[1]).toEqual({
-      weekOf: '2026-10-05',
-      zones: [
-        { zone: '1', technicianId: 'emanuel' },
-        { zone: '2', technicianId: 'moses' },
-      ],
-    });
+    // Which zone a day is in is the day's own: the zones turn daily, so a week has none.
+    expect(rotation).not.toHaveProperty('weeks');
   });
 
   /** Zone 5 is some 200 km from the crew's homes (2026-09-18): "a 3-day trip for one person". */
