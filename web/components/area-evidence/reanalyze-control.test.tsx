@@ -2,7 +2,7 @@ import type { AreaRecording } from '@texasrenters/shared';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ReanalyzeControl, canReanalyze } from './ReanalyzeControl';
+import { ReanalyzeControl, ReanalyzeStatus, canReanalyze } from './ReanalyzeControl';
 
 /**
  * "Re-run AI" on a recording.
@@ -44,14 +44,18 @@ function recording(overrides: Partial<AreaRecording> = {}): AreaRecording {
   };
 }
 
-function show(data: AreaRecording, pendingFindings = 5) {
+function show(data: AreaRecording, pendingFindings = 5, lockedReason: string | null = null) {
   render(
-    <ReanalyzeControl
-      areaId="area-1"
-      inspectionId="inspection-1"
-      pendingFindings={pendingFindings}
-      recording={data}
-    />,
+    <>
+      <ReanalyzeControl
+        areaId="area-1"
+        inspectionId="inspection-1"
+        lockedReason={lockedReason}
+        pendingFindings={pendingFindings}
+        recording={data}
+      />
+      <ReanalyzeStatus recording={data} />
+    </>,
   );
 }
 
@@ -82,6 +86,7 @@ describe('re-running the AI on a recording', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-run AI' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(state.mutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Re-run AI' })).toBeTruthy();
   });
 
@@ -103,6 +108,17 @@ describe('re-running the AI on a recording', () => {
     );
     expect(screen.getByText(/no remaining credits/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Re-run AI' })).toBeTruthy();
+  });
+
+  // Once finalized it used to disappear, which read as the button having been
+  // removed. It stays, and says why it cannot run.
+  it('is shown locked on a finalized inspection, and says why instead of running', () => {
+    show(recording(), 5, 'This inspection was finalized Oct 2, 2026 by Kimson.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run AI' }));
+    expect(screen.getByText('This inspection was finalized Oct 2, 2026 by Kimson.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
+    expect(state.mutate).not.toHaveBeenCalled();
   });
 });
 

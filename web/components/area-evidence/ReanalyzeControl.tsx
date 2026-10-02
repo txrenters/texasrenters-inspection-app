@@ -1,10 +1,11 @@
 'use client';
 
 import type { AreaRecording } from '@texasrenters/shared';
-import { SparklesIcon } from 'lucide-react';
+import { LockIcon, SparklesIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
 import { formatDateTime } from '@/lib/format';
 import { useAdminMutations } from '@/lib/queries';
@@ -22,80 +23,105 @@ export function canReanalyze(recording: AreaRecording) {
 }
 
 /**
- * "Re-run AI" on one recording, and how the last re-run went.
+ * "Re-run AI" on one recording, in the recording's header beside its status.
  *
  * For after the analysis itself improved: a recording analysed under an older
  * prompt kept its findings for good. Re-running replaces only the findings still
  * awaiting a decision, which is the reviewer's queue, so it asks first and says
  * how many. Decided findings stay as they are.
+ *
+ * It used to sit at the foot of the card, under a player that fills the panel,
+ * and it vanished outright once the inspection was finalized -- which read as
+ * the button having been removed. A finalized inspection now shows it locked,
+ * and pressing it says why, since the server refuses that re-run.
  */
 export function ReanalyzeControl({
   recording,
   inspectionId,
   areaId,
   pendingFindings,
+  lockedReason = null,
 }: {
   recording: AreaRecording;
   inspectionId: string;
   areaId: string;
   /** This recording's findings still awaiting a decision, which a re-run replaces. */
   pendingFindings: number;
+  /** Why it cannot run here, said instead of running: a finalized inspection. */
+  lockedReason?: string | null;
 }) {
   const mutation = useAdminMutations().reanalyzeRecording;
-  const [confirming, setConfirming] = useState(false);
-  const run = recording.analysisRun;
+  const [open, setOpen] = useState(false);
 
-  if (run?.status === 'RUNNING')
+  if (recording.analysisRun?.status === 'RUNNING')
     return (
-      <p className="text-muted-foreground flex items-center gap-1.5 text-xs" role="status">
+      <span className="text-muted-foreground flex items-center gap-1.5 text-xs" role="status">
         <Spinner aria-hidden className="size-3" />
-        Re-running the AI. New findings appear here when it finishes.
-      </p>
+        Re-running the AI…
+      </span>
     );
 
   const start = () =>
     mutation.mutate(
       { mediaId: recording.id, inspectionId, areaId },
-      { onSettled: () => setConfirming(false) },
+      { onSuccess: () => setOpen(false) },
     );
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
-      {run?.status === 'FAILED' ? (
-        <span className="text-warning">The last re-run failed: {run.message}</span>
-      ) : run?.status === 'COMPLETED' ? (
-        <span className="text-muted-foreground">AI re-run {formatDateTime(run.at)}</span>
-      ) : null}
-      {mutation.isError ? (
-        <span className="text-destructive">{mutation.error.message}</span>
-      ) : null}
-      {confirming ? (
-        <>
-          <span className="text-muted-foreground">
-            {pendingFindings
-              ? `Replaces the ${pendingFindings} finding${pendingFindings === 1 ? '' : 's'} still awaiting a decision. Decided ones stay.`
-              : 'Findings already decided stay as they are.'}
-          </span>
-          <Button disabled={mutation.isPending} onClick={start} size="sm" type="button">
-            {mutation.isPending ? <Spinner /> : null}
-            Re-run
-          </Button>
-          <Button
-            disabled={mutation.isPending}
-            onClick={() => setConfirming(false)}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            Cancel
-          </Button>
-        </>
-      ) : (
-        <Button onClick={() => setConfirming(true)} size="sm" type="button" variant="ghost">
-          <SparklesIcon aria-hidden />
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        <Button className="h-7 text-xs" size="sm" type="button" variant="outline">
+          {lockedReason ? <LockIcon aria-hidden /> : <SparklesIcon aria-hidden />}
           Re-run AI
         </Button>
-      )}
-    </div>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="grid gap-3 text-sm">
+        {lockedReason ? (
+          <p className="text-muted-foreground">{lockedReason}</p>
+        ) : (
+          <>
+            <p className="font-medium">Run the AI on this recording again?</p>
+            <p className="text-muted-foreground">
+              {pendingFindings
+                ? `Replaces the ${pendingFindings} finding${pendingFindings === 1 ? '' : 's'} still awaiting a decision. Decided ones stay.`
+                : 'Findings already decided stay as they are.'}
+            </p>
+            {mutation.isError ? (
+              <p className="text-destructive">{mutation.error.message}</p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button
+                disabled={mutation.isPending}
+                onClick={() => setOpen(false)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+              <Button disabled={mutation.isPending} onClick={start} size="sm" type="button">
+                {mutation.isPending ? <Spinner /> : null}
+                Re-run
+              </Button>
+            </div>
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
   );
+}
+
+/**
+ * How the last re-run went, under the recording's header. Its own line so the
+ * header stays one row on the narrow player beside the findings.
+ */
+export function ReanalyzeStatus({ recording }: { recording: AreaRecording }) {
+  const run = recording.analysisRun;
+  if (run?.status === 'FAILED')
+    return <p className="text-warning text-xs">The last AI re-run failed: {run.message}</p>;
+  if (run?.status === 'COMPLETED')
+    return (
+      <p className="text-muted-foreground text-xs">AI re-run {formatDateTime(run.at)}</p>
+    );
+  return null;
 }

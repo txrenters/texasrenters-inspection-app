@@ -1,5 +1,5 @@
 import type { AreaEvidenceBundle, AreaFinding, AreaRecording } from '@texasrenters/shared';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AreaDetailPanel } from './AreaDetailPanel';
@@ -32,7 +32,12 @@ vi.mock('@/lib/queries', () => ({
     captureSnapshot: { isPending: false, isError: false, error: null, mutate: state.capture },
     reanalyzeRecording: { isPending: false, isError: false, error: null, mutate: () => {} },
   }),
-  useInspection: () => ({ data: { finalizedAt: state.finalizedAt } }),
+  useInspection: () => ({
+    data: {
+      finalizedAt: state.finalizedAt,
+      finalizedBy: state.finalizedAt ? { id: 'user-k', displayName: 'Kimson' } : null,
+    },
+  }),
   useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),
   useVideoPlayback: (mediaId: string) => ({
     isLoading: false,
@@ -219,6 +224,24 @@ describe('deciding a finding', () => {
       await screen.findByRole('button', { name: /Transition piece/, expanded: true }),
     ).toBeInTheDocument();
     expect(player()?.getAttribute('src')).toContain('startTime=76s');
+  });
+
+  it('offers Re-run AI at the top of the recording, beside the findings and on the Recording tab', () => {
+    open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]));
+    expect(screen.getByRole('button', { name: 'Re-run AI' }).closest('header')).not.toBeNull();
+    cleanup();
+
+    open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]), 'recording');
+    expect(screen.getByRole('button', { name: 'Re-run AI' }).closest('header')).not.toBeNull();
+  });
+
+  it('shows Re-run AI locked once finalized, saying who finalized it', () => {
+    state.finalizedAt = '2026-10-02T15:00:00.000Z';
+    open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]), 'recording');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run AI' }));
+    expect(screen.getByText(/finalized .* by Kimson\. .*cannot run on its recordings again/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
   });
 
   it('is closed once the inspection is finalized', () => {
