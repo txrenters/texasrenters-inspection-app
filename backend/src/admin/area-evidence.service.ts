@@ -22,10 +22,54 @@ import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { STREAM_ENCODING_FAILED } from '../media/inspection-video.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
-import { ROOM_SUMMARY_WHERE, readFrameMarkers } from '../technician/media-processing.service';
+import {
+  REANALYSIS_COMPLETED_EVENT,
+  REANALYSIS_FAILED_EVENT,
+  REANALYSIS_STARTED_EVENT,
+  ROOM_SUMMARY_WHERE,
+  readFrameMarkers,
+} from '../technician/media-processing.service';
 
 /** Findings awaiting a human decision. */
 const UNREVIEWED: FindingReviewStatus[] = [FindingReviewStatus.PENDING_REVIEW];
+
+const REANALYSIS_EVENTS = [
+  REANALYSIS_STARTED_EVENT,
+  REANALYSIS_COMPLETED_EVENT,
+  REANALYSIS_FAILED_EVENT,
+];
+
+/**
+ * How long a re-run may say it is running. Longer than any real one, which
+ * downloads a walkthrough and makes two provider calls; a start with no end
+ * after this died with the server, and saying "running" forever would leave
+ * the reviewer waiting on nothing.
+ */
+const REANALYSIS_STALE_MS = 15 * 60_000;
+
+/** The latest re-run of a recording's AI analysis, from its last event. */
+export function reanalysisState(
+  event: { eventType: string; createdAt: Date; payloadSummary: unknown } | undefined,
+  now = Date.now(),
+) {
+  if (!event) return null;
+  const at = event.createdAt.toISOString();
+  if (event.eventType === REANALYSIS_COMPLETED_EVENT) return { status: 'COMPLETED' as const, at };
+  if (event.eventType === REANALYSIS_STARTED_EVENT && now - event.createdAt.getTime() < REANALYSIS_STALE_MS)
+    return { status: 'RUNNING' as const, at };
+  const recorded =
+    event.eventType === REANALYSIS_FAILED_EVENT &&
+    event.payloadSummary &&
+    typeof event.payloadSummary === 'object' &&
+    typeof (event.payloadSummary as { message?: unknown }).message === 'string'
+      ? (event.payloadSummary as { message: string }).message
+      : null;
+  return {
+    status: 'FAILED' as const,
+    at,
+    message: recorded ?? 'The re-run stopped before it finished.',
+  };
+}
 
 /**
  * A recording's processing state, telling apart the two failures FAILED holds.
@@ -604,6 +648,13 @@ export class AreaEvidenceService {
           // reviewer, which made them useless.
           captureSummary: true,
           technician: { select: { displayName: true } },
+          // The latest re-run of the AI analysis, if anybody asked for one.
+          processingEvents: {
+            where: { eventType: { in: REANALYSIS_EVENTS } },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { eventType: true, createdAt: true, payloadSummary: true },
+          },
         },
       }),
       this.prisma.inspectionPhoto.findMany({
@@ -847,6 +898,7 @@ export class AreaEvidenceService {
         // Bounded by the recording length by the same helper the pipeline uses,
         // so a marker past the end never reaches the player as a dead chip.
         frameMarkersMs: readFrameMarkers(recording.captureSummary, recording.durationSeconds),
+        analysisRun: reanalysisState(recording.processingEvents[0]),
         contentPath: `/api/v1/admin/media/${recording.id}/content`,
       })),
       photoGroups: groups,

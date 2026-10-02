@@ -64,6 +64,20 @@ export class InspectionVideoController {
   ) {
     return this.service.captureSnapshot(request.user, videoId, body);
   }
+
+  /**
+   * Run the AI analysis of one recording again. Answers at once; the work takes
+   * minutes and its progress is on the recording in the area's evidence.
+   *
+   * Reviewer-side, authorized inside the service like the snapshot above.
+   */
+  @Post(':videoId/reanalyze')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  @HttpCode(202)
+  reanalyze(@Req() request: AuthenticatedRequest, @Param('videoId') videoId: string) {
+    return this.service.reanalyze(request.user, videoId);
+  }
 }
 
 /**

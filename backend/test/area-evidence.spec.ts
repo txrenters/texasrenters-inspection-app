@@ -1,6 +1,6 @@
 import { UserRole } from '@texasrenters/shared';
 
-import { AreaEvidenceService } from '../src/admin/area-evidence.service';
+import { AreaEvidenceService, reanalysisState } from '../src/admin/area-evidence.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 const user: AuthenticatedUser = {
@@ -665,6 +665,8 @@ describe('single area evidence bundle', () => {
             processingStatus: 'READY',
             createdAt: new Date('2026-07-28T10:00:00Z'),
             technician: { displayName: 'Ernie' },
+            // Nobody has asked for the AI to be run again.
+            processingEvents: [],
           },
         ]),
       },
@@ -792,6 +794,38 @@ describe('single area evidence bundle', () => {
     expect(bundle.area.reviewStatus).toBe('FINDINGS_NEED_REVIEW');
   });
 
+  it('says how the last re-run of the AI went, from its newest event', async () => {
+    const prisma = bundlePrisma();
+    const [recording] = await prisma.inspectionMedia.findMany();
+    const startedAt = new Date();
+    prisma.inspectionMedia.findMany.mockResolvedValue([
+      {
+        ...recording,
+        processingEvents: [
+          { eventType: 'REANALYSIS_STARTED', createdAt: startedAt, payloadSummary: {} },
+        ],
+      },
+    ]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    expect(bundle.recordings[0].analysisRun).toEqual({
+      status: 'RUNNING',
+      at: startedAt.toISOString(),
+    });
+    // Only the re-run's own events are read, newest first.
+    // The service's read, after the one above that borrowed the fixture.
+    const read = prisma.inspectionMedia.findMany.mock.calls.at(-1)![0];
+    expect(read.select.processingEvents).toMatchObject({
+      where: {
+        eventType: { in: ['REANALYSIS_STARTED', 'REANALYSIS_COMPLETED', 'REANALYSIS_FAILED'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    });
+    expect(bundle.recordings[0].processingStatus).toBe('READY');
+  });
+
   it('still calls a recording Cloudflare could not encode Failed', async () => {
     const prisma = bundlePrisma();
     const [recording] = await prisma.inspectionMedia.findMany();
@@ -859,5 +893,53 @@ describe('single area evidence bundle', () => {
     expect(signedUrl).toHaveBeenCalledTimes(1);
     expect(signedUrl.mock.calls[0][0]).toMatch(/\.thumb\.jpg$/);
     expect(bundle.recordings[0].thumbnailUrl).toBe('https://cdn.example/poster.jpg');
+  });
+});
+
+describe('how a re-run of the AI is reported', () => {
+  const now = new Date('2026-10-02T16:00:00.000Z').getTime();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+
+  it('is nothing when nobody asked for one', () => {
+    expect(reanalysisState(undefined, now)).toBeNull();
+  });
+
+  it('is running from its start until it ends', () => {
+    expect(
+      reanalysisState({ eventType: 'REANALYSIS_STARTED', createdAt: at(2), payloadSummary: {} }, now),
+    ).toEqual({ status: 'RUNNING', at: at(2).toISOString() });
+  });
+
+  it('stops saying running once a start has had no end for fifteen minutes', () => {
+    // It died with the server. Waiting on it would be waiting on nothing.
+    expect(
+      reanalysisState({ eventType: 'REANALYSIS_STARTED', createdAt: at(16), payloadSummary: {} }, now),
+    ).toMatchObject({ status: 'FAILED', message: 'The re-run stopped before it finished.' });
+  });
+
+  it('carries the reason a re-run failed', () => {
+    expect(
+      reanalysisState(
+        {
+          eventType: 'REANALYSIS_FAILED',
+          createdAt: at(1),
+          payloadSummary: { message: 'The AI provider account has no remaining credits.' },
+        },
+        now,
+      ),
+    ).toEqual({
+      status: 'FAILED',
+      at: at(1).toISOString(),
+      message: 'The AI provider account has no remaining credits.',
+    });
+  });
+
+  it('is complete once it is complete', () => {
+    expect(
+      reanalysisState(
+        { eventType: 'REANALYSIS_COMPLETED', createdAt: at(1), payloadSummary: { findingCount: 4 } },
+        now,
+      ),
+    ).toEqual({ status: 'COMPLETED', at: at(1).toISOString() });
   });
 });

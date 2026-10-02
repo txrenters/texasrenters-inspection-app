@@ -432,7 +432,7 @@ export class ComparisonService {
       // can never claim a baseline exists that this would then refuse.
       where: baselineWhere(moveOut),
       orderBy: { scheduledAt: 'desc' },
-      select: { id: true },
+      select: { id: true, scheduledAt: true },
     });
   }
 
@@ -558,6 +558,71 @@ export class ComparisonService {
     return new Map(areas.map((a) => [a.propertyAreaId, a._count.media + a._count.photos]));
   }
 
+  /**
+   * Pair each move-out area with a move-in area, in the move-out's own order.
+   *
+   * Greedy on purpose: a move-in area pairs once, so an earlier room can take
+   * the candidate a later one would also have accepted. That makes the order
+   * part of the answer, which is why `baselineAreaFor` walks this same list
+   * rather than matching one area on its own.
+   */
+  private pairAreas(moveOutAreas: AreaRow[], moveInAreas: AreaRow[]) {
+    const used = new Set<string>();
+    const pairs = moveOutAreas.map((mo) => {
+      const match = this.matchArea(mo, moveInAreas, used);
+      if (match) used.add(match.area.propertyAreaId);
+      return { mo, match };
+    });
+    return { pairs, used };
+  }
+
+  /**
+   * The move-in area one move-out area is compared against: the latest
+   * qualifying move-in, and the area `generate` pairs with it.
+   *
+   * Shared with the AI analysis of a move-out recording. That analysis used to
+   * read the move-in from `baselineInspectionId`, the link written at creation,
+   * which `resolveBaseline` deliberately does not trust. On 5819 Flower Gate Dr
+   * the link was empty, so every finding said no baseline existed while this
+   * comparison was reading the June 2025 move-in, whose checklist already had
+   * the entrance floor damaged.
+   *
+   * Null when there is no baseline move-in. `area` is null when the move-in has
+   * no area this one pairs with.
+   */
+  async baselineAreaFor(moveOutInspectionId: string, propertyAreaId: string) {
+    const moveOut = await this.prisma.inspection.findUnique({
+      where: { id: moveOutInspectionId },
+      select: {
+        id: true,
+        organizationId: true,
+        inspectionType: true,
+        propertywareBuildingId: true,
+        propertywareUnitId: true,
+        propertywareLeaseId: true,
+        baselineInspectionId: true,
+        scheduledAt: true,
+      },
+    });
+    if (!moveOut || moveOut.inspectionType !== InspectionType.MOVE_OUT) return null;
+    const moveIn = await this.resolveBaseline(moveOut);
+    if (!moveIn) return null;
+    const [moveOutAreas, moveInAreas] = await Promise.all([
+      this.loadAreas(moveOut.id, InspectionType.MOVE_OUT),
+      this.loadAreas(moveIn.id, InspectionType.MOVE_IN),
+    ]);
+    const paired = this.pairAreas(moveOutAreas, moveInAreas).pairs.find(
+      (pair) => pair.mo.propertyAreaId === propertyAreaId,
+    );
+    return {
+      inspectionId: moveIn.id,
+      scheduledAt: moveIn.scheduledAt,
+      area: paired?.match
+        ? { propertyAreaId: paired.match.area.propertyAreaId, name: paired.match.area.name }
+        : null,
+    };
+  }
+
   private buildAreaComparisons(
     moveOutAreas: AreaRow[],
     moveInAreas: AreaRow[],
@@ -565,12 +630,10 @@ export class ComparisonService {
     moveInCondition: ConditionSignals,
     moveOutEvidence: Map<string, number>,
   ): AreaResult[] {
-    const usedMoveIn = new Set<string>();
+    const { pairs, used: usedMoveIn } = this.pairAreas(moveOutAreas, moveInAreas);
     const results: AreaResult[] = [];
 
-    for (const mo of moveOutAreas) {
-      const match = this.matchArea(mo, moveInAreas, usedMoveIn);
-      if (match) usedMoveIn.add(match.area.propertyAreaId);
+    for (const { mo, match } of pairs) {
       const moDamage = moveOutCondition.damage.get(mo.propertyAreaId) ?? 0;
       const miDamage = match ? (moveInCondition.damage.get(match.area.propertyAreaId) ?? 0) : 0;
       const moEvidence = moveOutEvidence.get(mo.propertyAreaId) ?? 0;

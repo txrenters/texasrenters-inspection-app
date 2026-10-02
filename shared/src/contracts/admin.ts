@@ -632,6 +632,13 @@ export interface AdminInspection {
    */
   baselineMissing?: boolean;
   /**
+   * The move-in a move-out is compared against: the latest that qualifies, as
+   * the comparison and the AI analysis both choose it. Not `baselineInspection`,
+   * which is only the link written when the move-out was created. Null when
+   * there is none; absent on every other type.
+   */
+  comparisonBaseline?: { id: string; scheduledAt: string } | null;
+  /**
    * The quarter of the benefit-package programme this visit belongs to.
    *
    * Not the quarter its day falls in. A plan may start fifteen days before
