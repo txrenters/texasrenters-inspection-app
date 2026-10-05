@@ -38,7 +38,7 @@ import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { reportError } from '@/src/lib/error-log';
 import { goBack } from '@/src/lib/navigation';
-import { withFiltersPhoto, withServicePhoto } from '@/src/utils/job-tasks';
+import { withFiltersPhoto, withoutPhoto, withServicePhoto } from '@/src/utils/job-tasks';
 import { HomeButton } from '@/src/components/HomeButton';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
@@ -1038,6 +1038,17 @@ export default function RoomCameraScreen() {
     const types = snapshotTypesRef.current;
     const last = types.lastIndexOf(snapshot.captureType ?? 'AREA_OVERVIEW');
     if (last >= 0) types.splice(last, 1);
+    /**
+     * And out of the checklist, where a filter's or a service's photograph was
+     * written as the shutter fired. Left there, the answers pointed at a
+     * photograph that would never arrive: the job submitted as photographed,
+     * and read "still uploading" in the console for ever (5706 Micah Ln,
+     * 2026-10-02). Taken out, the registers ask for a photograph again.
+     */
+    if ((allFilters || serviceForPhoto) && inspection.data)
+      saveServices
+        .mutateAsync((current) => withoutPhoto(current, snapshot.id))
+        .catch(recordAnswerFailed);
     announce('Photo discarded.');
   };
 
