@@ -211,6 +211,7 @@ export function PlanSchedule({
   onOpenStop,
   unscheduledCount = 0,
   onShowUnscheduled,
+  onToday,
   canChange = false,
   canMoveVisits = false,
   jobberEditsPushed = null,
@@ -233,6 +234,8 @@ export function PlanSchedule({
   /** Visits with no day yet, on the button that lists them. */
   unscheduledCount?: number;
   onShowUnscheduled?: () => void;
+  /** Today is in another quarter's calendar: open that quarter. Absent when it is in this one. */
+  onToday?: () => void;
   /** May change the plan: put a day in order, place a visit not booked yet. */
   canChange?: boolean;
   /** May reschedule a booked visit: the planner's grant and the inspections one. */
@@ -300,16 +303,26 @@ export function PlanSchedule({
       .sort((left, right) => (order.get(left.technicianId) ?? 0) - (order.get(right.technicianId) ?? 0));
   /**
    * To a date, and a view. The Day view is about the date, so the map follows
-   * it: that date's first technician-day, unless one of its days is picked already.
+   * it: that date's first technician-day, unless one of its days is picked
+   * already. Today does the same in any view -- the map shows today's route.
    */
-  const goTo = (date: string, next: CalendarView = view) => {
+  const goTo = (date: string, next: CalendarView = view, follow = next === 'day') => {
     const target = clampToCalendar(date, months);
     setCursor(target);
     if (next !== view) onViewChange(next);
-    if (next === 'day' && (!selected || dateOf(selected) !== target)) {
+    if (follow && (!selected || dateOf(selected) !== target)) {
       const first = daysOn(target)[0];
       if (first) onSelect(first.id);
     }
+  };
+  /**
+   * Today, as Jobber's button: always there (the office, 2026-10-06, finding
+   * it greyed out on a quarter that starts in December). A quarter whose
+   * calendar does not reach today hands over to the one that does.
+   */
+  const goToToday = () => {
+    if (todayInQuarter || !onToday) goTo(today, view, true);
+    else onToday();
   };
   const pick = (dayId: string) => {
     const day = days.find((entry) => entry.id === dayId);
@@ -470,10 +483,9 @@ export function PlanSchedule({
               <ArrowRightIcon />
             </Button>
             <Button
-              disabled={!todayInQuarter}
-              onClick={() => goTo(today)}
+              onClick={goToToday}
               size="sm"
-              title={todayInQuarter ? undefined : 'Today is outside this quarter'}
+              title={todayInQuarter || !onToday ? undefined : 'Today is in another quarter: opens that one'}
               variant="outline"
             >
               Today
