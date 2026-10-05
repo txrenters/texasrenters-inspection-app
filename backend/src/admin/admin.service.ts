@@ -4397,6 +4397,24 @@ export class AdminService {
     );
   }
 
+  /**
+   * Approve or reject one of the AI's findings.
+   *
+   * **Findings are decided after finalization too** (the office's rule,
+   * 2026-10-03), and so are their corrections, the findings a reviewer adds,
+   * the area's review mark, a re-run of the AI and the stills filed under a
+   * finding. Finalizing -- like the technician ending the job -- closes the
+   * *visit*: its status, its Jobber completion and the technician's paid time.
+   * Deciding what the AI said is the office's work afterwards, for the reports
+   * and the move-in comparison, and none of these touch the inspection's
+   * status. Reopening to get at them would undo exactly what must stay done.
+   * What finalization still freezes is what was captured: the recordings and
+   * photos, the checklist answers, the areas.
+   *
+   * Only APPROVED findings reach a shared report, so a decision taken later
+   * reaches it then, which is the point. Each is audited with
+   * `afterFinalization`.
+   */
   async reviewFinding(
     user: AuthenticatedUser,
     findingId: string,
@@ -4409,13 +4427,22 @@ export class AdminService {
     const outcome = await this.prisma.$transaction(async (tx) => {
       const finding = await tx.inspectionFinding.findFirst({
         where: { id: findingId, inspection: { organizationId: user.organizationId } },
-        select: { id: true, inspectionId: true, reviewStatus: true },
+        select: {
+          id: true,
+          inspectionId: true,
+          reviewStatus: true,
+          inspection: { select: { finalizedAt: true } },
+        },
       });
       if (!finding) throw new ApplicationError(404, 'FINDING_NOT_FOUND', 'Finding was not found.');
       const nextStatus =
         status === 'APPROVED' ? FindingReviewStatus.APPROVED : FindingReviewStatus.REJECTED;
       // Re-sending the same decision is a no-op so review clicks are idempotent.
-      if (finding.reviewStatus === nextStatus) return { finding, review: null };
+      if (finding.reviewStatus === nextStatus)
+        return {
+          finding: { id: finding.id, inspectionId: finding.inspectionId, reviewStatus: finding.reviewStatus },
+          review: null,
+        };
       const review = await tx.findingReview.create({
         data: {
           findingId: finding.id,
@@ -4440,6 +4467,7 @@ export class AdminService {
           reason: reason ?? null,
           reasonCode: code,
           reviewId: review.id,
+          afterFinalization: Boolean(finding.inspection.finalizedAt),
         },
         'InspectionFinding',
       );
@@ -4460,8 +4488,8 @@ export class AdminService {
    * belongs to one of the area's recordings at the moment given, which is what
    * lets its frame be filed as its photograph and the AI be shown later what
    * it missed. The tenant lean is left undetermined: who pays is decided on
-   * the charge, by a person, as for every finding. Refused once the
-   * inspection is finalized, because the report it feeds is frozen.
+   * the charge, by a person, as for every finding. Allowed after
+   * finalization, like every findings decision: see `reviewFinding`.
    */
   async addFinding(
     user: AuthenticatedUser,
@@ -4490,12 +4518,6 @@ export class AdminService {
       });
       if (!area)
         throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'That area was not found.');
-      if (area.inspection.finalizedAt)
-        throw new ApplicationError(
-          409,
-          'INSPECTION_FINALIZED',
-          'This inspection is finalized, so its findings can no longer be changed.',
-        );
       const media = await tx.inspectionMedia.findFirst({
         where: { id: input.recordingId, inspectionAreaId: area.id, organizationId: user.organizationId },
         select: { id: true, durationSeconds: true },
@@ -4551,6 +4573,7 @@ export class AdminService {
         findingType: input.findingType,
         atSeconds: input.atSeconds === undefined ? null : at,
         reviewId: review.id,
+        afterFinalization: Boolean(area.inspection.finalizedAt),
       });
       return finding;
     }, ADMIN_TRANSACTION_OPTIONS);
@@ -4568,8 +4591,8 @@ export class AdminService {
    * Only a finding still waiting for review: a decided one is changed by
    * deciding it again, so the record of who kept what stays a sequence of
    * whole decisions. The correction is kept beside the decision, before and
-   * after, which is what the AI is later shown as a lesson. Refused once the
-   * inspection is finalized, because the report it feeds is frozen.
+   * after, which is what the AI is later shown as a lesson. Allowed after
+   * finalization, like every findings decision: see `reviewFinding`.
    */
   async editFinding(
     user: AuthenticatedUser,
@@ -4606,12 +4629,6 @@ export class AdminService {
         },
       });
       if (!finding) throw new ApplicationError(404, 'FINDING_NOT_FOUND', 'Finding was not found.');
-      if (finding.inspection.finalizedAt)
-        throw new ApplicationError(
-          409,
-          'INSPECTION_FINALIZED',
-          'This inspection is finalized, so its findings can no longer be changed.',
-        );
       if (finding.reviewStatus !== FindingReviewStatus.PENDING_REVIEW)
         throw new ApplicationError(
           409,
@@ -4673,7 +4690,13 @@ export class AdminService {
         user,
         changed.length ? 'FINDING_EDITED' : 'FINDING_APPROVED',
         finding.id,
-        { inspectionId: finding.inspectionId, changed, reason: note, reviewId: review.id },
+        {
+          inspectionId: finding.inspectionId,
+          changed,
+          reason: note,
+          reviewId: review.id,
+          afterFinalization: Boolean(finding.inspection.finalizedAt),
+        },
         'InspectionFinding',
       );
       return updated;

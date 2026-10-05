@@ -475,6 +475,8 @@ function reanalysisHarness(
         .fn()
         .mockResolvedValue(opts.comparisonStatus ? { status: opts.comparisonStatus } : null),
     },
+    // Present so a write to it would be seen: a re-run must never make one.
+    inspection: { update: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
   };
   const comparison = {
@@ -594,6 +596,20 @@ describe('re-running the analysis on a recording', () => {
     // The tenant lean stands: there is a baseline, and the AI called it new.
     const rows = harness.prisma.inspectionFinding.createMany.mock.calls[0][0].data;
     expect(rows[1]).toMatchObject({ possibleResponsibility: 'TENANT_REVIEW_REQUIRED' });
+  });
+
+  // A re-run is allowed on a finalized inspection (2026-10-03) because of this:
+  // the visit's status is what Jobber's completion and the technician's paid
+  // time follow, and a re-run writes findings only.
+  it('never moves the inspection’s status', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.prisma.inspectionFinding.createMany).toHaveBeenCalled();
+    expect(harness.prisma.inspection.update).not.toHaveBeenCalled();
+    expect(harness.prisma.inspection.updateMany).not.toHaveBeenCalled();
   });
 
   it('says there is no baseline when the comparison has none, and takes the tenant lean away', async () => {

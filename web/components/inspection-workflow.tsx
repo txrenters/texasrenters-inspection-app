@@ -157,10 +157,14 @@ export function InspectionWorkflowPanel({
           </Alert>
         ) : completed ? (
           <>
+            {/* Says the findings stay open before it says what reopening does:
+                reopening marks the Jobber visit incomplete and restarts the
+                technician's paid time, and is never needed to review. */}
             <Alert variant="success">
               <AlertDescription>
-                This inspection is finalized. Reopening sends it back to the assigned technician to
-                capture another area; everything already collected is kept.
+                This inspection is finalized. Its findings can still be reviewed in the areas above,
+                without reopening it. Reopening sends it back to the assigned technician to capture
+                another area; everything already collected is kept.
               </AlertDescription>
             </Alert>
             {canReopen ? (

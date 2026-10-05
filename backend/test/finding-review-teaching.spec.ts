@@ -66,6 +66,7 @@ describe('rejecting a finding', () => {
       id: 'finding-1',
       inspectionId: 'inspection-1',
       reviewStatus: 'PENDING_REVIEW',
+      inspection: { finalizedAt: null },
     });
 
     await service.reviewFinding(user, 'finding-1', 'REJECTED', undefined, 'NORMAL_WEAR');
@@ -86,12 +87,35 @@ describe('rejecting a finding', () => {
       id: 'finding-1',
       inspectionId: 'inspection-1',
       reviewStatus: 'PENDING_REVIEW',
+      inspection: { finalizedAt: null },
     });
 
     await service.reviewFinding(user, 'finding-1', 'APPROVED', undefined, 'NORMAL_WEAR');
 
     expect(tx.findingReview.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ status: 'APPROVED', reasonCode: null }),
+    });
+  });
+
+  // The office decides findings after the visit is closed, for the reports and
+  // the move-in comparison; reopening to do it would mark the Jobber visit
+  // incomplete and restart the technician's paid time (2026-10-03).
+  it('is decided after finalization too, and the audit says it was', async () => {
+    const { service, tx } = build({
+      id: 'finding-1',
+      inspectionId: 'inspection-1',
+      reviewStatus: 'PENDING_REVIEW',
+      inspection: { finalizedAt: new Date('2026-10-02T16:45:36Z') },
+    });
+
+    const decided = await service.reviewFinding(user, 'finding-1', 'APPROVED');
+
+    expect(decided).toMatchObject({ reviewStatus: 'APPROVED' });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'FINDING_APPROVED',
+        metadata: expect.objectContaining({ afterFinalization: true }),
+      }),
     });
   });
 });
@@ -205,13 +229,17 @@ describe('correcting a finding and approving it', () => {
     expect(tx.findingReview.create).not.toHaveBeenCalled();
   });
 
-  it('leaves a finalized inspection’s findings as they were reported', async () => {
+  it('corrects a finding after finalization too, and says so in the audit', async () => {
     const { service, tx } = build({ ...pending, inspection: { finalizedAt: new Date() } });
 
-    await expect(service.editFinding(user, 'finding-1', corrected)).rejects.toMatchObject({
-      code: 'INSPECTION_FINALIZED',
+    await service.editFinding(user, 'finding-1', corrected);
+
+    expect(tx.inspectionFinding.updateMany).toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({ afterFinalization: true }),
+      }),
     });
-    expect(tx.inspectionFinding.updateMany).not.toHaveBeenCalled();
   });
 
   it('is found only in the reviewer’s own organization', async () => {

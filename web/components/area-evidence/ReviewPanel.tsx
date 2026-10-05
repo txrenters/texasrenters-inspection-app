@@ -40,13 +40,12 @@ export function ReviewPanel({
   inspectionId,
   bundle,
   canReview,
-  finalized,
   onNextArea,
 }: {
   inspectionId: string;
   bundle: AreaEvidenceBundle;
+  /** Finalized or not: findings are decided after the visit is closed too. */
   canReview: boolean;
-  finalized: boolean;
   /** Absent at the last area with photographs. */
   onNextArea?: () => void;
 }) {
@@ -85,7 +84,7 @@ export function ReviewPanel({
           <ul className="grid gap-2">
             {ordered.map((finding) => (
               <FindingCard
-                canReview={canReview && !finalized}
+                canReview={canReview}
                 finding={finding}
                 inspectionId={inspectionId}
                 key={finding.id}
@@ -102,7 +101,6 @@ export function ReviewPanel({
           align="start"
           bundle={bundle}
           canReview={canReview}
-          finalized={finalized}
           inspectionId={inspectionId}
         />
         {onNextArea ? (

@@ -137,8 +137,10 @@ export class InspectionVideoService {
    * decision, and that set is the reviewer's queue. Decided findings are never
    * touched (`MediaProcessingService.analyze`).
    *
-   * Refused once the inspection has been finalized, keyed on `finalizedAt` like
-   * every other evidence freeze, and while the recording is still in its first
+   * Allowed after finalization, as deciding findings is (see
+   * `AdminService.reviewFinding`): a re-run writes findings and their checks,
+   * never the inspection's status, so the visit stays closed in Jobber and the
+   * technician's time stands. Refused while the recording is still in its first
    * pass. A recording Cloudflare could not encode has nothing to transcribe.
    */
   async reanalyze(user: AuthenticatedUser, videoId: string) {
@@ -172,12 +174,6 @@ export class InspectionVideoService {
     });
     if (!media)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
-    if (media.inspectionArea.inspection.finalizedAt)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_FINALIZED',
-        'This inspection has been finalized; its findings are no longer re-analysed.',
-      );
     if (
       media.processingStatus === MediaProcessingStatus.PENDING ||
       media.processingStatus === MediaProcessingStatus.PROCESSING
@@ -209,6 +205,7 @@ export class InspectionVideoService {
             inspectionMediaId: media.id,
             inspectionAreaId: media.inspectionArea.id,
             areaName: media.inspectionArea.propertyArea.name,
+            afterFinalization: Boolean(media.inspectionArea.inspection.finalizedAt),
           },
         },
       });
@@ -307,10 +304,11 @@ export class InspectionVideoService {
   /**
    * File the AI's suggested frame as the finding's photograph.
    *
-   * The same capture a reviewer makes by hand, with the same permission, the
-   * same refusal once the inspection is finalized, and the same rule for what
-   * prints: the photograph is the finding's, and appears once the finding is
-   * approved. The suggestion records who decided and which photograph it became.
+   * The same capture a reviewer makes by hand, with the same permission, and
+   * the same rule for what prints: the photograph is the finding's, and appears
+   * once the finding is approved. A finding's still, so allowed after
+   * finalization like the rest of deciding findings. The suggestion records who
+   * decided and which photograph it became.
    */
   async acceptFrameSuggestion(user: AuthenticatedUser, suggestionId: string) {
     const suggestion = await this.frameSuggestion(user, suggestionId);
@@ -358,7 +356,8 @@ export class InspectionVideoService {
 
   /**
    * A suggestion in the caller's organization, for someone allowed to decide
-   * what becomes report evidence, on an inspection still open.
+   * what becomes report evidence. Finalized or not: a suggestion is always a
+   * finding's still, and findings are decided after finalization too.
    */
   private async frameSuggestion(user: AuthenticatedUser, suggestionId: string) {
     if (!user.permissions.includes('inspections:manage'))
@@ -377,17 +376,10 @@ export class InspectionVideoService {
         findingId: true,
         inspectionId: true,
         inspectionMediaId: true,
-        inspection: { select: { finalizedAt: true } },
       },
     });
     if (!suggestion)
       throw new ApplicationError(404, 'FRAME_SUGGESTION_NOT_FOUND', 'That suggestion was not found.');
-    if (suggestion.inspection.finalizedAt)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_FINALIZED',
-        'This inspection has been finalized; its evidence can no longer change.',
-      );
     return suggestion;
   }
 
@@ -482,13 +474,19 @@ export class InspectionVideoService {
     });
     if (!media || !media.inspectionAreaId)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
-    // Evidence freezes at finalization (`finalizedAt`, never the status): a
-    // still added afterwards would change a report that may already be shared.
-    if (media.inspectionArea?.inspection.finalizedAt)
+    // After finalization (`finalizedAt`, never the status) only a finding's
+    // photograph: deciding findings goes on after the visit is closed (see
+    // `AdminService.reviewFinding`), and a finding's still is part of deciding
+    // it -- it prints only once the finding is approved. What was captured for
+    // the room and its checklist is frozen, so a still for either is refused.
+    if (
+      media.inspectionArea?.inspection.finalizedAt &&
+      (!input.findingId || input.checklistItemId)
+    )
       throw new ApplicationError(
         409,
         'INSPECTION_FINALIZED',
-        'This inspection has been finalized; its evidence can no longer change.',
+        'This inspection has been finalized; only a still for one of its findings can be added now.',
       );
     if (!media.streamUid || !media.readyAt)
       throw new ApplicationError(

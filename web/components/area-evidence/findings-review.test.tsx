@@ -32,12 +32,7 @@ vi.mock('@/lib/queries', () => ({
     captureSnapshot: { isPending: false, isError: false, error: null, mutate: state.capture },
     reanalyzeRecording: { isPending: false, isError: false, error: null, mutate: () => {} },
   }),
-  useInspection: () => ({
-    data: {
-      finalizedAt: state.finalizedAt,
-      finalizedBy: state.finalizedAt ? { id: 'user-k', displayName: 'Kimson' } : null,
-    },
-  }),
+  useInspection: () => ({ data: { finalizedAt: state.finalizedAt } }),
   useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),
   useVideoPlayback: (mediaId: string) => ({
     isLoading: false,
@@ -235,23 +230,28 @@ describe('deciding a finding', () => {
     expect(screen.getByRole('button', { name: 'Re-run AI' }).closest('header')).not.toBeNull();
   });
 
-  it('shows Re-run AI locked once finalized, saying who finalized it', () => {
+  // 10830 Harston Dr, 2026-10-02: finalized with its findings still waiting, and
+  // every room lost Approve, Reject and Re-run AI. The office reviews after the
+  // visit is closed -- for the reports and the move-in comparison -- and
+  // reopening would mark the Jobber visit incomplete and restart the
+  // technician's paid time.
+  it('offers Re-run AI on a finalized inspection too', () => {
     state.finalizedAt = '2026-10-02T15:00:00.000Z';
     open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]), 'recording');
 
     fireEvent.click(screen.getByRole('button', { name: 'Re-run AI' }));
-    expect(screen.getByText(/finalized .* by Kimson\. .*cannot run on its recordings again/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Re-run' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Re-run' })).toBeInTheDocument();
   });
 
-  it('is closed once the inspection is finalized', () => {
+  it('is still decided once the inspection is finalized', () => {
     state.finalizedAt = '2026-10-02T15:00:00.000Z';
     open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]));
     fireEvent.click(screen.getByRole('button', { name: /Entrance floor damaged/ }));
 
-    // The Findings tab used to offer Approve and Reject on a finalized inspection.
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /as evidence/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(state.approve).toHaveBeenCalledWith({ id: 'floor', inspectionId: 'inspection-1' });
+    // A still for the finding is part of deciding it, so it is offered too.
+    expect(screen.getByRole('button', { name: 'Add the 1:05 frame as evidence' })).toBeInTheDocument();
   });
 
   it('steps through the list with J and K', () => {
@@ -305,11 +305,11 @@ describe('adding what the AI missed', () => {
     expect(within(form).getByRole('textbox', { name: 'Moment in the recording' })).toHaveValue('');
   });
 
-  it('is not offered once the inspection is finalized', () => {
+  it('is offered on a finalized inspection too', () => {
     state.finalizedAt = '2026-10-03T15:00:00.000Z';
     open(bundle([finding('f1', 'Door hole', 18, 24)]));
 
-    expect(screen.queryByRole('button', { name: 'Add a finding the AI missed' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add a finding the AI missed' })).toBeInTheDocument();
   });
 });
 
