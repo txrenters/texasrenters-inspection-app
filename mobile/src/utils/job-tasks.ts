@@ -633,6 +633,37 @@ export function withFiltersPhoto(
 }
 
 /**
+ * The report with a discarded photograph taken back out of it.
+ *
+ * A filter's or a service's photograph is written into the checklist the moment
+ * the shutter fires (`withFiltersPhoto`, `withServicePhoto`), before the image
+ * leaves the phone -- and the camera offers it back to discard for fifteen
+ * seconds. Discarding deleted the image and left the answers pointing at it: a
+ * photograph that could never arrive, which the submission check counts as
+ * taken and the console showed as "still uploading" for ever (5706 Micah Ln,
+ * 2026-10-02). The registers stay changed and ask for their photograph again,
+ * so a retake is the way on.
+ */
+export function withoutPhoto(
+  report: VisitServicesReport | null | undefined,
+  photoKey: string,
+): VisitServicesReport {
+  const current = report ?? EMPTY_REPORT;
+  const services: VisitServicesReport['services'] = { ...current.services };
+  for (const service of Object.keys(services) as ReportableVisitService[]) {
+    const outcome = services[service];
+    if (outcome?.photoKey === photoKey && !outcome.photoId) services[service] = { ...outcome, photoKey: null };
+  }
+  return {
+    ...current,
+    services,
+    filters: (current.filters ?? []).map((filter) =>
+      filter.photoKey === photoKey && !filter.photoId ? { ...filter, photoKey: null } : filter,
+    ),
+  };
+}
+
+/**
  * The photograph the filters share, once one has been taken.
  *
  * The first changed register's, which after `withFiltersPhoto` is every changed

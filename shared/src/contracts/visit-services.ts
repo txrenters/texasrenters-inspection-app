@@ -193,6 +193,13 @@ export interface BookedFilter {
   slot: number;
   /** A thick media filter, which the office changes only twice a year. */
   media: boolean;
+  /**
+   * The size was listed again as its own entry ("16x25x1;16x25x1") rather than
+   * counted ("(2 pcs) 16x25x1"). Phones built before 2026-10-06 numbered every
+   * entry from slot 1, so they ask one question for both and send one answer;
+   * see `servicesReportProblems`'s `acceptOlderPhones`.
+   */
+  listedAgain?: boolean;
 }
 
 /**
@@ -210,17 +217,35 @@ export const MAX_BOOKED_FILTERS = 12;
  * Expanded by quantity, because "20x25x1 (2 pcs)" is two registers and the
  * office wants a photograph of each. Sizes are normalised so the list reads in
  * one spelling whatever the coordinator typed.
+ *
+ * **The slots run on across entries for the same size in the same place.**
+ * The Details the console writes list a size once per register --
+ * "Filter Change: 12x24x1;16x25x1;16x25x1" -- and each entry used to start at
+ * slot 1, so both 16x25x1 registers were "16x25x1, slot 1": one register to
+ * `filterKey`. The phone showed two rows that ticked together and sent one
+ * answer, and the Jobber note -- which the invoice is made from -- listed one
+ * 16x25x1 where three filters were installed (5706 Micah Ln, 2026-10-02).
  */
 export function bookedFilters(details: Pick<VisitDetails, 'filters'>): BookedFilter[] {
   const filters: BookedFilter[] = [];
+  const counted = new Map<string, number>();
   for (const filter of details.filters) {
     const size = normalizeFilterSize(filter.size);
     const location = filter.location?.trim() || null;
+    const place = `${size}|${(location ?? '').toLowerCase()}`;
+    const before = counted.get(place) ?? 0;
     const quantity = Math.max(1, Math.min(filter.quantity, MAX_BOOKED_FILTERS));
-    for (let slot = 1; slot <= quantity; slot += 1) {
+    for (let n = 1; n <= quantity; n += 1) {
       if (filters.length >= MAX_BOOKED_FILTERS) return filters;
-      filters.push({ size, location, slot, media: filter.media });
+      filters.push({
+        size,
+        location,
+        slot: before + n,
+        media: filter.media,
+        ...(before ? { listedAgain: true } : {}),
+      });
     }
+    counted.set(place, before + quantity);
   }
   return filters;
 }
@@ -270,7 +295,16 @@ export function servicesReportProblems(
   booked: readonly ReportableVisitService[],
   report: Pick<VisitServicesReport, 'services' | 'filters'> | null | undefined,
   filters: readonly BookedFilter[] = [],
-  options: { assessFilters?: boolean } = {},
+  options: {
+    assessFilters?: boolean;
+    /**
+     * The server's side only: a register `listedAgain` with no answer is not a
+     * problem, because a phone built before its slots ran on asked one question
+     * for it and its twin. Refusing that would stop a technician submitting a
+     * job they finished. The phone itself never passes this.
+     */
+    acceptOlderPhones?: boolean;
+  } = {},
 ): string[] {
   const problems: string[] = [];
   for (const service of booked) {
@@ -293,6 +327,7 @@ export function servicesReportProblems(
     const answer = answers.get(filterKey(filter));
     // Not at the property: removing it was the answer.
     if (answer?.removed) continue;
+    if (!answer && filter.listedAgain && options.acceptOlderPhones) continue;
     const label = answer ? filterLabel(answer, slotsOf(filters, filter)) : filterLabel(filter, slotsOf(filters, filter));
     if (!answer) problems.push(`Answer for the ${label} filter.`);
     else if (answer.changed && !answer.photoId && !answer.photoKey)
@@ -312,24 +347,42 @@ export function servicesReportProblems(
 }
 
 /**
- * The sizes actually installed, for the office's note.
+ * Every filter actually installed, one entry each: a size appears as many times
+ * as it was installed.
  *
  * From the per-register answers where the report has them, and from
  * `filtersInstalled` otherwise, so a report made before the office asked for a
  * photograph of each register still reads the same way.
+ *
+ * Not de-duplicated. It used to be, as a list of *sizes*, and the office's note
+ * -- which the invoice is made from -- said "installed 12x24x1, 16x25x1" for
+ * three filters, two of them 16x25x1 (2026-10-06). See `installedFiltersSummary`.
  */
-export function installedSizes(
+export function installedFilters(
   report: Pick<VisitServicesReport, 'filters' | 'filtersInstalled'> | null | undefined,
 ): string[] {
   if (!report) return [];
-  if (!report.filters?.length) return [...new Set(report.filtersInstalled)];
-  return [
-    ...new Set(
-      report.filters
-        .filter((filter) => filter.changed && !filter.removed)
-        .map((filter) => filter.actualSize || filter.size),
-    ),
-  ];
+  if (!report.filters?.length) return [...report.filtersInstalled];
+  return report.filters
+    .filter((filter) => filter.changed && !filter.removed)
+    .map((filter) => filter.actualSize || filter.size);
+}
+
+/**
+ * What was installed, counted, in the order first installed: "3 filters:
+ * 1 × 12x24x1, 2 × 16x25x1". What the office's Jobber note and the console say,
+ * so the two cannot disagree with each other or with the count invoiced. Null
+ * when nothing was installed.
+ */
+export function installedFiltersSummary(
+  report: Pick<VisitServicesReport, 'filters' | 'filtersInstalled'> | null | undefined,
+): string | null {
+  const installed = installedFilters(report);
+  if (!installed.length) return null;
+  const counts = new Map<string, number>();
+  for (const size of installed) counts.set(size, (counts.get(size) ?? 0) + 1);
+  const sizes = [...counts].map(([size, count]) => `${count} × ${size}`).join(', ');
+  return `${installed.length} filter${installed.length === 1 ? '' : 's'}: ${sizes}`;
 }
 
 /** The registers the technician did not change, with the reason each time. */

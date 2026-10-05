@@ -60,7 +60,9 @@ describe('the report stored with a submission', () => {
         filterChange: { done: true, reason: null, reschedule: false },
         pestControl: { done: false, reason: 'Tenant asked not to spray today.', reschedule: true },
       },
-      filtersInstalled: ['20x25x1', '12x12x1'],
+      // One entry per filter installed, a size as often as it went in: the
+      // count is what is invoiced.
+      filtersInstalled: ['20x25x1', '20x25x1', '12x12x1'],
       notes: 'Hallway register was blocked.',
     });
   });

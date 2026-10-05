@@ -245,7 +245,7 @@ describe('what the technician reported', () => {
     expect(within(reported).getByText('Done')).toBeInTheDocument();
     expect(within(reported).getByText('Not done')).toBeInTheDocument();
     expect(within(reported).getByText('Reschedule')).toBeInTheDocument();
-    expect(within(reported).getByText('20x25x4, 12x24x1')).toBeInTheDocument();
+    expect(within(reported).getByText('2 filters: 1 × 20x25x4, 1 × 12x24x1')).toBeInTheDocument();
     expect(within(reported).getByText('Return air grille was blocked.')).toBeInTheDocument();
   });
 
@@ -284,7 +284,27 @@ describe('what the technician reported', () => {
     expect(within(registers).getByText('Register painted over')).toBeInTheDocument();
     expect(within(registers).getByText('Photograph still uploading')).toBeInTheDocument();
     expect(within(registers).getByText('Found on site')).toBeInTheDocument();
-    expect(screen.getByText(/20x25x1, 16x20x1/)).toBeInTheDocument();
+    expect(screen.getByText('3 filters: 2 × 20x25x1, 1 × 16x20x1')).toBeInTheDocument();
+  });
+
+  // 5706 Micah Ln read "still uploading" for four days after the job was
+  // submitted: the office waited for a photograph that was never coming.
+  it('calls a photograph missing a day after the job was submitted, not still uploading', () => {
+    show({
+      status: 'REVIEW_REQUIRED',
+      submittedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      servicesReport: {
+        services: { filterChange: { done: true, reason: null, reschedule: false } },
+        filters: [
+          { size: '16x25x1', location: null, slot: 1, changed: true, reason: null, photoId: null, photoKey: 'snapshot-1', booked: true },
+        ],
+        filtersInstalled: [],
+        notes: null,
+      },
+    });
+
+    expect(screen.getByText('Photograph never arrived')).toBeInTheDocument();
+    expect(screen.queryByText('Photograph still uploading')).toBeNull();
   });
 
   it('shows one photograph of all the filters once, named for every filter in it', () => {

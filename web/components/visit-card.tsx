@@ -2,7 +2,7 @@
 
 import {
   filterLabel,
-  installedSizes,
+  installedFiltersSummary,
   isFinishedStatus,
   parseVisitDetails,
   REPORTABLE_VISIT_SERVICES,
@@ -215,7 +215,11 @@ export function VisitCard({
         ) : null}
 
         {report ? (
-          <ServicesDone report={report} reportedAt={inspection.servicesReportedAt ?? null} />
+          <ServicesDone
+            report={report}
+            reportedAt={inspection.servicesReportedAt ?? null}
+            submittedAt={inspection.submittedAt ?? null}
+          />
         ) : null}
 
         {tasks.length ? (
@@ -313,8 +317,26 @@ function visitTasks(read: VisitDetails): { text: string; heading: boolean }[] {
   });
 }
 
+/**
+ * How long after the job was submitted a photograph still missing is called
+ * missing rather than uploading. A phone in a cupboard with no signal sends it
+ * when the signal returns, which is hours at most; days means it is not coming.
+ */
+const PHOTO_OVERDUE_MS = 24 * 60 * 60 * 1000;
+
 /** What the technician reported doing: the part a reviewer reads. */
-function ServicesDone({ report, reportedAt }: { report: VisitServicesReport; reportedAt: string | null }) {
+function ServicesDone({
+  report,
+  reportedAt,
+  submittedAt,
+}: {
+  report: VisitServicesReport;
+  reportedAt: string | null;
+  submittedAt: string | null;
+}) {
+  // "Still uploading" four days on told the office to wait for a photograph
+  // that was never coming (5706 Micah Ln, 2026-10-02 to 10-06).
+  const overdue = submittedAt ? Date.now() - Date.parse(submittedAt) > PHOTO_OVERDUE_MS : false;
   return (
     <section aria-label="Services done" className="grid gap-2">
       <h3 className="text-muted-foreground text-xs">
@@ -336,9 +358,10 @@ function ServicesDone({ report, reportedAt }: { report: VisitServicesReport; rep
           );
         })}
       </ul>
-      {installedSizes(report).length ? (
+      {/* Counted, as the Jobber note says it: the invoice is made from it. */}
+      {installedFiltersSummary(report) ? (
         <p className="text-sm">
-          Filters installed: <span className="font-mono">{installedSizes(report).join(', ')}</span>
+          Filters installed: <span className="font-mono">{installedFiltersSummary(report)}</span>
         </p>
       ) : null}
       {/* Each register the technician answered for, once the office asked for a
@@ -373,7 +396,11 @@ function ServicesDone({ report, reportedAt }: { report: VisitServicesReport; rep
                 <span className="text-muted-foreground text-xs">{filterScore(filter)}</span>
               ) : null}
               {filter.changed && !filter.photoId && !filter.removed ? (
-                <span className="text-warning text-xs">Photograph still uploading</span>
+                overdue ? (
+                  <span className="text-destructive text-xs">Photograph never arrived</span>
+                ) : (
+                  <span className="text-warning text-xs">Photograph still uploading</span>
+                )
               ) : null}
             </li>
           ))}
