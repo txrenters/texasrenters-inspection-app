@@ -131,9 +131,10 @@ export default function TechnicianDetailPage() {
   const [state, setState] = useUrlState({ page: 1 });
   const technician = useTechnician(id);
   const assignments = useAssignments({ technicianId: id, page: state.page, pageSize: 20 });
-  // Today, in the technician's own calendar day. The schema stores a date with
-  // no clock value, so there is no narrower window to ask for.
-  const today = new Date().toISOString().slice(0, 10);
+  // Today, in the technician's own calendar day -- Texas's, not UTC's, which
+  // turns over at 7 PM there. The schema stores a date with no clock value, so
+  // there is no narrower window to ask for.
+  const today = localToday();
   // The route is built from the technician's live position, so it needs the
   // location grant rather than the directory one — the rest of this page does
   // not.

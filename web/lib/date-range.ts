@@ -1,10 +1,13 @@
+import { businessDayRange } from './clock';
+
 /**
  * Calendar dates, and the instants a date-bounded API query needs.
  *
- * Everything here is deliberately **local**. A coordinator picking "1 September"
- * means their own 1 September; the API compares against `scheduledAt`, a
- * timestamp, so getting the conversion wrong shifts results by a day in one
- * direction and silently truncates a range in the other.
+ * A date picked is a calendar date, carried as `yyyy-MM-dd` and built from a
+ * Date's local parts so the picker never moves it. The instants a query sends
+ * are **Texas** midnights (the office, 2026-10-06: "we are not using Manila
+ * time"): "1 September" from the Manila office is the field's 1 September, not
+ * a day that ended thirteen hours before it.
  */
 
 /**
@@ -30,25 +33,22 @@ export function fromDateValue(value: string | undefined): Date | undefined {
 }
 
 /**
- * The lower bound of a date filter: the first instant of that local day, as an
+ * The lower bound of a date filter: the first instant of that Texas day, as an
  * ISO string. `undefined` when nothing is picked, so it drops out of the query.
  */
 export function dayStart(value: string | undefined) {
-  return fromDateValue(value)?.toISOString();
+  return value ? businessDayRange(value)?.from : undefined;
 }
 
 /**
- * The upper bound: the **last** instant of that local day.
+ * The upper bound: the **last** instant of that Texas day.
  *
  * Not midnight. The API's comparison is `lte` against a timestamp, so a bare
  * date would exclude everything scheduled after 00:00 on the very day the reader
  * chose — the end of the range would quietly go missing.
  */
 export function dayEnd(value: string | undefined) {
-  const date = fromDateValue(value);
-  if (!date) return undefined;
-  date.setHours(23, 59, 59, 999);
-  return date.toISOString();
+  return value ? businessDayRange(value)?.to : undefined;
 }
 
 /**

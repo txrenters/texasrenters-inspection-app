@@ -19,7 +19,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CLASSIFICATION_VARIANT, classLabel } from '@/lib/comparison-classification';
-import { EMPTY, formatDate, humanize } from '@/lib/format';
+import { EMPTY, formatDate, formatScheduledDate, humanize } from '@/lib/format';
 
 /**
  * How a photograph is fetched, which is the only thing that differs between the
@@ -296,7 +296,7 @@ export function ComparisonReportView({
               <div className="mt-1 space-y-0.5 text-sm">
                 <div>{report.moveIn.templateLabel ?? humanize(report.moveIn.type)}</div>
                 <div className="text-muted-foreground">
-                  {formatDate(report.moveIn.completedAt ?? report.moveIn.scheduledAt)}
+                  {report.moveIn.completedAt ? formatDate(report.moveIn.completedAt) : formatScheduledDate(report.moveIn.scheduledAt)}
                 </div>
                 <div className="text-muted-foreground">{report.moveIn.inspector ?? EMPTY}</div>
               </div>
@@ -306,7 +306,7 @@ export function ComparisonReportView({
               <div className="mt-1 space-y-0.5 text-sm">
                 <div>{report.moveOut.templateLabel ?? humanize(report.moveOut.type)}</div>
                 <div className="text-muted-foreground">
-                  {formatDate(report.moveOut.completedAt ?? report.moveOut.scheduledAt)}
+                  {report.moveOut.completedAt ? formatDate(report.moveOut.completedAt) : formatScheduledDate(report.moveOut.scheduledAt)}
                 </div>
                 <div className="text-muted-foreground">{report.moveOut.inspector ?? EMPTY}</div>
               </div>

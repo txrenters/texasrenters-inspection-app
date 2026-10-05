@@ -167,6 +167,35 @@ export function businessDayRange(date: string): { from: string; to: string } | n
   };
 }
 
+/** `yyyy-MM-dd`, some whole days before or after another: calendar arithmetic, with no zone in it. */
+export function shiftDay(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * A moment as the Texas wall clock a `datetime-local` field shows,
+ * `yyyy-MM-ddTHH:mm`. The field has no zone of its own, and left to the
+ * browser it reads the reader's: a correction made from Manila showed the
+ * technician's 9 AM as 10 PM.
+ */
+export function businessDateTimeValue(value: string | Date): string {
+  return new Date(texasWallClock(new Date(value))).toISOString().slice(0, 16);
+}
+
+/**
+ * A `datetime-local` value read as Texas wall-clock time, as an ISO instant;
+ * null for anything else. The offset is taken at the moment itself, so a time
+ * either side of a daylight-saving change lands on its own offset.
+ */
+export function fromBusinessDateTimeValue(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+  const naive = Date.parse(`${value}:00.000Z`);
+  if (Number.isNaN(naive)) return null;
+  const offsetAt = (instant: number) => texasWallClock(new Date(instant)) - instant;
+  const guess = naive - offsetAt(naive);
+  return new Date(naive - offsetAt(guess)).toISOString();
+}
+
 /**
  * A moment as a time of day in Texas -- "2:14 PM" -- or null if it is not one.
  *

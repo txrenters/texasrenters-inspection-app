@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PROPERTY_ZOOM } from '@/components/map-camera';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -211,6 +212,7 @@ export function PlanSchedule({
   onOpenStop,
   unscheduledCount = 0,
   onShowUnscheduled,
+  onToday,
   canChange = false,
   canMoveVisits = false,
   jobberEditsPushed = null,
@@ -233,6 +235,8 @@ export function PlanSchedule({
   /** Visits with no day yet, on the button that lists them. */
   unscheduledCount?: number;
   onShowUnscheduled?: () => void;
+  /** Today is in another quarter's calendar: open that quarter. Absent when it is in this one. */
+  onToday?: () => void;
   /** May change the plan: put a day in order, place a visit not booked yet. */
   canChange?: boolean;
   /** May reschedule a booked visit: the planner's grant and the inspections one. */
@@ -258,6 +262,13 @@ export function PlanSchedule({
   // The zones' ground is off too: one day on the map reads alone (the office, 2026-10-05), and it is a switch away.
   const [display, setDisplay] = useState<MapDisplay>({ ...DEFAULT_MAP_DISPLAY, zones: false });
   const [moving, setMoving] = useState<MovingVisit | null>(null);
+  /**
+   * A visit or booking clicked on the week or the day, which the map goes to
+   * with its details open (the office, 2026-10-06: "nothing happens if I click
+   * each property from the calendar"). Picking a day, or another day, lets go.
+   */
+  // `at` makes a second click on the same visit go back to it after the map was moved.
+  const [focus, setFocus] = useState<{ dayId: string; stopId: string; at: number } | null>(null);
   /** The calendar and the map fill the window on a large screen, as in the Group maker. */
   const fill = useFillHeight<HTMLDivElement>();
 
@@ -300,26 +311,50 @@ export function PlanSchedule({
       .sort((left, right) => (order.get(left.technicianId) ?? 0) - (order.get(right.technicianId) ?? 0));
   /**
    * To a date, and a view. The Day view is about the date, so the map follows
-   * it: that date's first technician-day, unless one of its days is picked already.
+   * it: that date's first technician-day, unless one of its days is picked
+   * already. Today does the same in any view -- the map shows today's route.
    */
-  const goTo = (date: string, next: CalendarView = view) => {
+  const goTo = (date: string, next: CalendarView = view, follow = next === 'day') => {
     const target = clampToCalendar(date, months);
     setCursor(target);
     if (next !== view) onViewChange(next);
-    if (next === 'day' && (!selected || dateOf(selected) !== target)) {
+    if (follow && (!selected || dateOf(selected) !== target)) {
       const first = daysOn(target)[0];
-      if (first) onSelect(first.id);
+      if (first) {
+        setFocus(null);
+        onSelect(first.id);
+      }
     }
+  };
+  /**
+   * Today, as Jobber's button: always there (the office, 2026-10-06, finding
+   * it greyed out on a quarter that starts in December). A quarter whose
+   * calendar does not reach today hands over to the one that does.
+   */
+  const goToToday = () => {
+    if (todayInQuarter || !onToday) goTo(today, view, true);
+    else onToday();
   };
   const pick = (dayId: string) => {
     const day = days.find((entry) => entry.id === dayId);
     if (day) setCursor(dateOf(day));
+    setFocus(null);
     onSelect(dayId);
+  };
+  /** A visit or booking clicked on the calendar: its day picked, and the map on it. */
+  const pickStop = (dayId: string, stopId: string) => {
+    const day = days.find((entry) => entry.id === dayId);
+    if (day) setCursor(dateOf(day));
+    if (dayId !== selected?.id) onSelect(dayId);
+    setFocus({ dayId, stopId, at: Date.now() });
+    setShowMap(true);
   };
   const previous = stepCursor(view, cursor, -1, months);
   const next = stepCursor(view, cursor, 1, months);
 
   const made = useMemo(() => planDaysFile(days, visits), [days, visits]);
+  /** The pin the map is on: a stop of the day picked, while it is still that day's. */
+  const focused = focus && focus.dayId === selected?.id ? (made.rowOfStop.get(focus.stopId) ?? null) : null;
   const route = usePlanDayRoute(planId, selected?.id);
   const group = selected ? (made.groupOf.get(selected.id) ?? null) : null;
   const home = route.data?.home ?? null;
@@ -351,11 +386,14 @@ export function PlanSchedule({
    * click moved a visit into it: the map frames again only when the key changes.
    */
   const frame = useMemo<MapFrame>(
-    () => ({
-      key: `${selected?.id ?? ''}:${origin ? 'home' : ''}`,
-      points: [...(group?.rows ?? []), ...(origin ? [origin] : [])],
-    }),
-    [group, origin, selected?.id],
+    () =>
+      focused && focus
+        ? { key: `stop:${focus.stopId}:${focus.at}`, points: [focused], zoom: PROPERTY_ZOOM }
+        : {
+            key: `${selected?.id ?? ''}:${origin ? 'home' : ''}`,
+            points: [...(group?.rows ?? []), ...(origin ? [origin] : [])],
+          },
+    [focus, focused, group, origin, selected?.id],
   );
 
   const optimizeDay = (day: PlanDay) =>
@@ -470,10 +508,9 @@ export function PlanSchedule({
               <ArrowRightIcon />
             </Button>
             <Button
-              disabled={!todayInQuarter}
-              onClick={() => goTo(today)}
+              onClick={goToToday}
               size="sm"
-              title={todayInQuarter ? undefined : 'Today is outside this quarter'}
+              title={todayInQuarter || !onToday ? undefined : 'Today is in another quarter: opens that one'}
               variant="outline"
             >
               Today
@@ -537,6 +574,8 @@ export function PlanSchedule({
             cursor={cursor}
             days={shownDays}
             filter={filter}
+            focusedStopId={focused ? focus?.stopId : undefined}
+            onFocusStop={pickStop}
             onOpenDate={(date) => goTo(date, 'day')}
             onSelect={pick}
             quarter={quarter}
@@ -588,6 +627,7 @@ export function PlanSchedule({
                 activeKey={selected?.id ?? null}
                 display={display}
                 fadeOthers
+                focusRow={focused?.rowNumber ?? null}
                 frame={frame}
                 groups={mapGroups}
                 onPickDay={pick}

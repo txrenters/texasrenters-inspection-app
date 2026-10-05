@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
+import { BUSINESS_TIME_ZONE } from '../common/business-day';
+
 import { MAIL_CONFIG, type MailConfig } from './mail.config';
 import type { MailTransport } from './microsoft-graph-mail.client';
 
@@ -167,10 +169,13 @@ export class MailService {
   }
 
   sendReportShare(input: { to: string; reportUrl: string; expiresAt: Date }) {
+    // The Texas date, as the console says it: left to the server's zone, an
+    // evening expiry in Houston read as the next day.
     const expiry = input.expiresAt.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
+      timeZone: BUSINESS_TIME_ZONE,
     });
     return this.deliver({
       to: input.to,

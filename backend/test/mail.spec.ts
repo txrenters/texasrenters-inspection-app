@@ -128,6 +128,23 @@ describe('Microsoft Graph mail integration', () => {
     expect(message.html).toContain('A1b2c3!');
   });
 
+  /** The office (2026-10-06): "we are not using Manila time" -- nor the server's. */
+  it('says a shared report’s expiry as its date in Texas', async () => {
+    const sendMail = jest.fn().mockResolvedValue(undefined);
+    const service = new MailService(configuredMail, { sendMail, verify: jest.fn() } satisfies MailTransport);
+
+    // 9 PM on 12 October in Houston: already the 13th in UTC and in Manila.
+    await service.sendReportShare({
+      to: 'tenant@example.com',
+      reportUrl: 'https://inspection.example/r/abc',
+      expiresAt: new Date('2026-10-13T02:00:00.000Z'),
+    });
+
+    const message = sendMail.mock.calls[0][0] as { html: string };
+    expect(message.html).toContain('October 12, 2026');
+    expect(message.html).not.toContain('October 13, 2026');
+  });
+
   it('returns a safe failure without leaking a private Graph diagnostic', async () => {
     const sendMail = jest.fn().mockRejectedValue(new Error('private Graph diagnostic'));
     const service = new MailService(configuredMail, {

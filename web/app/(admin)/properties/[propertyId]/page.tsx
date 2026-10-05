@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
-import { EMPTY, formatAddress, formatCount, formatDate, formatRelative } from '@/lib/format';
+import { EMPTY, formatAddress, formatCount, formatDate, formatRelative, formatScheduledDate } from '@/lib/format';
 import { useProperty } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
@@ -56,7 +56,7 @@ function LeaseEnd({ endDate }: { endDate?: string | null }) {
   const status = leaseExpiryStatus(endDate);
   return (
     <span className="grid gap-0.5">
-      {formatDate(endDate)}
+      {formatScheduledDate(endDate)}
       <span
         className={cn(
           'text-xs',
@@ -97,7 +97,7 @@ const UNIT_COLUMNS: Array<Column<UnitRow>> = [
     key: 'moveOut',
     header: 'Scheduled move-out',
     hideBelow: 'lg',
-    cell: (unit) => formatDate(unit.scheduledMoveOutDate),
+    cell: (unit) => formatScheduledDate(unit.scheduledMoveOutDate),
   },
   {
     key: 'status',
@@ -130,13 +130,13 @@ const LEASE_COLUMNS: Array<Column<LeaseRow>> = [
     header: 'Status',
     cell: (lease) => lease.sourceStatus ?? EMPTY,
   },
-  { key: 'start', header: 'Term start', hideBelow: 'md', cell: (lease) => formatDate(lease.startDate) },
+  { key: 'start', header: 'Term start', hideBelow: 'md', cell: (lease) => formatScheduledDate(lease.startDate) },
   { key: 'end', header: 'Term ends', cell: (lease) => <LeaseEnd endDate={lease.endDate} /> },
   {
     key: 'moveOut',
     header: 'Scheduled move-out',
     hideBelow: 'lg',
-    cell: (lease) => formatDate(lease.scheduledMoveOutDate),
+    cell: (lease) => formatScheduledDate(lease.scheduledMoveOutDate),
   },
 ];
 
@@ -232,7 +232,7 @@ export default function PropertyDetailPage() {
             </dd>
           ) : item.leaseSummary?.nextLeaseEndDate ? (
             <dd className="text-muted-foreground mt-0.5 text-xs">
-              Next lease ends {formatDate(item.leaseSummary.nextLeaseEndDate)} ·{' '}
+              Next lease ends {formatScheduledDate(item.leaseSummary.nextLeaseEndDate)} ·{' '}
               {leaseExpiryLabel(item.leaseSummary.nextLeaseEndDate).toLowerCase()}
             </dd>
           ) : (

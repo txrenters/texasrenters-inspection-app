@@ -3,6 +3,8 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { DayPicker } from 'react-day-picker';
 
+import { businessToday } from '@/lib/clock';
+import { fromDateValue } from '@/lib/date-range';
 import { cn } from '@/lib/utils';
 import { buttonVariants } from '@/components/ui/button';
 
@@ -14,9 +16,12 @@ export type CalendarProps = React.ComponentProps<typeof DayPicker>;
  * Styled against the app's own tokens rather than react-day-picker's defaults,
  * which assume a light theme and would render nearly invisible on this one.
  */
-export function Calendar({ className, classNames, showOutsideDays = true, ...props }: CalendarProps) {
+export function Calendar({ className, classNames, showOutsideDays = true, today, ...props }: CalendarProps) {
   return (
     <DayPicker
+      // Today is the field's (the office, 2026-10-06): left to the browser it is
+      // the reader's, and a Manila evening is already tomorrow in Texas.
+      today={today ?? fromDateValue(businessToday())}
       showOutsideDays={showOutsideDays}
       className={cn('p-3', className)}
       classNames={{

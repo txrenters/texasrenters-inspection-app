@@ -44,6 +44,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
+import { businessToday } from '@/lib/clock';
 import { formatRelative } from '@/lib/format';
 import {
   attentionOf,
@@ -457,6 +458,9 @@ export default function PlanningPage() {
     : [];
 
   const showVisits = (filter: VisitFilter) => setState({ tab: 'visits', show: filter });
+  /** The quarter today is in, in Texas: where Today goes from a quarter whose calendar does not reach it. */
+  const today = businessToday();
+  const todayQuarter = quarterKey(Number(today.slice(0, 4)), Math.floor((Number(today.slice(5, 7)) - 1) / 3) + 1);
 
   /** The quarter in a line, with what needs a look said in its colour (the office, 2026-10-05: no paragraphs). */
   const summary = plan
@@ -750,6 +754,8 @@ export default function PlanningPage() {
                   onOpenStop={setOpenStopId}
                   onSelect={(day) => setState({ day })}
                   onShowUnscheduled={() => showVisits('unscheduled')}
+                  // A new quarter opens on its first day from today on: today, when today is worked.
+                  onToday={todayQuarter === choice.key ? undefined : () => setState({ quarter: todayQuarter, day: '' })}
                   onViewChange={(next) => setState({ view: next })}
                   planId={plan.id}
                   quarter={quarter}

@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { EMPTY, formatDate, formatScheduledDate, humanize } from '@/lib/format';
+import { EMPTY, formatScheduledDate, humanize } from '@/lib/format';
 import { useChargeReport } from '@/lib/queries';
 
 function money(amount: number | null | undefined, currency = 'USD') {
@@ -183,7 +183,7 @@ export default function ChargeReportPage() {
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">Scheduled move-out</dt>
-            <dd className="mt-0.5 text-sm">{formatDate(data.property.scheduledMoveOut)}</dd>
+            <dd className="mt-0.5 text-sm">{formatScheduledDate(data.property.scheduledMoveOut)}</dd>
           </div>
         </dl>
       </ReportSection>

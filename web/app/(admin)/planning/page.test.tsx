@@ -38,19 +38,29 @@ vi.mock('@/components/planning/plan-days-map', () => ({
     groups,
     ungrouped,
     onRowClick,
+    focusRow,
+    frame,
   }: {
     groups: { rows: { rowNumber: number; address: string }[] }[];
     ungrouped: { rowNumber: number; address: string }[];
     onRowClick: (row: unknown) => void;
-  }) => (
-    <div data-testid="plan-days-map">
-      {[...groups.flatMap((group) => group.rows), ...ungrouped].map((row) => (
-        <button key={row.rowNumber} onClick={() => onRowClick(row)} type="button">
-          Pin of {row.address}
-        </button>
-      ))}
-    </div>
-  ),
+    focusRow?: number | null;
+    frame: { points: unknown[]; zoom?: number };
+  }) => {
+    const rows = [...groups.flatMap((group) => group.rows), ...ungrouped];
+    return (
+      <div data-testid="plan-days-map">
+        {rows.map((row) => (
+          <button key={row.rowNumber} onClick={() => onRowClick(row)} type="button">
+            Pin of {row.address}
+          </button>
+        ))}
+        {/* What the map shows open, and what it goes to. */}
+        <span>{`Details open: ${rows.find((row) => row.rowNumber === focusRow)?.address ?? 'none'}`}</span>
+        <span>{`Framed: ${frame.points.length} ${frame.points.length === 1 ? 'point' : 'points'}${frame.zoom ? ` at zoom ${frame.zoom}` : ''}`}</span>
+      </div>
+    );
+  },
 }));
 vi.mock('@/components/planning/group-file-map', () => ({ GroupFileMap: () => <div data-testid="group-file-map" /> }));
 // No road routes under test: nothing here may call Mapbox, and the list falls back to the file's own figures.
@@ -718,6 +728,77 @@ describe('the benefit package plan page', () => {
     expect(url.set).toHaveBeenCalledWith({ view: 'week' });
     fireEvent.click(screen.getByRole('button', { name: 'Open Thursday, October 1' }));
     expect(url.set).toHaveBeenCalledWith({ view: 'day' });
+  });
+
+  /**
+   * The office (2026-10-06), on a quarter that starts in December: "the Today
+   * button is not functioning ... it's just disabled". It is always there, and
+   * from a quarter whose calendar does not reach today it opens the one that does.
+   */
+  it('opens the quarter today is in from Today, when this quarter’s calendar does not reach it', () => {
+    // Saturday 19 September: the third quarter, and before Q4's first day.
+    mount();
+
+    const today = screen.getByRole('button', { name: 'Today' }) as HTMLButtonElement;
+    expect(today.disabled).toBe(false);
+    fireEvent.click(today);
+
+    expect(url.set).toHaveBeenCalledWith({ quarter: '2026-3', day: '' });
+  });
+
+  it('goes to today on a quarter whose calendar reaches it, a weekend going on to the Monday', () => {
+    // Q4 started early, on 17 September: Saturday the 19th is in its calendar.
+    mount({ plans: [{ ...PLAN, startsOn: '2026-09-17T00:00:00.000Z' }] });
+    expect(screen.getByRole('button', { name: 'October 2026: choose a month' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+
+    expect(screen.getByRole('button', { name: 'September 2026: choose a month' })).toBeTruthy();
+    expect(url.set).not.toHaveBeenCalledWith(expect.objectContaining({ quarter: expect.anything() }));
+  });
+
+  it('picks today’s first technician-day from Today, so the map shows today’s route', () => {
+    vi.setSystemTime(new Date('2026-10-01T15:00:00.000Z'));
+    url.state = { quarter: '2026-4', tab: 'schedule', day: 'day-2', view: 'month', show: 'all' };
+    mount({ otherDays: [{ ...DAY, id: 'day-2', date: '2026-10-02T00:00:00.000Z', stops: [] }] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+
+    expect(url.set).toHaveBeenCalledWith({ day: 'day-1' });
+  });
+
+  /**
+   * The office (2026-10-06): "if we click the property from the calendar
+   * schedule it should show ... the hover effect details ... it will zoom it in
+   * just like the other map".
+   */
+  it('puts the map on a property clicked in the week, with its details open, and back on the day from its technician', () => {
+    url.state = { quarter: '2026-4', tab: 'schedule', day: '', view: 'week', show: 'all' };
+    mount();
+    const map = screen.getByTestId('plan-days-map');
+    expect(within(map).getByText('Details open: none')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^2 Any St, hvac, on Moses Rivera’s day$/ }));
+
+    expect(within(map).getByText('Details open: s2 Any St')).toBeTruthy();
+    expect(within(map).getByText('Framed: 1 point at zoom 18')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^2 Any St,/ }).getAttribute('aria-current')).toBe('true');
+
+    // The technician's day, picked again: the whole day, nothing open.
+    fireEvent.click(screen.getByRole('button', { name: /^Thursday, October 1: Moses Rivera, 3 visits/ }));
+    expect(within(map).getByText('Details open: none')).toBeTruthy();
+    expect(within(map).queryByText(/^Framed: 1 point/)).toBeNull();
+  });
+
+  it('shows the map again for a property clicked while it was hidden', () => {
+    url.state = { quarter: '2026-4', tab: 'schedule', day: '', view: 'day', show: 'all' };
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide the map' }));
+    expect(screen.queryByTestId('plan-days-map')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^3 Any St, occupied, on Moses Rivera’s day$/ }));
+
+    expect(within(screen.getByTestId('plan-days-map')).getByText('Details open: s3 Any St')).toBeTruthy();
   });
 
   /** The office (2026-10-05): the paragraph and the strip of rules above every plan were noise. */

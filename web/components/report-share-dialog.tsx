@@ -45,9 +45,7 @@ function ShareRow({ share, inspectionId }: { share: AdminReportShare; inspection
     ? `mailto:${encodeURIComponent(share.recipientEmail)}?subject=${encodeURIComponent(
         'Your TexasRenters inspection report',
       )}&body=${encodeURIComponent(
-        `Hello,\n\nYour inspection report is ready to view:\n${url}\n\nThis link expires ${new Date(
-          share.expiresAt,
-        ).toLocaleDateString()}.`,
+        `Hello,\n\nYour inspection report is ready to view:\n${url}\n\nThis link expires ${formatDate(share.expiresAt)}.`,
       )}`
     : null;
 
