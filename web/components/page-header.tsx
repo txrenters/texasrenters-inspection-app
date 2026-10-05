@@ -22,7 +22,8 @@ export function PageHeader({
   className,
 }: {
   title: string;
-  description?: string;
+  /** A sentence, or a line of figures with controls in it (the benefit package plan's summary). */
+  description?: ReactNode;
   /**
    * Status alongside the title, not below it in the first card on the page.
    *
@@ -44,8 +45,10 @@ export function PageHeader({
           <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
           {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}
         </div>
-        {description ? (
-          <p className="text-muted-foreground max-w-2xl text-sm text-pretty">{description}</p>
+        {typeof description === 'string' ? (
+          description && <p className="text-muted-foreground max-w-2xl text-sm text-pretty">{description}</p>
+        ) : description ? (
+          <div className="text-muted-foreground text-sm">{description}</div>
         ) : null}
       </div>
       {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}

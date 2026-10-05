@@ -10,7 +10,6 @@ import { LeaseInspectionsController } from './lease-inspections.controller';
 import { LeaseInspectionScheduler } from './lease-inspections.scheduler';
 import { LateMoveOutService } from './late-move-outs.service';
 import { LeaseInspectionService } from './lease-inspections.service';
-import { PlanAdvisorService } from './plan-advisor.service';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
 import { PlanBuildGuard } from './plan-build-guard';
 import { PlanDayMoveService } from './plan-day-move.service';
@@ -37,7 +36,6 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     TbpPublishService,
     TbpPlanScheduler,
     TbpStopEditService,
-    PlanAdvisorService,
     PlanBuildGuard,
     LeaseInspectionService,
     LeaseInspectionScheduler,

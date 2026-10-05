@@ -1,6 +1,5 @@
 'use client';
 
-import { FileSpreadsheetIcon } from 'lucide-react';
 import { useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'sonner';
 
@@ -13,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Spinner } from '@/components/ui/spinner';
 import { readOfficeSheet } from '@/lib/planning';
 import { usePlanningMutations, type OfficeDetailsAddress, type OfficeDetailsImport } from '@/lib/planning-queries';
 
@@ -24,16 +22,20 @@ import { usePlanningMutations, type OfficeDetailsAddress, type OfficeDetailsImpo
  * and only the address and the services line are sent. What did not match is
  * shown straight after, because a row nobody matched is a tenancy whose visit
  * will carry a line written from the tenant report instead of the office's.
+ *
+ * A hook rather than a button, so the page can offer it from its More menu:
+ * `choose` opens the file picker, and `element` -- the picker and the result
+ * window -- is rendered outside the menu, which unmounts its items on close.
  */
-export function OfficeSheetImport({ planId, disabled }: { planId: string; disabled?: boolean }) {
+export function useOfficeSheetImport(planId: string | undefined) {
   const input = useRef<HTMLInputElement>(null);
   const { importOfficeDetails } = usePlanningMutations();
   const [result, setResult] = useState<(OfficeDetailsImport & { fileName: string; skipped: number }) | null>(null);
 
-  const choose = async (event: ChangeEvent<HTMLInputElement>) => {
+  const read = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (!file || !planId) return;
     const sheet = readOfficeSheet(await file.text());
     if (sheet.missing.length) {
       toast.error(`${file.name} is missing ${sheet.missing.join(' and ')}.`, {
@@ -54,25 +56,16 @@ export function OfficeSheetImport({ planId, disabled }: { planId: string; disabl
     );
   };
 
-  return (
+  const element = (
     <>
       <input
         accept=".csv,text/csv"
         aria-label="The office’s sheet of visit Details, as CSV"
         className="hidden"
-        onChange={(event) => void choose(event)}
+        onChange={(event) => void read(event)}
         ref={input}
         type="file"
       />
-      <Button
-        disabled={disabled || importOfficeDetails.isPending}
-        onClick={() => input.current?.click()}
-        size="sm"
-        variant="outline"
-      >
-        {importOfficeDetails.isPending ? <Spinner /> : <FileSpreadsheetIcon />}
-        Import office sheet
-      </Button>
 
       <Dialog onOpenChange={(open) => !open && setResult(null)} open={Boolean(result)}>
         <DialogContent className="sm:max-w-lg">
@@ -108,6 +101,8 @@ export function OfficeSheetImport({ planId, disabled }: { planId: string; disabl
       </Dialog>
     </>
   );
+
+  return { choose: () => input.current?.click(), pending: importOfficeDetails.isPending, element };
 }
 
 function Addresses({ heading, rows }: { heading: string; rows: OfficeDetailsAddress[] }) {

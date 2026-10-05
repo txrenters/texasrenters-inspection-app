@@ -140,18 +140,20 @@ export function loadGroupFile(
 }
 
 /**
- * Which groups file the Groups tab shows: one chosen in this browser, or else
- * the server's.
+ * Which groups file the plan's Schedule shows in place of its calendar: one
+ * chosen in this browser, or the server's, or none.
  *
- * The server's is the default (the office, 2026-09-30: "load this file by
- * default"), so the tab opens on it with nothing to choose. Going back to the
- * quarter's days is remembered while the page is open, so the default does not
- * reappear on the next render; a file chosen here wins until the page is left.
+ * None until asked, from the page's More menu. The Groups tab that opened on
+ * the server's file by default (the office, 2026-09-30: "load this file by
+ * default") went on 2026-10-05, when the plan became a calendar beside a map,
+ * and the server's file is now fetched only when it is asked for: it names
+ * every tenant, and a page that never shows it has no business holding it.
  */
-export function useGroupFileChoice(enabled: boolean) {
-  const server = useGroupFileOnServer(enabled);
+export function useGroupFileChoice() {
+  const [asked, setAsked] = useState(false);
+  const server = useGroupFileOnServer(asked);
   const [chosen, setChosen] = useState<LoadedGroupFile | null>(null);
-  const [closed, setClosed] = useState(false);
+  const [closed, setClosed] = useState(true);
   const fromServer = useMemo(
     () =>
       server.data
@@ -160,12 +162,26 @@ export function useGroupFileChoice(enabled: boolean) {
     [server.data],
   );
   const serverFile = fromServer && 'loaded' in fromServer ? fromServer.loaded : null;
+  const wanted = !chosen && !closed;
 
   return {
     shown: chosen ?? (closed ? null : serverFile),
-    serverFile,
-    /** The server's file is there but cannot be drawn: said, rather than silently not opening. */
-    serverProblem: fromServer && 'problem' in fromServer ? fromServer.problem : null,
+    /**
+     * What became of the server's file, while it is the one asked for and is
+     * not on the map: on its way, not there, or there and unreadable -- said,
+     * rather than silently not opening.
+     */
+    serverNote: !wanted
+      ? null
+      : server.isFetching
+        ? 'Opening the server’s groups file…'
+        : server.isError
+          ? `The server’s groups file could not be opened: ${server.error.message}`
+          : server.isSuccess && server.data === null
+            ? 'The server has no groups file.'
+            : fromServer && 'problem' in fromServer
+              ? `The server’s groups file could not be opened: ${fromServer.problem}`
+              : null,
     choose: (loaded: LoadedGroupFile) => {
       setChosen(loaded);
       setClosed(false);
@@ -175,6 +191,7 @@ export function useGroupFileChoice(enabled: boolean) {
       setClosed(true);
     },
     showServerFile: () => {
+      setAsked(true);
       setChosen(null);
       setClosed(false);
     },
@@ -197,21 +214,39 @@ export function GroupFilePicker({
   onLoad: (loaded: LoadedGroupFile) => void;
   variant?: 'outline' | 'ghost';
 }) {
+  const picker = useGroupFilePicker(onLoad);
+  return (
+    <>
+      {picker.element}
+      <Button onClick={picker.choose} size="sm" variant={variant}>
+        <FileSpreadsheetIcon />
+        {label}
+      </Button>
+    </>
+  );
+}
+
+/**
+ * The same without its button, for a menu item: `choose` opens the file
+ * picker, and `element` -- the picker itself -- is rendered outside the menu,
+ * which unmounts its items when it closes.
+ */
+export function useGroupFilePicker(onLoad: (loaded: LoadedGroupFile) => void) {
   const input = useRef<HTMLInputElement>(null);
 
-  const choose = async (event: ChangeEvent<HTMLInputElement>) => {
+  const read = async (event: ChangeEvent<HTMLInputElement>) => {
     const chosen = event.target.files?.[0];
     // Cleared, so choosing the same file again after replacing it on disk reads it again.
     event.target.value = '';
     if (!chosen) return;
-    const read = loadGroupFile(chosen.name, await chosen.text(), 'browser', Date.now());
-    if ('problem' in read) {
-      toast.error(read.problem, {
+    const loaded = loadGroupFile(chosen.name, await chosen.text(), 'browser', Date.now());
+    if ('problem' in loaded) {
+      toast.error(loaded.problem, {
         description: 'A groups file needs group, address, latitude and longitude columns, named in its first row.',
       });
       return;
     }
-    const { file } = read.loaded;
+    const { file } = loaded.loaded;
     if (file.skippedRows.length)
       toast.warning(
         `${file.skippedRows.length.toLocaleString()} ${file.skippedRows.length === 1 ? 'row is' : 'rows are'} not on the map`,
@@ -219,25 +254,22 @@ export function GroupFilePicker({
           description: `No group, or no latitude and longitude: row${file.skippedRows.length === 1 ? '' : 's'} ${file.skippedRows.join(', ')} of ${chosen.name}.`,
         },
       );
-    onLoad(read.loaded);
+    onLoad(loaded.loaded);
   };
 
-  return (
-    <>
+  return {
+    choose: () => input.current?.click(),
+    element: (
       <input
         accept=".csv,text/csv"
         aria-label="A groups file, as CSV"
         className="hidden"
-        onChange={(event) => void choose(event)}
+        onChange={(event) => void read(event)}
         ref={input}
         type="file"
       />
-      <Button onClick={() => input.current?.click()} size="sm" variant={variant}>
-        <FileSpreadsheetIcon />
-        {label}
-      </Button>
-    </>
-  );
+    ),
+  };
 }
 
 /**

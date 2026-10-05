@@ -29,7 +29,7 @@ vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
  * screen that has nothing to do with the map.
  */
 vi.mock('@/lib/queries', () => ({ useTechnicianLocations: () => ({ data: [] }) }));
-const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: '' }, set: vi.fn() }));
+const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'schedule', day: '', view: 'month', show: 'all' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 // The maps load Google's script; the page around them is what is under test.
 // The Days map hands each property's click back; a button per property stands in for its pin.
@@ -52,7 +52,6 @@ vi.mock('@/components/planning/plan-days-map', () => ({
     </div>
   ),
 }));
-vi.mock('@/components/planning/plan-groups-map', () => ({ PlanGroupsMap: () => <div data-testid="plan-groups-map" /> }));
 vi.mock('@/components/planning/group-file-map', () => ({ GroupFileMap: () => <div data-testid="group-file-map" /> }));
 // No road routes under test: nothing here may call Mapbox, and the list falls back to the file's own figures.
 vi.mock('@/components/planning/road-routes', async (importOriginal) => ({
@@ -192,8 +191,6 @@ function mount({
   day = DAY as Record<string, unknown>,
   otherDays = [] as Record<string, unknown>[],
   editStop = idle as unknown,
-  advice = null as unknown,
-  applyAdvice = null as unknown,
   groupFile = null as unknown,
   templates = [] as unknown[],
   lateMoveOuts = { conflicts: [], jobberEditsPushed: true } as unknown,
@@ -203,7 +200,7 @@ function mount({
   moveToDay = idle as unknown,
 } = {}) {
   hooks.usePlanLateMoveOuts.mockReturnValue({ data: lateMoveOuts });
-  hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile });
+  hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile, isSuccess: true, isFetching: false, isError: false });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
   hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [day, ...otherDays] : [] });
@@ -230,8 +227,6 @@ function mount({
     setType: idle,
     exclude: idle,
     publish: idle,
-    advice: advice ?? idle,
-    applyAdvice: applyAdvice ?? idle,
     moveToMonday,
     optimizeDay,
     optimizeDays,
@@ -240,9 +235,13 @@ function mount({
   return render(<PlanningPage />);
 }
 
+/** Opens a menu as a pointer does: Radix opens on pointer-down, not on click. */
+const openMenu = (name: string) =>
+  fireEvent.pointerDown(screen.getByRole('button', { name }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+
 beforeEach(() => {
   vi.clearAllMocks();
-  url.state = { quarter: '2026-4', tab: 'days', day: '' };
+  url.state = { quarter: '2026-4', tab: 'schedule', day: '', view: 'month', show: 'all' };
   // Saturday 19 September 2026 in Texas: Q4 may start from today to 16 October.
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-09-19T15:00:00.000Z'));
@@ -254,12 +253,11 @@ afterEach(() => {
 
 describe('the benefit package plan page', () => {
   /**
-   * The office (2026-09-30): "Load this file by default." The server's groups
-   * file opens on the Groups tab with nothing to choose and says where it came
-   * from; going back to the quarter's days offers it again.
+   * The office (2026-09-30): "Load this file by default." The Groups tab that
+   * opened it went on 2026-10-05; the server's file is in More, and is drawn in
+   * place of the calendar until the office goes back to it.
    */
-  it('opens the server’s groups file on the Groups tab by default, and offers it again after going back', () => {
-    url.state = { quarter: '2026-4', tab: 'groups', day: '' };
+  it('shows the server’s groups file in place of the calendar when asked, and goes back to the calendar', () => {
     mount({
       groupFile: {
         fileName: 'groups.csv',
@@ -272,6 +270,9 @@ describe('the benefit package plan page', () => {
       },
     });
 
+    openMenu('More');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Show the server’s groups file' }));
+
     expect(hooks.useGroupFileOnServer).toHaveBeenCalledWith(true);
     expect(screen.getByText('groups.csv')).toBeTruthy();
     expect(screen.getByText(/from the server’s data folder/)).toBeTruthy();
@@ -280,14 +281,24 @@ describe('the benefit package plan page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Back to the quarter’s days/ }));
     expect(screen.queryByText(/from the server’s data folder/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Show groups.csv' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'October 2026' })).toBeTruthy();
   });
 
   /** It names every tenant: a page that never shows it has no business asking for it. */
-  it('does not ask the server for the groups file until the Groups tab is open', () => {
+  it('does not ask the server for the groups file until somebody asks to see it', () => {
     mount();
     expect(hooks.useGroupFileOnServer).toHaveBeenCalledWith(false);
     expect(hooks.useGroupFileOnServer).not.toHaveBeenCalledWith(true);
+  });
+
+  it('says so when the server has no groups file', () => {
+    mount({ groupFile: null });
+
+    openMenu('More');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Show the server’s groups file' }));
+
+    expect(screen.getByText('The server has no groups file.')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'October 2026' })).toBeTruthy();
   });
 
   it('offers to build a quarter that has no plan yet', () => {
@@ -662,7 +673,8 @@ describe('the benefit package plan page', () => {
     const success = vi.spyOn(toast, 'success');
     mount();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Filter sizes' }));
+    openMenu('More');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh filter sizes' }));
 
     const [planId, handlers] = idle.mutate.mock.calls.at(-1)! as [
       string,
@@ -689,26 +701,38 @@ describe('the benefit package plan page', () => {
     );
   });
 
-  /** The office asked for the quarter as a calendar too (2026-09-17). */
-  it('shows the plan as a calendar, and opens a day picked there in the Days tab', () => {
-    url.state = { quarter: '2026-4', tab: 'calendar', day: '' };
+  /** The office (2026-10-05): the calendar beside the map, as Jobber's schedule, and the day picked drawn on it. */
+  it('shows the plan as a calendar, and picks a day clicked there for the map beside it', () => {
     mount();
 
+    expect(screen.getByTestId('plan-days-map')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^Thursday, October 1: Moses Rivera, 3 visits/ }));
 
-    expect(url.set).toHaveBeenCalledWith({ tab: 'days', day: 'day-1' });
+    expect(url.set).toHaveBeenCalledWith({ day: 'day-1' });
   });
 
-  it('states the working days and the day limits in plain words', () => {
+  it('switches the calendar to a week or a day, and opens a date’s day from its number', () => {
     mount();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Week' }));
+    expect(url.set).toHaveBeenCalledWith({ view: 'week' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open Thursday, October 1' }));
+    expect(url.set).toHaveBeenCalledWith({ view: 'day' });
+  });
+
+  /** The office (2026-10-05): the paragraph and the strip of rules above every plan were noise. */
+  it('keeps the rules and the quarter’s facts behind the ⓘ, in plain words', () => {
+    mount();
+
+    expect(screen.queryByText(/Building asks who goes out/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'How days are built' }));
+
     // The quarter's US holidays, found by the planner rather than typed in.
-    expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
+    expect(screen.getByText('Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
     expect(screen.getByText("Oct 1, the quarter's first day")).toBeTruthy();
     // Days of nine, room for the office's own, and no drive over twenty minutes between properties (2026-09-19).
-    expect(screen.getByText('Over 10 visits, 6 hr inspecting, or 20 min between properties')).toBeTruthy();
-    expect(screen.getByText('9, and up to 10 where the properties are within 5 minutes of each other')).toBeTruthy();
-    expect(screen.getByText('never more than 20 min from one to the next; fewer visits where they are further apart')).toBeTruthy();
+    expect(screen.getByText('9 visits a day, up to 10 where the properties are within 5 minutes of each other.')).toBeTruthy();
+    expect(screen.getByText('Never more than 20 minutes from one property to the next.')).toBeTruthy();
     // How far the crew's homes may be from a zone is not a limit on a day.
     expect(screen.queryByText(/90 min/)).toBeNull();
     expect(screen.queryByText(/360/)).toBeNull();
@@ -834,7 +858,8 @@ describe('the benefit package plan page', () => {
   it('counts a visit still without its unit as needing attention', () => {
     mount({ stops: [stop('s1'), stop('s2', { unitResolution: 'UNRESOLVED' })] });
 
-    expect(screen.getByRole('tab', { name: 'Needs attention (1)' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '1 needs attention' }));
+    expect(url.set).toHaveBeenCalledWith({ tab: 'visits', show: 'attention' });
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -844,7 +869,7 @@ describe('the benefit package plan page', () => {
    * already has says so.
    */
   it('chooses the unit of a visit waiting for one where it is listed', async () => {
-    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'attention' };
     const units = [
       { id: 'unit-house', name: 'House', addressLine1: '4815 N Fictional St' },
       { id: 'unit-half', name: '1/2', addressLine1: '4815 1/2 N Fictional St' },
@@ -879,7 +904,7 @@ describe('the benefit package plan page', () => {
    * not planning now cause we are fetching".
    */
   it('does not offer to plan a quarter that is already under way', () => {
-    url.state = { quarter: '2026-3', tab: 'days', day: '' };
+    url.state = { quarter: '2026-3', tab: 'schedule', day: '', view: 'month', show: 'all' };
     mount({ plans: [] });
 
     expect(screen.getByText('Q3 2026 was run outside this plan')).toBeTruthy();
@@ -898,10 +923,11 @@ describe('the benefit package plan page', () => {
       assignedTechnicianId: null,
       assignedTechnician: null,
     });
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'all' };
     mount({ stops: [stop('s1'), stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1' }), waiting] });
 
-    expect(screen.getByRole('tab', { name: 'Scheduled (2)' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Unscheduled (1)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Scheduled 2' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unscheduled 1' })).toBeTruthy();
   });
 
   /**
@@ -910,7 +936,7 @@ describe('the benefit package plan page', () => {
    * so does this.
    */
   it('lists the visits published to Jobber with no day, and opens one to place it', () => {
-    url.state = { quarter: '2026-4', tab: 'unscheduled', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'unscheduled' };
     const waiting = stop('s2', {
       status: 'UNSCHEDULED',
       scheduledOn: null,
@@ -920,8 +946,8 @@ describe('the benefit package plan page', () => {
     });
     mount({ plans: [{ ...PLAN, status: 'PUBLISHED' }], stops: [stop('s1'), waiting] });
 
-    expect(screen.getByRole('tab', { name: 'Unscheduled (1)' })).toBeTruthy();
-    expect(screen.getByText(/In Jobber with no day on them/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unscheduled 1' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText(/a published one is also in Jobber’s Unscheduled list/)).toBeTruthy();
     expect(within(screen.getByTestId('plan-attention-map')).getByText('s2: NO_DAY')).toBeTruthy();
   });
 
@@ -931,7 +957,7 @@ describe('the benefit package plan page', () => {
    * changeable whatever the quarter's state.
    */
   it('still lets a visit with no day be changed after the quarter is published', () => {
-    url.state = { quarter: '2026-4', tab: 'visits', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'all' };
     const failed = stop('s2', {
       status: 'FAILED',
       scheduledOn: null,
@@ -956,7 +982,7 @@ describe('the benefit package plan page', () => {
    * makita ni sila asa dapita?"
    */
   it('lays every visit needing attention out on a map, the planned ones behind them', () => {
-    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'attention' };
     const noDay = stop('s2', {
       status: 'BLOCKED',
       blockedCode: 'NOT_PLACED',
@@ -975,57 +1001,18 @@ describe('the benefit package plan page', () => {
   });
 
   it('says how many visits needing attention have no location to put on the map', () => {
-    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'attention' };
     const nowhere = stop('s2', { status: 'BLOCKED', scheduledOn: null, assignedTechnicianId: null, latitude: null, longitude: null });
     mount({ stops: [stop('s1'), nowhere] });
 
     expect(screen.getByText(/1 is not on the map: Propertyware has no location for the property\./)).toBeTruthy();
   });
 
-  /**
-   * The office (2026-09-20): "can you integrate ai into this also cause I have
-   * openai integrated already with the system". What it says, and the moves the
-   * rules allowed -- applied only when the office takes them.
-   */
-  it('shows what AI makes of the quarter, and applies the moves the office takes', async () => {
-    const advice = {
-      mutate: vi.fn((_planId: string, handlers: { onSuccess: (result: unknown) => void }) =>
-        handlers.onSuccess({
-          notes: ['Thu 1 Oct mixes four visits in one neighbourhood with one fifteen kilometres north.'],
-          proposed: 2,
-          moves: [
-            {
-              stopId: 's3',
-              address: '3 Any St',
-              fromDate: '2026-10-01',
-              toDate: '2026-10-02',
-              toTechnicianId: 'tech-2',
-              toTechnicianName: 'Kevin Grant',
-              savedMinutes: 14,
-              why: 'It is next to Kevin’s day.',
-            },
-          ],
-          refused: [{ stopId: 's2', address: '2 Any St', toDate: '2026-10-05', refused: 'It would not shorten the driving.' }],
-          savedMinutes: 14,
-          provider: 'OPENAI',
-          modelId: 'gpt-5.6-terra',
-          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
-        }),
-      ),
-      isPending: false,
-    };
-    const applyAdvice = { mutate: vi.fn(), isPending: false };
-    mount({ advice, applyAdvice });
+  /** The office (2026-10-05): "let's remove this Ask AI". */
+  it('offers no AI advice on the days', () => {
+    mount();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
-
-    expect(await screen.findByText(/mixes four visits in one neighbourhood/)).toBeTruthy();
-    expect(screen.getByText(/saves 14 min/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Apply 1 move/ }));
-    expect(applyAdvice.mutate.mock.calls[0][0]).toEqual({
-      planId: 'plan-1',
-      moves: [{ stopId: 's3', toDate: '2026-10-02', toTechnicianId: 'tech-2' }],
-    });
+    expect(screen.queryByRole('button', { name: /Ask AI/ })).toBeNull();
   });
 
   /**
@@ -1034,7 +1021,7 @@ describe('the benefit package plan page', () => {
    * a day and a technician are given, and the list now says so.
    */
   it('opens a visit the planner could not place, to give it a day and a technician', async () => {
-    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'attention' };
     const blocked = stop('s1', {
       status: 'BLOCKED',
       blockedCode: 'NOT_PLACED',
@@ -1080,9 +1067,7 @@ describe('the benefit package plan page', () => {
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('25 min drive · over the 20 min between properties')).toBeTruthy();
-    expect(screen.getByRole('navigation', { name: 'Planned technician-days' }).textContent).toContain('a 25 min drive between properties');
-    const stat = screen.getByText('Days outside the rules').parentElement!.parentElement!;
-    expect(within(stat).getByText('1').className).toContain('text-destructive');
+    expect(screen.getByText('1 day outside the rules').className).toContain('text-destructive');
   });
 
   /** A plan built before days started from home, or for a technician with no home on file. */
@@ -1091,22 +1076,7 @@ describe('the benefit package plan page', () => {
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('not used')).toBeTruthy();
-    expect(within(day).getByText(/Optimize its route, or rebuild the plan, to route it from home/)).toBeTruthy();
-  });
-
-  /**
-   * The office (2026-10-02): the Days view works as the Group maker does -- each
-   * day listed as a group is, with its drive, its distance and the day it makes.
-   */
-  it('lists each day as the Group maker lists a group', () => {
-    mount();
-
-    const list = screen.getByRole('navigation', { name: 'Planned technician-days' });
-    expect(within(list).getByText('3 visits · 1 HVAC · Zone 1')).toBeTruthy();
-    expect(within(list).getByText(/^20 min drive/)).toBeTruthy();
-    expect(within(list).getByText('14 km')).toBeTruthy();
-    // On site and between the properties: the drive from home is not in the day.
-    expect(within(list).getByText(/Est\. day: 2 h 5 min/)).toBeTruthy();
+    expect(within(day).getByText(/Optimize the route to start it from home/)).toBeTruthy();
   });
 
   it('puts one day, or every day, in the order that drives least from home', () => {
@@ -1134,6 +1104,10 @@ describe('the benefit package plan page', () => {
       ],
     });
 
+    // Only the day picked is drawn (the office, 2026-10-05) until the others are asked for.
+    await screen.findByRole('button', { name: 'Pin of s1 Any St' });
+    expect(screen.queryByRole('button', { name: 'Pin of s4 Any St' })).toBeNull();
+    fireEvent.click(screen.getByRole('switch', { name: 'Show other days' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Pin of s4 Any St' }));
 
     const dialog = await screen.findByRole('alertdialog');
@@ -1164,6 +1138,7 @@ describe('the benefit package plan page', () => {
     };
     mount({ moveToDay, otherDays: [kevins] });
 
+    fireEvent.click(screen.getByRole('switch', { name: 'Show other days' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Pin of 9 Any St' }));
 
     const dialog = await screen.findByRole('alertdialog');
@@ -1219,7 +1194,7 @@ describe('the benefit package plan page', () => {
   });
 
   it('opens a visit’s details from the visits table', async () => {
-    url.state = { quarter: '2026-4', tab: 'visits', day: '' };
+    url.state = { quarter: '2026-4', tab: 'visits', day: '', view: 'month', show: 'all' };
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'Details of the visit at s3 Any St' }));
@@ -1232,13 +1207,15 @@ describe('the benefit package plan page', () => {
   it('shows the crew, the zone each day is in, and the Mondays kept for reschedules', () => {
     mount();
 
-    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · the crew on the planning profiles · a zone each, moving daily')).toBeTruthy();
-    // The zones turn daily, so a week heading names nobody's zone: each day says its own.
-    expect(screen.queryByText(/Zone 1 Moses/)).toBeNull();
+    // The zone is the day's own, on its chip and on its visits.
+    expect(screen.getByRole('button', { name: /^Thursday, October 1: Moses Rivera, 3 visits \(1 HVAC\), zone 1,/ })).toBeTruthy();
+    expect(screen.getAllByText('Katy · Zone 1').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'How days are built' }));
+    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall')).toBeTruthy();
     // Too far for a day's drive, so a trip -- planned when the quarter is rebuilt.
     expect(screen.getByText('Zone 5: a trip for whoever lives nearest, planned at the next Rebuild')).toBeTruthy();
-    expect(screen.getByText('kept free for rescheduled visits from week 2')).toBeTruthy();
-    expect(screen.getByText(/1 HVAC · Zone 1/)).toBeTruthy();
+    expect(screen.getByText(/Mondays from week 2 are kept free for rescheduled visits/)).toBeTruthy();
   });
 
   it('publishes a draft whose visits are all placed', () => {

@@ -1,7 +1,16 @@
 'use client';
 
-import { zoneNumberOf } from '@texasrenters/shared';
-import { RouteIcon } from 'lucide-react';
+import { zoneNumberOf, type Quarter } from '@texasrenters/shared';
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CalendarOffIcon,
+  ChevronDownIcon,
+  MapIcon,
+  RouteIcon,
+  SlidersHorizontalIcon,
+  XIcon,
+} from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
@@ -19,13 +28,14 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { businessToday } from '@/lib/clock';
 import { formatDistance } from '@/lib/format';
 import {
-  bookedInWords,
   dayClock,
   formatClock,
   formatMinutes,
@@ -33,7 +43,6 @@ import {
   leaveHomeAt,
   legOverLimit,
   limitState,
-  longestLegSeconds,
   type LimitState,
 } from '@/lib/planning';
 import {
@@ -42,15 +51,27 @@ import {
   type OptimizedPlanDay,
   type PlanDay,
   type PlanDayAnchor,
-  type PlanDayStop,
+  type PlanRotation,
   type PlanSettings,
 } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
+import { FilterPill, type FilterOption } from './filter-pill';
 import type { GroupFileRow } from './group-file';
-import { GroupBadge } from './group-file-legend';
 import { DEFAULT_MAP_DISPLAY, MapDisplaySwitches, type MapDisplay } from './group-file-view';
 import type { MapFrame } from './group-file-map';
+import {
+  calendarDates,
+  calendarTitle,
+  clampToCalendar,
+  dayTimeline,
+  PlanCalendar,
+  quarterCrew,
+  quarterMonths,
+  stepCursor,
+  type CalendarFilter,
+  type CalendarView,
+} from './plan-calendar';
 import type { DayStop } from './plan-day-groups';
 import { dayRouteView, planDaysFile, type DayMapEntry } from './plan-days-groups';
 import { formatDrive } from './road-routes';
@@ -75,19 +96,25 @@ const LIMIT_TEXT: Record<LimitState, string> = {
 /** Limit colour on a figure that is otherwise ordinary text: only near and over say anything. */
 const toneOf = (state: LimitState) => (state === 'within' ? '' : LIMIT_TEXT[state]);
 
-type TimelineEntry =
-  | (PlanDayStop & { kind: 'visit' })
-  | (Omit<PlanDayAnchor, 'kind'> & { kind: 'booked'; booking: PlanDayAnchor['kind'] });
-
-/** A day's visits and the move-outs and move-ins it is built around, in driving order. */
-function dayTimeline(day: PlanDay): TimelineEntry[] {
-  return [
-    ...day.stops.map((stop) => ({ ...stop, kind: 'visit' as const })),
-    ...(day.anchors ?? []).map((anchor) => ({ ...anchor, kind: 'booked' as const, booking: anchor.kind })),
-  ].sort((left, right) => (left.positionInDay ?? Number.MAX_SAFE_INTEGER) - (right.positionInDay ?? Number.MAX_SAFE_INTEGER));
-}
-
 const BOOKING_LABEL: Record<PlanDayAnchor['kind'], string> = { MOVE_OUT: 'Move-out', MOVE_IN: 'Move-in' };
+
+const VIEWS: { value: CalendarView; label: string }[] = [
+  { value: 'month', label: 'Month' },
+  { value: 'week', label: 'Week' },
+  { value: 'day', label: 'Day' },
+];
+
+const TYPE_OPTIONS: FilterOption[] = [
+  { value: 'HVAC', label: 'HVAC inspections' },
+  { value: 'OCCUPIED', label: 'Occupied inspections' },
+  { value: 'BOOKED', label: 'Move-outs and move-ins' },
+];
+
+/** A visit on a day is either still the plan's, or booked in Jobber by a publish. */
+const STATUS_OPTIONS: FilterOption[] = [
+  { value: 'PLANNED', label: 'Not booked yet' },
+  { value: 'PUBLISHED', label: 'Booked in Jobber' },
+];
 
 /** What the office needs to do about a move-out or move-in a day is built around, if anything. */
 export function bookedProblem(
@@ -106,23 +133,21 @@ export function bookedProblem(
 /** Minutes driving between a day's properties, or null when nothing measured it. */
 const driveMinutes = (day: PlanDay) => (day.totalDriveSeconds === null ? null : Math.round(day.totalDriveSeconds / 60));
 
-/** The Monday a day's week starts on, `YYYY-MM-DD`. */
-function mondayOf(date: string) {
-  const day = new Date(date);
-  return new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
-}
-
-/** The Monday a day's week starts on, as its group heading. */
-function weekOf(date: string) {
-  const monday = new Date(`${mondayOf(date)}T00:00:00Z`);
-  return `Week of ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(monday)}`;
-}
-
 /** A day as the office names it: "Thu, Dec 17 · Moses Rodriguez". */
 const dayName = (day: PlanDay) => `${DAY.format(new Date(day.date))} · ${day.technician.displayName}`;
 
+const dateOf = (day: PlanDay) => day.date.slice(0, 10);
+
 /** Whether a day is behind us: its order is history, and nothing joins it. */
-const hasPassed = (day: PlanDay) => day.date.slice(0, 10) < businessToday();
+const hasPassed = (day: PlanDay) => dateOf(day) < businessToday();
+
+/** The day the page opens on: the first from today on, or the quarter's first when every day has passed. */
+function firstDayToShow(days: readonly PlanDay[]) {
+  const today = businessToday();
+  let next: PlanDay | null = null;
+  for (const day of days) if (dateOf(day) >= today && (!next || dateOf(day) < dateOf(next))) next = day;
+  return next ?? days[0] ?? null;
+}
 
 /**
  * The office's template group a day was laid out from: its colour and "Group 12
@@ -149,54 +174,6 @@ export function TemplateGroupTag({
   );
 }
 
-/** The zones a day's visits are in, as "Zone 2" or "Zones 1, 2". */
-function zonesOf(day: PlanDay) {
-  const zones = [...new Set(day.stops.map((stop) => zoneNumberOf(stop.zone)).filter((zone): zone is string => Boolean(zone)))];
-  zones.sort((left, right) => Number(left) - Number(right));
-  return zones.length ? `${zones.length === 1 ? 'Zone' : 'Zones'} ${zones.join(', ')}` : null;
-}
-
-/**
- * A day's figures in the list, as the Group maker writes a group's: "9 visits
- * · 43 min drive · 26.7 km", and under it the day that makes. The drive is
- * between its properties; the drive from home is said apart (the office,
- * 2026-10-02), and is not in the day.
- */
-function DayFigures({ day, settings }: { day: PlanDay; settings: PlanSettings }) {
-  const drive = driveMinutes(day);
-  const homeMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
-  const onSite = limitState(day.onSiteMinutes, settings.maxOnSiteMinutes);
-  const longest = longestLegSeconds(day);
-  return (
-    <>
-      <span className="text-muted-foreground block text-xs">
-        {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
-        {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
-        {day.anchors?.length ? ` · ${bookedInWords(day.anchors, 'bare')}` : ''}
-        {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
-      </span>
-      <span className="text-muted-foreground block text-xs">
-        {drive === null ? 'Drive not measured' : `${drive} min drive`}
-        {day.totalDriveMeters ? (
-          <>
-            {' · '}
-            <span className="text-road-distance font-medium">{formatDistance(day.totalDriveMeters)}</span>
-          </>
-        ) : null}
-      </span>
-      <span className="text-muted-foreground block text-xs">
-        <span className={toneOf(onSite)}>
-          Est. day: {formatDrive(day.onSiteMinutes * 60 + (day.totalDriveSeconds ?? 0))}
-        </span>
-        {day.originKind === 'HOME' && homeMinutes !== null ? ` · ${homeMinutes} min from home` : ''}
-      </span>
-      {legOverLimit(longest, settings.maxLegMinutes) ? (
-        <span className="text-destructive block text-xs">a {Math.round(longest! / 60)} min drive between properties</span>
-      ) : null}
-    </>
-  );
-}
-
 /** A day put in its best order, in words: what it did to the driving. */
 function optimizedInWords(days: readonly OptimizedPlanDay[]) {
   const changed = days.filter((day) => day.changed);
@@ -211,33 +188,51 @@ function optimizedInWords(days: readonly OptimizedPlanDay[]) {
 type MovingVisit = Extract<DayMapEntry, { kind: 'visit' }>;
 
 /**
- * The quarter's days, as the Group maker shows a template's groups (the office,
- * 2026-10-02): the map beside the list of days, the day picked drawn from the
- * technician's home with every leg's drive on it, a property clicked on the map
- * joining the day picked, and each day's route put in the order that drives
- * least from home with one click. The day's visits and times are listed under.
+ * The quarter's days as a schedule, laid out as Jobber's (the office,
+ * 2026-10-05): the calendar on the left -- a month, a week or a day -- with
+ * Team, Type and Status filters, and the map on the right drawing the day
+ * picked and nothing else, from the technician's home with each leg's drive.
+ * The other days come back faded behind a switch, for moving a visit into the
+ * day picked with a click on its property. The day's visits and times are
+ * listed under, with Optimize route.
  */
-export function PlanDays({
+export function PlanSchedule({
   planId,
+  quarter,
+  startsOn = null,
   days,
   visits,
   settings,
+  rotation = null,
   selectedDayId,
   onSelect,
+  view,
+  onViewChange,
   onOpenStop,
+  unscheduledCount = 0,
+  onShowUnscheduled,
   canChange = false,
   canMoveVisits = false,
   jobberEditsPushed = null,
 }: {
   planId: string;
+  quarter: Quarter;
+  /** The plan's own first day, `YYYY-MM-DD`, when it is not the quarter's. */
+  startsOn?: string | null;
   days: PlanDay[];
   /** Every visit of the quarter, with no day or with one: what the map can move into a day. */
   visits: readonly DayStop[];
   settings: PlanSettings;
+  rotation?: PlanRotation | null;
   selectedDayId: string;
   onSelect: (dayId: string) => void;
+  view: CalendarView;
+  onViewChange: (view: CalendarView) => void;
   /** A stop's pin or row was clicked: open its details. */
   onOpenStop?: (stopId: string) => void;
+  /** Visits with no day yet, on the button that lists them. */
+  unscheduledCount?: number;
+  onShowUnscheduled?: () => void;
   /** May change the plan: put a day in order, place a visit not booked yet. */
   canChange?: boolean;
   /** May reschedule a booked visit: the planner's grant and the inspections one. */
@@ -245,21 +240,86 @@ export function PlanDays({
   /** Whether the console's edits reach Jobber; null when not known (a quarter not published). */
   jobberEditsPushed?: boolean | null;
 }) {
-  const selected = days.find((day) => day.id === selectedDayId) ?? days[0] ?? null;
+  const months = useMemo(
+    () => quarterMonths({ year: quarter.year, quarter: quarter.quarter }, startsOn),
+    [quarter.year, quarter.quarter, startsOn],
+  );
+  const crew = useMemo(() => quarterCrew(days, rotation), [days, rotation]);
+  const order = useMemo(() => new Map(crew.map((member, index) => [member.id, index])), [crew]);
+  const selected = days.find((day) => day.id === selectedDayId) ?? firstDayToShow(days);
   const mutations = usePlanningMutations();
-  const [display, setDisplay] = useState<MapDisplay>(DEFAULT_MAP_DISPLAY);
-  const [fadeOthers, setFadeOthers] = useState(true);
+  const [cursor, setCursor] = useState(() => clampToCalendar(selected ? dateOf(selected) : businessToday(), months));
+  const [hiddenTeam, setHiddenTeam] = useState<ReadonlySet<string>>(() => new Set());
+  const [hiddenTypes, setHiddenTypes] = useState<ReadonlySet<string>>(() => new Set());
+  const [hiddenStatuses, setHiddenStatuses] = useState<ReadonlySet<string>>(() => new Set());
+  const [showMap, setShowMap] = useState(true);
+  // Only the day picked, unless asked (the office, 2026-10-05: the other days all around it confused the map).
+  const [showOthers, setShowOthers] = useState(false);
+  // The zones' ground is off too: one day on the map reads alone (the office, 2026-10-05), and it is a switch away.
+  const [display, setDisplay] = useState<MapDisplay>({ ...DEFAULT_MAP_DISPLAY, zones: false });
   const [moving, setMoving] = useState<MovingVisit | null>(null);
-  /** The map and the list fill the window on a large screen, as in the Group maker. */
+  /** The calendar and the map fill the window on a large screen, as in the Group maker. */
   const fill = useFillHeight<HTMLDivElement>();
 
-  const made = useMemo(() => planDaysFile(days, visits), [days, visits]);
-  const weeks = useMemo(() => {
-    const grouped = new Map<string, PlanDay[]>();
-    for (const day of days) grouped.set(mondayOf(day.date), [...(grouped.get(mondayOf(day.date)) ?? []), day]);
-    return [...grouped.entries()];
-  }, [days]);
+  const filter = useMemo<CalendarFilter>(
+    () => ({
+      visit: (stop) =>
+        !hiddenTypes.has(stop.inspectionType) && !hiddenStatuses.has(stop.status === 'PUBLISHED' ? 'PUBLISHED' : 'PLANNED'),
+      bookings: !hiddenTypes.has('BOOKED'),
+    }),
+    [hiddenStatuses, hiddenTypes],
+  );
+  const shownDays = useMemo(() => {
+    const filtering = hiddenTypes.size > 0 || hiddenStatuses.size > 0;
+    return days.filter(
+      (day) =>
+        !hiddenTeam.has(day.technicianId) &&
+        (!filtering || day.stops.some(filter.visit) || (filter.bookings && Boolean(day.anchors?.length))),
+    );
+  }, [days, filter, hiddenStatuses.size, hiddenTeam, hiddenTypes.size]);
+  const teamOptions = useMemo<FilterOption[]>(
+    () =>
+      crew
+        .filter((member) => member.days > 0)
+        .map((member) => ({
+          value: member.id,
+          label: member.name,
+          swatch: member.colour,
+          detail: `${member.days} ${member.days === 1 ? 'day' : 'days'} · ${member.visits} visits`,
+        })),
+    [crew],
+  );
 
+  const dates = calendarDates(months);
+  const today = businessToday();
+  const todayInQuarter = dates.length > 0 && today >= dates[0]! && today <= dates.at(-1)!;
+  /** A date's technician-days the filters let through, in the crew's order. */
+  const daysOn = (date: string) =>
+    shownDays
+      .filter((day) => dateOf(day) === date)
+      .sort((left, right) => (order.get(left.technicianId) ?? 0) - (order.get(right.technicianId) ?? 0));
+  /**
+   * To a date, and a view. The Day view is about the date, so the map follows
+   * it: that date's first technician-day, unless one of its days is picked already.
+   */
+  const goTo = (date: string, next: CalendarView = view) => {
+    const target = clampToCalendar(date, months);
+    setCursor(target);
+    if (next !== view) onViewChange(next);
+    if (next === 'day' && (!selected || dateOf(selected) !== target)) {
+      const first = daysOn(target)[0];
+      if (first) onSelect(first.id);
+    }
+  };
+  const pick = (dayId: string) => {
+    const day = days.find((entry) => entry.id === dayId);
+    if (day) setCursor(dateOf(day));
+    onSelect(dayId);
+  };
+  const previous = stepCursor(view, cursor, -1, months);
+  const next = stepCursor(view, cursor, 1, months);
+
+  const made = useMemo(() => planDaysFile(days, visits), [days, visits]);
   const route = usePlanDayRoute(planId, selected?.id);
   const group = selected ? (made.groupOf.get(selected.id) ?? null) : null;
   const home = route.data?.home ?? null;
@@ -280,6 +340,11 @@ export function PlanDays({
     () =>
       display.zones ? zoneTerritories([...made.file.groups.flatMap((one) => one.rows), ...made.file.ungrouped]) : [],
     [display.zones, made],
+  );
+  /** What the map draws: the day picked alone, or every day faded behind it and the visits with no day. */
+  const mapGroups = useMemo(
+    () => (showOthers ? made.file.groups : group ? [group] : []),
+    [group, made.file.groups, showOthers],
   );
   /**
    * Framed when another day is picked, or its home arrives -- never because a
@@ -376,121 +441,184 @@ export function PlanDays({
 
   return (
     <div className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <p className="text-muted-foreground min-w-0 text-sm">
-          {days.length.toLocaleString()} {days.length === 1 ? 'day' : 'days'} ·{' '}
-          {made.file.placed.toLocaleString()} {made.file.placed === 1 ? 'stop' : 'stops'}
-          {made.file.ungrouped.length ? ` · ${made.file.ungrouped.length.toLocaleString()} with no day yet` : ''}
-        </p>
-        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
-          <label className="flex cursor-pointer items-center gap-2 text-sm" title="Every day but the one picked, faded">
-            <Switch aria-label="Fade the other days" checked={fadeOthers} onCheckedChange={setFadeOthers} />
-            Fade the other days
-          </label>
-          <MapDisplaySwitches display={display} onChange={setDisplay} />
-          {canChange ? (
+      <div className="grid gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                aria-label={`${calendarTitle(cursor)}: choose a month`}
+                className="hover:bg-accent -ml-1 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-lg font-semibold tracking-tight"
+                type="button"
+              >
+                {calendarTitle(cursor)}
+                <ChevronDownIcon className="text-muted-foreground size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {months.map((month) => (
+                <DropdownMenuItem key={month.key} onSelect={() => goTo(calendarDates([month])[0] ?? cursor)}>
+                  {month.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="flex items-center gap-1">
+            <Button aria-label={`Previous ${view}`} disabled={previous === cursor} onClick={() => goTo(previous)} size="icon-sm" variant="outline">
+              <ArrowLeftIcon />
+            </Button>
+            <Button aria-label={`Next ${view}`} disabled={next === cursor} onClick={() => goTo(next)} size="icon-sm" variant="outline">
+              <ArrowRightIcon />
+            </Button>
             <Button
-              disabled={mutations.optimizeDays.isPending}
-              onClick={optimizeEveryDay}
+              disabled={!todayInQuarter}
+              onClick={() => goTo(today)}
               size="sm"
-              title="Every day from today on, in the order that drives least from the technician’s home"
+              title={todayInQuarter ? undefined : 'Today is outside this quarter'}
               variant="outline"
             >
-              {mutations.optimizeDays.isPending ? <Spinner /> : <RouteIcon />}
-              {mutations.optimizeDays.isPending ? 'Optimizing every day…' : 'Optimize every day'}
+              Today
+            </Button>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <FilterPill hidden={hiddenTeam} label="Team" onChange={setHiddenTeam} options={teamOptions} />
+            <FilterPill hidden={hiddenTypes} label="Type" onChange={setHiddenTypes} options={TYPE_OPTIONS} />
+            <FilterPill hidden={hiddenStatuses} label="Status" onChange={setHiddenStatuses} options={STATUS_OPTIONS} />
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div aria-label="Calendar view" className="inline-flex rounded-md border p-0.5" role="group">
+            {VIEWS.map((entry) => (
+              <button
+                aria-pressed={view === entry.value}
+                className={cn(
+                  'rounded px-3 py-1 text-sm font-medium transition-colors',
+                  view === entry.value ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground',
+                )}
+                key={entry.value}
+                onClick={() => goTo(cursor, entry.value)}
+                type="button"
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+          {onShowUnscheduled ? (
+            <Button
+              aria-label={`${unscheduledCount.toLocaleString()} ${unscheduledCount === 1 ? 'visit' : 'visits'} with no day yet`}
+              onClick={onShowUnscheduled}
+              size="sm"
+              title="Visits with no day yet"
+              variant="outline"
+            >
+              <CalendarOffIcon />
+              <span className="font-mono tabular-nums">{unscheduledCount.toLocaleString()}</span>
             </Button>
           ) : null}
+          <Button
+            aria-label={showMap ? 'Hide the map' : 'Show the map'}
+            aria-pressed={showMap}
+            onClick={() => setShowMap(!showMap)}
+            size="icon-sm"
+            variant={showMap ? 'default' : 'outline'}
+          >
+            <MapIcon />
+          </Button>
         </div>
       </div>
 
       <div
-        className="grid gap-3 lg:h-[36rem] lg:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_26rem]"
+        className={cn('grid gap-3', showMap && 'lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-[minmax(0,1fr)]')}
         ref={fill.ref}
         style={fill.height ? { height: fill.height } : undefined}
       >
-        <div className="h-80 lg:h-full">
-          <PlanDaysMap
-            activeKey={selected?.id ?? null}
-            display={display}
-            fadeOthers={fadeOthers}
-            frame={frame}
-            groups={made.file.groups}
-            onPickDay={onSelect}
-            onRowClick={onRowClick}
-            origin={origin}
-            route={routeView}
-            ungrouped={made.file.ungrouped}
-            zones={zones}
+        <div className="bg-card min-h-0 overflow-auto rounded-xl border">
+          <PlanCalendar
+            crew={crew}
+            cursor={cursor}
+            days={shownDays}
+            filter={filter}
+            onOpenDate={(date) => goTo(date, 'day')}
+            onSelect={pick}
+            quarter={quarter}
+            selectedDayId={selected?.id}
+            settings={settings}
+            startsOn={startsOn}
+            view={view}
           />
         </div>
 
-        <nav aria-label="Planned technician-days" className="bg-card min-h-0 overflow-y-auto rounded-xl border">
-          {weeks.map(([monday, weekDays]) => (
-            <section className="grid" key={monday}>
-              <h3 className="bg-card text-muted-foreground sticky top-0 z-10 border-b px-3 pt-2 pb-1 text-xs font-medium tracking-wide uppercase">
-                {weekOf(monday)}
-              </h3>
-              <ul className="divide-y">
-                {weekDays.map((day) => {
-                  const active = selected?.id === day.id;
-                  const badge = made.groupOf.get(day.id);
-                  return (
-                    <li
-                      className={cn('flex items-center gap-2 px-3 py-2', active ? 'bg-muted' : 'hover:bg-muted/50')}
-                      key={day.id}
-                    >
-                      <button
-                        aria-current={active || undefined}
-                        className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
-                        onClick={() => onSelect(day.id)}
-                        type="button"
-                      >
-                        {badge ? <GroupBadge className="mt-0.5 shrink-0" group={badge} /> : null}
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-baseline justify-between gap-2">
-                            <span className={cn('truncate text-sm', active && 'font-semibold')}>{DAY.format(new Date(day.date))}</span>
-                            <span className="text-muted-foreground truncate text-xs">{day.technician.displayName}</span>
-                          </span>
-                          {day.templateGroup ? <TemplateGroupTag className="text-xs" group={day.templateGroup} /> : null}
-                          <DayFigures day={day} settings={settings} />
-                        </span>
-                      </button>
-                      {canChange ? (
-                        <Button
-                          aria-label={`Optimize the route of ${dayName(day)}`}
-                          disabled={hasPassed(day) || Boolean(optimizingDay) || mutations.optimizeDays.isPending}
-                          onClick={() => optimizeDay(day)}
-                          size="icon-sm"
-                          title={
-                            hasPassed(day)
-                              ? 'This day has passed'
-                              : 'Optimize route: the order that drives least from the technician’s home'
-                          }
-                          variant="ghost"
-                        >
-                          {optimizingDay === day.id ? <Spinner /> : <RouteIcon />}
-                        </Button>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))}
-        </nav>
+        {showMap ? (
+          <div className="bg-card flex h-96 min-h-0 flex-col overflow-hidden rounded-xl border lg:h-auto">
+            <div className="flex items-center gap-x-3 border-b px-3 py-1.5">
+              <label className="flex min-w-0 cursor-pointer items-center gap-2 text-sm whitespace-nowrap" title="The quarter’s other days, faded, and the visits with no day yet">
+                <Switch aria-label="Show other days" checked={showOthers} onCheckedChange={setShowOthers} />
+                Show other days
+              </label>
+              <div className="ml-auto flex items-center gap-1">
+                {canChange ? (
+                  <Button
+                    aria-label="Optimize every day"
+                    disabled={mutations.optimizeDays.isPending}
+                    onClick={optimizeEveryDay}
+                    size="sm"
+                    title="Every day from today on, in the order that drives least from the technician’s home"
+                    variant="ghost"
+                  >
+                    {mutations.optimizeDays.isPending ? <Spinner /> : <RouteIcon />}
+                    <span className="hidden 2xl:inline">{mutations.optimizeDays.isPending ? 'Optimizing…' : 'Optimize every day'}</span>
+                  </Button>
+                ) : null}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button aria-label="Map options" size="icon-sm" variant="ghost">
+                      <SlidersHorizontalIcon />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="grid w-60 gap-3">
+                    <MapDisplaySwitches display={display} onChange={setDisplay} />
+                  </PopoverContent>
+                </Popover>
+                <Button aria-label="Close the map" onClick={() => setShowMap(false)} size="icon-sm" variant="ghost">
+                  <XIcon />
+                </Button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <PlanDaysMap
+                activeKey={selected?.id ?? null}
+                display={display}
+                fadeOthers
+                frame={frame}
+                groups={mapGroups}
+                onPickDay={pick}
+                onRowClick={onRowClick}
+                origin={origin}
+                route={routeView}
+                ungrouped={showOthers ? made.file.ungrouped : []}
+                zones={zones}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
-      {selected ? (
-        <p className="text-muted-foreground -mt-1 text-xs">
-          {canChange
-            ? `Click a property on the map to move its visit into ${dayName(selected)}; click one of this day’s own, or a row in its list, to see its details.`
-            : 'Click a property of this day on the map, or in the list, to see its details.'}
-        </p>
+
+      {selected && showMap && showOthers && canChange ? (
+        <p className="text-muted-foreground -mt-1 text-xs">Click a property on the map to move its visit into {dayName(selected)}.</p>
       ) : null}
-      {route.isSuccess && !route.data.geometry.length && (group?.rows.length ?? 0) > 1 ? (
+      {showMap && route.isSuccess && !route.data.geometry.length && (group?.rows.length ?? 0) > 1 ? (
         <p className="text-muted-foreground -mt-1 text-xs">The road could not be drawn, so the stops are joined with dashed straight lines.</p>
       ) : null}
 
-      {selected ? <DayDetail day={selected} onOpenStop={onOpenStop} settings={settings} /> : null}
+      {selected ? (
+        <DayDetail
+          day={selected}
+          onOpenStop={onOpenStop}
+          onOptimize={canChange ? () => optimizeDay(selected) : undefined}
+          optimizing={optimizingDay === selected.id}
+          optimizeDisabled={hasPassed(selected) || Boolean(optimizingDay) || mutations.optimizeDays.isPending}
+          settings={settings}
+        />
+      ) : null}
 
       <AlertDialog onOpenChange={(open) => !open && setMoving(null)} open={moving !== null}>
         {moving && selected ? (
@@ -527,14 +655,12 @@ export function PlanDays({
   );
 }
 
-/** How the day's drives were measured, and what the driving shown covers. */
+/** How the day's drives were measured, in a line. */
 function measuredText(day: PlanDay) {
   const fromHome = day.originKind === 'HOME';
-  // Said without the rule the order was chosen by: a build keeps to twenty
-  // minutes between properties, and Optimize route only drives least.
   const counted = fromHome
-    ? 'The day is routed from the technician’s home; the driving shown is between its properties, and the drive from home is shown apart.'
-    : 'This day was built without the technician’s home, so it starts at its first job. Optimize its route, or rebuild the plan, to route it from home; the home comes from the technician’s planning profile.';
+    ? 'Routed from the technician’s home; the drive from home is shown apart.'
+    : 'Built without the technician’s home, so it starts at its first job. Optimize the route to start it from home.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
       return `Drives measured by Google for a 9 AM start. ${counted}`;
@@ -559,10 +685,17 @@ function DayDetail({
   day,
   settings,
   onOpenStop,
+  onOptimize,
+  optimizing = false,
+  optimizeDisabled = false,
 }: {
   day: PlanDay;
   settings: PlanSettings;
   onOpenStop?: (stopId: string) => void;
+  /** Put the day in the order that drives least from home; absent without the grant. */
+  onOptimize?: () => void;
+  optimizing?: boolean;
+  optimizeDisabled?: boolean;
 }) {
   const timeline = useMemo(() => dayTimeline(day), [day]);
   const clock = useMemo(() => dayClock(timeline), [timeline]);
@@ -574,9 +707,24 @@ function DayDetail({
   return (
     <section aria-label={`${LONG_DAY.format(new Date(day.date))}, ${day.technician.displayName}`} className="grid gap-3">
       <div className="bg-card grid gap-3 rounded-xl border p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <h2 className="text-base font-semibold tracking-tight">{LONG_DAY.format(new Date(day.date))}</h2>
-          <span className="text-sm font-medium">{day.technician.displayName}</span>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+            <h2 className="text-base font-semibold tracking-tight">{LONG_DAY.format(new Date(day.date))}</h2>
+            <span className="text-sm font-medium">{day.technician.displayName}</span>
+          </div>
+          {onOptimize ? (
+            <Button
+              aria-label={`Optimize the route of ${dayName(day)}`}
+              disabled={optimizeDisabled}
+              onClick={onOptimize}
+              size="sm"
+              title={hasPassed(day) ? 'This day has passed' : 'The order that drives least from the technician’s home'}
+              variant="outline"
+            >
+              {optimizing ? <Spinner /> : <RouteIcon />}
+              Optimize route
+            </Button>
+          ) : null}
         </div>
         {day.templateGroup ? <TemplateGroupTag className="text-sm" group={day.templateGroup} /> : null}
         <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 xl:grid-cols-4">

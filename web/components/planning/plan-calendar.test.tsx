@@ -3,7 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { PlanDay, PlanRotation, PlanSettings } from '@/lib/planning-queries';
 
-import { PlanCalendar, quarterMonths } from './plan-calendar';
+import {
+  clampToCalendar,
+  initialsOf,
+  PlanCalendar,
+  quarterCrew,
+  quarterMonths,
+  shortName,
+  stepCursor,
+  weekOf,
+  type CalendarView,
+} from './plan-calendar';
 
 const Q4 = { year: 2026, quarter: 4 as const };
 
@@ -51,12 +61,12 @@ const day = (id: string, date: string, technicianId: string, displayName: string
       id: `${id}-stop-${index + 1}`,
       sequence: index + 1,
       positionInDay: index + 1,
-      inspectionType: 'OCCUPIED',
+      inspectionType: index < 2 ? 'HVAC' : 'OCCUPIED',
       onSiteMinutes: 20,
-      driveSecondsForecast: null,
+      driveSecondsForecast: index ? 600 : null,
       zone,
       status: 'PLANNED',
-      address: null,
+      address: `${index + 1} ${id} St`,
       city: null,
       latitude: null,
       longitude: null,
@@ -69,6 +79,11 @@ const DAYS = [
   day('emanuel-oct-2', '2026-10-02', 'emanuel', 'Emanuel Hall', 10, '3'),
   day('moses-oct-6', '2026-10-06', 'moses', 'Moses Rodriguez', 7, '2'),
 ];
+
+const CREW = quarterCrew(DAYS, ROTATION);
+
+const calendar = (props: Partial<Parameters<typeof PlanCalendar>[0]> & { view?: CalendarView } = {}) =>
+  render(<PlanCalendar crew={CREW} days={DAYS} onSelect={vi.fn()} quarter={Q4} settings={SETTINGS} {...props} />);
 
 describe('the quarter as months of weekdays', () => {
   it('lays each month out Monday to Friday, blank where a week reaches outside it', () => {
@@ -95,10 +110,55 @@ describe('the quarter as months of weekdays', () => {
   });
 });
 
-describe('the benefit-package calendar', () => {
-  it('puts each technician-day on its date in the crew’s order, and opens the one clicked', () => {
+describe('moving through the quarter', () => {
+  const months = quarterMonths(Q4);
+
+  it('steps a day at a time over the weekend, a week at a time from Monday, and a month at a time from its first weekday', () => {
+    expect(stepCursor('day', '2026-10-02', 1, months)).toBe('2026-10-05');
+    expect(stepCursor('day', '2026-10-05', -1, months)).toBe('2026-10-02');
+    expect(stepCursor('week', '2026-10-07', 1, months)).toBe('2026-10-12');
+    // The quarter's first week starts on a Thursday.
+    expect(stepCursor('week', '2026-10-07', -1, months)).toBe('2026-10-01');
+    expect(stepCursor('month', '2026-10-21', 1, months)).toBe('2026-11-02');
+  });
+
+  it('never leaves the quarter', () => {
+    expect(stepCursor('day', '2026-10-01', -1, months)).toBe('2026-10-01');
+    expect(stepCursor('month', '2026-12-15', 1, months)).toBe('2026-12-15');
+    expect(clampToCalendar('2026-08-03', months)).toBe('2026-10-01');
+    expect(clampToCalendar('2027-01-04', months)).toBe('2026-12-31');
+    // A Saturday is the Monday after.
+    expect(clampToCalendar('2026-10-10', months)).toBe('2026-10-12');
+  });
+
+  it('knows the weekdays of a date’s week', () => {
+    expect(weekOf('2026-10-08')).toEqual(['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09']);
+  });
+});
+
+describe('who is out', () => {
+  it('keeps the crew’s order, each with a colour and their totals', () => {
+    expect(CREW.map(({ name, days, visits }) => ({ name, days, visits }))).toEqual([
+      { name: 'Moses Rodriguez', days: 2, visits: 17 },
+      { name: 'Kevin Granados', days: 1, visits: 9 },
+      { name: 'Emanuel Hall', days: 1, visits: 10 },
+    ]);
+    expect(new Set(CREW.map((member) => member.colour)).size).toBe(3);
+  });
+
+  /** Found 2026-10-05: on a quarter sent out unassigned every chip read "Day". */
+  it('names a day group by its number, not by the first word of "Day group"', () => {
+    expect(shortName('Day group 2')).toBe('Group 2');
+    expect(initialsOf('Day group 2')).toBe('G2');
+    expect(shortName('Moses Rodriguez')).toBe('Moses');
+    expect(initialsOf('Moses Rodriguez')).toBe('MR');
+  });
+});
+
+describe('the month', () => {
+  it('puts each technician-day on its date in the crew’s order, and picks the one clicked', () => {
     const onSelect = vi.fn();
-    render(<PlanCalendar days={DAYS} onSelect={onSelect} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+    calendar({ onSelect, cursor: '2026-10-01' });
 
     const october = screen.getByRole('region', { name: 'October 2026' });
     const kevin = within(october).getByRole('button', {
@@ -107,18 +167,30 @@ describe('the benefit-package calendar', () => {
     const moses = within(october).getByRole('button', { name: /^Thursday, October 1: Moses Rodriguez, 10 visits/ });
     // Moses is first on the crew, so first on the day.
     expect(moses.compareDocumentPosition(kevin) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Each date counts its visits, as Jobber does.
+    expect(within(october).getByText('19 visits')).toBeTruthy();
 
     fireEvent.click(kevin);
     expect(onSelect).toHaveBeenCalledWith('kevin-oct-1');
   });
 
+  it('shows one month at a time: the one the date in view is in', () => {
+    calendar({ cursor: '2026-11-10' });
+
+    expect(screen.getByRole('region', { name: 'November 2026' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'October 2026' })).toBeNull();
+  });
+
   it('marks US holidays, days the office closed, and the Mondays kept free', () => {
-    render(<PlanCalendar days={DAYS} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+    const { unmount } = calendar({ cursor: '2026-10-01' });
 
     const october = screen.getByRole('region', { name: 'October 2026' });
     // Oct 12 is a US holiday; Oct 5, 19 and 26 are kept for rescheduled visits.
     expect(within(october).getAllByText('US holiday')).toHaveLength(1);
     expect(within(october).getAllByText('Kept free')).toHaveLength(3);
+    unmount();
+
+    calendar({ cursor: '2026-11-02' });
     const november = screen.getByRole('region', { name: 'November 2026' });
     expect(within(november).getAllByText('US holiday')).toHaveLength(2);
     expect(within(november).getByText('Closed')).toBeTruthy();
@@ -127,7 +199,7 @@ describe('the benefit-package calendar', () => {
   it('says which days are outside the office’s rules', () => {
     const long = day('kevin-oct-7', '2026-10-07', 'kevin', 'Kevin Granados', 9, '2');
     long.stops[4]!.driveSecondsForecast = 25 * 60;
-    render(<PlanCalendar days={[...DAYS, long]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+    calendar({ days: [...DAYS, long], cursor: '2026-10-01' });
 
     // A drive of twenty-five minutes between two of its properties.
     expect(screen.getByRole('button', { name: /^Wednesday, October 7: Kevin Granados, 9 visits.*, outside the rules$/ })).toBeTruthy();
@@ -138,7 +210,7 @@ describe('the benefit-package calendar', () => {
 
   it('shows a plan’s days before the quarter, with the Mondays kept free from its own second week', () => {
     const early = [day('moses-sep-23', '2026-09-23', 'moses', 'Moses Rodriguez', 9, '1')];
-    render(<PlanCalendar days={early} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} startsOn="2026-09-23" />);
+    calendar({ days: early, startsOn: '2026-09-23', cursor: '2026-09-23' });
 
     const september = screen.getByRole('region', { name: 'September 2026' });
     expect(within(september).getByRole('button', { name: /^Wednesday, September 23: Moses Rodriguez, 9 visits/ })).toBeTruthy();
@@ -151,7 +223,7 @@ describe('the benefit-package calendar', () => {
       ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 10, '3'),
       anchors: [{ id: 'anchor-1', inspectionId: 'move-out-1', kind: 'MOVE_OUT' }],
     } as unknown as PlanDay;
-    render(<PlanCalendar days={[anchored]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+    calendar({ days: [anchored], cursor: '2026-10-14' });
 
     expect(screen.getByRole('button', { name: /^Wednesday, October 14: Moses Rodriguez, 10 visits.*, built around a move-out, / })).toBeTruthy();
   });
@@ -165,17 +237,78 @@ describe('the benefit-package calendar', () => {
         { id: 'anchor-2', inspectionId: 'move-out-2', kind: 'MOVE_OUT' },
       ],
     } as unknown as PlanDay;
-    render(<PlanCalendar days={[anchored]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+    calendar({ days: [anchored], cursor: '2026-10-14' });
 
     // Two of them leave room for up to four visits: inside the rules.
     const button = screen.getByRole('button', { name: /built around 2 move-outs, / });
     expect(button.getAttribute('aria-label')).not.toContain('outside the rules');
   });
 
-  it('keys each technician’s colour and totals', () => {
-    render(<PlanCalendar days={DAYS} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+  it('opens a day from its date', () => {
+    const onOpenDate = vi.fn();
+    calendar({ cursor: '2026-10-01', onOpenDate });
 
-    expect(screen.getByText('2 days · 17 visits')).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'October 2026' }).textContent).toContain('4 technician-days · 36 visits');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Tuesday, October 6' }));
+    expect(onOpenDate).toHaveBeenCalledWith('2026-10-06');
+  });
+
+  it('counts only the visits the filters let through', () => {
+    calendar({ cursor: '2026-10-01', filter: { visit: (stop) => stop.inspectionType === 'HVAC', bookings: true } });
+
+    // Two HVAC visits on each of Moses's and Kevin's days.
+    expect(within(screen.getByRole('region', { name: 'October 2026' })).getByText('4 visits')).toBeTruthy();
+  });
+});
+
+describe('the week', () => {
+  it('lists each date’s visits under whose day they are, and picks the day of the visit clicked', () => {
+    const onSelect = vi.fn();
+    calendar({ view: 'week', cursor: '2026-10-06', onSelect });
+
+    const tuesday = screen.getByRole('group', { name: 'Tuesday, October 6' });
+    expect(within(tuesday).getByText('7 visits')).toBeTruthy();
+    expect(within(tuesday).getByRole('button', { name: /^Tuesday, October 6: Moses Rodriguez, 7 visits/ })).toBeTruthy();
+    // Monday the 5th is kept free, and nothing is on it.
+    expect(within(screen.getByRole('group', { name: 'Monday, October 5' })).getByText('Kept free')).toBeTruthy();
+
+    fireEvent.click(within(tuesday).getByRole('button', { name: /^3 moses-oct-6 St, occupied, on Moses Rodriguez’s day$/ }));
+    expect(onSelect).toHaveBeenCalledWith('moses-oct-6');
+  });
+
+  it('greys the days of the quarter’s first week that are before it', () => {
+    calendar({ view: 'week', cursor: '2026-10-01', onOpenDate: vi.fn() });
+
+    // Monday 28 September is not in the quarter: no way to open it.
+    expect(screen.getByRole('group', { name: 'Monday, September 28' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open Monday, September 28' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Thursday, October 1' })).toBeTruthy();
+  });
+});
+
+describe('the day', () => {
+  it('gives each technician out that date a column, with the visits in driving order and when each is reached', () => {
+    const onSelect = vi.fn();
+    calendar({ view: 'day', cursor: '2026-10-01', onSelect, selectedDayId: 'moses-oct-1' });
+
+    const day = screen.getByRole('region', { name: 'Thursday, October 1' });
+    const columns = within(day).getAllByRole('button', { name: /^Thursday, October 1: / });
+    expect(columns.map((button) => button.getAttribute('aria-label')?.split(',')[1]?.split(':')[1]?.trim())).toEqual([
+      'Moses Rodriguez',
+      'Kevin Granados',
+    ]);
+    expect(columns[0]!.getAttribute('aria-current')).toBe('true');
+    // Nine o'clock, twenty minutes there, ten minutes' drive to the next.
+    expect(within(day).getByRole('button', { name: /^1 moses-oct-1 St,/ }).textContent).toContain('9:00 AM');
+    expect(within(day).getByRole('button', { name: /^2 moses-oct-1 St,/ }).textContent).toContain('9:30 AM');
+
+    fireEvent.click(columns[1]!);
+    expect(onSelect).toHaveBeenCalledWith('kevin-oct-1');
+  });
+
+  it('says so when nothing is planned on the date', () => {
+    calendar({ view: 'day', cursor: '2026-10-05' });
+
+    expect(screen.getByText('Nothing planned on this day.')).toBeTruthy();
+    expect(screen.getByText('Kept free')).toBeTruthy();
   });
 });

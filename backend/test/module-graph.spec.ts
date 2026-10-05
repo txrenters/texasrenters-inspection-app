@@ -3,7 +3,6 @@ import { Test } from '@nestjs/testing';
 import { PrismaService } from '../src/common/prisma.service';
 import { InspectionVideoService } from '../src/media/inspection-video.service';
 import { MediaModule } from '../src/media/media.module';
-import { PlanAdvisorService } from '../src/planning/plan-advisor.service';
 import { PlanningModule } from '../src/planning/planning.module';
 import { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService } from '../src/planning/tbp-stop-edit.service';
@@ -29,7 +28,6 @@ describe('the planning module', () => {
       .useValue({})
       .compile();
 
-    expect(moduleRef.get(PlanAdvisorService)).toBeInstanceOf(PlanAdvisorService);
     expect(moduleRef.get(TbpStopEditService)).toBeInstanceOf(TbpStopEditService);
     expect(moduleRef.get(TbpPublishService)).toBeInstanceOf(TbpPublishService);
   });

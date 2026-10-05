@@ -570,10 +570,10 @@ export interface PlanGroupFile {
 }
 
 /**
- * The groups file in the server's `data/` folder, which the Groups map opens
- * by default -- or null when there is none, or none for this organization.
+ * The groups file in the server's `data/` folder, which the plan's Schedule
+ * shows when asked -- or null when there is none, or none for this organization.
  *
- * Asked for only while the Groups tab is open: it names every tenant, and a
+ * Asked for only once somebody asks to see it: it names every tenant, and a
  * page that never shows it has no business holding it.
  */
 export const useGroupFileOnServer = (enabled: boolean) =>
@@ -649,39 +649,6 @@ export const usePlanDayRoute = (planId: string | undefined, dayId: string | unde
     staleTime: Number.POSITIVE_INFINITY,
   });
 
-/** One move AI proposed and the plan's own rules allowed. */
-export interface AdvisedMove {
-  stopId: string;
-  address: string | null;
-  fromDate: string | null;
-  toDate: string;
-  toTechnicianId: string;
-  toTechnicianName: string;
-  /** Estimated minutes the two days save together. */
-  savedMinutes: number;
-  /** Why AI proposed it, as it wrote it. */
-  why: string;
-}
-
-/** One it proposed and the rules refused, with the reason they refused it. */
-export interface RefusedMove {
-  stopId: string;
-  address: string | null;
-  toDate: string;
-  refused: string;
-}
-
-export interface PlanAdvice {
-  notes: string[];
-  proposed: number;
-  moves: AdvisedMove[];
-  refused: RefusedMove[];
-  savedMinutes: number;
-  provider: string;
-  modelId: string;
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
-}
-
 export function usePlanningMutations() {
   const client = useQueryClient();
   // Every change here moves days, stops and counts together, so the whole plan
@@ -732,17 +699,6 @@ export function usePlanningMutations() {
     }),
     publish: useMutation({
       mutationFn: (planId: string) => post<PublishSummary>(`/quarters/${planId}/publish`),
-      onSuccess: refresh,
-    }),
-    // What AI makes of the quarter. It changes nothing: the moves it proposes
-    // are judged against the office's rules on the server, and applied only
-    // when the office takes them.
-    advice: useMutation({
-      mutationFn: (planId: string) => post<PlanAdvice>(`/quarters/${planId}/advice`),
-    }),
-    applyAdvice: useMutation({
-      mutationFn: ({ planId, moves }: { planId: string; moves: { stopId: string; toDate: string; toTechnicianId: string }[] }) =>
-        post<{ applied: number; refused: RefusedMove[] }>(`/quarters/${planId}/advice/apply`, { moves }),
       onSuccess: refresh,
     }),
     // A day, or every day from today on, in the order that drives least from the
