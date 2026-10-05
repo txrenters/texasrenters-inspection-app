@@ -31,6 +31,62 @@ function reviewableInspection(status: InspectionStatus = InspectionStatus.REVIEW
 }
 
 describe('inspection status lifecycle (spec §11)', () => {
+  function submission(extra: Record<string, unknown> = {}) {
+    const record = {
+      id: 'insp-1',
+      inspectionType: 'MOVE_IN',
+      baselineInspectionId: null,
+      baselineInspection: null,
+      scheduledAt: new Date('2026-07-25T09:00:00.000Z'),
+      status: InspectionStatus.IN_PROGRESS,
+      priority: 'STANDARD',
+      internalNotes: null,
+      propertywareUnit: null,
+      propertywareBuilding: null,
+      areas: [],
+      ...extra,
+    };
+    const prisma: {
+      inspection: { findFirst: jest.Mock; update: jest.Mock };
+      jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
+      inspectionArea: { count: jest.Mock };
+      $transaction: jest.Mock;
+    } = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue(record),
+        update: jest.fn().mockResolvedValue({ ...record, status: InspectionStatus.TECHNICIAN_SUBMITTED }),
+      },
+      inspectionArea: { count: jest.fn().mockResolvedValue(0) },
+      jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
+      $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
+    };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      { queue: jest.fn(), advanceInspection: jest.fn().mockResolvedValue(undefined) } as never,
+    );
+    return { service, prisma };
+  }
+
+  // Submitted is done (the office, 2026-10-05): nobody finalizes any more, and
+  // a later inspection's move-in link reads `completedAt`.
+  it('records the completion with the submission, and the technician as the report’s owner', async () => {
+    const { service, prisma } = submission({ source: 'JOBBER', jobberVisitId: 'visit-1', jobberJobId: 'job-1' });
+
+    await service.completeInspection(technician, 'insp-1');
+
+    expect(prisma.inspection.update.mock.calls[0][0].data).toMatchObject({
+      status: InspectionStatus.TECHNICIAN_SUBMITTED,
+      completedAt: expect.any(Date),
+    });
+    // The owner is what lets the Jobber note carry the report link, which
+    // waited for a finalizer that no longer comes.
+    expect(prisma.jobberOutboundTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'VISIT_COMPLETED', createdById: technician.id }),
+    });
+  });
+
   it('technician submission sets TECHNICIAN_SUBMITTED, never COMPLETED', async () => {
     const record = {
       id: 'insp-1',

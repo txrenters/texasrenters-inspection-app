@@ -224,7 +224,7 @@ describe('the file the office holds on a job', () => {
     });
   });
 
-  it('looks for the last visit at this unit, completed, before this one', async () => {
+  it('looks for the last visit at this unit, done, before this one', async () => {
     const { service, prisma } = build();
 
     await service.inspection(user, 'job-1');
@@ -233,10 +233,13 @@ describe('the file the office holds on a job', () => {
     expect(where).toMatchObject({
       organizationId: user.organizationId,
       id: { not: 'job-1' },
-      status: InspectionStatus.COMPLETED,
+      // A submitted visit is done (2026-10-05): nobody finalizes any more, so
+      // waiting for COMPLETED hid every note written at submission.
+      status: { in: expect.arrayContaining([InspectionStatus.REVIEW_REQUIRED, InspectionStatus.COMPLETED]) },
       // A note about the upstairs unit is not about this one.
       propertywareUnitId: 'unit-1',
     });
+    expect(where.status.in).not.toContain(InspectionStatus.CANCELLED);
     expect(where.scheduledAt).toEqual({ lte: JOB.scheduledAt });
     expect(where.propertywareBuildingId).toBeUndefined();
   });

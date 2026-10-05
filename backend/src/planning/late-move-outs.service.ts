@@ -14,6 +14,7 @@ import { AdminService } from '../admin/admin.service';
 import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-position';
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { DONE_INSPECTION_STATUSES } from '../common/inspection-done';
 import { PrismaService } from '../common/prisma.service';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { movableInspection } from './quarter-planner.service';
@@ -101,7 +102,8 @@ export class LateMoveOutService {
         where: {
           organizationId,
           inspectionType: { in: [InspectionType.MOVE_OUT, InspectionType.MOVE_IN] },
-          status: { notIn: [InspectionStatus.CANCELLED, InspectionStatus.COMPLETED] },
+          // A walked one no longer clashes with anything: submitted is done.
+          status: { notIn: [InspectionStatus.CANCELLED, ...DONE_INSPECTION_STATUSES] },
           scheduledAt: { gte: startsOn ? new Date(`${startsOn}T00:00:00.000Z`) : quarterStart(quarter), lt: quarterEnd(quarter) },
         },
         select: {

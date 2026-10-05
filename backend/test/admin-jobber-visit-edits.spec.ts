@@ -121,6 +121,26 @@ describe('console changes to a Jobber visit, when they are pushed', () => {
     expect(audit.metadata).toEqual({ titleChanged: true });
   });
 
+  // Submitted is done (2026-10-05). Waiting for COMPLETED, which nobody
+  // finalizes into any more, let a walked visit be re-dated, cancelled or
+  // re-described, and the change pushed to a visit Jobber already completed.
+  it('changes nothing about a visit the technician has submitted', async () => {
+    for (const status of ['TECHNICIAN_SUBMITTED', 'REVIEW_REQUIRED']) {
+      const { service, tx } = build(existing({ status }));
+      await expect(
+        service.updateInspection(user, 'inspection-1', { scheduledAt: '2026-10-09T00:00:00.000Z' }),
+      ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_FINALIZED' });
+      await expect(
+        service.updateInspection(user, 'inspection-1', { status: 'CANCELLED', cancellationReason: 'x' }),
+      ).rejects.toMatchObject({ status: 409 });
+      await expect(
+        service.updateJobberVisit(user, 'inspection-1', { details: 'Gate Code: 4321' }),
+      ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_FINALIZED' });
+      expect(tx.inspection.update).not.toHaveBeenCalled();
+      expect(tx.jobberOutboundTask.upsert).not.toHaveBeenCalled();
+    }
+  });
+
   it('refuses to edit a visit an inspection does not have', async () => {
     const { service } = build(existing({ jobberVisitId: null }));
     await expect(

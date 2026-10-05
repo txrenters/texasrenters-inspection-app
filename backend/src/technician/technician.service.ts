@@ -59,6 +59,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
+import { DONE_INSPECTION_STATUSES } from '../common/inspection-done';
 import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
 import { jobStartTime } from './job-start-time';
 import { PrismaService } from '../common/prisma.service';
@@ -614,12 +615,15 @@ export class TechnicianService {
           },
         }),
       ]);
-    const count = (status: InspectionStatus) =>
-      statusGroups.find((group) => group.status === status)?._count._all ?? 0;
+    const count = (statuses: InspectionStatus[]) =>
+      statusGroups
+        .filter((group) => statuses.includes(group.status))
+        .reduce((sum, group) => sum + group._count._all, 0);
     return {
       today: todayTotal,
-      inProgress: count(InspectionStatus.IN_PROGRESS),
-      completed: count(InspectionStatus.COMPLETED),
+      inProgress: count([InspectionStatus.IN_PROGRESS]),
+      // Submitted is done: COMPLETED alone stayed at zero once nobody finalized.
+      completed: count(DONE_INSPECTION_STATUSES),
       pendingUploads,
       assignments: queueRecords.map((record) => this.mapInspection(record, user.id)),
       recent: recentRecords.map((record) => this.mapInspection(record, user.id)),
@@ -725,15 +729,16 @@ export class TechnicianService {
        * The last visit here that left the office a note.
        *
        * The same unit where the job names one, the building otherwise: a note
-       * about the upstairs unit is not about this one. Only a completed visit,
-       * and only one carrying something to read, so the app never shows an
-       * empty "last visit" block.
+       * about the upstairs unit is not about this one. Only a visit that is
+       * done -- submitted counts, since nobody finalizes any more and the note
+       * is written at submission -- and only one carrying something to read,
+       * so the app never shows an empty "last visit" block.
        */
       this.prisma.inspection.findFirst({
         where: {
           organizationId,
           id: { not: record.id },
-          status: InspectionStatus.COMPLETED,
+          status: { in: DONE_INSPECTION_STATUSES },
           scheduledAt: { lte: record.scheduledAt },
           ...(unitId ? { propertywareUnitId: unitId } : { propertywareBuildingId: buildingId }),
           OR: [{ nextInspectionAlert: { not: null } }, { maintenanceComments: { not: null } }],
@@ -1207,10 +1212,11 @@ export class TechnicianService {
         'REQUIRED_ROOMS_INCOMPLETE',
         'Complete or provide an authorized skip reason for every required room.',
       );
-    // Technician submission is NOT completion (spec §11): only a human
-    // administrator finalizes *this inspection*. Record the submission and let
-    // the AI pipeline advance it to REVIEW_REQUIRED once processing finishes.
-    // The Jobber push below is a separate claim — see the comment on it.
+    // Submitted is done (the office, 2026-10-05; `DONE_INSPECTION_STATUSES`):
+    // nobody finalizes any more, so the submission records the completion as
+    // well. The status still goes through the AI pipeline to REVIEW_REQUIRED,
+    // where the office reviews the findings for the reports -- that review is
+    // the office's work, not part of the visit.
     // Its photographs checked first, so one from another job cannot make a
     // register look answered: see `resolveJobPhotos`.
     const servicesReport = this.servicesReportFor(
@@ -1223,6 +1229,17 @@ export class TechnicianService {
         data: {
           status: InspectionStatus.TECHNICIAN_SUBMITTED,
           submittedAt: new Date(),
+          /**
+           * The visit is complete when the technician submits it.
+           *
+           * `completedAt` is what a later inspection's move-in link reads
+           * (`resolveLifecycleBaseline`), and it was only ever set by a
+           * finalize or by Jobber's own completion -- so with nobody
+           * finalizing, a move-in walked in the app was never anybody's
+           * baseline. Not set by a "could not get in" report, which closes the
+           * visit without walking it and must never become a property's move-in.
+           */
+          completedAt: new Date(),
           // Stored with the submission, in the same transaction that queues the
           // Jobber completion, because the note to Jobber is read from it.
           ...(servicesReport
@@ -1251,9 +1268,11 @@ export class TechnicianService {
        * VISIT_COMPLETE means "this visit occurred", not "the report was
        * approved", so this is also the truer reading of it.
        *
-       * `reportOwnerId` is null: a share link needs a person, and a technician
-       * submitting is not the one signing the report off. The finalizer claims
-       * that later if the push has not gone yet.
+       * `reportOwnerId` is the technician, so the visit's note in Jobber carries
+       * the report link. It used to be null and left to the finalizer, and with
+       * nobody finalizing no report link ever reached Jobber. The link is live:
+       * the report it opens prints the findings the office approves, as it
+       * approves them.
        *
        * In the same transaction as the submission, for the same reason
        * finalization is: submitted and "Jobber will be told" commit together.
@@ -1262,7 +1281,7 @@ export class TechnicianService {
       await enqueueJobberCompletion(tx, {
         organizationId: user.organizationId,
         inspectionId: id,
-        reportOwnerId: null,
+        reportOwnerId: user.id,
       });
       return row;
     });

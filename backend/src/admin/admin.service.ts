@@ -47,6 +47,7 @@ import { moveStopWithVisit } from '../planning/move-stop-with-visit';
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
+import { DONE_INSPECTION_STATUSES, isDoneInspectionStatus } from '../common/inspection-done';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import {
@@ -469,10 +470,14 @@ export class AdminService {
       this.prisma.propertywareLease.count({ where: { organizationId, isActive: true } }),
     ]);
     const [unassigned, assigned, inProgress, completed] = await Promise.all([
+      // Work still waiting for a technician: a submitted visit is done, and
+      // needs nobody assigned to it (`DONE_INSPECTION_STATUSES`).
       this.prisma.inspection.count({
         where: {
           organizationId,
-          status: { in: ACTIVE_INSPECTION_STATUSES },
+          status: {
+            in: ACTIVE_INSPECTION_STATUSES.filter((status) => !DONE_INSPECTION_STATUSES.includes(status)),
+          },
           assignments: { none: { isCurrent: true } },
         },
       }),
@@ -482,8 +487,9 @@ export class AdminService {
       this.prisma.inspection.count({
         where: { organizationId, status: InspectionStatus.IN_PROGRESS },
       }),
+      // Submitted is done; COMPLETED alone stopped moving once nobody finalized.
       this.prisma.inspection.count({
-        where: { organizationId, status: InspectionStatus.COMPLETED },
+        where: { organizationId, status: { in: DONE_INSPECTION_STATUSES } },
       }),
     ]);
     const [technicians, lastSync, recentErrors] = await Promise.all([
@@ -2310,8 +2316,14 @@ export class AdminService {
    */
   async updateJobberVisit(user: AuthenticatedUser, id: string, input: UpdateJobberVisitDto) {
     const existing = await this.requireInspection(user.organizationId, id);
-    if (existing.status === InspectionStatus.COMPLETED || existing.status === InspectionStatus.CANCELLED)
-      throw new ApplicationError(409, 'INSPECTION_FINALIZED', 'A completed or cancelled inspection cannot be changed.');
+    // A visit the technician has submitted is done: its Details are the record
+    // of what they were told, and Jobber already has the visit complete.
+    if (isDoneInspectionStatus(existing.status) || existing.status === InspectionStatus.CANCELLED)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'This visit has been done or cancelled, so it can no longer be changed.',
+      );
     await this.prisma.$transaction(async (tx) => {
       const pendingBooking = await tx.jobberOutboundTask.findFirst({
         where: {
@@ -2362,14 +2374,18 @@ export class AdminService {
 
   async updateInspection(user: AuthenticatedUser, id: string, input: UpdateAdminInspectionDto) {
     const existing = await this.requireInspection(user.organizationId, id);
-    if (
-      existing.status === InspectionStatus.COMPLETED ||
-      existing.status === InspectionStatus.CANCELLED
-    )
+    /**
+     * A visit the technician has submitted is done (`DONE_INSPECTION_STATUSES`).
+     *
+     * This used to wait for COMPLETED, which with nobody finalizing never came:
+     * a walked visit could be re-dated or cancelled, and the change pushed to a
+     * Jobber visit already marked complete.
+     */
+    if (isDoneInspectionStatus(existing.status) || existing.status === InspectionStatus.CANCELLED)
       throw new ApplicationError(
         409,
         'INSPECTION_FINALIZED',
-        'A completed or cancelled inspection cannot be changed.',
+        'This visit has been done or cancelled, so it can no longer be changed.',
       );
     if (input.status === 'CANCELLED' && !input.cancellationReason)
       throw new ApplicationError(
@@ -3806,7 +3822,8 @@ export class AdminService {
               ...workloadWhere,
               inspection: {
                 organizationId: user.organizationId,
-                status: InspectionStatus.COMPLETED,
+                // Submitted is done (`DONE_INSPECTION_STATUSES`).
+                status: { in: DONE_INSPECTION_STATUSES },
               },
             },
             _count: { _all: true },
