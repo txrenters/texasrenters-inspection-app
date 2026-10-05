@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InspectionStatus, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
-import { haversineMeters, type Quarter, quarterLabel } from '@texasrenters/shared';
+import { haversineMeters, type Quarter, quarterLabel, withoutInspectionLink } from '@texasrenters/shared';
 
 import {
   ApiAuthGuard,
@@ -44,7 +44,7 @@ import {
   PlanStopListQueryDto,
   PlanStopTypeDto,
 } from './planning.dto';
-import { QuarterPlannerService } from './quarter-planner.service';
+import { movableInspection, QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
 import { TbpPlanService } from './tbp-plan.service';
 import { TbpPublishService } from './tbp-publish.service';
@@ -283,6 +283,10 @@ export class PlanningController {
         onSiteMinutesOverriddenAt: true,
         unitOverriddenAt: true,
         propertywareUnit: { select: { id: true, name: true, addressLine1: true } },
+        // A booked visit: whether it can still be changed from the plan, and the
+        // title and Details its Jobber visit holds now -- the console may have
+        // edited them since publishing.
+        inspection: { select: { status: true, finalizedAt: true, jobberVisitTitle: true, jobberVisitDetails: true } },
         propertywareBuilding: {
           select: {
             // Where it is, for the map of the visits that need attention.
@@ -335,8 +339,18 @@ export class PlanningController {
       planId,
       stops.flatMap((stop) => (stop.assignedTechnicianId ? [stop.assignedTechnicianId] : [])),
     );
-    return stops.map(({ previousTechnicianId, propertywareBuilding, ...stop }) => ({
+    return stops.map(({ previousTechnicianId, propertywareBuilding, inspection, ...stop }) => ({
       ...stop,
+      booking: inspection
+        ? {
+            status: inspection.status,
+            // Not yet started, finished or called off: its day, technician and words can still change.
+            changeable: movableInspection(inspection),
+            title: inspection.jobberVisitTitle,
+            // Without the link back to the inspection, which a save puts back.
+            details: inspection.jobberVisitDetails ? withoutInspectionLink(inspection.jobberVisitDetails) : null,
+          }
+        : null,
       assignedTechnician:
         groups && stop.assignedTechnician
           ? { ...stop.assignedTechnician, displayName: groups.get(stop.assignedTechnician.id) ?? 'Day group' }

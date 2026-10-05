@@ -350,6 +350,9 @@ export function tbpVisitDetails(servicesLine: string): string {
   return [servicesLine.trim(), [COMPLETION_HEADING, ...OCCUPIED_COMPLETION_STEPS].join('\n')].join('\n\n');
 }
 
+/** How the Details introduce the link to the inspection: the technician follows it out of the Jobber visit. */
+const INSPECTION_LINK_LABEL = 'Texas Renters inspection:';
+
 /**
  * The Details with a link to the inspection, before the completion steps.
  *
@@ -358,9 +361,23 @@ export function tbpVisitDetails(servicesLine: string): string {
  * them.
  */
 export function withInspectionLink(details: string, inspectionUrl: string): string {
-  const link = `Texas Renters inspection: ${inspectionUrl}`;
+  const link = `${INSPECTION_LINK_LABEL} ${inspectionUrl}`;
   if (details.includes(link)) return details;
   const heading = details.indexOf(COMPLETION_HEADING);
   if (heading < 0) return [details.trim(), link].filter(Boolean).join('\n\n');
   return [details.slice(0, heading).trim(), link, details.slice(heading)].filter(Boolean).join('\n\n');
+}
+
+/**
+ * The Details as a coordinator writes them: without the link to the inspection,
+ * which `withInspectionLink` puts back when they are sent. A booked visit's
+ * Details are edited from the plan this way (the office, 2026-10-06), so the
+ * link is neither shown as text to keep nor lost by a save.
+ */
+export function withoutInspectionLink(details: string): string {
+  return details
+    .split(/\n{2,}/)
+    .filter((paragraph) => !paragraph.trim().startsWith(INSPECTION_LINK_LABEL))
+    .join('\n\n')
+    .trim();
 }

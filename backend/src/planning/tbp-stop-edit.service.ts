@@ -7,15 +7,20 @@ import {
   quarterLabel,
   quarterStart,
   unitFilterSizes,
+  withInspectionLink,
+  withoutInspectionLink,
 } from '@texasrenters/shared';
 
+import { AdminService } from '../admin/admin.service';
 import { type AuthenticatedUser, auditActor } from '../common/auth';
+import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { benefitPackageInspectionInDetails } from '../integrations/jobber/jobber.visit-type';
-import { QuarterPlannerService } from './quarter-planner.service';
+import { movableInspection, QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanService, planVisitDetails, visitTitle } from './tbp-plan.service';
-import { TbpPublishService } from './tbp-publish.service';
+import { TbpPublishService, webOrigin } from './tbp-publish.service';
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */
 export interface PlanStopEdit {
@@ -39,6 +44,8 @@ export interface PlanStopEditResult {
    * that had already been published, so nothing else would have created it.
    */
   placed?: boolean;
+  /** A booked visit's change was queued for its Jobber visit. */
+  sentToJobber?: boolean;
 }
 
 /** A technician a visit can be given to, for the console's picker. */
@@ -104,6 +111,7 @@ export class TbpStopEditService {
     @Inject(TbpPlanService) private readonly plans: TbpPlanService,
     @Inject(QuarterPlannerService) private readonly planner: QuarterPlannerService,
     @Inject(TbpPublishService) private readonly publisher: TbpPublishService,
+    @Inject(AdminService) private readonly admin: AdminService,
   ) {}
 
   /**
@@ -142,7 +150,25 @@ export class TbpStopEditService {
         visitDetailsOverriddenAt: true,
         onSiteMinutes: true,
         hvacFilterSizes: true,
-        plan: { select: { status: true, quarterYear: true, quarterNumber: true, maxOnSiteMinutes: true, startsOn: true } },
+        plan: {
+          select: {
+            status: true,
+            quarterYear: true,
+            quarterNumber: true,
+            maxOnSiteMinutes: true,
+            startsOn: true,
+            jobberUnassigned: true,
+          },
+        },
+        inspection: {
+          select: {
+            status: true,
+            finalizedAt: true,
+            jobberVisitId: true,
+            jobberVisitTitle: true,
+            jobberVisitDetails: true,
+          },
+        },
         tenant: {
           select: {
             addressLine1: true,
@@ -156,12 +182,11 @@ export class TbpStopEditService {
       },
     });
     if (!stop) throw new ApplicationError(404, 'STOP_NOT_FOUND', 'This visit does not exist.');
-    if (stop.inspectionId || stop.status === TbpStopStatus.PUBLISHED || stop.status === TbpStopStatus.EXCLUDED)
-      throw new ApplicationError(
-        409,
-        'STOP_NOT_EDITABLE',
-        'This visit has been published or left out, and cannot be changed.',
-      );
+    if (stop.status === TbpStopStatus.EXCLUDED)
+      throw new ApplicationError(409, 'STOP_NOT_EDITABLE', 'This visit has been left out, and cannot be changed.');
+    if (stop.inspectionId) return this.editBooked(user, { ...stop, inspectionId: stop.inspectionId }, input);
+    if (stop.status === TbpStopStatus.PUBLISHED)
+      throw new ApplicationError(409, 'STOP_NOT_EDITABLE', 'This visit has been published, and cannot be changed here.');
     // A published quarter is still open for the visits it could not place: they
     // have no inspection, they are Jobber's unscheduled work or nobody's, and
     // the office gives them a day here (2026-09-20, on a plan whose publish had
@@ -341,6 +366,199 @@ export class TbpStopEditService {
         : null;
 
     return { id: stop.id, changed, ...(placed ? { placed: placed !== 'FAILED' } : {}) };
+  }
+
+  /**
+   * A change to a visit already booked -- it has its inspection, and its Jobber
+   * visit -- made from the same window (the office, 2026-10-06: "if we want to
+   * reschedule it from October sixth to October seventh we should be able to do
+   * so by clicking the field just like the unpublished one").
+   *
+   * Each value goes the way the console already changes a booking, so this is
+   * not a second way of changing one and Jobber hears of it the same way:
+   * - **The day**: the inspection's reschedule, which moves its plan stop too
+   *   and queues the Jobber visit's new day.
+   * - **The technician**: the inspection's (re)assignment, which queues it for
+   *   Jobber; the plan stop follows, so the plan shows it on their day. On a
+   *   quarter sent out to nobody, the days are groups and only the stop moves.
+   * - **The title and Details**: the Jobber visit's edit, the Details with the
+   *   link back to the inspection put back; the stop keeps the same words.
+   * - **The time on site**: the plan's alone -- Jobber books these visits for a
+   *   day with no time -- measured into its day again.
+   *
+   * The kind of visit and the unit are fixed: the inspection was made for them.
+   * A visit somebody has started, finished or called off is a record and stays
+   * as it is. Where the console's edits are not sent to Jobber, nothing that
+   * Jobber holds is changed here, so the two cannot disagree. Everything is
+   * checked before anything is written.
+   */
+  private async editBooked(
+    user: AuthenticatedUser,
+    stop: {
+      id: string;
+      planId: string;
+      inspectionId: string;
+      inspectionType: string;
+      scheduledOn: Date | null;
+      assignedTechnicianId: string | null;
+      propertywareUnitId: string | null;
+      visitTitle: string | null;
+      visitDetails: string | null;
+      onSiteMinutes: number | null;
+      plan: {
+        quarterYear: number;
+        quarterNumber: number;
+        maxOnSiteMinutes: number;
+        startsOn: Date | null;
+        jobberUnassigned: boolean;
+      };
+      inspection: {
+        status: Parameters<typeof movableInspection>[0]['status'];
+        finalizedAt: Date | null;
+        jobberVisitId: string | null;
+        jobberVisitTitle: string | null;
+        jobberVisitDetails: string | null;
+      } | null;
+    },
+    input: PlanStopEdit,
+  ): Promise<PlanStopEditResult> {
+    const { organizationId } = user;
+    const inspection = stop.inspection;
+    if (!inspection || !movableInspection(inspection))
+      throw new ApplicationError(
+        409,
+        'VISIT_STARTED',
+        'This visit has been started, done or called off, so it stays as it is. Open its inspection to see it.',
+      );
+    if (input.inspectionType !== undefined && input.inspectionType !== stop.inspectionType)
+      throw new ApplicationError(
+        409,
+        'BOOKED_KIND_FIXED',
+        'The kind of visit is fixed once it is booked: its inspection was made for it.',
+      );
+    if (input.propertywareUnitId !== undefined && input.propertywareUnitId !== stop.propertywareUnitId)
+      throw new ApplicationError(409, 'BOOKED_UNIT_FIXED', 'The unit is fixed once it is booked: its inspection is at that door.');
+
+    const quarter: Quarter = { year: stop.plan.quarterYear, quarter: stop.plan.quarterNumber as Quarter['quarter'] };
+    const date =
+      input.scheduledOn !== undefined && input.scheduledOn !== dateOf(stop.scheduledOn)
+        ? dayInQuarter(input.scheduledOn, quarter, dateOf(stop.plan.startsOn))
+        : null;
+    if (date && date < businessDate())
+      throw new ApplicationError(422, 'DATE_PASSED', 'Choose today or a later day: a booked visit is not moved into the past.');
+    const technicianId =
+      input.assignedTechnicianId !== undefined && input.assignedTechnicianId !== stop.assignedTechnicianId
+        ? await this.technician(organizationId, input.assignedTechnicianId)
+        : null;
+    const length =
+      input.onSiteMinutes !== undefined && input.onSiteMinutes !== stop.onSiteMinutes
+        ? this.length(input.onSiteMinutes, stop.plan.maxOnSiteMinutes)
+        : null;
+    // What the Jobber visit says now, as a coordinator reads it: the console may
+    // have edited it since publishing, and then those are the words to change.
+    const jobberTitle = inspection.jobberVisitTitle ?? stop.visitTitle;
+    const jobberDetails = inspection.jobberVisitDetails ? withoutInspectionLink(inspection.jobberVisitDetails) : stop.visitDetails;
+    const title = input.visitTitle === undefined ? undefined : this.title(input.visitTitle);
+    const details =
+      input.visitDetails === undefined ? undefined : this.details(input.visitDetails, stop.inspectionType as TbpInspectionType);
+    const newTitle = title !== undefined && title !== jobberTitle ? title : null;
+    const newDetails = details !== undefined && details !== jobberDetails ? details : null;
+
+    // Who may: the same grants the inspection's own page asks for each change.
+    const sentToNobody = stop.plan.jobberUnassigned;
+    const reassigns = Boolean(technicianId) && !sentToNobody;
+    if ((date || newTitle || newDetails) && !user.permissions.includes('inspections:manage'))
+      throw new ApplicationError(
+        403,
+        'FORBIDDEN',
+        'Changing a booked visit changes its inspection and its Jobber visit, which needs permission to manage inspections.',
+      );
+    if (reassigns && !user.permissions.includes('inspections:assign'))
+      throw new ApplicationError(
+        403,
+        'FORBIDDEN',
+        'Giving a booked visit to someone else needs permission to assign inspections.',
+      );
+    const touchesJobber = Boolean(date || newTitle || newDetails || reassigns);
+    const pushes = getJobberConfig().pushEditsEnabled;
+    if (touchesJobber && inspection.jobberVisitId && !pushes)
+      throw new ApplicationError(
+        409,
+        'JOBBER_EDITS_OFF',
+        'This visit is booked in Jobber, and changes made here are not sent to Jobber on this server. Change it in Jobber and it will update here.',
+      );
+
+    const changed: PlanStopEditResult['changed'] = [];
+    const before = { date: dateOf(stop.scheduledOn), technicianId: stop.assignedTechnicianId };
+
+    if (date) {
+      await this.admin.updateInspection(user, stop.inspectionId, { scheduledAt: date });
+      changed.push('scheduledOn');
+    }
+    if (technicianId) {
+      if (reassigns) {
+        const current = await this.prisma.inspectionAssignment.findFirst({
+          where: { inspectionId: stop.inspectionId, isCurrent: true },
+          select: { technicianId: true },
+        });
+        const assignment = { technicianId, reason: 'Moved on the benefit package plan' };
+        if (!current) await this.admin.assign(user, stop.inspectionId, assignment);
+        else if (current.technicianId !== technicianId) await this.admin.reassign(user, stop.inspectionId, assignment);
+      }
+      changed.push('assignedTechnicianId');
+    }
+    if (newTitle || newDetails) {
+      const link = (text: string) => withInspectionLink(text, `${webOrigin()}/inspections/${stop.inspectionId}`);
+      await this.admin.updateJobberVisit(user, stop.inspectionId, {
+        ...(newTitle ? { title: newTitle } : {}),
+        details: newDetails ? link(newDetails) : (inspection.jobberVisitDetails ?? link(stop.visitDetails ?? '')),
+      });
+      if (newTitle) changed.push('visitTitle');
+      if (newDetails) changed.push('visitDetails');
+    }
+    if (length !== null) changed.push('onSiteMinutes');
+    if (!changed.length) return { id: stop.id, changed };
+
+    // The stop says what the booking now says. Its day was moved with the
+    // inspection's; the rest is written here, each marked as a person's so a
+    // rebuild keeps it.
+    const now = new Date();
+    const data: Prisma.TbpQuarterPlanStopUncheckedUpdateInput = {
+      ...(technicianId ? { assignedTechnicianId: technicianId, technicianOverriddenAt: now, scheduleOverriddenAt: now } : {}),
+      ...(newTitle ? { visitTitle: newTitle, visitTitleOverriddenAt: now } : {}),
+      ...(newDetails ? { visitDetails: newDetails, visitDetailsOverriddenAt: now } : {}),
+      ...(length !== null ? { onSiteMinutes: length, onSiteMinutesOverriddenAt: now } : {}),
+    };
+    if (Object.keys(data).length) await this.prisma.tbpQuarterPlanStop.update({ where: { id: stop.id }, data });
+
+    // The days it left and joined, measured and ordered again as a move on the
+    // map does: a published day is never measured as a draft's (`measureDays`
+    // counts only unpublished visits).
+    const after = { date: date ?? before.date, technicianId: technicianId ?? before.technicianId };
+    const days = [before, after].filter(
+      (day): day is { date: string; technicianId: string } => Boolean(day.date && day.technicianId),
+    );
+    if ((date || technicianId || length !== null) && days.length) await this.planner.optimizeDays(organizationId, stop.planId, days);
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        ...auditActor(user),
+        action: 'TBP_PLAN_STOP_EDITED',
+        entityType: 'TbpQuarterPlanStop',
+        entityId: stop.id,
+        metadata: {
+          planId: stop.planId,
+          booked: true,
+          inspectionId: stop.inspectionId,
+          fields: changed,
+          ...(date || technicianId ? { from: before, to: after } : {}),
+          ...(length !== null ? { onSiteMinutes: { from: stop.onSiteMinutes, to: length } } : {}),
+        },
+      },
+    });
+
+    return { id: stop.id, changed, sentToJobber: touchesJobber && Boolean(inspection.jobberVisitId) && pushes };
   }
 
   /**

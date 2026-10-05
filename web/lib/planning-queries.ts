@@ -113,6 +113,13 @@ export interface PlanStop {
   propertywareUnit: { id: string; name: string; addressLine1: string | null } | null;
   /** The building's units, when it has any: in a building of several, a coordinator chooses the tenancy's. */
   buildingUnits: { id: string; name: string; addressLine1: string | null }[];
+  /**
+   * Its booking, once it has its inspection: whether it can still be changed
+   * from the plan (nobody has started, finished or called it off), and the
+   * title and Details its Jobber visit holds now, without the link back to the
+   * inspection. Absent from a server older than this.
+   */
+  booking?: { status: string; changeable: boolean; title: string | null; details: string | null } | null;
   tenant: {
     leaseName: string;
     addressLine1: string | null;
@@ -686,7 +693,7 @@ export function usePlanningMutations() {
     // server, so days, stops and counts are all read again after.
     editStop: useMutation({
       mutationFn: ({ stopId, ...input }: PlanStopEdit & { stopId: string }) =>
-        api<{ id: string; changed: string[] }>(`${PLANNING}/stops/${stopId}`, {
+        api<{ id: string; changed: string[]; placed?: boolean; sentToJobber?: boolean }>(`${PLANNING}/stops/${stopId}`, {
           method: 'PATCH',
           body: JSON.stringify(input),
         }),
