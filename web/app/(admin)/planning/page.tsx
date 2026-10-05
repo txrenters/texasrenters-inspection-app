@@ -1,24 +1,23 @@
 'use client';
 
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
-import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon, SparklesIcon, WindIcon } from 'lucide-react';
+import { CalendarRangeIcon, EllipsisIcon, FileSpreadsheetIcon, MapIcon, RefreshCwIcon, RouteIcon, SendIcon, WindIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { GroupFilePicker, GroupFileView, useGroupFileChoice } from '@/components/planning/group-file-view';
-import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
-import { PlanAdviceDialog } from '@/components/planning/plan-advice-dialog';
+import { GroupFileView, useGroupFileChoice, useGroupFilePicker, type LoadedGroupFile } from '@/components/planning/group-file-view';
+import { useOfficeSheetImport } from '@/components/planning/office-sheet-import';
 import type { AttentionMapStop } from '@/components/planning/plan-attention-map';
 import { PlanBuildDialog, type PlanBuildChoice } from '@/components/planning/plan-build-dialog';
-import { PlanCalendar } from '@/components/planning/plan-calendar';
-import { bookedProblem, PlanDays } from '@/components/planning/plan-days';
+import type { CalendarView } from '@/components/planning/plan-calendar';
 import { LateMoveOutsPanel } from '@/components/planning/late-move-outs';
+import { PlanRules } from '@/components/planning/plan-rules';
+import { bookedProblem, PlanSchedule } from '@/components/planning/plan-schedule';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
-import { Stat, StatGroup, StatStrip, StatStripItem } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import {
   AlertDialog,
@@ -33,6 +32,13 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
@@ -43,7 +49,6 @@ import {
   attentionOf,
   bookedInWords,
   dayOutsideRules,
-  formatMinutes,
   formatShortDay,
   needsUnit,
   planStartText,
@@ -58,10 +63,10 @@ import {
   usePlanRotation,
   usePlanStops,
   usePlanningMutations,
-  type PlanAdvice,
   type PlanStatus,
 } from '@/lib/planning-queries';
 import { useUrlState } from '@/lib/url-state';
+import { cn } from '@/lib/utils';
 
 /**
  * A quarter of Tenant Benefit Package visits, before and after it is booked.
@@ -85,19 +90,17 @@ import { useUrlState } from '@/lib/url-state';
  * the days, changes any draft visit in its window -- the day, technician, unit,
  * title, Details -- and publishes, which creates the inspections and queues
  * their visits for Jobber.
+ *
+ * Two tabs since 2026-10-05, when the office found seven too many: the
+ * Schedule -- the calendar beside the map, as Jobber's -- and the Visits, one
+ * table with the scheduled, unscheduled and needing attention a click apart.
+ * The rules are behind an ⓘ rather than above every plan.
  */
 
 /** Google Maps touches `window` and measures its container, so it is never rendered on the server. */
 const PlanAttentionMap = dynamic(() => import('@/components/planning/plan-attention-map').then((module) => module.PlanAttentionMap), {
   ssr: false,
   loading: () => <Skeleton className="h-full w-full rounded-lg" />,
-});
-
-/** Mapbox measures its container too, so this is client-only for the same reason. */
-const PlanGroupsMap = dynamic(() => import('@/components/planning/plan-groups-map').then((module) => module.PlanGroupsMap), {
-  ssr: false,
-  // Sized itself: the view sets its own height once loaded, and nothing around it does.
-  loading: () => <Skeleton className="h-80 w-full rounded-lg lg:h-[36rem]" />,
 });
 
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
@@ -108,10 +111,30 @@ const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' 
   CANCELLED: { label: 'Cancelled', variant: 'outline' },
 };
 
+type VisitFilter = 'all' | 'scheduled' | 'unscheduled' | 'attention';
+
+const VISIT_FILTERS: VisitFilter[] = ['all', 'scheduled', 'unscheduled', 'attention'];
+
+/** The tabs this page had before 2026-10-05, so a bookmark to one still lands where its content went. */
+const OLD_TABS: Record<string, { tab: 'schedule' | 'visits'; show?: VisitFilter }> = {
+  days: { tab: 'schedule' },
+  calendar: { tab: 'schedule' },
+  groups: { tab: 'schedule' },
+  scheduled: { tab: 'visits', show: 'scheduled' },
+  unscheduled: { tab: 'visits', show: 'unscheduled' },
+  attention: { tab: 'visits', show: 'attention' },
+};
+
+const CALENDAR_VIEWS: CalendarView[] = ['month', 'week', 'day'];
+
 export default function PlanningPage() {
   const { has } = usePermissions();
   const canChange = has('planning:publish');
-  const [state, setState] = useUrlState({ quarter: '', tab: 'days', day: '' });
+  const [state, setState] = useUrlState({ quarter: '', tab: 'schedule', day: '', view: 'month', show: 'all' });
+  const tab = state.tab === 'visits' ? 'visits' : (OLD_TABS[state.tab]?.tab ?? 'schedule');
+  const show: VisitFilter =
+    OLD_TABS[state.tab]?.show ?? (VISIT_FILTERS.includes(state.show as VisitFilter) ? (state.show as VisitFilter) : 'all');
+  const view: CalendarView = CALENDAR_VIEWS.includes(state.view as CalendarView) ? (state.view as CalendarView) : 'month';
   const quarters = usePlanQuarters();
   const choices = useMemo(() => quarterChoices(quarters.data ?? [], new Date()), [quarters.data]);
   const choice = choices.find((entry) => entry.key === state.quarter) ?? choices[0]!;
@@ -121,15 +144,24 @@ export default function PlanningPage() {
   const days = usePlanDays(plan?.id);
   const rotation = usePlanRotation(plan?.id);
   const mutations = usePlanningMutations();
+  const officeSheet = useOfficeSheetImport(plan?.id);
+  /**
+   * A groups file drawn in place of the calendar: the server's, or one chosen
+   * here (the office works groupings out in a spreadsheet too). Never stored in
+   * the browser: it names tenants.
+   */
+  const groupFiles = useGroupFileChoice();
+  const mapGroupFile = (loaded: LoadedGroupFile) => {
+    groupFiles.choose(loaded);
+    setState({ tab: 'schedule', show: 'all' });
+  };
+  const groupFilePicker = useGroupFilePicker(mapGroupFile);
   const [publishing, setPublishing] = useState(false);
   // Build and Rebuild ask who goes out and the first day before anything is laid out (2026-09-19).
   const [choosing, setChoosing] = useState(false);
-  // The visit whose details are open, from its pin, its row in a day, or the tables.
+  // The visit whose details are open, from its pin, its row in a day, or the table.
   const [openStopId, setOpenStopId] = useState<string | null>(null);
-  /**
-   * The visits as the Groups tab draws them, each day a group. Kept between
-   * renders: every day's colour, outline and road route is worked out from it.
-   */
+  /** Every visit as the schedule's map draws it: with its day, or none yet. */
   const dayStops = useMemo(
     () =>
       (stops.data ?? []).map((stop) => ({
@@ -150,20 +182,6 @@ export default function PlanningPage() {
       })),
     [stops.data],
   );
-  /**
-   * A groups file drawn on the Groups map in place of the quarter's days: the
-   * server's by default, or one chosen here.
-   *
-   * Held here rather than in the tab, so looking at another tab and coming
-   * back keeps it. Never stored in the browser: it names tenants.
-   */
-  const groupFiles = useGroupFileChoice(state.tab === 'groups');
-  const groupFile = groupFiles.shown;
-
-  // What AI made of the quarter, and the moves it offered (2026-09-20).
-  const [advising, setAdvising] = useState(false);
-  const [advice, setAdvice] = useState<PlanAdvice | null>(null);
-  const [adviceError, setAdviceError] = useState<string | null>(null);
 
   const draft = plan?.status === 'DRAFT';
   // A published quarter is still open for the visits it could not place: they
@@ -212,14 +230,14 @@ export default function PlanningPage() {
   );
   const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
-  // Published to Jobber with no day: theirs to schedule there, or ours to give a
-  // day here (2026-09-20, as Jobber's own Unscheduled list).
-  const unscheduled = (stops.data ?? []).filter((stop) => stop.status === 'UNSCHEDULED');
   // On a day, whether or not it has been created yet: what the crew is going
   // out to. The office wants the two counts side by side (2026-09-20).
   const scheduled = (stops.data ?? []).filter(
     (stop) => stop.scheduledOn && (stop.status === 'PLANNED' || stop.status === 'PUBLISHED'),
   );
+  // No day yet: published to Jobber's own Unscheduled list (2026-09-20), or
+  // going there with the next publish.
+  const unscheduled = (stops.data ?? []).filter((stop) => !stop.scheduledOn && stop.status !== 'EXCLUDED');
   // A visit the planner could not place is published too, with no day on it: it
   // goes to Jobber's unscheduled work for the office to put on the calendar
   // there (2026-09-20).
@@ -312,38 +330,6 @@ export default function PlanningPage() {
           });
         },
         onError: (error) => toast.error(`${choice.label} could not be planned`, { id, description: error.message }),
-      },
-    );
-  };
-
-  /** Ask AI what it makes of the quarter. It changes nothing until a move is applied. */
-  const ask = () => {
-    if (!plan) return;
-    setAdvice(null);
-    setAdviceError(null);
-    setAdvising(true);
-    mutations.advice.mutate(plan.id, {
-      onSuccess: setAdvice,
-      onError: (error) => setAdviceError(error.message),
-    });
-  };
-
-  const applyAdvice = (moves: { stopId: string; toDate: string; toTechnicianId: string }[]) => {
-    if (!plan) return;
-    mutations.applyAdvice.mutate(
-      { planId: plan.id, moves },
-      {
-        onSuccess: (result) => {
-          setAdvising(false);
-          setAdvice(null);
-          if (result.applied)
-            toast.success(`${result.applied.toLocaleString()} ${result.applied === 1 ? 'visit' : 'visits'} moved`, {
-              description: 'Their days were measured again on Google.',
-            });
-          if (result.refused.length)
-            toast.warning(`${result.refused.length} could not be moved`, { description: result.refused[0]!.refused });
-        },
-        onError: (error) => toast.error('The moves could not be applied', { description: error.message }),
       },
     );
   };
@@ -441,6 +427,91 @@ export default function PlanningPage() {
     });
   };
 
+  /** What is behind the ⓘ: this quarter's facts, in a line each. */
+  const facts = plan
+    ? [
+        { label: 'First day', value: planStartText(quarter, startsOn) },
+        { label: 'US holidays', value: holidays.length ? holidays.map(formatShortDay).join(', ') : 'none' },
+        ...(alsoClosed.length ? [{ label: 'Also closed', value: alsoClosed.map(formatShortDay).join(', ') }] : []),
+        ...(rotation.data
+          ? [
+              {
+                label: 'Crew',
+                value: plan.jobberUnassigned
+                  ? `sent out unassigned, to hand out in Jobber · ${rotation.data.crew.length} day ${
+                      rotation.data.crew.length === 1 ? 'group' : 'groups'
+                    } at a time`
+                  : rotation.data.crew.length
+                    ? rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')
+                    : 'nobody yet: choose who goes out when you rebuild',
+              },
+            ]
+          : []),
+        ...(trips.length ? [{ label: trips.length === 1 ? 'Trip' : 'Trips', value: trips.join(' · ') }] : []),
+        {
+          label: 'Details',
+          value: plan.officeDetailsImportedAt ? `office sheet, ${formatRelative(plan.officeDetailsImportedAt)}` : 'from the tenant report',
+        },
+        { label: 'Built', value: formatRelative(plan.generatedAt) },
+      ]
+    : [];
+
+  const showVisits = (filter: VisitFilter) => setState({ tab: 'visits', show: filter });
+
+  /** The quarter in a line, with what needs a look said in its colour (the office, 2026-10-05: no paragraphs). */
+  const summary = plan
+    ? (() => {
+        const parts = [
+          <span key="visits">
+            {(plan.hvacStopCount + plan.occupiedStopCount).toLocaleString()} visits
+            {plan.hvacStopCount ? ` (${plan.hvacStopCount.toLocaleString()} HVAC)` : ''}
+          </span>,
+          ...(days.data?.length
+            ? [
+                <span key="days">
+                  {days.data.length.toLocaleString()} technician-days, {technicians.size}{' '}
+                  {technicians.size === 1 ? 'technician' : 'technicians'}
+                </span>,
+              ]
+            : []),
+          ...(attentionIds.size
+            ? [
+                <button
+                  className="text-warning font-medium underline-offset-4 hover:underline"
+                  key="attention"
+                  onClick={() => showVisits('attention')}
+                  type="button"
+                >
+                  {attentionIds.size.toLocaleString()} {attentionIds.size === 1 ? 'needs' : 'need'} attention
+                </button>,
+              ]
+            : []),
+          ...(daysOutsideRules.length
+            ? [
+                <span
+                  className="text-destructive font-medium"
+                  key="outside"
+                  title={`Over ${plan.maxStopsPerDay} visits, the inspecting limit, or ${plan.maxLegMinutes} min between properties`}
+                >
+                  {daysOutsideRules.length.toLocaleString()} {daysOutsideRules.length === 1 ? 'day' : 'days'} outside the rules
+                </span>,
+              ]
+            : []),
+        ];
+        return (
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {parts.flatMap((part, index) => (index ? [<span aria-hidden key={`dot-${index}`}>·</span>, part] : [part]))}
+            <PlanRules
+              facts={facts}
+              maxLegMinutes={plan.maxLegMinutes}
+              maxStopsPerDay={plan.maxStopsPerDay}
+              minStopsPerDay={plan.minStopsPerDay}
+            />
+          </span>
+        );
+      })()
+    : 'Each quarter’s Tenant Benefit Package visits, planned into days and published to Jobber.';
+
   const header = (
     <PageHeader
       actions={
@@ -458,60 +529,74 @@ export default function PlanningPage() {
             </SelectContent>
           </Select>
           {canPlace && plan ? (
-            <>
-              <OfficeSheetImport planId={plan.id} />
-              <Button
-                disabled={building}
-                onClick={() => setChoosing(true)}
-                size="sm"
-                title="Reads the tenant report again and lays the days out again, for the technicians and from the first day you choose. Every change a coordinator made to a visit is kept."
-                variant="outline"
-              >
-                {building ? <Spinner /> : <RefreshCwIcon />}
-                Rebuild
-              </Button>
-              <Button
-                disabled={building || mutations.refreshFilterSizes.isPending}
-                onClick={refreshFilterSizes}
-                size="sm"
-                title="Reads every visit's filter sizes from the tenant report as it stands now, published visits included, and says which properties Propertyware still holds no size for. Details a coordinator wrote keep their words."
-                variant="outline"
-              >
-                {mutations.refreshFilterSizes.isPending ? <Spinner /> : <WindIcon />}
-                Filter sizes
-              </Button>
-              {(days.data?.length ?? 0) > 0 ? (
-                <Button
-                  disabled={building || mutations.advice.isPending}
-                  onClick={ask}
-                  size="sm"
-                  title="Reads the days and says what looks wrong, then offers the moves that keep every rule and shorten the driving."
-                  variant="outline"
-                >
-                  {mutations.advice.isPending ? <Spinner /> : <SparklesIcon />}
-                  Ask AI
-                </Button>
-              ) : null}
-              <Button
-                disabled={building || planned.length + unplaced.length === 0}
-                onClick={() => setPublishing(true)}
-                size="sm"
-                title={
-                  unplaced.length
-                    ? `${unplaced.length.toLocaleString()} visits with no day go to Jobber unscheduled.`
-                    : undefined
-                }
-              >
-                <SendIcon />
-                {draft ? 'Publish' : 'Publish the rest'}
-              </Button>
-            </>
+            <Button
+              disabled={building}
+              onClick={() => setChoosing(true)}
+              size="sm"
+              title="Reads the tenant report again and lays the days out again. Changes made to visits are kept."
+              variant="outline"
+            >
+              {building ? <Spinner /> : <RefreshCwIcon />}
+              Rebuild
+            </Button>
           ) : null}
-
+          {plan ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline">
+                  {officeSheet.pending || mutations.refreshFilterSizes.isPending ? <Spinner /> : <EllipsisIcon />}
+                  More
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {canPlace ? (
+                  <>
+                    <DropdownMenuItem disabled={officeSheet.pending} onSelect={officeSheet.choose}>
+                      <FileSpreadsheetIcon />
+                      Import office sheet
+                    </DropdownMenuItem>
+                    <DropdownMenuItem disabled={building || mutations.refreshFilterSizes.isPending} onSelect={refreshFilterSizes}>
+                      <WindIcon />
+                      Refresh filter sizes
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                ) : null}
+                <DropdownMenuItem
+                  onSelect={() => {
+                    groupFiles.showServerFile();
+                    setState({ tab: 'schedule', show: 'all' });
+                  }}
+                >
+                  <MapIcon />
+                  Show the server’s groups file
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={groupFilePicker.choose}>
+                  <MapIcon />
+                  Map a groups file
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          {canPlace && plan ? (
+            <Button
+              disabled={building || planned.length + unplaced.length === 0}
+              onClick={() => setPublishing(true)}
+              size="sm"
+              title={
+                unplaced.length
+                  ? `${unplaced.length.toLocaleString()} visits with no day go to Jobber unscheduled.`
+                  : undefined
+              }
+            >
+              <SendIcon />
+              {draft ? 'Publish' : 'Publish the rest'}
+            </Button>
+          ) : null}
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next; a day takes a 10th while that property is within 5 minutes of it, and a day short of 9 fills from the fuller days near it, so none is left with one or two. Everyone chosen works every day from the plan's first until every visit has a day: the quarter is finished as early as the crew can, and the days left at the end of it stay empty. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in a zone of their own each day and moves to the next zone the day after, skipping a zone with nothing left; in each zone the group furthest from downtown Houston goes first, working in. A property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description={summary}
       title="Benefit package plan"
     />
   );
@@ -531,9 +616,26 @@ export default function PlanningPage() {
       </>
     );
 
+  const visitFilters: { value: VisitFilter; label: string; count: number }[] = [
+    { value: 'all', label: 'All', count: stops.data?.length ?? 0 },
+    { value: 'scheduled', label: 'Scheduled', count: scheduled.length },
+    { value: 'unscheduled', label: 'Unscheduled', count: unscheduled.length },
+    { value: 'attention', label: 'Needs attention', count: attentionIds.size },
+  ];
+  const listed =
+    show === 'scheduled'
+      ? scheduled
+      : show === 'unscheduled'
+        ? unscheduled
+        : show === 'attention'
+          ? (stops.data ?? []).filter((stop) => attentionIds.has(stop.id))
+          : (stops.data ?? []);
+
   return (
     <>
       {header}
+      {officeSheet.element}
+      {groupFilePicker.element}
 
       {!plan ? (
         choice.started ? (
@@ -541,7 +643,7 @@ export default function PlanningPage() {
           // its visits are inspections, and a plan built now would lay today's
           // tenancies over days that have passed (2026-09-21).
           <EmptyState
-            description={`${choice.label} is already under way and was never planned here. The visits the office ran in it are inspections — open Inspections to see them by their days. A plan built now would lay today's tenancies over days that have passed.`}
+            description={`${choice.label} is already under way and was never planned here. Its visits are in Inspections.`}
             icon={CalendarRangeIcon}
             title={`${choice.label} was run outside this plan`}
           >
@@ -551,10 +653,10 @@ export default function PlanningPage() {
           </EmptyState>
         ) : (
           <EmptyState
-            description={`Build it from the tenant report: every enrolled tenancy, in ${quarterName(
+            description={`Built from the tenant report, in ${quarterName(
               choice.quarter === 1 ? choice.year - 1 : choice.year,
               choice.quarter === 1 ? 4 : choice.quarter - 1,
-            )}'s order${choice.quarter % 2 === 0 ? ', with HVAC inspections for tenancies on the HVAC plan' : ', each an occupied inspection'}. Nothing is booked until it is published.`}
+            )}'s order${choice.quarter % 2 === 0 ? ', with HVAC inspections for tenancies on the HVAC plan' : ''}. Nothing is booked until it is published.`}
             icon={CalendarRangeIcon}
             title={`No plan for ${choice.label} yet`}
           >
@@ -592,74 +694,6 @@ export default function PlanningPage() {
             </Alert>
           ) : null}
 
-          <StatGroup columns="grid-cols-2 lg:grid-cols-4">
-            <Stat
-              detail={`${plan.hvacStopCount.toLocaleString()} HVAC · ${plan.occupiedStopCount.toLocaleString()} occupied`}
-              label="Visits"
-              value={(plan.hvacStopCount + plan.occupiedStopCount).toLocaleString()}
-            />
-            <Stat
-              detail={`${technicians.size} ${technicians.size === 1 ? 'technician' : 'technicians'}`}
-              label="Technician-days"
-              value={(days.data?.length ?? 0).toLocaleString()}
-            />
-            <Stat
-              detail={review.length ? `${review.length} to check the kind of visit` : 'Resolve or leave out before publishing'}
-              label="Needs attention"
-              tone={attention.length ? 'warning' : 'default'}
-              value={attention.length.toLocaleString()}
-            />
-            <Stat
-              detail={`Over ${plan.maxStopsPerDay} visits, ${formatMinutes(plan.maxOnSiteMinutes)} inspecting, or ${plan.maxLegMinutes} min between properties`}
-              label="Days outside the rules"
-              tone={daysOutsideRules.length ? 'destructive' : 'success'}
-              value={daysOutsideRules.length.toLocaleString()}
-            />
-          </StatGroup>
-
-          <StatStrip>
-            <StatStripItem label="First day" value={planStartText(quarter, startsOn)} />
-            <StatStripItem
-              label="Working days"
-              value={`Weekdays except US holidays${holidays.length ? `: ${holidays.map(formatShortDay).join(', ')}` : ''}`}
-            />
-            {alsoClosed.length ? (
-              <StatStripItem label="Also closed" value={alsoClosed.map(formatShortDay).join(', ')} />
-            ) : null}
-            <StatStripItem
-              label="Visits a day"
-              value={`${plan.minStopsPerDay}, and up to ${plan.maxStopsPerDay} where the properties are within 5 minutes of each other`}
-            />
-            <StatStripItem
-              label="Between properties"
-              value={`never more than ${plan.maxLegMinutes} min from one to the next; fewer visits where they are further apart`}
-            />
-            <StatStripItem label="Neighbours" value="a property within 5 minutes of a group joins it, whatever its zone" />
-            <StatStripItem label="Mondays" value="kept free for rescheduled visits from week 2" />
-            {rotation.data ? (
-              <StatStripItem
-                label="Crew"
-                value={
-                  plan.jobberUnassigned
-                    ? `nobody: sent out unassigned, to hand out in Jobber · ${rotation.data.crew.length} day ${
-                        rotation.data.crew.length === 1 ? 'group' : 'groups'
-                      } at a time, a zone each, moving daily`
-                    : rotation.data.crew.length
-                      ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · ${
-                          plan.crewTechnicianIds?.length ? 'chosen for this plan' : 'the crew on the planning profiles'
-                        } · a zone each, moving daily`
-                      : 'nobody yet: choose who goes out when you rebuild'
-                }
-              />
-            ) : null}
-            {trips.length ? <StatStripItem label={trips.length === 1 ? 'Trip' : 'Trips'} value={trips.join(' · ')} /> : null}
-            <StatStripItem
-              label="Details"
-              value={plan.officeDetailsImportedAt ? `office sheet, ${formatRelative(plan.officeDetailsImportedAt)}` : 'from the tenant report'}
-            />
-            <StatStripItem label="Built" value={formatRelative(plan.generatedAt)} />
-          </StatStrip>
-
           {lateMoveOuts.data ? (
             <LateMoveOutsPanel
               canMove={canMoveVisits}
@@ -669,62 +703,34 @@ export default function PlanningPage() {
             />
           ) : null}
 
-          <Tabs onValueChange={(tab) => setState({ tab })} value={state.tab}>
+          <Tabs onValueChange={(next) => setState({ tab: next, show: 'all' })} value={tab}>
             <TabsList>
-              <TabsTrigger value="days">Days ({(days.data?.length ?? 0).toLocaleString()})</TabsTrigger>
-              <TabsTrigger value="calendar">Calendar</TabsTrigger>
+              <TabsTrigger value="schedule">Schedule</TabsTrigger>
               <TabsTrigger value="visits">Visits ({(stops.data?.length ?? 0).toLocaleString()})</TabsTrigger>
-              <TabsTrigger value="scheduled">Scheduled ({scheduled.length.toLocaleString()})</TabsTrigger>
-              <TabsTrigger value="unscheduled">Unscheduled ({unscheduled.length.toLocaleString()})</TabsTrigger>
-              <TabsTrigger value="groups">Groups</TabsTrigger>
-              <TabsTrigger value="attention">Needs attention ({attentionIds.size.toLocaleString()})</TabsTrigger>
             </TabsList>
 
             {/*
-              The quarter's days as the Group maker draws a template (the
-              office, 2026-10-01): each day a group in its own colour, its
-              stops numbered in driving order along the roads.
-
-              Or a file of properties already split into groups, drawn on the
-              same map: the office works groupings out in a spreadsheet too.
+              The calendar beside the map, as Jobber's schedule (the office,
+              2026-10-05): a technician-day picked on the calendar is the one
+              day the map draws.
             */}
-            <TabsContent className="mt-3" value="groups">
-              {groupFile ? (
-                <GroupFileView
-                  key={`${groupFile.source}:${groupFile.name}:${groupFile.loadedAt}`}
-                  loaded={groupFile}
-                  onClose={groupFiles.close}
-                  onLoad={groupFiles.choose}
-                />
-              ) : (
-                <div className="grid gap-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-muted-foreground text-xs">
-                      Each day of the quarter as a group, its stops in driving order: numbered in the order it is
-                      worked, or with its template group&rsquo;s number when the quarter was built from a template
-                      (N1, N2&hellip; for a day of none).
-                      To see a file of properties already split into groups on this map instead, choose it here: it is
-                      read in this browser and sent nowhere.
-                      {groupFiles.serverProblem
-                        ? ` The server’s groups file could not be opened: ${groupFiles.serverProblem}.`
-                        : null}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {groupFiles.serverFile ? (
-                        <Button onClick={groupFiles.showServerFile} size="sm" variant="outline">
-                          Show {groupFiles.serverFile.name}
-                        </Button>
-                      ) : null}
-                      <GroupFilePicker label="Map a groups file" onLoad={groupFiles.choose} />
-                    </div>
-                  </div>
-                  <PlanGroupsMap days={days.data} stops={dayStops} />
+            <TabsContent className="mt-3" value="schedule">
+              {groupFiles.serverNote ? (
+                <div className="text-muted-foreground mb-3 flex flex-wrap items-center gap-2 text-sm">
+                  {groupFiles.serverNote}
+                  <Button onClick={groupFiles.close} size="sm" variant="ghost">
+                    Dismiss
+                  </Button>
                 </div>
-              )}
-            </TabsContent>
-
-            <TabsContent className="mt-3" value="days">
-              {days.isLoading ? (
+              ) : null}
+              {groupFiles.shown ? (
+                <GroupFileView
+                  key={`${groupFiles.shown.source}:${groupFiles.shown.name}:${groupFiles.shown.loadedAt}`}
+                  loaded={groupFiles.shown}
+                  onClose={groupFiles.close}
+                  onLoad={mapGroupFile}
+                />
+              ) : days.isLoading ? (
                 <PageSkeleton cards={1} />
               ) : days.isError ? (
                 <ErrorState error={days.error} retry={() => void days.refetch()} />
@@ -735,42 +741,25 @@ export default function PlanningPage() {
                   title="No technician-days"
                 />
               ) : (
-                <PlanDays
+                <PlanSchedule
                   canChange={canChange}
                   canMoveVisits={canMoveVisits}
                   days={days.data}
                   jobberEditsPushed={lateMoveOuts.data?.jobberEditsPushed ?? null}
+                  key={plan.id}
                   onOpenStop={setOpenStopId}
                   onSelect={(day) => setState({ day })}
+                  onShowUnscheduled={() => showVisits('unscheduled')}
+                  onViewChange={(next) => setState({ view: next })}
                   planId={plan.id}
-                  selectedDayId={state.day}
-                  settings={plan}
-                  visits={dayStops}
-                />
-              )}
-            </TabsContent>
-
-            <TabsContent className="mt-3" value="calendar">
-              {days.isLoading ? (
-                <PageSkeleton cards={1} />
-              ) : days.isError ? (
-                <ErrorState error={days.error} retry={() => void days.refetch()} />
-              ) : !days.data?.length ? (
-                <EmptyState
-                  description="No visit has a day yet. Rebuild the plan to place them."
-                  icon={CalendarRangeIcon}
-                  title="No technician-days"
-                />
-              ) : (
-                // A day chosen here opens in the Days tab, with its route and visits.
-                <PlanCalendar
-                  days={days.data}
-                  onSelect={(day) => setState({ tab: 'days', day })}
                   quarter={quarter}
                   rotation={rotation.data ?? null}
                   selectedDayId={state.day}
                   settings={plan}
                   startsOn={startsOn}
+                  unscheduledCount={unscheduled.length}
+                  view={view}
+                  visits={dayStops}
                 />
               )}
             </TabsContent>
@@ -781,88 +770,68 @@ export default function PlanningPage() {
               ) : stops.isError ? (
                 <ErrorState error={stops.error} retry={() => void stops.refetch()} />
               ) : (
-                <PlanStopsTable editable={canPlace} onOpen={setOpenStopId} stops={stops.data ?? []} />
-              )}
-            </TabsContent>
-
-            <TabsContent className="mt-3" value="scheduled">
-              {scheduled.length ? (
                 <div className="grid gap-3">
-                  <p className="text-muted-foreground text-xs">
-                    {scheduled.filter((stop) => stop.status === 'PUBLISHED').length.toLocaleString()} of these are
-                    inspections already, booked in Jobber on their day; the rest are waiting for the next publish.
-                  </p>
-                  <PlanStopsTable
-                    allStops={stops.data ?? []}
-                    editable={canPlace}
-                    onOpen={setOpenStopId}
-                    stops={scheduled}
-                  />
-                </div>
-              ) : (
-                <EmptyState
-                  description="No visit has a day yet. Rebuild the quarter to lay them out."
-                  title="Nothing scheduled"
-                />
-              )}
-            </TabsContent>
+                  <div aria-label="Show" className="flex flex-wrap gap-1.5" role="group">
+                    {visitFilters.map((filter) => (
+                      <button
+                        aria-pressed={show === filter.value}
+                        className={cn(
+                          'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-sm transition-colors',
+                          show === filter.value ? 'bg-accent text-foreground border-ring/40 font-medium' : 'text-muted-foreground hover:text-foreground',
+                        )}
+                        key={filter.value}
+                        onClick={() => showVisits(filter.value)}
+                        type="button"
+                      >
+                        {filter.label}{' '}
+                        <span className="font-mono text-xs tabular-nums">{filter.count.toLocaleString()}</span>
+                      </button>
+                    ))}
+                  </div>
 
-            <TabsContent className="mt-3" value="unscheduled">
-              {unscheduled.length ? (
-                <div className="grid gap-3">
-                  <div className="h-80 lg:h-[30rem]">
-                    <PlanAttentionMap
-                      onSelectStop={setOpenStopId}
-                      planned={plannedMap}
-                      stops={unscheduled.map((stop) => ({ ...onMap(stop), attention: 'NO_DAY' as const }))}
+                  {(show === 'unscheduled' || show === 'attention') && listed.length ? (
+                    <>
+                      <div className="h-80 lg:h-[30rem]">
+                        <PlanAttentionMap
+                          onSelectStop={setOpenStopId}
+                          planned={plannedMap}
+                          stops={
+                            show === 'attention'
+                              ? needingMap
+                              : unscheduled.map((stop) => ({ ...onMap(stop), attention: attentionOf(stop) ?? ('NO_DAY' as const) }))
+                          }
+                        />
+                      </div>
+                      <p className="text-muted-foreground text-xs">
+                        {show === 'unscheduled'
+                          ? 'Visits with no day. Give one a day and a technician here; a published one is also in Jobber’s Unscheduled list.'
+                          : 'Visits waiting for something, with the planned ones behind them in grey. Click one to fix it.'}
+                        {show === 'attention' && withoutLocation
+                          ? ` ${withoutLocation.toLocaleString()} ${withoutLocation === 1 ? 'is' : 'are'} not on the map: Propertyware has no location for the property.`
+                          : ''}
+                      </p>
+                    </>
+                  ) : null}
+
+                  {listed.length ? (
+                    <PlanStopsTable
+                      allStops={stops.data ?? []}
+                      editable={canPlace}
+                      onOpen={setOpenStopId}
+                      stops={listed}
                     />
-                  </div>
-                  <p className="text-muted-foreground text-xs">
-                    In Jobber with no day on them, in its Unscheduled list. Give one a day and a technician here and it
-                    becomes an inspection at once; schedule it in Jobber instead and it comes back here with the day it
-                    was given.
-                  </p>
-                  <PlanStopsTable
-                    allStops={stops.data ?? []}
-                    editable={canPlace}
-                    onOpen={setOpenStopId}
-                    stops={unscheduled}
-                  />
-                </div>
-              ) : (
-                <EmptyState
-                  description="Every visit this quarter has a day. A visit published without one waits here, and in Jobber's own unscheduled work."
-                  title="Nothing unscheduled"
-                />
-              )}
-            </TabsContent>
-
-            <TabsContent className="mt-3" value="attention">
-              {stops.isLoading ? (
-                <PageSkeleton cards={1} />
-              ) : attentionIds.size === 0 ? (
-                <EmptyState
-                  description="Every visit has a day and a technician inside the limits, and every kind of visit is settled by the tenant report."
-                  title="Nothing needs attention"
-                />
-              ) : (
-                <div className="grid gap-3">
-                  <div className="h-80 lg:h-[30rem]">
-                    <PlanAttentionMap onSelectStop={setOpenStopId} planned={plannedMap} stops={needingMap} />
-                  </div>
-                  <p className="text-muted-foreground text-xs">
-                    Every visit waiting for something, with the visits already planned behind them in grey. Click one to
-                    give it a day and a technician.
-                    {withoutLocation
-                      ? ` ${withoutLocation.toLocaleString()} ${withoutLocation === 1 ? 'is' : 'are'} not on the map: Propertyware has no location for the property.`
-                      : ''}
-                  </p>
-                  <PlanStopsTable
-                    allStops={stops.data ?? []}
-                    editable={canPlace}
-                    onOpen={setOpenStopId}
-                    stops={(stops.data ?? []).filter((stop) => attentionIds.has(stop.id))}
-                  />
+                  ) : (
+                    <EmptyState
+                      description={
+                        show === 'attention'
+                          ? 'Every visit has a day and a technician, and every kind of visit is settled.'
+                          : show === 'unscheduled'
+                            ? 'Every visit this quarter has a day.'
+                            : 'No visit has a day yet. Rebuild the quarter to lay them out.'
+                      }
+                      title={show === 'attention' ? 'Nothing needs attention' : show === 'unscheduled' ? 'Nothing unscheduled' : 'No visits'}
+                    />
+                  )}
                 </div>
               )}
             </TabsContent>
@@ -886,17 +855,6 @@ export default function PlanningPage() {
         quarter={quarter}
         startsOn={startsOn}
         stop={openStop}
-      />
-
-      <PlanAdviceDialog
-        advice={advice}
-        applying={mutations.applyAdvice.isPending}
-        error={adviceError}
-        label={choice.label}
-        loading={mutations.advice.isPending}
-        onApply={applyAdvice}
-        onOpenChange={setAdvising}
-        open={advising}
       />
 
       <PlanBuildDialog
