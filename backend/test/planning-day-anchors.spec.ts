@@ -63,7 +63,6 @@ function controllerWith(anchors: ReturnType<typeof anchor>[], days: Record<strin
     {} as never,
     new PlanBuildGuard(),
     {} as never,
-    {} as never,
   );
 }
 
