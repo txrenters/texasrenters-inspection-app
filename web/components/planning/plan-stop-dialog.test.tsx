@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PlanStopDialog } from './plan-stop-dialog';
 
@@ -204,7 +205,7 @@ describe('changing a draft visit in its window', () => {
   });
 
   it('shows plain values, with nothing to click, for a visit that can no longer change', () => {
-    mount({ stop: stop({ status: 'PUBLISHED', inspectionId: 'insp-1' }) });
+    mount({ stop: stop({ status: 'EXCLUDED' }) });
     expect(screen.queryByRole('button', { name: /^Change / })).toBeNull();
     expect(hooks.usePlanTechnicians).toHaveBeenLastCalledWith(false);
     expect(screen.getByText('1 Any St - Zone 1 - Q4 2026 Tenant Benefit Package')).toBeTruthy();
@@ -230,6 +231,95 @@ describe('changing a draft visit in its window', () => {
   it('says a visit new this quarter had none', () => {
     mount({ stop: stop({ previousVisitOn: null, previousSequence: null, orderSource: 'NEW_ENROLLMENT' }) });
     expect(screen.getByText('None')).toBeTruthy();
+  });
+});
+
+/**
+ * A visit already booked, changed in the same window (the office, 2026-10-06):
+ * "if we want to reschedule it from October sixth to October seventh we should
+ * be able to do so by clicking the field just like the unpublished one" -- and
+ * the change is sent to Jobber.
+ */
+describe('changing a booked visit in its window', () => {
+  const BOOKED = {
+    status: 'PUBLISHED',
+    inspectionId: 'insp-1',
+    jobberVisitId: 'jobber-visit-1',
+    booking: { status: 'SCHEDULED', changeable: true, title: null, details: null },
+  };
+  const ALLOWED = { manage: true, assign: true, jobberEditsPushed: true };
+
+  beforeEach(() => {
+    // Monday 5 October 2026 in Texas.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-05T15:00:00.000Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('reschedules it from its date, as a draft’s, and says it went to Jobber', async () => {
+    editStop.mutateAsync.mockResolvedValue({ id: 's1', changed: ['scheduledOn'], sentToJobber: true });
+    const success = vi.spyOn(toast, 'success');
+    mount({ stop: stop(BOOKED), booked: ALLOWED });
+
+    expect(screen.getByText(/Booked: click a value to change it\. Its day, technician, title and Details are sent to Jobber/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Change the date/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /October 7th, 2026/ }));
+
+    await waitFor(() => expect(editStop.mutateAsync).toHaveBeenCalledWith({ stopId: 's1', scheduledOn: '2026-10-07' }));
+    await waitFor(() => expect(success).toHaveBeenCalledWith('Saved, and sent to Jobber', expect.anything()));
+  });
+
+  it('does not offer a day before today', async () => {
+    mount({ stop: stop(BOOKED), booked: ALLOWED });
+
+    fireEvent.click(screen.getByRole('button', { name: /Change the date/ }));
+    const friday = await screen.findByRole('button', { name: /October 2nd, 2026/ });
+    expect((friday as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('changes its technician, time on site, title and Details, but not its kind or unit', () => {
+    mount({ stop: stop(BOOKED), booked: ALLOWED });
+
+    for (const value of ['the date', 'the technician', 'the time on site', 'the title', 'the Details'])
+      expect(screen.getByRole('button', { name: new RegExp(`Change ${value}`) })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Change the kind of visit/ })).toBeNull();
+  });
+
+  it('shows and changes the words its Jobber visit holds now', () => {
+    const edited = 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection\n\nRing the side bell';
+    mount({
+      stop: stop({ ...BOOKED, booking: { ...BOOKED.booking, title: '1 Any St - Side gate - Q4 2026 Tenant Benefit Package', details: edited } }),
+      booked: ALLOWED,
+    });
+
+    expect(screen.getByText('1 Any St - Side gate - Q4 2026 Tenant Benefit Package')).toBeTruthy();
+    expect(screen.getByText(/Ring the side bell/)).toBeTruthy();
+    expect(screen.getByText(/As its Jobber visit has it, with the link to the inspection added when sent/)).toBeTruthy();
+  });
+
+  it('stays as it is once somebody has started, finished or called it off', () => {
+    mount({ stop: stop({ ...BOOKED, booking: { ...BOOKED.booking, status: 'IN_PROGRESS', changeable: false } }), booked: ALLOWED });
+
+    expect(screen.queryByRole('button', { name: /^Change / })).toBeNull();
+    expect(screen.getByText(/It has been started, done or called off, so it stays as it is\./)).toBeTruthy();
+  });
+
+  it('changes only the plan’s time on site where the console’s edits are not sent to Jobber', () => {
+    mount({ stop: stop(BOOKED), booked: { ...ALLOWED, jobberEditsPushed: false } });
+
+    expect(screen.getByRole('button', { name: /Change the time on site/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Change the date/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Change the title/ })).toBeNull();
+    expect(screen.getByText(/change its day, technician and words in Jobber/)).toBeTruthy();
+  });
+
+  it('asks for the grants the inspection’s own page asks for', () => {
+    mount({ stop: stop(BOOKED), booked: { ...ALLOWED, manage: false } });
+
+    // Assigning, without managing: the technician only, and the plan's own time on site.
+    expect(screen.getByRole('button', { name: /Change the technician/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Change the date/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Change the Details/ })).toBeNull();
   });
 });
 

@@ -1256,22 +1256,40 @@ describe('the benefit package plan page', () => {
   });
 
   /** The office edits a draft visit where it reads it (2026-09-16): each value is its own control. */
-  it('lets a coordinator change a draft visit’s values in its window, and nothing of a visit already published', async () => {
+  it('lets a coordinator change a draft visit’s values in its window', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Details of stop 2, 2 Any St' }));
     const dialog = await screen.findByRole('dialog');
     for (const value of ['the date', 'the technician', 'the time on site', 'the kind of visit', 'the title', 'the Details'])
       expect(within(dialog).getByRole('button', { name: new RegExp(`Change ${value}`) })).toBeTruthy();
-    fireEvent.keyDown(dialog, { key: 'Escape' });
+  });
 
-    // Its inspection exists: the day is the inspection's now, not the plan's.
+  /**
+   * The office (2026-10-06): a booked visit is changed from its window too, its
+   * changes sent to Jobber -- until somebody has started it.
+   */
+  it('lets a coordinator change a booked visit in its window, and nothing of one already started', async () => {
+    const booking = { status: 'SCHEDULED', changeable: true, title: null, details: null };
     mount({
       plans: [{ ...PLAN, status: 'PUBLISHED' }],
-      stops: [stop('s1'), stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1' }), stop('s3')],
+      stops: [
+        stop('s1'),
+        stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1', jobberVisitId: 'jv-2', booking }),
+        stop('s3', { status: 'PUBLISHED', inspectionId: 'insp-3', jobberVisitId: 'jv-3', booking: { ...booking, status: 'IN_PROGRESS', changeable: false } }),
+      ],
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Details of stop 2, 2 Any St' }).at(-1)!);
-    const published = (await screen.findAllByRole('dialog')).at(-1)!;
-    expect(within(published).queryByRole('button', { name: /Change the date/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details of stop 2, 2 Any St' }));
+    const booked = await screen.findByRole('dialog');
+    for (const value of ['the date', 'the technician', 'the time on site', 'the title', 'the Details'])
+      expect(within(booked).getByRole('button', { name: new RegExp(`Change ${value}`) })).toBeTruthy();
+    // Booked for this kind of visit: its inspection was made for it.
+    expect(within(booked).queryByRole('button', { name: /Change the kind of visit/ })).toBeNull();
+    fireEvent.keyDown(booked, { key: 'Escape' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details of stop 3, 3 Any St' }));
+    const started = (await screen.findAllByRole('dialog')).at(-1)!;
+    expect(within(started).queryByRole('button', { name: /^Change / })).toBeNull();
   });
 
   it('opens a visit’s details from the visits table', async () => {

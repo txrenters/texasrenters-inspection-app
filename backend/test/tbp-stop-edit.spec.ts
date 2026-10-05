@@ -1,11 +1,25 @@
-import { InspectionType, TbpPlanStatus, TbpStopStatus, TbpUnitResolution } from '@prisma/client';
+import { InspectionStatus, InspectionType, TbpPlanStatus, TbpStopStatus, TbpUnitResolution } from '@prisma/client';
+import { withInspectionLink, withoutInspectionLink } from '@texasrenters/shared';
 
+import type { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 import type { PrismaService } from '../src/common/prisma.service';
 import type { QuarterPlannerService } from '../src/planning/quarter-planner.service';
 import type { TbpPlanService } from '../src/planning/tbp-plan.service';
 import type { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService, dayInQuarter, detailsProblem } from '../src/planning/tbp-stop-edit.service';
+
+/** Whether this server sends the console's edits to Jobber, per test. */
+const jobber = { pushEditsEnabled: true };
+jest.mock('../src/integrations/jobber/jobber.config', () => ({
+  ...jest.requireActual('../src/integrations/jobber/jobber.config'),
+  getJobberConfig: () => jobber,
+}));
+// Monday 5 October 2026 in Texas: a booked visit may move to that day or later.
+jest.mock('../src/common/business-day', () => ({
+  ...jest.requireActual('../src/common/business-day'),
+  businessDate: () => '2026-10-05',
+}));
 
 const USER = {
   id: 'user-1',
@@ -30,7 +44,7 @@ const UNITS = [
 
 const build = (
   overrides: Record<string, unknown> = {},
-  options: { technicianActive?: boolean; plan?: Record<string, unknown> } = {},
+  options: { technicianActive?: boolean; plan?: Record<string, unknown>; assignedTo?: string } = {},
 ) => {
   const stop = {
     id: 's1',
@@ -50,7 +64,16 @@ const build = (
     visitDetailsOverriddenAt: null,
     onSiteMinutes: 30,
     hvacFilterSizes: ['20x20x1'],
-    plan: { status: TbpPlanStatus.DRAFT, quarterYear: 2026, quarterNumber: 4, maxOnSiteMinutes: 360, ...options.plan },
+    plan: {
+      status: TbpPlanStatus.DRAFT,
+      quarterYear: 2026,
+      quarterNumber: 4,
+      maxOnSiteMinutes: 360,
+      startsOn: null,
+      jobberUnassigned: false,
+      ...options.plan,
+    },
+    inspection: null,
     tenant: {
       addressLine1: '4815 N Fictional St',
       zone: '1',
@@ -83,6 +106,7 @@ const build = (
       ),
     },
     propertywareUnit: { findMany: jest.fn().mockResolvedValue(UNITS) },
+    inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(options.assignedTo ? { technicianId: options.assignedTo } : null) },
     auditLog: { create: auditCreate },
   } as unknown as PrismaService;
   const plans = {
@@ -94,13 +118,24 @@ const build = (
       visitDetails: HVAC_DETAILS,
     }),
   } as unknown as TbpPlanService;
-  const planner = { measureDays: jest.fn().mockResolvedValue(undefined) } as unknown as QuarterPlannerService;
+  const planner = {
+    measureDays: jest.fn().mockResolvedValue(undefined),
+    optimizeDays: jest.fn().mockResolvedValue([]),
+  } as unknown as QuarterPlannerService;
+  // A booked visit's day, technician and Jobber text change the way the inspection's own page changes them.
+  const admin = {
+    updateInspection: jest.fn().mockResolvedValue({}),
+    assign: jest.fn().mockResolvedValue({}),
+    reassign: jest.fn().mockResolvedValue({}),
+    updateJobberVisit: jest.fn().mockResolvedValue({}),
+  } as unknown as AdminService;
 
   // A draft plan never reaches the publisher; a published one does.
   const publisher = { placeOne: jest.fn().mockResolvedValue(null) } as unknown as TbpPublishService;
 
   return {
-    service: new TbpStopEditService(prisma, plans, planner, publisher),
+    service: new TbpStopEditService(prisma, plans, planner, publisher, admin),
+    admin,
     stopUpdate,
     auditCreate,
     planUpdate,
@@ -328,11 +363,13 @@ describe('a coordinator editing a visit in a draft', () => {
     expect(stopUpdate).not.toHaveBeenCalled();
   });
 
-  it('refuses a visit already published, whatever its plan', async () => {
-    const published = build({ status: TbpStopStatus.PUBLISHED, inspectionId: 'insp-1' });
-
-    await expect(published.service.edit(USER, 's1', { onSiteMinutes: 60 })).rejects.toMatchObject({ code: 'STOP_NOT_EDITABLE' });
-    expect(published.stopUpdate).not.toHaveBeenCalled();
+  it('refuses a visit published but not yet given its inspection, and one left out', async () => {
+    const publishing = build({ status: TbpStopStatus.PUBLISHED });
+    await expect(publishing.service.edit(USER, 's1', { onSiteMinutes: 60 })).rejects.toMatchObject({ code: 'STOP_NOT_EDITABLE' });
+    const excluded = build({ status: TbpStopStatus.EXCLUDED });
+    await expect(excluded.service.edit(USER, 's1', { onSiteMinutes: 60 })).rejects.toMatchObject({ code: 'STOP_NOT_EDITABLE' });
+    expect(publishing.stopUpdate).not.toHaveBeenCalled();
+    expect(excluded.stopUpdate).not.toHaveBeenCalled();
   });
 
   /**
@@ -384,6 +421,196 @@ describe('a coordinator editing a visit in a draft', () => {
   });
 });
 
+/**
+ * A visit already booked, changed from the plan's window as a draft's is (the
+ * office, 2026-10-06): "if we want to reschedule it from October sixth to
+ * October seventh we should be able to do so by clicking the field just like
+ * the unpublished one" -- and Jobber told.
+ */
+describe('a coordinator changing a booked visit from the plan', () => {
+  const MANAGER = { ...USER, permissions: ['planning:publish', 'inspections:manage', 'inspections:assign'] } as unknown as AuthenticatedUser;
+  const LINK = 'https://inspection.example/inspections/insp-1';
+  const booked = (
+    inspection: Record<string, unknown> = {},
+    plan: Record<string, unknown> = {},
+    options: { assignedTo?: string } = {},
+  ) =>
+    build(
+      {
+        status: TbpStopStatus.PUBLISHED,
+        inspectionId: 'insp-1',
+        inspection: {
+          status: InspectionStatus.SCHEDULED,
+          finalizedAt: null,
+          jobberVisitId: 'jobber-visit-1',
+          jobberVisitTitle: '4815 N Fictional St - Zone 1 - Q4 2026 Tenant Benefit Package',
+          jobberVisitDetails: withInspectionLink(OCCUPIED_DETAILS, LINK),
+          ...inspection,
+        },
+      },
+      { plan: { status: TbpPlanStatus.PUBLISHED, ...plan }, assignedTo: options.assignedTo ?? 'tech-1' },
+    );
+
+  beforeEach(() => {
+    jobber.pushEditsEnabled = true;
+  });
+
+  it('reschedules it through its inspection, which tells Jobber, and orders both days again', async () => {
+    const { service, admin, planner, stopUpdate } = booked();
+
+    const result = await service.edit(MANAGER, 's1', { scheduledOn: '2026-10-07' });
+
+    expect(admin.updateInspection).toHaveBeenCalledWith(MANAGER, 'insp-1', { scheduledAt: '2026-10-07' });
+    expect(planner.optimizeDays).toHaveBeenCalledWith('org-1', 'plan-1', [
+      { date: '2026-10-06', technicianId: 'tech-1' },
+      { date: '2026-10-07', technicianId: 'tech-1' },
+    ]);
+    // Never measured as a draft's day: that counts only unpublished visits.
+    expect(planner.measureDays).not.toHaveBeenCalled();
+    // The reschedule moved the stop with the inspection; nothing else to write.
+    expect(stopUpdate).not.toHaveBeenCalled();
+    expect(result).toEqual({ id: 's1', changed: ['scheduledOn'], sentToJobber: true });
+  });
+
+  it('gives it to someone else through its assignment, which tells Jobber, and the plan follows', async () => {
+    const { service, admin, stopUpdate } = booked();
+
+    await service.edit(MANAGER, 's1', { assignedTechnicianId: 'tech-2' });
+
+    expect(admin.reassign).toHaveBeenCalledWith(MANAGER, 'insp-1', expect.objectContaining({ technicianId: 'tech-2' }));
+    expect(stopUpdate).toHaveBeenCalledWith({
+      where: { id: 's1' },
+      data: expect.objectContaining({ assignedTechnicianId: 'tech-2', technicianOverriddenAt: expect.any(Date) }),
+    });
+  });
+
+  it('assigns one nobody holds', async () => {
+    const { service, admin } = booked({}, {}, { assignedTo: '' });
+
+    await service.edit(MANAGER, 's1', { assignedTechnicianId: 'tech-2' });
+
+    expect(admin.assign).toHaveBeenCalledWith(MANAGER, 'insp-1', expect.objectContaining({ technicianId: 'tech-2' }));
+    expect(admin.reassign).not.toHaveBeenCalled();
+  });
+
+  it('moves it between day groups on a quarter sent out to nobody, telling Jobber nothing', async () => {
+    const { service, admin, stopUpdate } = booked({}, { jobberUnassigned: true });
+
+    const result = await service.edit(MANAGER, 's1', { assignedTechnicianId: 'tech-2' });
+
+    expect(admin.assign).not.toHaveBeenCalled();
+    expect(admin.reassign).not.toHaveBeenCalled();
+    expect(stopUpdate).toHaveBeenCalledWith({ where: { id: 's1' }, data: expect.objectContaining({ assignedTechnicianId: 'tech-2' }) });
+    expect(result.sentToJobber).toBe(false);
+  });
+
+  it('sends a new title and Details to its Jobber visit with the link back to the inspection, and keeps them on the plan', async () => {
+    const { service, admin, stopUpdate } = booked();
+    const details = OCCUPIED_DETAILS.replace('Change filters', 'Change both filters');
+
+    const result = await service.edit(MANAGER, 's1', {
+      visitTitle: '4815 N Fictional St - Back gate - Q4 2026 Tenant Benefit Package',
+      visitDetails: details,
+    });
+
+    expect(admin.updateJobberVisit).toHaveBeenCalledWith(MANAGER, 'insp-1', {
+      title: '4815 N Fictional St - Back gate - Q4 2026 Tenant Benefit Package',
+      details: expect.stringContaining('Texas Renters inspection: '),
+    });
+    const sent = (admin.updateJobberVisit as jest.Mock).mock.calls[0][2].details as string;
+    expect(withoutInspectionLink(sent)).toBe(details);
+    expect(stopUpdate).toHaveBeenCalledWith({
+      where: { id: 's1' },
+      data: expect.objectContaining({ visitDetails: details, visitDetailsOverriddenAt: expect.any(Date) }),
+    });
+    expect(result.changed).toEqual(['visitTitle', 'visitDetails']);
+  });
+
+  it('changes the Details the Jobber visit holds now, which the console may have edited since publishing', async () => {
+    const edited = OCCUPIED_DETAILS.replace('Change filters', 'Ring the side bell');
+    const { service, admin } = booked({ jobberVisitDetails: withInspectionLink(edited, LINK) });
+
+    // The same words sent back are no change, although the plan's own copy differs.
+    const result = await service.edit(MANAGER, 's1', { visitDetails: edited });
+
+    expect(admin.updateJobberVisit).not.toHaveBeenCalled();
+    expect(result.changed).toEqual([]);
+  });
+
+  it('keeps the Details as they are when only the title changes', async () => {
+    const { service, admin } = booked();
+
+    await service.edit(MANAGER, 's1', { visitTitle: '4815 N Fictional St - Q4 2026 Tenant Benefit Package' });
+
+    expect((admin.updateJobberVisit as jest.Mock).mock.calls[0][2].details).toBe(withInspectionLink(OCCUPIED_DETAILS, LINK));
+  });
+
+  it('changes its time on site on the plan alone, and orders its day again', async () => {
+    const { service, admin, planner, stopUpdate } = booked();
+
+    const result = await service.edit(MANAGER, 's1', { onSiteMinutes: 45 });
+
+    expect(stopUpdate).toHaveBeenCalledWith({ where: { id: 's1' }, data: expect.objectContaining({ onSiteMinutes: 45 }) });
+    expect(planner.optimizeDays).toHaveBeenCalled();
+    expect(admin.updateInspection).not.toHaveBeenCalled();
+    expect(result.sentToJobber).toBe(false);
+  });
+
+  it('keeps the kind of visit and the unit it was booked for', async () => {
+    const { service, stopUpdate } = booked();
+
+    await expect(service.edit(MANAGER, 's1', { inspectionType: 'HVAC' })).rejects.toMatchObject({ code: 'BOOKED_KIND_FIXED' });
+    await expect(service.edit(MANAGER, 's1', { propertywareUnitId: 'unit-half' })).rejects.toMatchObject({ code: 'BOOKED_UNIT_FIXED' });
+    expect(stopUpdate).not.toHaveBeenCalled();
+  });
+
+  it('leaves a visit somebody has started, finished or called off as it is', async () => {
+    for (const status of [InspectionStatus.IN_PROGRESS, InspectionStatus.TECHNICIAN_SUBMITTED, InspectionStatus.CANCELLED]) {
+      const { service, admin } = booked({ status });
+      await expect(service.edit(MANAGER, 's1', { scheduledOn: '2026-10-07' })).rejects.toMatchObject({ code: 'VISIT_STARTED' });
+      expect(admin.updateInspection).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not move it into the past', async () => {
+    const { service, admin } = booked();
+
+    await expect(service.edit(MANAGER, 's1', { scheduledOn: '2026-10-02' })).rejects.toMatchObject({ code: 'DATE_PASSED' });
+    expect(admin.updateInspection).not.toHaveBeenCalled();
+  });
+
+  it('asks for the grants the inspection’s own page asks for', async () => {
+    const planner = { ...USER, permissions: ['planning:publish'] } as unknown as AuthenticatedUser;
+    const { service, admin } = booked();
+
+    await expect(service.edit(planner, 's1', { scheduledOn: '2026-10-07' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.edit(planner, 's1', { assignedTechnicianId: 'tech-2' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(admin.updateInspection).not.toHaveBeenCalled();
+    expect(admin.reassign).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing Jobber holds where the console’s edits are not sent there', async () => {
+    jobber.pushEditsEnabled = false;
+    const { service, admin, stopUpdate } = booked();
+
+    await expect(service.edit(MANAGER, 's1', { scheduledOn: '2026-10-07' })).rejects.toMatchObject({ code: 'JOBBER_EDITS_OFF' });
+    await expect(service.edit(MANAGER, 's1', { assignedTechnicianId: 'tech-2' })).rejects.toMatchObject({ code: 'JOBBER_EDITS_OFF' });
+    expect(admin.updateInspection).not.toHaveBeenCalled();
+    expect(stopUpdate).not.toHaveBeenCalled();
+    // The plan's own figure is still the office's to change.
+    await expect(service.edit(MANAGER, 's1', { onSiteMinutes: 45 })).resolves.toMatchObject({ changed: ['onSiteMinutes'] });
+  });
+});
+
+describe('the link back to the inspection in a booked visit’s Details', () => {
+  it('comes out for editing and goes back in the same place', () => {
+    const linked = withInspectionLink(OCCUPIED_DETAILS, 'https://inspection.example/inspections/insp-1');
+    expect(linked).toContain('Texas Renters inspection: https://inspection.example/inspections/insp-1');
+    expect(withoutInspectionLink(linked)).toBe(OCCUPIED_DETAILS);
+    expect(withInspectionLink(withoutInspectionLink(linked), 'https://inspection.example/inspections/insp-1')).toBe(linked);
+  });
+});
+
 describe('the technicians a visit can be given to', () => {
   it('lists the crew first in its order, then everyone else by name, with whether a home is on file', async () => {
     const prisma = {
@@ -412,6 +639,7 @@ describe('the technicians a visit can be given to', () => {
       {} as TbpPlanService,
       {} as QuarterPlannerService,
       {} as TbpPublishService,
+      {} as AdminService,
     );
 
     const technicians = await service.technicians('org-1');

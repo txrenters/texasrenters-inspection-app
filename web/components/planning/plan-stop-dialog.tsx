@@ -3,6 +3,7 @@
 import { isRescheduleMonday, monthOfQuarter, quarterEnd, quarterFirstDay, type Quarter } from '@texasrenters/shared';
 import Link from 'next/link';
 import { Fragment, useMemo, type ReactNode } from 'react';
+import { toast } from 'sonner';
 
 import { EditableDate, EditablePick, EditableText, type PickOption } from '@/components/planning/inline-edit';
 import { STOP_STATUS, reasonText } from '@/components/planning/plan-stops-table';
@@ -17,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { businessToday } from '@/lib/clock';
 import { EMPTY, formatDistance, formatScheduledDate } from '@/lib/format';
 import { dayClock, formatClock, formatMinutes, formatShortDay, leaveHomeAt } from '@/lib/planning';
 import {
@@ -104,6 +106,7 @@ export function PlanStopDialog({
   closedDays = [],
   startsOn = null,
   dayGroups = null,
+  booked = null,
 }: {
   /** The visit to show; null closes the window. */
   stop: PlanStop | null;
@@ -127,12 +130,38 @@ export function PlanStopDialog({
    * days belong to technicians.
    */
   dayGroups?: readonly { id: string; name: string }[] | null;
+  /**
+   * A visit already booked can be changed here too (the office, 2026-10-06):
+   * the grants the inspection's own page asks for -- managing inspections for
+   * its day and words, assigning them for its technician -- and whether this
+   * server sends the console's edits to Jobber (null when not known).
+   */
+  booked?: { manage: boolean; assign: boolean; jobberEditsPushed: boolean | null } | null;
 }) {
   const { editStop } = usePlanningMutations();
+  const isBooked = Boolean(stop?.inspectionId);
   const canEdit = Boolean(
-    editable && quarter && stop && !stop.inspectionId && stop.status !== 'PUBLISHED' && stop.status !== 'EXCLUDED',
+    editable && quarter && stop && !isBooked && stop.status !== 'PUBLISHED' && stop.status !== 'EXCLUDED',
   );
-  const technicians = usePlanTechnicians(canEdit);
+  /**
+   * A booked visit, changed the way its inspection's page changes it: its day,
+   * technician and words reach Jobber; its time on site is the plan's alone.
+   * Not once somebody has started, finished or called it off, and nothing
+   * Jobber holds where the console's edits are not sent there.
+   */
+  const started = isBooked && !stop?.booking?.changeable;
+  const jobberOff = isBooked && Boolean(stop?.jobberVisitId) && booked?.jobberEditsPushed === false;
+  const bookedBase = Boolean(editable && quarter && isBooked && !started && booked);
+  const can = {
+    date: canEdit || (bookedBase && !jobberOff && Boolean(booked?.manage)),
+    // On a quarter sent out to nobody the days are groups, and moving a visit between them tells Jobber nothing.
+    technician: canEdit || (bookedBase && (dayGroups ? true : !jobberOff && Boolean(booked?.assign))),
+    onSite: canEdit || bookedBase,
+    words: canEdit || (bookedBase && !jobberOff && Boolean(booked?.manage)),
+    kindAndUnit: canEdit,
+  };
+  const anyEdit = can.date || can.technician || can.onSite || can.words;
+  const technicians = usePlanTechnicians(can.technician);
   const technicianOptions = useMemo<PickOption[]>(
     () =>
       dayGroups
@@ -157,12 +186,30 @@ export function PlanStopDialog({
   const kind = stop.inspectionType === 'HVAC' ? 'HVAC inspection' : 'Occupied inspection';
   const tenant = stop.tenant;
   const filterSizes = stop.hvacFilterSizes.length ? stop.hvacFilterSizes : tenant.hvacFilterSizes;
-  const save = (input: PlanStopEdit) => editStop.mutateAsync({ stopId: stop.id, ...input });
+  const save = async (input: PlanStopEdit) => {
+    const result = await editStop.mutateAsync({ stopId: stop.id, ...input });
+    // Said, because the change left the console: the technician's Jobber visit is different now.
+    if (result.sentToJobber) toast.success('Saved, and sent to Jobber', { description: 'Its Jobber visit is updated in a moment.' });
+    return result;
+  };
   const scheduledOn = stop.scheduledOn ? stop.scheduledOn.slice(0, 10) : null;
   const severalUnits = stop.buildingUnits.length > 1;
-  const note = canEdit && scheduledOn && quarter ? dayNote(scheduledOn, quarter, closedDays, startsOn) : null;
+  const note = can.date && scheduledOn && quarter ? dayNote(scheduledOn, quarter, closedDays, startsOn) : null;
   // The last day of the quarter: the day before the next one starts.
   const lastDay = quarter ? new Date(quarterEnd(quarter).getTime() - 86_400_000).toISOString().slice(0, 10) : '';
+  const firstDay = quarter ? (startsOn ?? quarterFirstDay(quarter)) : '';
+  // A booked visit is not moved into the past: its earliest day is today, in Texas.
+  const earliest = isBooked && businessToday() > firstDay ? businessToday() : firstDay;
+  // What the visit is sent as: a booked one's Jobber visit, which the console may have edited since publishing.
+  const titleText = (isBooked ? stop.booking?.title : null) ?? stop.visitTitle;
+  const detailsText = (isBooked ? stop.booking?.details : null) ?? stop.visitDetails;
+  const lockedBecause = !isBooked || !editable
+    ? null
+    : started
+      ? 'It has been started, done or called off, so it stays as it is.'
+      : jobberOff
+        ? 'This server does not send the console’s changes to Jobber, so change its day, technician and words in Jobber.'
+        : null;
 
   const dateText = scheduledOn ? LONG_DAY.format(new Date(stop.scheduledOn!)) : 'Not on a day yet';
   const technicianText = dayGroups
@@ -219,6 +266,10 @@ export function PlanStopDialog({
           <DialogDescription>
             {[tenant.city, zoneLabel(stop.zone)].filter(Boolean).join(' · ') || EMPTY}
             {canEdit ? ' · Click a value to change it; each change is saved as you make it and kept when the plan is rebuilt.' : ''}
+            {isBooked && anyEdit
+              ? ' · Booked: click a value to change it. Its day, technician, title and Details are sent to Jobber as you change them.'
+              : ''}
+            {lockedBecause ? ` · ${lockedBecause}` : ''}
           </DialogDescription>
         </DialogHeader>
 
@@ -233,13 +284,13 @@ export function PlanStopDialog({
             rows={[
               [
                 'Date',
-                canEdit ? (
+                can.date ? (
                   <span className="grid gap-0.5" key="date">
                     <EditableDate
                       display={dateText}
                       label="the date"
                       max={lastDay}
-                      min={startsOn ?? quarterFirstDay(quarter!)}
+                      min={earliest}
                       onSave={(value) => save({ scheduledOn: value })}
                       value={scheduledOn}
                     />
@@ -252,7 +303,7 @@ export function PlanStopDialog({
               ['Time', timing ? `${formatClock(timing.entry.arrives)} – ${formatClock(timing.entry.leaves)}` : null],
               [
                 dayGroups ? 'Day group' : 'Technician',
-                canEdit ? (
+                can.technician ? (
                   <EditablePick
                     display={technicianText}
                     key="technician"
@@ -270,7 +321,7 @@ export function PlanStopDialog({
               ['Drive', drive],
               [
                 'On site',
-                canEdit ? (
+                can.onSite ? (
                   <EditableText
                     display={onSiteText ?? EMPTY}
                     hint="Minutes on site · Enter to save · Esc to undo"
@@ -305,7 +356,7 @@ export function PlanStopDialog({
               ['City', [tenant.city, [tenant.state, tenant.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ')],
               [
                 'Unit',
-                canEdit && severalUnits ? (
+                can.kindAndUnit && severalUnits ? (
                   <EditablePick
                     display={unitText ?? <span className="text-warning">Choose which unit this tenancy is in</span>}
                     key="unit"
@@ -353,7 +404,7 @@ export function PlanStopDialog({
             rows={[
               [
                 'Kind of visit',
-                canEdit ? (
+                can.kindAndUnit ? (
                   <EditablePick
                     display={kindText}
                     key="kind"
@@ -384,13 +435,18 @@ export function PlanStopDialog({
               Title
             </h3>
             <span className="text-muted-foreground text-xs">
-              {stop.visitTitleOverriddenAt ? 'Written by a coordinator' : 'Written by the plan'} · sent to Jobber as written
+              {isBooked
+                ? 'As its Jobber visit has it'
+                : stop.visitTitleOverriddenAt
+                  ? 'Written by a coordinator'
+                  : 'Written by the plan'}{' '}
+              · sent to Jobber as written
             </span>
           </div>
-          {canEdit ? (
-            <EditableText label="the title" onSave={(value) => save({ visitTitle: value })} value={stop.visitTitle ?? ''} />
+          {can.words ? (
+            <EditableText label="the title" onSave={(value) => save({ visitTitle: value })} value={titleText ?? ''} />
           ) : (
-            <p className="text-sm">{stop.visitTitle ?? EMPTY}</p>
+            <p className="text-sm">{titleText ?? EMPTY}</p>
           )}
         </section>
 
@@ -400,29 +456,31 @@ export function PlanStopDialog({
               Details
             </h3>
             <span className="text-muted-foreground text-xs">
-              {stop.visitDetailsOverriddenAt
-                ? 'Written by a coordinator'
-                : stop.officeDetails
-                  ? 'From the office’s sheet'
-                  : 'Written from the tenant report'}{' '}
+              {isBooked
+                ? 'As its Jobber visit has it, with the link to the inspection added when sent'
+                : stop.visitDetailsOverriddenAt
+                  ? 'Written by a coordinator'
+                  : stop.officeDetails
+                    ? 'From the office’s sheet'
+                    : 'Written from the tenant report'}{' '}
               · sent to Jobber as written
             </span>
           </div>
-          {canEdit ? (
+          {can.words ? (
             <EditableText
               display={
                 <span className="bg-muted/50 block rounded-lg border px-3 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
-                  {stop.visitDetails ?? EMPTY}
+                  {detailsText ?? EMPTY}
                 </span>
               }
               label="the Details"
               multiline
               onSave={(value) => save({ visitDetails: value })}
-              value={stop.visitDetails ?? ''}
+              value={detailsText ?? ''}
             />
           ) : (
             <p className="bg-muted/50 rounded-lg border px-3 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
-              {stop.visitDetails ?? EMPTY}
+              {detailsText ?? EMPTY}
             </p>
           )}
         </section>

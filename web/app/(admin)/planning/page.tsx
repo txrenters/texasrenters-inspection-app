@@ -857,6 +857,12 @@ export default function PlanningPage() {
             : null
         }
         editable={canPlace}
+        // A booked visit is changed here too, and its changes reach Jobber (the office, 2026-10-06).
+        booked={{
+          manage: has('inspections:manage'),
+          assign: has('inspections:assign'),
+          jobberEditsPushed: lateMoveOuts.data?.jobberEditsPushed ?? null,
+        }}
         onOpenChange={(open) => !open && setOpenStopId(null)}
         quarter={quarter}
         startsOn={startsOn}
