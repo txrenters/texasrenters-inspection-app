@@ -1,6 +1,6 @@
 'use client';
 
-import { PencilIcon } from 'lucide-react';
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -10,6 +10,7 @@ import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   Dialog,
   DialogContent,
@@ -18,72 +19,183 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { usePermissions } from '@/lib/auth';
 import { businessDateTimeValue, businessToday, fromBusinessDateTimeValue, shiftDay } from '@/lib/clock';
-import { formatDateTime } from '@/lib/format';
+import { formatTime } from '@/lib/format';
 import {
   asHours,
   useTimesheet,
   useTimesheetActions,
-  type TimesheetSegment,
   type TimesheetTotal,
+  type TimesheetVisit,
 } from '@/lib/timesheet-queries';
 
 /**
- * The hours a technician worked, read from where they actually were.
+ * The hours a technician worked, one Texas day at a time.
  *
  * Start job and End job play no part in it. A technician looks round a
  * property before pressing Start and does not always press End when they
- * leave, so the office asked on 2026-10-06 for the clock to follow the
- * technician instead: it runs while they are inside the 20 m circle of a
- * property they have a visit at, and everything else between the first arrival
- * of the day and the last departure is general time.
+ * leave, so the clock follows the technician instead: it runs while they are
+ * inside the 20 m circle of a property they have a visit at, and everything
+ * else between the first arrival of the day and the last departure is general
+ * time.
  *
- * Two figures and their total, then, and no third pile. The page used to keep
- * a list of stretches the phone had gone quiet for, each to be settled by hand
- * before anybody was paid -- 59 of them in one fortnight, nearly all of them a
- * phone indoors for a few minutes. Those minutes are counted now, and marked,
- * so the office can still see which hours were measured and which were carried
- * through a silence; and a correction still says that a person made it.
+ * One day, and one row per property on it -- the office, 2026-10-06. A range
+ * drew every stretch of a fortnight to show a handful of them, and its two
+ * ends could be put the wrong way round, which from Manila happened on the
+ * first morning because "today" there is already tomorrow in Texas. And a
+ * technician who stepped out to the van three times was at that house once;
+ * the row says when they first arrived, when they last left, and how long of
+ * that they were inside.
  */
-
-/** The last fortnight, which is the period the office settles pay over, in Texas days. */
-function defaultRange() {
-  const today = businessToday();
-  return { from: shiftDay(today, -13), to: today };
-}
-
-const CATEGORY = {
-  ONSITE: { label: 'On site', variant: 'success' },
-  GENERAL: { label: 'General time', variant: 'secondary' },
-} as const;
 
 /**
- * Below this a silence is not worth a badge.
+ * How far back the trail goes, and so how far back recalculating can reach.
  *
- * The rule only calls the phone quiet after five minutes without a fix, so
- * anything it reports is already longer than this; the floor is here so a
- * rounding remainder on a piece of a corrected stretch never shows as "0m".
+ * The fixes are pruned after thirty days. Older days keep the hours they have
+ * -- the server will not rewrite a day it has no trail for.
  */
+const TRAIL_DAYS = 30;
+
+/** Below this a silence is not worth a badge. */
 const QUIET_WORTH_SAYING_SECONDS = 60;
 
-const dateField =
-  'h-9 rounded-lg border border-border bg-card px-2 text-sm text-foreground';
+const dateField = 'h-9 rounded-lg border border-border bg-card px-2 text-sm text-foreground';
+
+/** "Tuesday, October 6", for a day held as `yyyy-MM-dd`. Noon UTC is the same date everywhere. */
+const dayLabel = (date: string) =>
+  new Date(`${date}T12:00:00.000Z`).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 
 export default function TimesheetPage() {
   const { has } = usePermissions();
   const canChange = has('inspections:manage');
-  const [range, setRange] = useState(defaultRange);
+  const today = businessToday();
+  const [date, setDate] = useState(today);
   const [technicianId, setTechnicianId] = useState<string | undefined>(undefined);
-  const sheet = useTimesheet(range.from, range.to, technicianId);
+  const sheet = useTimesheet(date, technicianId);
   const actions = useTimesheetActions();
 
-  const [adjusting, setAdjusting] = useState<TimesheetSegment | null>(null);
+  const [correcting, setCorrecting] = useState<TimesheetVisit | null>(null);
   /** What the last recalculation did, in the office's words rather than counts. */
   const [recalculated, setRecalculated] = useState<string | null>(null);
 
-  if (sheet.isLoading) return <PageSkeleton />;
-  if (sheet.isError) return <ErrorState error={sheet.error} retry={() => void sheet.refetch()} />;
+  const recalculate = (from: string, to: string) =>
+    actions.recalculate.mutate(
+      { from, to },
+      {
+        onSuccess: (result) =>
+          setRecalculated(
+            result.changed === 0
+              ? `${result.days === 1 ? 'This day already says' : 'These days already say'} what the trail says. Nothing changed.`
+              : `Read ${result.days} ${result.days === 1 ? 'day' : 'days'} again. ` +
+                  `${result.changed} technician-${result.changed === 1 ? 'day' : 'days'} changed; ` +
+                  'hours corrected by hand were left as they are.',
+          ),
+        onError: (error) => toast.error('The hours could not be recalculated', { description: error.message }),
+      },
+    );
+
+  const toolbar = (
+    <div className="flex flex-wrap items-center gap-2 pb-4">
+      <Button
+        aria-label="The day before"
+        onClick={() => setDate((current) => shiftDay(current, -1))}
+        size="icon"
+        variant="outline"
+      >
+        <ChevronLeftIcon />
+      </Button>
+      <DatePicker
+        aria-label="The day to show"
+        className="w-auto min-w-56"
+        max={today}
+        // Clearing the picker is not a day; it falls back to today rather than
+        // asking for the hours of no date at all.
+        onChange={(next) => setDate(next || today)}
+        value={date}
+      />
+      <Button
+        aria-label="The day after"
+        disabled={date >= today}
+        onClick={() => setDate((current) => shiftDay(current, 1))}
+        size="icon"
+        variant="outline"
+      >
+        <ChevronRightIcon />
+      </Button>
+      {date !== today ? (
+        <Button onClick={() => setDate(today)} size="sm" variant="secondary">
+          Today
+        </Button>
+      ) : null}
+      {technicianId ? (
+        <Button onClick={() => setTechnicianId(undefined)} size="sm" variant="secondary">
+          All technicians
+        </Button>
+      ) : null}
+      {/*
+        Today and yesterday are read without anybody asking. This is for the
+        days behind them: after a property's pin or its distances are
+        corrected, and once after the rule itself changes -- which is the
+        thirty days, read in one go on the server rather than drawn here.
+
+        It leaves alone every hour somebody corrected by hand, and pressing it
+        twice gives the same answer, which is what makes it safe to leave in
+        the toolbar rather than behind a warning.
+      */}
+      {canChange ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button className="ml-auto" disabled={actions.recalculate.isPending} size="sm" variant="secondary">
+              {actions.recalculate.isPending ? 'Reading the trail…' : 'Recalculate'}
+              <ChevronDownIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => recalculate(date, date)}>This day</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => recalculate(shiftDay(today, -(TRAIL_DAYS - 1)), today)}>
+              The last {TRAIL_DAYS} days
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </div>
+  );
+
+  const header = (
+    <PageHeader
+      title="Timesheet"
+      description="The clock runs while a technician is inside a property’s circle. Everything between properties is general time."
+    />
+  );
+
+  if (sheet.isLoading)
+    return (
+      <>
+        {header}
+        {toolbar}
+        <PageSkeleton />
+      </>
+    );
+  if (sheet.isError)
+    return (
+      <>
+        {header}
+        {toolbar}
+        <ErrorState error={sheet.error} retry={() => void sheet.refetch()} />
+      </>
+    );
 
   const data = sheet.data!;
   const onsiteTotal = data.totals.reduce((sum, row) => sum + row.onsiteSeconds, 0);
@@ -119,131 +231,72 @@ export default function TimesheetPage() {
       header: 'Phone quiet',
       numeric: true,
       hideBelow: 'md',
-      cell: (row) =>
-        row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? (
-          <span className="text-muted-foreground">{asHours(row.quietSeconds)}</span>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        ),
+      cell: (row) => (
+        <span className="text-muted-foreground">
+          {row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? asHours(row.quietSeconds) : '—'}
+        </span>
+      ),
     },
   ];
 
-  const segmentColumns: Column<TimesheetSegment>[] = [
+  const visitColumns: Column<TimesheetVisit>[] = [
     { key: 'technician', header: 'Technician', primary: true, cell: (row) => row.technician },
+    { key: 'property', header: 'Property', cell: (row) => row.address ?? '—' },
+    { key: 'arrived', header: 'Arrived', cell: (row) => formatTime(row.arrivedAt) },
+    { key: 'left', header: 'Left', cell: (row) => formatTime(row.leftAt) },
     {
-      key: 'property',
-      header: 'Property',
-      cell: (row) =>
-        row.address ?? <span className="text-muted-foreground">Between properties</span>,
-    },
-    {
-      key: 'what',
-      header: 'What',
+      key: 'notes',
+      header: '',
+      hideBelow: 'md',
       cell: (row) => (
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant={CATEGORY[row.category].variant}>{CATEGORY[row.category].label}</Badge>
           {/* Said plainly. Somebody paid from this is entitled to know which
-              numbers a person decided rather than the trail, and which the
+              hours a person decided rather than the trail, and which the
               trail could only answer by carrying the clock through a silence. */}
           {row.adjusted ? <Badge variant="outline">Corrected</Badge> : null}
-          {row.source === 'MANUAL' ? <Badge variant="outline">Added by hand</Badge> : null}
+          {row.addedByHand ? <Badge variant="outline">Added by hand</Badge> : null}
+          {row.stays > 1 ? (
+            <Badge variant="outline">
+              Stepped out {row.stays - 1} {row.stays === 2 ? 'time' : 'times'}
+            </Badge>
+          ) : null}
           {row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? (
             <Badge variant="outline">Phone quiet {asHours(row.quietSeconds)}</Badge>
           ) : null}
         </div>
       ),
     },
-    { key: 'from', header: 'From', hideBelow: 'md', cell: (row) => formatDateTime(row.startedAt) },
-    { key: 'to', header: 'To', hideBelow: 'lg', cell: (row) => formatDateTime(row.endedAt) },
-    { key: 'time', header: 'Time', numeric: true, cell: (row) => asHours(row.durationSeconds) },
+    {
+      key: 'onsite',
+      header: 'On site',
+      numeric: true,
+      cell: (row) => <span className="font-medium">{asHours(row.onsiteSeconds)}</span>,
+    },
     ...(canChange
       ? [
           {
             key: 'correct',
             header: '',
-            cell: (row: TimesheetSegment) => (
+            cell: (row: TimesheetVisit) => (
               <Button
-                aria-label={`Correct this ${CATEGORY[row.category].label} time`}
+                aria-label={`Correct the time at ${row.address ?? 'this property'}`}
                 className="relative z-10"
-                onClick={() => setAdjusting(row)}
+                onClick={() => setCorrecting(row)}
                 size="sm"
                 variant="ghost"
               >
                 <PencilIcon />
               </Button>
             ),
-          } satisfies Column<TimesheetSegment>,
+          } satisfies Column<TimesheetVisit>,
         ]
       : []),
   ];
 
   return (
     <>
-      <PageHeader
-        title="Timesheet"
-        description="The clock runs while a technician is inside a property’s circle. Everything between properties is general time."
-      />
-
-      <div className="flex flex-wrap items-end gap-3 pb-4">
-        <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-          From
-          <input
-            className={dateField}
-            onChange={(event) => setRange((current) => ({ ...current, from: event.target.value }))}
-            type="date"
-            value={range.from}
-          />
-        </label>
-        <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-          To
-          <input
-            className={dateField}
-            onChange={(event) => setRange((current) => ({ ...current, to: event.target.value }))}
-            type="date"
-            value={range.to}
-          />
-        </label>
-        {technicianId ? (
-          <Button onClick={() => setTechnicianId(undefined)} size="sm" variant="secondary">
-            All technicians
-          </Button>
-        ) : null}
-        {/*
-          Today and yesterday are read without anybody asking. This is for the
-          days behind them: after a property's pin or its distances are
-          corrected, and once after the rule itself changes.
-
-          It leaves alone every hour somebody corrected by hand, and pressing
-          it twice gives the same answer -- which is what makes it safe to
-          leave in the toolbar rather than behind a warning.
-        */}
-        {canChange ? (
-          <Button
-            disabled={actions.recalculate.isPending}
-            onClick={() =>
-              actions.recalculate.mutate(
-                { from: range.from, to: range.to },
-                {
-                  onSuccess: (result) =>
-                    setRecalculated(
-                      result.changed === 0
-                        ? 'These days already say what the trail says. Nothing changed.'
-                        : `Read ${result.days} ${result.days === 1 ? 'day' : 'days'} again. ` +
-                            `${result.changed} technician-${result.changed === 1 ? 'day' : 'days'} changed; ` +
-                            'hours corrected by hand were left as they are.',
-                    ),
-                  onError: (error) =>
-                    toast.error('These days could not be recalculated', { description: error.message }),
-                },
-              )
-            }
-            size="sm"
-            variant="secondary"
-          >
-            {actions.recalculate.isPending ? 'Reading the trail…' : 'Recalculate these days'}
-          </Button>
-        ) : null}
-      </div>
+      {header}
+      {toolbar}
 
       {recalculated ? <p className="text-muted-foreground -mt-2 pb-4 text-xs">{recalculated}</p> : null}
 
@@ -254,7 +307,7 @@ export default function TimesheetPage() {
       </StatGroup>
 
       <section className="mt-6">
-        <h2 className="text-foreground mb-2 text-sm font-semibold">Hours by technician</h2>
+        <h2 className="text-foreground mb-2 text-sm font-semibold">Hours by technician · {dayLabel(date)}</h2>
         {data.totals.length ? (
           <DataTable
             columns={totalColumns}
@@ -264,63 +317,62 @@ export default function TimesheetPage() {
           />
         ) : (
           <EmptyState
-            description="Nobody was inside the circle of a property they had a visit at. If somebody was working, check the property’s pin and its distances, then recalculate."
-            title="Nothing recorded in these days"
+            description="Nobody was inside the circle of a property they had a visit at. If somebody was working, check the property’s pin and its distances, then recalculate this day."
+            title="Nothing recorded on this day"
           />
         )}
       </section>
 
-      <section className="mt-6">
-        <h2 className="text-foreground mb-2 text-sm font-semibold">Every stretch</h2>
-        {data.segments.length ? (
+      {data.visits.length ? (
+        <section className="mt-6">
+          <h2 className="text-foreground mb-2 text-sm font-semibold">Time at each property</h2>
           <DataTable
-            columns={segmentColumns}
-            label="Every stretch of time"
-            rowKey={(row) => row.id}
-            rows={data.segments}
+            columns={visitColumns}
+            label="Time at each property"
+            rowKey={(row) => row.key}
+            rows={data.visits}
           />
-        ) : (
-          <EmptyState title="No stretches in these days" />
-        )}
-      </section>
+        </section>
+      ) : null}
 
-      <AdjustDialog
-        onClose={() => setAdjusting(null)}
+      <CorrectDialog
+        onClose={() => setCorrecting(null)}
         onSave={(startedAt, endedAt, reason) => {
-          if (!adjusting) return;
-          actions.adjust.mutate(
-            { segmentId: adjusting.id, startedAt, endedAt, reason },
+          if (!correcting) return;
+          actions.correct.mutate(
+            { segmentIds: correcting.segmentIds, startedAt, endedAt, reason },
             {
               onSuccess: (saved) =>
-                toast.success(`Corrected to ${asHours(saved.durationSeconds)}`, {
+                toast.success(`Corrected to ${asHours(saved.durationSeconds)} on site`, {
                   description: 'What the trail said is kept beside it.',
                 }),
               onError: (error) => toast.error('That could not be saved', { description: error.message }),
             },
           );
-          setAdjusting(null);
+          setCorrecting(null);
         }}
-        segment={adjusting}
+        visit={correcting}
       />
     </>
   );
 }
 
-
 /**
- * Correcting a stretch the trail got wrong.
+ * Correcting a technician's time at one property.
  *
- * Both ends are asked for even when only one moves: "it ran from here to here"
- * can be checked afterwards in a way that "make it end later" cannot. The
- * reason is required, and it is what the technician is shown if they ever ask
- * why their hours changed.
+ * The row is the whole visit, so the correction is too: whatever stretches
+ * are behind it become one, on site from here to here. Both ends are asked
+ * for even when only one moves -- "it ran from here to here" can be checked
+ * afterwards in a way that "make it end later" cannot. The reason is
+ * required, and it is what the technician is shown if they ever ask why their
+ * hours changed.
  */
-function AdjustDialog({
-  segment,
+function CorrectDialog({
+  visit,
   onClose,
   onSave,
 }: {
-  segment: TimesheetSegment | null;
+  visit: TimesheetVisit | null;
   onClose: () => void;
   onSave: (startedAt: string, endedAt: string, reason: string) => void;
 }) {
@@ -328,10 +380,10 @@ function AdjustDialog({
   const [startedAt, setStartedAt] = useState('');
   const [endedAt, setEndedAt] = useState('');
 
-  // Filled from the segment the first time it opens, then left to the person.
-  if (segment && !startedAt) {
-    setStartedAt(businessDateTimeValue(segment.startedAt));
-    setEndedAt(businessDateTimeValue(segment.endedAt));
+  // Filled from the visit the first time it opens, then left to the person.
+  if (visit && !startedAt) {
+    setStartedAt(businessDateTimeValue(visit.arrivedAt));
+    setEndedAt(businessDateTimeValue(visit.leftAt));
   }
 
   const close = () => {
@@ -342,19 +394,22 @@ function AdjustDialog({
   };
 
   return (
-    <Dialog onOpenChange={(next) => (next ? undefined : close())} open={Boolean(segment)}>
+    <Dialog onOpenChange={(next) => (next ? undefined : close())} open={Boolean(visit)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Correct this time</DialogTitle>
+          <DialogTitle>Correct the time at {visit?.address ?? 'this property'}</DialogTitle>
           <DialogDescription>
-            {segment?.technician}, {segment?.address ? `at ${segment.address}` : 'between properties'}. The trail said{' '}
-            {segment ? asHours(segment.durationSeconds) : ''}, and that is kept beside whatever you
-            put here.
+            {visit
+              ? `${visit.technician} was inside the circle for ${asHours(visit.onsiteSeconds)} between ` +
+                `${formatTime(visit.arrivedAt)} and ${formatTime(visit.leftAt)}. `
+              : ''}
+            Saving makes it on site the whole time from the start to the end below. What the trail said is
+            kept beside it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
           <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            From (Texas time)
+            Arrived (Texas time)
             <input
               className={dateField}
               onChange={(event) => setStartedAt(event.target.value)}
@@ -363,7 +418,7 @@ function AdjustDialog({
             />
           </label>
           <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            To (Texas time)
+            Left (Texas time)
             <input
               className={dateField}
               onChange={(event) => setEndedAt(event.target.value)}
@@ -386,7 +441,9 @@ function AdjustDialog({
             Cancel
           </Button>
           <Button
-            disabled={reason.trim().length < 4 || !fromBusinessDateTimeValue(startedAt) || !fromBusinessDateTimeValue(endedAt)}
+            disabled={
+              reason.trim().length < 4 || !fromBusinessDateTimeValue(startedAt) || !fromBusinessDateTimeValue(endedAt)
+            }
             onClick={() =>
               onSave(fromBusinessDateTimeValue(startedAt)!, fromBusinessDateTimeValue(endedAt)!, reason.trim())
             }

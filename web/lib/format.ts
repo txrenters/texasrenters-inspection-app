@@ -16,6 +16,7 @@ import { BUSINESS_TIME_ZONE } from './clock';
  */
 const DATE_TIME = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: BUSINESS_TIME_ZONE });
 const DATE_ONLY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: BUSINESS_TIME_ZONE });
+const TIME_ONLY = new Intl.DateTimeFormat('en-US', { timeStyle: 'short', timeZone: BUSINESS_TIME_ZONE });
 /** A day written some other way than `yyyy-MM-dd`, read and shown in the same (the reader's) zone, so it keeps its date. */
 const LOOSE_DAY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });
 /**
@@ -38,6 +39,16 @@ export function formatDateTime(value?: string | Date | null) {
   if (!value) return EMPTY;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? EMPTY : DATE_TIME.format(date);
+}
+
+/**
+ * The Texas clock time of a moment, "9:30 AM", for a page that already says
+ * which day it is showing -- the timesheet, read one day at a time.
+ */
+export function formatTime(value?: string | Date | null) {
+  if (!value) return EMPTY;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? EMPTY : TIME_ONLY.format(date);
 }
 
 /** The Texas date of a moment. A value that is already a day (a lease's end, a move-out) goes to `formatScheduledDate`. */

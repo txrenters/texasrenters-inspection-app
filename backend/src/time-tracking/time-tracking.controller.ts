@@ -1,6 +1,6 @@
 /* DTO classes and guards are runtime imports required by Nest metadata. */
 /* eslint-disable @typescript-eslint/consistent-type-imports */
-import { Body, Controller, Get, HttpCode, Inject, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import {
@@ -9,7 +9,7 @@ import {
   RequirePermissions,
   type AuthenticatedRequest,
 } from '../common/auth';
-import { AdjustSegmentDto, RecalculateDto, TimesheetQueryDto } from './time-tracking.dto';
+import { CorrectVisitDto, RecalculateDto, TimesheetQueryDto } from './time-tracking.dto';
 import { TimeTrackingService } from './time-tracking.service';
 
 export const TIME_TRACKING_TAG = 'Time tracking';
@@ -39,7 +39,7 @@ export class TimeTrackingController {
   }
 
   /**
-   * What each technician is owed for a stretch of days.
+   * What each technician worked on one day, property by property.
    *
    * A read, so `inspections:read` -- the office looks at this far more often
    * than it changes anything, and a permission that made looking expensive
@@ -52,19 +52,16 @@ export class TimeTrackingController {
   }
 
   /**
-   * Correct a segment the trail got wrong.
+   * Correct a technician's time at one property, the way the timesheet shows it.
    *
    * Admin-only and always with a reason. A technician cannot edit their own
    * time -- that is the self-reporting this feature replaces -- but the office
    * can, and every correction keeps what it replaced.
    */
-  @Patch('segments/:segmentId')
+  @Post('visits/correct')
   @RequirePermissions('inspections:manage')
-  adjust(
-    @Req() request: AuthenticatedRequest,
-    @Param('segmentId') segmentId: string,
-    @Body() body: AdjustSegmentDto,
-  ) {
-    return this.time.adjustSegment(request.user, segmentId, body);
+  @HttpCode(200)
+  correctVisit(@Req() request: AuthenticatedRequest, @Body() body: CorrectVisitDto) {
+    return this.time.correctVisit(request.user, body);
   }
 }
