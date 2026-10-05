@@ -32,13 +32,23 @@ export function InspectionTabs({
   active: InspectionTabKey;
 }) {
   const base = `/inspections/${inspectionId}`;
+  /**
+   * Charges is hidden for now (the office, 2026-10-05): not one charge had been
+   * recorded on any inspection. Its page is still there at `/charge-report`,
+   * and shows itself as the tab it is while open, so the way back is the tab.
+   */
   const tabs: { key: InspectionTabKey; label: string; href: string }[] = [
     { key: 'overview', label: 'Overview', href: base },
     ...(inspectionType === 'MOVE_OUT'
       ? [{ key: 'comparison' as const, label: 'Move-in comparison', href: `${base}/comparison` }]
       : []),
-    { key: 'charges', label: 'Charges', href: `${base}/charge-report` },
+    ...(active === 'charges'
+      ? [{ key: 'charges' as const, label: 'Charges', href: `${base}/charge-report` }]
+      : []),
   ];
+  // A bar holding only the page you are on says nothing: a move-in, an
+  // occupied or an HVAC inspection has just its overview now.
+  if (tabs.length < 2) return null;
 
   return (
     <nav aria-label="Inspection sections" className="border-border border-b">
