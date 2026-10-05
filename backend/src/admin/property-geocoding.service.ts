@@ -355,7 +355,7 @@ export class PropertyGeocodingService {
   /**
    * Put a property back on the defaults, and back on its geocoded pin.
    *
-   * Deletes the row rather than writing 40 and 60 into it, so "nobody has
+   * Deletes the row rather than writing the defaults into it, so "nobody has
    * decided this" and "somebody decided the default" stay different states --
    * the second is a judgement worth keeping, and a later change to the default
    * should move the first and not the second.

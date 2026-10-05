@@ -15,32 +15,35 @@ import type { TimeTrackingService } from '../src/time-tracking/time-tracking.ser
 import { TimeTrackingScheduler } from '../src/time-tracking/time-tracking.scheduler';
 
 /**
- * Reading a submitted job's hours again, a while after it was submitted.
+ * Keeping the timesheet up to date while the technicians are still out.
  *
- * The sweep exists because the handset flushes its trail late — out of signal
- * at a rural property, then everything at once on the drive home. What is
- * pinned here is that it keeps going: one job whose hours cannot be read must
- * never stop the sweep, because the jobs behind it in the list are other
+ * Nothing on the handset starts or stops a clock; the circle is applied to the
+ * trail here, every few minutes. What is pinned is that it reads the right
+ * days, and that it keeps going: one technician whose day cannot be read must
+ * never stop the sweep, because the ones behind them in the list are other
  * people's pay.
  */
 
 const CronJobMock = CronJob as unknown as jest.Mock;
 
-const DUE = [
-  { id: 'insp-1', organizationId: 'org-1' },
-  { id: 'insp-2', organizationId: 'org-2' },
+const TRACKED = [
+  { organizationId: 'org-1', technicianId: 'tech-1' },
+  { organizationId: 'org-2', technicianId: 'tech-2' },
 ];
 
-function build(
-  rows: unknown[] = DUE,
-  recompute: jest.Mock = jest.fn().mockResolvedValue({ onsiteSeconds: 3_600 }),
-) {
-  const findMany = jest.fn().mockResolvedValue(rows);
-  const prisma = { inspection: { findMany } } as unknown as PrismaService;
-  const time = { recomputeAutomatically: recompute } as unknown as TimeTrackingService;
-  return { scheduler: new TimeTrackingScheduler(prisma, time), findMany, recompute };
-}
+/** Three in the afternoon in Texas, 6 October 2026: yesterday has settled. */
+const AFTERNOON = new Date('2026-10-06T20:00:00.000Z');
+/** Eight in the morning the same day: yesterday may still be arriving. */
+const MORNING = new Date('2026-10-06T13:00:00.000Z');
 
+const read = (changed = false) => ({ changed });
+
+function build(rows: unknown[] = TRACKED, recompute: jest.Mock = jest.fn().mockResolvedValue(read())) {
+  const groupBy = jest.fn().mockResolvedValue(rows);
+  const prisma = { technicianLocationPing: { groupBy } } as unknown as PrismaService;
+  const time = { recomputeDayAutomatically: recompute } as unknown as TimeTrackingService;
+  return { scheduler: new TimeTrackingScheduler(prisma, time), groupBy, recompute };
+}
 
 beforeEach(() => {
   CronJobMock.mockClear();
@@ -49,10 +52,11 @@ beforeEach(() => {
 });
 
 describe('scheduling the sweep', () => {
-  it('runs every quarter of an hour by default', () => {
+  /** Often enough that the hours move while the office is watching the map. */
+  it('runs every five minutes by default', () => {
     build().scheduler.onModuleInit();
 
-    expect(CronJobMock.mock.calls[0]![0]).toBe('*/15 * * * *');
+    expect(CronJobMock.mock.calls[0]![0]).toBe('*/5 * * * *');
     expect(CronJobMock.mock.results[0]!.value.start).toHaveBeenCalled();
   });
 
@@ -62,13 +66,13 @@ describe('scheduling the sweep', () => {
    * happily if `onModuleInit` had registered a callback that did nothing.
    */
   it('registers the sweep itself as the timer callback', async () => {
-    const { scheduler, findMany } = build();
+    const { scheduler, groupBy } = build();
     scheduler.onModuleInit();
 
     CronJobMock.mock.calls[0]![1]();
     await Promise.resolve();
 
-    expect(findMany).toHaveBeenCalled();
+    expect(groupBy).toHaveBeenCalled();
   });
 
   it('can be turned off without a code change', () => {
@@ -81,81 +85,86 @@ describe('scheduling the sweep', () => {
 });
 
 describe('sweeping', () => {
-  it('reads each recently submitted job under its own organization', async () => {
-    const { scheduler, recompute } = build();
+  it('reads today for everybody with a trail today, each under their own organization', async () => {
+    const { scheduler, recompute, groupBy } = build();
 
-    await scheduler.sweep();
+    await scheduler.sweep(AFTERNOON);
 
-    expect(recompute).toHaveBeenCalledWith('org-1', 'insp-1');
-    expect(recompute).toHaveBeenCalledWith('org-2', 'insp-2');
-  });
-
-  it('only looks at jobs submitted recently', async () => {
-    const { scheduler, findMany } = build();
-
-    await scheduler.sweep();
-
-    // A window, not the whole table: every job ever submitted recomputed every
-    // quarter of an hour would be a different feature and a much heavier one.
-    const since = findMany.mock.calls[0]![0].where.submittedAt.gte as Date;
-    const hoursBack = (Date.now() - since.getTime()) / 3_600_000;
-    expect(hoursBack).toBeGreaterThan(5);
-    expect(hoursBack).toBeLessThan(7);
+    expect(recompute.mock.calls).toEqual([
+      ['org-1', 'tech-1', '2026-10-06'],
+      ['org-2', 'tech-2', '2026-10-06'],
+    ]);
+    // Today in Texas, not today in UTC: midnight there is five in the morning here.
+    expect(groupBy.mock.calls[0]![0].where.recordedAt.gte).toEqual(new Date('2026-10-06T05:00:00.000Z'));
   });
 
   /**
-   * The property this whole class exists for.
-   *
-   * A job with no coordinates cannot be measured, and that is an ordinary fact
-   * about a job rather than an emergency. If it stopped the sweep, one bad
-   * property would silently cost every technician behind it in the list their
-   * recorded hours.
+   * A phone that went flat in the afternoon sends the end of the day when it
+   * is next opened, which is the following morning. Reading a day only once,
+   * when it ended, would bake in the short answer.
    */
-  it('keeps going when one job cannot be measured', async () => {
-    const recompute = jest
-      .fn()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({ onsiteSeconds: 3_600 });
-    const { scheduler } = build(DUE, recompute);
+  it('reads yesterday as well until noon, for the trail that arrives late', async () => {
+    const { scheduler, recompute, groupBy } = build([TRACKED[0]]);
 
-    await scheduler.sweep();
+    await scheduler.sweep(MORNING);
 
-    expect(recompute).toHaveBeenCalledTimes(2);
-    expect(recompute).toHaveBeenLastCalledWith('org-2', 'insp-2');
+    expect(recompute.mock.calls).toEqual([
+      ['org-1', 'tech-1', '2026-10-05'],
+      ['org-1', 'tech-1', '2026-10-06'],
+    ]);
+    expect(groupBy.mock.calls[0]![0].where.recordedAt.gte).toEqual(new Date('2026-10-05T05:00:00.000Z'));
   });
 
-  it('does nothing when nothing has been submitted', async () => {
+  /**
+   * The property this whole class exists for. If one failure stopped the
+   * sweep, it would silently cost every technician behind it in the list
+   * their recorded hours.
+   */
+  it('keeps going when one technician’s day cannot be read', async () => {
+    const recompute = jest.fn().mockResolvedValueOnce(null).mockResolvedValue(read(true));
+    const { scheduler } = build(TRACKED, recompute);
+
+    await scheduler.sweep(AFTERNOON);
+
+    expect(recompute).toHaveBeenCalledTimes(2);
+    expect(recompute).toHaveBeenLastCalledWith('org-2', 'tech-2', '2026-10-06');
+  });
+
+  it('does nothing when nobody has a trail', async () => {
     const { scheduler, recompute } = build([]);
 
-    await scheduler.sweep();
+    await scheduler.sweep(AFTERNOON);
 
     expect(recompute).not.toHaveBeenCalled();
   });
 
   /** A slow sweep must not stack on the next tick and read everything twice. */
   it('will not run on top of itself', async () => {
-    // The first job hangs until the test lets it go, and `reached` is how the
-    // test knows the sweep is actually inside it. Releasing on a timer instead
-    // is the same test with a race in it.
+    // The first reading hangs until the test lets it go, and `reached` is how
+    // the test knows the sweep is actually inside it. Releasing on a timer
+    // instead is the same test with a race in it.
     let release = () => {};
     let reached = () => {};
-    const inTheFirstJob = new Promise<void>((resolve) => (reached = resolve));
-    const recompute = jest.fn().mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve(null);
-          reached();
-        }),
-    );
-    const { scheduler } = build(DUE, recompute);
+    const inTheFirst = new Promise<void>((resolve) => (reached = resolve));
+    const recompute = jest
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve(null);
+            reached();
+          }),
+      )
+      .mockResolvedValue(read());
+    const { scheduler } = build(TRACKED, recompute);
 
-    const first = scheduler.sweep();
-    await inTheFirstJob;
-    await scheduler.sweep(); // while the first is still held on the job above
+    const first = scheduler.sweep(AFTERNOON);
+    await inTheFirst;
+    await scheduler.sweep(AFTERNOON); // while the first is still held on the reading above
     release();
     await first;
 
-    // Two jobs from the first sweep, and nothing from the second.
+    // Two readings from the first sweep, and nothing from the second.
     expect(recompute).toHaveBeenCalledTimes(2);
   });
 
@@ -164,11 +173,11 @@ describe('sweeping', () => {
    * process down, and a missed sweep is not worth an outage.
    */
   it('survives the database being unreachable', async () => {
-    const findMany = jest.fn().mockRejectedValue(new Error('database unreachable'));
-    const prisma = { inspection: { findMany } } as unknown as PrismaService;
-    const time = { recomputeAutomatically: jest.fn() } as unknown as TimeTrackingService;
+    const groupBy = jest.fn().mockRejectedValue(new Error('database unreachable'));
+    const prisma = { technicianLocationPing: { groupBy } } as unknown as PrismaService;
+    const time = { recomputeDayAutomatically: jest.fn() } as unknown as TimeTrackingService;
     const scheduler = new TimeTrackingScheduler(prisma, time);
 
-    await expect(scheduler.sweep()).resolves.toBeUndefined();
+    await expect(scheduler.sweep(AFTERNOON)).resolves.toBeUndefined();
   });
 });

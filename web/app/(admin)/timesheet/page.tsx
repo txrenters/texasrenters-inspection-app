@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangleIcon, PencilIcon } from 'lucide-react';
+import { PencilIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -25,23 +25,26 @@ import {
   asHours,
   useTimesheet,
   useTimesheetActions,
-  type TimesheetGap,
   type TimesheetSegment,
   type TimesheetTotal,
 } from '@/lib/timesheet-queries';
 
 /**
- * The hours a technician is paid for, read from where they actually were.
+ * The hours a technician worked, read from where they actually were.
  *
- * This replaces Start job / End job as the number payroll runs on. A month of
- * real work measured on 2026-09-23 found the buttons wrong in both directions:
- * one visit recorded 43.9 hours because End was never pressed, and others
- * recorded seven and eight minutes for visits the trail shows ran to two hours.
+ * Start job and End job play no part in it. A technician looks round a
+ * property before pressing Start and does not always press End when they
+ * leave, so the office asked on 2026-10-06 for the clock to follow the
+ * technician instead: it runs while they are inside the 20 m circle of a
+ * property they have a visit at, and everything else between the first arrival
+ * of the day and the last departure is general time.
  *
- * The rule of this page is that nothing is hidden from the person being paid.
- * Time the trail could not account for sits beside the hours and never inside
- * them; a correction says who made it and why; and the difference between what
- * the trail said and what somebody decided stays visible on the row.
+ * Two figures and their total, then, and no third pile. The page used to keep
+ * a list of stretches the phone had gone quiet for, each to be settled by hand
+ * before anybody was paid -- 59 of them in one fortnight, nearly all of them a
+ * phone indoors for a few minutes. Those minutes are counted now, and marked,
+ * so the office can still see which hours were measured and which were carried
+ * through a silence; and a correction still says that a person made it.
  */
 
 /** The last fortnight, which is the period the office settles pay over, in Texas days. */
@@ -50,11 +53,19 @@ function defaultRange() {
   return { from: shiftDay(today, -13), to: today };
 }
 
-const CATEGORY: Record<string, { label: string; variant: 'success' | 'info' | 'secondary' }> = {
+const CATEGORY = {
   ONSITE: { label: 'On site', variant: 'success' },
-  DRIVING: { label: 'Driving', variant: 'info' },
-  GENERAL: { label: 'General', variant: 'secondary' },
-};
+  GENERAL: { label: 'General time', variant: 'secondary' },
+} as const;
+
+/**
+ * Below this a silence is not worth a badge.
+ *
+ * The rule only calls the phone quiet after five minutes without a fix, so
+ * anything it reports is already longer than this; the floor is here so a
+ * rounding remainder on a piece of a corrected stretch never shows as "0m".
+ */
+const QUIET_WORTH_SAYING_SECONDS = 60;
 
 const dateField =
   'h-9 rounded-lg border border-border bg-card px-2 text-sm text-foreground';
@@ -68,17 +79,15 @@ export default function TimesheetPage() {
   const actions = useTimesheetActions();
 
   const [adjusting, setAdjusting] = useState<TimesheetSegment | null>(null);
-  const [settling, setSettling] = useState<TimesheetGap | null>(null);
-  /** What the last fill found, in the office's words rather than counts. */
-  const [filled, setFilled] = useState<string | null>(null);
+  /** What the last recalculation did, in the office's words rather than counts. */
+  const [recalculated, setRecalculated] = useState<string | null>(null);
 
   if (sheet.isLoading) return <PageSkeleton />;
   if (sheet.isError) return <ErrorState error={sheet.error} retry={() => void sheet.refetch()} />;
 
   const data = sheet.data!;
-  const openGaps = data.gaps.filter((gap) => !gap.resolved);
   const onsiteTotal = data.totals.reduce((sum, row) => sum + row.onsiteSeconds, 0);
-  const gapTotal = data.totals.reduce((sum, row) => sum + row.unsettledGapSeconds, 0);
+  const generalTotal = data.totals.reduce((sum, row) => sum + row.generalSeconds, 0);
 
   const totalColumns: Column<TimesheetTotal>[] = [
     {
@@ -96,27 +105,23 @@ export default function TimesheetPage() {
       ),
     },
     { key: 'onsite', header: 'On site', numeric: true, cell: (row) => asHours(row.onsiteSeconds) },
+    { key: 'general', header: 'General time', numeric: true, cell: (row) => asHours(row.generalSeconds) },
     {
-      key: 'driving',
-      header: 'Driving',
+      key: 'total',
+      header: 'Total',
       numeric: true,
-      hideBelow: 'md',
-      cell: (row) => <span className="text-muted-foreground">{asHours(row.drivingSeconds)}</span>,
+      cell: (row) => <span className="font-medium">{asHours(row.totalSeconds)}</span>,
     },
     {
-      key: 'general',
-      header: 'General',
+      // Inside the total, not beside it. Its own column so that a day carried
+      // through a long silence does not look the same as one that was measured.
+      key: 'quiet',
+      header: 'Phone quiet',
       numeric: true,
       hideBelow: 'md',
-      cell: (row) => <span className="text-muted-foreground">{asHours(row.generalSeconds)}</span>,
-    },
-    {
-      key: 'gap',
-      header: 'Unaccounted for',
-      numeric: true,
       cell: (row) =>
-        row.unsettledGapSeconds ? (
-          <span className="text-warning">{asHours(row.unsettledGapSeconds)}</span>
+        row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? (
+          <span className="text-muted-foreground">{asHours(row.quietSeconds)}</span>
         ) : (
           <span className="text-muted-foreground">—</span>
         ),
@@ -125,23 +130,30 @@ export default function TimesheetPage() {
 
   const segmentColumns: Column<TimesheetSegment>[] = [
     { key: 'technician', header: 'Technician', primary: true, cell: (row) => row.technician },
-    { key: 'property', header: 'Property', hideBelow: 'md', cell: (row) => row.address ?? '—' },
+    {
+      key: 'property',
+      header: 'Property',
+      cell: (row) =>
+        row.address ?? <span className="text-muted-foreground">Between properties</span>,
+    },
     {
       key: 'what',
       header: 'What',
       cell: (row) => (
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant={CATEGORY[row.category]?.variant ?? 'secondary'}>
-            {CATEGORY[row.category]?.label ?? row.category}
-          </Badge>
+          <Badge variant={CATEGORY[row.category].variant}>{CATEGORY[row.category].label}</Badge>
           {/* Said plainly. Somebody paid from this is entitled to know which
-              numbers a person decided rather than the trail. */}
+              numbers a person decided rather than the trail, and which the
+              trail could only answer by carrying the clock through a silence. */}
           {row.adjusted ? <Badge variant="outline">Corrected</Badge> : null}
           {row.source === 'MANUAL' ? <Badge variant="outline">Added by hand</Badge> : null}
+          {row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? (
+            <Badge variant="outline">Phone quiet {asHours(row.quietSeconds)}</Badge>
+          ) : null}
         </div>
       ),
     },
-    { key: 'from', header: 'From', hideBelow: 'lg', cell: (row) => formatDateTime(row.startedAt) },
+    { key: 'from', header: 'From', hideBelow: 'md', cell: (row) => formatDateTime(row.startedAt) },
     { key: 'to', header: 'To', hideBelow: 'lg', cell: (row) => formatDateTime(row.endedAt) },
     { key: 'time', header: 'Time', numeric: true, cell: (row) => asHours(row.durationSeconds) },
     ...(canChange
@@ -151,7 +163,7 @@ export default function TimesheetPage() {
             header: '',
             cell: (row: TimesheetSegment) => (
               <Button
-                aria-label={`Correct this ${CATEGORY[row.category]?.label ?? ''} time`}
+                aria-label={`Correct this ${CATEGORY[row.category].label} time`}
                 className="relative z-10"
                 onClick={() => setAdjusting(row)}
                 size="sm"
@@ -165,42 +177,11 @@ export default function TimesheetPage() {
       : []),
   ];
 
-  const gapColumns: Column<TimesheetGap>[] = [
-    { key: 'technician', header: 'Technician', primary: true, cell: (row) => row.technician },
-    { key: 'from', header: 'From', cell: (row) => formatDateTime(row.startedAt) },
-    { key: 'to', header: 'To', hideBelow: 'md', cell: (row) => formatDateTime(row.endedAt) },
-    { key: 'long', header: 'Long', numeric: true, cell: (row) => asHours(row.durationSeconds) },
-    {
-      key: 'settled',
-      header: 'Settled',
-      cell: (row) =>
-        row.resolved ? (
-          <span className="text-muted-foreground text-xs">{row.resolution}</span>
-        ) : (
-          <Badge variant="destructive">Open</Badge>
-        ),
-    },
-    ...(canChange
-      ? [
-          {
-            key: 'settle',
-            header: '',
-            cell: (row: TimesheetGap) =>
-              row.resolved ? null : (
-                <Button className="relative z-10" onClick={() => setSettling(row)} size="sm" variant="secondary">
-                  Settle
-                </Button>
-              ),
-          } satisfies Column<TimesheetGap>,
-        ]
-      : []),
-  ];
-
   return (
     <>
       <PageHeader
         title="Timesheet"
-        description="Hours read from where the technician actually was, rather than from a button."
+        description="The clock runs while a technician is inside a property’s circle. Everything between properties is general time."
       />
 
       <div className="flex flex-wrap items-end gap-3 pb-4">
@@ -228,90 +209,50 @@ export default function TimesheetPage() {
           </Button>
         ) : null}
         {/*
-          Jobs finished before any of this existed have no hours against them,
-          and nothing else will ever go back for them: a submission reads its
-          own job, and the sweep only looks a few hours back. Without this the
-          page opens empty on its first day and there is nothing anybody can
-          press about it.
+          Today and yesterday are read without anybody asking. This is for the
+          days behind them: after a property's pin or its distances are
+          corrected, and once after the rule itself changes.
 
-          It fills only where there is nothing, so it cannot move an hour
-          somebody has already been paid — which is what makes it safe to leave
-          in the toolbar rather than behind a warning.
+          It leaves alone every hour somebody corrected by hand, and pressing
+          it twice gives the same answer -- which is what makes it safe to
+          leave in the toolbar rather than behind a warning.
         */}
         {canChange ? (
           <Button
-            disabled={actions.fillHours.isPending}
+            disabled={actions.recalculate.isPending}
             onClick={() =>
-              actions.fillHours.mutate(
+              actions.recalculate.mutate(
                 { from: range.from, to: range.to },
                 {
                   onSuccess: (result) =>
-                    setFilled(
-                      result.considered === 0
-                        ? 'Every job in these days already has its hours.'
-                        : [
-                            `Read ${result.measured} of ${result.considered} jobs.`,
-                            result.unmeasurable
-                              ? `${result.unmeasurable} could not be measured — no coordinates, or nobody assigned.`
-                              : '',
-                            result.more ? 'More of this range is left; press again.' : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' '),
+                    setRecalculated(
+                      result.changed === 0
+                        ? 'These days already say what the trail says. Nothing changed.'
+                        : `Read ${result.days} ${result.days === 1 ? 'day' : 'days'} again. ` +
+                            `${result.changed} technician-${result.changed === 1 ? 'day' : 'days'} changed; ` +
+                            'hours corrected by hand were left as they are.',
                     ),
+                  onError: (error) =>
+                    toast.error('These days could not be recalculated', { description: error.message }),
                 },
               )
             }
             size="sm"
             variant="secondary"
           >
-            {actions.fillHours.isPending ? 'Reading the trail…' : 'Fill in missing hours'}
+            {actions.recalculate.isPending ? 'Reading the trail…' : 'Recalculate these days'}
           </Button>
         ) : null}
       </div>
 
-      {filled ? <p className="text-muted-foreground -mt-2 pb-4 text-xs">{filled}</p> : null}
+      {recalculated ? <p className="text-muted-foreground -mt-2 pb-4 text-xs">{recalculated}</p> : null}
 
       <StatGroup columns="grid-cols-1 sm:grid-cols-3">
         <Stat label="On site" value={asHours(onsiteTotal)} />
-        <Stat label="Technicians" value={String(data.totals.length)} />
-        {/*
-          Beside the hours, never inside them. An unsettled stretch is time
-          nobody can account for: not hours worked, not hours not worked, a
-          question — and a total that swallowed it would pay somebody the wrong
-          amount without anybody noticing.
-        */}
-        <Stat
-          label="Unaccounted for"
-          tone={gapTotal ? 'warning' : 'default'}
-          value={gapTotal ? asHours(gapTotal) : '—'}
-        />
+        <Stat label="General time" value={asHours(generalTotal)} />
+        <Stat label="Total" value={asHours(onsiteTotal + generalTotal)} />
       </StatGroup>
 
-      {openGaps.length ? (
-        <div className="border-warning/40 bg-warning/10 mt-4 flex items-start gap-3 rounded-xl border p-3">
-          <AlertTriangleIcon className="text-warning mt-0.5 shrink-0" size={16} />
-          <div className="min-w-0 flex-1 text-sm">
-            <p className="text-foreground font-medium">
-              {openGaps.length === 1
-                ? 'One stretch of time is unaccounted for'
-                : `${openGaps.length} stretches of time are unaccounted for`}
-            </p>
-            <p className="text-muted-foreground text-xs">
-              A phone that died, was left in a van, or lost its permission. Settle each one before
-              this period is paid — those hours are missing from the totals above until you do.
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {/*
-        Stacked rather than tabbed, and that is a decision rather than a
-        default. The banner above tells the office to settle each open stretch
-        before the period is paid; putting the button to do it behind a third
-        tab would contradict the instruction. A payroll page should let somebody
-        scroll once and see everything that bears on the number.
-      */}
       <section className="mt-6">
         <h2 className="text-foreground mb-2 text-sm font-semibold">Hours by technician</h2>
         {data.totals.length ? (
@@ -323,27 +264,8 @@ export default function TimesheetPage() {
           />
         ) : (
           <EmptyState
-            description="Either nobody was working, or these jobs finished before their hours were being read. Fill in missing hours to find out which."
+            description="Nobody was inside the circle of a property they had a visit at. If somebody was working, check the property’s pin and its distances, then recalculate."
             title="Nothing recorded in these days"
-          />
-        )}
-      </section>
-
-      <section className="mt-6">
-        <h2 className="text-foreground mb-2 text-sm font-semibold">
-          Unaccounted for{openGaps.length ? ` (${openGaps.length})` : ''}
-        </h2>
-        {data.gaps.length ? (
-          <DataTable
-            columns={gapColumns}
-            label="Time the trail could not account for"
-            rowKey={(row) => row.id}
-            rows={data.gaps}
-          />
-        ) : (
-          <EmptyState
-            description="No stretch of these days went unrecorded."
-            title="Every minute is accounted for"
           />
         )}
       </section>
@@ -379,27 +301,6 @@ export default function TimesheetPage() {
           setAdjusting(null);
         }}
         segment={adjusting}
-      />
-
-      <SettleGapDialog
-        gap={settling}
-        onClose={() => setSettling(null)}
-        onSettle={(resolution, creditedMinutes) => {
-          if (!settling) return;
-          actions.resolveGap.mutate(
-            { gapId: settling.id, resolution, creditedMinutes },
-            {
-              onSuccess: (settled) =>
-                toast.success(
-                  settled.creditedMinutes
-                    ? `${asHours(settled.creditedMinutes * 60)} added to the timesheet`
-                    : 'Settled, with no time added',
-                ),
-              onError: (error) => toast.error('That could not be settled', { description: error.message }),
-            },
-          );
-          setSettling(null);
-        }}
       />
     </>
   );
@@ -446,7 +347,7 @@ function AdjustDialog({
         <DialogHeader>
           <DialogTitle>Correct this time</DialogTitle>
           <DialogDescription>
-            {segment?.technician} at {segment?.address ?? 'this property'}. The trail said{' '}
+            {segment?.technician}, {segment?.address ? `at ${segment.address}` : 'between properties'}. The trail said{' '}
             {segment ? asHours(segment.durationSeconds) : ''}, and that is kept beside whatever you
             put here.
           </DialogDescription>
@@ -491,81 +392,6 @@ function AdjustDialog({
             }
           >
             Save the correction
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * Settling a stretch nobody can account for.
- *
- * Two real answers, and this offers both without steering: the work happened
- * and the phone missed it, or the technician was not working. Leaving it open
- * is the only wrong one, because the hours stay out of the total either way and
- * nobody is told.
- */
-function SettleGapDialog({
-  gap,
-  onClose,
-  onSettle,
-}: {
-  gap: TimesheetGap | null;
-  onClose: () => void;
-  onSettle: (resolution: string, creditedMinutes?: number) => void;
-}) {
-  const [resolution, setResolution] = useState('');
-  const [minutes, setMinutes] = useState('');
-
-  const close = () => {
-    setResolution('');
-    setMinutes('');
-    onClose();
-  };
-
-  const typed = Number(minutes);
-  const credited = Number.isFinite(typed) && typed > 0 ? Math.round(typed) : undefined;
-
-  return (
-    <Dialog onOpenChange={(next) => (next ? undefined : close())} open={Boolean(gap)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Settle this stretch</DialogTitle>
-          <DialogDescription>
-            {gap
-              ? `${asHours(gap.durationSeconds)} of ${gap.technician}'s day that the trail could not account for.`
-              : ''}{' '}
-            Credit the hours if the work happened, or say why none are owed.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-3">
-          <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            What happened
-            <textarea
-              className="border-border bg-card text-foreground min-h-20 rounded-lg border px-2 py-1.5 text-sm"
-              onChange={(event) => setResolution(event.target.value)}
-              placeholder="Phone died at the Feldspar job; four hours added back."
-              value={resolution}
-            />
-          </label>
-          <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            Minutes to credit — leave it empty if none are owed
-            <input
-              className={dateField}
-              inputMode="numeric"
-              onChange={(event) => setMinutes(event.target.value)}
-              placeholder="240"
-              value={minutes}
-            />
-          </label>
-        </div>
-        <DialogFooter>
-          <Button onClick={close} variant="secondary">
-            Cancel
-          </Button>
-          <Button disabled={resolution.trim().length < 4} onClick={() => onSettle(resolution.trim(), credited)}>
-            {credited ? `Credit ${asHours(credited * 60)}` : 'Settle with no time'}
           </Button>
         </DialogFooter>
       </DialogContent>
