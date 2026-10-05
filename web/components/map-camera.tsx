@@ -36,7 +36,7 @@ export type CameraFocus =
 export const FOLLOW_ZOOM = 15;
 
 /** Past the clustering ceiling, so a picked property is drawn on its own. */
-const PROPERTY_ZOOM = 18;
+export const PROPERTY_ZOOM = 18;
 
 /**
  * A fitted single point zooms to a rooftop with no context, so a fit stops

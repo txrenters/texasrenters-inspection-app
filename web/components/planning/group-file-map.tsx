@@ -61,6 +61,11 @@ type OutlineFeature = {
 export interface MapFrame {
   key: string;
   points: readonly { latitude: number; longitude: number }[];
+  /**
+   * One point, glided to at this zoom: a property picked from a list, as the
+   * technician map goes to a property picked. Without it a frame fits its points.
+   */
+  zoom?: number;
 }
 
 /** Manual grouping, as the map takes part in it. */
@@ -71,6 +76,11 @@ export interface ManualMapOptions {
   dimOthers: boolean;
   /** A property was clicked: the grouping decides what that means. */
   onRowClick: (row: GroupFileRow) => void;
+  /**
+   * A property picked outside the map -- a visit clicked on the calendar (the
+   * office, 2026-10-06): its details stay open as on hover, and its pin is on top.
+   */
+  focusRow?: number | null;
 }
 
 const NO_ZONES: readonly ZoneTerritory[] = [];
@@ -225,9 +235,15 @@ function Frame({ frame }: { frame: MapFrame }) {
   const { current: map } = useMap();
   const points = useRef(frame.points);
   points.current = frame.points;
+  const zoom = useRef(frame.zoom);
+  zoom.current = frame.zoom;
   useEffect(() => {
     const framed = points.current.map((point) => [point.latitude, point.longitude] as [number, number]);
     if (!map || !framed.length) return;
+    if (zoom.current !== undefined && framed.length === 1) {
+      map.easeTo({ center: [framed[0]![1], framed[0]![0]], zoom: zoom.current });
+      return;
+    }
     fitTo(map, framed, 48);
   }, [map, frame.key]);
   return null;
@@ -282,7 +298,9 @@ function GroupFileLayers({
   );
   const offsets = useMemo(() => fanOffsets(rows.map(({ row }) => row)), [rows]);
   const open = manual ? null : (rows.find(({ row }) => row.rowNumber === openRow) ?? null);
-  const hovered = manual ? (rows.find(({ row }) => row.rowNumber === hoverRow) ?? null) : null;
+  // The pin under the pointer, or else the one picked outside the map.
+  const shownRow = hoverRow ?? manual?.focusRow ?? null;
+  const hovered = manual ? (rows.find(({ row }) => row.rowNumber === shownRow) ?? null) : null;
 
   /** A group's road route, when it is a route of these very stops -- and from its origin, when it has one. */
   const routeOf = (group: FileGroup) => {
@@ -345,8 +363,8 @@ function GroupFileLayers({
   const drawn = useMemo(() => {
     if (!box) return rows;
     const reach = padBox(box, DRAWN_BEYOND_VIEW);
-    return rows.filter(({ row }) => row.rowNumber === openRow || inBox(row, reach));
-  }, [box, openRow, rows]);
+    return rows.filter(({ row }) => row.rowNumber === openRow || row.rowNumber === manual?.focusRow || inBox(row, reach));
+  }, [box, manual?.focusRow, openRow, rows]);
 
   /**
    * Outlines and routes each in one source, painted from each shape's own
@@ -583,7 +601,7 @@ function GroupFileLayers({
             else setOpenRow(row.rowNumber);
           }}
           // Grouped over ungrouped, so a numbered stop is never under a grey dot.
-          style={{ zIndex: row.rowNumber === openRow ? 820 : group ? 800 : 790 }}
+          style={{ zIndex: row.rowNumber === openRow || row.rowNumber === manual?.focusRow ? 820 : group ? 800 : 790 }}
         >
           <span
             onMouseEnter={manual ? () => setHoverRow(row.rowNumber) : undefined}

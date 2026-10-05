@@ -230,6 +230,9 @@ interface Shared {
   colourOf: (technicianId: string) => string;
   onSelect: (dayId: string) => void;
   onOpenDate?: (date: string) => void;
+  /** The visit or booking the map is on. */
+  focusedStopId?: string;
+  onFocusStop?: (dayId: string, stopId: string) => void;
 }
 
 /** The visits and bookings of a day the filters let through, in driving order. */
@@ -257,6 +260,8 @@ export function PlanCalendar({
   selectedDayId,
   onSelect,
   onOpenDate,
+  focusedStopId,
+  onFocusStop,
   filter = SHOW_ALL,
   startsOn = null,
 }: {
@@ -272,6 +277,13 @@ export function PlanCalendar({
   onSelect: (dayId: string) => void;
   /** A date's number was clicked: open that day. */
   onOpenDate?: (date: string) => void;
+  /** The visit or booking the map is on, outlined where it is listed. */
+  focusedStopId?: string;
+  /**
+   * A visit or booking was clicked on the week or the day: put the map on it
+   * (the office, 2026-10-06). Without it, a click picks the visit's day.
+   */
+  onFocusStop?: (dayId: string, stopId: string) => void;
   filter?: CalendarFilter;
   /** The plan's own first day, `YYYY-MM-DD`, when it is not the quarter's. */
   startsOn?: string | null;
@@ -315,6 +327,8 @@ export function PlanCalendar({
     colourOf: (technicianId) => colours.get(technicianId) ?? TECHNICIAN_COLOURS[0]!,
     onSelect,
     onOpenDate,
+    focusedStopId,
+    onFocusStop,
   };
 
   if (view === 'day') return <DayView date={shown} shared={shared} />;
@@ -435,6 +449,7 @@ function VisitChip({
   time?: string;
 }) {
   const zone = entry.kind === 'visit' ? zoneNumberOf(entry.zone) : null;
+  const focused = entry.id === shared.focusedStopId;
   const what =
     entry.kind === 'booked'
       ? entry.booking === 'MOVE_OUT'
@@ -445,12 +460,15 @@ function VisitChip({
         : 'Occupied';
   return (
     <button
+      aria-current={focused || undefined}
       aria-label={`${entry.address ?? 'Unknown address'}, ${what.toLowerCase()}, on ${day.technician.displayName}’s day`}
       className={cn(
         'hover:bg-accent focus-visible:ring-ring/50 grid w-full min-w-0 gap-0.5 rounded-md border px-1.5 py-1 text-left text-xs outline-none focus-visible:ring-[3px]',
         entry.kind === 'booked' ? 'border-warning/50 bg-warning/10' : 'bg-muted/40',
+        focused && 'border-ring bg-accent ring-ring ring-1',
       )}
-      onClick={() => shared.onSelect(day.id)}
+      onClick={() => (shared.onFocusStop ? shared.onFocusStop(day.id, entry.id) : shared.onSelect(day.id))}
+      title="Show it on the map"
       type="button"
     >
       <span className="line-clamp-2 leading-snug">

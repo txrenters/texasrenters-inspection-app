@@ -40,6 +40,8 @@ export interface PlanDaysFile {
   entries: ReadonlyMap<number, DayMapEntry>;
   /** Each day's group, by day id. */
   groupOf: ReadonlyMap<string, FileGroup>;
+  /** Each day's stop on the map -- a visit, or a move-out or move-in it is built around -- by its id. */
+  rowOfStop: ReadonlyMap<string, GroupFileRow>;
 }
 
 /** A position a map can draw: 0,0 is in the Atlantic, and is what a missing one becomes. */
@@ -79,6 +81,7 @@ export function dayStopsInOrder(day: PlanDay) {
 export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[]): PlanDaysFile {
   const detailsOf = new Map(visits.map((visit) => [visit.id, visit]));
   const entries = new Map<number, DayMapEntry>();
+  const rowOfStop = new Map<string, GroupFileRow>();
   let rowNumber = 0;
   const rowOf = (
     stop: { id: string; address: string | null; city: string | null; zone: string | null; latitude: number; longitude: number },
@@ -113,6 +116,7 @@ export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[
         day.id,
         stop.positionInDay ?? index + 1,
       );
+      rowOfStop.set(stop.id, row);
       entries.set(
         row.rowNumber,
         stop.booking
@@ -182,6 +186,7 @@ export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[
     },
     entries,
     groupOf: new Map(groups.map((group) => [group.key, group])),
+    rowOfStop,
   };
 }
 

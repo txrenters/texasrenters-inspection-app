@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { PROPERTY_ZOOM } from '@/components/map-camera';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -261,6 +262,13 @@ export function PlanSchedule({
   // The zones' ground is off too: one day on the map reads alone (the office, 2026-10-05), and it is a switch away.
   const [display, setDisplay] = useState<MapDisplay>({ ...DEFAULT_MAP_DISPLAY, zones: false });
   const [moving, setMoving] = useState<MovingVisit | null>(null);
+  /**
+   * A visit or booking clicked on the week or the day, which the map goes to
+   * with its details open (the office, 2026-10-06: "nothing happens if I click
+   * each property from the calendar"). Picking a day, or another day, lets go.
+   */
+  // `at` makes a second click on the same visit go back to it after the map was moved.
+  const [focus, setFocus] = useState<{ dayId: string; stopId: string; at: number } | null>(null);
   /** The calendar and the map fill the window on a large screen, as in the Group maker. */
   const fill = useFillHeight<HTMLDivElement>();
 
@@ -312,7 +320,10 @@ export function PlanSchedule({
     if (next !== view) onViewChange(next);
     if (follow && (!selected || dateOf(selected) !== target)) {
       const first = daysOn(target)[0];
-      if (first) onSelect(first.id);
+      if (first) {
+        setFocus(null);
+        onSelect(first.id);
+      }
     }
   };
   /**
@@ -327,12 +338,23 @@ export function PlanSchedule({
   const pick = (dayId: string) => {
     const day = days.find((entry) => entry.id === dayId);
     if (day) setCursor(dateOf(day));
+    setFocus(null);
     onSelect(dayId);
+  };
+  /** A visit or booking clicked on the calendar: its day picked, and the map on it. */
+  const pickStop = (dayId: string, stopId: string) => {
+    const day = days.find((entry) => entry.id === dayId);
+    if (day) setCursor(dateOf(day));
+    if (dayId !== selected?.id) onSelect(dayId);
+    setFocus({ dayId, stopId, at: Date.now() });
+    setShowMap(true);
   };
   const previous = stepCursor(view, cursor, -1, months);
   const next = stepCursor(view, cursor, 1, months);
 
   const made = useMemo(() => planDaysFile(days, visits), [days, visits]);
+  /** The pin the map is on: a stop of the day picked, while it is still that day's. */
+  const focused = focus && focus.dayId === selected?.id ? (made.rowOfStop.get(focus.stopId) ?? null) : null;
   const route = usePlanDayRoute(planId, selected?.id);
   const group = selected ? (made.groupOf.get(selected.id) ?? null) : null;
   const home = route.data?.home ?? null;
@@ -364,11 +386,14 @@ export function PlanSchedule({
    * click moved a visit into it: the map frames again only when the key changes.
    */
   const frame = useMemo<MapFrame>(
-    () => ({
-      key: `${selected?.id ?? ''}:${origin ? 'home' : ''}`,
-      points: [...(group?.rows ?? []), ...(origin ? [origin] : [])],
-    }),
-    [group, origin, selected?.id],
+    () =>
+      focused && focus
+        ? { key: `stop:${focus.stopId}:${focus.at}`, points: [focused], zoom: PROPERTY_ZOOM }
+        : {
+            key: `${selected?.id ?? ''}:${origin ? 'home' : ''}`,
+            points: [...(group?.rows ?? []), ...(origin ? [origin] : [])],
+          },
+    [focus, focused, group, origin, selected?.id],
   );
 
   const optimizeDay = (day: PlanDay) =>
@@ -549,6 +574,8 @@ export function PlanSchedule({
             cursor={cursor}
             days={shownDays}
             filter={filter}
+            focusedStopId={focused ? focus?.stopId : undefined}
+            onFocusStop={pickStop}
             onOpenDate={(date) => goTo(date, 'day')}
             onSelect={pick}
             quarter={quarter}
@@ -600,6 +627,7 @@ export function PlanSchedule({
                 activeKey={selected?.id ?? null}
                 display={display}
                 fadeOthers
+                focusRow={focused?.rowNumber ?? null}
                 frame={frame}
                 groups={mapGroups}
                 onPickDay={pick}

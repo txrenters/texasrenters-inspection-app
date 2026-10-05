@@ -33,6 +33,7 @@ export function PlanDaysMap({
   frame,
   onRowClick,
   onPickDay,
+  focusRow = null,
 }: {
   groups: readonly FileGroup[];
   /** Visits with no day yet. */
@@ -49,6 +50,8 @@ export function PlanDaysMap({
   frame: MapFrame;
   onRowClick: (row: GroupFileRow) => void;
   onPickDay: (key: string) => void;
+  /** The pin of a visit picked on the calendar: its details open, the map gone to it. */
+  focusRow?: number | null;
 }) {
   // Only the day picked starts at home: the others are drawn as the Group maker draws a group.
   const drawn = useMemo(
@@ -70,7 +73,7 @@ export function PlanDaysMap({
       groups={drawn}
       legTimes={legTimes}
       lines={display.lines}
-      manual={{ activeKey, dimOthers: fadeOthers, onRowClick }}
+      manual={{ activeKey, dimOthers: fadeOthers, onRowClick, focusRow }}
       onPickGroup={onPickDay}
       road={display.road}
       routeViews={routeViews}

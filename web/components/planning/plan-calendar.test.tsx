@@ -275,6 +275,19 @@ describe('the week', () => {
     expect(onSelect).toHaveBeenCalledWith('moses-oct-6');
   });
 
+  /** The office (2026-10-06): a property clicked on the calendar is shown on the map. */
+  it('hands a visit clicked to the map, and outlines the one the map is on', () => {
+    const onFocusStop = vi.fn();
+    const onSelect = vi.fn();
+    calendar({ view: 'week', cursor: '2026-10-06', onSelect, onFocusStop, focusedStopId: 'moses-oct-6-stop-2' });
+
+    const tuesday = screen.getByRole('group', { name: 'Tuesday, October 6' });
+    fireEvent.click(within(tuesday).getByRole('button', { name: /^3 moses-oct-6 St,/ }));
+    expect(onFocusStop).toHaveBeenCalledWith('moses-oct-6', 'moses-oct-6-stop-3');
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(within(tuesday).getByRole('button', { name: /^2 moses-oct-6 St,/ }).getAttribute('aria-current')).toBe('true');
+  });
+
   it('greys the days of the quarter’s first week that are before it', () => {
     calendar({ view: 'week', cursor: '2026-10-01', onOpenDate: vi.fn() });
 
