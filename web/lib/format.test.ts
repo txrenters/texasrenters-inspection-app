@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { EMPTY, formatDate, formatDateTime, formatScheduledDate } from './format';
+import { EMPTY, formatDate, formatDateTime, formatScheduledDate, formatTime } from './format';
 
 /**
  * An inspection booked in Jobber for September 3rd showed as September 2nd in
@@ -47,6 +47,11 @@ describe('a moment', () => {
     expect(formatDateTime('2026-10-06T14:00:00.000Z')).toBe('Oct 6, 2026, 9:00 AM');
     // An hour's difference in winter.
     expect(formatDateTime('2026-12-01T15:00:00.000Z')).toBe('Dec 1, 2026, 9:00 AM');
+  });
+
+  it('has its clock time read in Texas too, when the day is said elsewhere', () => {
+    expect(formatTime('2026-10-06T14:30:00.000Z')).toBe('9:30 AM');
+    expect(formatTime(null)).toBe(EMPTY);
   });
 
   it('is on its Texas date, which an evening there is not in Manila', () => {

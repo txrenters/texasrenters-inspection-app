@@ -35,6 +35,40 @@ export interface TimesheetTotal {
   quietSeconds: number;
 }
 
+/**
+ * One technician's time at one property on one day: a single row.
+ *
+ * However often they walked out to the van and back, the office reads one
+ * line per property -- the office, 2026-10-06, about a visit that showed as
+ * four rows at one address. The stretches stay separate underneath, because
+ * the minutes outside the circle are general time and not this property's;
+ * the row is when they first arrived, when they last left, and how long of
+ * that they were inside.
+ */
+export interface TimesheetVisit {
+  /** Stable for a technician, a property and a day. */
+  key: string;
+  technicianId: string;
+  technician: string;
+  buildingId: string | null;
+  /** The first visit booked there that day, which the time is filed under. */
+  inspectionId: string | null;
+  address: string | null;
+  arrivedAt: string;
+  leftAt: string;
+  /** Inside the circle, added up. Never more than the time between the two above. */
+  onsiteSeconds: number;
+  quietSeconds: number;
+  /** How many times they went in. One is the ordinary answer. */
+  stays: number;
+  /** What a correction of this row replaces. Sent back as they are. */
+  segmentIds: string[];
+  /** A person changed some of this; the trail will not take it back. */
+  adjusted: boolean;
+  /** Some of it was added by hand rather than read from the trail. */
+  addedByHand: boolean;
+}
+
 /** What reading one technician's day did. */
 export interface DayRecompute {
   day: string;
@@ -220,6 +254,26 @@ export class TimeTrackingService {
     }
 
     const fixes = await this.fixesIn(organizationId, technicianId, start, end);
+
+    /**
+     * No trail at all is not an answer, and nothing is written from it.
+     *
+     * The fixes are pruned after thirty days, and a day read again after that
+     * would find nothing and conclude the technician never worked -- every
+     * stretch on it deleted by the button meant to put it right. A day the
+     * trail is silent for keeps whatever it already says.
+     */
+    if (!fixes.length)
+      return {
+        day,
+        technicianId,
+        changed: false,
+        onsiteSeconds: 0,
+        generalSeconds: 0,
+        fixesRead: 0,
+        fixesDiscarded: 0,
+      };
+
     const ledger = computeDayLedger(fixes, [...fences.values()]);
 
     const scope = { organizationId, technicianId };
@@ -487,20 +541,23 @@ export class TimeTrackingService {
   }
 
   /**
-   * What each technician worked over a stretch of days, and where it came from.
+   * What each technician worked on one Texas day, property by property.
    *
-   * The number payroll uses, and the working that produced it, in one answer --
-   * somebody paid from a total must be able to see the stretches behind it
-   * without having to ask.
+   * One day because the office settles it a day at a time, and a range made
+   * the page fetch and draw a fortnight of stretches to look at one of them.
+   * One row per property because that is how the office reads a visit: a
+   * technician who stepped out to the van three times was at that house once,
+   * and four rows at one address on one day read as four jobs.
    */
-  async timesheet(user: AuthenticatedUser, query: { technicianId?: string; from: string; to: string }) {
+  async timesheet(user: AuthenticatedUser, query: { technicianId?: string; date: string }) {
     const { organizationId } = user;
-    const { from, to } = this.rangeFor(query);
+    if (!DAY.test(query.date)) throw new ApplicationError(422, 'BAD_DATES', 'Give the day as YYYY-MM-DD.');
+    const { start, end } = businessDayBounds(businessDayFromQuery(query.date));
 
     const segments = await this.prisma.timeSegment.findMany({
       where: {
         organizationId,
-        startedAt: { gte: from, lt: to },
+        startedAt: { gte: start, lt: end },
         ...(query.technicianId ? { technicianId: query.technicianId } : {}),
       },
       select: {
@@ -515,7 +572,6 @@ export class TimeTrackingService {
         quietSeconds: true,
         source: true,
         adjustedAt: true,
-        flag: true,
         technician: { select: { displayName: true } },
         building: { select: { addressLine1: true } },
         inspection: { select: { propertywareBuilding: { select: { addressLine1: true } } } },
@@ -523,8 +579,8 @@ export class TimeTrackingService {
       orderBy: [{ technicianId: 'asc' }, { startedAt: 'asc' }],
     });
 
-    // Totalled per technician, because that is the shape a payroll run needs.
     const totals = new Map<string, TimesheetTotal>();
+    const visits = new Map<string, TimesheetVisit>();
     for (const segment of segments) {
       const total = totals.get(segment.technicianId) ?? {
         technicianId: segment.technicianId,
@@ -535,49 +591,84 @@ export class TimeTrackingService {
         quietSeconds: 0,
       };
       totals.set(segment.technicianId, total);
-      // One figure for everything away from a property. `DRIVING` is only on
-      // rows from before the day was read whole, and it belongs in here.
-      if (segment.category === 'ONSITE') total.onsiteSeconds += segment.durationSeconds;
-      else total.generalSeconds += segment.durationSeconds;
       total.totalSeconds += segment.durationSeconds;
       total.quietSeconds += segment.quietSeconds;
+      // One figure for everything away from a property. `DRIVING` is only on
+      // rows from before the day was read whole, and it belongs in here.
+      if (segment.category !== 'ONSITE') {
+        total.generalSeconds += segment.durationSeconds;
+        continue;
+      }
+      total.onsiteSeconds += segment.durationSeconds;
+
+      // The property, or the visit for a row from before stretches named one.
+      const place = segment.buildingId ?? segment.inspectionId ?? segment.id;
+      const key = `${segment.technicianId}:${place}:${query.date}`;
+      const startedAt = segment.startedAt.toISOString();
+      const endedAt = segment.endedAt.toISOString();
+      const visit = visits.get(key);
+      if (!visit) {
+        visits.set(key, {
+          key,
+          technicianId: segment.technicianId,
+          technician: segment.technician.displayName,
+          buildingId: segment.buildingId,
+          inspectionId: segment.inspectionId,
+          address:
+            segment.building?.addressLine1 ?? segment.inspection?.propertywareBuilding?.addressLine1 ?? null,
+          arrivedAt: startedAt,
+          leftAt: endedAt,
+          onsiteSeconds: segment.durationSeconds,
+          quietSeconds: segment.quietSeconds,
+          stays: 1,
+          segmentIds: [segment.id],
+          adjusted: Boolean(segment.adjustedAt),
+          addedByHand: segment.source === TimeSegmentSource.MANUAL,
+        });
+        continue;
+      }
+      // In time order, so the first row seen is the arrival -- but a corrected
+      // stretch can end after a later one, so the departure is the latest end.
+      if (endedAt > visit.leftAt) visit.leftAt = endedAt;
+      visit.inspectionId ??= segment.inspectionId;
+      visit.onsiteSeconds += segment.durationSeconds;
+      visit.quietSeconds += segment.quietSeconds;
+      visit.stays += 1;
+      visit.segmentIds.push(segment.id);
+      visit.adjusted ||= Boolean(segment.adjustedAt);
+      visit.addedByHand ||= segment.source === TimeSegmentSource.MANUAL;
     }
 
     return {
-      from: query.from,
-      to: query.to,
+      date: query.date,
       totals: [...totals.values()].sort((left, right) => right.totalSeconds - left.totalSeconds),
-      segments: segments.map((segment) => ({
-        id: segment.id,
-        technicianId: segment.technicianId,
-        technician: segment.technician.displayName,
-        inspectionId: segment.inspectionId,
-        address:
-          segment.building?.addressLine1 ?? segment.inspection?.propertywareBuilding?.addressLine1 ?? null,
-        category: segment.category === 'ONSITE' ? ('ONSITE' as const) : ('GENERAL' as const),
-        startedAt: segment.startedAt.toISOString(),
-        endedAt: segment.endedAt.toISOString(),
-        durationSeconds: segment.durationSeconds,
-        quietSeconds: segment.quietSeconds,
-        source: segment.source,
-        adjusted: Boolean(segment.adjustedAt),
-        flag: segment.flag,
-      })),
+      visits: [...visits.values()].sort(
+        (left, right) =>
+          left.technician.localeCompare(right.technician) || left.arrivedAt.localeCompare(right.arrivedAt),
+      ),
     };
   }
 
   /**
-   * An administrator correcting a segment, with the original kept.
+   * An administrator correcting a technician's time at one property.
    *
-   * The correction is written to the segment and the previous value into
-   * `TimeAdjustment` -- never over the top of it -- so the difference between
-   * "the trail said this" and "a person decided this" survives. `adjustedAt` is
-   * what makes the hour theirs: every later reading of the day works round it.
+   * The timesheet shows a property once a day, so this corrects it once: every
+   * stretch behind the row becomes one stretch, on site from `startedAt` to
+   * `endedAt`, and the minutes the trail had called general time inside that
+   * span are on site now -- that is what the person is saying.
+   *
+   * Nothing is overwritten without a record. The first stretch is kept and
+   * changed; what the whole visit said before -- first arrival, last departure,
+   * the minutes inside -- goes into `TimeAdjustment`; and the corrections any
+   * of the others already carried are moved onto it before they go, so the
+   * history of the row survives the row being merged. `adjustedAt` is what
+   * makes the hours a person's: every later reading of the day works round
+   * them, including the span they replaced, so the trail cannot put the old
+   * minutes back.
    */
-  async adjustSegment(
+  async correctVisit(
     user: AuthenticatedUser,
-    segmentId: string,
-    input: { startedAt: string; endedAt: string; reason: string },
+    input: { segmentIds: string[]; startedAt: string; endedAt: string; reason: string },
   ) {
     const { organizationId } = user;
     const started = new Date(input.startedAt);
@@ -585,82 +676,160 @@ export class TimeTrackingService {
     if (Number.isNaN(started.getTime()) || Number.isNaN(ended.getTime()))
       throw new ApplicationError(422, 'BAD_TIMES', 'Give both ends as timestamps.');
     if (ended <= started)
-      throw new ApplicationError(422, 'BAD_RANGE', 'A segment has to end after it starts.');
+      throw new ApplicationError(422, 'BAD_RANGE', 'The time at a property has to end after it starts.');
+    const ids = [...new Set(input.segmentIds)];
 
-    const segment = await this.prisma.timeSegment.findFirst({
-      where: { id: segmentId, organizationId },
-      select: { id: true, technicianId: true, startedAt: true, endedAt: true, durationSeconds: true },
-    });
-    if (!segment)
-      throw new ApplicationError(
+    const gone = () =>
+      new ApplicationError(
         404,
         'SEGMENT_NOT_FOUND',
-        'That stretch is no longer on the timesheet. Refresh the page and correct it from there.',
+        'This visit has changed since the page was loaded. Refresh the page and correct it from there.',
       );
 
-    const durationSeconds = Math.round((ended.getTime() - started.getTime()) / 1000);
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.timeAdjustment.create({
-        data: {
-          organizationId,
-          segmentId,
-          adminId: user.id,
-          beforeStartedAt: segment.startedAt,
-          beforeEndedAt: segment.endedAt,
-          beforeDurationSeconds: segment.durationSeconds,
-          afterStartedAt: started,
-          afterEndedAt: ended,
-          afterDurationSeconds: durationSeconds,
-          reason: input.reason.trim(),
-        },
-      });
-      return tx.timeSegment.update({
-        where: { id: segmentId },
-        data: { startedAt: started, endedAt: ended, durationSeconds, adjustedAt: new Date() },
-        select: { id: true, startedAt: true, endedAt: true, durationSeconds: true },
-      });
+    // Which technician and day, to queue behind any reading of that day.
+    const first = await this.prisma.timeSegment.findFirst({
+      where: { id: { in: ids }, organizationId },
+      select: { technicianId: true, startedAt: true },
+      orderBy: { startedAt: 'asc' },
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        organizationId,
-        ...auditActor(user),
-        action: 'TIME_SEGMENT_ADJUSTED',
-        entityType: 'TimeSegment',
-        entityId: segmentId,
-        // The change in seconds, not the reason: the reason belongs to the
-        // technician as much as the office and lives on the adjustment itself.
-        metadata: { beforeSeconds: segment.durationSeconds, afterSeconds: durationSeconds },
-      },
-    });
+    if (!first) throw gone();
+    const day = businessDate(first.startedAt);
 
     /**
-     * The days either end of the correction touches are read again.
-     *
-     * A stretch made longer now covers minutes the trail had called something
-     * else, and those rows have to give way or the minutes are counted twice.
-     * Asked for by this person, so it is theirs in the audit. A failure here
-     * does not fail the correction: that is already saved, and the sweep
-     * reads today again within minutes.
+     * Inside the same queue as the sweep. A reading that ran between finding
+     * the stretches and replacing them could lengthen one of them, or delete
+     * it, and the correction would be made to a visit that no longer exists.
      */
-    const days = new Set(
-      [segment.startedAt, segment.endedAt, started, ended].map((instant) => businessDate(instant)),
-    );
-    for (const day of days)
-      await this.recomputeDay(organizationId, segment.technicianId, day, user).catch((error: unknown) =>
+    const result = await this.oneAtATime(`${organizationId}:${first.technicianId}:${day}`, async () => {
+      const segments = await this.prisma.timeSegment.findMany({
+        where: { id: { in: ids }, organizationId },
+        select: {
+          id: true,
+          technicianId: true,
+          category: true,
+          buildingId: true,
+          inspectionId: true,
+          startedAt: true,
+          endedAt: true,
+          durationSeconds: true,
+        },
+        orderBy: { startedAt: 'asc' },
+      });
+      if (segments.length !== ids.length) throw gone();
+      const place = (segment: (typeof segments)[number]) => segment.buildingId ?? segment.inspectionId ?? segment.id;
+      if (
+        segments.some(
+          (segment) =>
+            segment.category !== 'ONSITE' ||
+            segment.technicianId !== first.technicianId ||
+            place(segment) !== place(segments[0]!),
+        )
+      )
+        throw new ApplicationError(
+          422,
+          'NOT_ONE_VISIT',
+          'Those stretches are not one technician’s time at one property.',
+        );
+
+      const [keep, ...others] = segments as [(typeof segments)[number], ...typeof segments];
+      const before = {
+        startedAt: keep.startedAt,
+        endedAt: new Date(Math.max(...segments.map((segment) => segment.endedAt.getTime()))),
+        durationSeconds: segments.reduce((sum, segment) => sum + segment.durationSeconds, 0),
+      };
+      const durationSeconds = Math.round((ended.getTime() - started.getTime()) / 1000);
+
+      const updated = await this.prisma.$transaction(async (tx) => {
+        if (others.length) {
+          const otherIds = others.map((segment) => segment.id);
+          await tx.timeAdjustment.updateMany({
+            where: { organizationId, segmentId: { in: otherIds } },
+            data: { segmentId: keep.id },
+          });
+          await tx.timeSegment.deleteMany({ where: { organizationId, id: { in: otherIds } } });
+        }
+        await tx.timeAdjustment.create({
+          data: {
+            organizationId,
+            segmentId: keep.id,
+            adminId: user.id,
+            beforeStartedAt: before.startedAt,
+            beforeEndedAt: before.endedAt,
+            beforeDurationSeconds: before.durationSeconds,
+            afterStartedAt: started,
+            afterEndedAt: ended,
+            afterDurationSeconds: durationSeconds,
+            reason: input.reason.trim(),
+          },
+        });
+        return tx.timeSegment.update({
+          where: { id: keep.id },
+          data: {
+            startedAt: started,
+            endedAt: ended,
+            durationSeconds,
+            // A person's answer, not a reading through a silence.
+            quietSeconds: 0,
+            adjustedAt: new Date(),
+          },
+          select: { id: true, startedAt: true, endedAt: true, durationSeconds: true },
+        });
+      });
+
+      await this.prisma.auditLog.create({
+        data: {
+          organizationId,
+          ...auditActor(user),
+          action: 'TIME_VISIT_CORRECTED',
+          entityType: 'TimeSegment',
+          entityId: keep.id,
+          // The change in seconds, not the reason: the reason belongs to the
+          // technician as much as the office and lives on the adjustment itself.
+          metadata: {
+            beforeSeconds: before.durationSeconds,
+            afterSeconds: durationSeconds,
+            stretchesMerged: segments.length,
+          },
+        },
+      });
+
+      /**
+       * The day is read again straight away, still in the queue.
+       *
+       * The corrected span may now cover minutes the trail had called general
+       * time, or another property's, and those rows have to give way or the
+       * minutes are counted twice. A failure here does not fail the
+       * correction: that is already saved, and the sweep reads today again
+       * within minutes.
+       */
+      await this.readDay(organizationId, first.technicianId, day, user).catch((error: unknown) =>
         this.logger.warn({
           event: 'time_day_not_recomputed_after_correction',
-          segmentId,
+          segmentId: keep.id,
           day,
           message: error instanceof Error ? error.message : String(error),
         }),
       );
+      return updated;
+    });
+
+    // A correction moved onto another day leaves that day to be read too.
+    for (const other of new Set([businessDate(started), businessDate(ended)]))
+      if (other !== day)
+        await this.recomputeDay(organizationId, first.technicianId, other, user).catch((error: unknown) =>
+          this.logger.warn({
+            event: 'time_day_not_recomputed_after_correction',
+            segmentId: result.id,
+            day: other,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
 
     return {
-      id: updated.id,
-      startedAt: updated.startedAt.toISOString(),
-      endedAt: updated.endedAt.toISOString(),
-      durationSeconds: updated.durationSeconds,
+      id: result.id,
+      startedAt: result.startedAt.toISOString(),
+      endedAt: result.endedAt.toISOString(),
+      durationSeconds: result.durationSeconds,
       adjusted: true,
     };
   }

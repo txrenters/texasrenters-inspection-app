@@ -308,7 +308,7 @@ describe('reading a day that has been read before', () => {
   });
 
   it('only ever looks at rows the trail wrote, in this technician’s day', async () => {
-    const { service, segments } = harness();
+    const { service, segments } = harness({ pings: at(0, 900, 5) });
 
     await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
@@ -412,12 +412,42 @@ describe('hours somebody has corrected', () => {
   });
 
   it('asks for corrections and hand-credited time that touch the day', async () => {
-    const { service, segments } = harness();
+    const { service, segments } = harness({ pings: at(0, 900, 5) });
 
     await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
     const decided = segments.mock.calls.map(([query]) => query.where).find((where) => where.AND)!;
     expect(decided.AND![0]).toEqual({ OR: [{ source: 'MANUAL' }, { adjustedAt: { not: null } }] });
+  });
+});
+
+/**
+ * The fixes are pruned after thirty days. A day read again after that finds no
+ * trail at all, and must not conclude that nobody worked.
+ */
+describe('a day the trail is silent for', () => {
+  it('keeps the hours already on it, and writes nothing', async () => {
+    const { service, transaction, audit, segments } = harness({
+      pings: [],
+      stored: [row('seg-1', 'ONSITE', 'b1', 'insp-1', 0, 900)],
+    });
+
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, USER);
+
+    expect(result).toMatchObject({ changed: false, fixesRead: 0 });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    // Not even asked: there is nothing it could decide about them.
+    expect(segments).not.toHaveBeenCalled();
+  });
+
+  /** One fix is still a trail, and the reading goes ahead on it. */
+  it('still reads a day with any trail at all', async () => {
+    const { service, segments } = harness({ pings: [ping(0, 5)] });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(segments).toHaveBeenCalled();
   });
 });
 
