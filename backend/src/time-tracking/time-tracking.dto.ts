@@ -1,27 +1,30 @@
-import { IsISO8601, IsInt, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { IsISO8601, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
+
+/** A calendar day in Texas, as the console sends it: `2026-09-01`. */
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The stretch of days a timesheet covers, and whose. */
 export class TimesheetQueryDto {
   @IsOptional() @IsUUID() technicianId?: string;
 
-  /** Inclusive, as a calendar day: `2026-09-01`. */
-  @IsString() @MaxLength(10) from!: string;
+  /** Inclusive, as a calendar day in Texas: `2026-09-01`. */
+  @Matches(DAY) from!: string;
 
   /** Inclusive. */
-  @IsString() @MaxLength(10) to!: string;
+  @Matches(DAY) to!: string;
 }
 
 /**
- * The stretch of days to fill in.
+ * The stretch of days to read again.
  *
  * Its own class rather than reusing the timesheet's, because that one carries
- * a technician filter this must not have: filling one person's missing hours
- * and leaving their colleagues' unread would put two different questions on
- * one page and make the totals mean different things per row.
+ * a technician filter this must not have: reading one person's days under a
+ * new rule and leaving their colleagues on the old one would make the totals
+ * mean different things per row.
  */
-export class FillHoursDto {
-  @IsString() @MaxLength(10) from!: string;
-  @IsString() @MaxLength(10) to!: string;
+export class RecalculateDto {
+  @Matches(DAY) from!: string;
+  @Matches(DAY) to!: string;
 }
 
 /**
@@ -43,20 +46,4 @@ export class AdjustSegmentDto {
    * legible later -- to the office, and to the technician being paid from it.
    */
   @IsString() @MinLength(4) @MaxLength(500) reason!: string;
-}
-
-/** Settling a stretch the trail could not account for. */
-export class ResolveGapDto {
-  /**
-   * What the gap was, in words a technician would recognise: "phone died at
-   * the Feldspar job, four hours from the timesheet added back".
-   */
-  @IsString() @MinLength(4) @MaxLength(500) resolution!: string;
-
-  /**
-   * Minutes of on-site time to credit for the gap, when the office decides the
-   * work happened. Omitted, the gap is simply marked settled and nothing is
-   * added -- which is the right answer when the technician was not working.
-   */
-  @IsOptional() @IsInt() creditedMinutes?: number;
 }

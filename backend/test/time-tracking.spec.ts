@@ -1,16 +1,14 @@
-import { TimeSegmentSource } from '@prisma/client';
-
 import type { AuthenticatedUser } from '../src/common/auth';
 import type { PrismaService } from '../src/common/prisma.service';
 import { TimeTrackingService } from '../src/time-tracking/time-tracking.service';
 
 /**
- * Reading a technician's trail as the time a job took.
+ * Reading a technician's day from the trail.
  *
  * The arithmetic is pinned in `shared/tests/time-segments.test.ts`. What is
- * pinned here is everything around it: which of its answers belong to this job,
- * what a recompute is allowed to overwrite, and what it refuses to do when the
- * trail cannot answer.
+ * pinned here is everything around it: which properties count, that the Start
+ * and End buttons do not, what a reading is allowed to overwrite, and that
+ * reading the same day twice changes nothing the second time.
  */
 
 const USER = {
@@ -22,305 +20,534 @@ const USER = {
   principalType: 'USER',
 } as unknown as AuthenticatedUser;
 
-const PROPERTY = { latitude: 29.76, longitude: -95.37 };
+const DAY = '2026-10-06';
+/** Ten in the morning in Texas, on that day. */
+const START = Date.UTC(2026, 9, 6, 15, 0, 0);
 const METRE = 1 / 111_320;
-const START = Date.UTC(2026, 8, 23, 14, 0, 0);
+const PROPERTY = { latitude: 29.76, longitude: -95.37 };
 
-const ping = (seconds: number, metresNorth: number, speed: number | null = 0, accuracy = 5) => ({
+const instant = (seconds: number) => new Date(START + seconds * 1000);
+
+const ping = (seconds: number, metresNorth: number, accuracy = 5) => ({
   latitude: PROPERTY.latitude + metresNorth * METRE,
   longitude: PROPERTY.longitude,
   accuracyMeters: accuracy,
-  speedMetersPerSecond: speed,
-  recordedAt: new Date(START + seconds * 1000),
+  recordedAt: instant(seconds),
 });
 
 /** A stretch at one place, one fix every thirty seconds as the recorder makes them. */
-const at = (fromSeconds: number, forSeconds: number, metresNorth: number, speed: number | null = 0) =>
+const at = (fromSeconds: number, forSeconds: number, metresNorth: number) =>
   Array.from({ length: Math.floor(forSeconds / 30) + 1 }, (_, index) =>
-    ping(fromSeconds + index * 30, metresNorth, speed),
+    ping(fromSeconds + index * 30, metresNorth),
   );
 
+const building = (id: string, metresNorth = 0, geofence: unknown = null) => ({
+  id,
+  latitude: PROPERTY.latitude + metresNorth * METRE,
+  longitude: PROPERTY.longitude,
+  geofence,
+});
+
+const visit = (id: string, at_: unknown) => ({ id, propertywareBuilding: at_ });
+
+/** One property, then a drive, then a second one four kilometres on. */
+const TWO_VISITS = [visit('insp-1', building('b1')), visit('insp-2', building('b2', 4_000))];
+const TWO_PROPERTY_TRAIL = [...at(0, 900, 5), ...at(930, 600, 2_000), ...at(1_560, 900, 4_003)];
+
+const row = (
+  id: string,
+  category: string,
+  buildingId: string | null,
+  inspectionId: string | null,
+  fromSeconds: number,
+  toSeconds: number,
+) => ({
+  id,
+  category,
+  buildingId,
+  inspectionId,
+  startedAt: instant(fromSeconds),
+  endedAt: instant(toSeconds),
+  durationSeconds: toSeconds - fromSeconds,
+  quietSeconds: 0,
+});
+
+/** What reading `TWO_PROPERTY_TRAIL` against `TWO_VISITS` writes. */
+const TWO_PROPERTY_ROWS = [
+  row('seg-1', 'ONSITE', 'b1', 'insp-1', 0, 930),
+  row('seg-2', 'GENERAL', null, null, 930, 1_560),
+  row('seg-3', 'ONSITE', 'b2', 'insp-2', 1_560, 2_460),
+];
+
 const harness = (
-  pings: ReturnType<typeof ping>[],
-  overrides: { geofence?: unknown; building?: unknown; technicianId?: string | null } = {},
+  given: {
+    visits?: unknown[];
+    pings?: unknown[] | (() => Promise<unknown[]>);
+    stored?: unknown[];
+    decided?: unknown[];
+    openGaps?: number;
+  } = {},
 ) => {
-  const createSegments = jest.fn().mockResolvedValue({ count: 0 });
-  const deleteSegments = jest.fn().mockResolvedValue({ count: 0 });
-  const createGaps = jest.fn().mockResolvedValue({ count: 0 });
-  const deleteGaps = jest.fn().mockResolvedValue({ count: 0 });
-  const auditCreate = jest.fn().mockResolvedValue({});
   const tx = {
-    timeSegment: { deleteMany: deleteSegments, createMany: createSegments },
-    trackingGap: { deleteMany: deleteGaps, createMany: createGaps },
-  };
-  const building =
-    overrides.building === undefined
-      ? {
-          id: 'b1',
-          latitude: PROPERTY.latitude,
-          longitude: PROPERTY.longitude,
-          geofence: overrides.geofence ?? null,
-        }
-      : overrides.building;
-  const prisma = {
-    inspection: {
-      findFirst: jest.fn().mockResolvedValue({
-        id: 'insp-1',
-        startedAt: new Date(START),
-        submittedAt: new Date(START + 7_200_000),
-        scheduledAt: new Date(START),
-        propertywareBuilding: building,
-        assignments:
-          overrides.technicianId === null ? [] : [{ technicianId: overrides.technicianId ?? 'tech-1' }],
-      }),
+    timeSegment: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      update: jest.fn().mockResolvedValue({}),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
-    technicianLocationPing: { findMany: jest.fn().mockResolvedValue(pings) },
-    auditLog: { create: auditCreate },
-    $transaction: jest.fn((run: (client: unknown) => Promise<unknown>) => run(tx)),
-  } as unknown as PrismaService;
-  return {
-    service: new TimeTrackingService(prisma),
-    createSegments,
-    deleteSegments,
-    createGaps,
-    deleteGaps,
-    auditCreate,
+    trackingGap: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
+  const visits = jest.fn().mockResolvedValue(given.visits ?? [visit('insp-1', building('b1'))]);
+  const pings =
+    typeof given.pings === 'function' ? jest.fn(given.pings) : jest.fn().mockResolvedValue(given.pings ?? []);
+  // Asked twice in one reading: once for the hours a person has decided, once
+  // for the rows already stored. Told apart by the question, not the order.
+  const segments = jest.fn(({ where }: { where: { AND?: unknown[] } }) =>
+    Promise.resolve(where.AND ? (given.decided ?? []) : (given.stored ?? [])),
+  );
+  const audit = jest.fn().mockResolvedValue({});
+  const transaction = jest.fn((run: (client: unknown) => Promise<unknown>) => run(tx));
+  const prisma = {
+    inspection: { findMany: visits },
+    technicianLocationPing: { findMany: pings, groupBy: jest.fn().mockResolvedValue([]) },
+    timeSegment: { findMany: segments, groupBy: jest.fn().mockResolvedValue([]) },
+    trackingGap: { count: jest.fn().mockResolvedValue(given.openGaps ?? 0) },
+    auditLog: { create: audit },
+    $transaction: transaction,
+  } as unknown as PrismaService;
+  return { service: new TimeTrackingService(prisma), prisma, tx, visits, pings, segments, audit, transaction };
 };
 
-const categories = (createSegments: jest.Mock): string[] =>
-  (createSegments.mock.calls[0]?.[0]?.data ?? []).map((row: { category: string }) => row.category);
+const created = (tx: { timeSegment: { createMany: jest.Mock } }) =>
+  (tx.timeSegment.createMany.mock.calls[0]?.[0]?.data ?? []) as {
+    category: string;
+    buildingId: string | null;
+    inspectionId: string | null;
+    organizationId: string;
+    technicianId: string;
+    startedAt: Date;
+    endedAt: Date;
+    durationSeconds: number;
+    quietSeconds: number;
+  }[];
 
-describe('reading a job from the trail', () => {
-  it('records the time the technician was at the property', async () => {
-    const { service, createSegments } = harness([...at(0, 300, 500, 12), ...at(330, 3_600, 5)]);
+describe('reading a day from the trail', () => {
+  it('records the time at each property and the time between them', async () => {
+    const { service, tx } = harness({ visits: TWO_VISITS, pings: TWO_PROPERTY_TRAIL });
 
-    const result = await service.recomputeForInspection(USER, 'insp-1');
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(categories(createSegments)).toContain('ONSITE');
-    expect(result.onsiteSeconds).toBeGreaterThan(3_400);
+    expect(created(tx).map((written) => [written.category, written.buildingId])).toEqual([
+      ['ONSITE', 'b1'],
+      ['GENERAL', null],
+      ['ONSITE', 'b2'],
+    ]);
+    expect(result).toMatchObject({ changed: true, onsiteSeconds: 930 + 900, generalSeconds: 630 });
+  });
+
+  /** General time is between properties, so it is no visit's and no property's. */
+  it('files on-site time under the visit and general time under nothing', async () => {
+    const { service, tx } = harness({ visits: TWO_VISITS, pings: TWO_PROPERTY_TRAIL });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(created(tx).map((written) => written.inspectionId)).toEqual(['insp-1', null, 'insp-2']);
   });
 
   /**
-   * The case the office described: property, supplier, property. The trip out
-   * and back sits between two of this job's own visits, so it is this job's.
+   * The office, 2026-10-06: a technician looks round a property before
+   * pressing Start and does not always press End when they leave. The visits
+   * here carry neither timestamp and the hours are all there.
    */
-  it('keeps a trip to the supplier that happened during the visit', async () => {
-    const { service, createSegments } = harness([
-      ...at(0, 900, 5),
-      ...at(960, 600, 4_000, 15),
-      ...at(1_620, 900, 8_000, 0),
-      ...at(2_580, 600, 4_000, 15),
-      ...at(3_240, 900, 5),
-    ]);
+  it('does not need Start job or End job to have been pressed', async () => {
+    const { service, visits } = harness({ visits: TWO_VISITS, pings: TWO_PROPERTY_TRAIL });
 
-    await service.recomputeForInspection(USER, 'insp-1');
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(categories(createSegments)).toEqual(['ONSITE', 'DRIVING', 'GENERAL', 'DRIVING', 'ONSITE']);
+    expect(result.onsiteSeconds).toBe(930 + 900);
+    // And is never handed them: what is not selected cannot become the hours.
+    expect(Object.keys(visits.mock.calls[0]![0].select)).toEqual(['id', 'propertywareBuilding']);
   });
 
   /**
-   * The judgement this service makes, and the one worth arguing with.
-   *
-   * A technician driving to the first job of the day is driving for that job,
-   * or the last one, or neither -- answering it properly needs the whole day's
-   * schedule. Attributing it here would put somebody else's travel on this
-   * invoice, so travel before the first arrival and after the last departure is
-   * left out. It is still in the trail, and something that knows the day can
-   * attribute it later.
+   * Two jobs at one building on one day are one stay. Read per job, each was
+   * given the whole of it and the technician was on site twice at once.
    */
-  it('leaves travel before arriving and after leaving off this job', async () => {
-    const { service, createSegments } = harness([
-      ...at(0, 900, 6_000, 15),   // driving in, before the visit
-      ...at(960, 1_800, 5),        // the visit
-      ...at(2_820, 900, 6_000, 15),// driving away afterwards
-    ]);
+  it('counts a property once however many visits are booked there', async () => {
+    const { service, tx } = harness({
+      visits: [visit('insp-1', building('b1')), visit('insp-9', building('b1'))],
+      pings: at(0, 1_800, 5),
+    });
 
-    await service.recomputeForInspection(USER, 'insp-1');
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(categories(createSegments)).toEqual(['ONSITE']);
+    expect(created(tx)).toHaveLength(1);
+    expect(created(tx)[0]).toMatchObject({ buildingId: 'b1', inspectionId: 'insp-1', durationSeconds: 1_800 });
   });
 
-  it('reports what the buttons said beside what the trail said', async () => {
-    const { service } = harness([...at(0, 300, 500, 12), ...at(330, 1_800, 5)]);
+  it('carries a visit through a phone that went quiet indoors, and says how long for', async () => {
+    const { service, tx } = harness({ pings: [...at(0, 600, 5), ...at(3_000, 600, 5)] });
 
-    const result = await service.recomputeForInspection(USER, 'insp-1');
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    // Start at 14:00, End two hours later, whatever the technician was doing.
-    expect(result.manualSeconds).toBe(7_200);
-    expect(result.onsiteSeconds).toBeLessThan(result.manualSeconds!);
+    expect(created(tx)).toHaveLength(1);
+    expect(created(tx)[0]).toMatchObject({ durationSeconds: 3_600, quietSeconds: 2_400 });
+  });
+
+  it('uses the distances the office set for a property in place of the defaults', async () => {
+    // Sixty metres from the pin: outside the default circle, inside this one.
+    const wide = building('b1', 0, { latitude: null, longitude: null, enterRadiusMeters: 100, exitRadiusMeters: 150 });
+    const { service, tx } = harness({ visits: [visit('insp-1', wide)], pings: at(0, 1_800, 60) });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(created(tx)[0]).toMatchObject({ category: 'ONSITE', durationSeconds: 1_800 });
+  });
+
+  it('writes nothing for a property that has no coordinates to draw a circle round', async () => {
+    const nowhere = { id: 'b1', latitude: null, longitude: null, geofence: null };
+    const { service, transaction } = harness({ visits: [visit('insp-1', nowhere)], pings: at(0, 1_800, 5) });
+
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(result).toMatchObject({ changed: false, onsiteSeconds: 0 });
+    expect(transaction).not.toHaveBeenCalled();
   });
 });
 
-describe('what a recompute may overwrite', () => {
-  /**
-   * An administrator corrected a segment because the trail was wrong about it.
-   * Re-deriving would undo that correction every time this ran, which would
-   * make the correction worthless and the tracker untrustworthy.
-   */
-  it('replaces its own previous answer but never an adjusted segment', async () => {
-    const { service, deleteSegments } = harness([...at(0, 1_800, 5)]);
+describe('which visits are on the day', () => {
+  it('asks only for this technician’s visits, in this organization, on the Texas day', async () => {
+    const { service, visits } = harness();
 
-    await service.recomputeForInspection(USER, 'insp-1');
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(deleteSegments).toHaveBeenCalledWith({
-      where: {
-        inspectionId: 'insp-1',
-        organizationId: 'org-1',
-        source: TimeSegmentSource.AUTOMATIC,
-        adjustedAt: null,
-      },
+    const where = visits.mock.calls[0]![0].where;
+    expect(where.organizationId).toBe('org-1');
+    expect(where.assignments).toEqual({ some: { isCurrent: true, technicianId: 'tech-1' } });
+    // Midnight to midnight in Texas, which in October is five hours behind UTC.
+    expect(where.OR[0].scheduledAt).toEqual({
+      gte: new Date('2026-10-06T05:00:00.000Z'),
+      lt: new Date('2026-10-07T05:00:00.000Z'),
     });
   });
 
-  it('leaves a gap somebody has already settled alone', async () => {
-    const { service, deleteGaps } = harness([...at(0, 1_800, 5)]);
+  it('reads the trail for the same Texas day, and only this technician’s', async () => {
+    const { service, pings } = harness();
 
-    await service.recomputeForInspection(USER, 'insp-1');
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(deleteGaps).toHaveBeenCalledWith({
-      where: { inspectionId: 'insp-1', organizationId: 'org-1', resolvedAt: null },
+    expect(pings.mock.calls[0]![0].where).toMatchObject({
+      organizationId: 'org-1',
+      technicianId: 'tech-1',
+      recordedAt: { gte: new Date('2026-10-06T05:00:00.000Z'), lt: new Date('2026-10-07T05:00:00.000Z') },
     });
   });
 
-  it('audits the counts, and never the coordinates', async () => {
-    const { service, auditCreate } = harness([...at(0, 1_800, 5)]);
+  it('refuses a day it cannot read as a date', () => {
+    const { service } = harness();
 
-    await service.recomputeForInspection(USER, 'insp-1');
-
-    const audited = auditCreate.mock.calls[0]![0].data;
-    expect(audited.action).toBe('TIME_SEGMENTS_RECOMPUTED');
-    expect(Object.keys(audited.metadata)).toEqual([
-      'segments',
-      'onsiteSeconds',
-      'gaps',
-      'fixesRead',
-      'fixesDiscarded',
-    ]);
-  });
-});
-
-describe('when the trail cannot answer', () => {
-  /**
-   * Five of 589 active properties are not rooftop-geocoded. Measuring time
-   * against a pin that is a guess along a street would bill somebody for
-   * standing in the wrong place, so it refuses and says what to fix.
-   */
-  it('refuses a property with no coordinates rather than guessing', async () => {
-    const { service } = harness([...at(0, 1_800, 5)], {
-      building: { id: 'b1', latitude: null, longitude: null, geofence: null },
-    });
-
-    await expect(service.recomputeForInspection(USER, 'insp-1')).rejects.toThrow(/coordinates/);
-  });
-
-  it('refuses a job with nobody assigned', async () => {
-    const { service } = harness([...at(0, 1_800, 5)], { technicianId: null });
-
-    await expect(service.recomputeForInspection(USER, 'insp-1')).rejects.toThrow(/nobody assigned/);
-  });
-
-  it('writes nothing at all from a trail with no fixes', async () => {
-    const { service, createSegments } = harness([]);
-
-    const result = await service.recomputeForInspection(USER, 'insp-1');
-
-    expect(result.segments).toEqual([]);
-    expect(createSegments).not.toHaveBeenCalled();
-  });
-
-  /** A property's own pin is overridden where somebody has corrected it. */
-  it('prefers a corrected pin over the building the geocoder placed', async () => {
-    const { service, createSegments } = harness([...at(0, 1_800, 300)], {
-      // The real property is 300 m north of where the geocoder put it.
-      geofence: {
-        latitude: PROPERTY.latitude + 300 * METRE,
-        longitude: PROPERTY.longitude,
-        enterRadiusMeters: 40,
-        exitRadiusMeters: 60,
-      },
-    });
-
-    await service.recomputeForInspection(USER, 'insp-1');
-
-    expect(categories(createSegments)).toContain('ONSITE');
+    expect(() => service.recomputeDay('org-1', 'tech-1', 'yesterday', null)).toThrow(/YYYY-MM-DD/);
   });
 });
 
 /**
- * The same recompute, with nobody behind it.
- *
- * Runs when a technician submits and again from the sweep, so the office never
- * has to remember to ask. Two things make it different from the request-driven
- * one, and both matter on a table somebody is paid from: it reports rather
- * than throws, and the audit says which of the two it was.
+ * Today is read every few minutes. Nearly all of it is the same each time, and
+ * what is the same must be left exactly as it is.
  */
-describe('recomputing without a person', () => {
-  it('reads the job and writes its segments', async () => {
-    const { service, createSegments } = harness([...at(0, 300, 500, 12), ...at(330, 3_600, 5)]);
+describe('reading a day that has been read before', () => {
+  it('writes nothing, and audits nothing, when the day already says what the trail says', async () => {
+    const { service, transaction, audit } = harness({
+      visits: TWO_VISITS,
+      pings: TWO_PROPERTY_TRAIL,
+      stored: TWO_PROPERTY_ROWS,
+    });
 
-    const result = await service.recomputeAutomatically('org-1', 'insp-1');
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(result?.onsiteSeconds).toBeGreaterThan(0);
-    expect(categories(createSegments)).toContain('ONSITE');
+    expect(result.changed).toBe(false);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 
   /**
-   * Never mistakable for somebody's decision.
-   *
-   * Two null actor columns already mean "no person", but they mean that for an
-   * anonymous write too. The action name is what separates a recompute an
-   * administrator asked for from one that simply happened.
+   * A visit still in progress has only grown. Its row is kept, so the office
+   * correcting it does not find it gone between opening the dialog and saving.
    */
-  it('audits itself as automatic, with no actor', async () => {
-    const { service, auditCreate } = harness([...at(0, 3_600, 5)]);
+  it('lengthens the row of a visit that is still going instead of replacing it', async () => {
+    const { service, tx } = harness({
+      pings: at(0, 900, 5),
+      stored: [row('seg-1', 'ONSITE', 'b1', 'insp-1', 0, 600)],
+    });
 
-    await service.recomputeAutomatically('org-1', 'insp-1');
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(auditCreate.mock.calls[0]![0].data).toMatchObject({
-      action: 'TIME_SEGMENTS_RECOMPUTED_AUTOMATICALLY',
+    expect(tx.timeSegment.update).toHaveBeenCalledWith({
+      where: { id: 'seg-1' },
+      data: { inspectionId: 'insp-1', endedAt: instant(900), durationSeconds: 900, quietSeconds: 0 },
+    });
+    expect(tx.timeSegment.createMany).not.toHaveBeenCalled();
+    expect(tx.timeSegment.deleteMany).not.toHaveBeenCalled();
+  });
+
+  /** How the rows of the per-job reading, and any duplicate, leave the timesheet. */
+  it('removes a row the day no longer calls for', async () => {
+    const { service, tx } = harness({
+      pings: at(0, 900, 5),
+      stored: [
+        row('seg-1', 'ONSITE', 'b1', 'insp-1', 0, 900),
+        row('seg-twin', 'ONSITE', 'b1', 'insp-1', 0, 900),
+        row('seg-old', 'DRIVING', 'b1', 'insp-1', 200, 400),
+      ],
+    });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(tx.timeSegment.deleteMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', technicianId: 'tech-1', id: { in: ['seg-twin', 'seg-old'] } },
+    });
+    expect(tx.timeSegment.createMany).not.toHaveBeenCalled();
+  });
+
+  it('only ever looks at rows the trail wrote, in this technician’s day', async () => {
+    const { service, segments } = harness();
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    const stored = segments.mock.calls.map(([query]) => query.where).find((where) => !where.AND)!;
+    expect(stored).toMatchObject({
+      organizationId: 'org-1',
+      technicianId: 'tech-1',
+      source: 'AUTOMATIC',
+      adjustedAt: null,
+    });
+  });
+
+  /**
+   * Every silence used to be listed for the office to settle. It is counted
+   * now, so a question still open about this day has been answered.
+   */
+  it('clears the open questions the per-job reading left about the day, and no settled one', async () => {
+    const { service, tx } = harness({ pings: at(0, 900, 5), openGaps: 3 });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(tx.trackingGap.deleteMany.mock.calls[0]![0].where).toMatchObject({
+      organizationId: 'org-1',
+      technicianId: 'tech-1',
+      resolvedAt: null,
+    });
+  });
+
+  /**
+   * Two readings of one day at once would each see the same stored rows, each
+   * decide what to add, and both add it: the same hour twice.
+   */
+  it('reads one technician’s day one reading at a time', async () => {
+    let release: (fixes: unknown[]) => void = () => {};
+    let reached = () => {};
+    const inTheFirst = new Promise<void>((resolve) => (reached = resolve));
+    let asked = 0;
+    const { service, visits } = harness({
+      pings: () => {
+        asked += 1;
+        if (asked > 1) return Promise.resolve([]);
+        return new Promise<unknown[]>((resolve) => {
+          release = resolve;
+          reached();
+        });
+      },
+    });
+
+    const first = service.recomputeDay('org-1', 'tech-1', DAY, null);
+    const second = service.recomputeDay('org-1', 'tech-1', DAY, null);
+    await inTheFirst;
+
+    // The second has not begun: it has not even asked which visits there are.
+    expect(visits).toHaveBeenCalledTimes(1);
+    release([]);
+    await Promise.all([first, second]);
+    expect(visits).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * An hour a person has decided is no longer the trail's to answer.
+ */
+describe('hours somebody has corrected', () => {
+  /**
+   * The first version spared the corrected row and wrote the trail's version of
+   * the same hour beside it: one correction and one recompute paid it twice.
+   */
+  it('does not write the trail’s version of an hour underneath a correction', async () => {
+    const { service, tx } = harness({
+      pings: at(0, 900, 5),
+      decided: [{ startedAt: instant(0), endedAt: instant(600), adjustments: [] }],
+    });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(created(tx)).toHaveLength(1);
+    expect(created(tx)[0]).toMatchObject({ startedAt: instant(600), endedAt: instant(900) });
+  });
+
+  /**
+   * Shortening a visit says the technician was not working for the rest of it.
+   * The trail still says they were, and would put the time straight back.
+   */
+  it('does not give back the time a correction took away', async () => {
+    const { service, transaction } = harness({
+      pings: at(0, 900, 5),
+      decided: [
+        {
+          startedAt: instant(0),
+          endedAt: instant(300),
+          adjustments: [{ beforeStartedAt: instant(0), beforeEndedAt: instant(900) }],
+        },
+      ],
+    });
+
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(result).toMatchObject({ changed: false, onsiteSeconds: 0 });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('asks for corrections and hand-credited time that touch the day', async () => {
+    const { service, segments } = harness();
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    const decided = segments.mock.calls.map(([query]) => query.where).find((where) => where.AND)!;
+    expect(decided.AND![0]).toEqual({ OR: [{ source: 'MANUAL' }, { adjustedAt: { not: null } }] });
+  });
+});
+
+describe('the audit trail', () => {
+  it('says a person asked, when a person did', async () => {
+    const { service, audit } = harness({ pings: at(0, 900, 5) });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, USER);
+
+    expect(audit.mock.calls[0]![0].data).toMatchObject({
+      action: 'TIME_DAY_RECOMPUTED',
+      actorUserId: 'admin-1',
+      entityType: 'UserProfile',
+      entityId: 'tech-1',
+    });
+  });
+
+  /**
+   * Two null actor columns already mean "no person", but they mean that for an
+   * anonymous write too. The action name is what separates the two.
+   */
+  it('says nobody asked, under its own name, when nobody did', async () => {
+    const { service, audit } = harness({ pings: at(0, 900, 5) });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(audit.mock.calls[0]![0].data).toMatchObject({
+      action: 'TIME_DAY_RECOMPUTED_AUTOMATICALLY',
       actorUserId: null,
       actorApiClientId: null,
     });
   });
 
-  it('still names the person when one asked for it', async () => {
-    const { service, auditCreate } = harness([...at(0, 3_600, 5)]);
+  it('records durations and counts, never where anybody was', async () => {
+    const { service, audit } = harness({ pings: at(0, 900, 5) });
 
-    await service.recomputeForInspection(USER, 'insp-1');
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
 
-    expect(auditCreate.mock.calls[0]![0].data).toMatchObject({
-      action: 'TIME_SEGMENTS_RECOMPUTED',
-      actorUserId: 'admin-1',
+    expect(audit.mock.calls[0]![0].data.metadata).toEqual({
+      day: DAY,
+      onsiteSeconds: 900,
+      generalSeconds: 0,
+      quietSeconds: 0,
+      stretches: 1,
+      properties: 1,
+      fixesRead: 31,
+      fixesDiscarded: 0,
     });
   });
+});
 
-  /**
-   * A job that cannot be measured is an ordinary fact, not an emergency.
-   *
-   * The request-driven path tells an administrator why, because they asked.
-   * Thrown from a sweep it would stop every job behind it in the list, which
-   * is other people's hours.
-   */
-  it('reports rather than throws when the property has no coordinates', async () => {
-    const { service } = harness([...at(0, 3_600, 5)], {
-      building: { id: 'b1', latitude: null, longitude: null, geofence: null },
-    });
+describe('a reading nobody is waiting for', () => {
+  /** A submission must not fail because its hours could not be read. */
+  it('reports a failure and hands back nothing, instead of throwing', async () => {
+    const { service } = harness({ pings: () => Promise.reject(new Error('database unreachable')) });
 
-    await expect(service.recomputeAutomatically('org-1', 'insp-1')).resolves.toBeNull();
+    await expect(service.recomputeDayAutomatically('org-1', 'tech-1', DAY)).resolves.toBeNull();
+  });
+});
+
+/**
+ * The office's button: how a change of rule reaches days already on the
+ * timesheet.
+ */
+describe('recalculating a range', () => {
+  const rangeHarness = (tracked: string[], timed: string[] = []) => {
+    const built = harness();
+    const prisma = built.prisma as unknown as {
+      technicianLocationPing: { groupBy: jest.Mock };
+      timeSegment: { groupBy: jest.Mock };
+    };
+    prisma.technicianLocationPing.groupBy.mockResolvedValue(tracked.map((technicianId) => ({ technicianId })));
+    prisma.timeSegment.groupBy.mockResolvedValue(timed.map((technicianId) => ({ technicianId })));
+    const read = jest
+      .spyOn(built.service, 'recomputeDay')
+      .mockImplementation((_organization, technicianId, day) =>
+        Promise.resolve({
+          day,
+          technicianId,
+          changed: day === '2026-10-02',
+          onsiteSeconds: 0,
+          generalSeconds: 0,
+          fixesRead: 0,
+          fixesDiscarded: 0,
+        }),
+      );
+    return { ...built, read, prisma };
+  };
+
+  it('reads every day in the range for everybody with a trail or hours in it', async () => {
+    const { service, read } = rangeHarness(['tech-1'], ['tech-1', 'tech-2']);
+
+    const result = await service.recalculate(USER, { from: '2026-10-01', to: '2026-10-03' });
+
+    expect(read.mock.calls.map(([, technicianId, day]) => `${technicianId} ${day}`)).toEqual([
+      'tech-1 2026-10-01',
+      'tech-1 2026-10-02',
+      'tech-1 2026-10-03',
+      'tech-2 2026-10-01',
+      'tech-2 2026-10-02',
+      'tech-2 2026-10-03',
+    ]);
+    expect(result).toEqual({ days: 3, technicians: 2, changed: 2 });
   });
 
-  it('reports rather than throws when nobody is assigned', async () => {
-    const { service } = harness([...at(0, 3_600, 5)], { technicianId: null });
+  it('does it as the person who asked, inside their own organization', async () => {
+    const { service, read, prisma } = rangeHarness(['tech-1']);
 
-    await expect(service.recomputeAutomatically('org-1', 'insp-1')).resolves.toBeNull();
+    await service.recalculate(USER, { from: '2026-10-01', to: '2026-10-01' });
+
+    expect(read).toHaveBeenCalledWith('org-1', 'tech-1', '2026-10-01', USER);
+    expect(prisma.technicianLocationPing.groupBy.mock.calls[0]![0].where.organizationId).toBe('org-1');
+    expect(prisma.timeSegment.groupBy.mock.calls[0]![0].where.organizationId).toBe('org-1');
   });
 
-  it('writes nothing when it could not measure', async () => {
-    const { service, createSegments } = harness([...at(0, 3_600, 5)], { technicianId: null });
+  /** The trail is kept for thirty days. There is nothing older to read. */
+  it('refuses more than a month at a time', async () => {
+    const { service, read } = rangeHarness(['tech-1']);
 
-    await service.recomputeAutomatically('org-1', 'insp-1');
+    await expect(service.recalculate(USER, { from: '2026-08-01', to: '2026-10-01' })).rejects.toThrow(
+      /up to 31 days/,
+    );
+    expect(read).not.toHaveBeenCalled();
+  });
 
-    expect(createSegments).not.toHaveBeenCalled();
+  it('refuses a range that runs backwards', async () => {
+    const { service } = rangeHarness(['tech-1']);
+
+    await expect(service.recalculate(USER, { from: '2026-10-03', to: '2026-10-01' })).rejects.toThrow(
+      /before the first/,
+    );
   });
 });

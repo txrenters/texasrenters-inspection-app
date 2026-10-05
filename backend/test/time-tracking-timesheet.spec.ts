@@ -3,10 +3,10 @@ import type { PrismaService } from '../src/common/prisma.service';
 import { TimeTrackingService } from '../src/time-tracking/time-tracking.service';
 
 /**
- * The timesheet, the correction and the gap.
+ * The timesheet and the correction.
  *
- * These three turn a recorded trail into somebody's pay, so what they refuse to
- * do matters as much as what they do. The arithmetic behind them is pinned in
+ * These turn a recorded trail into somebody's pay, so what they refuse to do
+ * matters as much as what they do. The arithmetic behind them is pinned in
  * `shared/tests/time-segments.test.ts`; this is about the money.
  */
 
@@ -29,95 +29,125 @@ const segment = (
 ) => ({
   id: `seg-${category}-${seconds}`,
   technicianId,
-  inspectionId: 'insp-1',
+  inspectionId: category === 'ONSITE' ? 'insp-1' : null,
+  buildingId: category === 'ONSITE' ? 'b1' : null,
   category,
   startedAt: new Date(START),
   endedAt: new Date(START + seconds * 1000),
   durationSeconds: seconds,
+  quietSeconds: 0,
   source: 'AUTOMATIC',
   adjustedAt: null,
   flag: null,
   technician: { displayName: technicianId === 'tech-1' ? 'Moses' : 'Kevin' },
-  inspection: { inspectionType: 'OCCUPIED', propertywareBuilding: { addressLine1: '1 Oak St' } },
+  building: category === 'ONSITE' ? { addressLine1: '1 Oak St' } : null,
+  inspection: null,
   ...overrides,
 });
 
-const gapRow = (overrides: Record<string, unknown> = {}) => ({
-  id: 'gap-1',
-  technicianId: 'tech-1',
-  inspectionId: 'insp-1',
-  startedAt: new Date(START),
-  endedAt: new Date(START + 4_000_000),
-  durationSeconds: 4_000,
-  resolvedAt: null,
-  resolution: null,
-  technician: { displayName: 'Moses' },
-  ...overrides,
-});
-
-const sheetHarness = (segments: unknown[], gaps: unknown[]) => {
-  const prisma = {
-    timeSegment: { findMany: jest.fn().mockResolvedValue(segments) },
-    trackingGap: { findMany: jest.fn().mockResolvedValue(gaps) },
-    auditLog: { create: jest.fn().mockResolvedValue({}) },
-  } as unknown as PrismaService;
-  return new TimeTrackingService(prisma);
+const sheetHarness = (segments: unknown[]) => {
+  const findMany = jest.fn().mockResolvedValue(segments);
+  const prisma = { timeSegment: { findMany } } as unknown as PrismaService;
+  return { service: new TimeTrackingService(prisma), findMany };
 };
 
 describe('the timesheet', () => {
-  it('totals each technician by category', async () => {
-    const service = sheetHarness(
-      [
-        segment('tech-1', 'ONSITE', 3_600),
-        segment('tech-1', 'DRIVING', 900),
-        segment('tech-1', 'ONSITE', 1_800),
-        segment('tech-2', 'ONSITE', 7_200),
-      ],
-      [],
-    );
+  it('totals each technician: on site, general time, and the two together', async () => {
+    const { service } = sheetHarness([
+      segment('tech-1', 'ONSITE', 3_600),
+      segment('tech-1', 'GENERAL', 900),
+      segment('tech-1', 'ONSITE', 1_800),
+      segment('tech-2', 'ONSITE', 7_200),
+    ]);
 
     const sheet = await service.timesheet(USER, { from: '2026-09-01', to: '2026-09-30' });
 
-    const moses = sheet.totals.find((row) => row.technicianId === 'tech-1')!;
-    expect(moses.onsiteSeconds).toBe(5_400);
-    expect(moses.drivingSeconds).toBe(900);
-    // Sorted by who is owed most, which is the order a payroll run reads in.
+    expect(sheet.totals.find((total) => total.technicianId === 'tech-1')).toMatchObject({
+      onsiteSeconds: 5_400,
+      generalSeconds: 900,
+      totalSeconds: 6_300,
+    });
+    // Sorted by who worked longest, which is the order a payroll run reads in.
     expect(sheet.totals[0]!.technicianId).toBe('tech-2');
   });
 
   /**
-   * The failure this feature exists to prevent, in one assertion.
-   *
-   * An unsettled gap is neither hours worked nor hours not worked -- it is a
-   * question. A timesheet that folds it into a total, or drops it quietly, pays
-   * somebody the wrong amount and nobody finds out.
+   * The office reads everything away from a property as one figure. `DRIVING`
+   * is only on rows from before the day was read whole, and belongs in it.
    */
-  it('keeps an unsettled gap beside the totals, never inside them', async () => {
-    const service = sheetHarness([segment('tech-1', 'ONSITE', 3_600)], [gapRow()]);
+  it('counts driving from older rows as general time', async () => {
+    const { service } = sheetHarness([segment('tech-1', 'DRIVING', 600), segment('tech-1', 'GENERAL', 300)]);
 
     const sheet = await service.timesheet(USER, { from: '2026-09-01', to: '2026-09-30' });
 
-    expect(sheet.totals[0]!.onsiteSeconds).toBe(3_600);
-    expect(sheet.totals[0]!.unsettledGapSeconds).toBe(4_000);
-    expect(sheet.gaps[0]!.resolved).toBe(false);
+    expect(sheet.totals[0]!.generalSeconds).toBe(900);
+    expect(sheet.segments.map((row) => row.category)).toEqual(['GENERAL', 'GENERAL']);
   });
 
-  it('stops counting a gap once somebody has settled it', async () => {
-    const service = sheetHarness(
-      [segment('tech-1', 'ONSITE', 3_600)],
-      [gapRow({ resolvedAt: new Date(), resolution: 'Phone died; time added back' })],
-    );
+  /** Counted in the hours, and still visible as what it is. */
+  it('says how much of the hours the phone was quiet for', async () => {
+    const { service } = sheetHarness([
+      segment('tech-1', 'ONSITE', 3_600, { quietSeconds: 1_200 }),
+      segment('tech-1', 'GENERAL', 900, { quietSeconds: 300 }),
+    ]);
 
     const sheet = await service.timesheet(USER, { from: '2026-09-01', to: '2026-09-30' });
 
-    expect(sheet.totals[0]!.unsettledGapSeconds).toBe(0);
+    expect(sheet.totals[0]).toMatchObject({ totalSeconds: 4_500, quietSeconds: 1_500 });
+    expect(sheet.segments[0]!.quietSeconds).toBe(1_200);
+  });
+
+  it('names the property of an on-site stretch and none for general time', async () => {
+    const { service } = sheetHarness([segment('tech-1', 'ONSITE', 3_600), segment('tech-1', 'GENERAL', 900)]);
+
+    const sheet = await service.timesheet(USER, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(sheet.segments.map((row) => row.address)).toEqual(['1 Oak St', null]);
+  });
+
+  /** Rows written before a stretch had a property of its own. */
+  it('falls back to the visit’s property for a row that names none', async () => {
+    const { service } = sheetHarness([
+      segment('tech-1', 'ONSITE', 3_600, {
+        building: null,
+        inspection: { propertywareBuilding: { addressLine1: '9 Elm Ct' } },
+      }),
+    ]);
+
+    const sheet = await service.timesheet(USER, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(sheet.segments[0]!.address).toBe('9 Elm Ct');
+  });
+
+  /**
+   * Read as UTC days, an evening visit in Texas landed on the following day's
+   * timesheet. In September Texas is five hours behind.
+   */
+  it('reads the range as Texas days, inside the caller’s own organization', async () => {
+    const { service, findMany } = sheetHarness([]);
+
+    await service.timesheet(USER, { from: '2026-09-01', to: '2026-09-30', technicianId: 'tech-1' });
+
+    expect(findMany.mock.calls[0]![0].where).toEqual({
+      organizationId: 'org-1',
+      technicianId: 'tech-1',
+      startedAt: { gte: new Date('2026-09-01T05:00:00.000Z'), lt: new Date('2026-10-01T05:00:00.000Z') },
+    });
   });
 
   it('refuses a range that runs backwards', async () => {
-    const service = sheetHarness([], []);
+    const { service } = sheetHarness([]);
 
     await expect(service.timesheet(USER, { from: '2026-09-30', to: '2026-09-01' })).rejects.toThrow(
       /before the first/,
+    );
+  });
+
+  it('refuses a date it cannot read', async () => {
+    const { service } = sheetHarness([]);
+
+    await expect(service.timesheet(USER, { from: 'last week', to: '2026-09-01' })).rejects.toThrow(
+      /YYYY-MM-DD/,
     );
   });
 });
@@ -125,6 +155,7 @@ describe('the timesheet', () => {
 describe('correcting a segment', () => {
   const existing = {
     id: 'seg-1',
+    technicianId: 'tech-1',
     startedAt: new Date(START),
     endedAt: new Date(START + 1_800_000),
     durationSeconds: 1_800,
@@ -143,12 +174,25 @@ describe('correcting a segment', () => {
       timeAdjustment: { create: createAdjustment },
       timeSegment: { update: updateSegment },
     };
+    const findFirst = jest.fn().mockResolvedValue(found);
     const prisma = {
-      timeSegment: { findFirst: jest.fn().mockResolvedValue(found) },
+      timeSegment: { findFirst },
       auditLog: { create: auditCreate },
       $transaction: jest.fn((run: (client: unknown) => Promise<unknown>) => run(tx)),
     } as unknown as PrismaService;
-    return { service: new TimeTrackingService(prisma), createAdjustment, updateSegment, auditCreate };
+    const service = new TimeTrackingService(prisma);
+    // Reading a day is exercised by its own spec; here it is the thing being
+    // asked for, so it is stood in for.
+    const read = jest.spyOn(service, 'recomputeDay').mockResolvedValue({
+      day: '2026-09-23',
+      technicianId: 'tech-1',
+      changed: true,
+      onsiteSeconds: 0,
+      generalSeconds: 0,
+      fixesRead: 0,
+      fixesDiscarded: 0,
+    });
+    return { service, createAdjustment, updateSegment, auditCreate, findFirst, read };
   };
 
   const correction = {
@@ -170,16 +214,46 @@ describe('correcting a segment', () => {
   });
 
   /**
-   * And the segment is marked, so the next recompute leaves the decision alone.
+   * And the segment is marked, so the next reading leaves the decision alone.
    * Without this an administrator's correction would survive until the trail
    * was next re-read, which is worse than not offering the correction at all.
    */
-  it('marks the segment so a recompute cannot undo the decision', async () => {
+  it('marks the segment so a later reading cannot undo the decision', async () => {
     const { service, updateSegment } = adjustHarness();
 
     await service.adjustSegment(USER, 'seg-1', correction);
 
     expect(updateSegment.mock.calls[0]![0].data.adjustedAt).toBeInstanceOf(Date);
+  });
+
+  /**
+   * A stretch made longer covers minutes the trail had called something else.
+   * Those rows have to give way, now, or the minutes are on the sheet twice.
+   */
+  it('reads the technician’s day again, as the person who made the correction', async () => {
+    const { service, read } = adjustHarness();
+
+    await service.adjustSegment(USER, 'seg-1', correction);
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith('org-1', 'tech-1', '2026-09-23', USER);
+  });
+
+  it('still saves the correction when the day could not be read again', async () => {
+    const { service, read } = adjustHarness();
+    read.mockRejectedValue(new Error('database unreachable'));
+
+    await expect(service.adjustSegment(USER, 'seg-1', correction)).resolves.toMatchObject({
+      adjusted: true,
+      durationSeconds: 3_600,
+    });
+  });
+
+  it('only finds a segment inside the caller’s own organization', async () => {
+    const { service, findFirst } = adjustHarness(null);
+
+    await expect(service.adjustSegment(USER, 'seg-1', correction)).rejects.toThrow(/no longer on the timesheet/);
+    expect(findFirst.mock.calls[0]![0].where).toEqual({ id: 'seg-1', organizationId: 'org-1' });
   });
 
   it('refuses a segment that would end before it starts', async () => {
@@ -204,158 +278,5 @@ describe('correcting a segment', () => {
       beforeSeconds: 1_800,
       afterSeconds: 3_600,
     });
-  });
-});
-
-describe('settling a gap', () => {
-  const open = {
-    id: 'gap-1',
-    technicianId: 'tech-1',
-    inspectionId: 'insp-1',
-    startedAt: new Date(START),
-    endedAt: new Date(START + 4_000_000),
-    resolvedAt: null,
-  };
-
-  const gapHarness = (found: unknown = open) => {
-    const updateGap = jest.fn().mockResolvedValue({});
-    const createSegment = jest.fn().mockResolvedValue({});
-    const tx = { trackingGap: { update: updateGap }, timeSegment: { create: createSegment } };
-    const prisma = {
-      trackingGap: { findFirst: jest.fn().mockResolvedValue(found) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-      $transaction: jest.fn((run: (client: unknown) => Promise<unknown>) => run(tx)),
-    } as unknown as PrismaService;
-    return { service: new TimeTrackingService(prisma), updateGap, createSegment };
-  };
-
-  /**
-   * The office deciding the work happened and the phone missed it.
-   *
-   * Written as MANUAL so no later recompute can take it away: a technician paid
-   * for four hours must not lose them because somebody re-read the trail.
-   */
-  it('credits time the office decides was worked, and protects it from a recompute', async () => {
-    const { service, createSegment } = gapHarness();
-
-    await service.resolveGap(USER, 'gap-1', {
-      resolution: 'Phone died at the Feldspar job.',
-      creditedMinutes: 240,
-    });
-
-    const written = createSegment.mock.calls[0]![0].data;
-    expect(written.source).toBe('MANUAL');
-    expect(written.durationSeconds).toBe(14_400);
-    expect(written.category).toBe('ONSITE');
-  });
-
-  /** Settled with nothing credited is a real answer: they were not working. */
-  it('can settle a gap without paying for it', async () => {
-    const { service, createSegment, updateGap } = gapHarness();
-
-    await service.resolveGap(USER, 'gap-1', { resolution: 'Lunch, off the clock.' });
-
-    expect(createSegment).not.toHaveBeenCalled();
-    expect(updateGap.mock.calls[0]![0].data.resolvedAt).toBeInstanceOf(Date);
-  });
-
-  it('refuses to settle the same gap twice', async () => {
-    const { service } = gapHarness({ ...open, resolvedAt: new Date() });
-
-    await expect(service.resolveGap(USER, 'gap-1', { resolution: 'Again.' })).rejects.toThrow(
-      /already been settled/,
-    );
-  });
-
-  it('refuses to credit time to a gap attached to no job', async () => {
-    const { service } = gapHarness({ ...open, inspectionId: null });
-
-    await expect(
-      service.resolveGap(USER, 'gap-1', { resolution: 'Worked somewhere.', creditedMinutes: 60 }),
-    ).rejects.toThrow(/nothing to credit/);
-  });
-});
-
-/**
- * Filling in the jobs that finished before any of this existed.
- *
- * Every job from now on has its hours read when it is submitted. Nothing goes
- * back for the ones already submitted, so without this the timesheet opens
- * empty on its first day. What is pinned here is the boundary that makes it
- * safe to leave in the toolbar: it fills where there is nothing and never
- * rewrites what is already there.
- */
-describe('filling in missing hours', () => {
-  const fillHarness = (rows: unknown[], recompute = jest.fn().mockResolvedValue({ onsiteSeconds: 3_600 })) => {
-    const findMany = jest.fn().mockResolvedValue(rows);
-    const prisma = { inspection: { findMany } } as unknown as PrismaService;
-    const service = new TimeTrackingService(prisma);
-    // The single-job path is exercised by its own spec; here it is the thing
-    // being orchestrated, so it is stood in for.
-    service.recomputeAutomatically = recompute;
-    return { service, findMany, recompute };
-  };
-
-  const job = (id: string) => ({ id });
-
-  /**
-   * The boundary. A job that already has segments is not touched, which is
-   * what stops this moving an hour somebody has already been paid for.
-   */
-  it('looks only at jobs with no segments at all', async () => {
-    const { service, findMany } = fillHarness([job('insp-1')]);
-
-    await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
-
-    expect(findMany.mock.calls[0]![0].where.timeSegments).toEqual({ none: {} });
-  });
-
-  it('reads each of them', async () => {
-    const { service, recompute } = fillHarness([job('insp-1'), job('insp-2')]);
-
-    const result = await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
-
-    expect(recompute).toHaveBeenCalledWith('org-1', 'insp-1');
-    expect(result).toMatchObject({ considered: 2, measured: 2, unmeasurable: 0 });
-  });
-
-  /** One unmeasurable job must not end the run: the rest are other people's pay. */
-  it('counts what it could not measure and carries on', async () => {
-    const recompute = jest.fn().mockResolvedValueOnce(null).mockResolvedValue({ onsiteSeconds: 60 });
-    const { service } = fillHarness([job('insp-1'), job('insp-2')], recompute);
-
-    const result = await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
-
-    expect(recompute).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ considered: 2, measured: 1, unmeasurable: 1 });
-  });
-
-  /**
-   * Capped, and it says so rather than reporting a clean run over a range it
-   * only partly read — which would look exactly like "there was nothing else".
-   */
-  it('says when there is more of the range left', async () => {
-    const { service } = fillHarness(Array.from({ length: 101 }, (_, i) => job(`insp-${i}`)));
-
-    const result = await service.fillMissingHours(USER, { from: '2026-01-01', to: '2026-12-31' });
-
-    expect(result.considered).toBe(100);
-    expect(result.more).toBe(true);
-  });
-
-  it('works forward through the range so pressing again does the remainder', async () => {
-    const { service, findMany } = fillHarness([job('insp-1')]);
-
-    await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
-
-    expect(findMany.mock.calls[0]![0].orderBy).toEqual({ submittedAt: 'asc' });
-  });
-
-  it('refuses a range that runs backwards, like the timesheet does', async () => {
-    const { service } = fillHarness([]);
-
-    await expect(
-      service.fillMissingHours(USER, { from: '2026-09-30', to: '2026-09-01' }),
-    ).rejects.toThrow(/before the first/);
   });
 });

@@ -9,12 +9,7 @@ import {
   RequirePermissions,
   type AuthenticatedRequest,
 } from '../common/auth';
-import {
-  AdjustSegmentDto,
-  FillHoursDto,
-  ResolveGapDto,
-  TimesheetQueryDto,
-} from './time-tracking.dto';
+import { AdjustSegmentDto, RecalculateDto, TimesheetQueryDto } from './time-tracking.dto';
 import { TimeTrackingService } from './time-tracking.service';
 
 export const TIME_TRACKING_TAG = 'Time tracking';
@@ -27,37 +22,20 @@ export class TimeTrackingController {
   constructor(@Inject(TimeTrackingService) private readonly time: TimeTrackingService) {}
 
   /**
-   * Read a job's time from the trail again.
+   * Read every technician's days in a range from the trail again.
    *
-   * Asked for rather than automatic while the manual buttons are still the
-   * source of an invoice: the office runs it to see what the tracker makes of a
-   * job, beside what Start and End said. It writes segments and nothing else --
-   * no invoice, no pay -- so running it is safe at any time, and running it
-   * twice produces the same answer.
+   * Today and yesterday are read without anybody asking. This is for the days
+   * behind them: after the rule changes, or after a property's pin or radius
+   * is corrected. It writes hours and nothing else, hours somebody corrected
+   * by hand are left alone, and running it twice gives the same answer.
    *
    * `inspections:manage` rather than a read permission, because it does write.
    */
-  @Post('inspections/:inspectionId/recompute')
+  @Post('recalculate')
   @RequirePermissions('inspections:manage')
   @HttpCode(200)
-  recompute(@Req() request: AuthenticatedRequest, @Param('inspectionId') inspectionId: string) {
-    return this.time.recomputeForInspection(request.user, inspectionId);
-  }
-
-  /**
-   * Read the hours of jobs in this range that have none.
-   *
-   * For the jobs that were submitted before any of this existed, and for
-   * anything the sweep could not reach. It only fills where there is nothing,
-   * so it cannot move an hour somebody has already been paid for.
-   *
-   * `inspections:manage`, like the single-job recompute: it writes.
-   */
-  @Post('fill-hours')
-  @RequirePermissions('inspections:manage')
-  @HttpCode(200)
-  fillHours(@Req() request: AuthenticatedRequest, @Body() body: FillHoursDto) {
-    return this.time.fillMissingHours(request.user, body);
+  recalculate(@Req() request: AuthenticatedRequest, @Body() body: RecalculateDto) {
+    return this.time.recalculate(request.user, body);
   }
 
   /**
@@ -88,17 +66,5 @@ export class TimeTrackingController {
     @Body() body: AdjustSegmentDto,
   ) {
     return this.time.adjustSegment(request.user, segmentId, body);
-  }
-
-  /** Settle a stretch the trail could not account for, crediting the time or not. */
-  @Post('gaps/:gapId/resolve')
-  @RequirePermissions('inspections:manage')
-  @HttpCode(200)
-  resolveGap(
-    @Req() request: AuthenticatedRequest,
-    @Param('gapId') gapId: string,
-    @Body() body: ResolveGapDto,
-  ) {
-    return this.time.resolveGap(request.user, gapId, body);
   }
 }

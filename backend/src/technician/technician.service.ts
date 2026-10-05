@@ -1298,7 +1298,11 @@ export class TechnicianService {
       // inspection sat in the queue until somebody happened to reload.
       const property = updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name ?? null;
       /**
-       * Read this job's hours from the trail, now that the work is finished.
+       * Read the technician's day from the trail, now that a visit is finished.
+       *
+       * The day and not the job: the hours are where the phone was, and the
+       * moment Submit was pressed is not one of them. This only brings the
+       * timesheet up to date a few minutes sooner than the sweep would.
        *
        * Not awaited, and deliberately. This is the last thing between a
        * technician pressing the button and the screen letting go of them, and
@@ -1306,11 +1310,11 @@ export class TechnicianService {
        * are properties waiting. The hours are for somebody reading a timesheet
        * later, so they can arrive a second later too.
        *
-       * Nothing here can fail the submission: `recomputeAutomatically` reports
-       * rather than throws, and the sweep reads the job again for the next six
-       * hours in case the handset was still flushing its trail when this ran.
+       * Nothing here can fail the submission: `recomputeDayAutomatically`
+       * reports rather than throws, and the sweep reads the day again in case
+       * the handset was still flushing its trail when this ran.
        */
-      void this.timeTracking?.recomputeAutomatically(user.organizationId, id);
+      void this.timeTracking?.recomputeDayAutomatically(user.organizationId, user.id);
       void this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
         kind: 'INSPECTION_SUBMITTED',
         title: 'Inspection submitted',

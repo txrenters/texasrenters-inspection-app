@@ -1503,6 +1503,7 @@ model PropertywarePortfolioOwner {
 
 model PropertywareBuilding {
   geofence PropertyGeofence?
+  timeSegments TimeSegment[]
   tbpPlanStops TbpQuarterPlanStop[]
   id                  String                 @id @default(uuid()) @db.Uuid
   organizationId      String                 @db.Uuid
@@ -3815,8 +3816,8 @@ model PropertyGeofence {
   latitude  Decimal? @db.Decimal(9, 6)
   longitude Decimal? @db.Decimal(9, 6)
 
-  enterRadiusMeters Int @default(40)
-  exitRadiusMeters  Int @default(60)
+  enterRadiusMeters Int @default(20)
+  exitRadiusMeters  Int @default(30)
 
   updatedById String?  @db.Uuid
   createdAt   DateTime @default(now())
@@ -3845,10 +3846,14 @@ model TimeSegment {
   id             String @id @default(uuid()) @db.Uuid
   organizationId String @db.Uuid
   technicianId   String @db.Uuid
-  /// The job this belongs to. Off-site time is still attributed to the job it
-  /// happened during -- a technician driving to a supplier is driving for that
-  /// visit.
-  inspectionId String @db.Uuid
+  /// The visit an on-site stretch was for. Null for general time, which is the
+  /// time between properties and belongs to no visit, and the day is read as a
+  /// whole so that it has somewhere to live.
+  inspectionId String? @db.Uuid
+  /// The property an on-site stretch was at. Its own column because a day is
+  /// read against properties, not jobs: two visits to one building on one day
+  /// are one stay, and counting it per job counted it twice.
+  buildingId   String? @db.Uuid
 
   category  TimeSegmentCategory
   startedAt DateTime
@@ -3856,6 +3861,10 @@ model TimeSegment {
   /// Stored rather than derived, so a query can sum it without arithmetic on
   /// two timestamps and a time zone.
   durationSeconds Int
+  /// How much of this stretch the trail was silent for and the rule filled in.
+  /// The hours are counted either way; this is what lets the office tell
+  /// measured time from time that was carried through a quiet phone.
+  quietSeconds    Int @default(0)
 
   source TimeSegmentSource @default(AUTOMATIC)
 
@@ -3872,11 +3881,13 @@ model TimeSegment {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   technician   UserProfile  @relation("TimeSegmentTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
-  inspection   Inspection   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  inspection   Inspection?  @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  building     PropertywareBuilding? @relation(fields: [buildingId], references: [id], onDelete: SetNull)
   adjustments  TimeAdjustment[]
 
   @@index([organizationId, technicianId, startedAt])
   @@index([inspectionId, category])
+  @@index([buildingId])
 }
 
 enum TimeSegmentCategory {
