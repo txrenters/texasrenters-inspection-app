@@ -36,6 +36,7 @@ import {
 
 import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { isDoneInspectionStatus } from '../common/inspection-done';
 import { PrismaService } from '../common/prisma.service';
 import {
   addressKeyCandidates,
@@ -555,11 +556,13 @@ export class TbpPlanService {
        * kept anywhere. Rewriting it would destroy that, and the Jobber edit
        * behind it would be an edit to a visit somebody already completed. The
        * endpoint takes any plan id, including a quarter that ended months ago,
-       * so this is the ordinary case rather than an unlikely one.
+       * so this is the ordinary case rather than an unlikely one. Walked means
+       * submitted (`DONE_INSPECTION_STATUSES`), not only completed: nobody
+       * finalizes any more.
        */
       if (
         stop.inspection &&
-        (stop.inspection.status === InspectionStatus.COMPLETED ||
+        (isDoneInspectionStatus(stop.inspection.status) ||
           stop.inspection.status === InspectionStatus.CANCELLED)
       ) {
         result.keptFinished += 1;

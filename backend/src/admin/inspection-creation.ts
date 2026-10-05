@@ -29,6 +29,7 @@ import {
 } from '@texasrenters/shared';
 
 import { ApplicationError } from '../common/errors';
+import { DONE_INSPECTION_STATUSES } from '../common/inspection-done';
 import type { PrismaService } from '../common/prisma.service';
 
 /**
@@ -192,14 +193,11 @@ export async function resolveLifecycleBaseline(
       propertywareUnitId: input.unitId,
       propertywareLeaseId: input.leaseId,
       scheduledAt: { lt: input.scheduledAt },
+      // Set by the technician's submission now that submitted is done (and
+      // never by a "could not get in" report, which walked nothing), as well
+      // as by a finalize, Jobber's completion or an import.
       completedAt: { not: null },
-      status: {
-        in: [
-          InspectionStatus.PROCESSING,
-          InspectionStatus.REVIEW_REQUIRED,
-          InspectionStatus.COMPLETED,
-        ],
-      },
+      status: { in: DONE_INSPECTION_STATUSES },
       inspectionType: InspectionType.MOVE_IN,
     },
     orderBy: { scheduledAt: 'desc' },

@@ -163,9 +163,15 @@ describe('re-reading a quarter’s filter sizes from the tenant report', () => {
    * old text is kept nowhere. `AdminService.updateJobberVisit` refuses these two
    * statuses before writing the same column; so does this. The endpoint takes
    * any plan id, including a quarter that ended months ago, so a completed
-   * visit is the ordinary case rather than a corner.
+   * visit is the ordinary case rather than a corner. A submitted one is done
+   * too (2026-10-05): nobody finalizes it into COMPLETED any more.
    */
-  it.each([InspectionStatus.COMPLETED, InspectionStatus.CANCELLED])(
+  it.each([
+    InspectionStatus.COMPLETED,
+    InspectionStatus.CANCELLED,
+    InspectionStatus.TECHNICIAN_SUBMITTED,
+    InspectionStatus.REVIEW_REQUIRED,
+  ])(
     'leaves a %s inspection alone entirely',
     async (status) => {
       const { service, stopUpdate, inspectionUpdate, outboundUpsert } = harness([
