@@ -6,7 +6,7 @@ import { InspectionTabs } from './inspection-tabs';
 const ID = 'insp-1';
 
 describe('inspection tabs', () => {
-  it('links every section to its own route', () => {
+  it('links a move-out’s overview and comparison to their own routes', () => {
     render(<InspectionTabs active="overview" inspectionId={ID} inspectionType="MOVE_OUT" />);
 
     expect(screen.getByRole('link', { name: 'Overview' })).toHaveAttribute(
@@ -17,20 +17,20 @@ describe('inspection tabs', () => {
       'href',
       `/inspections/${ID}/comparison`,
     );
-    // The charge report had a route and no entry point at all — a reviewer had
-    // to know the URL.
-    expect(screen.getByRole('link', { name: 'Charges' })).toHaveAttribute(
-      'href',
-      `/inspections/${ID}/charge-report`,
-    );
+  });
+
+  // Hidden for now (the office, 2026-10-05): not one charge had been recorded.
+  it('does not offer Charges', () => {
+    render(<InspectionTabs active="overview" inspectionId={ID} inspectionType="MOVE_OUT" />);
+    expect(screen.queryByRole('link', { name: 'Charges' })).toBeNull();
   });
 
   /**
-   * A move-in *is* the baseline, so there is nothing to compare it against.
-   * Offering an always-empty tab on every other inspection would teach
-   * reviewers to ignore the row.
+   * A move-in *is* the baseline, so there is nothing to compare it against --
+   * and with Charges hidden, every other inspection has only its overview,
+   * which a bar of one tab does not need to say.
    */
-  it('offers the comparison only on a move-out', () => {
+  it('shows no bar at all where the overview is the only section', () => {
     for (const type of [
       'MOVE_IN',
       'OCCUPIED',
@@ -44,7 +44,7 @@ describe('inspection tabs', () => {
       const { unmount } = render(
         <InspectionTabs active="overview" inspectionId={ID} inspectionType={type} />,
       );
-      expect(screen.queryByRole('link', { name: 'Move-in comparison' })).toBeNull();
+      expect(screen.queryByRole('navigation', { name: 'Inspection sections' })).toBeNull();
       unmount();
     }
   });
@@ -56,13 +56,13 @@ describe('inspection tabs', () => {
       'aria-current',
       'page',
     );
-    expect(screen.getByRole('link', { name: 'Charges' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current');
   });
 
-  it('does not mark overview active from a sub-page', () => {
+  it('still names the charge report as its own tab while it is open, with the way back', () => {
     // The overview lives at the base route, so a naive prefix match would light
     // it up on every sub-page at once.
-    render(<InspectionTabs active="charges" inspectionId={ID} inspectionType="MOVE_OUT" />);
+    render(<InspectionTabs active="charges" inspectionId={ID} inspectionType="MOVE_IN" />);
 
     expect(screen.getByRole('link', { name: 'Charges' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current');

@@ -1,22 +1,14 @@
 'use client';
 
-import {
-  CheckIcon,
-  CircleIcon,
-  InfoIcon,
-  MoreHorizontalIcon,
-  TriangleAlertIcon,
-  XIcon,
-} from 'lucide-react';
+import { isFinishedStatus } from '@texasrenters/shared';
+import { MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useState, type ReactNode } from 'react';
 
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
 import { AssignmentDialog } from '@/components/assignment-dialog';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
-import { InspectionChargesPanel } from '@/components/inspection-charges';
-import { InspectionCompleteDialog } from '@/components/inspection-complete-dialog';
 import { InspectionDeleteDialog } from '@/components/inspection-delete-dialog';
 import {
   InspectionCancelDialog,
@@ -25,9 +17,7 @@ import {
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
 import { InspectionTabs } from '@/components/inspection-tabs';
-import { JobberVisitDetails } from '@/components/jobber-visit-details';
-import { ReportClosingNotes } from '@/components/report-closing-notes';
-import { InspectionWorkflowPanel, REVIEWABLE } from '@/components/inspection-workflow';
+import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { ReportShareDialog } from '@/components/report-share-dialog';
@@ -43,10 +33,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { VisitCard } from '@/components/visit-card';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
-import { inspectionTime, jobWorked } from '@/lib/job-time';
-import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 import {
   useAreaEvidenceSummary,
   useAssignments,
@@ -56,14 +45,6 @@ import {
 } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
-
-/** Spoken state for a step that has no more specific detail. */
-const STEP_STATE_LABEL = {
-  complete: 'Complete',
-  active: 'In progress',
-  pending: 'Not started',
-  blocked: 'Blocked',
-} as const;
 
 type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
 
@@ -116,10 +97,10 @@ function InspectionDetail() {
   const [editingVisit, setEditingVisit] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [unassigning, setUnassigning] = useState(false);
-  const [completing, setCompleting] = useState(false);
+  const [markingComplete, setMarkingComplete] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // Room condition summaries are informational and never gate completion.
+  // Defects only: room condition summaries are context, never a decision.
   const pendingFindings = useInspectionFindings(
     id,
     1,
@@ -127,7 +108,7 @@ function InspectionDetail() {
     'DEFECTS',
     permissions.has('findings:read'),
   );
-  // The same read the Areas card makes, for the finalize bar's count.
+  // The same read the Areas card makes, for the review summary's count.
   const areaSummary = useAreaEvidenceSummary(id);
 
   if (inspection.isError)
@@ -154,9 +135,16 @@ function InspectionDetail() {
    * off that directly is what threw "Cannot read properties of undefined".
    */
   const current = (item.assignments ?? []).find((assignment) => assignment.isCurrent);
-  const finalized = item.status === 'COMPLETED' || item.status === 'CANCELLED';
-  const contextualAction = primaryAction(item.status);
-  const banner = attentionBanner(item.status, pendingFindings.data?.total ?? 0);
+  /**
+   * The visit is over: submitted, or cancelled.
+   *
+   * Submitted is done (the office, 2026-10-05). Nobody finalizes: the
+   * technician's submission ends the visit -- Jobber is told, their paid time
+   * stops -- and what is left is the office's review of the findings, which this
+   * page is for. So scheduling, assigning and editing the visit stop there, as
+   * they used to stop only at a finalize that no longer comes. Reviewing does not.
+   */
+  const visitOver = isFinishedStatus(item.status) || item.status === 'CANCELLED';
   /**
    * The move-in a move-out is compared against, as the comparison and the AI
    * both choose it. The link written at creation is only the fallback for the
@@ -167,54 +155,35 @@ function InspectionDetail() {
     item.inspectionType === 'MOVE_OUT' && item.comparisonBaseline !== undefined
       ? item.comparisonBaseline
       : item.baselineInspection;
-  const baselineLabel =
-    item.inspectionType === 'MOVE_IN'
-      ? 'This inspection establishes the property baseline'
-      : baseline
-        ? `Move-in inspection · ${formatScheduledDate(baseline.scheduledAt)}`
-        : item.inspectionType === 'MOVE_OUT'
-          ? 'No move-in to compare against'
-          : 'No move-in baseline is linked';
-  // Recomputed on render rather than ticking: a job still running is read by
-  // somebody who refreshes, and a second timer on this page earns nothing.
-  const worked = jobWorked(item);
+  // Only the types compared against a move-in: a move-in is the record, and an
+  // HVAC visit is not compared with anything.
+  const comparesToMoveIn =
+    item.inspectionType === 'MOVE_OUT' ||
+    item.inspectionType === 'OCCUPIED' ||
+    item.inspectionType === 'BACK_TO_MARKET';
+  const pending = pendingFindings.data?.total ?? 0;
   /**
-   * Deletion is deliberately *not* gated on `finalized`, unlike everything else
-   * in this menu. Editing a closed inspection would quietly alter a report that
-   * may already have been shared; deleting it removes the report outright,
-   * which is a different act — and the permission is the gate on it.
+   * Deletion is deliberately *not* gated on the visit being over, unlike
+   * everything else in this menu: deleting removes the record outright, which
+   * is a different act -- and the permission is the gate on it.
    */
   const canDelete = permissions.has('inspections:delete');
   const canEditOrAssign =
-    !finalized &&
+    !visitOver &&
     (permissions.has('inspections:manage') || (current && permissions.has('inspections:assign')));
-  const canUseMenu = canDelete || canEditOrAssign;
+  // For a walkthrough done outside this app, with nothing here to submit; see
+  // `MarkCompleteDialog`. Before a submission only, like the server's rule.
+  const canMarkComplete =
+    (item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS') &&
+    permissions.has('inspections:finalize');
+  const canUseMenu = canDelete || canEditOrAssign || canMarkComplete;
 
   return (
     <>
       <PageHeader
         actions={
           <>
-            {/* One primary action, chosen by where the inspection actually is.
-                The bar used to offer Reassign, Share report and More at equal
-                weight whatever the state, so nothing indicated what to do next.
-                This only ever navigates — finalization stays gated inside the
-                workflow panel rather than gaining an ungated twin up here. */}
-            {contextualAction ? (
-              <Button
-                onClick={() => {
-                  const target = document.getElementById(contextualAction.target);
-                  target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                  // Focus follows the scroll, so a keyboard user arrives where
-                  // the page just moved rather than back at the top.
-                  target?.focus?.();
-                }}
-                type="button"
-              >
-                {contextualAction.label}
-              </Button>
-            ) : null}
-            {!finalized && permissions.has('inspections:assign') ? (
+            {!visitOver && permissions.has('inspections:assign') ? (
               <Button onClick={() => setAssigning(true)} variant="outline">
                 {current ? 'Reassign' : 'Assign technician'}
               </Button>
@@ -242,6 +211,11 @@ function InspectionDetail() {
                       Unassign technician
                     </DropdownMenuItem>
                   ) : null}
+                  {canMarkComplete ? (
+                    <DropdownMenuItem onSelect={() => setMarkingComplete(true)}>
+                      Mark complete…
+                    </DropdownMenuItem>
+                  ) : null}
                   {canEditOrAssign && permissions.has('inspections:manage') ? (
                     <>
                       <DropdownMenuSeparator />
@@ -252,7 +226,7 @@ function InspectionDetail() {
                   ) : null}
                   {canDelete ? (
                     <>
-                      {canEditOrAssign ? <DropdownMenuSeparator /> : null}
+                      {canEditOrAssign || canMarkComplete ? <DropdownMenuSeparator /> : null}
                       {/* Last, and separated: cancelling is the reversible way
                           to close an inspection, so it stays the neighbour a
                           misfire lands on rather than this. */}
@@ -279,130 +253,51 @@ function InspectionDetail() {
 
       <InspectionTabs active="overview" inspectionId={id} inspectionType={item.inspectionType} />
 
-      {/* No "Inspection overview" heading any more. The card carried a title
-          restating the page you are already on, and three status badges that
-          have moved up beside the inspection's name where someone scanning back
-          to the top actually looks for them. What is left is the two things the
-          card is for: where the work has got to, and the facts about it. */}
-      <section aria-label="Inspection status" className="mt-3 space-y-4">
-        {/* The stepper is the instrument on this page: it answers "where has
-              this got to" in four named stages, where the status badge alone
-              said "In progress" for capture running, review not started and
-              finalization unavailable alike. Each step carries its own label and
-              a written state, never colour alone.
+      {/*
+        Where the review stands, in three figures -- what this page is for.
 
-              One hairline panel rather than four floating boxes, matching
-              StatGroup: four cells, whole rows at both breakpoints. */}
-        <ol
-          aria-label="Inspection workflow"
-          className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-xl border lg:grid-cols-4"
-        >
-          {inspectionProgress(item.status).map((step) => (
-            <li className="bg-card flex items-start gap-2 p-3" key={step.key}>
-              <span
-                aria-hidden
-                className={cn(
-                  'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border',
-                  // `text-background`, never `text-white`. These fills invert
-                  // between modes: in dark mode --success is a light green and
-                  // white on it measures 1.95:1, so the tick simply vanished.
-                  // The page background is by definition the most contrasting
-                  // neutral available in whichever mode is active.
-                  step.state === 'complete' && 'bg-success border-success text-background',
-                  step.state === 'active' && 'border-primary text-primary',
-                  step.state === 'blocked' && 'bg-destructive border-destructive text-background',
-                  step.state === 'pending' && 'text-muted-foreground',
-                )}
-              >
-                {step.state === 'complete' ? (
-                  <CheckIcon className="size-3" />
-                ) : step.state === 'blocked' ? (
-                  <XIcon className="size-3" />
-                ) : (
-                  <CircleIcon className="size-2 fill-current" />
-                )}
-              </span>
-              <span className="grid min-w-0 gap-0.5">
-                <span className="text-sm font-medium">{step.label}</span>
-                {/* The written state is what a screen reader announces, and
-                      what makes the marker meaningful to everyone else. */}
-                <span className="text-muted-foreground text-xs">
-                  {step.detail || STEP_STATE_LABEL[step.state]}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ol>
-
-        {/* Three facts, and deliberately not a second panel below the first.
-              These are reference, not instrument: giving them the same bordered
-              treatment as the stepper would make the page read as two equally
-              important rows of boxes. Plain text on the canvas, with the labels
-              carrying the only chrome they need.
-
-              The date and the unit are not repeated here: the line under the
-              property's name already says both, and five facts in a four-column
-              grid left the last alone on a row of its own. */}
-        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-3">
-          <div>
-            <dt className="text-muted-foreground text-xs">Assigned technician</dt>
-            <dd className="mt-0.5 text-sm font-medium">
-              {current?.technician?.displayName ?? 'Not assigned'}
-            </dd>
-            {current ? null : (
-              <dd className="text-warning mt-0.5 text-xs">Required before field work can start</dd>
-            )}
-          </div>
-          <div>
-            <dt className="text-muted-foreground text-xs">Comparison baseline</dt>
-            <dd className="mt-0.5 text-sm font-medium">
-              {baseline && item.inspectionType !== 'MOVE_IN' ? (
+        This was a four-step stepper (Capture, Technician submission, Admin
+        review, Finalized), a strip of facts and a banner saying findings "must
+        be reviewed before this inspection can be completed". The office does
+        not finalize (2026-10-05): the technician's submission ends the visit,
+        and the maintenance admins review the findings for the reports and the
+        comparison. A stepper whose last step never comes, and a banner about a
+        completion nobody performs, said nothing true. Who walked it and for how
+        long are the visit's facts and moved into its card below.
+      */}
+      <section aria-label="Review" className="mt-3 space-y-3">
+        <dl className="grid gap-3 sm:grid-cols-3">
+          <SummaryFigure label="Areas reviewed">
+            {areaSummary.data
+              ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
+              : '—'}
+          </SummaryFigure>
+          {permissions.has('findings:read') ? (
+            <SummaryFigure label="Findings to review" tone={pending ? 'warning' : undefined}>
+              {pendingFindings.data ? (pending ? pending : 'None') : '—'}
+            </SummaryFigure>
+          ) : null}
+          {comparesToMoveIn ? (
+            <SummaryFigure label="Compared with">
+              {baseline ? (
                 <Link className="hover:underline" href={`/inspections/${baseline.id}`}>
-                  {baselineLabel}
+                  Move-in · {formatScheduledDate(baseline.scheduledAt)}
                 </Link>
               ) : (
-                baselineLabel
+                <span className="text-muted-foreground">No move-in</span>
               )}
-            </dd>
-          </div>
-          <div>
-            {/* The technician's own clock: Start job on the handset to
-                submitting. Nothing inferred from photographs or locations. */}
-            <dt className="text-muted-foreground text-xs">Time on the job</dt>
-            <dd className="mt-0.5 text-sm font-medium">
-              {worked ? `${worked.worked}${worked.running ? ' so far' : ''}` : 'Not started'}
-            </dd>
-            {worked ? <dd className="text-muted-foreground mt-0.5 text-xs">{worked.window}</dd> : null}
-            {/* The inspection on its own, read from its first photograph or
-                recording to its last: where a job's time goes. */}
-            {inspectionTime(item.inspectionWorked) ? (
-              <dd className="text-muted-foreground mt-0.5 text-xs">
-                Inspection {inspectionTime(item.inspectionWorked)}
-              </dd>
-            ) : null}
-          </div>
+            </SummaryFigure>
+          ) : null}
         </dl>
-
-        {banner ? (
-          <Alert variant={banner.tone === 'warning' ? 'warning' : 'default'}>
-            {banner.tone === 'warning' ? <TriangleAlertIcon /> : <InfoIcon />}
-            <AlertTitle>{banner.title}</AlertTitle>
-            <AlertDescription>{banner.body}</AlertDescription>
-          </Alert>
-        ) : null}
 
         {/*
           A move-out with nothing to compare against.
 
           `ComparisonService.generate` refuses this outright with
           MOVE_IN_BASELINE_NOT_FOUND, so the report this inspection exists to
-          produce cannot be written — and the technician finds that out after
-          walking the property rather than before. Said here, on the record
-          somebody opens to work it.
-
-          Its own alert rather than folded into `attentionBanner`, which reads
-          only the status: this is true of a SCHEDULED move-out as much as a
-          completed one, and it is the scheduled ones that are still fixable.
+          produce cannot be written. Said here, on the record somebody opens to
+          work it -- true of a scheduled move-out as much as a walked one, and it
+          is the scheduled ones that are still fixable.
         */}
         {item.baselineMissing ? (
           <Alert variant="warning">
@@ -415,31 +310,12 @@ function InspectionDetail() {
             </AlertDescription>
           </Alert>
         ) : null}
-
-        {item.internalNotes ? (
-          <div className="bg-muted rounded-lg p-3">
-            <p className="text-muted-foreground text-xs">Internal notes</p>
-            <p className="mt-1 text-sm whitespace-pre-wrap">{item.internalNotes}</p>
-          </div>
-        ) : null}
       </section>
 
-      <JobberVisitDetails
-        title={item.jobberVisitTitle}
-        details={item.jobberVisitDetails}
-        inspectionType={item.inspectionType}
-        servicesReport={item.servicesReport}
-        servicesReportedAt={item.servicesReportedAt}
-        booking={item.jobberBooking}
-        pushes={item.jobberPushes}
-        inJobber={Boolean(item.scheduledInJobber || item.jobberBooking)}
-        // Planning detail -- what to bring, who to call -- matters before the
-        // visit. Once the technician has submitted, it folds away so the areas
-        // are not a screen below it; what was done, and any alert, stays open.
-        planningCollapsed={item.status !== 'SCHEDULED' && item.status !== 'IN_PROGRESS'}
+      <VisitCard
         action={
           // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
-          !finalized &&
+          !visitOver &&
           permissions.has('inspections:manage') &&
           (item.scheduledInJobber
             ? item.jobberEditsPushed
@@ -449,6 +325,8 @@ function InspectionDetail() {
             </Button>
           ) : null
         }
+        inspection={item}
+        technicianName={current?.technician?.displayName ?? null}
       />
 
       {/* Area-first: recordings, photos, condition summaries and findings are
@@ -467,22 +345,17 @@ function InspectionDetail() {
             happens. */}
         <AreaEvidenceWorkspace inspectionId={id} />
 
-        {/* The comparison moved to its own page. It was rendered here, below
-            the evidence workspace and above the charges, where nothing linked
-            to it and a reviewer had to scroll past everything else to find a
-            distinct piece of work. See the "Move-in comparison" tab. */}
+        {/* The comparison has its own page: the "Move-in comparison" tab.
 
-        {item.inspectionType === 'OCCUPIED' || item.inspectionType === 'MOVE_OUT' ? (
-          <InspectionChargesPanel inspectionId={id} inspectionType={item.inspectionType} />
-        ) : null}
-
-        {/* Before finalization, in the order the work happens: a reviewer
-            writes what the report should say, then decides it is ready. */}
-        <ReportClosingNotes inspection={item} readOnly={finalized} />
-
-        {/* Finalization sits after the evidence, in the order the work happens:
-            read the areas, then decide. */}
-        <InspectionWorkflowPanel inspection={item} onFinalize={() => setCompleting(true)} />
+            Three cards used to follow the areas, and are gone (the office,
+            2026-10-05): "Charges & pet review" (no charge had ever been
+            recorded on any of 326 inspections with evidence), "Report closing
+            notes" (filled on 8 of 1,615, all HVAC, where the technician writes
+            them in the app) and "Finalization & follow-up" with its sticky
+            "Finalize inspection" bar -- the office does not finalize, and its
+            reopen and request-more-evidence both sent the job back to the
+            technician, marking the Jobber visit incomplete and restarting their
+            paid time. "Mark complete" survives in the More menu. */}
 
         {/* Assignment history and activity are reference material, not the task.
             Collapsed by default so they stop competing with the review
@@ -585,34 +458,6 @@ function InspectionDetail() {
         </details>
       </div>
 
-      {/* Where the review stands and the way to close it, always in reach.
-          Finalize lived three screens down, below the charges and the closing
-          notes, so the page's own count of reviewed areas and the button it
-          led to were never on screen together. Opens the same dialog as the
-          workflow panel's button, with the same pending-findings rule. */}
-      {REVIEWABLE.includes(item.status) && permissions.has('inspections:finalize') ? (
-        <div className="bg-card sticky bottom-3 z-20 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 shadow-lg">
-          <p className="text-sm">
-            {areaSummary.data ? (
-              <span className="font-medium">
-                {areaSummary.data.totals.areasReviewed} of {areaSummary.data.totals.areas} areas
-                reviewed
-              </span>
-            ) : null}
-            {pendingFindings.data?.total ? (
-              <span className="text-warning">
-                {areaSummary.data ? ' · ' : ''}
-                {pendingFindings.data.total} finding{pendingFindings.data.total === 1 ? '' : 's'}{' '}
-                awaiting review
-              </span>
-            ) : null}
-          </p>
-          <Button onClick={() => setCompleting(true)} type="button">
-            Finalize inspection
-          </Button>
-        </div>
-      ) : null}
-
       {assigning ? (
         <AssignmentDialog current={current} inspectionId={id} onClose={() => setAssigning(false)} />
       ) : null}
@@ -628,12 +473,8 @@ function InspectionDetail() {
       {unassigning ? (
         <InspectionUnassignDialog inspectionId={id} onClose={() => setUnassigning(false)} />
       ) : null}
-      {completing ? (
-        <InspectionCompleteDialog
-          inspectionId={id}
-          onClose={() => setCompleting(false)}
-          pendingFindings={pendingFindings.data?.total ?? 0}
-        />
+      {markingComplete ? (
+        <MarkCompleteDialog inspectionId={id} onClose={() => setMarkingComplete(false)} />
       ) : null}
       {sharing ? <ReportShareDialog inspectionId={id} onClose={() => setSharing(false)} /> : null}
       {deleting ? (
@@ -650,6 +491,26 @@ function InspectionDetail() {
         />
       ) : null}
     </>
+  );
+}
+
+/** One figure in the review summary: a label over a value, on a quiet tile. */
+function SummaryFigure({
+  label,
+  tone,
+  children,
+}: {
+  label: string;
+  tone?: 'warning';
+  children: ReactNode;
+}) {
+  return (
+    <div className="bg-card rounded-xl border px-4 py-3">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className={cn('mt-1 text-lg font-semibold tabular-nums', tone === 'warning' && 'text-warning')}>
+        {children}
+      </dd>
+    </div>
   );
 }
 
