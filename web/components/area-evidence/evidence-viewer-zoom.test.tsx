@@ -52,6 +52,12 @@ async function open() {
 }
 
 const zoomShown = () => screen.getByText(/%$/).textContent;
+/**
+ * The zoom once the photograph on screen has arrived. The zoom controls are
+ * only there while a photograph is, and the next one has not always been
+ * fetched ahead by the time a key steps on to it.
+ */
+const zoomShownOnArrival = async () => (await screen.findByText(/%$/)).textContent;
 
 function wheel(target: HTMLElement, deltaY: number) {
   const event = new WheelEvent('wheel', {
@@ -155,7 +161,7 @@ describe('the buttons and keys', () => {
 
     fireEvent.keyDown(window, { key: 'ArrowRight' });
 
-    expect(zoomShown()).toBe('100%');
+    expect(await zoomShownOnArrival()).toBe('100%');
   });
 });
 
