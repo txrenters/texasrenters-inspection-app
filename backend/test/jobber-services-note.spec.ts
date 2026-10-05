@@ -41,7 +41,7 @@ describe('the services note', () => {
     ).toBe(
       [
         'Services completed: 1, 2, 3',
-        '1. Filter Change: done (installed 20x25x1)',
+        '1. Filter Change: done (installed 1 filter: 1 × 20x25x1)',
         '2. Pest Control: done',
         '3. HVAC / Occupied Inspection: done',
         'Recorded by Pat Field in the Texas Renters inspection app, Sep 15, 2026, 2:14:05 PM CDT.',
@@ -125,11 +125,55 @@ describe('the services note', () => {
       technicianName: null,
       recordedAt: RECORDED,
     })!.split('\n');
-    expect(lines).toContain('1. Filter Change: done (installed 20x20x1)');
+    expect(lines).toContain('1. Filter Change: done (installed 1 filter: 1 × 20x20x1)');
     expect(lines).toContain('   12x12x1 · downstairs: not at the property.');
     expect(lines).toContain('   Listed as 20x25x1, actually 20x20x1.');
     // Neither is "not changed": one is not there, the other was changed.
     expect(lines.some((line) => line.includes('NOT changed'))).toBe(false);
+  });
+
+  /**
+   * The invoice is made from this note. Three filters went in at 5706 Micah Ln
+   * (2026-10-02), two of them 16x25x1, and the note said "installed 12x24x1,
+   * 16x25x1" -- a list of sizes, not of filters.
+   */
+  it('counts the filters installed, a size installed twice as two', () => {
+    const outcome = (size: string, slot: number, changed = true) => ({
+      size,
+      location: null,
+      slot,
+      changed,
+      reason: changed ? null : 'Register painted over',
+      photoId: changed ? `p-${size}-${slot}` : null,
+      booked: true,
+    });
+    const lines = jobberServicesNote({
+      report: report({
+        filtersInstalled: [],
+        filters: [outcome('12x24x1', 1), outcome('16x25x1', 1), outcome('16x25x1', 2)],
+      }),
+      details: 'Filter Change: 12x24x1;16x25x1;16x25x1 + Pest Control + HVAC Inspection',
+      inspectionType: 'HVAC',
+      inspectionDone: true,
+      technicianName: null,
+      recordedAt: RECORDED,
+    })!.split('\n');
+    expect(lines).toContain('1. Filter Change: done (installed 3 filters: 1 × 12x24x1, 2 × 16x25x1)');
+
+    // And one of the two not changed is named as which of the two.
+    const missed = jobberServicesNote({
+      report: report({
+        filtersInstalled: [],
+        filters: [outcome('12x24x1', 1), outcome('16x25x1', 1), outcome('16x25x1', 2, false)],
+      }),
+      details: 'Filter Change: 12x24x1;16x25x1;16x25x1 + Pest Control + HVAC Inspection',
+      inspectionType: 'HVAC',
+      inspectionDone: true,
+      technicianName: null,
+      recordedAt: RECORDED,
+    })!.split('\n');
+    expect(missed).toContain('1. Filter Change: done (installed 2 filters: 1 × 12x24x1, 1 × 16x25x1)');
+    expect(missed).toContain('   16x25x1 (2 of 2): NOT changed. Register painted over');
   });
 
   it('leaves out the filter change an HVAC visit never booked, which the office has no number to tick for', () => {
@@ -158,7 +202,7 @@ describe('the services note', () => {
       technicianName: null,
       recordedAt: RECORDED,
     });
-    expect(note).toContain('1. Filter Change: done (installed 20x25x1)');
+    expect(note).toContain('1. Filter Change: done (installed 1 filter: 1 × 20x25x1)');
   });
 });
 

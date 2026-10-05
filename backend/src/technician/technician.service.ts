@@ -8,7 +8,7 @@ import {
   checklistTemplateFor,
   choicesInAnswer,
   filterKey,
-  installedSizes,
+  installedFilters,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
   STANDARD_LAYOUT_SOURCE,
@@ -873,6 +873,9 @@ export class TechnicianService {
     if (whole) {
       const problems = servicesReportProblems(booked, report as VisitServicesReport, filters, {
         assessFilters: inspectionAssessesFilters(inspection.inspectionType),
+        // A phone built before a size listed twice became two registers asks
+        // one question for both; its technician must still be able to submit.
+        acceptOlderPhones: true,
       });
       if (problems.length)
         throw new ApplicationError(422, 'SERVICES_REPORT_INCOMPLETE', problems.join(' '));
@@ -910,12 +913,14 @@ export class TechnicianService {
        * answered passed submission with the filter change ticked done.
        */
       ...(report.filters !== undefined ? { filters: answered } : {}),
-      // The sizes the office reads back. From the per-register answers where
-      // the phone sent them, and from the old flat list otherwise.
+      // What the office reads back: one entry per filter installed, a size as
+      // often as it went in -- the count is what is invoiced. From the
+      // per-register answers where the phone sent them, the old flat list
+      // otherwise.
       filtersInstalled: services.filterChange?.done
         ? answered.length
-          ? installedSizes({ filters: answered, filtersInstalled: [] })
-          : [...new Set(report.filtersInstalled.map(normalizeFilterSize))]
+          ? installedFilters({ filters: answered, filtersInstalled: [] })
+          : report.filtersInstalled.map(normalizeFilterSize)
         : [],
       notes,
     };

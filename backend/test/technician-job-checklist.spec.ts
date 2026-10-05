@@ -344,8 +344,9 @@ describe('submitting a job whose registers were answered one by one', () => {
       filtersInstalled: string[];
     };
     expect(report.filters).toHaveLength(3);
-    // Only the ones actually changed, once each.
-    expect(report.filtersInstalled).toEqual(['20x25x1']);
+    // Only the ones actually changed, each one: two 20x25x1 went in, and the
+    // invoice is made from this count.
+    expect(report.filtersInstalled).toEqual(['20x25x1', '20x25x1']);
   });
 
   it('refuses a register marked changed with no photograph', async () => {

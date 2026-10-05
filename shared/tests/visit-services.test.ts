@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   FILTER_SIZE_PATTERN,
   bookedFilters,
+  filterKey,
   filterLabel,
   filtersNotChanged,
-  installedSizes,
+  installedFilters,
+  installedFiltersSummary,
   normalizeFilterSize,
   parseVisitDetails,
   reportableServices,
@@ -146,6 +148,23 @@ describe('the filter registers a visit books', () => {
     ]);
   });
 
+  // The Details the console writes list a size once per register. Each entry
+  // used to start at slot 1, so the two 16x25x1 were one register: the phone
+  // asked once and the Jobber note -- the invoice -- listed one (2026-10-06).
+  it('numbers a size listed twice as two registers, not one', () => {
+    const booked = bookedFilters(
+      parseVisitDetails('Filter Change: 12x24x1;16x25x1;16x25x1 + Pest Control + HVAC Inspection'),
+    );
+    expect(booked.map((filter) => `${filter.size}#${filter.slot}`)).toEqual([
+      '12x24x1#1',
+      '16x25x1#1',
+      '16x25x1#2',
+    ]);
+    // The second is what a phone built before this could not ask about.
+    expect(booked.map((filter) => Boolean(filter.listedAgain))).toEqual([false, false, true]);
+    expect(new Set(booked.map((filter) => filterKey(filter))).size).toBe(3);
+  });
+
   it('refuses to ask for twenty photographs because of a mistyped quantity', () => {
     expect(bookedFilters(parseVisitDetails('Filter Change: 20x25x1 (40 pcs)')).length).toBe(12);
   });
@@ -218,6 +237,28 @@ describe('what stops a submission once every register is asked about', () => {
     ).toEqual([]);
   });
 
+  it('asks the phone about both of a size listed twice, and lets an older phone’s one answer through on the server', () => {
+    const details = parseVisitDetails('Filter Change: 12x24x1;16x25x1;16x25x1');
+    const listed = bookedFilters(details);
+    const answers = [
+      changed({ size: '12x24x1', location: null }),
+      // An older phone: one answer, slot 1, for both 16x25x1 rows.
+      changed({ size: '16x25x1', location: null }),
+    ];
+    const filterOnly = reportableServices(details);
+
+    expect(servicesReportProblems(filterOnly, withFilters(answers), listed)).toEqual([
+      'Answer for the 16x25x1 (2 of 2) filter.',
+    ]);
+    expect(
+      servicesReportProblems(filterOnly, withFilters(answers), listed, { acceptOlderPhones: true }),
+    ).toEqual([]);
+    // Every other register is still asked about on the server.
+    expect(
+      servicesReportProblems(filterOnly, withFilters(answers.slice(1)), listed, { acceptOlderPhones: true }),
+    ).toEqual(['Answer for the 12x24x1 filter.']);
+  });
+
   it('still wants a photograph of a register the technician found on site', () => {
     const found = changed({ size: '16x20x1', location: null, booked: false, photoId: null });
 
@@ -228,19 +269,36 @@ describe('what stops a submission once every register is asked about', () => {
 });
 
 describe('what the office reads back', () => {
-  it('lists the sizes actually installed, once each', () => {
+  // The invoice is made from the note: a size installed twice is two filters.
+  it('lists every filter installed, a size as often as it went in, and counts them', () => {
     const report = withFilters([
       changed({}),
       changed({ slot: 2 }),
       changed({ size: '12x12x1', location: 'downstairs', changed: false, reason: 'Painted over', photoId: null }),
     ]);
 
-    expect(installedSizes(report)).toEqual(['20x25x1']);
+    expect(installedFilters(report)).toEqual(['20x25x1', '20x25x1']);
+    expect(installedFiltersSummary(report)).toBe('2 filters: 2 × 20x25x1');
     expect(filtersNotChanged(report).map((filter) => filter.reason)).toEqual(['Painted over']);
   });
 
-  it('falls back to the old list when a report carries no registers', () => {
-    expect(installedSizes({ filtersInstalled: ['20x25x1', '20x25x1', '12x12x1'] })).toEqual(['20x25x1', '12x12x1']);
-    expect(installedSizes(null)).toEqual([]);
+  it('counts each size in the order it was first installed', () => {
+    const report = withFilters([
+      changed({ size: '12x24x1', location: null }),
+      changed({ size: '16x25x1', location: null }),
+      changed({ size: '16x25x1', location: null, slot: 2 }),
+    ]);
+    expect(installedFiltersSummary(report)).toBe('3 filters: 1 × 12x24x1, 2 × 16x25x1');
+  });
+
+  it('falls back to the old list when a report carries no registers, keeping its repeats', () => {
+    expect(installedFilters({ filtersInstalled: ['20x25x1', '20x25x1', '12x12x1'] })).toEqual([
+      '20x25x1',
+      '20x25x1',
+      '12x12x1',
+    ]);
+    expect(installedFiltersSummary({ filtersInstalled: ['12x12x1'] })).toBe('1 filter: 1 × 12x12x1');
+    expect(installedFilters(null)).toEqual([]);
+    expect(installedFiltersSummary(null)).toBeNull();
   });
 });

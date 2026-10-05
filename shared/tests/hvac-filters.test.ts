@@ -6,7 +6,7 @@ import {
   filtersNotChanged,
   filtersRemoved,
   HVAC_WALKED_SECTIONS,
-  installedSizes,
+  installedFilters,
   jobServices,
   parseVisitDetails,
   servicesReportProblems,
@@ -123,7 +123,7 @@ describe('a corrected filter, as the office reads it', () => {
   };
 
   it('installs the size really there, never one removed', () => {
-    expect(installedSizes(report)).toEqual(['20x20x1']);
+    expect(installedFilters(report)).toEqual(['20x20x1']);
   });
 
   it('names a resized filter by its real size', () => {

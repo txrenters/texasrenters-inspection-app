@@ -2,7 +2,7 @@
 
 import {
   filterLabel,
-  installedSizes,
+  installedFiltersSummary,
   isFinishedStatus,
   parseVisitDetails,
   REPORTABLE_VISIT_SERVICES,
@@ -336,9 +336,10 @@ function ServicesDone({ report, reportedAt }: { report: VisitServicesReport; rep
           );
         })}
       </ul>
-      {installedSizes(report).length ? (
+      {/* Counted, as the Jobber note says it: the invoice is made from it. */}
+      {installedFiltersSummary(report) ? (
         <p className="text-sm">
-          Filters installed: <span className="font-mono">{installedSizes(report).join(', ')}</span>
+          Filters installed: <span className="font-mono">{installedFiltersSummary(report)}</span>
         </p>
       ) : null}
       {/* Each register the technician answered for, once the office asked for a

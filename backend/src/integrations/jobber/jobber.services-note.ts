@@ -4,9 +4,11 @@ import {
   filtersRemoved,
   formatPhotoStamp,
   inspectionAssessesFilters,
-  installedSizes,
+  installedFiltersSummary,
+  normalizeFilterSize,
   parseVisitDetails,
   type ReportableVisitService,
+  type VisitFilterOutcome,
   type VisitServicesReport,
 } from '@texasrenters/shared';
 
@@ -33,6 +35,13 @@ const OFFICE_NAME: Record<ReportableVisitService, string> = {
   pestControl: 'Pest Control',
   fleaTreatment: 'Flea Treatment',
 };
+
+/** How many answered registers share this one's size and place. */
+function sameRegisters(report: VisitServicesReport, of: VisitFilterOutcome): number {
+  const place = (filter: VisitFilterOutcome) =>
+    `${normalizeFilterSize(filter.size)}|${(filter.location ?? '').trim().toLowerCase()}`;
+  return (report.filters ?? []).filter((filter) => place(filter) === place(of)).length;
+}
 
 export function jobberServicesNote(input: {
   report: VisitServicesReport;
@@ -61,10 +70,15 @@ export function jobberServicesNote(input: {
     const label = number ? `${number}. ${OFFICE_NAME[service]}` : OFFICE_NAME[service];
     if (outcome.done) {
       if (number) completed.push(number);
-      const sizes = service === 'filterChange' ? installedSizes(input.report) : [];
+      /**
+       * Counted: "installed 3 filters: 1 × 12x24x1, 2 × 16x25x1". The invoice
+       * is made from this line, and a list of sizes said "12x24x1, 16x25x1" for
+       * three filters, two of them the same size (5706 Micah Ln, 2026-10-02).
+       */
+      const installed = service === 'filterChange' ? installedFiltersSummary(input.report) : null;
       lines.push({
         order: number ?? 10,
-        text: `${label}: done${sizes.length ? ` (installed ${sizes.join(', ')})` : ''}`,
+        text: `${label}: done${installed ? ` (installed ${installed})` : ''}`,
       });
       /**
        * And which register was missed, where the technician answered for each.
@@ -78,7 +92,9 @@ export function jobberServicesNote(input: {
         for (const filter of filtersNotChanged(input.report))
           lines.push({
             order: number ?? 10,
-            text: `   ${filterLabel(filter)}: NOT changed. ${filter.reason ?? ''}`.trimEnd(),
+            // "(2 of 2)" where the size is in that place more than once, or two
+            // identical lines would not say which register was missed.
+            text: `   ${filterLabel(filter, sameRegisters(input.report, filter))}: NOT changed. ${filter.reason ?? ''}`.trimEnd(),
           });
         // What the visit listed and the technician corrected: the office's
         // record of the property's filters is wrong until somebody fixes it.
