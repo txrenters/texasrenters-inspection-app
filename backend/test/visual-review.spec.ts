@@ -96,6 +96,12 @@ function harness(
     houseRules?: string | null;
     /** The technician's own photos of this room; none unless a test is about them. */
     roomPhotos?: unknown[];
+    /** Frames the AI filed under findings a re-run has since replaced. */
+    orphans?: Array<{ id: string; storageKey: string }>;
+    /** Suggestions the AI may file once the review is written. */
+    toFile?: Array<{ id: string; findingId: string; atMs: number }>;
+    /** A photograph already filed at the same moment of the recording. */
+    filedAlready?: { id: string; findingId: string | null } | null;
   } = {},
 ) {
   const media =
@@ -106,6 +112,8 @@ function harness(
           streamUid: 'uid-1',
           readyAt: new Date(),
           durationSeconds: 12,
+          technicianId: 'technician-1',
+          recordedAt: new Date('2026-10-01T15:00:12.000Z'),
           inspectionAreaId: 'inspection-area-1',
           inspectionArea: {
             propertyArea: { id: 'pa-entrance', name: 'Entrance' },
@@ -168,12 +176,24 @@ function harness(
       ]),
     },
     inspectionPhoto: {
-      // The room's own photos are asked for by area; the move-in's by its room.
-      findMany: jest.fn(async (args: { where: { inspectionAreaId?: string } }) =>
-        args.where.inspectionAreaId
-          ? (opts.roomPhotos ?? [])
-          : (opts.baselinePhotos ?? DEFAULT_BASELINE_PHOTOS),
+      // The room's own photos are asked for by area; the move-in's by its room;
+      // the AI's own loose frames by who filed them.
+      findMany: jest.fn(async (args: { where: { inspectionAreaId?: string; metadata?: unknown } }) =>
+        args.where.metadata
+          ? (opts.orphans ?? [])
+          : args.where.inspectionAreaId
+            ? (opts.roomPhotos ?? [])
+            : (opts.baselinePhotos ?? DEFAULT_BASELINE_PHOTOS),
       ),
+      findUnique: jest.fn().mockResolvedValue(opts.filedAlready ?? null),
+      create: jest.fn().mockResolvedValue({ id: 'ai-photo-1' }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    findingFrameSuggestion: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue(opts.toFile ?? [{ id: 'suggestion-door', findingId: 'finding-door', atMs: 4500 }]),
+      update: jest.fn().mockResolvedValue({}),
     },
     aiAnalysisJob: {
       create: jest.fn().mockResolvedValue({ id: 'vision-job-1' }),
@@ -194,7 +214,12 @@ function harness(
     customerCode: opts.customerCode === undefined ? 'cust' : opts.customerCode,
     signPlaybackToken: jest.fn().mockReturnValue({ token: 'tok' }),
   };
-  const storage = { get: jest.fn().mockResolvedValue(Buffer.from('move-in-photo')) };
+  const storage = {
+    get: jest.fn().mockResolvedValue(Buffer.from('move-in-photo')),
+    putBytes: jest.fn().mockResolvedValue(undefined),
+    delete: jest.fn().mockResolvedValue(undefined),
+    providerName: jest.fn().mockReturnValue('r2'),
+  };
   const comparison = {
     baselineAreaFor: jest.fn().mockResolvedValue({
       inspectionId: 'move-in-1',
@@ -281,7 +306,7 @@ function harness(
       text?: string;
       image_url?: string;
     }>;
-  return { service, prisma, tx, aiSettings, stream, comparison, sent, calls };
+  return { service, prisma, tx, aiSettings, stream, comparison, storage, sent, calls };
 }
 
 describe('looking at a recording', () => {
@@ -497,6 +522,154 @@ describe('looking at a recording', () => {
   });
 });
 
+/**
+ * The office (2026-10-06): a reviewer pressed "Use this photo" on every
+ * suggestion. The AI now files its sharpest confirmed frame of each finding
+ * still awaiting review itself.
+ */
+describe('the frames the AI files itself', () => {
+  it('files the sharpest confirmed frame under its finding, credited to the technician, marked as the AI’s', async () => {
+    const { service, prisma, storage } = harness();
+
+    const result = await service.review('media-1', ORGANIZATION_ID);
+
+    // Only the best frame of a finding nobody has decided yet.
+    expect(prisma.findingFrameSuggestion.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          inspectionMediaId: 'media-1',
+          rank: 0,
+          status: 'SUGGESTED',
+          photoId: null,
+          finding: { reviewStatus: 'PENDING_REVIEW' },
+        },
+      }),
+    );
+    const key = `organizations/${ORGANIZATION_ID}/inspections/move-out-1/photos/media-1-snapshot-4500.jpg`;
+    expect(storage.putBytes).toHaveBeenCalledWith(key, expect.any(Buffer), 'image/jpeg');
+    // The full-height frame, the one the close look confirmed it in.
+    expect((storage.putBytes.mock.calls[0][1] as Buffer).byteLength).toBe(900);
+    expect(prisma.inspectionPhoto.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: ORGANIZATION_ID,
+        inspectionId: 'move-out-1',
+        inspectionAreaId: 'inspection-area-1',
+        findingId: 'finding-door',
+        capturedById: 'technician-1',
+        provider: 'r2',
+        storageKey: key,
+        captureType: 'VIDEO_FRAME_SNAPSHOT',
+        // The same key a reviewer's capture of that moment uses.
+        idempotencyKey: 'media-1-snapshot-4500',
+        metadata: { videoTimestampMs: 4500, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: 'AI' },
+      }),
+      select: { id: true },
+    });
+    // Accepted with nobody against it: the AI's acceptance.
+    expect(prisma.findingFrameSuggestion.update).toHaveBeenCalledWith({
+      where: { id: 'suggestion-door' },
+      data: { status: 'ACCEPTED', photoId: 'ai-photo-1', decidedAt: expect.any(Date) },
+    });
+    expect(result?.filed).toBe(1);
+  });
+
+  it('takes back the frames it filed under findings a re-run replaced', async () => {
+    const { service, prisma, storage } = harness({
+      orphans: [{ id: 'old-ai-photo', storageKey: 'organizations/x/old.jpg' }],
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(prisma.inspectionPhoto.findMany).toHaveBeenCalledWith({
+      where: {
+        inspectionAreaId: 'inspection-area-1',
+        findingId: null,
+        metadata: { path: ['filedBy'], equals: 'AI' },
+      },
+      select: { id: true, storageKey: true },
+    });
+    expect(prisma.inspectionPhoto.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['old-ai-photo'] } } });
+    expect(storage.delete).toHaveBeenCalledWith('organizations/x/old.jpg');
+  });
+
+  it('leaves a moment a person already filed where they put it', async () => {
+    const { service, prisma, storage } = harness({
+      filedAlready: { id: 'reviewer-photo', findingId: null },
+    });
+
+    const result = await service.review('media-1', ORGANIZATION_ID);
+
+    expect(storage.putBytes).not.toHaveBeenCalled();
+    expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
+    expect(prisma.findingFrameSuggestion.update).not.toHaveBeenCalled();
+    expect(result?.filed).toBe(0);
+  });
+
+  it('counts a person’s photograph of the same moment under the same finding as filed', async () => {
+    const { service, prisma, storage } = harness({
+      filedAlready: { id: 'reviewer-photo', findingId: 'finding-door' },
+    });
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(storage.putBytes).not.toHaveBeenCalled();
+    expect(prisma.findingFrameSuggestion.update).toHaveBeenCalledWith({
+      where: { id: 'suggestion-door' },
+      data: { status: 'ACCEPTED', photoId: 'reviewer-photo', decidedAt: expect.any(Date) },
+    });
+  });
+
+  it('leaves a frame it cannot store as a suggestion, and still finishes the review', async () => {
+    const { service, prisma, storage } = harness();
+    storage.putBytes.mockRejectedValueOnce(new Error('bucket unavailable'));
+
+    const result = await service.review('media-1', ORGANIZATION_ID);
+
+    expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
+    expect(prisma.findingFrameSuggestion.update).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ filed: 0, spotted: 1 });
+    expect(prisma.aiAnalysisJob.update).toHaveBeenCalledWith({
+      where: { id: 'vision-job-1' },
+      data: { status: 'COMPLETED' },
+    });
+  });
+
+  it('takes away the photograph again when it cannot record it as filed', async () => {
+    const { service, prisma, storage } = harness();
+    prisma.inspectionPhoto.create.mockRejectedValueOnce(new Error('unique constraint'));
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    expect(storage.delete).toHaveBeenCalledWith(
+      `organizations/${ORGANIZATION_ID}/inspections/move-out-1/photos/media-1-snapshot-4500.jpg`,
+    );
+    expect(prisma.findingFrameSuggestion.update).not.toHaveBeenCalled();
+  });
+
+  it('writes no stock advice on what it spotted', async () => {
+    const { service, tx } = harness();
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    const [[{ data: spotted }]] = tx.inspectionFinding.createMany.mock.calls;
+    expect(spotted[0].recommendedReview).toBe('');
+  });
+});
+
+describe('what the scan is asked for', () => {
+  it('ten problems nobody narrated, surface by surface, one thing each, said specifically', async () => {
+    const { service, sent } = harness();
+
+    await service.review('media-1', ORGANIZATION_ID);
+
+    const prompt = sent(0)[0].text!;
+    expect(prompt).toContain('List up to 10 other problems');
+    expect(prompt).toContain('Go surface by surface');
+    expect(prompt).toContain('never join two things in one');
+    expect(prompt).toContain('Never a vague title');
+  });
+});
+
 describe('the office’s house rules, in the look at the video', () => {
   it('judges what is worth listing by them, and records the version it ran under', async () => {
     const { service, sent, prisma } = harness({
@@ -509,7 +682,7 @@ describe('the office’s house rules, in the look at the video', () => {
       '<house_rules>\nDirt is a cleaning item, never damage.\n</house_rules>',
     );
     expect(prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ promptVersion: 'vision-3', guidanceVersion: 2 }),
+      data: expect.objectContaining({ promptVersion: 'vision-4', guidanceVersion: 2 }),
     });
   });
 

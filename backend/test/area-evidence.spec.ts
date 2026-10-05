@@ -780,6 +780,77 @@ describe('single area evidence bundle', () => {
     );
   });
 
+  // The office (2026-10-06): the AI files its best frame of a finding itself.
+  it('says which photographs the AI filed, and which suggestion it accepted', async () => {
+    const prisma = bundlePrisma();
+    const [overviewPhoto, closeUp] = await prisma.inspectionPhoto.findMany();
+    prisma.inspectionPhoto.findMany.mockResolvedValue([
+      overviewPhoto,
+      closeUp,
+      {
+        ...closeUp,
+        id: 'ai-frame',
+        captureType: 'VIDEO_FRAME_SNAPSHOT',
+        metadata: { videoTimestampMs: 21_500, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: 'AI' },
+      },
+    ]);
+    const [finding] = await prisma.inspectionFinding.findMany();
+    const suggestion = {
+      inspectionMediaId: 'media-1',
+      atMs: 21_500,
+      rank: 0,
+      boxX: null,
+      boxY: null,
+      boxWidth: null,
+      boxHeight: null,
+      observation: null,
+    };
+    prisma.inspectionFinding.findMany.mockResolvedValue([
+      {
+        ...finding,
+        frameSuggestions: [
+          { ...suggestion, id: 'by-ai', status: 'ACCEPTED', photoId: 'ai-frame', decidedById: null },
+          { ...suggestion, id: 'by-person', status: 'ACCEPTED', photoId: 'photo-2', decidedById: 'user-9' },
+        ],
+      },
+    ]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    const photos = bundle.photoGroups.flatMap((group) => group.photos);
+    expect(photos.find((photo) => photo.id === 'ai-frame')?.filedByAi).toBe(true);
+    expect(photos.find((photo) => photo.id === 'photo-2')?.filedByAi).toBe(false);
+    expect(
+      bundle.findings[0].frameSuggestions?.map((row) => [row.id, row.filedByAi]),
+    ).toEqual([
+      ['by-ai', true],
+      ['by-person', false],
+    ]);
+  });
+
+  it('stops showing the AI’s frame of a finding the office rejected, and never a loose one', async () => {
+    const prisma = bundlePrisma();
+    const [overviewPhoto, closeUp] = await prisma.inspectionPhoto.findMany();
+    const aiFiled = { videoTimestampMs: 21_500, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: 'AI' };
+    prisma.inspectionPhoto.findMany.mockResolvedValue([
+      overviewPhoto,
+      // The technician's own photograph of the rejected finding stays.
+      closeUp,
+      { ...closeUp, id: 'ai-frame', captureType: 'VIDEO_FRAME_SNAPSHOT', metadata: aiFiled },
+      { ...closeUp, id: 'ai-loose', findingId: null, captureType: 'VIDEO_FRAME_SNAPSHOT', metadata: aiFiled },
+    ]);
+    const [finding] = await prisma.inspectionFinding.findMany();
+    prisma.inspectionFinding.findMany.mockResolvedValue([{ ...finding, reviewStatus: 'REJECTED' }]);
+
+    const bundle = await service(prisma).areaEvidence(user, INSPECTION, 'a1');
+
+    const shown = bundle.photoGroups.flatMap((group) => group.photos.map((photo) => photo.id));
+    expect(shown).toEqual(expect.arrayContaining(['photo-1', 'photo-2']));
+    expect(shown).not.toContain('ai-frame');
+    expect(shown).not.toContain('ai-loose');
+    expect(bundle.counts.photos).toBe(2);
+  });
+
   it('returns the condition summary separately from itemized findings', async () => {
     const bundle = await service(bundlePrisma()).areaEvidence(user, INSPECTION, 'a1');
 

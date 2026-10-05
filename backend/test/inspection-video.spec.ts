@@ -797,6 +797,93 @@ describe('the office re-runs the analysis of a recording', () => {
  * Draft house rules tried on a recording the office already decided. Nothing
  * but the usage is stored; the draft is set beside the decisions.
  */
+/**
+ * The office (2026-10-06): the whole narration, word for word, beside the
+ * video -- transcribed on the server, never on the phone.
+ */
+describe('the narration of a recording, for the reviewer', () => {
+  const reviewer: AuthenticatedUser = {
+    ...technician,
+    id: '10000000-0000-4000-8000-000000000003',
+    permissions: ['findings:read'],
+  };
+
+  function harness(media: Record<string, unknown> | null) {
+    const { service, prisma } = build();
+    const findFirst = jest.fn().mockResolvedValue(media);
+    Object.assign(prisma.inspectionMedia, { findFirst });
+    return { service, findFirst };
+  }
+
+  it('is every line, in order, with its seconds', async () => {
+    const { service, findFirst } = harness({
+      id: 'media-1',
+      transcriptionJob: {
+        status: 'COMPLETED',
+        segments: [
+          { startSeconds: 0, endSeconds: 6, text: ' This is the kitchen. ' },
+          { startSeconds: 18, endSeconds: 24, text: 'The floor is lifting at the doorway.' },
+        ],
+      },
+    });
+
+    await expect(service.getTranscript(reviewer, 'media-1')).resolves.toEqual({
+      mediaId: 'media-1',
+      status: 'COMPLETED',
+      lines: [
+        { start: 0, end: 6, text: 'This is the kitchen.' },
+        { start: 18, end: 24, text: 'The floor is lifting at the doorway.' },
+      ],
+    });
+    // Scoped to the caller's organization, and read in the order spoken.
+    const [[query]] = findFirst.mock.calls;
+    expect(query.where).toEqual({ id: 'media-1', organizationId: reviewer.organizationId });
+    expect(query.select.transcriptionJob.select.segments.orderBy).toEqual([
+      { startSeconds: 'asc' },
+      { endSeconds: 'asc' },
+    ]);
+  });
+
+  it('drops empty lines and never ends a line before it starts', async () => {
+    const { service } = harness({
+      id: 'media-1',
+      transcriptionJob: {
+        status: 'COMPLETED',
+        segments: [
+          { startSeconds: 4, endSeconds: 4, text: '   ' },
+          { startSeconds: 9, endSeconds: 3, text: 'Ceiling stain above the sink.' },
+        ],
+      },
+    });
+
+    const transcript = await service.getTranscript(reviewer, 'media-1');
+
+    expect(transcript.lines).toEqual([{ start: 9, end: 9, text: 'Ceiling stain above the sink.' }]);
+  });
+
+  it('says it is still being transcribed, or was never, rather than showing nothing', async () => {
+    const running = harness({ id: 'media-1', transcriptionJob: { status: 'RUNNING', segments: [] } });
+    await expect(running.service.getTranscript(reviewer, 'media-1')).resolves.toEqual({
+      mediaId: 'media-1',
+      status: 'RUNNING',
+      lines: [],
+    });
+    const never = harness({ id: 'media-1', transcriptionJob: null });
+    await expect(never.service.getTranscript(reviewer, 'media-1')).resolves.toMatchObject({ status: 'NONE' });
+  });
+
+  it('is for the office, not a technician', async () => {
+    const { service, findFirst } = harness({ id: 'media-1', transcriptionJob: null });
+    await expect(service.getTranscript(technician, 'media-1')).rejects.toMatchObject({ status: 403 });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('answers not found for a recording outside the organization', async () => {
+    const { service } = harness(null);
+    await expect(service.getTranscript(reviewer, 'media-1')).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 describe('the office tries draft house rules on a recording', () => {
   const configurer: AuthenticatedUser = {
     ...technician,

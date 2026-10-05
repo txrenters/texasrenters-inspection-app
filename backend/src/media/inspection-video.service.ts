@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import type { RecordingTranscript } from '@texasrenters/shared';
 import {
   FrameSuggestionStatus,
   InspectionAreaCompletionStatus,
@@ -16,6 +17,7 @@ import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
+import { isAiFiled } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from '../technician/room-summary';
 import {
@@ -332,15 +334,48 @@ export class InspectionVideoService {
     return decided;
   }
 
-  /** Not this frame. The next of the AI's suggestions is offered instead, if it had one. */
+  /**
+   * Not this frame. The next of the AI's suggestions is offered instead, if it
+   * had one.
+   *
+   * A frame the AI filed itself can be set aside like one it only suggested:
+   * its photograph goes with it. One a person filed stays -- that was somebody's
+   * decision, and a photograph is removed from the Photos tab, not from here.
+   */
   async dismissFrameSuggestion(user: AuthenticatedUser, suggestionId: string) {
     const suggestion = await this.frameSuggestion(user, suggestionId);
-    if (suggestion.status === FrameSuggestionStatus.ACCEPTED)
-      throw new ApplicationError(
-        409,
-        'FRAME_SUGGESTION_ACCEPTED',
-        'This frame is already filed as the finding’s photograph.',
-      );
+    if (suggestion.status === FrameSuggestionStatus.ACCEPTED) {
+      const filed =
+        !suggestion.decidedById && suggestion.photoId
+          ? await this.prisma.inspectionPhoto.findFirst({
+              where: { id: suggestion.photoId, findingId: suggestion.findingId },
+              select: { id: true, storageKey: true, metadata: true },
+            })
+          : null;
+      if (!filed || !isAiFiled(filed.metadata))
+        throw new ApplicationError(
+          409,
+          'FRAME_SUGGESTION_ACCEPTED',
+          'This frame is already filed as the finding’s photograph.',
+        );
+      const decided = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.findingFrameSuggestion.update({
+          where: { id: suggestion.id },
+          data: {
+            status: FrameSuggestionStatus.DISMISSED,
+            photoId: null,
+            decidedById: user.id,
+            decidedAt: new Date(),
+          },
+          select: { id: true, status: true, photoId: true },
+        });
+        await tx.inspectionPhoto.delete({ where: { id: filed.id } });
+        return row;
+      });
+      await this.mediaStorage?.delete(filed.storageKey).catch(() => undefined);
+      await this.frameSuggestionAudit(user, 'FRAME_SUGGESTION_DISMISSED', suggestion, filed.id);
+      return decided;
+    }
     const decided = await this.prisma.findingFrameSuggestion.update({
       where: { id: suggestion.id },
       data: {
@@ -372,6 +407,8 @@ export class InspectionVideoService {
         id: true,
         status: true,
         photoId: true,
+        // Null on one the AI accepted itself.
+        decidedById: true,
         atMs: true,
         findingId: true,
         inspectionId: true,
@@ -760,6 +797,50 @@ export class InspectionVideoService {
       inspectionId: area.inspectionId,
     });
     return this.sessionResponse(media.id, upload.streamUid, upload.uploadUrl, upload.expiresAt);
+  }
+
+  /**
+   * The recording's narration, word for word, for the reviewer to read beside
+   * the video.
+   *
+   * Reviewer-side: gated on `findings:read`, checked here because this
+   * controller carries no permissions guard, and scoped to the caller's
+   * organization so another one's id is simply not found. The narration can
+   * name a tenant or a way in, which is why it is kept out of logs and event
+   * payloads; the reviewer reading it is who it is kept for.
+   */
+  async getTranscript(user: AuthenticatedUser, videoId: string): Promise<RecordingTranscript> {
+    if (!user.permissions.includes('findings:read'))
+      throw new ApplicationError(403, 'FORBIDDEN', 'You do not have permission to read transcripts.');
+    const media = await this.prisma.inspectionMedia.findFirst({
+      where: { id: videoId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        transcriptionJob: {
+          select: {
+            status: true,
+            segments: {
+              orderBy: [{ startSeconds: 'asc' }, { endSeconds: 'asc' }],
+              select: { startSeconds: true, endSeconds: true, text: true },
+            },
+          },
+        },
+      },
+    });
+    if (!media)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
+    const job = media.transcriptionJob;
+    return {
+      mediaId: media.id,
+      status: job?.status ?? 'NONE',
+      lines: (job?.segments ?? [])
+        .map((segment) => ({
+          start: segment.startSeconds,
+          end: Math.max(segment.startSeconds, segment.endSeconds),
+          text: segment.text.trim(),
+        }))
+        .filter((line) => line.text.length > 0),
+    };
   }
 
   /**

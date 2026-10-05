@@ -34,6 +34,16 @@ vi.mock('@/lib/queries', () => ({
   }),
   useInspection: () => ({ data: { finalizedAt: state.finalizedAt } }),
   useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),
+  // Each recording's narration, one line naming the recording it belongs to.
+  useRecordingTranscript: (mediaId: string) => ({
+    isLoading: false,
+    isError: false,
+    data: {
+      mediaId,
+      status: 'COMPLETED',
+      lines: [{ start: 12, end: 16, text: `Narration of ${mediaId}.` }],
+    },
+  }),
   useVideoPlayback: (mediaId: string) => ({
     isLoading: false,
     isError: false,
@@ -288,6 +298,34 @@ describe('the recording tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /0:12 Carpet seam lifting/ }));
 
     // Additional clips never seeked at all: they opened at 0:00.
+    expect(player()?.getAttribute('src')).toBe(
+      'https://customer-x.cloudflarestream.com/clip.tok/iframe?startTime=12s&autoplay=true',
+    );
+  });
+
+  // The office (2026-10-06): the narration word for word, beside each video.
+  it('puts each recording’s whole transcript beside it, and plays the recording from a line', () => {
+    open(
+      bundle(
+        [finding('seam', 'Carpet seam lifting', 12, 18, { recordingId: 'clip' })],
+        [
+          recording('walkthrough'),
+          recording('clip', { recordingType: 'ADDITIONAL_ISSUE', label: 'Carpet seam' }),
+        ],
+      ),
+      'recording',
+    );
+
+    const transcripts = screen.getAllByRole('region', { name: 'Transcript' });
+    expect(transcripts.map((transcript) => transcript.textContent)).toEqual([
+      expect.stringContaining('Narration of walkthrough.'),
+      expect.stringContaining('Narration of clip.'),
+    ]);
+    // The clip's finding is marked on the line it was written from.
+    expect(within(transcripts[1]).getByText('Carpet seam lifting')).toBeInTheDocument();
+
+    fireEvent.click(within(transcripts[1]).getByRole('button', { name: /Narration of clip/ }));
+
     expect(player()?.getAttribute('src')).toBe(
       'https://customer-x.cloudflarestream.com/clip.tok/iframe?startTime=12s&autoplay=true',
     );

@@ -21,6 +21,7 @@ import { inspectedAreas } from '../common/inspected-areas';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { STREAM_ENCODING_FAILED } from '../media/inspection-video.service';
+import { isAiFiled } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import {
   REANALYSIS_COMPLETED_EVENT,
@@ -625,7 +626,7 @@ export class AreaEvidenceService {
         'Inspection area was not found.',
       );
 
-    const [recordings, photos, findings, summaryFinding, checklistItems, reviewers] =
+    const [recordings, filedPhotos, findings, summaryFinding, checklistItems, reviewers] =
       await Promise.all([
       this.prisma.inspectionMedia.findMany({
         where: { inspectionAreaId: area.id },
@@ -679,6 +680,8 @@ export class AreaEvidenceService {
           createdAt: true,
           sha256: true,
           findingId: true,
+          // Says whether the AI filed it; see `isAiFiled`.
+          metadata: true,
           capturedBy: { select: { displayName: true } },
         },
       }),
@@ -727,6 +730,7 @@ export class AreaEvidenceService {
               observation: true,
               status: true,
               photoId: true,
+              decidedById: true,
             },
           },
           reviewStatus: true,
@@ -806,6 +810,22 @@ export class AreaEvidenceService {
       this.reviewerNames([area.reviewedById]),
     ]);
 
+    /**
+     * A frame the AI filed is shown only while it still documents a finding the
+     * office has not turned down. Rejecting the finding answers its frame too:
+     * kept, so undoing the rejection brings it back, but not left among the
+     * area's photographs as if somebody had chosen it.
+     */
+    const rejected = new Set(
+      findings
+        .filter((finding) => finding.reviewStatus === FindingReviewStatus.REJECTED)
+        .map((finding) => finding.id),
+    );
+    const photos = filedPhotos.filter(
+      (photo) =>
+        !isAiFiled(photo.metadata) || (photo.findingId !== null && !rejected.has(photo.findingId)),
+    );
+
     // Poster frames only. Playback URLs are minted when a recording is opened.
     const thumbnails = await Promise.all(
       recordings.map((recording) =>
@@ -849,6 +869,7 @@ export class AreaEvidenceService {
       sha256: photo.sha256,
       capturedByName: photo.capturedBy.displayName,
       findingId: photo.findingId,
+      filedByAi: isAiFiled(photo.metadata),
       contentPath: `/api/v1/admin/photos/${photo.id}/content`,
     });
     if (overview.length)
@@ -1017,6 +1038,8 @@ export class AreaEvidenceService {
           observation: suggestion.observation,
           status: suggestion.status,
           photoId: suggestion.photoId,
+          // Only the AI accepts without a person against it.
+          filedByAi: suggestion.status === 'ACCEPTED' && !suggestion.decidedById,
         })),
         reviewStatus: finding.reviewStatus,
         createdAt: finding.createdAt.toISOString(),

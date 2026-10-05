@@ -127,11 +127,45 @@ describe("the AI's suggested photo", () => {
     expect(screen.getByRole('img', { name: /Frame at 0:25 suggested/ })).toBeTruthy();
   });
 
-  it('says so once the frame is filed, and offers nothing more to decide', () => {
+  it('says so once a person filed the frame, and offers nothing more to decide', () => {
     const [second, first] = finding().frameSuggestions!;
     show(finding({ frameSuggestions: [{ ...first, status: 'ACCEPTED', photoId: 'photo-1' }, second] }));
     expect(screen.getByText('Filed under the finding')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Use this photo' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Not this one' })).toBeNull();
+  });
+
+  // The office (2026-10-06): the AI files its best frame itself; a reviewer
+  // can still say it is the wrong one.
+  it('says the AI filed it, and lets the reviewer set it aside', () => {
+    const [second, first] = finding().frameSuggestions!;
+    show(
+      finding({
+        frameSuggestions: [{ ...first, status: 'ACCEPTED', photoId: 'ai-photo', filedByAi: true }, second],
+      }),
+    );
+
+    expect(screen.getByText(/Added by the AI as this finding/)).toBeTruthy();
+    expect(screen.getByText('Filed under the finding')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Use this photo' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Not this one' }));
+    expect(state.mutate).toHaveBeenCalledWith({
+      suggestionId: 'suggestion-1',
+      decision: 'dismiss',
+      inspectionId: 'inspection-1',
+      areaId: 'area-1',
+    });
+  });
+
+  it('does not offer to set aside the AI’s frame to someone who may not file evidence', () => {
+    const [second, first] = finding().frameSuggestions!;
+    show(
+      finding({
+        frameSuggestions: [{ ...first, status: 'ACCEPTED', photoId: 'ai-photo', filedByAi: true }, second],
+      }),
+      false,
+    );
+    expect(screen.queryByRole('button', { name: 'Not this one' })).toBeNull();
   });
 
   it('is only looked at by someone who may not file evidence', () => {

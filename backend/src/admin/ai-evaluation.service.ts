@@ -12,6 +12,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withTenant } from '../database/tenant-context';
+import { isAiFiled } from '../technician/ai-filed-frames';
 import { MediaProcessingService, PROMPT_VERSION } from '../technician/media-processing.service';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from '../technician/room-summary';
 import { AiGuidanceService, MAX_GUIDANCE_LENGTH } from './ai-guidance.service';
@@ -250,10 +251,11 @@ export class AiEvaluationService {
           orderBy: { createdAt: 'desc' },
           select: { status: true, reasonCode: true, editedValue: true },
         },
+        // Every frame filed, so the first a person chose can be told from the
+        // AI's own: a frame the AI filed is not the office confirming anything.
         photos: {
           where: { captureType: PhotoCaptureType.VIDEO_FRAME_SNAPSHOT },
           orderBy: { createdAt: 'asc' },
-          take: 1,
           select: { metadata: true },
         },
       },
@@ -263,8 +265,8 @@ export class AiEvaluationService {
       const correctedFrom = finding.reviews
         .map((review) => (review.editedValue as { before?: { title?: unknown } } | null)?.before?.title)
         .filter((title): title is string => typeof title === 'string' && title !== finding.title);
-      const frame = (finding.photos[0]?.metadata as { videoTimestampMs?: unknown } | null)
-        ?.videoTimestampMs;
+      const chosen = finding.photos.find((photo) => !isAiFiled(photo.metadata));
+      const frame = (chosen?.metadata as { videoTimestampMs?: unknown } | null)?.videoTimestampMs;
       return {
         id: finding.id,
         titles: [finding.title, ...correctedFrom],

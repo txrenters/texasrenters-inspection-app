@@ -138,6 +138,23 @@ export interface AreaEvidenceSummary {
   unassigned: { recordings: number; photos: number };
 }
 
+/**
+ * A recording's narration word for word, as the server transcribed it.
+ *
+ * The office reads the whole of it beside the video (2026-10-06): the findings
+ * are the AI's reading of the narration, and a reviewer listening through the
+ * recording to hear what the technician said about each one was the slow part
+ * of the review. Transcribed on the server from Cloudflare's copy of the video,
+ * never on the phone.
+ */
+export interface RecordingTranscript {
+  mediaId: string;
+  /** Where transcription stands; NONE before it has started. */
+  status: 'NONE' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  /** One line per utterance, in order, with its seconds in the recording. */
+  lines: Array<{ start: number; end: number; text: string }>;
+}
+
 export interface AreaRecording {
   id: string;
   recordingType: 'PRIMARY_AREA' | 'ADDITIONAL_ISSUE';
@@ -200,6 +217,11 @@ export interface AreaPhoto {
   capturedByName: string;
   /** Finding this photo evidences, when it documents a specific one. */
   findingId?: string | null;
+  /**
+   * A frame the AI filed itself from the video check, rather than one a person
+   * took or chose. `capturedByName` is still the technician who filmed it.
+   */
+  filedByAi?: boolean;
   /** Base path; callers append a width to request a bounded variant. */
   contentPath: string;
 }
@@ -293,8 +315,10 @@ export interface AreaChecklistEntry {
 }
 
 /**
- * A frame the AI suggests as a finding's photograph. A suggestion until a
- * person accepts it, which files it under the finding.
+ * A frame the AI suggests as a finding's photograph. A suggestion until it is
+ * accepted, which files it under the finding: by a person, or -- for its
+ * sharpest confirmed frame of a finding still awaiting review -- by the AI
+ * itself, which a reviewer can still set aside.
  */
 export interface AreaFrameSuggestion {
   id: string;
@@ -307,6 +331,8 @@ export interface AreaFrameSuggestion {
   observation?: string | null;
   status: 'SUGGESTED' | 'ACCEPTED' | 'DISMISSED';
   photoId?: string | null;
+  /** Accepted by the AI rather than by a person. */
+  filedByAi?: boolean;
 }
 
 /**

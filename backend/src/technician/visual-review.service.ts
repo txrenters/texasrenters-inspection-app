@@ -30,8 +30,10 @@ import { findingMatchesChecklistItem } from '../common/checklist-item-match';
 import { ApplicationError } from '../common/errors';
 import { resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor } from '../common/object-storage';
+import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
+import { aiFiledMetadata, removeOrphanedAiFrames } from './ai-filed-frames';
 import { houseRulesLines } from './house-rules';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from './room-summary';
@@ -69,8 +71,10 @@ import { ROOM_SUMMARY_WHERE } from './room-summary';
  * Recorded on the analysis job, so a finding can be traced to the prompt that wrote it.
  * vision-2: the office's house rules decide what counts as a problem worth spotting.
  * vision-3: the technician's photos of the room are looked at with the frames.
+ * vision-4: twice the problems spotted, looked for surface by surface, each
+ *   one thing titled and described specifically.
  */
-export const VISUAL_PROMPT_VERSION = 'vision-3';
+export const VISUAL_PROMPT_VERSION = 'vision-4';
 
 /** Frames looked at in the scan, however long the recording. */
 const MAX_SCAN_FRAMES = 90;
@@ -78,9 +82,17 @@ const MAX_SCAN_FRAMES = 90;
 const MIN_SCAN_STEP_SECONDS = 3;
 const SCAN_FRAME_HEIGHT = 640;
 const CLOSE_FRAME_HEIGHT = 1080;
-/** Findings and spotted problems given a close look, at most. */
-const MAX_CLOSE_TARGETS = 15;
-const MAX_SPOTTED = 5;
+/**
+ * Findings and spotted problems given a close look, at most. Each is one more
+ * frame paid for; a finding past the limit gets no frame and no photograph, so
+ * it is sized for a move-out room's findings with the spotted ones on top.
+ */
+const MAX_CLOSE_TARGETS = 30;
+/**
+ * Problems the scan may add that nobody narrated. Five left visible damage out
+ * of a move-out the office then found by watching (2026-10-06).
+ */
+const MAX_SPOTTED = 10;
 const MAX_BASELINE_PHOTOS_PER_TARGET = 2;
 const BASELINE_PHOTO_WIDTH = 1000;
 /**
@@ -295,6 +307,10 @@ export function scanPrompt(input: {
     '- frames: up to 3 frame or photo labels that show it best, best first. Empty unless VISIBLE.',
     '- observation: one or two sentences on exactly what the best frame shows: the item, where it is, its approximate size, its condition. Only what can be seen; never restate the narration as if seen.',
     `Task B. List up to ${MAX_SPOTTED} other problems that are clearly visible but not covered by any finding: damage, stains, holes, chips, cracks, scuffs, missing or broken parts, torn screens, dirt or items left behind. Small details count: nail and screw holes, small chips, hairline cracks, water marks. Report only what is unmistakable in a frame, never a guess from blur.`,
+    '  Go surface by surface through every frame and photo before answering: walls, ceiling, floor and its transitions, baseboards, doors and their frames and hardware, windows, blinds and screens, outlets, switches and their covers, lights and fans, vents, cabinets, counters, sinks and fixtures, appliances, closets.',
+    '  One problem on one thing per entry; never join two things in one ("floor and transition strip" is two).',
+    '  title: the thing and what is wrong with it, under 80 characters, e.g. "Wall: three nail holes left of the window". Never a vague title such as "Wall damage" or "Flooring issue".',
+    '  description: one sentence saying what the title does not: where exactly, how big or how many, what it looks like. Do not repeat the title or tell the reviewer what to do.',
     '  Each: title, description, category (a short noun such as Walls), kind (DAMAGE|CLEANING|ITEMS_LEFT|MAINTENANCE), severity (LOW|MEDIUM|HIGH), frames (best first), observation.',
     moveIn
       ? 'This is a MOVE-IN: everything you see is the condition the tenant receives, to be recorded.'
@@ -361,6 +377,9 @@ export class VisualReviewService {
         streamUid: true,
         readyAt: true,
         durationSeconds: true,
+        // For the frames it files: who filmed them, and when the take ended.
+        technicianId: true,
+        recordedAt: true,
         inspectionAreaId: true,
         inspectionArea: {
           select: {
@@ -747,8 +766,9 @@ export class VisualReviewService {
           // Never a tenant lean from the AI's own eyes.
           possibleResponsibility: ResponsibilityClassification.UNDETERMINED,
           confidence: 0.5,
-          recommendedReview:
-            'Spotted in the video by the AI; the technician did not mention it. Check the frame before approving.',
+          // The console already says "Spotted by AI" on it; the same sentence
+          // on every one of them was the stock advice the office skips.
+          recommendedReview: '',
           reviewStatus: FindingReviewStatus.PENDING_REVIEW,
           visualStatus: VisualCheckStatus.VISIBLE,
           visualObservation: look.observation || target.observation,
@@ -795,10 +815,23 @@ export class VisualReviewService {
         data: { status: AiAnalysisStatus.COMPLETED },
       });
       await this.aiSettings.recordUsage(organizationId, configuration, 'VISUAL_REVIEW', usage, media.id);
+      // The spotted findings it replaced take the frames filed under them;
+      // the findings it confirmed now get theirs. Neither can fail the review.
+      if (media.inspectionAreaId)
+        await removeOrphanedAiFrames(this.prisma, this.storage, media.inspectionAreaId).catch(() => 0);
+      const filed = await this.fileConfirmedFrames(media, organizationId).catch((error) => {
+        this.logger.warn({
+          event: 'ai_frame_filing_failed',
+          mediaId: media.id,
+          message: error instanceof Error ? error.message : 'unknown',
+        });
+        return 0;
+      });
       return {
         checked: findingUpdates.length,
         suggested: suggestions.length,
         spotted: spottedRows.length,
+        filed,
         usage,
       };
     } catch (error) {
@@ -811,6 +844,107 @@ export class VisualReviewService {
           .catch(() => undefined);
       throw error;
     }
+  }
+
+  /**
+   * Files the sharpest confirmed frame of each finding still awaiting review as
+   * that finding's photograph (the office, 2026-10-06).
+   *
+   * A reviewer used to press "Add photo" on every suggestion. The frame is the
+   * one the close look confirmed the condition in -- rank 0 of the finding's
+   * suggestions -- fetched at full height exactly as `captureSnapshot` fetches
+   * one, under the same key, so a reviewer who files the same moment by hand
+   * gets this photograph back rather than a second copy. The suggestion is
+   * marked accepted with no person against it, and the photograph is marked
+   * as the AI's (`aiFiledMetadata`), credited to the technician who filmed it.
+   *
+   * Only for a finding still awaiting review: an approved finding's photographs
+   * print, and the AI does not add to a report a person has already decided.
+   * One that fails to fetch is left as a suggestion to file by hand.
+   */
+  private async fileConfirmedFrames(
+    media: {
+      id: string;
+      inspectionId: string;
+      inspectionAreaId: string | null;
+      streamUid: string | null;
+      technicianId: string;
+      recordedAt: Date | null;
+      durationSeconds: number;
+    },
+    organizationId: string,
+  ) {
+    if (!this.storage || !this.stream?.customerCode || !media.streamUid || !media.inspectionAreaId)
+      return 0;
+    const pending = await this.prisma.findingFrameSuggestion.findMany({
+      where: {
+        inspectionMediaId: media.id,
+        rank: 0,
+        status: FrameSuggestionStatus.SUGGESTED,
+        photoId: null,
+        finding: { reviewStatus: FindingReviewStatus.PENDING_REVIEW },
+      },
+      select: { id: true, findingId: true, atMs: true },
+    });
+    if (!pending.length) return 0;
+    const base = this.thumbnailBase(media.streamUid);
+    let filed = 0;
+    for (const suggestion of pending) {
+      const idempotencyKey = `${media.id}-snapshot-${suggestion.atMs}`;
+      try {
+        const existing = await this.prisma.inspectionPhoto.findUnique({
+          where: { idempotencyKey },
+          select: { id: true, findingId: true },
+        });
+        // The same moment a person already filed -- loose, or under another
+        // finding -- stays where they put it.
+        if (existing && existing.findingId !== suggestion.findingId) continue;
+        let photoId = existing?.id ?? null;
+        if (!photoId) {
+          const bytes = await this.frame(base, suggestion.atMs / 1000, CLOSE_FRAME_HEIGHT);
+          if (!bytes) continue;
+          const storageKey = `organizations/${organizationId}/inspections/${media.inspectionId}/photos/${idempotencyKey}.jpg`;
+          await this.storage.putBytes(storageKey, bytes, 'image/jpeg');
+          const photo = await this.prisma.inspectionPhoto
+            .create({
+              data: {
+                organizationId,
+                inspectionId: media.inspectionId,
+                inspectionAreaId: media.inspectionAreaId,
+                findingId: suggestion.findingId,
+                capturedById: media.technicianId,
+                provider: this.storage.providerName(),
+                storageKey,
+                captureType: PhotoCaptureType.VIDEO_FRAME_SNAPSHOT,
+                mimeType: 'image/jpeg',
+                sizeBytes: bytes.byteLength,
+                idempotencyKey,
+                ...captureTimeForFrame(media, suggestion.atMs),
+                metadata: aiFiledMetadata(suggestion.atMs),
+              },
+              select: { id: true },
+            })
+            .catch(async (error: unknown) => {
+              await this.storage!.delete(storageKey).catch(() => undefined);
+              throw error;
+            });
+          photoId = photo.id;
+        }
+        await this.prisma.findingFrameSuggestion.update({
+          where: { id: suggestion.id },
+          data: { status: FrameSuggestionStatus.ACCEPTED, photoId, decidedAt: new Date() },
+        });
+        filed += 1;
+      } catch (error) {
+        // One frame that cannot be filed stays a suggestion; the rest go on.
+        this.logger.warn({
+          event: 'ai_frame_not_filed',
+          suggestionId: suggestion.id,
+          message: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+    return filed;
   }
 
   /** A signed still URL for any moment of the recording, short-lived. */
@@ -943,7 +1077,9 @@ export class VisualReviewService {
             },
             body: JSON.stringify({
               model: configuration.modelId,
-              max_tokens: 6_000,
+              // Room for a verdict on every finding of a long move-out room and
+              // ten spotted problems; it is a ceiling, not a cost.
+              max_tokens: 10_000,
               // As for floor plans: no sampling parameters, and the whole
               // budget for the answer.
               thinking: { type: 'disabled' },
@@ -976,7 +1112,7 @@ export class VisualReviewService {
             body: JSON.stringify({
               model: configuration.modelId,
               // Reasoning tokens come out of this budget too.
-              max_output_tokens: 12_000,
+              max_output_tokens: 16_000,
               reasoning: { effort: 'low' },
               input: [
                 {

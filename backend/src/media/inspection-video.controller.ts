@@ -58,6 +58,14 @@ export class InspectionVideoController {
    * recording, but deciding which frame becomes evidence in a report handed to
    * a tenant is the office's call.
    */
+  /** The narration word for word, for the reviewer. Authorized inside the service. */
+  @Get(':videoId/transcript')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  transcript(@Req() request: AuthenticatedRequest, @Param('videoId') videoId: string) {
+    return this.service.getTranscript(request.user, videoId);
+  }
+
   @Post(':videoId/snapshot')
   @ApiBearerAuth()
   @UseGuards(ApiAuthGuard)

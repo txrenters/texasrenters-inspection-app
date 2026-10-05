@@ -353,11 +353,85 @@ describe("deciding the AI's suggested photograph", () => {
     expect(auditLog.create.mock.calls[0][0].data.action).toBe('FRAME_SUGGESTION_DISMISSED');
   });
 
-  it('will not set aside a frame already filed', async () => {
-    const { service } = suggestionHarness({ status: 'ACCEPTED', photoId: 'photo-9' });
+  it('will not set aside a frame a person filed', async () => {
+    const { service, prisma } = suggestionHarness({
+      status: 'ACCEPTED',
+      photoId: 'photo-9',
+      decidedById: reviewer().id,
+    });
+    Object.assign(prisma.inspectionPhoto, { findFirst: jest.fn(), delete: jest.fn() });
     await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
       status: 409,
     });
+    expect((prisma.inspectionPhoto as unknown as { delete: jest.Mock }).delete).not.toHaveBeenCalled();
+  });
+
+  // The office (2026-10-06): the AI files its best frame of a finding itself;
+  // "Not this one" still works on it, and takes the photograph back.
+  it('takes back a frame the AI filed, with its photograph, and offers the next', async () => {
+    const { service, prisma, storage, findingFrameSuggestion, auditLog } = suggestionHarness({
+      status: 'ACCEPTED',
+      photoId: 'ai-photo',
+      decidedById: null,
+    });
+    const findFirst = jest.fn().mockResolvedValue({
+      id: 'ai-photo',
+      storageKey: 'organizations/o/inspections/i/photos/m-snapshot-21500.jpg',
+      metadata: { videoTimestampMs: 21_500, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: 'AI' },
+    });
+    const remove = jest.fn().mockResolvedValue({});
+    Object.assign(prisma.inspectionPhoto, { findFirst, delete: remove });
+    storage.delete.mockResolvedValue(undefined);
+    Object.assign(prisma, {
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) => run(prisma)),
+    });
+
+    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).resolves.toMatchObject({
+      status: 'DISMISSED',
+      photoId: null,
+    });
+
+    // Only a photograph filed under this finding is looked at.
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'ai-photo', findingId: FINDING } }),
+    );
+    expect(findingFrameSuggestion.update.mock.calls[0][0].data).toMatchObject({
+      status: 'DISMISSED',
+      photoId: null,
+      decidedById: reviewer().id,
+    });
+    expect(remove).toHaveBeenCalledWith({ where: { id: 'ai-photo' } });
+    // The suggestion lets go of the photograph before the photograph goes.
+    expect(remove.mock.invocationCallOrder[0]).toBeGreaterThan(
+      findingFrameSuggestion.update.mock.invocationCallOrder[0],
+    );
+    expect(storage.delete).toHaveBeenCalledWith('organizations/o/inspections/i/photos/m-snapshot-21500.jpg');
+    expect(auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'FRAME_SUGGESTION_DISMISSED',
+      metadata: expect.objectContaining({ photoId: 'ai-photo' }),
+    });
+  });
+
+  it('will not take away a photograph the AI did not file, whatever the suggestion says', async () => {
+    const { service, prisma } = suggestionHarness({
+      status: 'ACCEPTED',
+      photoId: 'photo-9',
+      decidedById: null,
+    });
+    const remove = jest.fn();
+    Object.assign(prisma.inspectionPhoto, {
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'photo-9',
+        storageKey: 'k',
+        metadata: { videoTimestampMs: 21_500, captureSource: 'VIDEO_FRAME_EXTRACTION' },
+      }),
+      delete: remove,
+    });
+
+    await expect(service.dismissFrameSuggestion(reviewer(), SUGGESTION)).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it("is the office's to decide, not a technician's", async () => {
