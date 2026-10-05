@@ -1,3 +1,5 @@
+import { BUSINESS_TIME_ZONE } from './clock';
+
 /**
  * Every display format the app uses, in one place.
  *
@@ -6,8 +8,16 @@
  * is why the PDF renderer ended up with its own copy that drifted.
  */
 
-const DATE_TIME = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-const DATE_ONLY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });
+/**
+ * A moment, in Texas time, whoever reads it (the office, 2026-10-06: "we are
+ * not using Manila time"). The business runs in Texas, and the header's clock
+ * says what time it is there; a time printed in the reader's zone was thirteen
+ * or fourteen hours off from every schedule beside it.
+ */
+const DATE_TIME = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: BUSINESS_TIME_ZONE });
+const DATE_ONLY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: BUSINESS_TIME_ZONE });
+/** A day written some other way than `yyyy-MM-dd`, read and shown in the same (the reader's) zone, so it keeps its date. */
+const LOOSE_DAY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });
 /**
  * For a value that is a *day*, not an instant.
  *
@@ -23,12 +33,14 @@ const CURRENCY = new Intl.NumberFormat('en-US', { style: 'currency', currency: '
 /** The em dash, used everywhere a value is genuinely absent. */
 export const EMPTY = '—';
 
+/** A moment -- created, recorded, started -- in Texas time. Never a day such as `scheduledAt`: use `formatScheduledDate`. */
 export function formatDateTime(value?: string | Date | null) {
   if (!value) return EMPTY;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? EMPTY : DATE_TIME.format(date);
 }
 
+/** The Texas date of a moment. A value that is already a day (a lease's end, a move-out) goes to `formatScheduledDate`. */
 export function formatDate(value?: string | Date | null) {
   if (!value) return EMPTY;
   const date = new Date(value);
@@ -47,7 +59,11 @@ export function formatDate(value?: string | Date | null) {
 export function formatScheduledDate(value?: string | Date | null) {
   if (!value) return EMPTY;
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? EMPTY : SCHEDULED_DAY.format(date);
+  if (Number.isNaN(date.getTime())) return EMPTY;
+  // "10/1/2015", as a Propertyware report can leave a date it could not read:
+  // parsed as the reader's midnight, so shown in the reader's zone.
+  if (typeof value === 'string' && !/^\d{4}-\d{2}-\d{2}/.test(value)) return LOOSE_DAY.format(date);
+  return SCHEDULED_DAY.format(date);
 }
 
 export function formatCurrency(value?: number | string | null) {

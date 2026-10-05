@@ -13,7 +13,7 @@ import { EmptyState, ErrorState } from '@/components/states';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { EMPTY, formatCurrency, formatDate, formatRelative } from '@/lib/format';
+import { EMPTY, formatCurrency, formatDate, formatRelative, formatScheduledDate } from '@/lib/format';
 import { usePropertyPrivateDetails } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
@@ -90,7 +90,7 @@ function LeasingCard({ leasing }: { leasing: PropertyDetailsView['leasing'] }) {
     <DetailCard title="Leasing">
       <DetailRow label="Status">{leasing.status}</DetailRow>
       <DetailRow label="Ready">{yesNo(leasing.ready)}</DetailRow>
-      <DetailRow label="Available">{leasing.availableDate ? formatDate(leasing.availableDate) : null}</DetailRow>
+      <DetailRow label="Available">{leasing.availableDate ? formatScheduledDate(leasing.availableDate) : null}</DetailRow>
       <DetailRow label="Target rent">{leasing.targetRent ? formatCurrency(leasing.targetRent) : null}</DetailRow>
       <DetailRow label="Target deposit">{leasing.targetDeposit ? formatCurrency(leasing.targetDeposit) : null}</DetailRow>
       <DetailRow label="Pets allowed">{yesNo(leasing.petsAllowed)}</DetailRow>
@@ -134,10 +134,10 @@ function ManagementCard({
       <DetailRow label="Owners">{owner?.owners}</DetailRow>
       <DetailRow label="Portfolio">{owner?.portfolioName}</DetailRow>
       <DetailRow label="First agreement signed">
-        {owner?.managementAgreementSignedOn ? formatDate(owner.managementAgreementSignedOn) : null}
+        {owner?.managementAgreementSignedOn ? formatScheduledDate(owner.managementAgreementSignedOn) : null}
       </DetailRow>
-      <DetailRow label="Contract start">{management.contractStart ? formatDate(management.contractStart) : null}</DetailRow>
-      <DetailRow label="Contract end">{management.contractEnd ? formatDate(management.contractEnd) : null}</DetailRow>
+      <DetailRow label="Contract start">{management.contractStart ? formatScheduledDate(management.contractStart) : null}</DetailRow>
+      <DetailRow label="Contract end">{management.contractEnd ? formatScheduledDate(management.contractEnd) : null}</DetailRow>
       <DetailRow label="Maintenance limit">
         {management.maintenanceLimit
           ? `${formatCurrency(management.maintenanceLimit)}${management.maintenanceLimitPeriod ? ` ${management.maintenanceLimitPeriod.toLowerCase()}` : ''}`

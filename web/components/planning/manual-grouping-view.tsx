@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
+import { businessToday } from '@/lib/clock';
 
 import type { GroupFile, GroupFileRow } from './group-file';
 import type { MapFrame } from './group-file-map';
@@ -419,8 +420,7 @@ export function ManualGroupingView({
     const csv = exportCsv(file, state, properties, { routes, minutesPerProperty });
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
-    const today = new Date();
-    const stamp = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const stamp = businessToday();
     link.href = url;
     link.download = `tbp-groups-manual-${stamp}.csv`;
     link.click();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { EMPTY, formatScheduledDate } from './format';
+import { EMPTY, formatDate, formatDateTime, formatScheduledDate } from './format';
 
 /**
  * An inspection booked in Jobber for September 3rd showed as September 2nd in
@@ -33,5 +33,31 @@ describe('a scheduled day', () => {
     expect(formatScheduledDate(null)).toBe(EMPTY);
     expect(formatScheduledDate(undefined)).toBe(EMPTY);
     expect(formatScheduledDate('not a date')).toBe(EMPTY);
+  });
+});
+
+/**
+ * A moment -- a time somebody started, a link's expiry -- in Texas time,
+ * whoever reads it (the office, 2026-10-06: "we are not using Manila time").
+ * These run in the reader's zone; the expected values are Houston's.
+ */
+describe('a moment', () => {
+  it('is printed in Texas time', () => {
+    // 2 PM UTC is 9 AM in Houston in October, 10 PM in Manila.
+    expect(formatDateTime('2026-10-06T14:00:00.000Z')).toBe('Oct 6, 2026, 9:00 AM');
+    // An hour's difference in winter.
+    expect(formatDateTime('2026-12-01T15:00:00.000Z')).toBe('Dec 1, 2026, 9:00 AM');
+  });
+
+  it('is on its Texas date, which an evening there is not in Manila', () => {
+    // 9 PM in Houston on the 5th is already the 6th in Manila and in UTC.
+    expect(formatDate('2026-10-06T02:00:00.000Z')).toBe('Oct 5, 2026');
+  });
+});
+
+describe('a day written some other way', () => {
+  it('keeps its date', () => {
+    // A Propertyware report can leave a date it could not read as written.
+    expect(formatScheduledDate('10/1/2015')).toBe('Oct 1, 2015');
   });
 });

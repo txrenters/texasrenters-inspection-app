@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { businessDayRange, businessTimeOfDay, CLOCK_ZONES, msUntilNextMinute, readClock } from './clock';
+import {
+  businessDateTimeValue,
+  businessDayRange,
+  businessTimeOfDay,
+  CLOCK_ZONES,
+  fromBusinessDateTimeValue,
+  msUntilNextMinute,
+  readClock,
+  shiftDay,
+} from './clock';
 
 const manila = CLOCK_ZONES.find((zone) => zone.id === 'manila')!;
 const texas = CLOCK_ZONES.find((zone) => zone.id === 'texas')!;
@@ -123,5 +132,45 @@ describe('businessDayRange', () => {
   it('is null for anything that is not a date', () => {
     expect(businessDayRange('')).toBeNull();
     expect(businessDayRange('October 2')).toBeNull();
+  });
+});
+
+/**
+ * A time correction's fields are Texas wall-clock time (the office,
+ * 2026-10-06): a `datetime-local` field has no zone, and the browser's own made
+ * the technician's 9 AM read 10 PM from Manila.
+ */
+describe('a Texas date-and-time field', () => {
+  it('shows a moment as Houston’s wall clock', () => {
+    expect(businessDateTimeValue('2026-10-06T14:00:00.000Z')).toBe('2026-10-06T09:00');
+    expect(businessDateTimeValue('2026-12-01T15:30:00.000Z')).toBe('2026-12-01T09:30');
+  });
+
+  it('reads what was typed as Houston’s wall clock', () => {
+    expect(fromBusinessDateTimeValue('2026-10-06T09:00')).toBe('2026-10-06T14:00:00.000Z');
+    expect(fromBusinessDateTimeValue('2026-12-01T09:30')).toBe('2026-12-01T15:30:00.000Z');
+  });
+
+  it('takes the offset of the day itself either side of a daylight-saving change', () => {
+    // Clocks went back at 2 AM on 1 November 2026.
+    expect(fromBusinessDateTimeValue('2026-10-31T23:00')).toBe('2026-11-01T04:00:00.000Z');
+    expect(fromBusinessDateTimeValue('2026-11-01T08:00')).toBe('2026-11-01T14:00:00.000Z');
+  });
+
+  it('round-trips', () => {
+    for (const instant of ['2026-03-09T13:15:00.000Z', '2026-07-04T22:45:00.000Z'])
+      expect(fromBusinessDateTimeValue(businessDateTimeValue(instant))).toBe(instant);
+  });
+
+  it('is null for anything that is not a date and time', () => {
+    expect(fromBusinessDateTimeValue('')).toBeNull();
+    expect(fromBusinessDateTimeValue('2026-10-06')).toBeNull();
+  });
+});
+
+describe('shiftDay', () => {
+  it('counts whole calendar days, across a month and a daylight-saving change', () => {
+    expect(shiftDay('2026-11-05', -13)).toBe('2026-10-23');
+    expect(shiftDay('2026-12-31', 1)).toBe('2027-01-01');
   });
 });

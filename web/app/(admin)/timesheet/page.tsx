@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { usePermissions } from '@/lib/auth';
+import { businessDateTimeValue, businessToday, fromBusinessDateTimeValue, shiftDay } from '@/lib/clock';
 import { formatDateTime } from '@/lib/format';
 import {
   asHours,
@@ -43,13 +44,10 @@ import {
  * the trail said and what somebody decided stays visible on the row.
  */
 
-/** The last fortnight, which is the period the office settles pay over. */
+/** The last fortnight, which is the period the office settles pay over, in Texas days. */
 function defaultRange() {
-  const today = new Date();
-  const from = new Date(today);
-  from.setDate(from.getDate() - 13);
-  const iso = (date: Date) => date.toISOString().slice(0, 10);
-  return { from: iso(from), to: iso(today) };
+  const today = businessToday();
+  return { from: shiftDay(today, -13), to: today };
 }
 
 const CATEGORY: Record<string, { label: string; variant: 'success' | 'info' | 'secondary' }> = {
@@ -407,12 +405,6 @@ export default function TimesheetPage() {
   );
 }
 
-/** `datetime-local` wants no seconds and no zone. */
-const localValue = (iso: string) => {
-  const at = new Date(iso);
-  const offset = at.getTimezoneOffset() * 60_000;
-  return new Date(at.getTime() - offset).toISOString().slice(0, 16);
-};
 
 /**
  * Correcting a stretch the trail got wrong.
@@ -437,8 +429,8 @@ function AdjustDialog({
 
   // Filled from the segment the first time it opens, then left to the person.
   if (segment && !startedAt) {
-    setStartedAt(localValue(segment.startedAt));
-    setEndedAt(localValue(segment.endedAt));
+    setStartedAt(businessDateTimeValue(segment.startedAt));
+    setEndedAt(businessDateTimeValue(segment.endedAt));
   }
 
   const close = () => {
@@ -461,7 +453,7 @@ function AdjustDialog({
         </DialogHeader>
         <div className="grid gap-3">
           <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            From
+            From (Texas time)
             <input
               className={dateField}
               onChange={(event) => setStartedAt(event.target.value)}
@@ -470,7 +462,7 @@ function AdjustDialog({
             />
           </label>
           <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            To
+            To (Texas time)
             <input
               className={dateField}
               onChange={(event) => setEndedAt(event.target.value)}
@@ -493,9 +485,9 @@ function AdjustDialog({
             Cancel
           </Button>
           <Button
-            disabled={reason.trim().length < 4 || !startedAt || !endedAt}
+            disabled={reason.trim().length < 4 || !fromBusinessDateTimeValue(startedAt) || !fromBusinessDateTimeValue(endedAt)}
             onClick={() =>
-              onSave(new Date(startedAt).toISOString(), new Date(endedAt).toISOString(), reason.trim())
+              onSave(fromBusinessDateTimeValue(startedAt)!, fromBusinessDateTimeValue(endedAt)!, reason.trim())
             }
           >
             Save the correction

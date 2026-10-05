@@ -24,23 +24,20 @@ describe('date range', () => {
     }
   });
 
-  it('covers the whole of the last day, so the end of a range is not truncated', () => {
-    const start = new Date(dayStart('2026-08-31')!);
-    const end = new Date(dayEnd('2026-08-31')!);
-
-    expect([start.getHours(), start.getMinutes(), start.getSeconds()]).toEqual([0, 0, 0]);
-    expect([end.getHours(), end.getMinutes(), end.getSeconds()]).toEqual([23, 59, 59]);
-
-    // The bound the API is given must contain every instant of the chosen day.
-    // A bare date here would exclude an inspection scheduled that afternoon.
-    const afternoon = new Date(2026, 7, 31, 14, 30);
-    expect(afternoon >= start && afternoon <= end).toBe(true);
+  /** The office, 2026-10-06: "we are not using Manila time". A day picked is the field's day. */
+  it('bounds a picked day by Texas midnights, whoever is reading', () => {
+    expect(dayStart('2026-08-31')).toBe('2026-08-31T05:00:00.000Z');
+    expect(dayEnd('2026-08-31')).toBe('2026-09-01T04:59:59.999Z');
+    // An hour later once Texas is back on standard time.
+    expect(dayStart('2026-12-01')).toBe('2026-12-01T06:00:00.000Z');
   });
 
-  it('does not mutate the caller through the shared parse', () => {
-    // `dayEnd` shifts the hours on the parsed date; a second call must not see it.
-    expect(dayEnd('2026-08-31')).toBe(dayEnd('2026-08-31'));
-    expect(new Date(dayStart('2026-08-31')!).getHours()).toBe(0);
+  it('covers the whole of the last day, so the end of a range is not truncated', () => {
+    // 2:30 PM in Houston on the 31st, and a minute before its midnight: both the 31st's.
+    for (const instant of ['2026-08-31T19:30:00.000Z', '2026-09-01T04:59:00.000Z'])
+      expect(instant >= dayStart('2026-08-31')! && instant <= dayEnd('2026-08-31')!).toBe(true);
+    // Midnight in Houston is the next day.
+    expect('2026-09-01T05:00:00.000Z' <= dayEnd('2026-08-31')!).toBe(false);
   });
 
   it('labels open-ended ranges without claiming an exclusive bound', () => {
