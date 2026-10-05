@@ -31,6 +31,7 @@ import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { FindingsReview } from './FindingsReview';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { ReanalyzeControl, ReanalyzeStatus, canReanalyze } from './ReanalyzeControl';
+import { RecordingTranscript } from './RecordingTranscript';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface, recordingFrame } from './RecordingSurface';
 
@@ -405,6 +406,43 @@ export function AreaDetailPanel({
           ).length,
         }
       : null;
+  // Each finding's stretch of a recording, to mark the lines it was written from.
+  const findingSpansFor = (recording: AreaRecording) =>
+    findings.flatMap((finding) => {
+      const moment = findingMoment(finding);
+      return moment?.recordingId === recording.id
+        ? [{ id: finding.id, title: finding.title, start: moment.start, end: moment.end }]
+        : [];
+    });
+  /** One recording on the Recording tab: the video, and its transcript beside it. */
+  const renderRecording = (recording: AreaRecording) => (
+    <div
+      className="grid gap-4 @3xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] @3xl:items-start"
+      key={recording.id}
+    >
+      <RecordingCard
+        activeId={activeRecording}
+        areaId={bundle.area.id}
+        checklist={bundle.checklist}
+        findingMarks={findingMarksFor(recording)}
+        inspectionId={inspectionId}
+        key={`${recording.id}-${seek?.recordingId === recording.id ? seek.nonce : 0}`}
+        onActivate={setActiveRecording}
+        onExpand={() => setViewerIndex(viewerItems.findIndex((entry) => entry.id === recording.id))}
+        onSeek={(seconds) => seekTo(recording.id, seconds)}
+        reanalyze={reanalyzeFor(recording)}
+        recording={recording}
+        startSeconds={seek?.recordingId === recording.id ? seek.seconds : null}
+      />
+      <RecordingTranscript
+        className="max-h-96 @3xl:sticky @3xl:top-[calc(var(--app-header-height)+0.75rem)] @3xl:max-h-[min(75vh,44rem)]"
+        findings={findingSpansFor(recording)}
+        mediaId={recording.id}
+        onSeek={(seconds) => seekTo(recording.id, seconds)}
+        playingSecond={seek?.recordingId === recording.id ? seek.seconds : null}
+      />
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -523,63 +561,25 @@ export function AreaDetailPanel({
           </dl>
         </TabsContent>
 
-        <TabsContent className="space-y-4" value="recording">
+        <TabsContent className="@container space-y-6" value="recording">
           {recordings.length ? (
             <>
-              {/* The primary walkthrough gets the full panel width. Every
-                  recording used to share one auto-fill grid, so the single video
-                  most areas have rendered as a 260px card marooned in a wide
-                  panel — the evidence a reviewer came to watch, shown smaller
-                  than the photos beside it. Additional clips keep the grid. */}
-              {primaryRecording ? (
-                <RecordingCard
-                  activeId={activeRecording}
-                  key={`${primaryRecording.id}-${seek?.recordingId === primaryRecording.id ? seek.nonce : 0}`}
-                  onActivate={setActiveRecording}
-                  onExpand={() =>
-                    setViewerIndex(
-                      viewerItems.findIndex((entry) => entry.id === primaryRecording.id),
-                    )
-                  }
-                  areaId={bundle.area.id}
-                  checklist={bundle.checklist}
-                  inspectionId={inspectionId}
-                  findingMarks={findingMarksFor(primaryRecording)}
-                  onSeek={(seconds) => seekTo(primaryRecording.id, seconds)}
-                  reanalyze={reanalyzeFor(primaryRecording)}
-                  recording={primaryRecording}
-                  startSeconds={seek?.recordingId === primaryRecording.id ? seek.seconds : null}
-                />
-              ) : null}
+              {/* The video on the left and the narration word for word on the
+                  right (the office, 2026-10-06): reviewing meant listening
+                  through the walkthrough to hear what was said about each
+                  finding. A line plays the recording from there; the lines a
+                  finding was written from carry its title. Side by side once the
+                  panel is wide enough, the transcript under the video otherwise.
+                  The primary walkthrough first; each additional clip the same. */}
+              {primaryRecording ? renderRecording(primaryRecording) : null}
               {additionalRecordings.length ? (
-                <div>
+                <div className="space-y-4">
                   {primaryRecording ? (
                     <SectionHeading count={additionalRecordings.length}>
                       Additional clips
                     </SectionHeading>
                   ) : null}
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {additionalRecordings.map((recording) => (
-                      <RecordingCard
-                        activeId={activeRecording}
-                        key={`${recording.id}-${seek?.recordingId === recording.id ? seek.nonce : 0}`}
-                        onActivate={setActiveRecording}
-                        onExpand={() =>
-                          setViewerIndex(
-                            viewerItems.findIndex((entry) => entry.id === recording.id),
-                          )
-                        }
-                        areaId={bundle.area.id}
-                        checklist={bundle.checklist}
-                        inspectionId={inspectionId}
-                        findingMarks={findingMarksFor(recording)}
-                        onSeek={(seconds) => seekTo(recording.id, seconds)}
-                        reanalyze={reanalyzeFor(recording)}
-                        recording={recording}
-                        startSeconds={seek?.recordingId === recording.id ? seek.seconds : null}
-                      />
-                    ))}
-                  </div>
+                  {additionalRecordings.map(renderRecording)}
                 </div>
               ) : null}
             </>

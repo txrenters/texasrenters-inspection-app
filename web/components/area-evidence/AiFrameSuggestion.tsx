@@ -24,6 +24,10 @@ import { LazyPhoto } from './LazyPhoto';
  * is why only the close look's boxes reach here. "Use this photo" files the
  * frame under the finding, like a capture by hand; "Not this one" sets it aside
  * and offers the AI's next frame, if it had one.
+ *
+ * The AI files its best frame of a finding awaiting review itself (the office,
+ * 2026-10-06), so most arrive already filed. "Not this one" still works on
+ * those, and takes the photograph back off the finding.
  */
 export function AiFrameSuggestion({
   finding,
@@ -51,6 +55,20 @@ export function AiFrameSuggestion({
 
   const seconds = suggestion ? suggestion.atMs / 1000 : 0;
   const accepted = suggestion?.status === 'ACCEPTED';
+  // Filed by the AI itself, so a reviewer may still set it aside.
+  const filedByAi = accepted && Boolean(suggestion?.filedByAi);
+  const dismissButton = (
+    <Button
+      disabled={decide.isPending}
+      onClick={() => send('dismiss')}
+      size="sm"
+      type="button"
+      variant="outline"
+    >
+      {decide.isPending && decide.variables?.decision === 'dismiss' ? <Spinner /> : <XIcon aria-hidden />}
+      Not this one
+    </Button>
+  );
   const send = (decision: 'accept' | 'dismiss') =>
     suggestion && decide.mutate({ suggestionId: suggestion.id, decision, inspectionId, areaId });
 
@@ -83,7 +101,11 @@ export function AiFrameSuggestion({
           </figure>
           <div className="grid content-start gap-2">
             <p className="text-muted-foreground text-xs font-medium">
-              {accepted ? 'Added as this finding’s photo' : 'Suggested photo'}
+              {filedByAi
+                ? 'Added by the AI as this finding’s photo'
+                : accepted
+                  ? 'Added as this finding’s photo'
+                  : 'Suggested photo'}
               {suggestion.box ? ' · outlined where the AI sees it' : ''}
             </p>
             {suggestion.observation ? (
@@ -94,10 +116,13 @@ export function AiFrameSuggestion({
             ) : null}
             <div className="flex flex-wrap gap-1.5">
               {accepted ? (
-                <span className="text-success flex items-center gap-1 text-xs">
-                  <CheckIcon aria-hidden className="size-3.5" />
-                  Filed under the finding
-                </span>
+                <>
+                  <span className="text-success flex items-center gap-1 text-xs">
+                    <CheckIcon aria-hidden className="size-3.5" />
+                    Filed under the finding
+                  </span>
+                  {filedByAi && canDecide ? dismissButton : null}
+                </>
               ) : canDecide ? (
                 <>
                   <Button disabled={decide.isPending} onClick={() => send('accept')} size="sm" type="button">
@@ -108,20 +133,7 @@ export function AiFrameSuggestion({
                     )}
                     Use this photo
                   </Button>
-                  <Button
-                    disabled={decide.isPending}
-                    onClick={() => send('dismiss')}
-                    size="sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    {decide.isPending && decide.variables?.decision === 'dismiss' ? (
-                      <Spinner />
-                    ) : (
-                      <XIcon aria-hidden />
-                    )}
-                    Not this one
-                  </Button>
+                  {dismissButton}
                 </>
               ) : null}
               <Button

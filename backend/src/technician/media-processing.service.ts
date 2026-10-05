@@ -37,6 +37,7 @@ import {
 } from './deepgram-transcription';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { captureTimeForFrame } from '../common/photo-capture-time';
+import { removeOrphanedAiFrames } from './ai-filed-frames';
 import { houseRulesLines } from './house-rules';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
 import { VisualReviewService } from './visual-review.service';
@@ -44,7 +45,9 @@ import { VisualReviewService } from './visual-review.service';
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
 // again on a re-run. 5: the office's house rules and its recent decisions.
-export const PROMPT_VERSION = '6';
+// 7: every problem, one per finding, titled and described specifically, and
+// no stock advice in recommendedReview.
+export const PROMPT_VERSION = '7';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -225,9 +228,14 @@ const findingItemSchema = z.object({
     'UNDETERMINED',
   ]),
   confidence: z.number().min(0).max(1),
-  recommendedReview: z.string().min(1).max(500),
+  // Empty unless there is something particular to check. Required to be a
+  // sentence, it was filled with the same advice on every finding -- "compare
+  // the move-in and move-out" -- which a reviewer learns to skip (the office,
+  // 2026-10-06).
+  recommendedReview: z.string().max(500).catch(''),
 });
-export const analysisResponseSchema = z.array(findingItemSchema).max(25);
+// Room summary plus one finding per problem: a move-out room can have twenty.
+export const analysisResponseSchema = z.array(findingItemSchema).max(40);
 
 /**
  * Takes the tenant lean off a finding that has nothing to rest it on.
@@ -1185,6 +1193,7 @@ export class MediaProcessingService implements OnModuleInit {
     media: {
       id: string;
       inspectionId: string;
+      inspectionAreaId?: string | null;
       durationSeconds: number;
       inspectionArea: {
         propertyArea: {
@@ -1231,6 +1240,9 @@ export class MediaProcessingService implements OnModuleInit {
           source: FindingSource.NARRATION,
         },
       });
+      // The frames the AI filed under those findings go with them.
+      if (media.inspectionAreaId)
+        await removeOrphanedAiFrames(this.prisma, this.storage, media.inspectionAreaId).catch(() => 0);
       if (items.length)
         await this.prisma.inspectionFinding.createMany({
           data: items.map((finding) => ({
@@ -1716,6 +1728,25 @@ export class MediaProcessingService implements OnModuleInit {
       'description = a 2-4 sentence English summary of the narrated room condition,',
       'comparisonResult NO_MATERIAL_CHANGE (or INSUFFICIENT_DATA when the narration is unclear), severity LOW, possibleResponsibility UNDETERMINED.',
       'After the summary, add one item per damage or maintenance issue the narration supports — none if none were narrated.',
+      // The office (2026-10-06): findings read alike and said little --
+      // "Flooring and transition piece require replacement review", its
+      // description the title again, its advice "compare the move-in and
+      // move-out" -- and problems the technician named were missing.
+      'Be thorough and specific:',
+      '- Report EVERY problem the technician names or the checklist marks, minor ones included (a nail hole,',
+      '  a missing outlet cover, a burnt-out bulb, a loose towel bar). Do not drop one because it is small.',
+      '  The rules above still decide what counts: never one the assessment contradicts or the office decided.',
+      '- One item per problem on one thing. Never join two things in one finding ("flooring and transition',
+      '  piece"): the floor and the transition strip are two findings, each with its own times.',
+      '- title: the thing and what is wrong with it, in plain words, under 80 characters, e.g.',
+      '  "Carpet: dark stain by the closet door" or "Transition strip missing at kitchen doorway". Never a',
+      '  vague title such as "Flooring issue", "Wall condition" or "requires replacement review".',
+      '- description: one or two sentences saying what the title does not — exactly where in the room, how',
+      '  big or how many, what it looks like, and what the technician said about it. Do not repeat the title,',
+      '  do not tell the reviewer what to do, and leave the move-in to baselineCondition.',
+      '- recommendedReview: an empty string unless the evidence leaves something particular to check, said',
+      '  precisely (e.g. "The checklist has the wall undamaged but the technician says two holes at 1:42").',
+      '  Never generic advice such as "compare the move-in and move-out" or "review the video".',
       'Each item: findingType (POSSIBLE_NEW_DAMAGE|EXISTING_CONDITION|MAINTENANCE|NO_CHANGE),',
       'category (short noun, e.g. Walls, Plumbing), title, description,',
       'baselineCondition (what the baseline says about this item, or empty string),',
@@ -1730,7 +1761,7 @@ export class MediaProcessingService implements OnModuleInit {
       '  checklist item nobody talks about, use its [at Ns] time and a few seconds after. Never estimate',
       '  a time: when neither the transcript nor an [at Ns] gives one, use 0 for both,',
       'severity (LOW|MEDIUM|HIGH), possibleResponsibility (TENANT_REVIEW_REQUIRED|OWNER_REVIEW_REQUIRED|UNDETERMINED),',
-      'confidence (0-1), recommendedReview (one actionable sentence for the human reviewer).',
+      'confidence (0-1), recommendedReview (as above; usually an empty string).',
       'Findings are suggestions for human review; never state conclusions about charges or fault.',
     ].join('\n');
   }

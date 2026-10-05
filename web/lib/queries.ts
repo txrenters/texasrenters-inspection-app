@@ -2,6 +2,7 @@
 
 import type { VideoPlayback } from './playback';
 import type {
+  RecordingTranscript,
   AccountDeletionPreflight,
   AccountDeletionResult,
   AdminAssignment,
@@ -177,6 +178,7 @@ export const keys = {
   technician: (id: string) => ['admin', 'technician', id] as const,
   usersRoot: ['admin', 'access', 'users'] as const,
   videoPlayback: (mediaId: string) => ['admin', 'video-playback', mediaId] as const,
+  recordingTranscript: (mediaId: string) => ['admin', 'recording-transcript', mediaId] as const,
   accountDeletionPreflight: (scope: string, id: string) =>
     ['admin', 'account-deletion-preflight', scope, id] as const,
   users: (query: object) => ['admin', 'access', 'users', query] as const,
@@ -918,6 +920,26 @@ export const useVideoPlayback = (mediaId: string, enabled = true) =>
     staleTime: 60 * 60_000,
     // Never persisted: a stored playback token would outlive its expiry.
     gcTime: 0,
+    retry: 1,
+  });
+/**
+ * A recording's narration word for word, read beside the video.
+ *
+ * Asked again every fifteen seconds while the server is still transcribing, so
+ * a reviewer who opens the area as the recording lands sees it fill in; once it
+ * is done it does not change, so it is kept for the session.
+ */
+export const useRecordingTranscript = (mediaId: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.recordingTranscript(mediaId),
+    queryFn: ({ signal }) =>
+      api<RecordingTranscript>(`/api/v1/inspection-videos/${mediaId}/transcript`, { signal }),
+    enabled: enabled && Boolean(mediaId),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'PENDING' || status === 'RUNNING' ? 15_000 : false;
+    },
     retry: 1,
   });
 export const useRoles = (query: Record<string, string | number | boolean | undefined>) =>

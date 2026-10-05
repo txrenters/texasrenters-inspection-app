@@ -80,6 +80,19 @@ describe('media processing pipeline', () => {
     }
   });
 
+  // The office (2026-10-06): a sentence on every finding came back as the same
+  // "compare the move-in and move-out". Empty is the usual answer now.
+  it('takes a finding with no advice for the reviewer, rather than failing the analysis', () => {
+    const withoutAdvice: Partial<typeof FINDING> = { ...FINDING };
+    delete withoutAdvice.recommendedReview;
+    const parsed = analysisResponseSchema.parse([{ ...FINDING, recommendedReview: '' }, withoutAdvice]);
+    expect(parsed.map((item) => item.recommendedReview)).toEqual(['', '']);
+  });
+
+  it('takes a room with many problems, one finding each', () => {
+    expect(analysisResponseSchema.safeParse(Array.from({ length: 40 }, () => FINDING)).success).toBe(true);
+  });
+
   it('rounds a fractional timestamp instead of throwing the moment away', () => {
     // `.int()` used to turn 12.5 into 0:00: a real moment, discarded.
     const parsed = analysisResponseSchema.parse([
@@ -412,6 +425,8 @@ function reanalysisHarness(
     visualReview?: { enabled: jest.Mock; review: jest.Mock };
     /** The office's house rules and lessons; absent unless a test is about them. */
     guidance?: { current: jest.Mock; lessons: jest.Mock };
+    /** Frames the AI filed under findings this re-run replaces. */
+    orphans?: Array<{ id: string; storageKey: string }>;
   } = {},
 ) {
   const media = {
@@ -477,8 +492,13 @@ function reanalysisHarness(
     },
     // Present so a write to it would be seen: a re-run must never make one.
     inspection: { update: jest.fn(), updateMany: jest.fn() },
+    inspectionPhoto: {
+      findMany: jest.fn().mockResolvedValue(opts.orphans ?? []),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     $transaction: jest.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
   };
+  const storage = { get: jest.fn(), delete: jest.fn().mockResolvedValue(undefined) };
   const comparison = {
     baselineAreaFor: jest.fn().mockResolvedValue(opts.baseline ?? null),
     generate: jest.fn().mockResolvedValue({}),
@@ -512,7 +532,7 @@ function reanalysisHarness(
   }) as unknown as typeof fetch;
   const service = new MediaProcessingService(
     prisma as never,
-    { get: jest.fn() } as never,
+    storage as never,
     aiSettings as never,
     comparison as never,
     undefined,
@@ -543,7 +563,7 @@ function reanalysisHarness(
     }
     throw new Error('The re-run never finished.');
   };
-  return { service, prisma, comparison, aiSettings, prompt, events, settled };
+  return { service, prisma, storage, comparison, aiSettings, prompt, events, settled };
 }
 
 const TIMED_NARRATION = [
@@ -671,6 +691,47 @@ describe('re-running the analysis on a recording', () => {
     expect(harness.prisma.inspectionFinding.deleteMany).toHaveBeenCalledWith({
       where: { inspectionMediaId: 'media-1', reviewStatus: 'PENDING_REVIEW', source: 'NARRATION' },
     });
+  });
+
+  it('takes the frames the AI filed under the replaced findings with them', async () => {
+    const harness = reanalysisHarness({
+      storedSegments: TIMED_NARRATION,
+      orphans: [{ id: 'ai-photo-old', storageKey: 'organizations/x/old.jpg' }],
+    });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.prisma.inspectionPhoto.findMany).toHaveBeenCalledWith({
+      where: {
+        inspectionAreaId: 'inspection-area-1',
+        findingId: null,
+        metadata: { path: ['filedBy'], equals: 'AI' },
+      },
+      select: { id: true, storageKey: true },
+    });
+    // After the findings they were filed under are gone, not before.
+    expect(harness.prisma.inspectionPhoto.findMany.mock.invocationCallOrder[0]).toBeGreaterThan(
+      harness.prisma.inspectionFinding.deleteMany.mock.invocationCallOrder[0],
+    );
+    expect(harness.prisma.inspectionPhoto.deleteMany).toHaveBeenCalledWith({
+      where: { id: { in: ['ai-photo-old'] } },
+    });
+    expect(harness.storage.delete).toHaveBeenCalledWith('organizations/x/old.jpg');
+  });
+
+  it('asks for every problem, one thing per finding, said specifically, without stock advice', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    const prompt = harness.prompt();
+    expect(prompt).toContain('Report EVERY problem the technician names or the checklist marks, minor ones included');
+    expect(prompt).toContain('Never join two things in one finding');
+    expect(prompt).toContain('Do not repeat the title');
+    expect(prompt).toContain('recommendedReview: an empty string unless');
+    expect(prompt).not.toContain('one actionable sentence for the human reviewer');
   });
 
   it('leaves the earlier findings and the recording alone when the new analysis is unusable', async () => {
@@ -813,7 +874,7 @@ describe('the office teaches the analysis', () => {
     expect(teaching.lessons).toHaveBeenCalledWith(ORGANIZATION_ID, 'Entrance', 'move-out-1');
     // The analysis records the rules it ran under, for the scorecard.
     expect(harness.prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ promptVersion: '6', guidanceVersion: 3 }),
+      data: expect.objectContaining({ promptVersion: '7', guidanceVersion: 3 }),
     });
   });
 

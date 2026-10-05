@@ -1,6 +1,7 @@
 'use client';
 
 import type { PhotoCaptureTimeSource } from '@texasrenters/shared';
+import { SparklesIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { PhotoStamp } from '@/components/photo-stamp';
@@ -59,6 +60,8 @@ export function LazyPhoto({
     label?: string | null;
     capturedAt?: string | null;
     captureTimeSource?: PhotoCaptureTimeSource | null;
+    /** Filed by the AI from the video check; marked so nobody takes it for a person's pick. */
+    filedByAi?: boolean;
   };
   areaName: string;
   onOpen?: () => void;
@@ -115,7 +118,7 @@ export function LazyPhoto({
 
   const alt = `${captureLabel(photo.captureType ?? 'OTHER')} of ${areaName}${
     photo.label ? ` - ${photo.label}` : ''
-  }`;
+  }${photo.filedByAi ? ', added by AI' : ''}`;
 
   return (
     <button
@@ -128,6 +131,15 @@ export function LazyPhoto({
       <span className="bg-muted relative block aspect-square overflow-hidden rounded-lg border">
         {objectUrl && !compact ? (
           <PhotoStamp capturedAt={photo.capturedAt} source={photo.captureTimeSource} />
+        ) : null}
+        {photo.filedByAi ? (
+          <span
+            className="pointer-events-none absolute top-1.5 left-1.5 z-10 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] leading-tight font-medium text-white"
+            data-testid="added-by-ai"
+          >
+            <SparklesIcon aria-hidden className="size-3" />
+            {compact ? 'AI' : 'Added by AI'}
+          </span>
         ) : null}
         {objectUrl ? (
           // eslint-disable-next-line @next/next/no-img-element

@@ -247,7 +247,7 @@ describe('a test run', () => {
         organizationId: ORGANIZATION_ID,
         houseRules: 'Scuffs are normal wear.',
         guidanceVersion: null,
-        promptVersion: '6',
+        promptVersion: '7',
         recordingCount: 2,
       }),
       select: { id: true },
@@ -278,6 +278,35 @@ describe('a test run', () => {
       status: 'COMPLETED',
       totals: { recordings: 2, failed: 1, kept: 1, found: 1, rejected: 1, repeated: 0, onTime: 1 },
     });
+  });
+
+  // The AI files its best frame of a finding itself (2026-10-06). That frame is
+  // its own guess, not the office confirming where the finding is.
+  it('times a finding by the frame a person filed, never by the one the AI filed', async () => {
+    const aiFrame = {
+      metadata: { videoTimestampMs: 90_000, captureSource: 'VIDEO_FRAME_EXTRACTION', filedBy: 'AI' },
+    };
+    const personFrame = { metadata: { videoTimestampMs: 21_000, captureSource: 'VIDEO_FRAME_EXTRACTION' } };
+    const door = {
+      id: 'f-door',
+      title: 'Holes in the entrance door',
+      category: 'Doors',
+      reviewStatus: 'APPROVED',
+      videoTimestampStart: 18,
+      reviews: [{ status: 'APPROVED', reasonCode: null, editedValue: null }],
+    };
+    const scoreWith = async (photos: unknown[]) => {
+      const { service, prisma, updates, finished } = harness();
+      prisma.inspectionFinding.findMany.mockImplementationOnce((async () => [{ ...door, photos }]) as never);
+      await service.start(USER, { houseRules: '' });
+      await finished();
+      return (updates[0].results as Array<{ score: { timed: number; onTime: number } | null }>)[0].score;
+    };
+
+    // The AI's frame first, the reviewer's after: the reviewer's is the moment.
+    await expect(scoreWith([aiFrame, personFrame])).resolves.toMatchObject({ timed: 1, onTime: 1 });
+    // Only the AI's: no confirmed moment at all.
+    await expect(scoreWith([aiFrame])).resolves.toMatchObject({ timed: 0, onTime: 0 });
   });
 
   it('records the saved version when the rules tried are the ones in use', async () => {
