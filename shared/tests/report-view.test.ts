@@ -122,6 +122,24 @@ describe('inspection report view model', () => {
     expect(view.inspectionLabel).toBe('Occupied inspection');
   });
 
+  it('dates a visit finished in the evening by its Texas day, not the next', () => {
+    // 8:30 PM on 23 July in Houston: the 24th in UTC.
+    const view = buildReportView(
+      report({
+        inspection: {
+          type: 'OCCUPIED',
+          status: 'COMPLETED',
+          scheduledAt: '2026-07-23T00:00:00.000Z',
+          completedAt: '2026-07-24T01:30:00.000Z',
+        },
+        generatedAt: '2026-07-24T01:30:00.000Z',
+      }),
+    );
+
+    expect(view.dateLabel).toBe('Completed July 23, 2026');
+    expect(view.generatedLabel).toBe('July 23, 2026');
+  });
+
   it('words comparison verdicts for a homeowner instead of echoing the enum', () => {
     const view = buildReportView(report({ rooms: [ROOM], findings: [FINDING] }));
 

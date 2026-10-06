@@ -168,7 +168,16 @@ export class MailService {
     });
   }
 
-  sendReportShare(input: { to: string; reportUrl: string; expiresAt: Date }) {
+  /**
+   * A report link, worded for the document it opens: an inspection report, or
+   * the move-in / move-out comparison an owner or tenant is sent to review.
+   */
+  sendReportShare(input: {
+    to: string;
+    reportUrl: string;
+    expiresAt: Date;
+    kind?: 'INSPECTION' | 'COMPARISON';
+  }) {
     // The Texas date, as the console says it: left to the server's zone, an
     // evening expiry in Houston read as the next day.
     const expiry = input.expiresAt.toLocaleDateString('en-US', {
@@ -177,16 +186,23 @@ export class MailService {
       day: 'numeric',
       timeZone: BUSINESS_TIME_ZONE,
     });
+    const comparison = input.kind === 'COMPARISON';
+    const name = comparison ? 'move-in / move-out comparison report' : 'inspection report';
     return this.deliver({
       to: input.to,
-      subject: 'Your TexasRenters inspection report',
+      subject: `Your TexasRenters ${name}`,
       html: this.layout(
-        'Your inspection report is ready',
-        `<p>Your inspection report is ready to view.</p>
-         <p><a href="${escapeHtml(input.reportUrl)}">Open inspection report</a></p>
+        `Your ${name} is ready`,
+        `<p>Your ${name} is ready to view.</p>
+         ${
+           comparison
+             ? '<p>It sets the condition recorded when the home was moved into beside the condition recorded at move-out, room by room, with the photographs from both inspections.</p>'
+             : ''
+         }
+         <p><a href="${escapeHtml(input.reportUrl)}">Open ${name}</a></p>
          <p>This private link expires on ${escapeHtml(expiry)}.</p>`,
       ),
-      template: 'report-share',
+      template: comparison ? 'comparison-report-share' : 'report-share',
     });
   }
 

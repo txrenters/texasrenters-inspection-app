@@ -2159,12 +2159,27 @@ model FindingFrameSuggestion {
   @@index([organizationId])
 }
 
+/// What a share link publishes.
+///
+/// One table rather than two: a comparison link is still a link to one
+/// inspection's material -- the move-out's -- issued by one person, expiring and
+/// revoked the same way. Only the document differs, and the token resolution,
+/// expiry and revocation logic is worth having in exactly one place.
+enum ReportShareKind {
+  INSPECTION
+  COMPARISON
+}
+
 model InspectionReportShare {
   id             String      @id @default(uuid()) @db.Uuid
   organizationId String      @db.Uuid
   inspectionId   String      @db.Uuid
   createdById    String      @db.Uuid
   token          String      @unique
+  /// Which document this token serves. Defaulted so every link issued before
+  /// comparison links existed keeps serving the inspection report it was
+  /// created for.
+  kind           ReportShareKind @default(INSPECTION)
   recipientEmail String?
   expiresAt      DateTime
   revokedAt      DateTime?

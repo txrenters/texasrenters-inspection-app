@@ -13,11 +13,22 @@
  *
  * The visibility rules are the inspection report's, deliberately: only APPROVED
  * findings, and only photographs that carry no unapproved finding. This document
- * is charge-relevant and may be shown to a tenant once the share link exists, so
- * it must never be the place unreviewed AI output first appears.
+ * is charge-relevant and is sent to owners and tenants by share link (the
+ * office, 2026-10-06), so it must never be the place unreviewed AI output first
+ * appears.
+ *
+ * Each room carries the item-by-item comparison the verdict was drawn from, as
+ * it was when the comparison was generated. Reading the two checklists live
+ * beside a stored verdict let them disagree: a checklist answer changed in
+ * review after generation and the report printed "New since move-in: Walls"
+ * over a table showing the walls sound.
  */
 import { Inject, Injectable } from '@nestjs/common';
-import type { ComparisonReport, ComparisonReportAreaSide } from '@texasrenters/shared';
+import type {
+  ComparisonReport,
+  ComparisonReportAreaSide,
+  ComparisonReportItem,
+} from '@texasrenters/shared';
 import { FindingReviewStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 
@@ -25,6 +36,8 @@ import { ApplicationError } from '../common/errors';
 import type { AuthenticatedUser } from '../common/auth';
 import { inspectedAreas } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
+import { ROOM_SUMMARY_WHERE } from '../technician/room-summary';
+import type { ComparedItem } from './comparison-items';
 
 /** Bounded per inspection, so a photo-heavy pair cannot build an unbounded document. */
 const MAX_REPORT_PHOTOS = 300;
@@ -42,6 +55,30 @@ const REPORT_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
   OR: [{ findingId: null }, { finding: { reviewStatus: FindingReviewStatus.APPROVED } }],
 };
 
+/** How a photograph is addressed, which is all that differs between the two copies. */
+type PhotoPath = (photoId: string) => string;
+
+const adminPhotoPath: PhotoPath = (photoId) => `/api/v1/admin/photos/${photoId}/content`;
+
+/**
+ * The items stored on an area row by `ComparisonService.generate`, as the report
+ * prints them. Their keywords stay behind: they exist to match findings to
+ * items in the console, and say nothing to a reader.
+ */
+function storedItems(metadata: Prisma.JsonValue | null): ComparisonReportItem[] {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+  const items = (metadata as { items?: unknown }).items;
+  if (!Array.isArray(items)) return [];
+  return (items as ComparedItem[]).map((item) => ({
+    itemId: item.itemId,
+    label: item.label,
+    moveIn: item.moveIn,
+    moveOut: item.moveOut,
+    change: item.change,
+    cleaning: item.cleaning,
+  }));
+}
+
 const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
   MOVE_IN: process.env.REPORT_TEMPLATE_LABEL_MOVE_IN ?? 'Entry Inspection',
   MOVE_OUT: process.env.REPORT_TEMPLATE_LABEL_MOVE_OUT ?? 'Exit Inspection',
@@ -51,9 +88,37 @@ const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
 export class ComparisonReportService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  /** The console's copy: photographs come from the authenticated admin route. */
   async report(user: AuthenticatedUser, moveOutInspectionId: string): Promise<ComparisonReport> {
+    return this.build(user.organizationId, moveOutInspectionId, adminPhotoPath);
+  }
+
+  /**
+   * The shared copy, for the link an owner or tenant opens.
+   *
+   * Photographs are addressed through the share token, which is the viewer's
+   * only credential -- the route the shared inspection report uses, so an
+   * expired or revoked link fails identically for the page and its images.
+   */
+  async reportForShare(
+    organizationId: string,
+    moveOutInspectionId: string,
+    token: string,
+  ): Promise<ComparisonReport> {
+    return this.build(
+      organizationId,
+      moveOutInspectionId,
+      (photoId) => `/api/v1/reports/${encodeURIComponent(token)}/photos/${photoId}`,
+    );
+  }
+
+  private async build(
+    organizationId: string,
+    moveOutInspectionId: string,
+    photoPath: PhotoPath,
+  ): Promise<ComparisonReport> {
     const comparison = await this.prisma.inspectionComparison.findFirst({
-      where: { moveOutInspectionId, organizationId: user.organizationId },
+      where: { moveOutInspectionId, organizationId },
       include: {
         areaComparisons: {
           // Position, because `createdAt` cannot order these: one `createMany`
@@ -75,8 +140,8 @@ export class ComparisonReportService {
       );
 
     const [moveIn, moveOut, reviewer] = await Promise.all([
-      this.loadSide(comparison.moveInInspectionId),
-      this.loadSide(comparison.moveOutInspectionId),
+      this.loadSide(comparison.moveInInspectionId, photoPath),
+      this.loadSide(comparison.moveOutInspectionId, photoPath),
       comparison.reviewedById
         ? this.prisma.userProfile.findUnique({
             where: { id: comparison.reviewedById },
@@ -97,6 +162,7 @@ export class ComparisonReportService {
       requiresReview: row.requiresReview,
       // Nullable in the table; a renderer should not have to null-check a caption.
       summary: row.summary ?? '',
+      items: storedItems(row.metadata),
       // Null on either side is meaningful: an area documented at move-in and
       // never revisited, or one that only exists at move-out. Those rows are
       // the point of the document, so they are carried rather than dropped.
@@ -122,6 +188,7 @@ export class ComparisonReportService {
         generatedAt: comparison.generatedAt.toISOString(),
         reviewedByName: reviewer?.displayName ?? null,
         reviewedAt: comparison.reviewedAt?.toISOString() ?? null,
+        reviewNote: comparison.reviewNote ?? null,
       },
       moveIn: moveIn.inspection,
       moveOut: moveOut.inspection,
@@ -137,7 +204,7 @@ export class ComparisonReportService {
    * is what `InspectionAreaComparison` stores on each side, and it is the only
    * identifier the two inspections share.
    */
-  private async loadSide(inspectionId: string) {
+  private async loadSide(inspectionId: string, photoPath: PhotoPath) {
     const inspection = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
       select: {
@@ -198,8 +265,10 @@ export class ComparisonReportService {
             },
           },
         },
+        // The room's condition summary is context for reviewers, never a
+        // finding: it is not printed whatever its status.
         findings: {
-          where: { reviewStatus: FindingReviewStatus.APPROVED },
+          where: { reviewStatus: FindingReviewStatus.APPROVED, NOT: { ...ROOM_SUMMARY_WHERE } },
           orderBy: { createdAt: 'asc' },
           take: 200,
           select: {
@@ -265,9 +334,9 @@ export class ComparisonReportService {
           captureTimeSource: photo.captureTimeSource,
           width: photo.width,
           height: photo.height,
-          // The authenticated console route. This is the only field a share-link
-          // version of this document would need to change.
-          contentPath: `/api/v1/admin/photos/${photo.id}/content`,
+          // The one field that differs between readers: the console's
+          // authenticated route, or the share token's.
+          contentPath: photoPath(photo.id),
         })),
       });
     }

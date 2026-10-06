@@ -3,7 +3,7 @@
 import { NextRequest } from 'next/server';
 import { describe, expect, it } from 'vitest';
 
-import { middleware } from './middleware';
+import { config, middleware } from './middleware';
 
 /**
  * The server-side guard in front of the admin shell.
@@ -47,5 +47,25 @@ describe('the admin shell guard', () => {
     expect(letThrough(visit(`tr_access=${token(now() - 60)}; tr_remember=1`))).toBe(true);
     // The access cookie is gone altogether once its hour is up.
     expect(letThrough(visit('tr_remember=1'))).toBe(true);
+  });
+});
+
+/**
+ * Which paths the guard stands in front of. A share link is opened by an owner
+ * or a tenant with no account, so its page must not be sent to sign in -- and
+ * the console's own copy of the same document must.
+ */
+describe('the paths it guards', () => {
+  const guarded = (path: string) => new RegExp(`^${config.matcher[0]}$`).test(path);
+
+  it('leaves the shared inspection and comparison reports open, and their PDFs', () => {
+    expect(guarded('/report/abc123')).toBe(false);
+    expect(guarded('/comparison-report/abc123')).toBe(false);
+    expect(guarded('/comparison-report/abc123/pdf')).toBe(false);
+  });
+
+  it('keeps the console’s comparison report behind sign-in', () => {
+    expect(guarded('/inspections/9f0c/comparison-report')).toBe(true);
+    expect(guarded('/inspections/9f0c/comparison')).toBe(true);
   });
 });

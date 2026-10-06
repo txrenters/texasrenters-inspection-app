@@ -145,6 +145,25 @@ describe('Microsoft Graph mail integration', () => {
     expect(message.html).not.toContain('October 13, 2026');
   });
 
+  /** The office (2026-10-06): the comparison goes to owners and tenants to review. */
+  it('names the comparison report when that is what the link opens', async () => {
+    const sendMail = jest.fn().mockResolvedValue(undefined);
+    const service = new MailService(configuredMail, { sendMail, verify: jest.fn() } satisfies MailTransport);
+
+    await service.sendReportShare({
+      to: 'tenant@example.com',
+      reportUrl: 'https://inspection.example/comparison-report/abc',
+      expiresAt: new Date('2026-11-05T18:00:00.000Z'),
+      kind: 'COMPARISON',
+    });
+
+    const message = sendMail.mock.calls[0][0] as { subject: string; html: string };
+    expect(message.subject).toBe('Your TexasRenters move-in / move-out comparison report');
+    expect(message.html).toContain('Open move-in / move-out comparison report');
+    expect(message.html).toContain('https://inspection.example/comparison-report/abc');
+    expect(message.html).not.toContain('Open inspection report');
+  });
+
   it('returns a safe failure without leaking a private Graph diagnostic', async () => {
     const sendMail = jest.fn().mockRejectedValue(new Error('private Graph diagnostic'));
     const service = new MailService(configuredMail, {

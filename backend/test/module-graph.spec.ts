@@ -1,5 +1,9 @@
 import { Test } from '@nestjs/testing';
 
+import { AdminModule } from '../src/admin/admin.module';
+import { ComparisonReportService } from '../src/admin/comparison-report.service';
+import { ComparisonService } from '../src/admin/comparison.service';
+import { ReportShareService } from '../src/admin/report-share.service';
 import { PrismaService } from '../src/common/prisma.service';
 import { InspectionVideoService } from '../src/media/inspection-video.service';
 import { MediaModule } from '../src/media/media.module';
@@ -60,5 +64,26 @@ describe('the media module', () => {
         { atMs: 1000 },
       ),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+/**
+ * Report links, which issue and serve the move-in / move-out comparison too
+ * (2026-10-06). The comparison services are optional dependencies of the share
+ * service, so only this kind of test sees one go missing.
+ */
+describe('the admin module', () => {
+  it('gives report links the comparison services', async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AdminModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+    const service = moduleRef.get(ReportShareService) as unknown as {
+      comparisonReport?: unknown;
+      comparisons?: unknown;
+    };
+
+    expect(service.comparisonReport).toBeInstanceOf(ComparisonReportService);
+    expect(service.comparisons).toBeInstanceOf(ComparisonService);
   });
 });

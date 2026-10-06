@@ -17,6 +17,17 @@ import { ReportShareService } from './report-share.service';
 export class ReportsController {
   constructor(private readonly shares: ReportShareService) {}
 
+  /**
+   * A move-out's comparison with its move-in, for the owner or tenant it was
+   * sent to. Declared before `:token` so the literal segment wins the match
+   * however the router orders patterns of the same length.
+   */
+  @Get('comparison/:token')
+  @Header('Cache-Control', 'private, no-store')
+  comparisonReport(@Param('token') token: string) {
+    return this.shares.publicComparisonReport(token);
+  }
+
   @Get(':token')
   @Header('Cache-Control', 'private, no-store')
   report(@Param('token') token: string) {

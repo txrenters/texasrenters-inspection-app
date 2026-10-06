@@ -1,6 +1,6 @@
 import { UserRole } from '@texasrenters/shared';
 
-import { ComparisonService } from '../src/admin/comparison.service';
+import { baselineWhere, ComparisonService, keepOverrides } from '../src/admin/comparison.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 const user: AuthenticatedUser = {
@@ -77,6 +77,54 @@ function dirtyItem(propertyAreaId: string) {
 }
 
 /**
+ * The reads `readiness` makes, added to a double: by default nothing
+ * undecided, nothing changed since generation, and the same move-in.
+ */
+function withReadiness<T extends Record<string, unknown>>(
+  prisma: T,
+  opts: {
+    undecided?: number;
+    checklistChanged?: boolean;
+    roomAdded?: boolean;
+    latestMoveIn?: string;
+  } = {},
+) {
+  const part = (key: string) => {
+    const existing = (prisma as Record<string, Record<string, unknown> | undefined>)[key] ?? {};
+    (prisma as Record<string, unknown>)[key] = existing;
+    return existing;
+  };
+  Object.assign(part('inspectionAreaComparison'), {
+    count: jest.fn().mockResolvedValue(opts.undecided ?? 0),
+  });
+  Object.assign(part('inspectionAreaChecklistResponse'), {
+    findFirst: jest.fn().mockResolvedValue(opts.checklistChanged ? { id: 'response-1' } : null),
+  });
+  Object.assign(part('inspectionArea'), {
+    findFirst: jest.fn().mockResolvedValue(opts.roomAdded ? { id: 'area-new' } : null),
+  });
+  const inspection = part('inspection');
+  inspection.findUnique ??= jest.fn().mockResolvedValue(moveOutRecord());
+  inspection.findFirst ??= jest
+    .fn()
+    .mockResolvedValue({ id: opts.latestMoveIn ?? 'move-in-1', scheduledAt: new Date('2025-06-12') });
+  return prisma;
+}
+
+function moveOutRecord() {
+  return {
+    id: 'move-out-1',
+    organizationId: '10000000-0000-4000-8000-000000000001',
+    inspectionType: 'MOVE_OUT',
+    propertywareBuildingId: 'building-1',
+    propertywareUnitId: 'unit-1',
+    propertywareLeaseId: 'lease-1',
+    baselineInspectionId: 'move-in-1',
+    scheduledAt: new Date('2026-07-01T00:00:00.000Z'),
+  };
+}
+
+/**
  * Build a prisma double for ComparisonService.generate. The three
  * inspectionArea.findMany calls fire in this order: move-out areas, move-in
  * areas, move-out evidence counts; inspectionFinding.findMany and
@@ -86,7 +134,12 @@ function dirtyItem(propertyAreaId: string) {
 function generatePrisma(opts: {
   moveOut: Record<string, unknown>;
   moveIn: { id: string } | null;
-  existing?: { id: string; status: string; version: number } | null;
+  existing?: {
+    id: string;
+    status: string;
+    version: number;
+    areaComparisons?: Array<Record<string, unknown>>;
+  } | null;
   moveOutAreas: ReturnType<typeof area>[];
   moveInAreas: ReturnType<typeof area>[];
   moveOutMedia: ReturnType<typeof mediaRow>[];
@@ -168,6 +221,7 @@ function generatePrisma(opts: {
     userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
   };
+  withReadiness(prisma);
   return { prisma, tx, created, areaCreateMany };
 }
 
@@ -626,6 +680,8 @@ describe('comparison review + override (spec §12)', () => {
             id: 'comparison-1',
             status: 'DRAFT',
             moveOutInspectionId: 'move-out-1',
+            moveInInspectionId: 'move-in-1',
+            generatedAt: new Date(),
           })
           .mockResolvedValueOnce({
             id: 'comparison-1',
@@ -649,7 +705,7 @@ describe('comparison review + override (spec §12)', () => {
       inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new ComparisonService(prisma as never);
+    const service = new ComparisonService(withReadiness(prisma) as never);
 
     await service.review(user, 'comparison-1', 'APPROVED');
     expect(tx.inspectionComparison.update).toHaveBeenCalledWith(
@@ -683,7 +739,7 @@ describe('comparison review + override (spec §12)', () => {
           classification: 'NEW_DAMAGE',
           originalClassification: null,
           comparisonId: 'comparison-1',
-          comparison: { moveOutInspectionId: 'move-out-1' },
+          comparison: { moveOutInspectionId: 'move-out-1', status: 'DRAFT' },
         }),
       },
       inspectionComparison: {
@@ -709,7 +765,7 @@ describe('comparison review + override (spec §12)', () => {
       inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new ComparisonService(prisma as never);
+    const service = new ComparisonService(withReadiness(prisma) as never);
 
     await service.overrideArea(
       user,
@@ -1035,7 +1091,7 @@ describe('comparing a room item by item', () => {
       inspectionFinding: { findMany },
       userProfile: { findUnique: jest.fn() },
     };
-    const service = new ComparisonService(prisma as never);
+    const service = new ComparisonService(withReadiness(prisma) as never);
 
     const result = await service.get(user, 'move-out-1');
 
@@ -1057,5 +1113,217 @@ describe('comparing a room item by item', () => {
       reviewStatus: { not: 'REJECTED' },
     });
     expect(result?.areas[0]).not.toHaveProperty('items.0.keywords');
+  });
+});
+
+/**
+ * The review of the comparison before it went to owners and tenants by link
+ * (the office, 2026-10-06): what an approval stands behind, and what survives
+ * a regenerate.
+ */
+describe('a comparison fit to send', () => {
+  it('compares against a move-in submitted but not yet through the AI', () => {
+    // Submitted is done (2026-10-05): the checklist is complete at submission.
+    const where = baselineWhere(moveOutRecord());
+    expect(where.status.in).toEqual(
+      expect.arrayContaining(['TECHNICIAN_SUBMITTED', 'PROCESSING', 'REVIEW_REQUIRED', 'COMPLETED']),
+    );
+    expect(where.status.in).not.toContain('IN_PROGRESS');
+    expect(where.status.in).not.toContain('SCHEDULED');
+  });
+
+  function reviewing(ready: Parameters<typeof withReadiness>[1] = {}) {
+    const tx = {
+      inspectionComparison: { update: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = withReadiness(
+      {
+        inspectionComparison: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'comparison-1',
+            status: 'DRAFT',
+            moveOutInspectionId: 'move-out-1',
+            moveInInspectionId: 'move-in-1',
+            generatedAt: new Date('2026-10-06T15:00:00Z'),
+          }),
+        },
+        $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+      },
+      ready,
+    );
+    return { service: new ComparisonService(prisma as never), tx };
+  }
+
+  it('is not approved while a room still says Requires review', async () => {
+    const { service, tx } = reviewing({ undecided: 2 });
+
+    await expect(service.review(user, 'comparison-1', 'APPROVED')).rejects.toMatchObject({
+      status: 409,
+      code: 'COMPARISON_ROOMS_UNDECIDED',
+      message: expect.stringContaining('2 rooms'),
+    });
+    expect(tx.inspectionComparison.update).not.toHaveBeenCalled();
+  });
+
+  it('is not approved once the evidence under it has changed, and says what changed', async () => {
+    for (const [ready, words] of [
+      [{ checklistChanged: true }, 'A checklist answer changed after it was generated.'],
+      [{ roomAdded: true }, 'A room was added to one of the inspections after it was generated.'],
+      [{ latestMoveIn: 'move-in-2' }, 'A later move-in has been recorded since it was generated.'],
+    ] as const) {
+      const { service, tx } = reviewing(ready);
+      await expect(service.review(user, 'comparison-1', 'APPROVED')).rejects.toMatchObject({
+        status: 409,
+        code: 'COMPARISON_OUT_OF_DATE',
+        message: expect.stringContaining(words),
+      });
+      expect(tx.inspectionComparison.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('can still be rejected whatever its state', async () => {
+    const { service, tx } = reviewing({ undecided: 3, checklistChanged: true });
+    // What load reads afterwards is beside the point here.
+    await service.review(user, 'comparison-1', 'REJECTED').catch(() => undefined);
+    expect(tx.inspectionComparison.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'REJECTED' }) }),
+    );
+  });
+
+  function overriding(status: string) {
+    const tx = {
+      inspectionAreaComparison: {
+        update: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue([{ classification: 'UNCHANGED', requiresReview: false }]),
+      },
+      inspectionComparison: { update: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = withReadiness({
+      inspectionAreaComparison: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-comparison-1',
+          classification: 'NEW_DAMAGE',
+          originalClassification: null,
+          comparisonId: 'comparison-1',
+          comparison: { moveOutInspectionId: 'move-out-1', status },
+        }),
+      },
+      // `load`, afterwards.
+      inspectionComparison: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+    });
+    return { service: new ComparisonService(prisma as never), tx };
+  }
+
+  it('needs the reason a room was changed, because the report prints it', async () => {
+    const { service, tx } = overriding('DRAFT');
+
+    for (const reason of [undefined, '', '   '])
+      await expect(
+        service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, reason),
+      ).rejects.toMatchObject({ status: 400, code: 'OVERRIDE_REASON_REQUIRED' });
+    expect(tx.inspectionAreaComparison.update).not.toHaveBeenCalled();
+
+    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, '  Same marks in the move-in photos. ');
+    expect(tx.inspectionAreaComparison.update.mock.calls[0][0].data.overrideReason).toBe(
+      'Same marks in the move-in photos.',
+    );
+  });
+
+  it('sends an approved comparison back for approval when a room is changed', async () => {
+    const { service, tx } = overriding('APPROVED');
+
+    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, 'Pre-existing');
+
+    expect(tx.inspectionComparison.update.mock.calls[0][0].data).toMatchObject({
+      status: 'UNDER_REVIEW',
+      reviewedById: null,
+      reviewedAt: null,
+    });
+    expect(tx.auditLog.create.mock.calls[0][0].data.metadata).toMatchObject({ approvalWithdrawn: true });
+  });
+
+  it('leaves a draft a draft when a room is changed', async () => {
+    const { service, tx } = overriding('DRAFT');
+
+    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, 'Pre-existing');
+
+    expect(tx.inspectionComparison.update.mock.calls[0][0].data.status).toBeUndefined();
+  });
+});
+
+describe('a reviewer’s decision, across a regenerate', () => {
+  const row = (classification: string, extra: Record<string, unknown> = {}) => ({
+    moveInPropertyAreaId: 'pa-kitchen',
+    moveOutPropertyAreaId: 'pa-kitchen',
+    areaName: 'Kitchen',
+    floorName: null,
+    classification,
+    matchMethod: 'LOCAL_AREA_ID',
+    matchConfidence: 1,
+    requiresReview: true,
+    summary: 'New since move-in: Walls and ceilings.',
+    ...extra,
+  });
+  const decided = {
+    moveInPropertyAreaId: 'pa-kitchen',
+    moveOutPropertyAreaId: 'pa-kitchen',
+    classification: 'UNCHANGED',
+    originalClassification: 'NEW_DAMAGE',
+    overriddenById: 'user-9',
+    overriddenAt: new Date('2026-10-06T16:00:00Z'),
+    overrideReason: 'The move-in photographs show the same marks.',
+  };
+
+  it('is kept where the machine still says what the reviewer set aside', () => {
+    const { results, kept } = keepOverrides([row('NEW_DAMAGE')] as never, [decided] as never);
+
+    expect(kept).toBe(1);
+    expect(results[0]).toMatchObject({
+      classification: 'UNCHANGED',
+      originalClassification: 'NEW_DAMAGE',
+      overrideReason: 'The move-in photographs show the same marks.',
+      requiresReview: false,
+      // The checklist's own words stay: the report prints both.
+      summary: 'New since move-in: Walls and ceilings.',
+    });
+  });
+
+  it('is dropped where the evidence moved the machine’s verdict, or the rooms differ', () => {
+    expect(keepOverrides([row('UNCHANGED', { requiresReview: false })] as never, [decided] as never).kept).toBe(0);
+    expect(
+      keepOverrides([row('NEW_DAMAGE', { moveInPropertyAreaId: 'pa-other' })] as never, [decided] as never).kept,
+    ).toBe(0);
+  });
+
+  it('survives regenerating the comparison', async () => {
+    const { prisma, areaCreateMany, tx } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      existing: {
+        id: 'comparison-1',
+        status: 'DRAFT',
+        version: 2,
+        areaComparisons: [{ ...decided, moveInPropertyAreaId: 'pa-kitchen', moveOutPropertyAreaId: 'pa-kitchen' }],
+      },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [damageFinding('pa-kitchen')],
+      moveInFindings: [soundFinding('pa-kitchen')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      classification: 'UNCHANGED',
+      originalClassification: 'NEW_DAMAGE',
+      overrideReason: 'The move-in photographs show the same marks.',
+      requiresReview: false,
+    });
+    expect(tx.auditLog.create.mock.calls[0][0].data.metadata).toMatchObject({ keptOverrides: 1 });
   });
 });

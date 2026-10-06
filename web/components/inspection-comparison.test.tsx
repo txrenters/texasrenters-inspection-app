@@ -192,3 +192,60 @@ describe('the move-in comparison', () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * Before it goes to an owner or tenant (the office, 2026-10-06): every room
+ * decided, the evidence unchanged since it was drawn, and approved.
+ */
+describe('a comparison going out', () => {
+  it('holds the approval until every room is decided, and says why', () => {
+    state.data = { ...comparison([entrance()]), undecidedRooms: 2 };
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+
+    expect(screen.getByRole('button', { name: 'Approve comparison' })).toBeDisabled();
+    expect(
+      screen.getByText('Decide the 2 rooms marked Requires review first (Override).'),
+    ).toBeInTheDocument();
+  });
+
+  it('says when the comparison is out of date, and holds the approval for a regenerate', () => {
+    state.data = {
+      ...comparison([entrance()]),
+      undecidedRooms: 0,
+      outOfDate: ['CHECKLIST_CHANGED'],
+      outOfDateText: 'A checklist answer changed after it was generated.',
+    };
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+
+    expect(screen.getByText(/Out of date\. A checklist answer changed after it was generated\./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve comparison' })).toBeDisabled();
+  });
+
+  it('offers to share only an approved comparison with nothing left to decide', () => {
+    state.data = { ...comparison([entrance()]), undecidedRooms: 0 };
+    const { unmount } = render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+    const draft = screen.getByRole('button', { name: 'Share' });
+    expect(draft).toBeDisabled();
+    expect(draft).toHaveAttribute('title', expect.stringContaining('Not approved yet'));
+    unmount();
+
+    state.data = { ...comparison([entrance()]), status: 'APPROVED', undecidedRooms: 0, outOfDate: [] };
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+    expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
+  });
+
+  it('asks why a room was changed, since the report prints the reason', () => {
+    state.data = { ...comparison([entrance()]), status: 'APPROVED', undecidedRooms: 0 };
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Override' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/sends it back for approval/)).toBeInTheDocument();
+    const save = within(dialog).getByRole('button', { name: 'Save override' });
+    expect(save).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('Reason, printed on the report'), {
+      target: { value: 'The move-in photographs show the same marks.' },
+    });
+    expect(save).toBeEnabled();
+  });
+});

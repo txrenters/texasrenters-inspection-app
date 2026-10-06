@@ -3,6 +3,7 @@
  * kept apart from the components so it is testable without a browser.
  */
 
+import { comparisonGradeText } from '@texasrenters/shared';
 import type {
   AdminAreaComparison,
   AdminComparisonItem,
@@ -10,18 +11,13 @@ import type {
   ComparisonItemChange,
 } from '@texasrenters/shared';
 
-/** One side's grades in a few words: "Damaged, not working · dirty". Null was not graded. */
+/**
+ * One side's grades in a few words: "Damaged, not working · dirty". Null was
+ * not graded. The comparison report's own words (`comparisonGradeText`), so
+ * the review table and the document an owner or tenant reads cannot disagree.
+ */
 export function gradeText(side: AdminComparisonItemSide | null) {
-  if (!side) return 'Not graded';
-  const condition: string[] = [];
-  if (side.undamaged === false) condition.push('damaged');
-  if (side.working === false) condition.push('not working');
-  if (!condition.length && (side.undamaged === true || side.working === true))
-    condition.push('sound');
-  const cleanliness =
-    side.clean === false ? 'dirty' : side.clean === true && !condition.length ? 'clean' : null;
-  const text = [condition.join(', '), cleanliness].filter(Boolean).join(' · ');
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : 'Not graded';
+  return comparisonGradeText(side, 'Not graded');
 }
 
 /** Each change, named and coloured by what it means for the tenancy. */

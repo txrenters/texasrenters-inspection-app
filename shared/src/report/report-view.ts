@@ -16,7 +16,7 @@ import type {
   PublicReportChecklistItem,
   PublicReportPhoto,
 } from '../contracts/admin.js';
-import { formatPhotoStamp } from '../contracts/photo-capture-time.js';
+import { formatPhotoStamp, PHOTO_STAMP_TIME_ZONE } from '../contracts/photo-capture-time.js';
 
 export type ReportSeverity = 'HIGH' | 'MEDIUM' | 'LOW';
 
@@ -104,7 +104,15 @@ function toSeverity(value: string): ReportSeverity {
   return value === 'HIGH' || value === 'MEDIUM' || value === 'LOW' ? value : 'LOW';
 }
 
-function formatDay(value?: string | null) {
+/**
+ * A day, as the report prints it: "October 1, 2026".
+ *
+ * `moment` for a time something happened -- a completion, the report's
+ * generation -- read in Texas. Read in UTC, a visit finished after 7 pm in
+ * Houston printed as completed the next day. A scheduled day stays in UTC,
+ * which is how a date-only visit is stored.
+ */
+export function formatReportDay(value?: string | Date | null, moment = false) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
@@ -112,9 +120,11 @@ function formatDay(value?: string | null) {
     month: 'long',
     day: 'numeric',
     year: 'numeric',
-    timeZone: 'UTC',
+    timeZone: moment ? PHOTO_STAMP_TIME_ZONE : 'UTC',
   }).format(date);
 }
+
+const formatDay = formatReportDay;
 
 export interface ReportPhotoView {
   id: string;
@@ -129,6 +139,9 @@ export interface ReportPhotoView {
    */
   stamp: string | null;
   contentPath: string;
+  /** The capture time and its origin, for a viewer that draws its own stamp. */
+  capturedAt: string | null;
+  captureTimeSource: PublicReportPhoto['captureTimeSource'] | null;
 }
 
 export interface ReportFindingView {
@@ -301,13 +314,16 @@ const DISCLAIMER =
   'publication. This report is informational: it does not by itself authorize charges or ' +
   'determine responsibility for any condition described.';
 
-function mapPhoto(photo: PublicReportPhoto): ReportPhotoView {
+/** A photograph as a report prints it; shared with the comparison report. */
+export function reportPhotoView(photo: PublicReportPhoto): ReportPhotoView {
   return {
     id: photo.id,
     caption: photo.label?.trim() || null,
     notes: photo.notes?.trim() || null,
     stamp: formatPhotoStamp(photo.capturedAt, photo.captureTimeSource),
     contentPath: photo.contentPath,
+    capturedAt: photo.capturedAt ?? null,
+    captureTimeSource: photo.captureTimeSource ?? null,
   };
 }
 
@@ -336,8 +352,8 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
   const photosByRoom = new Map<string, ReportPhotoView[]>();
   for (const photo of report.photos ?? []) {
     const list = photosByRoom.get(photo.roomId);
-    if (list) list.push(mapPhoto(photo));
-    else photosByRoom.set(photo.roomId, [mapPhoto(photo)]);
+    if (list) list.push(reportPhotoView(photo));
+    else photosByRoom.set(photo.roomId, [reportPhotoView(photo)]);
   }
 
   const findings = report.findings.map(mapFinding);
@@ -441,7 +457,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
 
   const property = report.property;
   const unit = property.unitName ? `, Unit ${property.unitName}` : '';
-  const completed = formatDay(report.inspection.completedAt);
+  const completed = formatDay(report.inspection.completedAt, true);
   const scheduled = formatDay(report.inspection.scheduledAt);
 
   return {
@@ -479,7 +495,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     rooms,
     otherFindings: orphaned.sort(bySeverity),
     allFindings: [...findings].sort(bySeverity),
-    generatedLabel: formatDay(report.generatedAt) ?? '',
+    generatedLabel: formatDay(report.generatedAt, true) ?? '',
     disclaimer: DISCLAIMER,
   };
 }
