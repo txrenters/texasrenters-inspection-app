@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildReportView } from '../src/index.js';
+import { buildReportView, restatesChecklist } from '../src/index.js';
 import type { PublicInspectionReport } from '../src/index.js';
 
 function report(overrides: Partial<PublicInspectionReport> = {}): PublicInspectionReport {
@@ -156,12 +156,21 @@ describe('inspection report view model', () => {
  * findings from the technician's narration ("Flooring", "Smoke alarm"). These
  * cover the pairings a real two-room report produced, where matching the two
  * labels for equality left five of six failed rows printing a bare N.
+ *
+ * Since 2026-10-07 a comment is a finding's title -- short, as the office asked
+ * -- and it comes from every finding the office has not rejected, confirmed or
+ * not (`checklistNotes`): 10830 Harston Dr printed no comment at all while its
+ * 227 findings waited to be confirmed.
  */
 describe('explaining a failed checklist row', () => {
+  type Note = { category: string; title: string };
+
   function rowFor(
-    item: { label: string; keywords?: string[]; isClean?: boolean | null },
-    findings: { category: string; description: string }[],
+    item: { label: string; keywords?: string[]; isClean?: boolean | null; comment?: string },
+    notes: Note[],
+    via: 'notes' | 'findings' = 'notes',
   ) {
+    const sources = notes.map((note, index) => ({ ...FINDING, id: `finding-${index}`, ...note }));
     const view = buildReportView(
       report({
         rooms: [
@@ -172,6 +181,7 @@ describe('explaining a failed checklist row', () => {
                 id: 'item-1',
                 label: item.label,
                 keywords: item.keywords,
+                comment: item.comment,
                 isClean: item.isClean ?? false,
                 isUndamaged: true,
                 isWorking: true,
@@ -179,11 +189,16 @@ describe('explaining a failed checklist row', () => {
             ],
           },
         ],
-        findings: findings.map((finding, index) => ({
-          ...FINDING,
-          id: `finding-${index}`,
-          ...finding,
-        })),
+        ...(via === 'notes'
+          ? {
+              checklistNotes: sources.map(({ roomId, roomName, category, title }) => ({
+                roomId,
+                roomName,
+                category,
+                title,
+              })),
+            }
+          : { findings: sources }),
       }),
     );
     return view.rooms[0].checklist[0];
@@ -196,53 +211,120 @@ describe('explaining a failed checklist row', () => {
     ['Doors and locks', ['door', 'lock'], 'Doors'],
     ['Lights and power points', ['light', 'power', 'point'], 'Lighting'],
   ])('explains %s from a finding filed under %s', (label, keywords, category) => {
-    expect(rowFor({ label, keywords }, [{ category, description: 'The recorded defect.' }]).comment)
-      .toBe('The recorded defect.');
+    expect(rowFor({ label, keywords }, [{ category, title: 'Corner: chipped' }]).comment).toBe(
+      'Corner: chipped',
+    );
   });
 
-  it('carries every finding that explains the row, not just the first', () => {
-    // A room can have two things wrong with its walls. Printing one of them
-    // silently drops the other from the only column a reader checks.
-    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall', 'ceiling'] }, [
-      { category: 'WALLS', description: 'Multiple wall cracks.' },
-      { category: 'WALLS', description: 'Water staining near the ceiling.' },
+  it('prints the title, short, never the description', () => {
+    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall'] }, [
+      { category: 'Walls', title: 'Entrance wall: several screw holes' },
     ]);
 
-    expect(row.comment).toBe('Multiple wall cracks. Water staining near the ceiling.');
+    expect(row.comment).toBe('Entrance wall: several screw holes');
+    expect(row.comment).not.toContain(FINDING.description);
   });
 
-  it('leads with the reviewer note and keeps the findings after it', () => {
+  it('prints what the walkthrough found before anyone confirmed it', () => {
+    // The findings section is the office's confirmed findings; the comments
+    // are not held for them (2026-10-07).
     const view = buildReportView(
       report({
         rooms: [
           {
             ...ROOM,
             checklist: [
-              {
-                id: 'item-1',
-                label: 'Walls and ceilings',
-                keywords: ['wall', 'ceiling'],
-                comment: 'Tenant reported this on move-in day.',
-                isClean: false,
-                isUndamaged: true,
-                isWorking: true,
-              },
+              { id: 'item-1', label: 'Walls and ceilings', keywords: ['wall'], isClean: true, isUndamaged: false, isWorking: true },
             ],
           },
         ],
-        findings: [{ ...FINDING, category: 'WALLS', description: 'Multiple wall cracks.' }],
+        findings: [],
+        checklistNotes: [{ roomId: 'area-1', roomName: 'Kitchen', category: 'Walls', title: 'Wall: two nail holes' }],
       }),
     );
 
-    expect(view.rooms[0].checklist[0].comment).toBe(
-      'Tenant reported this on move-in day. Multiple wall cracks.',
+    expect(view.rooms[0].checklist[0].comment).toBe('Wall: two nail holes');
+    expect(view.rooms[0].findings).toHaveLength(0);
+    expect(view.disclaimer).toContain('comments beside the checklist are drawn automatically');
+  });
+
+  it('leaves out a finding that only says the row’s N back', () => {
+    // 10830 Harston Dr: "Walls and ceilings: not clean", "Lights and power
+    // points: recorded damage" -- most of its 227 findings.
+    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall', 'ceiling'] }, [
+      { category: 'Walls', title: 'Walls and ceilings: not clean' },
+      { category: 'Walls', title: 'Walls and ceilings: failed working check' },
+      { category: 'Walls', title: 'Walls and ceilings: recorded damage, not working' },
+      { category: 'Walls', title: 'Entrance wall: several screw holes' },
+    ]);
+
+    expect(row.comment).toBe('Entrance wall: several screw holes');
+  });
+
+  it.each([
+    // The ways 10830 Harston Dr's findings said a row's N back (2026-10-07).
+    ['Doors and locks', ['door', 'lock'], 'Kitchen door recorded as unclean', true],
+    ['Dishwasher', ['dishwasher'], 'Dishwasher is damaged', true],
+    ['Lawn and garden', ['lawn', 'garden'], 'Lawn and garden: damage recorded without details', true],
+    ['Lights and power points', ['light', 'power'], 'Kitchen lights or power points not working', true],
+    ['Floor and coverings', ['floor'], 'Kitchen-room floor recorded as not clean', true],
+    ['Walls and ceilings', ['wall', 'ceiling'], 'Walls or ceiling: unspecified functional issue recorded', true],
+    // And ones that say what is wrong.
+    ['Doors and locks', ['door', 'lock'], 'Sliding door locking mechanism damaged', false],
+    ['Walls and ceilings', ['wall', 'ceiling'], 'Kitchen wall has widespread grease stains', false],
+    ['Smoke alarms', ['smoke', 'alarm'], 'Smoke alarm missing from office', false],
+    ['Lights and power points', ['light', 'bulb'], 'Two bathroom light bulbs are not working', false],
+  ])('on %s, "%s" says the row back: %s', (label, keywords, title, echo) => {
+    expect(restatesChecklist(title, { label, keywords }, 'Kitchen')).toBe(echo);
+  });
+
+  it('carries what explains the row, up to three, not just the first', () => {
+    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall', 'ceiling'] }, [
+      { category: 'WALLS', title: 'Wall: multiple cracks' },
+      { category: 'WALLS', title: 'Ceiling: water stain by the vent' },
+      { category: 'WALLS', title: 'Wall: scuff by the door' },
+      { category: 'WALLS', title: 'Wall: crayon marks' },
+      // The same title twice is said once.
+      { category: 'WALLS', title: 'Wall: multiple cracks' },
+    ]);
+
+    expect(row.comment).toBe('Wall: multiple cracks; Ceiling: water stain by the vent; Wall: scuff by the door');
+  });
+
+  it('cuts a long title at a word', () => {
+    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall'] }, [
+      {
+        category: 'Walls',
+        title:
+          'Wall: long horizontal scrape running along the hallway from the bedroom door to the bathroom',
+      },
+    ]);
+
+    expect(row.comment.length).toBeLessThanOrEqual(80);
+    expect(row.comment).toMatch(/^Wall: long horizontal scrape .*…$/);
+  });
+
+  it('matches on the thing a title names, whatever its category', () => {
+    const row = rowFor({ label: 'Lights and power points', keywords: ['light', 'outlet'] }, [
+      { category: 'Electrical', title: 'Outlet cover: missing by the sink' },
+    ]);
+
+    expect(row.comment).toBe('Outlet cover: missing by the sink');
+  });
+
+  it('leads with the technician’s note and keeps the findings after it', () => {
+    const row = rowFor(
+      { label: 'Walls and ceilings', keywords: ['wall', 'ceiling'], comment: 'Tenant reported this on move-in day.' },
+      [{ category: 'WALLS', title: 'Wall: multiple cracks' }],
     );
+
+    expect(row.comment).toBe('Tenant reported this on move-in day. Wall: multiple cracks');
   });
 
   it('says nothing about a row that passed', () => {
     // A comment against an all-Y row reads as a defect that was never found.
     const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall'], isClean: true }, [
-      { category: 'WALLS', description: 'Multiple wall cracks.' },
+      { category: 'WALLS', title: 'Wall: multiple cracks' },
     ]);
 
     expect(row.comment).toBe('');
@@ -250,20 +332,26 @@ describe('explaining a failed checklist row', () => {
 
   it('does not attach a finding about something else in the room', () => {
     const row = rowFor({ label: 'Smoke alarms', keywords: ['smoke', 'alarm'] }, [
-      { category: 'Flooring', description: 'Floor stained and unclean.' },
+      { category: 'Flooring', title: 'Floor: stained by the sink' },
     ]);
 
     expect(row.comment).toBe('');
   });
 
   it('still matches on the label when the item carries no keywords', () => {
-    // Reports generated against a backend that predates `keywords` still have
-    // to explain their failed rows.
-    const row = rowFor({ label: 'Smoke alarms' }, [
-      { category: 'Smoke alarm', description: 'No smoke alarm observed.' },
-    ]);
+    const row = rowFor({ label: 'Smoke alarms' }, [{ category: 'Smoke alarm', title: 'Smoke alarm: missing' }]);
 
-    expect(row.comment).toBe('No smoke alarm observed.');
+    expect(row.comment).toBe('Smoke alarm: missing');
+  });
+
+  it('reads the confirmed findings when a report carries no notes (an older backend)', () => {
+    const row = rowFor(
+      { label: 'Walls and ceilings', keywords: ['wall'] },
+      [{ category: 'Walls', title: 'Wall: multiple cracks' }],
+      'findings',
+    );
+
+    expect(row.comment).toBe('Wall: multiple cracks');
   });
 });
 

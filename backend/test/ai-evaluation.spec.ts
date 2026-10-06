@@ -247,7 +247,7 @@ describe('a test run', () => {
         organizationId: ORGANIZATION_ID,
         houseRules: 'Scuffs are normal wear.',
         guidanceVersion: null,
-        promptVersion: '7',
+        promptVersion: '8',
         recordingCount: 2,
       }),
       select: { id: true },

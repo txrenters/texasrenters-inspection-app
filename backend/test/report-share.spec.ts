@@ -167,6 +167,17 @@ describe('inspection report shares', () => {
           ],
         }),
       },
+      // The comments' notes: every finding the office has not rejected.
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            propertyAreaId: 'property-area-1',
+            title: 'Door: two scratches by the handle',
+            category: 'Doors',
+            propertyArea: { name: 'Kitchen' },
+          },
+        ]),
+      },
     };
     const service = new ReportShareService(prisma as never);
 
@@ -175,7 +186,20 @@ describe('inspection report shares', () => {
     const findingsQuery = prisma.inspection.findUnique.mock.calls[0][0] as {
       select: { findings: { where: { reviewStatus: string } } };
     };
+    // The findings section stays the office's confirmed findings...
     expect(findingsQuery.select.findings.where).toEqual({ reviewStatus: 'APPROVED' });
+    // ...and the comments read every finding not rejected, by title only, so
+    // they are there before anyone confirms them (the office, 2026-10-07).
+    const notesQuery = prisma.inspectionFinding.findMany.mock.calls[0][0];
+    expect(notesQuery.where).toEqual({
+      inspectionId: 'inspection-1',
+      reviewStatus: { not: 'REJECTED' },
+      findingType: { not: 'NO_CHANGE' },
+    });
+    expect(notesQuery.select).not.toHaveProperty('description');
+    expect(report.checklistNotes).toEqual([
+      { roomId: 'area-1', roomName: 'Kitchen', category: 'Doors', title: 'Door: two scratches by the handle' },
+    ]);
     expect(report.property.addressLine1).toBe('1458 Oak Ridge Dr');
     expect(report.rooms).toHaveLength(1);
     expect(report.findings).toHaveLength(1);
@@ -228,6 +252,7 @@ describe('inspection report shares', () => {
           findings: [],
         }),
       },
+      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = new ReportShareService(prisma as never);
 

@@ -237,9 +237,10 @@ describe('inspection report PDF', () => {
 
   describe('a failed axis borrows the finding that explains it', () => {
     // The office's report never prints a bare "N" — the comment column is where
-    // a reader learns what was wrong. The AI already wrote that sentence from
-    // the narration and filed it under the same name as the checklist item, so
-    // this surfaces existing words rather than inventing any.
+    // a reader learns what was wrong. The AI already wrote it from the
+    // narration and filed it under the checklist item, so this surfaces
+    // existing words -- the finding's title, kept short -- rather than
+    // inventing any (2026-10-07).
     const withFinding = (checklist: unknown) => ({
       ...REPORT,
       rooms: [{ ...REPORT.rooms[0]!, checklist }],
@@ -248,7 +249,7 @@ describe('inspection report PDF', () => {
           id: 'f-1',
           roomId: 'area-1',
           roomName: 'Kitchen',
-          title: 'Doors and locks not clean',
+          title: 'Door handle: grease around it',
           description: 'Grease around the handle, noted in the narration.',
           category: 'Doors and locks',
           severity: 'LOW',
@@ -272,9 +273,7 @@ describe('inspection report PDF', () => {
         ]) as never,
       );
 
-      expect(view.rooms[0]!.checklist[0]!.comment).toBe(
-        'Grease around the handle, noted in the narration.',
-      );
+      expect(view.rooms[0]!.checklist[0]!.comment).toBe('Door handle: grease around it');
     });
 
     it('leaves a passing row alone', () => {
@@ -314,7 +313,7 @@ describe('inspection report PDF', () => {
       );
 
       expect(view.rooms[0]!.checklist[0]!.comment).toBe(
-        'Handle sticks. Grease around the handle, noted in the narration.',
+        'Handle sticks. Door handle: grease around it',
       );
     });
 

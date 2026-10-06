@@ -1058,6 +1058,20 @@ export interface PublicInspectionReport {
     comparisonResult: string;
     baselineCondition: string;
   }>;
+  /**
+   * What the walkthrough found, for the comment beside a failed checklist row:
+   * every finding the office has not rejected, confirmed or not, by its title
+   * -- never its description, and never in the findings section, which stays
+   * the office's confirmed findings (the office, 2026-10-07). Absent from a
+   * report built by an older backend; the comments then come from `findings`.
+   */
+  checklistNotes?: Array<{
+    /** InspectionArea id, as on a finding. Null if the room was removed. */
+    roomId?: string | null;
+    roomName: string;
+    category: string;
+    title: string;
+  }>;
   photos: PublicReportPhoto[];
   /**
    * The report's closing block, written by the reviewer at sign-off.

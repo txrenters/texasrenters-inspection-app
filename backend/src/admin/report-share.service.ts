@@ -4,6 +4,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   AreaChecklistItemKind,
   FindingReviewStatus,
+  FindingType,
   InspectionAreaCompletionStatus,
   ReportShareKind,
 } from '@prisma/client';
@@ -274,10 +275,11 @@ export class ReportShareService {
   }
 
   /**
-   * Public, unauthenticated report for homeowners. Contains only reviewed
-   * material: room completion, APPROVED findings, and photos that pass
-   * REPORT_VISIBLE_PHOTO. Internal notes, technician identities, pending AI
-   * output, and identifiers stay private.
+   * Public, unauthenticated report for homeowners: room completion, APPROVED
+   * findings, photos that pass REPORT_VISIBLE_PHOTO, and -- for the comments
+   * beside failed checklist rows only -- the titles of the findings the office
+   * has not rejected (`checklistNotes`, 2026-10-07). Internal notes, finding
+   * descriptions not yet approved, and identifiers stay private.
    */
   async publicReport(token: string) {
     const share = await this.resolveShare(token);
@@ -468,6 +470,29 @@ export class ReportShareService {
         },
       },
     });
+    /**
+     * The comments beside failed checklist rows: every finding the office has
+     * not rejected, by title only (the office, 2026-10-07 -- print them
+     * straight away, keep them short). Neither a room's summary nor a "no
+     * change" note: beside an N it would read as the opposite of the row.
+     */
+    const notes = inspection
+      ? await this.prisma.inspectionFinding.findMany({
+          where: {
+            inspectionId,
+            reviewStatus: { not: FindingReviewStatus.REJECTED },
+            findingType: { not: FindingType.NO_CHANGE },
+          },
+          orderBy: { createdAt: 'asc' },
+          take: 300,
+          select: {
+            propertyAreaId: true,
+            title: true,
+            category: true,
+            propertyArea: { select: { name: true } },
+          },
+        })
+      : [];
     if (!inspection)
       throw new ApplicationError(404, 'REPORT_NOT_AVAILABLE', 'This report is not available.');
     const building = inspection.propertywareBuilding;
@@ -593,6 +618,12 @@ export class ReportShareService {
         severity: finding.severity,
         comparisonResult: finding.comparisonResult,
         baselineCondition: finding.baselineCondition,
+      })),
+      checklistNotes: notes.map((note) => ({
+        roomId: roomIdByPropertyArea.get(note.propertyAreaId) ?? null,
+        roomName: note.propertyArea.name,
+        category: note.category,
+        title: note.title,
       })),
       photos: [
         ...areas.flatMap((area) => area.photos.map((photo) => photoView(photo, area.id))),
