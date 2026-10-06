@@ -45,8 +45,10 @@ import { VisualReviewService } from './visual-review.service';
 // comparison's move-in with its checklist, and reviewed findings are not raised
 // again on a re-run. 5: the office's house rules and its recent decisions.
 // 7: every problem, one per finding, titled and described specifically, and
-// no stock advice in recommendedReview.
-export const PROMPT_VERSION = '7';
+// no stock advice in recommendedReview. 8: no finding that only repeats a
+// checklist answer, and a title of at most eight words -- the report prints it
+// as the checklist row's comment.
+export const PROMPT_VERSION = '8';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -1688,7 +1690,8 @@ export class MediaProcessingService implements OnModuleInit {
             '  can assert the exact opposite of what the technician recorded. The assessment wins.',
             '- The same applies to clean and working.',
             '- Raise a finding for an item only when the assessment marks it NOT clean, DAMAGED or',
-            '  NOT working, or when the narration describes a problem the checklist has no item for.',
+            '  NOT working and the narration says what is wrong with it, or when the narration',
+            '  describes a problem the checklist has no item for. The mark alone is not a finding.',
             '- When an item is "not assessed", the narration is the only evidence; say so in',
             '  recommendedReview rather than assuming a condition.',
             '- If the transcript and the assessment disagree, follow the assessment and note the',
@@ -1733,14 +1736,23 @@ export class MediaProcessingService implements OnModuleInit {
       // description the title again, its advice "compare the move-in and
       // move-out" -- and problems the technician named were missing.
       'Be thorough and specific:',
-      '- Report EVERY problem the technician names or the checklist marks, minor ones included (a nail hole,',
-      '  a missing outlet cover, a burnt-out bulb, a loose towel bar). Do not drop one because it is small.',
+      '- Report EVERY problem the technician names, minor ones included (a nail hole, a missing outlet',
+      '  cover, a burnt-out bulb, a loose towel bar). Do not drop one because it is small.',
       '  The rules above still decide what counts: never one the assessment contradicts or the office decided.',
+      // 2026-10-07: 10830 Harston Dr had 227 findings, most of them a checklist
+      // answer said back -- "Walls and ceilings: not clean", "the narration
+      // does not identify ..." -- which the report already prints as an N.
+      '- A checklist answer on its own is not a finding: the report already shows it. Never raise one that',
+      '  only repeats it ("Walls: not clean", "Lights: recorded damage", "the narration does not say which").',
+      '  For an item the checklist marks, raise a finding only when the narration says what is wrong with it.',
       '- One item per problem on one thing. Never join two things in one finding ("flooring and transition',
       '  piece"): the floor and the transition strip are two findings, each with its own times.',
-      '- title: the thing and what is wrong with it, in plain words, under 80 characters, e.g.',
-      '  "Carpet: dark stain by the closet door" or "Transition strip missing at kitchen doorway". Never a',
-      '  vague title such as "Flooring issue", "Wall condition" or "requires replacement review".',
+      // The report prints the title as the comment beside the checklist row
+      // (2026-10-07: "keep it short and simple, and precise").
+      '- title: the thing and what is wrong with it, in plain words, at most eight words, e.g.',
+      '  "Carpet: dark stain by the closet door" or "Transition strip missing at kitchen doorway". It is',
+      '  printed on the report as the comment beside the checklist item. Never a vague title such as',
+      '  "Flooring issue", "Wall condition" or "requires replacement review".',
       '- description: one or two sentences saying what the title does not — exactly where in the room, how',
       '  big or how many, what it looks like, and what the technician said about it. Do not repeat the title,',
       '  do not tell the reviewer what to do, and leave the move-in to baselineCondition.',

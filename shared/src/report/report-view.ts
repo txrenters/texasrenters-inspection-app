@@ -254,8 +254,12 @@ function sameSubject(a: string, b: string) {
  * the vocabulary for it. `keywords` exists to recognise the item in a
  * transcript, which is the same job.
  */
-function explains(item: PublicReportChecklistItem, finding: ReportFindingView): boolean {
-  const subject = matchTokens(finding.categoryLabel);
+function explains(item: PublicReportChecklistItem, note: CommentSource): boolean {
+  // The category, and the thing the title names before its colon: "Outlet
+  // cover: missing" is about an outlet whatever category it was filed under.
+  const subject = matchTokens(note.category);
+  const colon = note.title.indexOf(':');
+  if (colon > 0) for (const word of matchTokens(note.title.slice(0, colon))) subject.add(word);
   if (!subject.size) return false;
   const itemWords = matchTokens(item.label);
   for (const keyword of item.keywords ?? [])
@@ -263,6 +267,63 @@ function explains(item: PublicReportChecklistItem, finding: ReportFindingView): 
   for (const word of itemWords)
     for (const other of subject) if (sameSubject(word, other)) return true;
   return false;
+}
+
+/** What a comment is drawn from: a finding's category and its title. */
+type CommentSource = { roomId?: string | null; roomName: string; category: string; title: string };
+
+/** At most this many comments beside one row: the column is a note, not a list. */
+const MAX_ROW_COMMENTS = 3;
+/** A comment longer than this is cut at a word. Titles are asked for in eight words. */
+const MAX_COMMENT_LENGTH = 80;
+
+/**
+ * Words that say no more than a row's Y/N columns: its verdicts, and the
+ * filler the AI wraps them in ("recorded as", "unspecified", "condition").
+ * Singular, as `matchTokens` leaves them.
+ */
+const ECHO_WORDS = new Set(
+  (
+    'recorded reported marked noted listed checklist assessment rating rated condition status ' +
+    'item issue problem unspecified detail without described general overall additional area part ' +
+    'all both some the and with ha have had are wa were been being its their also appear seem ' +
+    'require required requiring need needed needing check fail failed failing not non functional ' +
+    'functioning function working work operational operating clean cleaned unclean cleaning ' +
+    'cleanliness dirty dirt damage damaged unknown room'
+  ).split(' '),
+);
+
+/**
+ * A title that says nothing the row does not: "Walls and ceilings: not clean",
+ * "Kitchen door recorded as unclean", "Dishwasher is damaged", "Lawn and
+ * garden: damage recorded without details". The AI filed one for every failed
+ * checklist answer (10830 Harston Dr, 2026-10-07: dozens of its 227 findings),
+ * worded a different way each time, and beside the row it repeats it is noise.
+ *
+ * What is left of the title once the row's own words, the room's name and
+ * the verdicts are taken out: nothing, and it is an echo. "Sliding door
+ * locking mechanism damaged" leaves "sliding mechanism", and is kept.
+ */
+export function restatesChecklist(
+  title: string,
+  item: Pick<PublicReportChecklistItem, 'label' | 'keywords'>,
+  roomName = '',
+) {
+  const known = matchTokens(item.label);
+  for (const keyword of item.keywords ?? []) for (const word of matchTokens(keyword)) known.add(word);
+  for (const word of matchTokens(roomName)) known.add(word);
+  const said = [...matchTokens(title)];
+  return said.every(
+    (word) => ECHO_WORDS.has(word) || [...known].some((other) => sameSubject(word, other)),
+  );
+}
+
+/** A title as a comment: short, and cut at a word when it is not. */
+export function commentText(title: string) {
+  const text = title.trim().replace(/\s+/g, ' ');
+  if (text.length <= MAX_COMMENT_LENGTH) return text;
+  const cut = text.slice(0, MAX_COMMENT_LENGTH - 1);
+  return `${cut.slice(0, cut.lastIndexOf(' ') > 40 ? cut.lastIndexOf(' ') : cut.length)}…`;
 }
 
 export interface ReportSeverityCount {
@@ -309,10 +370,16 @@ export interface ReportView {
   disclaimer: string;
 }
 
+/**
+ * What the report is, said truthfully: the findings section is the office's
+ * confirmed findings, and the checklist comments are drawn from the recording
+ * whether or not anyone has confirmed them yet (2026-10-07).
+ */
 const DISCLAIMER =
-  'Every finding in this report was reviewed and approved by the TexasRenters team before ' +
-  'publication. This report is informational: it does not by itself authorize charges or ' +
-  'determine responsibility for any condition described.';
+  'The findings listed in this report were reviewed and approved by the TexasRenters team ' +
+  'before publication. The comments beside the checklist are drawn automatically from the ' +
+  "inspector's walkthrough recording. This report is informational: it does not by itself " +
+  'authorize charges or determine responsibility for any condition described.';
 
 /** A photograph as a report prints it; shared with the comparison report. */
 export function reportPhotoView(photo: PublicReportPhoto): ReportPhotoView {
@@ -376,6 +443,22 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     else findingsByRoom.set(key, [view]);
   });
 
+  /**
+   * What the comments are drawn from, by room: every finding the office has
+   * not rejected, confirmed or not (the office, 2026-10-07: the comments
+   * "are not generated" while 227 findings waited to be confirmed). A report
+   * from an older backend carries only the confirmed ones.
+   */
+  const notesByRoom = new Map<string, CommentSource[]>();
+  for (const note of report.checklistNotes ?? report.findings) {
+    const key =
+      note.roomId && roomIds.has(note.roomId)
+        ? note.roomId
+        : report.rooms.find((room) => room.name === note.roomName)?.id;
+    if (!key) continue;
+    notesByRoom.set(key, [...(notesByRoom.get(key) ?? []), note]);
+  }
+
   const rooms: ReportRoomView[] = report.rooms.map((room) => {
     const photos = photosByRoom.get(room.id) ?? [];
     const roomFindings = (findingsByRoom.get(room.id) ?? []).sort(bySeverity);
@@ -384,17 +467,18 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     // than an empty one.
     const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => {
       /**
-       * A failed axis borrows every finding that explains it.
+       * A failed axis is explained by what the walkthrough found about it.
        *
        * The office's report never prints a bare "N" — the comment column is
-       * where a reader learns what was wrong. The AI already wrote those
-       * sentences from the technician's narration and filed them as findings,
-       * so this surfaces existing words rather than inventing new ones.
-       * Nothing is generated here.
+       * where a reader learns what was wrong. The AI already wrote that from
+       * the technician's narration and filed it as findings, so this surfaces
+       * existing words rather than inventing new ones. Nothing is generated
+       * here.
        *
-       * *Every* matching finding, not the first: a room can have two things
-       * wrong with its walls, and printing one of them silently drops the
-       * other from the only column a reader checks.
+       * A finding's **title**, not its description (2026-10-07: "keep it short
+       * and simple, and precise"), and never one that only says the row's N
+       * back. Every matching one up to three, not the first: a room can have
+       * two things wrong with its walls.
        *
        * Only when an axis actually failed. A row scored all-Y needs no
        * explanation, and attaching one would read as a defect.
@@ -403,10 +487,16 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         item.isClean === false || item.isUndamaged === false || item.isWorking === false;
       const written = item.comment?.trim() || '';
       const borrowed = failed
-        ? roomFindings
-            .filter((finding) => explains(item, finding))
-            .map((finding) => finding.description.trim())
-            .filter(Boolean)
+        ? [
+            ...new Set(
+              (notesByRoom.get(room.id) ?? [])
+                .filter(
+                  (note) => explains(item, note) && !restatesChecklist(note.title, item, room.name),
+                )
+                .map((note) => commentText(note.title))
+                .filter(Boolean),
+            ),
+          ].slice(0, MAX_ROW_COMMENTS)
         : [];
       // The reviewer's own words lead; the findings follow rather than being
       // replaced by it, so writing one note never hides the rest.
@@ -422,7 +512,8 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         clean: axisCell(item.isClean),
         undamaged: axisCell(item.isUndamaged),
         working: axisCell(item.isWorking),
-        comment: [written, ...borrowed.filter((text) => text !== written)]
+        // "Tenant reported it at move-in. Wall: two cracks; Ceiling: water stain"
+        comment: [written, borrowed.filter((text) => text !== written).join('; ')]
           .filter(Boolean)
           .join(' '),
       };

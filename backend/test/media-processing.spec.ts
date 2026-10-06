@@ -727,7 +727,13 @@ describe('re-running the analysis on a recording', () => {
     await harness.settled();
 
     const prompt = harness.prompt();
-    expect(prompt).toContain('Report EVERY problem the technician names or the checklist marks, minor ones included');
+    expect(prompt).toContain('Report EVERY problem the technician names, minor ones included');
+    // Not a checklist answer said back (10830 Harston Dr: 227 findings, most of
+    // them "Walls and ceilings: not clean"), and a title short enough to print
+    // as the report's comment (2026-10-07).
+    expect(prompt).not.toContain('or the checklist marks');
+    expect(prompt).toContain('A checklist answer on its own is not a finding');
+    expect(prompt).toContain('at most eight words');
     expect(prompt).toContain('Never join two things in one finding');
     expect(prompt).toContain('Do not repeat the title');
     expect(prompt).toContain('recommendedReview: an empty string unless');
@@ -876,7 +882,7 @@ describe('the office teaches the analysis', () => {
     expect(teaching.lessons).toHaveBeenCalledWith(ORGANIZATION_ID, 'Entrance', 'move-out-1');
     // The analysis records the rules it ran under, for the scorecard.
     expect(harness.prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ promptVersion: '7', guidanceVersion: 3 }),
+      data: expect.objectContaining({ promptVersion: '8', guidanceVersion: 3 }),
     });
   });
 

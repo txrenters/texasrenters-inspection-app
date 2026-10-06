@@ -65,6 +65,8 @@ const SERVICES_REPORT = {
 
 function build(areas: unknown[], over: Record<string, unknown> = {}) {
   const prisma = {
+    // The comments' notes (every finding not rejected); none here.
+    inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
     inspectionReportShare: {
       findUnique: jest.fn().mockResolvedValue({
         inspectionId: 'inspection-1',
