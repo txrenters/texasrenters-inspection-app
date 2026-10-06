@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   InspectionSource,
   InspectionStatus,
@@ -18,6 +18,8 @@ import {
   insertInspection,
   resolveInspectionPlan,
 } from '../../admin/inspection-creation';
+import { CacheInvalidationService } from '../../cache/cache-invalidation.service';
+import { businessDate } from '../../common/business-day';
 import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
@@ -51,6 +53,15 @@ import {
   unknownAssigneeReason,
 } from '../../integrations/jobber/jobber.assignment';
 import { moveStopWithVisit } from '../../planning/move-stop-with-visit';
+import { TechnicianEventsGateway } from '../../realtime/technician-events.gateway';
+import {
+  cancelledByJobberSync,
+  JOBBER_CANCELLATION_PREFIXES,
+  JOBBER_VISIT_DELETED,
+  legacyRemovalReason,
+  removeWithdrawnInspection,
+  type JobberRemovalReason,
+} from './jobber-visit-removal';
 
 /**
  * Page size.
@@ -87,6 +98,9 @@ const RECONCILE_BATCH = 25;
  * withdrawn, and the run says why.
  */
 const MAX_WITHDRAWN_PER_RUN = 15;
+
+/** Inspections the old withdrawal cancelled, removed per run (`sweepJobberCancellations`). */
+const SWEEP_BATCH = 50;
 
 /**
  * On a visit's import row while the inspection is off its day because Jobber
@@ -247,6 +261,10 @@ export class JobberSyncWorker {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(JobberClient) private readonly client: JobberClient,
     @Inject(JobberMappingService) private readonly mapping: JobberMappingService,
+    // Optional so the worker builds in tests without them; the module graph
+    // spec proves the running app hands both over.
+    @Optional() @Inject(TechnicianEventsGateway) private readonly technicianEvents?: TechnicianEventsGateway,
+    @Optional() @Inject(CacheInvalidationService) private readonly cacheInvalidation?: CacheInvalidationService,
   ) {}
 
   /**
@@ -356,6 +374,14 @@ export class JobberSyncWorker {
         await this.reconcileUnseen(organizationId, seen, window, index, rules, result, correlationId).catch((error) =>
           this.logger.warn({
             event: 'jobber_reconcile_failed',
+            correlationId,
+            reason: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      if (!over)
+        await this.sweepJobberCancellations(organizationId, result).catch((error) =>
+          this.logger.warn({
+            event: 'jobber_cancellation_sweep_failed',
             correlationId,
             reason: error instanceof Error ? error.message : String(error),
           }),
@@ -1245,21 +1271,18 @@ export class JobberSyncWorker {
   }
 
   /**
-   * Takes an inspection off its day because Jobber has its visit on none.
+   * Takes an inspection off the console because Jobber has its visit on no day.
    *
    * `UNSCHEDULED`: Jobber returned the visit with no day -- it was moved to
    * Unscheduled there. `MISSING`: two sweeps running asked Jobber for it by id
-   * and got nothing -- deleted, most likely. Either way the console has to stop
-   * showing it on the old day, which it did not: three of Moses's October 1
-   * stops were visits Jobber no longer had there (2026-10-01).
+   * and got nothing -- deleted. Either way the console has to stop showing it on
+   * the old day, which it did not: three of Moses's October 1 stops were visits
+   * Jobber no longer had there (2026-10-01).
    *
-   * An inspection must have a day, so it is cancelled -- with a code on its
-   * Jobber link, and `applyChanges` restores it, the same inspection, on the day
-   * Jobber gives it. That is the difference from a deletion the webhook reports
-   * (`withdrawDeletedVisit`), and it is why the uncertain case is handled this
-   * way too: if the visit comes back, so does the inspection.
-   *
-   * Work already under way is left for a person, as a reschedule is.
+   * Deleted, not cancelled (the office, 2026-10-07): a cancelled inspection kept
+   * its technician and kept turning up on the map, the dashboard and the phone.
+   * A visit moved to Unscheduled that Jobber later gives a day comes back as a
+   * new inspection. Work already under way is left for a person.
    */
   private async withdrawFromDay(
     organizationId: string,
@@ -1268,53 +1291,79 @@ export class JobberSyncWorker {
     why: 'UNSCHEDULED' | 'MISSING',
     result: JobberSyncResult,
   ) {
-    if (inspection.status === InspectionStatus.CANCELLED) {
-      result.skipped += 1;
-      return;
-    }
-    if (inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED) {
+    const outcome = await this.removeFromConsole(organizationId, jobberVisitId, inspection.id, why);
+    if (outcome === 'REMOVED') result.withdrawn += 1;
+    else result.skipped += 1;
+  }
+
+  /**
+   * Removes an inspection whose visit Jobber deleted or took off the calendar,
+   * tells its technician, and refreshes the console (`removeWithdrawnInspection`).
+   * What cannot be removed is said on the visit's Jobber row for a person.
+   */
+  private async removeFromConsole(
+    organizationId: string,
+    jobberVisitId: string,
+    inspectionId: string,
+    why: JobberRemovalReason,
+  ) {
+    const removal = await removeWithdrawnInspection(this.prisma, { organizationId, inspectionId, jobberVisitId, why });
+    if (removal.outcome === 'REMOVED') {
+      if (removal.notify)
+        this.technicianEvents?.publish(removal.notify.technicianId, inspectionId, 'CANCELLED', removal.notify.detail);
+      await this.cacheInvalidation?.publish({ type: 'inspection.changed', organizationId });
+      this.logger.log(`Removed inspection ${inspectionId}: its Jobber visit was ${why.toLowerCase()}.`);
+    } else if (removal.outcome === 'IN_USE') {
       await this.prisma.jobberVisitImport.updateMany({
         where: { organizationId, jobberVisitId },
         data: {
-          failureCode: 'JOBBER_RESCHEDULE_NEEDS_REVIEW',
+          failureCode: why === 'DELETED' ? 'JOBBER_VISIT_DELETED_NEEDS_REVIEW' : 'JOBBER_RESCHEDULE_NEEDS_REVIEW',
           failureMessage:
-            'Jobber no longer has this visit on a day, and the inspection is already under way. Someone has to decide what happens to the work already recorded.',
+            why === 'DELETED'
+              ? 'Jobber deleted this visit after the inspection was already under way. Someone has to decide what happens to the work already recorded.'
+              : 'Jobber no longer has this visit on a day, and the inspection is already under way. Someone has to decide what happens to the work already recorded.',
         },
       });
-      result.skipped += 1;
-      return;
-    }
-    const reason =
-      why === 'UNSCHEDULED'
-        ? 'Moved to Unscheduled in Jobber. It comes back on the day Jobber gives it.'
-        : 'No longer on Jobber’s schedule: deleted there, or moved to Unscheduled. It comes back if Jobber gives it a day.';
-    const withdrawn = await this.prisma.$transaction(async (tx) => {
-      // Re-asserted here: a technician may have started it since it was read.
-      const { count } = await tx.inspection.updateMany({
-        where: { id: inspection.id, organizationId, status: InspectionStatus.SCHEDULED, startedAt: null },
-        data: { status: InspectionStatus.CANCELLED, cancelledAt: new Date(), cancellationReason: reason },
-      });
-      if (!count) return false;
-      await tx.jobberVisitImport.updateMany({
+    } else if (removal.outcome === 'KEPT_BY_OFFICE' && why !== 'UNSCHEDULED') {
+      // Cancelled here first -- the console's cancel deletes the visit in Jobber,
+      // and this is that deletion coming back. The office's record stays.
+      await this.prisma.jobberVisitImport.updateMany({
         where: { organizationId, jobberVisitId },
-        data: { failureCode: JOBBER_VISIT_UNSCHEDULED, failureMessage: reason },
+        data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null, failureCode: null },
       });
-      await tx.auditLog.create({
-        data: {
-          organizationId,
-          action: 'INSPECTION_CANCELLED',
-          entityType: 'Inspection',
-          entityId: inspection.id,
-          metadata: {
-            jobberVisitId,
-            reason: why === 'UNSCHEDULED' ? 'JOBBER_VISIT_UNSCHEDULED' : 'JOBBER_VISIT_MISSING',
-          },
-        },
-      });
-      return true;
+    }
+    return removal.outcome;
+  }
+
+  /**
+   * Removes the inspections the sync cancelled before it deleted (2026-10-07):
+   * cancelled with a Jobber reason, and nothing done on them. Their technicians
+   * are not told -- those jobs left their schedule when they were cancelled.
+   * A batch a run, so a backlog clears over a few runs rather than in one.
+   */
+  private async sweepJobberCancellations(organizationId: string, result: JobberSyncResult) {
+    const cancelled = await this.prisma.inspection.findMany({
+      where: {
+        organizationId,
+        status: InspectionStatus.CANCELLED,
+        startedAt: null,
+        jobberVisitId: { not: null },
+        OR: JOBBER_CANCELLATION_PREFIXES.map((prefix) => ({ cancellationReason: { startsWith: prefix } })),
+      },
+      select: { id: true, jobberVisitId: true, cancellationReason: true },
+      take: SWEEP_BATCH,
     });
-    if (withdrawn) result.withdrawn += 1;
-    else result.skipped += 1;
+    for (const row of cancelled) {
+      if (!row.jobberVisitId || !cancelledByJobberSync(row.cancellationReason)) continue;
+      const removal = await removeWithdrawnInspection(this.prisma, {
+        organizationId,
+        inspectionId: row.id,
+        jobberVisitId: row.jobberVisitId,
+        why: legacyRemovalReason(row.cancellationReason),
+      });
+      if (removal.outcome === 'REMOVED') result.withdrawn += 1;
+    }
+    if (cancelled.length) await this.cacheInvalidation?.publish({ type: 'inspection.changed', organizationId });
   }
 
   /**
@@ -1511,70 +1560,49 @@ export class JobberSyncWorker {
   }
 
   /**
-   * Withdraws an inspection whose Jobber visit was deleted.
+   * Removes the inspection whose Jobber visit was deleted.
    *
-   * For the webhook's VISIT_DESTROY, which is the one case that knows the visit
-   * is gone rather than unseen -- so, unlike `withdrawFromDay`, the link is let
-   * go: the import row is IGNORED and nothing will bring it back. Without this
-   * the subscription would be inert: the delivery recorded, the inspection left
-   * SCHEDULED on a technician's phone for work that no longer exists.
+   * For the webhook's VISIT_DESTROY, the one case that knows the visit is gone
+   * rather than unseen: the inspection is deleted from the console and the
+   * import row ruled out for good (`removeFromConsole`). Without this the
+   * subscription would be inert: the delivery recorded, the inspection left on
+   * a technician's phone for work that no longer exists.
    *
-   * Work already under way is never cancelled from here. Once a technician has
+   * Work already under way is never removed from here. Once a technician has
    * started, evidence exists and someone has to decide what happens to it, so
    * that is recorded against the visit for a person rather than resolved by a
    * webhook.
+   *
+   * A deleted visit with no inspection still leaves things to put right: its
+   * row in the console's queue, and a plan stop published to Jobber with no day.
    */
   async withdrawDeletedVisit(organizationId: string, jobberVisitId: string) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { organizationId, jobberVisitId },
-      select: { id: true, status: true, startedAt: true },
+      select: { id: true },
     });
-    if (!inspection) return;
-
-    if (inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED) {
-      // Already off its day for a visit it could not see, and now known to be deleted.
-      if (inspection.status === InspectionStatus.CANCELLED) {
-        await this.prisma.jobberVisitImport.updateMany({
-          where: { organizationId, jobberVisitId },
-          data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null, failureCode: null },
-        });
-        return;
-      }
-      await this.prisma.jobberVisitImport.updateMany({
-        where: { organizationId, jobberVisitId },
-        data: {
-          failureCode: 'JOBBER_VISIT_DELETED_NEEDS_REVIEW',
-          failureMessage:
-            'Jobber deleted this visit after the inspection was already under way. Someone has to decide what happens to the work already recorded.',
-        },
-      });
+    if (inspection) {
+      await this.removeFromConsole(organizationId, jobberVisitId, inspection.id, 'DELETED');
       return;
     }
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inspection.update({
-        where: { id: inspection.id },
-        data: {
-          status: InspectionStatus.CANCELLED,
-          cancelledAt: new Date(),
-          cancellationReason: 'The Jobber visit this inspection came from was deleted.',
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          organizationId,
-          action: 'INSPECTION_CANCELLED',
-          entityType: 'Inspection',
-          entityId: inspection.id,
-          metadata: { jobberVisitId, reason: 'JOBBER_VISIT_DESTROYED' },
-        },
-      });
-      await tx.jobberVisitImport.updateMany({
-        where: { organizationId, jobberVisitId },
-        data: { status: JobberVisitImportStatus.IGNORED, inspectionId: null },
-      });
+    await this.prisma.jobberVisitImport.updateMany({
+      where: { organizationId, jobberVisitId, status: { not: JobberVisitImportStatus.IGNORED } },
+      data: {
+        status: JobberVisitImportStatus.IGNORED,
+        inspectionId: null,
+        failureCode: JOBBER_VISIT_DELETED,
+        failureMessage: 'Deleted in Jobber.',
+      },
     });
-    this.logger.log(`Cancelled inspection ${inspection.id}: its Jobber visit was deleted.`);
+    await this.prisma.tbpQuarterPlanStop.updateMany({
+      where: { organizationId, jobberVisitId, inspectionId: null, status: TbpStopStatus.UNSCHEDULED },
+      data: {
+        status: TbpStopStatus.EXCLUDED,
+        jobberVisitId: null,
+        jobberJobId: null,
+        blockedMessage: `Its Jobber visit was deleted on ${businessDate()}.`,
+      },
+    });
   }
 
   /**

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AdminModule } from '../admin/admin.module';
 import { DatabaseModule } from '../database/database.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { RoutingModule } from '../routing/routing.module';
 import { GroupTemplateController } from './group-template.controller';
 import { GroupTemplateGateway } from './group-template.gateway';
@@ -22,7 +23,8 @@ import { TbpPublishService } from './tbp-publish.service';
 import { TbpStopEditService } from './tbp-stop-edit.service';
 
 @Module({
-  imports: [DatabaseModule, RoutingModule, AdminModule],
+  // Realtime: a lease call-off tells the technician whose job it was (2026-10-07).
+  imports: [DatabaseModule, RoutingModule, AdminModule, RealtimeModule],
   controllers: [
     PlanningController,
     TbpGroupFileController,

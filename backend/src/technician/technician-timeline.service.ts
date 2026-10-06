@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { InspectionStatus } from '@prisma/client';
 import {
   dayTotals,
   driveToPlace,
@@ -62,6 +63,10 @@ export class TechnicianTimelineService {
         inspection: {
           organizationId: user.organizationId,
           scheduledAt: { gte: start, lt: end },
+          // A cancelled visit is not a place on their day (2026-10-07): it
+          // counted towards their on-site and driving time, and as a stop
+          // "that could not be timed".
+          status: { not: InspectionStatus.CANCELLED },
         },
       },
       select: {

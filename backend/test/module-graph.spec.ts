@@ -4,12 +4,19 @@ import { AdminModule } from '../src/admin/admin.module';
 import { ComparisonReportService } from '../src/admin/comparison-report.service';
 import { ComparisonService } from '../src/admin/comparison.service';
 import { ReportShareService } from '../src/admin/report-share.service';
+import { CacheInvalidationService } from '../src/cache/cache-invalidation.service';
+import { CacheModule } from '../src/cache/cache.module';
 import { PrismaService } from '../src/common/prisma.service';
+import { DatabaseModule } from '../src/database/database.module';
+import { JobberModule } from '../src/integrations/jobber/jobber.module';
 import { InspectionVideoService } from '../src/media/inspection-video.service';
 import { MediaModule } from '../src/media/media.module';
+import { LeaseInspectionService } from '../src/planning/lease-inspections.service';
 import { PlanningModule } from '../src/planning/planning.module';
 import { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService } from '../src/planning/tbp-stop-edit.service';
+import { TechnicianEventsGateway } from '../src/realtime/technician-events.gateway';
+import { JobberSyncWorker } from '../src/workers/jobber-sync/jobber-sync.worker';
 
 /**
  * The wiring, which no other test here touches.
@@ -34,6 +41,9 @@ describe('the planning module', () => {
 
     expect(moduleRef.get(TbpStopEditService)).toBeInstanceOf(TbpStopEditService);
     expect(moduleRef.get(TbpPublishService)).toBeInstanceOf(TbpPublishService);
+    // A lease call-off tells the technician whose job it was (2026-10-07).
+    const lease = moduleRef.get(LeaseInspectionService) as unknown as { technicianEvents?: unknown };
+    expect(lease.technicianEvents).toBeInstanceOf(TechnicianEventsGateway);
   });
 });
 
@@ -64,6 +74,30 @@ describe('the media module', () => {
         { atMs: 1000 },
       ),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+/**
+ * The Jobber sync, which removes an inspection whose visit Jobber deleted and
+ * tells its technician (2026-10-07). The gateway and the console's cache
+ * refresh are optional dependencies, so only this kind of test sees one go
+ * missing -- and a missing gateway would remove jobs from the console without
+ * a word to the phone that is driving to them.
+ */
+describe('the Jobber module', () => {
+  it('gives the sync the technician events and the cache refresh', async () => {
+    // The global modules the app provides it with; the database is faked below.
+    const moduleRef = await Test.createTestingModule({ imports: [DatabaseModule, CacheModule, JobberModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+    const worker = moduleRef.get(JobberSyncWorker) as unknown as {
+      technicianEvents?: unknown;
+      cacheInvalidation?: unknown;
+    };
+
+    expect(worker.technicianEvents).toBeInstanceOf(TechnicianEventsGateway);
+    expect(worker.cacheInvalidation).toBeInstanceOf(CacheInvalidationService);
   });
 });
 

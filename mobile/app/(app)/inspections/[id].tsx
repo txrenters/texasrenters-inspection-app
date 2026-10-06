@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
+  CalendarXIcon,
   CheckCircle2Icon,
   ClockIcon,
   FlagIcon,
@@ -26,6 +27,7 @@ import { JobTasksCard } from '@/src/components/JobTasksCard';
 import { NoAccessSheet } from '@/src/components/NoAccessSheet';
 import { NotDoneSheet } from '@/src/components/NotDoneSheet';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
+import { Button } from '@/src/components/ui';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFiltersArea, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
@@ -43,6 +45,7 @@ import {
 } from '@/src/utils/closing-comments';
 import { planEndJob } from '@/src/utils/end-job';
 import { formatTimer, formatWorked, jobElapsed } from '@/src/utils/job-clock';
+import { isJobRemoved } from '@/src/utils/job-removed';
 import {
   filterRulesFor,
   jobChecklistProblems,
@@ -56,7 +59,7 @@ import { INSPECTION_STATUS_TONE_CLASS, inspectionStatusPresentation } from '@/sr
 import { evaluateSubmissionGate } from '@/src/utils/submission-gate';
 import { formatVisitWindow } from '@/src/utils/visit-window';
 
-registerIcons(AlertTriangleIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIcon, PlayCircleIcon);
+registerIcons(AlertTriangleIcon, CalendarXIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIcon, PlayCircleIcon);
 
 /**
  * One job, in the steps the office asked for (2026-09-18):
@@ -92,6 +95,43 @@ const INSPECTION_TYPE_LABEL: Record<string, string> = {
 
 const isService = (task: JobTask): task is JobTask & { key: ReportableVisitService } => task.key !== 'inspection';
 
+/** A job no longer on this technician's schedule, opened from a list or a notification. */
+function JobRemoved() {
+  return (
+    <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
+        <Pressable
+          accessibilityLabel="Back"
+          accessibilityRole="button"
+          className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
+          hitSlop={8}
+          onPress={() => goBack()}
+        >
+          <BackGlyph size={18} className="text-foreground" />
+        </Pressable>
+        <Text numberOfLines={1} className="min-w-0 flex-1 text-lg font-bold text-foreground">
+          Job
+        </Text>
+        <HomeButton />
+      </View>
+      <View className="mx-5 items-center gap-3 rounded-2xl bg-card p-6">
+        <View className="h-12 w-12 items-center justify-center rounded-xl bg-muted">
+          <CalendarXIcon size={22} className="text-muted-foreground" />
+        </View>
+        <Text className="text-center text-lg font-bold text-foreground">This job is off your schedule</Text>
+        <Text className="text-center text-sm leading-relaxed text-muted-foreground">
+          It was cancelled, or given to someone else. There is nothing to do here.
+        </Text>
+        <Button
+          className="mt-2 self-stretch"
+          label="Back to my jobs"
+          onPress={() => router.replace('/(app)/(tabs)/inspections')}
+        />
+      </View>
+    </SafeAreaView>
+  );
+}
+
 export default function JobScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
   const inspection = useInspection(id);
@@ -119,6 +159,13 @@ export default function JobScreen() {
     id,
     running && reportableServices(parseVisitDetails(inspection.data?.visitDetails)).includes('filterChange'),
   );
+
+  /*
+   * Before the copy it holds: a job cancelled, deleted in Jobber or given to
+   * someone else is refused by the server, and the last copy would go on
+   * offering Start job on it (the office, 2026-10-07).
+   */
+  if (isJobRemoved(inspection.error)) return <JobRemoved />;
 
   if (inspection.isLoading || !inspection.data) {
     return (
@@ -156,6 +203,12 @@ export default function JobScreen() {
       // runs meanwhile. Only a refusal is worth saying.
       onError: (error) => {
         if (error instanceof Error && error.name === 'QueuedOfflineError') return;
+        // Not the connection: the job is no longer theirs. Asking for it again
+        // draws the screen that says so.
+        if (isJobRemoved(error)) {
+          void inspection.refetch();
+          return;
+        }
         Alert.alert('The job did not start', 'Check the connection and press Start job again.');
       },
     });

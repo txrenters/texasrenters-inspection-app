@@ -42,6 +42,8 @@ import {
 import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
+import { eraseInspectionRows } from '../common/erase-inspection';
+import { jobInWords } from '../common/job-in-words';
 import { ApplicationError } from '../common/errors';
 import { moveStopWithVisit } from '../planning/move-stop-with-visit';
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
@@ -487,8 +489,15 @@ export class AdminService {
           assignments: { none: { isCurrent: true } },
         },
       }),
+      // "Ready to begin": still to come, as "Unassigned" counts. Any current
+      // assignment counted done visits, and cancelled ones still carrying a
+      // technician (2026-10-07).
       this.prisma.inspection.count({
-        where: { organizationId, assignments: { some: { isCurrent: true } } },
+        where: {
+          organizationId,
+          status: { in: UPCOMING_INSPECTION_STATUSES },
+          assignments: { some: { isCurrent: true } },
+        },
       }),
       this.prisma.inspection.count({
         where: { organizationId, status: InspectionStatus.IN_PROGRESS },
@@ -2434,6 +2443,8 @@ export class AdminService {
         'SCHEDULED_IN_JOBBER',
         'This visit is scheduled in Jobber. Change its date in Jobber and it will update here.',
       );
+    /** The technician whose assignment a cancel ended, to be told after the commit. */
+    let cancelledFor: string | null = null;
     const updated = await this.prisma.$transaction(async (tx) => {
       if (scheduledAt) {
         // Same rule as creation, and it has to stay the same rule: rescheduling
@@ -2506,6 +2517,7 @@ export class AdminService {
               where: { inspectionId: id, isCurrent: true },
             })
           : null;
+      cancelledFor = current?.technicianId ?? null;
       if (current)
         await tx.inspectionAssignment.update({
           where: { id: current.id },
@@ -2533,6 +2545,25 @@ export class AdminService {
       type: 'inspection.changed',
       organizationId: user.organizationId,
     });
+    /**
+     * Told, and the job leaves their phone at once (the office, 2026-10-07:
+     * "notify and remove"). It used to wait for their next refresh -- a minute
+     * away with the app open, and never on a job screen already showing it.
+     */
+    if (cancelledFor) {
+      const building = existing.propertywareBuildingId
+        ? await this.prisma.propertywareBuilding.findUnique({
+            where: { id: existing.propertywareBuildingId },
+            select: { name: true, addressLine1: true },
+          })
+        : null;
+      this.technicianEvents?.publish(
+        cancelledFor,
+        id,
+        'CANCELLED',
+        jobInWords(building?.addressLine1 || building?.name, existing.scheduledAt),
+      );
+    }
     return updated;
   }
 
@@ -3600,13 +3631,21 @@ export class AdminService {
      * -- and the filter has to be identical on both.
      */
     const matchesSearch = assignmentPropertySearch(query.search);
+    /**
+     * A cancelled visit is not an assignment to manage, unless asked for by
+     * name (2026-10-07): the unassigned half listed every one as waiting for a
+     * technician, and the other half a cancelled one still carrying its own.
+     */
+    const statusFilter: Prisma.InspectionWhereInput = query.inspectionStatus
+      ? { status: query.inspectionStatus as InspectionStatus }
+      : { status: { not: InspectionStatus.CANCELLED } };
     const assignmentWhere: Prisma.InspectionAssignmentWhereInput = {
       inspection: {
         organizationId: user.organizationId,
         ...matchesSearch,
         ...(query.inspectionId ? { id: query.inspectionId } : {}),
         ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
-        ...(query.inspectionStatus ? { status: query.inspectionStatus as InspectionStatus } : {}),
+        ...statusFilter,
         ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
       },
       ...(query.technicianId ? { technicianId: query.technicianId } : {}),
@@ -3681,7 +3720,7 @@ export class AdminService {
       ...(query.inspectionId ? { id: query.inspectionId } : {}),
       assignments: { none: { isCurrent: true } },
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
-      ...(query.inspectionStatus ? { status: query.inspectionStatus as InspectionStatus } : {}),
+      ...statusFilter,
       // The same filter, and the half that is easy to forget. These rows come
       // from a separate query against Inspection, so without it every section
       // would list every unassigned inspection regardless of type — and those
@@ -3816,7 +3855,15 @@ export class AdminService {
       ? await Promise.all([
           this.prisma.inspectionAssignment.groupBy({
             by: ['technicianId'],
-            where: { ...workloadWhere, isCurrent: true },
+            // A cancelled visit is no one's work (2026-10-07).
+            where: {
+              ...workloadWhere,
+              isCurrent: true,
+              inspection: {
+                organizationId: user.organizationId,
+                status: { not: InspectionStatus.CANCELLED },
+              },
+            },
             _count: { _all: true },
           }),
           this.prisma.inspectionAssignment.groupBy({
@@ -3876,7 +3923,16 @@ export class AdminService {
         displayName: true,
         isActive: true,
         createdAt: true,
-        _count: { select: { assignments: { where: { isCurrent: true } } } },
+        _count: {
+          select: {
+            assignments: {
+              where: {
+                isCurrent: true,
+                inspection: { status: { not: InspectionStatus.CANCELLED } },
+              },
+            },
+          },
+        },
       },
     });
     if (!technician)
@@ -3894,7 +3950,12 @@ export class AdminService {
     await this.requireTechnician(user.organizationId, id, this.prisma, false);
     if (!input.isActive) {
       const activeAssignments = await this.prisma.inspectionAssignment.count({
-        where: { technicianId: id, isCurrent: true },
+        // A cancelled visit does not keep a leaver's account open.
+        where: {
+          technicianId: id,
+          isCurrent: true,
+          inspection: { status: { not: InspectionStatus.CANCELLED } },
+        },
       });
       if (activeAssignments > 0)
         throw new ApplicationError(
@@ -4854,84 +4915,6 @@ export class AdminService {
 
     const counts = await this.prisma.$transaction(async (tx) => {
       /**
-       * Dependants are unlinked rather than deleted.
-       *
-       * `baselineInspectionId` and `parentInspectionId` are both
-       * `onDelete: Restrict`, so a move-in that some move-out compares against
-       * cannot simply be removed. Clearing the pointer keeps the other
-       * inspection — and all of its evidence — intact; it loses its baseline
-       * comparison, which is recorded in the audit metadata below so the
-       * absence is explainable later.
-       */
-      const [baselineOf, parentOf] = await Promise.all([
-        tx.inspection.updateMany({
-          where: { baselineInspectionId: id },
-          data: { baselineInspectionId: null },
-        }),
-        tx.inspection.updateMany({
-          where: { parentInspectionId: id },
-          data: { parentInspectionId: null },
-        }),
-      ]);
-
-      // No Prisma relation on either column, so these are matched by hand.
-      // Area comparisons cascade from the comparison row.
-      await tx.inspectionComparison.deleteMany({
-        where: { OR: [{ moveOutInspectionId: id }, { moveInInspectionId: id }] },
-      });
-
-      // Charges reference findings and pet candidates, so they go first.
-      await tx.charge.deleteMany({ where: { inspectionId: id } });
-      await tx.petObservation.deleteMany({ where: { inspectionId: id } });
-      await tx.petCandidate.deleteMany({ where: { inspectionId: id } });
-
-      await tx.findingReview.deleteMany({ where: { finding: { inspectionId: id } } });
-      // Photos carry a findingId as well as an area, so they precede findings.
-      const deletedPhotos = await tx.inspectionPhoto.deleteMany({ where: { inspectionId: id } });
-
-      /**
-       * The three job tables that hang off a recording.
-       *
-       * None of them cascades, and none carries an `inspectionId` — they are
-       * reachable only through `inspectionMediaId`, which is why an enumeration
-       * that greps for `inspectionId` misses all three and the delete dies on
-       * `AiAnalysisJob_inspectionMediaId_fkey` at the first recording.
-       */
-      const mediaOfInspection = { inspectionMedia: { inspectionId: id } };
-      // Segments hang off the transcription job, not the media, and the
-      // constraint is RESTRICT — so the job cannot go until its transcript does.
-      await tx.transcriptSegment.deleteMany({
-        where: { transcriptionJob: mediaOfInspection },
-      });
-      await tx.aiAnalysisJob.deleteMany({ where: mediaOfInspection });
-      await tx.transcriptionJob.deleteMany({ where: mediaOfInspection });
-      await tx.mediaProcessingEvent.deleteMany({ where: mediaOfInspection });
-
-      /**
-       * Findings before media, not after.
-       *
-       * `InspectionFinding.inspectionMediaId` points at the recording a finding
-       * was raised from, so deleting the media first violates that constraint.
-       * The reverse order is not symmetric — nothing in `InspectionMedia` points
-       * back at a finding.
-       */
-      const deletedFindings = await tx.inspectionFinding.deleteMany({
-        where: { inspectionId: id },
-      });
-      const deletedMedia = await tx.inspectionMedia.deleteMany({ where: { inspectionId: id } });
-
-      await tx.mediaUploadSession.deleteMany({
-        where: { inspectionArea: { inspectionId: id } },
-      });
-      await tx.inspectionAreaStatusHistory.deleteMany({
-        where: { inspectionArea: { inspectionId: id } },
-      });
-      const deletedAreas = await tx.inspectionArea.deleteMany({ where: { inspectionId: id } });
-      await tx.inspectionAssignment.deleteMany({ where: { inspectionId: id } });
-      await tx.inspectionReportShare.deleteMany({ where: { inspectionId: id } });
-      await tx.areaEvidenceRequest.deleteMany({ where: { inspectionId: id } });
-
-      /**
        * A planned visit deleted here is taken off Jobber too (the office,
        * 2026-10-01: a visit deleted on either side goes from both). Before
        * this the visit stayed in Jobber for good, and the sync skipped it as
@@ -4970,7 +4953,8 @@ export class AdminService {
         });
       }
 
-      await tx.inspection.delete({ where: { id } });
+      // The rows themselves, in the order the schema demands (`erase-inspection.ts`).
+      const erased = await eraseInspectionRows(tx, id);
 
       /**
        * Written last, inside the same transaction.
@@ -4981,21 +4965,16 @@ export class AdminService {
        * the thing it happened to.
        */
       await this.audit(tx, user, 'INSPECTION_DELETED', id, {
-        areas: deletedAreas.count,
-        recordings: deletedMedia.count,
-        photos: deletedPhotos.count,
-        findings: deletedFindings.count,
-        unlinkedBaselineOf: baselineOf.count,
-        unlinkedParentOf: parentOf.count,
+        ...erased,
         ...(removeFromJobber ? { jobberVisitId: jobberVisit?.jobberVisitId, removedFromJobber: true } : {}),
       });
 
       return {
-        areas: deletedAreas.count,
-        recordings: deletedMedia.count,
-        photos: deletedPhotos.count,
-        findings: deletedFindings.count,
-        unlinkedInspections: baselineOf.count + parentOf.count,
+        areas: erased.areas,
+        recordings: erased.recordings,
+        photos: erased.photos,
+        findings: erased.findings,
+        unlinkedInspections: erased.unlinkedBaselineOf + erased.unlinkedParentOf,
       };
     });
 

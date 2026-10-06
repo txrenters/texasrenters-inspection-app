@@ -34,7 +34,7 @@ describe('technician push delivery', () => {
    * acting on.
    */
   it('pushes every event that puts work back in a technician’s hands', async () => {
-    for (const kind of ['ASSIGNED', 'REOPENED', 'EVIDENCE_REQUESTED', 'UPDATED']) {
+    for (const kind of ['ASSIGNED', 'REOPENED', 'EVIDENCE_REQUESTED', 'UPDATED', 'CANCELLED']) {
       const fetchMock = respondWith({ data: [{ status: 'ok' }] });
       const { service } = build();
 
@@ -48,6 +48,25 @@ describe('technician push delivery', () => {
     }
   });
 
+  /**
+   * A job taken off the schedule is pushed (the office, 2026-10-07: 'notify
+   * and remove'): cancelled in the console, called off from the lease
+   * schedule, or its Jobber visit cancelled or deleted. The technician may be
+   * driving to it, so the push names it.
+   */
+  it('names the cancelled job when the event says which', async () => {
+    const fetchMock = respondWith({ data: [{ status: 'ok' }] });
+    const { service } = build();
+
+    await service.send('CANCELLED', TECH, 'insp-1', '605 Sorrento Dr · Nov 27');
+
+    const [[, init]] = fetchMock.mock.calls;
+    const [message] = JSON.parse(String(init.body));
+    expect(message.title).toBe('Inspection cancelled');
+    expect(message.body).toBe('605 Sorrento Dr · Nov 27 was cancelled and is off your schedule.');
+    expect(message.data).toEqual({ inspectionId: 'insp-1', kind: 'CANCELLED' });
+  });
+
   it('stays quiet for queue churn', async () => {
     // These still reach an open app over the socket. Pushing every one is how
     // people learn to swipe a notification away without reading it.
@@ -57,7 +76,7 @@ describe('technician push delivery', () => {
     // carrying, which is more rooms to walk rather than churn — and a
     // technician who has left the property needs to know before they drive
     // away, not at their next poll.
-    for (const kind of ['REASSIGNED', 'UNASSIGNED', 'CANCELLED']) {
+    for (const kind of ['REASSIGNED', 'UNASSIGNED']) {
       const fetchMock = respondWith({ data: [] });
       const { prisma, service } = build();
 

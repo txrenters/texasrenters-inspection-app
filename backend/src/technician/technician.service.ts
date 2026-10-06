@@ -3584,6 +3584,8 @@ export class TechnicianService {
           id,
           inspection: {
             organizationId: user.organizationId,
+            // As every other job read here: a cancelled job's rooms take no more answers.
+            status: visibleStatuses,
             assignments: { some: { technicianId: user.id, isCurrent: true } },
           },
         },

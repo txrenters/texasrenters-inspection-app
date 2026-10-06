@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { InspectionType, Prisma } from '@prisma/client';
 import {
   InspectionSource,
@@ -28,6 +28,8 @@ import {
 } from '@texasrenters/shared';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
+import { jobInWords } from '../common/job-in-words';
+import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
@@ -178,7 +180,12 @@ interface ReconcileInput {
 export class LeaseInspectionService {
   private readonly logger = new Logger(LeaseInspectionService.name);
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    // Optional so the service builds in tests without it; the module graph spec
+    // proves the running app hands it over.
+    @Optional() @Inject(TechnicianEventsGateway) private readonly technicianEvents?: TechnicianEventsGateway,
+  ) {}
 
   /**
    * Book, move or call off every lease's move-out and move-in, as the rules say today.
@@ -700,9 +707,9 @@ export class LeaseInspectionService {
   private async callOff(input: ReconcileInput, row: ScheduleRow, inspectionId: string): Promise<LeaseScheduleChange> {
     const { organizationId, lease, kind, dryRun } = input;
     const reason = notAskedReason(input);
-    if (!dryRun)
-      await this.prisma.$transaction(async (tx) => {
-        await cancelBooked(tx, organizationId, inspectionId, reason);
+    if (!dryRun) {
+      const ended = await this.prisma.$transaction(async (tx) => {
+        const technician = await cancelBooked(tx, organizationId, inspectionId, reason);
         await tx.leaseScheduledInspection.update({
           where: { id: row.id },
           data: { outcome: LeaseInspectionOutcome.CALLED_OFF, detail: reason },
@@ -717,7 +724,10 @@ export class LeaseInspectionService {
             metadata: { leaseId: lease.id, kind, reason },
           },
         });
+        return technician;
       });
+      this.tellTechnician(ended, inspectionId, lease);
+    }
     return {
       leaseId: lease.id,
       property: { id: lease.buildingId, address: lease.building.addressLine1, city: lease.building.city },
@@ -737,9 +747,9 @@ export class LeaseInspectionService {
     const { organizationId, lease, kind, booked, dryRun } = input;
     const wanted = input.wanted!;
     const reason = `The office booked this ${LABEL[kind]} itself, for ${spoken(office.day)}.`;
-    if (!dryRun)
-      await this.prisma.$transaction(async (tx) => {
-        await cancelBooked(tx, organizationId, inspectionId, reason);
+    if (!dryRun) {
+      const ended = await this.prisma.$transaction(async (tx) => {
+        const technician = await cancelBooked(tx, organizationId, inspectionId, reason);
         await tx.leaseScheduledInspection.update({
           where: { id: row.id },
           data: {
@@ -760,7 +770,10 @@ export class LeaseInspectionService {
             metadata: { leaseId: lease.id, kind, reason, bookedByOffice: office.id },
           },
         });
+        return technician;
       });
+      this.tellTechnician(ended, inspectionId, lease);
+    }
     booked.claim(office.id, lease, kind);
     return {
       leaseId: lease.id,
@@ -771,6 +784,24 @@ export class LeaseInspectionService {
       inspectionId: office.id,
       detail: `${reason} The one booked from the lease is called off.`,
     };
+  }
+
+  /**
+   * Tells the technician a lease call-off took a job off their schedule, after
+   * the commit (the office, 2026-10-07: "notify and remove").
+   */
+  private tellTechnician(
+    ended: { technicianId: string; scheduledAt: Date } | null,
+    inspectionId: string,
+    lease: { building: { addressLine1: string | null } },
+  ) {
+    if (!ended) return;
+    this.technicianEvents?.publish(
+      ended.technicianId,
+      inspectionId,
+      'CANCELLED',
+      jobInWords(lease.building.addressLine1, ended.scheduledAt),
+    );
   }
 
   /** Who takes each kind: the technician marked on their planning profile, or nobody yet. */
@@ -793,10 +824,16 @@ export class LeaseInspectionService {
  * and one Jobber already has is taken off its calendar the way a console
  * cancellation is.
  */
-async function cancelBooked(tx: Prisma.TransactionClient, organizationId: string, inspectionId: string, reason: string) {
-  await tx.inspection.update({
+async function cancelBooked(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  inspectionId: string,
+  reason: string,
+): Promise<{ technicianId: string; scheduledAt: Date } | null> {
+  const { scheduledAt } = await tx.inspection.update({
     where: { id: inspectionId },
     data: { status: InspectionStatus.CANCELLED, cancelledAt: new Date(), cancellationReason: reason },
+    select: { scheduledAt: true },
   });
   await tx.jobberOutboundTask.deleteMany({
     where: {
@@ -819,6 +856,8 @@ async function cancelBooked(tx: Prisma.TransactionClient, organizationId: string
         reason: `Inspection cancelled: ${reason}`,
       },
     });
+  // Who to tell, once this commits.
+  return current ? { technicianId: current.technicianId, scheduledAt } : null;
 }
 
 /** Why a lease does not ask for its move-out or move-in today. */

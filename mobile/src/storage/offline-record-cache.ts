@@ -163,6 +163,14 @@ export async function updateExistingApiRecord<TSchema extends z.ZodType>(
   }
 }
 
+/**
+ * Drops records outright, for a job taken off this technician's schedule: out
+ * of signal, the fallback would otherwise open it again from its last copy.
+ */
+export async function forgetApiRecords(keys: string[]) {
+  await Promise.all(keys.map(async (key) => demoStorage.removeItem(await cacheKey(key))));
+}
+
 async function cacheKey(key: string) {
   // Who, not a token: an expired one names the same technician, and renewing
   // here is what could not be done behind the lock screen.

@@ -2271,6 +2271,12 @@ export function useAdminMutations() {
         mergeAuthoritativeEntity(client, keys.all, data);
         client.setQueryData(keys.inspection(variables.id), data);
         refreshInspection(variables.id);
+        // A cancelled or moved visit leaves the map's day at once, not at its next poll (2026-10-07).
+        if (variables.status === 'CANCELLED' || variables.scheduledAt) {
+          void client.invalidateQueries({ queryKey: ['map-assignments'] });
+          void client.invalidateQueries({ queryKey: ['technician-route'] });
+          void client.invalidateQueries({ queryKey: ['technician-timeline'] });
+        }
       },
     }),
     /**

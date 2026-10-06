@@ -367,8 +367,11 @@ describe('technician realtime authorization', () => {
 
     gateway.publish('technician-1', 'inspection-1', 'ASSIGNED');
     gateway.publish('technician-1', 'inspection-2', 'REOPENED');
+    // A cancelled job is named, so the technician knows which one (2026-10-07).
+    gateway.publish('technician-1', 'inspection-3', 'CANCELLED', '605 Sorrento Dr · Nov 27');
 
-    expect(mobilePush.send).toHaveBeenCalledWith('ASSIGNED', 'technician-1', 'inspection-1');
-    expect(mobilePush.send).toHaveBeenCalledWith('REOPENED', 'technician-1', 'inspection-2');
+    expect(mobilePush.send).toHaveBeenCalledWith('ASSIGNED', 'technician-1', 'inspection-1', undefined);
+    expect(mobilePush.send).toHaveBeenCalledWith('REOPENED', 'technician-1', 'inspection-2', undefined);
+    expect(mobilePush.send).toHaveBeenCalledWith('CANCELLED', 'technician-1', 'inspection-3', '605 Sorrento Dr · Nov 27');
   });
 });

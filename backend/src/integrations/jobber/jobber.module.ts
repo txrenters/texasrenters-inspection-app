@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, PermissionsGuard } from '../../common/auth';
+import { RealtimeModule } from '../../realtime/realtime.module';
 import { JobberOutboundWorker } from '../../workers/jobber-sync/jobber-outbound.worker';
 import { JobberSyncScheduler } from '../../workers/jobber-sync/jobber-sync.scheduler';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
@@ -16,6 +17,8 @@ import { JobberService } from './jobber.service';
 import { JobberTokenService } from './jobber.tokens.service';
 
 @Module({
+  // The sync tells a technician when a job of theirs is removed (2026-10-07).
+  imports: [RealtimeModule],
   controllers: [JobberIntegrationController, JobberOAuthCallbackController, JobberWebhookController],
   providers: [
     { provide: JOBBER_CONFIG, useFactory: getJobberConfig },
