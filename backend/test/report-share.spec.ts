@@ -128,7 +128,15 @@ describe('inspection report shares', () => {
               completionStatus: 'COMPLETED',
               skipReason: null,
               completedAt: new Date(),
-              propertyArea: { name: 'Kitchen', floor: { name: 'Ground Floor' } },
+              propertyArea: {
+                name: 'Kitchen',
+                floor: { name: 'Ground Floor' },
+                // The room's form: one row answered below, one never scored.
+                checklistItems: [
+                  { id: 'item-1', label: 'Doors and locks', keywords: ['door'], kind: 'ROOM', responseType: 'STATUS', unit: null },
+                  { id: 'item-2', label: 'Walls and ceilings', keywords: ['wall'], kind: 'ROOM', responseType: 'STATUS', unit: null },
+                ],
+              },
               // A partial assessment: Working was never scored, and the report
               // has to carry that through as null rather than false.
               checklistResponses: [
@@ -137,7 +145,7 @@ describe('inspection report shares', () => {
                   isUndamaged: true,
                   isWorking: null,
                   comment: 'scratches on door',
-                  checklistItem: { id: 'item-1', label: 'Doors and locks' },
+                  checklistItem: { id: 'item-1', label: 'Doors and locks', keywords: ['door'] },
                 },
               ],
               photos: [
@@ -254,18 +262,31 @@ describe('inspection report shares', () => {
     // The rule the printed report depends on: an unassessed axis stays null.
     // Coercing it to false would publish a defect the technician never
     // observed, on a document a tenant may be shown.
-    // The office first, then the field — the order the printed report uses.
-    // Deduplicated, so an administrator who is also the assignee is not printed
-    // twice.
-    expect(report.inspection.inspector).toBe('Operations Team / Lovely Mae');
+    // The field only: the office's name -- whoever issued the link or signed
+    // the report off -- came off this line at the maintenance team's request
+    // (2026-10-07).
+    expect(report.inspection.inspector).toBe('Lovely Mae');
+    // Every row of the room's form, in its order: the unscored one prints with
+    // blank cells rather than vanishing, so a room nobody scored still shows
+    // what was asked.
     expect(report.rooms[0].checklist).toEqual([
       {
         id: 'item-1',
         label: 'Doors and locks',
+        keywords: ['door'],
         isClean: false,
         isUndamaged: true,
         isWorking: null,
         comment: 'scratches on door',
+      },
+      {
+        id: 'item-2',
+        label: 'Walls and ceilings',
+        keywords: ['wall'],
+        isClean: null,
+        isUndamaged: null,
+        isWorking: null,
+        comment: null,
       },
     ]);
     expect(JSON.stringify(report)).not.toMatch(/internalNotes|technician|organizationId/);
