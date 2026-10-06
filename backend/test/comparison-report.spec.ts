@@ -320,6 +320,26 @@ describe('the comparison report an owner or tenant reads', () => {
     });
   });
 
+  it('prints every photograph but a rejected finding’s, as the inspection report does', async () => {
+    // A move-out is walked on video, and its photographs are the stills the AI
+    // files for its findings before the office has looked. Held back until each
+    // finding was approved, the report had none (10830 Harston Dr, 2026-10-07).
+    const prisma = prismaDouble({
+      comparison,
+      moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen']),
+      moveOut: inspectionRow('move-out-1', 'MOVE_OUT', ['pa-kitchen']),
+    });
+
+    await new ComparisonReportService(prisma as never).report(user, 'move-out-1');
+
+    const select = prisma.inspection.findUnique.mock.calls[0][0] as unknown as {
+      select: { areas: { select: { photos: { where: unknown } } } };
+    };
+    expect(select.select.areas.select.photos.where).toEqual({
+      OR: [{ findingId: null }, { finding: { reviewStatus: { not: 'REJECTED' } } }],
+    });
+  });
+
   it('addresses a shared copy’s photographs through its token, for either inspection', async () => {
     const prisma = prismaDouble({
       comparison,

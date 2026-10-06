@@ -12,7 +12,7 @@
  * this reads the stored rows and prints the verdict that was actually reviewed.
  *
  * The visibility rules are the inspection report's, deliberately: only APPROVED
- * findings, and only photographs that carry no unapproved finding. This document
+ * findings, and every photograph but a rejected finding's (`REPORT_VISIBLE_PHOTO`). This document
  * is charge-relevant and is sent to owners and tenants by share link (the
  * office, 2026-10-06), so it must never be the place unreviewed AI output first
  * appears.
@@ -36,24 +36,12 @@ import { ApplicationError } from '../common/errors';
 import type { AuthenticatedUser } from '../common/auth';
 import { inspectedAreas } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
+import { REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
 import { ROOM_SUMMARY_WHERE } from '../technician/room-summary';
 import type { ComparedItem } from './comparison-items';
 
 /** Bounded per inspection, so a photo-heavy pair cannot build an unbounded document. */
 const MAX_REPORT_PHOTOS = 300;
-
-/**
- * The same rule the shared inspection report uses.
- *
- * What must not leak is unreviewed AI output: a photograph attached to a finding
- * is only safe once that finding is APPROVED. A photograph with no finding is
- * the technician's own record of the area and carries no such claim. It does not
- * filter on `captureType` -- that describes framing, not fitness to publish, and
- * filtering on it once dropped ten of twelve photographs from a report.
- */
-const REPORT_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
-  OR: [{ findingId: null }, { finding: { reviewStatus: FindingReviewStatus.APPROVED } }],
-};
 
 /** How a photograph is addressed, which is all that differs between the two copies. */
 type PhotoPath = (photoId: string) => string;

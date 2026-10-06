@@ -7,7 +7,6 @@ import {
   FindingReviewStatus,
   InspectionAreaCompletionStatus,
   ReportShareKind,
-  type Prisma,
 } from '@prisma/client';
 import {
   filterLabel,
@@ -24,6 +23,7 @@ import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreas } from '../common/inspected-areas';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
+import { REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MailService } from '../mail/mail.service';
 import { ComparisonReportService } from './comparison-report.service';
@@ -45,25 +45,6 @@ const NOT_AVAILABLE = () =>
   );
 
 const MAX_REPORT_PHOTOS = 300;
-
-/**
- * Which photos a homeowner may see.
- *
- * What must not leak is *unreviewed AI output*: a photograph attached to a
- * finding is only safe once that finding is APPROVED, or the report publishes
- * a defect nobody signed off on. A photograph with no finding attached is the
- * technician's own record of the area and carries no such claim.
- *
- * This deliberately does **not** filter on `captureType`. It used to admit only
- * AREA_OVERVIEW, which meant the guided capture flow — which files its shots as
- * FINDING_CONTEXT — had every photograph silently dropped from the report: a
- * two-room inspection with twelve photographs published two. The capture type
- * describes how a photograph was framed, not whether it is fit to show, and
- * using it as a permission check hid evidence the report exists to present.
- */
-const HOMEOWNER_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
-  OR: [{ findingId: null }, { finding: { reviewStatus: FindingReviewStatus.APPROVED } }],
-};
 
 /**
  * How each inspection type is named on the printed report.
@@ -296,7 +277,7 @@ export class ReportShareService {
   /**
    * Public, unauthenticated report for homeowners. Contains only reviewed
    * material: room completion, APPROVED findings, and photos that pass
-   * HOMEOWNER_VISIBLE_PHOTO. Internal notes, technician identities, pending AI
+   * REPORT_VISIBLE_PHOTO. Internal notes, technician identities, pending AI
    * output, and identifiers stay private.
    */
   async publicReport(token: string) {
@@ -481,7 +462,7 @@ export class ReportShareService {
               },
             },
             photos: {
-              where: HOMEOWNER_VISIBLE_PHOTO,
+              where: REPORT_VISIBLE_PHOTO,
               orderBy: [{ captureType: 'asc' }, { sequenceNumber: 'asc' }, { capturedAt: 'asc' }],
               take: MAX_REPORT_PHOTOS,
               select: {
@@ -699,7 +680,7 @@ export class ReportShareService {
         'Inspection media storage is not configured.',
       );
     const photo = await this.prisma.inspectionPhoto.findFirst({
-      where: { id: photoId, inspectionId: { in: inspectionIds }, AND: HOMEOWNER_VISIBLE_PHOTO },
+      where: { id: photoId, inspectionId: { in: inspectionIds }, AND: REPORT_VISIBLE_PHOTO },
       select: { id: true, storageKey: true, mimeType: true },
     });
     if (!photo)
