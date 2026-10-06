@@ -244,3 +244,105 @@ describe('comparison report', () => {
     );
   });
 });
+
+/**
+ * The document as owners and tenants are sent it (the office, 2026-10-06).
+ */
+describe('the comparison report an owner or tenant reads', () => {
+  const items = [
+    {
+      itemId: 'ci-walls',
+      label: 'Walls and ceilings',
+      keywords: ['wall', 'ceiling'],
+      moveIn: { clean: true, undamaged: true, working: true, comment: null },
+      moveOut: { clean: false, undamaged: false, working: true, comment: 'Holes by the door' },
+      change: 'NEW_DAMAGE',
+      cleaning: 'NEEDS_CLEANING',
+    },
+  ];
+
+  it('carries each room’s items as the verdict was drawn from them, keywords left behind', async () => {
+    const prisma = prismaDouble({
+      comparison: {
+        ...comparison,
+        reviewNote: 'Checked against the move-in photographs.',
+        areaComparisons: [areaRow({ metadata: { items, aiNote: 'Console only.' } })],
+      },
+      moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen']),
+      moveOut: inspectionRow('move-out-1', 'MOVE_OUT', ['pa-kitchen']),
+    });
+    const service = new ComparisonReportService(prisma as never);
+
+    const report = await service.report(user, 'move-out-1');
+
+    expect(report.areas[0].items).toEqual([
+      {
+        itemId: 'ci-walls',
+        label: 'Walls and ceilings',
+        moveIn: items[0].moveIn,
+        moveOut: items[0].moveOut,
+        change: 'NEW_DAMAGE',
+        cleaning: 'NEEDS_CLEANING',
+      },
+    ]);
+    // The AI's note to the reviewer never travels with the document.
+    expect(JSON.stringify(report)).not.toContain('Console only.');
+    expect(report.comparison.reviewNote).toBe('Checked against the move-in photographs.');
+  });
+
+  it('has no items for a room compared before items were, rather than failing', async () => {
+    const prisma = prismaDouble({
+      comparison: { ...comparison, areaComparisons: [areaRow({ metadata: null })] },
+      moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen']),
+      moveOut: inspectionRow('move-out-1', 'MOVE_OUT', ['pa-kitchen']),
+    });
+
+    const report = await new ComparisonReportService(prisma as never).report(user, 'move-out-1');
+
+    expect(report.areas[0].items).toEqual([]);
+  });
+
+  it('prints only approved findings, and never a room’s condition summary', async () => {
+    const prisma = prismaDouble({
+      comparison,
+      moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen']),
+      moveOut: inspectionRow('move-out-1', 'MOVE_OUT', ['pa-kitchen']),
+    });
+
+    await new ComparisonReportService(prisma as never).report(user, 'move-out-1');
+
+    const select = prisma.inspection.findUnique.mock.calls[0][0] as unknown as {
+      select: { findings: { where: unknown } };
+    };
+    expect(select.select.findings.where).toEqual({
+      reviewStatus: 'APPROVED',
+      NOT: { findingType: 'NO_CHANGE', title: 'Room condition summary' },
+    });
+  });
+
+  it('addresses a shared copy’s photographs through its token, for either inspection', async () => {
+    const prisma = prismaDouble({
+      comparison,
+      moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen'], 'photo-in'),
+      moveOut: inspectionRow('move-out-1', 'MOVE_OUT', ['pa-kitchen'], 'photo-out'),
+    });
+
+    const report = await new ComparisonReportService(prisma as never).reportForShare(
+      user.organizationId,
+      'move-out-1',
+      'token/with+odd=chars',
+    );
+
+    expect(report.areas[0].moveIn?.photos[0].contentPath).toBe(
+      '/api/v1/reports/token%2Fwith%2Bodd%3Dchars/photos/photo-in',
+    );
+    expect(report.areas[0].moveOut?.photos[0].contentPath).toBe(
+      '/api/v1/reports/token%2Fwith%2Bodd%3Dchars/photos/photo-out',
+    );
+    expect(prisma.inspectionComparison.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { moveOutInspectionId: 'move-out-1', organizationId: user.organizationId },
+      }),
+    );
+  });
+});

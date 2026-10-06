@@ -756,6 +756,15 @@ export interface AdminInspectionComparison {
   reviewedAt?: string | null;
   reviewNote?: string | null;
   generatedAt: string;
+  /**
+   * Rooms still classified "Requires review". An approval and a share link
+   * both wait for none.
+   */
+  undecidedRooms?: number;
+  /** Why the comparison no longer describes its two inspections; empty when it does. */
+  outOfDate?: Array<'NEWER_MOVE_IN' | 'CHECKLIST_CHANGED' | 'ROOMS_CHANGED'>;
+  /** The same, in sentences, for the console. */
+  outOfDateText?: string | null;
   areas: AdminAreaComparison[];
 }
 
@@ -904,10 +913,18 @@ export interface AdminAuditEvent {
   detail?: string | null;
 }
 
+/**
+ * Which document a share link serves: the inspection's own report, or -- for a
+ * move-out -- its comparison with the move-in.
+ */
+export type ReportShareKind = 'INSPECTION' | 'COMPARISON';
+
 export interface AdminReportShare {
   id: string;
   inspectionId: string;
   token: string;
+  /** Which document this link serves; `sharePath` follows from it. */
+  kind: ReportShareKind;
   sharePath: string;
   recipientEmail?: string | null;
   expiresAt: string;
@@ -1123,8 +1140,25 @@ export interface ComparisonReportArea {
   matchConfidence: number;
   requiresReview: boolean;
   summary: string;
+  /**
+   * The checklist, item by item, as the verdict was drawn from it when the
+   * comparison was generated -- so the table and the verdict above it cannot
+   * disagree. Empty for a room with no item graded on both sides, and for a
+   * comparison generated before items were compared.
+   */
+  items?: ComparisonReportItem[];
   moveIn: ComparisonReportAreaSide | null;
   moveOut: ComparisonReportAreaSide | null;
+}
+
+/** One checklist item at move-in and at move-out; see `AdminComparisonItem`. */
+export interface ComparisonReportItem {
+  itemId: string;
+  label: string;
+  moveIn: AdminComparisonItemSide | null;
+  moveOut: AdminComparisonItemSide | null;
+  change: ComparisonItemChange;
+  cleaning: 'NEEDS_CLEANING' | 'ALREADY_DIRTY' | null;
 }
 
 /**
@@ -1155,6 +1189,8 @@ export interface ComparisonReport {
     generatedAt: string;
     reviewedByName?: string | null;
     reviewedAt?: string | null;
+    /** The approver's note, printed with the approval. */
+    reviewNote?: string | null;
   };
   moveIn: ComparisonReportSide;
   moveOut: ComparisonReportSide;

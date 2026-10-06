@@ -21,7 +21,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { AiProvider, InspectionType } from '@prisma/client';
+import { AiProvider, InspectionType, ReportShareKind } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
@@ -707,12 +707,30 @@ export class AdminController {
     @Param('inspectionId') id: string,
     @Body() body: CreateReportShareDto,
   ) {
-    return this.reportShares.createShare(request.user, id, body.recipientEmail);
+    return this.reportShares.createShare(
+      request.user,
+      id,
+      body.recipientEmail,
+      body.kind === 'COMPARISON' ? ReportShareKind.COMPARISON : ReportShareKind.INSPECTION,
+    );
   }
+  /** `kind` narrows the list to one document's links; absent, every link. */
   @Get('inspections/:inspectionId/report-shares')
   @RequirePermissions('reports:share')
-  listReportShares(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
-    return this.reportShares.listShares(request.user, id);
+  listReportShares(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Query('kind') kind?: string,
+  ) {
+    return this.reportShares.listShares(
+      request.user,
+      id,
+      kind === 'COMPARISON'
+        ? ReportShareKind.COMPARISON
+        : kind === 'INSPECTION'
+          ? ReportShareKind.INSPECTION
+          : undefined,
+    );
   }
   @Delete('report-shares/:shareId')
   @RequirePermissions('reports:share')

@@ -6,6 +6,7 @@ export * from './integrations/propertyware-entities.js';
 export * from './leases/lease-expiry.js';
 export * from './leases/lease-inspections.js';
 export * from './report/report-view.js';
+export * from './report/comparison-view.js';
 export * from './schemas/area-checklist-generation.js';
 export * from './schemas/finding.js';
 export * from './schemas/floor-plan.js';

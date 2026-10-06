@@ -37,6 +37,7 @@ import type {
   PropertyPrivateDetails,
   AdminPropertyArea,
   AdminReportShare,
+  ReportShareKind,
   AdminRole,
   AdminRoleSummary,
   AdminTechnician,
@@ -158,7 +159,11 @@ export const keys = {
   inspectionCharges: (id: string) => ['admin', 'inspection', id, 'charges'] as const,
   chargeReport: (id: string) => ['admin', 'inspection', id, 'charge-report'] as const,
   chargeRules: ['admin', 'charge-rules'] as const,
-  reportShares: (id: string) => ['admin', 'inspection', id, 'report-shares'] as const,
+  /** One document's links, or -- without `kind` -- the prefix covering both. */
+  reportShares: (id: string, kind?: ReportShareKind) =>
+    kind
+      ? (['admin', 'inspection', id, 'report-shares', kind] as const)
+      : (['admin', 'inspection', id, 'report-shares'] as const),
   inspectionFindings: (id: string, page: number, reviewStatus: string, kind = 'ALL') =>
     ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
   technicianLocations: ['technician-locations'] as const,
@@ -566,11 +571,14 @@ export const useSetAreaReviewed = (inspectionId: string) => {
   });
 };
 
-export const useReportShares = (id: string) =>
+/** The links issued for one document of an inspection: its report, or its comparison. */
+export const useReportShares = (id: string, kind: ReportShareKind = 'INSPECTION') =>
   useQuery({
-    queryKey: keys.reportShares(id),
+    queryKey: keys.reportShares(id, kind),
     queryFn: ({ signal }) =>
-      api<AdminReportShare[]>(`/api/v1/admin/inspections/${id}/report-shares`, { signal }),
+      api<AdminReportShare[]>(`/api/v1/admin/inspections/${id}/report-shares?kind=${kind}`, {
+        signal,
+      }),
     enabled: Boolean(id),
   });
 export const useInspectionAreas = (id: string, enabled = true) =>
@@ -2764,13 +2772,15 @@ export function useAdminMutations() {
       mutationFn: ({
         inspectionId,
         recipientEmail,
+        kind = 'INSPECTION',
       }: {
         inspectionId: string;
         recipientEmail?: string;
+        kind?: ReportShareKind;
       }) =>
         api<AdminReportShare>(`/api/v1/admin/inspections/${inspectionId}/report-shares`, {
           method: 'POST',
-          body: JSON.stringify(recipientEmail ? { recipientEmail } : {}),
+          body: JSON.stringify({ kind, ...(recipientEmail ? { recipientEmail } : {}) }),
         }),
       onSuccess: (data, variables) => {
         mergeAuthoritativeEntity(client, keys.all, data);

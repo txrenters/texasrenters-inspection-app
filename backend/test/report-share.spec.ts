@@ -275,7 +275,9 @@ describe('inspection report shares', () => {
       expect.objectContaining({
         where: {
           id: 'photo-1',
-          inspectionId: 'inspection-1',
+          // The share's own inspection, and no other: an inspection link's
+          // scope is that one inspection.
+          inspectionId: { in: ['inspection-1'] },
           AND: { OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }] },
         },
       }),

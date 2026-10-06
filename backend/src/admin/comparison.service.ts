@@ -25,9 +25,19 @@ import {
   type FindingSignal,
 } from './comparison-items';
 
-// A move-in inspection is usable as a baseline once the technician has submitted
-// it (findings exist) — completion/finalization is not required.
+/**
+ * A move-in inspection is usable as a baseline once the technician has submitted
+ * it -- completion or finalization is not required.
+ *
+ * "Submitted" includes the two states before the AI's pass is done. Submitted
+ * is done (the office, 2026-10-05): the checklist the comparison reads is
+ * complete at submission, and a move-in left in PROCESSING by one recording
+ * that failed analysis is still the record of the tenancy. Leaving them out
+ * made the comparison skip the latest move-in for an older one, or for none.
+ */
 const BASELINE_READY_STATUSES: InspectionStatus[] = [
+  InspectionStatus.TECHNICIAN_SUBMITTED,
+  InspectionStatus.PROCESSING,
   InspectionStatus.REVIEW_REQUIRED,
   InspectionStatus.UNDER_REVIEW,
   InspectionStatus.TBD,
@@ -69,6 +79,20 @@ export function baselineWhere(moveOut: {
     scheduledAt: { lt: moveOut.scheduledAt },
     status: { in: BASELINE_READY_STATUSES },
   } satisfies Prisma.InspectionWhereInput;
+}
+
+/** Why a comparison no longer describes its two inspections; see `readiness`. */
+export type ComparisonOutOfDate = 'NEWER_MOVE_IN' | 'CHECKLIST_CHANGED' | 'ROOMS_CHANGED';
+
+const OUT_OF_DATE_TEXT: Record<ComparisonOutOfDate, string> = {
+  NEWER_MOVE_IN: 'A later move-in has been recorded since it was generated.',
+  CHECKLIST_CHANGED: 'A checklist answer changed after it was generated.',
+  ROOMS_CHANGED: 'A room was added to one of the inspections after it was generated.',
+};
+
+/** The reasons, as one sentence each, for an error message. */
+export function outOfDateText(reasons: readonly ComparisonOutOfDate[]) {
+  return reasons.map((reason) => OUT_OF_DATE_TEXT[reason]).join(' ');
 }
 
 function normalizeName(name: string) {
@@ -126,7 +150,57 @@ type AreaResult = {
   requiresReview: boolean;
   summary: string;
   metadata?: Prisma.InputJsonValue;
+  originalClassification?: ComparisonClassification | null;
+  overriddenById?: string | null;
+  overriddenAt?: Date | null;
+  overrideReason?: string | null;
 };
+
+type KeptOverride = {
+  moveInPropertyAreaId: string | null;
+  moveOutPropertyAreaId: string | null;
+  classification: ComparisonClassification;
+  originalClassification: ComparisonClassification | null;
+  overriddenById: string | null;
+  overriddenAt: Date | null;
+  overrideReason: string | null;
+};
+
+/**
+ * A reviewer's override survives a regenerate when what it overrode has not
+ * changed: the same two rooms, and the machine's verdict on them the same as
+ * the one the reviewer set aside.
+ *
+ * Regenerating used to delete every area row and write new ones, so the
+ * overrides went with them -- the reasons the office wrote for the report
+ * included -- and nothing said so. Where the evidence moved, the machine's
+ * verdict moves with it and the override is dropped: it was a decision about
+ * evidence that is no longer what the room shows.
+ */
+export function keepOverrides(results: AreaResult[], previous: readonly KeptOverride[]) {
+  let kept = 0;
+  const next = results.map((result) => {
+    const override = previous.find(
+      (row) =>
+        row.moveInPropertyAreaId === result.moveInPropertyAreaId &&
+        row.moveOutPropertyAreaId === result.moveOutPropertyAreaId &&
+        row.originalClassification === result.classification,
+    );
+    if (!override) return result;
+    kept += 1;
+    return {
+      ...result,
+      classification: override.classification,
+      originalClassification: override.originalClassification,
+      overriddenById: override.overriddenById,
+      overriddenAt: override.overriddenAt,
+      overrideReason: override.overrideReason,
+      // Decided by a person, as `overrideArea` leaves it.
+      requiresReview: false,
+    };
+  });
+  return { results: next, kept };
+}
 
 /**
  * Move-in vs move-out comparison engine (spec §12). Matching is deterministic
@@ -187,7 +261,25 @@ export class ComparisonService {
 
     const existing = await this.prisma.inspectionComparison.findUnique({
       where: { moveOutInspectionId },
-      select: { id: true, status: true, version: true },
+      select: {
+        id: true,
+        status: true,
+        version: true,
+        // A reviewer's decisions, to carry over where the evidence they were
+        // made on has not changed; see `keepOverrides`.
+        areaComparisons: {
+          where: { overriddenAt: { not: null } },
+          select: {
+            moveInPropertyAreaId: true,
+            moveOutPropertyAreaId: true,
+            classification: true,
+            originalClassification: true,
+            overriddenById: true,
+            overriddenAt: true,
+            overrideReason: true,
+          },
+        },
+      },
     });
     // A person may regenerate an approved comparison. The approval is theirs to
     // supersede, and nothing is lost quietly: the rewrite below sets the record
@@ -215,12 +307,15 @@ export class ComparisonService {
         this.loadAreaEvidenceCounts(moveOut.id),
       ]);
 
-    const areaResults = this.buildAreaComparisons(
-      moveOutAreas,
-      moveInAreas,
-      moveOutCondition,
-      moveInCondition,
-      moveOutEvidence,
+    const { results: areaResults, kept: keptOverrides } = keepOverrides(
+      this.buildAreaComparisons(
+        moveOutAreas,
+        moveInAreas,
+        moveOutCondition,
+        moveInCondition,
+        moveOutEvidence,
+      ),
+      existing?.areaComparisons ?? [],
     );
     const requiresReviewCount = areaResults.filter((a) => a.requiresReview).length;
     const overallCondition = this.overallCondition(areaResults);
@@ -291,13 +386,21 @@ export class ComparisonService {
         system: !actor,
         // What this replaced, so an approval that vanished has a trail.
         supersededApproval: supersedesApproval,
+        keptOverrides,
       });
     });
 
     return this.load(moveOut.organizationId, moveOutInspectionId);
   }
 
-  /** Approve or reject a comparison — a human decision (spec §12). */
+  /**
+   * Approve or reject a comparison — a human decision (spec §12).
+   *
+   * An approval is what lets the report go to an owner or a tenant, so it is
+   * refused while the document would say something nobody decided: a room
+   * still marked "Requires review", or a comparison drawn from evidence that
+   * has changed since (`readiness`).
+   */
   async review(
     user: AuthenticatedUser,
     comparisonId: string,
@@ -306,10 +409,31 @@ export class ComparisonService {
   ) {
     const comparison = await this.prisma.inspectionComparison.findFirst({
       where: { id: comparisonId, organizationId: user.organizationId },
-      select: { id: true, status: true, moveOutInspectionId: true },
+      select: {
+        id: true,
+        status: true,
+        moveOutInspectionId: true,
+        moveInInspectionId: true,
+        generatedAt: true,
+      },
     });
     if (!comparison)
       throw new ApplicationError(404, 'COMPARISON_NOT_FOUND', 'Comparison was not found.');
+    if (decision === 'APPROVED') {
+      const ready = await this.readiness(comparison);
+      if (ready.outOfDate.length)
+        throw new ApplicationError(
+          409,
+          'COMPARISON_OUT_OF_DATE',
+          `${outOfDateText(ready.outOfDate)} Regenerate the comparison, then approve it.`,
+        );
+      if (ready.undecidedRooms)
+        throw new ApplicationError(
+          409,
+          'COMPARISON_ROOMS_UNDECIDED',
+          `Decide the ${ready.undecidedRooms} ${ready.undecidedRooms === 1 ? 'room' : 'rooms'} marked Requires review (Override) before approving.`,
+        );
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.inspectionComparison.update({
         where: { id: comparisonId },
@@ -332,13 +456,30 @@ export class ComparisonService {
     return this.load(user.organizationId, comparison.moveOutInspectionId);
   }
 
-  /** Override a single area's classification, with an audit trail (spec §12). */
+  /**
+   * Override a single area's classification, with an audit trail (spec §12).
+   *
+   * The reason is required: it is printed on the comparison report beside the
+   * verdict it changed, and a verdict that disagrees with the checklist beneath
+   * it, unexplained, is the report an owner or tenant disputes.
+   *
+   * Overriding an approved comparison withdraws the approval. The approval was
+   * of the report as it stood; what a share link shows next has to be approved
+   * again, and until it is the link says the report is being updated.
+   */
   async overrideArea(
     user: AuthenticatedUser,
     areaComparisonId: string,
     classification: ComparisonClassification,
     reason?: string,
   ) {
+    const why = reason?.trim();
+    if (!why)
+      throw new ApplicationError(
+        400,
+        'OVERRIDE_REASON_REQUIRED',
+        'Say why: the reason is printed on the comparison report.',
+      );
     const area = await this.prisma.inspectionAreaComparison.findFirst({
       where: { id: areaComparisonId, comparison: { organizationId: user.organizationId } },
       select: {
@@ -346,11 +487,12 @@ export class ComparisonService {
         classification: true,
         originalClassification: true,
         comparisonId: true,
-        comparison: { select: { moveOutInspectionId: true } },
+        comparison: { select: { moveOutInspectionId: true, status: true } },
       },
     });
     if (!area)
       throw new ApplicationError(404, 'AREA_COMPARISON_NOT_FOUND', 'Area comparison was not found.');
+    const withdrawsApproval = area.comparison.status === ComparisonStatus.APPROVED;
     await this.prisma.$transaction(async (tx) => {
       await tx.inspectionAreaComparison.update({
         where: { id: areaComparisonId },
@@ -360,7 +502,7 @@ export class ComparisonService {
           originalClassification: area.originalClassification ?? area.classification,
           overriddenById: user.id,
           overriddenAt: new Date(),
-          overrideReason: reason ?? null,
+          overrideReason: why,
           requiresReview: false,
         },
       });
@@ -374,6 +516,14 @@ export class ComparisonService {
         data: {
           overallCondition: this.overallCondition(areas),
           requiresReviewCount: areas.filter((a) => a.requiresReview).length,
+          ...(withdrawsApproval
+            ? {
+                status: ComparisonStatus.UNDER_REVIEW,
+                reviewedById: null,
+                reviewedAt: null,
+                reviewNote: null,
+              }
+            : {}),
         },
       });
       await this.audit(
@@ -386,11 +536,78 @@ export class ComparisonService {
           comparisonId: area.comparisonId,
           from: area.classification,
           to: classification,
-          reason: reason ?? null,
+          reason: why,
+          approvalWithdrawn: withdrawsApproval,
         },
       );
     });
     return this.load(user.organizationId, area.comparison.moveOutInspectionId);
+  }
+
+  /**
+   * Whether the comparison says only what was decided, about the evidence as
+   * it stands.
+   *
+   * - `undecidedRooms`: rooms still classified REQUIRES_REVIEW. On a document
+   *   an owner or tenant reads, "requires review" is no verdict at all.
+   * - `outOfDate`: why the comparison no longer describes the two inspections.
+   *   The verdicts are worked out when it is generated; a checklist answer
+   *   changed in review afterwards, a room added to either inspection, or a
+   *   later move-in than the one compared, and the stored verdicts describe
+   *   evidence that is not the evidence any more.
+   *
+   * Both stop an approval and a share link; the console says which.
+   */
+  async readiness(comparison: {
+    id: string;
+    moveOutInspectionId: string;
+    moveInInspectionId: string;
+    generatedAt: Date;
+  }) {
+    const inspectionIds = [comparison.moveOutInspectionId, comparison.moveInInspectionId];
+    const [undecidedRooms, checklistChange, roomAdded, moveOut] = await Promise.all([
+      this.prisma.inspectionAreaComparison.count({
+        where: {
+          comparisonId: comparison.id,
+          classification: ComparisonClassification.REQUIRES_REVIEW,
+        },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.findFirst({
+        where: {
+          inspectionArea: { inspectionId: { in: inspectionIds } },
+          updatedAt: { gt: comparison.generatedAt },
+        },
+        select: { id: true },
+      }),
+      // Rooms only, as `loadAreas` reads them: a job's photo area added later
+      // is not a room the comparison is missing. Move-ins and move-outs both
+      // walk rooms, so the one rule covers both sides.
+      this.prisma.inspectionArea.findFirst({
+        where: {
+          inspectionId: { in: inspectionIds },
+          createdAt: { gt: comparison.generatedAt },
+          ...inspectedAreaWhere(InspectionType.MOVE_OUT),
+        },
+        select: { id: true },
+      }),
+      this.prisma.inspection.findUnique({
+        where: { id: comparison.moveOutInspectionId },
+        select: {
+          organizationId: true,
+          propertywareBuildingId: true,
+          propertywareUnitId: true,
+          propertywareLeaseId: true,
+          baselineInspectionId: true,
+          scheduledAt: true,
+        },
+      }),
+    ]);
+    const latest = moveOut ? await this.resolveBaseline(moveOut) : null;
+    const outOfDate: ComparisonOutOfDate[] = [];
+    if (latest && latest.id !== comparison.moveInInspectionId) outOfDate.push('NEWER_MOVE_IN');
+    if (checklistChange) outOfDate.push('CHECKLIST_CHANGED');
+    if (roomAdded) outOfDate.push('ROOMS_CHANGED');
+    return { undecidedRooms, outOfDate };
   }
 
   // --- internals ---------------------------------------------------------
@@ -928,7 +1145,7 @@ export class ComparisonService {
       },
     });
     if (!record) return null;
-    const [reviewer, moveOutAreas, findings] = await Promise.all([
+    const [reviewer, moveOutAreas, findings, ready] = await Promise.all([
       record.reviewedById
         ? this.prisma.userProfile.findUnique({
             where: { id: record.reviewedById },
@@ -960,6 +1177,7 @@ export class ComparisonService {
           source: true,
         },
       }),
+      this.readiness(record),
     ]);
     const areaIdFor = new Map(moveOutAreas.map((area) => [area.propertyAreaId, area.id]));
     return {
@@ -976,6 +1194,10 @@ export class ComparisonService {
       reviewedAt: record.reviewedAt,
       reviewNote: record.reviewNote,
       generatedAt: record.generatedAt,
+      // What stops an approval or a share link; see `readiness`.
+      undecidedRooms: ready.undecidedRooms,
+      outOfDate: ready.outOfDate,
+      outOfDateText: ready.outOfDate.length ? outOfDateText(ready.outOfDate) : null,
       areas: record.areaComparisons.map((area) => ({
         id: area.id,
         areaName: area.areaName,
