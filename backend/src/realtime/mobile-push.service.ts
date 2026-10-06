@@ -81,7 +81,26 @@ export class MobilePushService {
       body: 'The office added an area to one of your inspections.',
       channelId: 'assignments',
     },
+    /**
+     * A job taken off the technician's schedule: cancelled in the console, or
+     * its visit cancelled or deleted in Jobber (the office, 2026-10-07: "notify
+     * and remove"). Worth a push because they may be driving to it.
+     */
+    CANCELLED: {
+      title: 'Inspection cancelled',
+      body: 'One of your inspections was cancelled and is off your schedule.',
+      channelId: 'assignments',
+    },
   };
+
+  /** The copy for one event, naming the job when the event says which. */
+  static copyFor(kind: string, detail?: string) {
+    const copy = MobilePushService.COPY[kind];
+    if (!copy) return undefined;
+    if (kind === 'CANCELLED' && detail)
+      return { ...copy, body: `${detail} was cancelled and is off your schedule.` };
+    return copy;
+  }
 
   /**
    * Delivers one event to every device this technician has registered.
@@ -89,8 +108,8 @@ export class MobilePushService {
    * Best effort throughout: a push that cannot be delivered must never fail the
    * admin action that triggered it, so every path here logs and returns.
    */
-  async send(kind: string, technicianId: string, inspectionId: string) {
-    const copy = MobilePushService.COPY[kind];
+  async send(kind: string, technicianId: string, inspectionId: string, detail?: string) {
+    const copy = MobilePushService.copyFor(kind, detail);
     if (!copy) return;
     const devices = await this.prisma.mobilePushDevice.findMany({
       where: { userProfileId: technicianId, isActive: true },

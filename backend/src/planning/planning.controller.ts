@@ -15,7 +15,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { InspectionStatus, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { InspectionStatus, InspectionType, PlanOriginKind, type Prisma, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 import { haversineMeters, type Quarter, quarterLabel, withoutInspectionLink } from '@texasrenters/shared';
 
 import {
@@ -49,6 +49,11 @@ import { TbpPlanScheduler } from './tbp-plan.scheduler';
 import { TbpPlanService } from './tbp-plan.service';
 import { TbpPublishService } from './tbp-publish.service';
 import { TbpStopEditService } from './tbp-stop-edit.service';
+
+/** A plan stop not booked yet, or booked as a visit that has not been cancelled. */
+const LIVE_STOP = {
+  OR: [{ inspectionId: null }, { inspection: { status: { not: InspectionStatus.CANCELLED } } }],
+} satisfies Prisma.TbpQuarterPlanStopWhereInput;
 
 export const PLANNING_TAG = 'Quarterly planning';
 
@@ -409,6 +414,8 @@ export class PlanningController {
           scheduledOn: { not: null },
           assignedTechnicianId: { not: null },
           status: { in: [TbpStopStatus.PLANNED, TbpStopStatus.PUBLISHED] },
+          // A booked visit cancelled since is off the day, not "Booked in Jobber" on it (2026-10-07).
+          ...LIVE_STOP,
         },
         orderBy: [{ scheduledOn: 'asc' }, { positionInDay: 'asc' }],
         select: {
@@ -565,7 +572,15 @@ export class PlanningController {
 
     const [stops, anchors] = await Promise.all([
       this.prisma.tbpQuarterPlanStop.findMany({
-        where: { planId, organizationId, scheduledOn: day.date, assignedTechnicianId: day.technicianId },
+        where: {
+          planId,
+          organizationId,
+          scheduledOn: day.date,
+          assignedTechnicianId: day.technicianId,
+          // Neither a stop taken off the plan nor a visit cancelled since is on its road (2026-10-07).
+          status: { not: TbpStopStatus.EXCLUDED },
+          ...LIVE_STOP,
+        },
         orderBy: { positionInDay: 'asc' },
         select: { id: true, positionInDay: true, propertywareBuilding: { select: BUILDING_POSITION_SELECT } },
       }),

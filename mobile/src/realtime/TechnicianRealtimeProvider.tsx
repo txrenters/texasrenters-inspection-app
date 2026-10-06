@@ -13,7 +13,9 @@ import { queryKeys } from '../features/queries';
 import { reportError } from '../lib/error-log';
 import { verifyQueries } from '../features/state-consistency';
 import { requestJson } from '../repositories/api/repositories';
+import { forgetApiRecords } from '../storage/offline-record-cache';
 import { areNotificationsEnabled, usePreferencesStore } from '../stores/preferences.store';
+import { JOB_LEAVES_THE_PHONE, notificationTarget, withoutJob } from '../utils/job-removed';
 import { loadNotifications, shouldNotifyLocally } from './notifications';
 import { pushDeviceStorage } from './push-device-storage';
 
@@ -32,6 +34,8 @@ interface InspectionChangedEvent {
     /** This technician's own change, reaching their other devices. Never notified. */
     | 'SYNCED';
   occurredAt: string;
+  /** The job in words, "605 Sorrento Dr · Nov 27", on a CANCELLED event. */
+  detail?: string;
 }
 
 export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
@@ -46,6 +50,26 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
 
     const refreshAssignments = () => {
       void verifyQueries(queryClient, [queryKeys.dashboard, queryKeys.inspectionsRoot]);
+    };
+
+    /**
+     * A job cancelled, deleted or given to someone else, gone from the phone at
+     * once (the office, 2026-10-07): from the home screen, every list, the
+     * reminders set for it -- the reminder sync follows the active list -- and
+     * the route. Out of signal it would otherwise open again from its offline
+     * copy.
+     */
+    const leaveThePhone = (inspectionId: string) => {
+      queryClient.setQueriesData({ queryKey: queryKeys.inspectionsRoot }, (data: unknown) =>
+        withoutJob(data, inspectionId),
+      );
+      queryClient.setQueryData(queryKeys.dashboard, (data: unknown) => withoutJob(data, inspectionId));
+      void verifyQueries(queryClient, [queryKeys.dayRoute]);
+      void forgetApiRecords([
+        `inspection:${inspectionId}`,
+        `inspection-context:${inspectionId}`,
+        `inspection-report:${inspectionId}`,
+      ]).catch(() => undefined);
     };
 
     const connect = async () => {
@@ -69,6 +93,8 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       });
       socket.on('technician:ready', refreshAssignments);
       socket.on('inspection:changed', (event: InspectionChangedEvent) => {
+        // Out of every list before the refetch, rather than after it.
+        if (JOB_LEAVES_THE_PHONE.has(event.kind)) leaveThePhone(event.inspectionId);
         refreshAssignments();
         void verifyQueries(queryClient, [
           queryKeys.inspection(event.inspectionId),
@@ -84,7 +110,7 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
         // shouldNotifyLocally for what was measured and why the app state is
         // part of the rule.
         if (shouldNotifyLocally(Boolean(registeredPushToken), AppState.currentState))
-          void notifyTechnician(event.kind, event.inspectionId).catch(() => undefined);
+          void notifyTechnician(event.kind, event.inspectionId, event.detail).catch(() => undefined);
       });
     };
 
@@ -128,9 +154,9 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       .then((Notifications) => {
         if (!Notifications || disposed) return;
         notificationResponse = Notifications.addNotificationResponseReceivedListener((response) => {
-          const inspectionId = response.notification.request.content.data.inspectionId;
-          if (typeof inspectionId === 'string')
-            router.push(`/(app)/inspections/${inspectionId}` as never);
+          // A cancelled job opens the list, not a job that is no longer there.
+          const target = notificationTarget(response.notification.request.content.data);
+          if (target) router.push(target as never);
         });
       })
       .catch(() => undefined);
@@ -269,9 +295,14 @@ const NOTIFIABLE: Partial<Record<string, { title: string; body: string }>> = {
     title: 'Inspection updated',
     body: 'The office added an area to one of your inspections.',
   },
+  // They may be driving to it (the office, 2026-10-07: "notify and remove").
+  CANCELLED: {
+    title: 'Inspection cancelled',
+    body: 'One of your inspections was cancelled and is off your schedule.',
+  },
 };
 
-async function notifyTechnician(kind: string, inspectionId: string) {
+async function notifyTechnician(kind: string, inspectionId: string, detail?: string) {
   const copy = NOTIFIABLE[kind];
   if (!copy) return;
   if (!areNotificationsEnabled()) return;
@@ -279,8 +310,10 @@ async function notifyTechnician(kind: string, inspectionId: string) {
   if (!Notifications) return;
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
+  // Naming the job, as the server's push does.
+  const body = kind === 'CANCELLED' && detail ? `${detail} was cancelled and is off your schedule.` : copy.body;
   await Notifications.scheduleNotificationAsync({
-    content: { ...copy, data: { inspectionId }, sound: true },
+    content: { ...copy, body, data: { inspectionId, kind }, sound: true },
     trigger: null,
   });
 }

@@ -795,7 +795,14 @@ describe('administrator assignment operations', () => {
       expect.objectContaining({
         select: expect.objectContaining({
           id: true,
-          _count: { select: { assignments: { where: { isCurrent: true } } } },
+          // A cancelled visit is no one's current work (2026-10-07).
+          _count: {
+            select: {
+              assignments: {
+                where: { isCurrent: true, inspection: { status: { not: 'CANCELLED' } } },
+              },
+            },
+          },
         }),
       }),
     );
@@ -1001,6 +1008,20 @@ describe('which assignments a work list shows', () => {
     const { prisma, service } = harness();
     await service.assignments(user, { page: 1, pageSize: 20 });
     expect(whereOf(prisma).isCurrent).toBe(true);
+  });
+
+  it('leaves cancelled visits off both halves unless they are asked for (2026-10-07)', async () => {
+    // The unassigned half listed every cancelled visit as waiting for a
+    // technician, and the other half one cancelled in Jobber still carrying its own.
+    const { prisma, service } = harness();
+    await service.assignments(user, { page: 1, pageSize: 20 });
+    expect(whereOf(prisma).inspection).toMatchObject({ status: { not: 'CANCELLED' } });
+    expect(prisma.inspection.findMany.mock.calls[0][0].where).toMatchObject({ status: { not: 'CANCELLED' } });
+
+    const asked = harness();
+    await asked.service.assignments(user, { page: 1, pageSize: 20, inspectionStatus: 'CANCELLED' });
+    expect(whereOf(asked.prisma).inspection).toMatchObject({ status: 'CANCELLED' });
+    expect(asked.prisma.inspection.findMany.mock.calls[0][0].where).toMatchObject({ status: 'CANCELLED' });
   });
 
   it('returns superseded rows when history is asked for', async () => {

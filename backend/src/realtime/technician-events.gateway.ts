@@ -52,6 +52,12 @@ export interface TechnicianInspectionEvent {
   inspectionId: string;
   kind: TechnicianInspectionEventKind;
   occurredAt: string;
+  /**
+   * Which job, in words -- "605 Sorrento Dr · Nov 27" -- for an event whose
+   * inspection may no longer exist to be looked up (CANCELLED: a visit Jobber
+   * deleted is deleted here too, 2026-10-07). Absent on the other kinds.
+   */
+  detail?: string;
 }
 
 /**
@@ -200,17 +206,18 @@ export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDi
     } satisfies TechnicianPresenceEvent);
   }
 
-  publish(technicianId: string, inspectionId: string, kind: TechnicianInspectionEventKind) {
+  publish(technicianId: string, inspectionId: string, kind: TechnicianInspectionEventKind, detail?: string) {
     const event: TechnicianInspectionEvent = {
       inspectionId,
       kind,
       occurredAt: new Date().toISOString(),
+      ...(detail ? { detail } : {}),
     };
     this.server?.to(this.technicianRoom(technicianId)).emit('inspection:changed', event);
     // The service decides which kinds are worth a push; the gateway just tells
     // it what happened. Pushing only ASSIGNED was why a reopened inspection or
     // an evidence request reached nobody whose app was closed.
-    void this.mobilePush?.send(kind, technicianId, inspectionId);
+    void this.mobilePush?.send(kind, technicianId, inspectionId, detail);
   }
 
   /** Broadcast to the organization's administrators, not to any technician. */

@@ -79,45 +79,33 @@ const visit = (fields: Partial<JobberVisit> = {}): JobberVisit =>
   ({ id: 'visit-1', title: 'Title', startAt: null, endAt: null, allDay: true, ...fields }) as JobberVisit;
 
 describe('a visit moved to Unscheduled in Jobber', () => {
-  it('takes its inspection off the day, marked so it can come back', async () => {
-    const { worker, tx } = changesFor({});
+  /**
+   * Removed from the console, not cancelled (the office, 2026-10-07): a
+   * cancelled inspection kept its technician and kept turning up on the map,
+   * the dashboard and the phone. `jobber-visit-removal.spec.ts` covers what the
+   * removal does; here, that an unscheduled visit is handed to it.
+   */
+  it('takes its inspection off the console', async () => {
+    const { worker } = changesFor({});
+    const remove = jest.fn().mockResolvedValue('REMOVED');
+    (worker as unknown as { removeFromConsole: jest.Mock }).removeFromConsole = remove;
     const outcome = result();
 
     await worker.applyChanges(ORG, visit(), 'inspection-1', outcome);
 
-    expect(tx.inspection.updateMany).toHaveBeenCalledWith({
-      where: { id: 'inspection-1', organizationId: ORG, status: InspectionStatus.SCHEDULED, startedAt: null },
-      data: expect.objectContaining({ status: InspectionStatus.CANCELLED }),
-    });
-    expect(tx.jobberVisitImport.updateMany).toHaveBeenCalledWith({
-      where: { organizationId: ORG, jobberVisitId: 'visit-1' },
-      data: expect.objectContaining({ failureCode: JOBBER_VISIT_UNSCHEDULED }),
-    });
-    expect(tx.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          action: 'INSPECTION_CANCELLED',
-          metadata: { jobberVisitId: 'visit-1', reason: 'JOBBER_VISIT_UNSCHEDULED' },
-        }),
-      }),
-    );
+    expect(remove).toHaveBeenCalledWith(ORG, 'visit-1', 'inspection-1', 'UNSCHEDULED');
     expect(outcome.withdrawn).toBe(1);
   });
 
-  it('leaves work already under way for a person', async () => {
-    const { worker, prisma } = changesFor({
-      status: InspectionStatus.IN_PROGRESS,
-      startedAt: new Date('2026-10-01T14:00:00Z'),
-    });
+  it('counts nothing withdrawn when the work is under way and a person has to decide', async () => {
+    const { worker } = changesFor({});
+    (worker as unknown as { removeFromConsole: jest.Mock }).removeFromConsole = jest.fn().mockResolvedValue('IN_USE');
     const outcome = result();
 
     await worker.applyChanges(ORG, visit(), 'inspection-1', outcome);
 
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(prisma.jobberVisitImport.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ failureCode: 'JOBBER_RESCHEDULE_NEEDS_REVIEW' }) }),
-    );
     expect(outcome.withdrawn).toBe(0);
+    expect(outcome.skipped).toBe(1);
   });
 
   it('brings the same inspection back on the day Jobber gives it', async () => {

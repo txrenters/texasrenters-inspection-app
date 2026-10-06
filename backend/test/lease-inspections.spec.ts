@@ -76,10 +76,10 @@ function build(
 ) {
   const handlers = options.handlers ?? { moveOuts: 'moses', moveIns: 'amy' };
   const tx = {
-    inspection: { update: jest.fn().mockResolvedValue({}) },
+    inspection: { update: jest.fn().mockResolvedValue({ scheduledAt: date('2026-11-23') }) },
     inspectionAssignment: {
       create: jest.fn().mockResolvedValue({}),
-      findFirst: jest.fn().mockResolvedValue({ id: 'assignment-1' }),
+      findFirst: jest.fn().mockResolvedValue({ id: 'assignment-1', technicianId: 'amy' }),
       update: jest.fn().mockResolvedValue({}),
     },
     leaseScheduledInspection: { upsert: jest.fn().mockResolvedValue({}), update: jest.fn().mockResolvedValue({}) },
@@ -103,7 +103,8 @@ function build(
     propertywareUnit: { count: jest.fn().mockResolvedValue(options.units ?? 0) },
     $transaction: jest.fn((run: (client: unknown) => unknown) => run(tx)),
   };
-  return { service: new LeaseInspectionService(prisma as never), prisma, tx };
+  const events = { publish: jest.fn() };
+  return { service: new LeaseInspectionService(prisma as never, events as never), prisma, tx, events };
 }
 
 beforeEach(() => {
@@ -306,10 +307,10 @@ describe('keeping them in step with the leases', () => {
     const run = await service.run('org-1', { now: NOW });
 
     expect(run.changes[0]).toMatchObject({ action: 'CALL_OFF', detail: expect.stringContaining('booked 60 days before') });
-    expect(tx.inspection.update).toHaveBeenCalledWith({
+    expect(tx.inspection.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'inspection-1' },
       data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: expect.stringContaining('Mon, Dec 21, 2026') }),
-    });
+    }));
   });
 
   it('leaves alone one that was moved by hand, and notes the lease’s new day', async () => {
@@ -333,8 +334,8 @@ describe('keeping them in step with the leases', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('calls off a move-in when the tenant is no longer leaving', async () => {
-    const { service, tx } = build({
+  it('calls off a move-in when the tenant is no longer leaving, and tells its technician', async () => {
+    const { service, tx, events } = build({
       leases: [lease({ endDate: date('2027-06-30') })],
       rows: [
         row({ inspectionType: 'MOVE_IN', dueOn: date('2026-11-22'), scheduledOn: date('2026-11-23') }, { scheduledAt: date('2026-11-23') }),
@@ -344,13 +345,15 @@ describe('keeping them in step with the leases', () => {
     const run = await service.run('org-1', { now: NOW });
 
     expect(run.changes[0]).toMatchObject({ kind: 'MOVE_IN', action: 'CALL_OFF' });
-    expect(tx.inspection.update).toHaveBeenCalledWith({
+    expect(tx.inspection.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'inspection-1' },
       data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: expect.stringContaining('no longer leaving') }),
-    });
+    }));
     expect(tx.inspectionAssignment.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'assignment-1' }, data: expect.objectContaining({ isCurrent: false }) }),
     );
+    // Told, and the job leaves the phone at once (the office, 2026-10-07).
+    expect(events.publish).toHaveBeenCalledWith('amy', 'inspection-1', 'CANCELLED', expect.stringContaining('Nov 23'));
     expect(tx.leaseScheduledInspection.update).toHaveBeenCalledWith({
       where: { id: 'row-1' },
       data: expect.objectContaining({ outcome: LeaseInspectionOutcome.CALLED_OFF }),
@@ -426,10 +429,10 @@ describe('what the office books itself', () => {
     expect(run.changes).toEqual([
       expect.objectContaining({ action: 'ALREADY_BOOKED', inspectionId: 'from-jobber', scheduledOn: '2026-10-22' }),
     ]);
-    expect(tx.inspection.update).toHaveBeenCalledWith({
+    expect(tx.inspection.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'inspection-1' },
       data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: 'The office booked this move-out itself, for Thu, Oct 22, 2026.' }),
-    });
+    }));
     expect(tx.leaseScheduledInspection.update).toHaveBeenCalledWith({
       where: { id: 'row-1' },
       data: expect.objectContaining({ outcome: LeaseInspectionOutcome.ALREADY_BOOKED, inspectionId: 'from-jobber' }),
