@@ -118,7 +118,8 @@ describe('the queue while a room is being filmed', () => {
     await expect(new ApiUploadRepository().tick()).resolves.toBe(false);
 
     const [after] = useDemoStore.getState().uploads;
-    expect(after.status).toBe('PENDING');
-    expect(after.attemptCount).toBeUndefined();
+    expect(after).toBeDefined();
+    expect(after?.status).toBe('PENDING');
+    expect(after?.attemptCount).toBeUndefined();
   });
 });

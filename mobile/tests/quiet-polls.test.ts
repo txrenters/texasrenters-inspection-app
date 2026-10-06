@@ -55,7 +55,7 @@ describe('a poll that changed nothing', () => {
     const next = reconcileMobileState(previous, incoming);
     expect(next).not.toBe(previous);
     expect(next.items[0]).toBe(kitchen);
-    expect(next.items[1].name).toBe('Bathroom');
+    expect(next.items[1]?.name).toBe('Bathroom');
   });
 
   it('is not written to disk again', () => {
