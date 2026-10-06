@@ -1,11 +1,7 @@
 'use client';
 
-import { buildReportView } from '@texasrenters/shared';
-import type {
-  PublicInspectionReport,
-  ReportFindingView,
-  ReportRoomView,
-} from '@texasrenters/shared';
+import { NARRATION_HEADING, buildReportView } from '@texasrenters/shared';
+import type { PublicInspectionReport, ReportRoomView } from '@texasrenters/shared';
 import { DownloadIcon } from 'lucide-react';
 import Image from 'next/image';
 import { useParams } from 'next/navigation';
@@ -29,10 +25,11 @@ import { ApiError, publicApi } from '@/lib/api';
  * how it is worded comes from the shared `buildReportView`, which the PDF
  * renderer also consumes — see shared/src/report/report-view.ts.
  *
- * The one place in this app where colour arrives as data rather than as a token.
- * Severity tones come from the shared view model precisely so the web page and
- * the PDF cannot disagree about what "Major" looks like, so they are applied
- * inline. Everything else here uses the theme.
+ * Each area prints its condition table, its photographs, and under them what
+ * the inspector said walking it, word for word. The findings cards that used
+ * to follow the photographs, and the summary of findings that opened the
+ * report, are gone at the maintenance team's request (2026-10-07): the table
+ * says what failed, the comments say why, and the narration says it verbatim.
  */
 
 /** Grid thumbnails; the backend caches this width (see ALLOWED_PHOTO_WIDTHS). */
@@ -42,43 +39,6 @@ const FULL_WIDTH = 1000;
 function photoUrl(contentPath: string, width: number) {
   const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '') ?? '';
   return `${base}${contentPath}?w=${width}`;
-}
-
-function SeverityChip({ finding }: { finding: ReportFindingView }) {
-  return (
-    <span
-      className="inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-xs font-medium"
-      style={{
-        color: finding.tone.accent,
-        background: finding.tone.surface,
-        borderColor: finding.tone.border,
-      }}
-    >
-      {finding.severityLabel}
-    </span>
-  );
-}
-
-function Finding({ finding, showRoom }: { finding: ReportFindingView; showRoom?: boolean }) {
-  return (
-    <li
-      className="bg-card space-y-1.5 rounded-r-lg border-l-4 py-3 pr-3 pl-4"
-      style={{ borderLeftColor: finding.tone.accent }}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <p className="font-medium">{finding.title}</p>
-        <SeverityChip finding={finding} />
-      </div>
-      <p className="text-muted-foreground text-xs">
-        {showRoom ? `${finding.roomName} · ` : ''}
-        {finding.categoryLabel} · {finding.comparisonLabel}
-      </p>
-      <p className="text-sm leading-relaxed">{finding.description}</p>
-      {finding.baselineCondition ? (
-        <p className="text-muted-foreground text-sm">At move-in: {finding.baselineCondition}</p>
-      ) : null}
-    </li>
-  );
 }
 
 /**
@@ -248,12 +208,22 @@ function Room({ room }: { room: ReportRoomView }) {
         </div>
       ) : null}
 
-      {room.findings.length ? (
-        <ul className="grid gap-2">
-          {room.findings.map((finding) => (
-            <Finding finding={finding} key={finding.id} />
+      {/* What was said walking the room, under the photographs it describes
+          and in the inspector's own words. One run of text per recording,
+          each utterance opening with its minute and second, as the office's
+          own reports set it out. Nothing is summarised or reworded here. */}
+      {room.narration.length ? (
+        <div className="space-y-2 border-t pt-4">
+          <h4 className="text-sm font-semibold">{NARRATION_HEADING}:</h4>
+          {room.narration.map((recording, index) => (
+            <p className="text-sm leading-relaxed" key={index}>
+              {recording.label ? (
+                <span className="font-medium">{recording.label}: </span>
+              ) : null}
+              {recording.text}
+            </p>
           ))}
-        </ul>
+        </div>
       ) : null}
 
       {!room.hasEvidence ? (
@@ -382,55 +352,17 @@ export default function PublicReportPage() {
               <dt className="text-muted-foreground text-xs font-medium">Date</dt>
               <dd className="text-sm font-medium">{view.dateLabel}</dd>
             </div>
+            {/* The one count the report keeps. The findings counters and the
+                summary of findings that followed this header are gone with
+                the findings lists they counted (2026-10-07). */}
+            <div className="space-y-0.5">
+              <dt className="text-muted-foreground text-xs font-medium">Rooms inspected</dt>
+              <dd className="text-sm font-medium tabular-nums">
+                {view.summary.roomsInspected} of {view.summary.roomsTotal}
+              </dd>
+            </div>
           </dl>
         </header>
-
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold tracking-tight">At a glance</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="bg-card rounded-xl border p-4">
-              <p className="text-2xl font-semibold tabular-nums">
-                {view.summary.roomsInspected}/{view.summary.roomsTotal}
-              </p>
-              <p className="text-muted-foreground mt-0.5 text-xs">Rooms inspected</p>
-            </div>
-            <div className="bg-card rounded-xl border p-4">
-              <p className="text-2xl font-semibold tabular-nums">{view.summary.findingsTotal}</p>
-              <p className="text-muted-foreground mt-0.5 text-xs">Findings reviewed</p>
-            </div>
-            {view.summary.severityCounts.map((entry) => (
-              <div className="bg-card rounded-xl border p-4" key={entry.severity}>
-                <p
-                  className="text-2xl font-semibold tabular-nums"
-                  style={{ color: entry.tone.accent }}
-                >
-                  {entry.count}
-                </p>
-                <p className="text-muted-foreground mt-0.5 text-xs">{entry.label}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold tracking-tight">Summary of findings</h2>
-          {view.summary.findingsTotal ? (
-            <>
-              <p className="text-muted-foreground text-sm">
-                {view.summary.headline}, most significant first.
-              </p>
-              <ul className="grid gap-2">
-                {view.allFindings.map((finding) => (
-                  <Finding finding={finding} key={finding.id} showRoom />
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="bg-card rounded-xl border p-5 text-sm">
-              No findings were confirmed during review of this inspection.
-            </p>
-          )}
-        </section>
 
         <section className="space-y-3">
           <h2 className="text-lg font-semibold tracking-tight">Room by room</h2>
@@ -457,20 +389,6 @@ export default function PublicReportPage() {
                   </span>
                   <Badge variant="secondary">{room.statusLabel}</Badge>
                 </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
-        {view.otherFindings.length ? (
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold tracking-tight">Additional findings</h2>
-            <p className="text-muted-foreground text-sm">
-              Recorded against areas that have since been renamed or merged.
-            </p>
-            <ul className="grid gap-2">
-              {view.otherFindings.map((finding) => (
-                <Finding finding={finding} key={finding.id} showRoom />
               ))}
             </ul>
           </section>

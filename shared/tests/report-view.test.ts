@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildReportView, restatesChecklist } from '../src/index.js';
+import { buildReportView, narrationText, restatesChecklist } from '../src/index.js';
 import type { PublicInspectionReport } from '../src/index.js';
 
 function report(overrides: Partial<PublicInspectionReport> = {}): PublicInspectionReport {
@@ -162,6 +162,61 @@ describe('inspection report view model', () => {
  * not (`checklistNotes`): 10830 Harston Dr printed no comment at all while its
  * 227 findings waited to be confirmed.
  */
+describe("the inspector's narration under a room", () => {
+  const LINES = [
+    { start: 1, end: 4, text: 'We are now in the dining room.' },
+    { start: 5, end: 9, text: ' Dining room has part pantry. ' },
+    { start: 70, end: 75, text: 'Windows are in good shape.' },
+  ];
+
+  it('prints each recording as one run of text, each line opening with its minute and second', () => {
+    const view = buildReportView(
+      report({
+        rooms: [
+          {
+            ...ROOM,
+            narration: [
+              { label: null, lines: LINES },
+              { label: 'Pantry shelf', lines: [{ start: 0, end: 3, text: 'Shelf is loose.' }] },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(view.rooms[0].narration).toEqual([
+      {
+        label: null,
+        text:
+          '[0:01] We are now in the dining room. [0:05] Dining room has part pantry. ' +
+          '[1:10] Windows are in good shape.',
+      },
+      { label: 'Pantry shelf', text: '[0:00] Shelf is loose.' },
+    ]);
+    // A room with nothing but its recording still prints, rather than being
+    // filed under "Other areas" as if nothing had been said about it.
+    expect(view.rooms[0].hasEvidence).toBe(true);
+  });
+
+  it('prints nothing for a recording that said nothing, and for a report from an older backend', () => {
+    const silent = buildReportView(
+      report({ rooms: [{ ...ROOM, narration: [{ label: null, lines: [{ start: 0, end: 1, text: '  ' }] }] }] }),
+    );
+    const older = buildReportView(report({ rooms: [ROOM] }));
+
+    expect(silent.rooms[0].narration).toEqual([]);
+    expect(silent.rooms[0].hasEvidence).toBe(false);
+    expect(older.rooms[0].narration).toEqual([]);
+  });
+
+  it('keeps the words as they were spoken', () => {
+    // Verbatim is the point: nothing is cut, reworded or capitalised.
+    expect(narrationText([{ start: 754, text: 'need to full repaint the door' }])).toBe(
+      '[12:34] need to full repaint the door',
+    );
+  });
+});
+
 describe('explaining a failed checklist row', () => {
   type Note = { category: string; title: string };
 

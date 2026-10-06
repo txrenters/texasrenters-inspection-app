@@ -7,12 +7,15 @@ import {
   FindingType,
   InspectionAreaCompletionStatus,
   ReportShareKind,
+  TranscriptionStatus,
+  VideoRecordingType,
 } from '@prisma/client';
 import {
   filterLabel,
   HVAC_FILTERS_SECTION,
   inspectionAssessesFilters,
   SERVICE_PHOTO_AREA,
+  type PublicInspectionReport,
   type VisitServicesReport,
 } from '@texasrenters/shared';
 
@@ -125,9 +128,52 @@ function filtersRoom(
         isWorking: filter.isWorking ?? null,
         comment: filter.comment ?? null,
       })),
+      // Filters are scored on a form, not narrated on a walkthrough.
+      narration: [] as NonNullable<PublicInspectionReport['rooms'][number]['narration']>,
     },
     photos: (photoArea?.photos ?? []).filter((photo) => photoIds.has(photo.id)) as never[],
   };
+}
+
+/**
+ * A room has one walkthrough and, rarely, a few extra clips; more than this on
+ * one room is a retake loop, and a report is not the place to print it.
+ */
+const MAX_REPORT_RECORDINGS = 10;
+
+/**
+ * A room's narration as the report prints it, from its recordings' stored
+ * transcripts. A recording that was transcribed but said nothing is dropped,
+ * and the walkthrough carries no label: it is the room's own recording.
+ */
+function narrationOf(
+  recordings: ReadonlyArray<{
+    recordingType: VideoRecordingType;
+    label: string | null;
+    transcriptionJob: {
+      segments: ReadonlyArray<{ startSeconds: number; endSeconds: number; text: string }>;
+    } | null;
+  }>,
+): NonNullable<PublicInspectionReport['rooms'][number]['narration']> {
+  return recordings.flatMap((recording) => {
+    const lines = (recording.transcriptionJob?.segments ?? [])
+      .map((segment) => ({
+        start: segment.startSeconds,
+        end: Math.max(segment.startSeconds, segment.endSeconds),
+        text: segment.text.trim(),
+      }))
+      .filter((line) => line.text.length > 0);
+    if (!lines.length) return [];
+    return [
+      {
+        label:
+          recording.recordingType === VideoRecordingType.PRIMARY_AREA
+            ? null
+            : recording.label?.trim() || null,
+        lines,
+      },
+    ];
+  });
 }
 
 /**
@@ -450,6 +496,32 @@ export class ReportShareService {
                 checklistItem: { select: { label: true } },
               },
             },
+            /**
+             * The room's recordings, for the narration printed under its
+             * photographs: what the inspector said, word for word, which the
+             * maintenance team's own reports carry in place of a findings
+             * list (2026-10-07). The walkthrough first, then any extra clip,
+             * each in the order it was made. Only a finished transcription is
+             * printed; a pending or failed one is left out rather than shown
+             * half-done on a document a tenant may be handed.
+             */
+            media: {
+              where: { transcriptionJob: { status: TranscriptionStatus.COMPLETED } },
+              orderBy: [{ recordingType: 'asc' as const }, { createdAt: 'asc' as const }],
+              take: MAX_REPORT_RECORDINGS,
+              select: {
+                recordingType: true,
+                label: true,
+                transcriptionJob: {
+                  select: {
+                    segments: {
+                      orderBy: [{ startSeconds: 'asc' as const }, { endSeconds: 'asc' as const }],
+                      select: { startSeconds: true, endSeconds: true, text: true },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         findings: {
@@ -607,6 +679,7 @@ export class ReportShareService {
                 }
               : {}),
         })),
+        narration: narrationOf(area.media ?? []),
       })),
       findings: inspection.findings.map((finding) => ({
         id: finding.id,

@@ -7,8 +7,8 @@
  * it that way: content logic added here silently diverges from the web report.
  */
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
-import { REPORT_PALETTE } from '@texasrenters/shared';
-import type { ReportFindingView, ReportRoomView, ReportView } from '@texasrenters/shared';
+import { NARRATION_HEADING, REPORT_PALETTE } from '@texasrenters/shared';
+import type { ReportRoomView, ReportView } from '@texasrenters/shared';
 
 const C = REPORT_PALETTE;
 
@@ -53,20 +53,6 @@ const styles = StyleSheet.create({
   // ---- generic -----------------------------------------------------------
   sectionTitle: { fontSize: 13, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
   sectionHint: { color: C.muted, marginBottom: 12 },
-  rule: { height: 2, backgroundColor: C.accent, width: 34, marginBottom: 14, marginTop: 6 },
-
-  statRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
-  statCard: {
-    flexGrow: 1,
-    flexBasis: 0,
-    borderWidth: 1,
-    borderColor: C.border,
-    borderRadius: 6,
-    padding: 11,
-    backgroundColor: C.surfaceSubtle,
-  },
-  statValue: { fontSize: 19, fontFamily: 'Helvetica-Bold' },
-  statLabel: { color: C.muted, fontSize: 8, marginTop: 2 },
 
   chip: {
     borderWidth: 1,
@@ -134,24 +120,13 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
 
-  findingRow: {
-    flexDirection: 'row',
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: C.border,
-  },
-  severityBar: { width: 3, borderRadius: 2, marginRight: 9 },
-  findingTitle: { fontSize: 10, fontFamily: 'Helvetica-Bold' },
-  findingMeta: { color: C.muted, fontSize: 8, marginTop: 1, marginBottom: 3 },
-  baseline: {
-    marginTop: 4,
-    paddingLeft: 7,
-    borderLeftWidth: 1,
-    borderLeftColor: C.border,
-    color: C.muted,
-    fontSize: 8.5,
-  },
+  // What was said walking the room, under its photographs: the office's own
+  // reports set it as one run of text with the minute and second of each
+  // utterance in brackets, and this prints it the same way.
+  narration: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.border },
+  narrationHeading: { fontSize: 9.5, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
+  narrationText: { fontSize: 8.5, lineHeight: 1.5, marginBottom: 4 },
+  narrationLabel: { fontFamily: 'Helvetica-Bold' },
   emptyRoom: { color: C.muted, fontSize: 8.5 },
   // The condition table. Column widths are fixed rather than proportional so
   // the three verdict columns line up down the page the way the office's
@@ -230,8 +205,6 @@ const styles = StyleSheet.create({
     lineHeight: '',
   },
 
-  grow: { flexGrow: 1, flexBasis: 0 },
-  spread: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
 });
 
 type Tone = { accent: string; surface: string; border: string };
@@ -249,29 +222,6 @@ function Chip({ label, tone }: { label: string; tone: Tone }) {
     >
       {label}
     </Text>
-  );
-}
-
-function Finding({ finding }: { finding: ReportFindingView }) {
-  return (
-    <View style={styles.findingRow} wrap={false}>
-      <View style={[styles.severityBar, { backgroundColor: finding.tone.accent }]} />
-      <View style={styles.grow}>
-        <View style={styles.spread}>
-          <Text style={[styles.findingTitle, styles.grow, { paddingRight: 8 }]}>
-            {finding.title}
-          </Text>
-          <Chip label={finding.severityLabel} tone={finding.tone} />
-        </View>
-        <Text style={styles.findingMeta}>
-          {finding.categoryLabel} · {finding.comparisonLabel}
-        </Text>
-        <Text>{finding.description}</Text>
-        {finding.baselineCondition ? (
-          <Text style={styles.baseline}>At move-in: {finding.baselineCondition}</Text>
-        ) : null}
-      </View>
-    </View>
   );
 }
 
@@ -349,7 +299,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
     // rather than leaving most of a page blank.
     <View
       style={styles.roomCard}
-      wrap={room.checklist.length + photos.length + room.findings.length > 4}
+      wrap={room.checklist.length + photos.length + room.narration.length > 4}
     >
       <View style={styles.roomHeader}>
         <View>
@@ -373,10 +323,25 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
             ))}
           </View>
         ) : null}
-        {room.findings.map((finding) => (
-          <Finding key={finding.id} finding={finding} />
-        ))}
-        {!room.checklist.length && !photos.length && !room.findings.length ? (
+        {/* The inspector's words, under the photographs they describe. The
+            findings cards that used to print here are gone (2026-10-07); the
+            narration is the recording itself, not a reading of it. Wrappable:
+            a long walkthrough has to be allowed across a page break rather
+            than clipped. */}
+        {room.narration.length ? (
+          <View style={styles.narration}>
+            <Text style={styles.narrationHeading}>{NARRATION_HEADING}:</Text>
+            {room.narration.map((recording, index) => (
+              <Text key={index} style={styles.narrationText}>
+                {recording.label ? (
+                  <Text style={styles.narrationLabel}>{recording.label}: </Text>
+                ) : null}
+                {recording.text}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+        {!room.checklist.length && !photos.length && !room.narration.length ? (
           <Text style={styles.emptyRoom}>
             {room.skipReason
               ? `Not inspected — ${room.skipReason}`
@@ -433,60 +398,22 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
               <Text style={styles.coverMetaLabel}>DATE</Text>
               <Text style={styles.coverMetaValue}>{view.dateLabel}</Text>
             </View>
-          </View>
-        </View>
-
-        <Text style={styles.sectionTitle}>At a glance</Text>
-        <View style={styles.rule} />
-        <View style={styles.statRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>
-              {view.summary.roomsInspected}/{view.summary.roomsTotal}
-            </Text>
-            <Text style={styles.statLabel}>Rooms inspected</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{view.summary.findingsTotal}</Text>
-            <Text style={styles.statLabel}>Findings reviewed</Text>
-          </View>
-          {view.summary.severityCounts.map((entry) => (
-            <View key={entry.severity} style={styles.statCard}>
-              <Text style={[styles.statValue, { color: entry.tone.accent }]}>{entry.count}</Text>
-              <Text style={styles.statLabel}>{entry.label}</Text>
+            {/* The one count the report keeps. The "At a glance" counters and
+                the summary of findings that used to fill the first page are
+                gone with the findings lists they counted (2026-10-07), so
+                the rooms start on the cover page. */}
+            <View>
+              <Text style={styles.coverMetaLabel}>ROOMS INSPECTED</Text>
+              <Text style={styles.coverMetaValue}>
+                {view.summary.roomsInspected} of {view.summary.roomsTotal}
+              </Text>
             </View>
-          ))}
+          </View>
         </View>
 
-        <Text style={styles.sectionTitle}>Summary of findings</Text>
-        {view.summary.findingsTotal ? (
-          <>
-            <Text style={styles.sectionHint}>{view.summary.headline}, most significant first.</Text>
-            {view.allFindings.map((finding) => (
-              <View key={finding.id} style={{ flexDirection: 'row', marginBottom: 6 }} wrap={false}>
-                <View style={[styles.severityBar, { backgroundColor: finding.tone.accent }]} />
-                <View style={styles.grow}>
-                  <Text style={styles.findingTitle}>{finding.title}</Text>
-                  <Text style={styles.findingMeta}>
-                    {finding.roomName} · {finding.comparisonLabel}
-                  </Text>
-                </View>
-                <Chip label={finding.severityLabel} tone={finding.tone} />
-              </View>
-            ))}
-          </>
-        ) : (
-          <Text style={styles.sectionHint}>
-            No findings were confirmed during review of this inspection.
-          </Text>
-        )}
-
-        <Footer address={address} />
-      </Page>
-
-      <Page size="LETTER" style={styles.page}>
         <Text style={styles.sectionTitle}>Room by room</Text>
         <Text style={styles.sectionHint}>
-          Photographs and reviewed findings for each area of the property.
+          The condition table, photographs and walkthrough recording for each area of the property.
         </Text>
         {roomsWithEvidence.map((room) => (
           <Room key={room.id} room={room} images={images} />
@@ -510,18 +437,6 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
                 </Text>
                 <Text style={{ color: C.muted }}>{room.statusLabel}</Text>
               </View>
-            ))}
-          </View>
-        ) : null}
-
-        {view.otherFindings.length ? (
-          <View>
-            <Text style={[styles.sectionTitle, { marginTop: 14 }]}>Additional findings</Text>
-            <Text style={styles.sectionHint}>
-              Recorded against areas that have since been renamed or merged.
-            </Text>
-            {view.otherFindings.map((finding) => (
-              <Finding key={finding.id} finding={finding} />
             ))}
           </View>
         ) : null}

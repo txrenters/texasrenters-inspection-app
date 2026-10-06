@@ -150,6 +150,27 @@ describe('inspection report shares', () => {
                   height: 1200,
                 },
               ],
+              // The walkthrough, then an extra clip; a blank utterance is dropped.
+              media: [
+                {
+                  recordingType: 'PRIMARY_AREA',
+                  label: 'ignored for the walkthrough',
+                  transcriptionJob: {
+                    segments: [
+                      { startSeconds: 1, endSeconds: 4, text: ' We are in the kitchen. ' },
+                      { startSeconds: 5, endSeconds: 5, text: '' },
+                      { startSeconds: 9, endSeconds: 7, text: 'Burn mark by the stove.' },
+                    ],
+                  },
+                },
+                {
+                  recordingType: 'ADDITIONAL_ISSUE',
+                  label: 'Under the sink',
+                  transcriptionJob: { segments: [{ startSeconds: 0, endSeconds: 2, text: 'Leak.' }] },
+                },
+                // Transcribed, but said nothing: not printed as an empty heading.
+                { recordingType: 'ADDITIONAL_ISSUE', label: 'Silent', transcriptionJob: { segments: [] } },
+              ],
             },
           ],
           findings: [
@@ -202,6 +223,29 @@ describe('inspection report shares', () => {
     ]);
     expect(report.property.addressLine1).toBe('1458 Oak Ridge Dr');
     expect(report.rooms).toHaveLength(1);
+    // Only a finished transcription is printed, and nothing of the recording
+    // itself travels: no ids, no playback, no technician.
+    const mediaQuery = findingsQuery.select as unknown as {
+      areas: { select: { media: { where: unknown; select: Record<string, unknown> } } };
+    };
+    expect(mediaQuery.areas.select.media.where).toEqual({
+      transcriptionJob: { status: 'COMPLETED' },
+    });
+    expect(Object.keys(mediaQuery.areas.select.media.select).sort()).toEqual([
+      'label',
+      'recordingType',
+      'transcriptionJob',
+    ]);
+    expect(report.rooms[0].narration).toEqual([
+      {
+        label: null,
+        lines: [
+          { start: 1, end: 4, text: 'We are in the kitchen.' },
+          { start: 9, end: 9, text: 'Burn mark by the stove.' },
+        ],
+      },
+      { label: 'Under the sink', lines: [{ start: 0, end: 2, text: 'Leak.' }] },
+    ]);
     expect(report.findings).toHaveLength(1);
     // Findings resolve to the per-inspection room so the view model can group them.
     expect(report.findings[0].roomId).toBe('area-1');
