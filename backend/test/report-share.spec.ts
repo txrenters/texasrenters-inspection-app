@@ -3,6 +3,9 @@ import { UserRole } from '@texasrenters/shared';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ReportShareService } from '../src/admin/report-share.service';
 
+/** The photographs a shared report prints: all but a rejected finding's. */
+const VISIBLE = { OR: [{ findingId: null }, { finding: { reviewStatus: { not: 'REJECTED' } } }] };
+
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000002',
   authUserId: 'auth-admin',
@@ -234,18 +237,19 @@ describe('inspection report shares', () => {
       select: { areas: { select: { photos: { where: unknown } } } };
     };
     /**
-     * What must not leak is unreviewed AI output — a photograph attached to a
-     * finding nobody has approved. A photograph with no finding on it is the
-     * technician's own record and carries no such claim.
+     * Every photograph but a rejected finding's. What must not leak is the
+     * AI's unconfirmed claim -- a finding's words -- and only APPROVED findings
+     * are printed. The still the AI filed for a finding waiting on the office
+     * is the technician's own recording, with no caption: holding it back left
+     * 10830 Harston Dr's move-out report without one of its 120 photographs
+     * (2026-10-07).
      *
      * Deliberately no `captureType` clause. Restricting to AREA_OVERVIEW read
      * as a tighter rule and was really a bug: guided capture files its shots as
      * FINDING_CONTEXT, so a two-room inspection with twelve photographs
      * published two of them and the report looked empty.
      */
-    expect(query.select.areas.select.photos.where).toEqual({
-      OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }],
-    });
+    expect(query.select.areas.select.photos.where).toEqual(VISIBLE);
   });
 
   it('scopes shared photo reads to the share inspection and re-applies the visibility rule', async () => {
@@ -278,7 +282,7 @@ describe('inspection report shares', () => {
           // The share's own inspection, and no other: an inspection link's
           // scope is that one inspection.
           inspectionId: { in: ['inspection-1'] },
-          AND: { OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }] },
+          AND: VISIBLE,
         },
       }),
     );

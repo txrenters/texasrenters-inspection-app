@@ -3,6 +3,9 @@ import { UserRole } from '@texasrenters/shared';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ReportShareService } from '../src/admin/report-share.service';
 
+/** The photographs a shared report prints: all but a rejected finding's. */
+const VISIBLE = { OR: [{ findingId: null }, { finding: { reviewStatus: { not: 'REJECTED' } } }] };
+
 /**
  * The move-in / move-out comparison, sent to owners and tenants by link (the
  * office, 2026-10-06), as the inspection report is.
@@ -218,7 +221,7 @@ describe('opening a comparison link', () => {
           id: 'photo-1',
           inspectionId: { in: ['move-in-1', 'move-out-1'] },
           // Still only what a homeowner may see.
-          AND: { OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }] },
+          AND: VISIBLE,
         }),
       }),
     );
