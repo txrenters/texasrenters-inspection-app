@@ -1,3 +1,4 @@
+import { useIsFocused } from '@react-navigation/native';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert } from 'react-native';
 import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
@@ -9,6 +10,7 @@ import type {
   InspectionRoom,
   InspectionStatus,
   LocalMedia,
+  UploadItem,
 } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
@@ -663,21 +665,41 @@ export function useFloorPlan(propertyId: string) {
  * merge it themselves; see `useLiveUploadProgress`.
  */
 export function useUploads() {
+  // Polled only by the screen in front. The Uploads and Settings tabs stay
+  // mounted once visited, so an unfocused copy went on asking every five
+  // seconds underneath the camera for the rest of the visit.
+  const focused = useIsFocused();
   return useQuery({
     queryKey: queryKeys.uploads,
     queryFn: () => repositories.uploads.list(),
-    refetchInterval: (state) => {
-      const uploads = state.state.data;
-      return uploads?.some(
-        (item) =>
-          item.status === 'COMPLETED' &&
-          !['READY_FOR_REVIEW', 'FAILED'].includes(item.processingStatus),
-      )
-        ? 5_000
-        : false;
-    },
+    subscribed: focused,
+    refetchInterval: (state) => uploadsPollInterval(state.state.data),
     refetchIntervalInBackground: false,
   });
+}
+
+/**
+ * How long a video may keep the uploads list polling after it was sent.
+ *
+ * Cloudflare's encode and the AI take minutes, not hours. Past this a video
+ * still "processing" is stuck, not slow, and asking every five seconds will
+ * not move it -- it only kept a phone's radio awake for good.
+ */
+export const UPLOAD_POLL_WINDOW_MS = 2 * 60 * 60_000;
+
+/** Five seconds while a recent video is still being processed; otherwise none. */
+export function uploadsPollInterval(
+  uploads: readonly Pick<UploadItem, 'status' | 'processingStatus' | 'createdAt'>[] | undefined,
+  now = Date.now(),
+): number | false {
+  return uploads?.some(
+    (item) =>
+      item.status === 'COMPLETED' &&
+      !['READY_FOR_REVIEW', 'FAILED'].includes(item.processingStatus) &&
+      now - Date.parse(item.createdAt) < UPLOAD_POLL_WINDOW_MS,
+  )
+    ? 5_000
+    : false;
 }
 /** Defects only — the per-room narrative summary is a separate concern. */
 export function useFindings(inspectionId?: string, pollWhileProcessing = false) {

@@ -25,3 +25,16 @@ export const demoStorage: StateStorage = {
     if (isValidSecureStoreKey(name)) await SecureStore.deleteItemAsync(name);
   },
 };
+
+/**
+ * The same store, written before the call returns.
+ *
+ * For the moments an `await` is too late: a fatal error, where the default
+ * handler ends the process straight after ours runs, and the breadcrumb that
+ * must already be on disk when the system ends it. Small values only -- it
+ * blocks the JS thread for the write.
+ */
+export const demoStorageNow = {
+  getItem: (name: string): string | null => SQLiteStorage.getItemSync(name),
+  setItem: (name: string, value: string): void => SQLiteStorage.setItemSync(name, value),
+};

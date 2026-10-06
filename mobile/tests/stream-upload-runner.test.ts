@@ -254,3 +254,21 @@ describe('upload URL freshness', () => {
     expect(uploadUrlUsable({ uploadUrl: undefined, uploadUrlExpiresAt: undefined })).toBe(false);
   });
 });
+
+describe('a take starting mid-upload (2026-10-06)', () => {
+  it('waits, rather than failing: no attempt spent and nothing to show the technician', async () => {
+    mockUpload.mockRejectedValue(new TusUploadError('Upload was paused.', 'retryable'));
+    const { promise, options } = run({ shouldPause: () => true });
+    await expect(promise).resolves.toEqual({ kind: 'paused' });
+    // The pause reaches the chunk loop, where it is checked between chunks.
+    expect(mockUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ shouldPause: options.shouldPause }),
+    );
+  });
+
+  it('is an ordinary failure once the camera has stopped', async () => {
+    mockUpload.mockRejectedValue(new TusUploadError('Chunk rejected (500).', 'retryable', 500));
+    const { promise } = run({ shouldPause: () => false });
+    await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: true });
+  });
+});

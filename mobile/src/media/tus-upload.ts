@@ -98,6 +98,14 @@ export async function uploadFileInChunks(options: {
   localUri: string;
   chunkBytes?: number;
   signal?: AbortSignal;
+  /**
+   * Asked before every chunk; true stops the upload at that boundary.
+   *
+   * A boundary rather than an abort, because the chunk already in flight costs
+   * the phone nothing more to finish -- the bytes are in native hands -- and
+   * cutting it off would only mean sending it again.
+   */
+  shouldPause?: () => boolean;
   onProgress?: (progress: TusProgress) => void;
 }): Promise<number> {
   const file = new File(options.localUri);
@@ -116,7 +124,7 @@ export async function uploadFileInChunks(options: {
   const handle = file.open();
   try {
     while (offset < totalBytes) {
-      if (options.signal?.aborted)
+      if (options.signal?.aborted || options.shouldPause?.())
         throw new TusUploadError('Upload was paused.', 'retryable');
 
       handle.offset = offset;
@@ -184,6 +192,40 @@ export async function uploadFileInChunks(options: {
 export const OFFSET_TIMEOUT_MS = 60_000;
 export const CHUNK_TIMEOUT_MS = 6 * 60_000;
 
+type BinaryFetch = (
+  url: string,
+  init: RequestInit,
+) => Promise<Pick<Response, 'ok' | 'status' | 'headers'>>;
+
+let binaryFetch: Promise<BinaryFetch> | null = null;
+
+/**
+ * Expo's fetch, which hands a chunk's bytes to native code as they are.
+ *
+ * React Native's own `fetch` cannot send binary. It turns every `Uint8Array`
+ * body into a base64 string on the JavaScript thread first
+ * (`convertRequestBody` → `binaryToBase64`), and native code decodes it back.
+ * For a 10 MiB chunk that is millions of small strings joined into one of
+ * ~14 MB, with the JS thread pinned for seconds -- and it ran while the next
+ * room was being filmed. On an iPhone in Low Power Mode, with the camera's
+ * buffers resident, that was the freeze and then the close the technicians
+ * reported (2026-10-06).
+ *
+ * Loaded on first use, inside a `catch`, rather than imported at the top.
+ * `ExpoFetchModule` is the `expo` package's own native module and is linked
+ * into every SDK 54 binary, so this should never fall back -- but if it ever
+ * did, the cost must be a slower upload, not an app that cannot start. The
+ * specifier stays a literal: Metro refuses any other (see `loadKeepAwake`).
+ */
+function chunkFetch(): Promise<BinaryFetch> {
+  binaryFetch ??= import('expo/fetch')
+    .then(({ fetch: expoFetch }): BinaryFetch => (url, init) =>
+      expoFetch(url, { ...init, credentials: 'omit' } as Parameters<typeof expoFetch>[1]),
+    )
+    .catch((): BinaryFetch => (url, init) => fetch(url, init));
+  return binaryFetch;
+}
+
 async function request(
   url: string,
   init: RequestInit & { headers?: Record<string, string> },
@@ -200,7 +242,8 @@ async function request(
   if (init.signal?.aborted) controller.abort();
   init.signal?.addEventListener?.('abort', pause);
   try {
-    return await fetch(url, {
+    const send = await chunkFetch();
+    return await send(url, {
       ...init,
       signal: controller.signal,
       headers: { 'Tus-Resumable': TUS_VERSION, ...(init.headers ?? {}) },
@@ -212,8 +255,10 @@ async function request(
         'retryable',
       );
     // No signal, a dropped connection, or a paused upload all land here. All are
-    // worth another attempt once the phone has a network again.
-    if ((error as { name?: string }).name === 'AbortError')
+    // worth another attempt once the phone has a network again. Read from the
+    // signal, not the error's name: Expo's fetch reports a cancelled request
+    // as a plain `FetchError`, never an `AbortError`.
+    if (controller.signal.aborted || (error as { name?: string }).name === 'AbortError')
       throw new TusUploadError('Upload was paused.', 'retryable');
     // Names the host and the underlying reason. "Could not reach Cloudflare"
     // was true but undiagnosable: it did not distinguish a phone with no

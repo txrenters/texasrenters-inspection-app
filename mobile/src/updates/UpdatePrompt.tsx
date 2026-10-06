@@ -7,6 +7,7 @@ import { BottomSheet } from '../components/BottomSheet';
 import { Button } from '../components/ui';
 import { announce } from '../lib/announce';
 import { reportError } from '../lib/error-log';
+import { noteDeliberateRestart } from '../lib/session-breadcrumb';
 import { shouldPromptForUpdate } from './update-prompt-rules';
 
 /**
@@ -79,6 +80,7 @@ export function UpdatePrompt() {
     setRestarting(true);
     setError(null);
     try {
+      noteDeliberateRestart();
       await Updates.reloadAsync();
     } catch (cause) {
       // Only reached if the reload itself fails; a successful one never

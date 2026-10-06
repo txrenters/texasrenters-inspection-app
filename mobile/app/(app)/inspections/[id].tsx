@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
@@ -107,7 +108,11 @@ export default function JobScreen() {
   const [endError, setEndError] = useState<string | null>(null);
   // Up here with the other hooks, above the early return below.
   const running = inspection.data?.status === 'IN_PROGRESS' && !inspection.data.submittedAt;
-  const now = useSecondNow(running);
+  // Ticks only while this screen is in front. It stays mounted under every
+  // area and camera screen of the visit, and re-rendered itself once a second
+  // behind them for the whole of it.
+  const focused = useIsFocused();
+  const now = useSecondNow(running && focused);
   // Asked for while the technician reads the list, so the filters' camera
   // opens without waiting on it (the office, 2026-09-29).
   useFiltersArea(

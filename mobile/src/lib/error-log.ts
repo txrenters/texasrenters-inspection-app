@@ -1,4 +1,4 @@
-import { demoStorage } from '../storage/demo-storage';
+import { demoStorage, demoStorageNow } from '../storage/demo-storage';
 
 /**
  * A small, persistent record of recent crashes and unhandled errors.
@@ -129,6 +129,42 @@ export async function reportError(
   await persist([entry, ...entries].slice(0, MAX_ENTRIES));
 }
 
+/**
+ * Records a fatal error before the call returns.
+ *
+ * `reportError` awaits its write, and a fatal error is followed at once by the
+ * default handler, which ends the process in a release build -- so the write
+ * never finished and the one entry worth having was the one always lost. The
+ * Error log has no fatal from a technician's phone for exactly this reason,
+ * not because there were none. Sent to the server on the next launch, by the
+ * reporter's startup flush.
+ */
+export function reportFatalNow(error: unknown, source = 'uncaught'): void {
+  try {
+    const entry = buildEntry({
+      error,
+      source,
+      fatal: true,
+      at: new Date().toISOString(),
+      id: `${Date.now().toString(36)}-${(sequence += 1)}`,
+    });
+    const entries = (cache ?? readNow()).filter((logged) => logged.id !== entry.id);
+    cache = [entry, ...entries].slice(0, MAX_ENTRIES);
+    demoStorageNow.setItem(STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // Dying already; a failed note about it must not be what is reported.
+  }
+}
+
+function readNow(): LoggedError[] {
+  try {
+    const raw = demoStorageNow.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as LoggedError[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function readErrorLog(): Promise<LoggedError[]> {
   return [...(await load())];
 }
@@ -166,7 +202,8 @@ export function installGlobalErrorHandlers(): void {
   if (errorUtils?.setGlobalHandler) {
     const previous = errorUtils.getGlobalHandler?.();
     errorUtils.setGlobalHandler((error, isFatal) => {
-      void reportError(error, { source: 'uncaught', fatal: Boolean(isFatal) });
+      if (isFatal) reportFatalNow(error);
+      else void reportError(error, { source: 'uncaught' });
       // Chain to the default handler so the red box still appears in dev and
       // the platform still records the crash.
       previous?.(error, isFatal);

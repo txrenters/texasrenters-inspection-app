@@ -301,3 +301,55 @@ describe('a request that never answers (2026-10-02)', () => {
     await outcome;
   });
 });
+
+describe('waiting for a take (2026-10-06)', () => {
+  it('stops at the next chunk boundary once a recording starts', async () => {
+    // The chunk already in flight finishes -- its bytes are in native hands and
+    // cutting it off would only mean sending it again -- and nothing follows it
+    // while the camera records.
+    mockFile.size = 3 * CHUNK_ALIGNMENT;
+    mockFile.open.mockReturnValue(handleOver(mockFile.size));
+    let recording = false;
+    let offset = 0;
+    const sentAt: number[] = [];
+    global.fetch = jest.fn().mockImplementation((_url: string, init: RequestInit) => {
+      if (init.method === 'HEAD') return Promise.resolve(respond(200, { 'upload-offset': '0' }));
+      sentAt.push(offset);
+      offset += CHUNK_ALIGNMENT;
+      recording = true;
+      return Promise.resolve(respond(204, { 'upload-offset': String(offset) }));
+    }) as never;
+
+    await expect(
+      uploadFileInChunks({
+        uploadUrl: 'https://upload/x',
+        localUri: 'file:///a.mp4',
+        chunkBytes: CHUNK_ALIGNMENT,
+        shouldPause: () => recording,
+      }),
+    ).rejects.toMatchObject({ kind: 'retryable', message: 'Upload was paused.' });
+    expect(sentAt).toEqual([0]);
+  });
+
+  it('reads a cancelled chunk as paused when fetch does not call it an AbortError', async () => {
+    // Expo's fetch, which now sends the chunks, rejects a cancelled request
+    // with a plain `FetchError`. Judged by the name alone, a pause read as
+    // "could not reach upload.cloudflarestream.com".
+    mockFile.size = CHUNK_ALIGNMENT;
+    mockFile.open.mockReturnValue(handleOver(mockFile.size));
+    const pause = new AbortController();
+    global.fetch = jest.fn().mockImplementation((_url: string, init: RequestInit) => {
+      if (init.method === 'HEAD') return Promise.resolve(respond(200, { 'upload-offset': '0' }));
+      setTimeout(() => pause.abort(), 0);
+      return new Promise((_resolve, reject) =>
+        init.signal?.addEventListener('abort', () =>
+          reject(new Error('fetch failed: The operation was cancelled.')),
+        ),
+      );
+    }) as never;
+
+    await expect(
+      uploadFileInChunks({ uploadUrl: 'https://upload/x', localUri: 'file:///a.mp4', signal: pause.signal }),
+    ).rejects.toMatchObject({ kind: 'retryable', message: 'Upload was paused.' });
+  });
+});

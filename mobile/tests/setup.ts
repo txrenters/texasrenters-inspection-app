@@ -22,10 +22,20 @@ const mockSQLiteStorage = {
   removeItem: jest.fn(async (key: string) => {
     mockSQLiteValues.delete(key);
   }),
+  getItemSync: jest.fn((key: string) => mockSQLiteValues.get(key) ?? null),
+  setItemSync: jest.fn((key: string, value: string) => {
+    mockSQLiteValues.set(key, value);
+  }),
 };
 jest.mock('expo-sqlite/kv-store', () => ({
   __esModule: true,
   AsyncStorage: mockSQLiteStorage,
   Storage: mockSQLiteStorage,
   default: mockSQLiteStorage,
+}));
+
+// Expo's fetch is a native module. The uploader uses it for binary chunks;
+// here it is the global fetch, so a test's `global.fetch = jest.fn()` drives it.
+jest.mock('expo/fetch', () => ({
+  fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
 }));
