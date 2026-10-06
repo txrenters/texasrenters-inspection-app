@@ -3,6 +3,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { queryKeys } from '../features/queries';
+import { isCaptureActive, subscribeToCaptureActivity } from '../media/capture-activity';
 import { snapshotsAwaitingUpload, uploadSnapshotNow } from '../media/snapshot-upload';
 import { useDemoStore } from '../stores/demo.store';
 import { verifyQueries } from '../features/state-consistency';
@@ -95,14 +96,16 @@ export function UploadQueueRunner() {
        * either way.
        */
       for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
+        // Photographs wait for a take to end as the recordings do.
+        if (isCaptureActive()) break;
         const { snapshots, updateSnapshot } = useDemoStore.getState();
         const [due] = snapshotsAwaitingUpload(snapshots ?? []);
         if (!due) break;
         await uploadSnapshotNow(due, { update: updateSnapshot });
         uploaded += 1;
-        // Refresh between photographs for the same reason the recordings do:
-        // the screen shows each one land instead of jumping at the end.
-        client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
+        // No uploads-list refresh here. That list is the recordings' alone --
+        // no photograph ever appears in it -- so the request it cost after each
+        // of an occupied visit's thirty photographs changed nothing on screen.
       }
 
       if (!uploaded) return;
@@ -133,9 +136,15 @@ export function UploadQueueRunner() {
     const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
       if (state === 'active') void flush();
     });
+    // The moment a take ends, not up to four seconds later: the technician is
+    // walking to the next room, and that walk is the upload's window.
+    const unsubscribeCapture = subscribeToCaptureActivity((recording) => {
+      if (!recording) void flush();
+    });
     return () => {
       clearInterval(timer);
       subscription.remove();
+      unsubscribeCapture();
     };
   }, [flush]);
 

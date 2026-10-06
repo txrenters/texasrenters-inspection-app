@@ -1,5 +1,10 @@
 import Constants from 'expo-constants';
-import { dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
+import {
+  dehydrate,
+  hydrate,
+  type QueryCacheNotifyEvent,
+  type QueryClient,
+} from '@tanstack/react-query';
 
 import { signedInUserId } from '../auth/session';
 import { demoStorage } from './demo-storage';
@@ -198,6 +203,35 @@ export async function restoreQueryCache(client: QueryClient): Promise<boolean> {
 }
 
 /**
+ * The data each query last had when it was considered for a write.
+ *
+ * A WeakMap so a query the cache garbage-collects takes its entry with it.
+ */
+const lastSeenData = new WeakMap<object, unknown>();
+
+/**
+ * Whether a cache event changes what a write would put on disk.
+ *
+ * Every event used to schedule a write of the whole cache -- an observer
+ * mounting, a fetch starting, and every poll that came back with the same
+ * answer. With a poll every five to sixty seconds on the screens under the
+ * camera, the phone serialised its entire cache to SQLite every few seconds of
+ * a move-out for nothing. Now only new data, a reset, or a removal does; the
+ * unchanged poll keeps its data's identity (see `reconcileMobileState`) and is
+ * skipped here.
+ */
+export function changesWhatIsStored(event: QueryCacheNotifyEvent): boolean {
+  if (event.type === 'removed') return true;
+  if (event.type !== 'updated') return false;
+  if (event.action.type === 'setState') return true;
+  if (event.action.type !== 'success') return false;
+  const data = event.query.state.data;
+  if (lastSeenData.has(event.query) && lastSeenData.get(event.query) === data) return false;
+  lastSeenData.set(event.query, data);
+  return true;
+}
+
+/**
  * Mirrors the live query cache to disk so the next launch has something to show.
  *
  * Returns an unsubscribe function.
@@ -228,8 +262,8 @@ export function persistQueryCache(client: QueryClient): () => void {
     await demoStorage.setItem(key, JSON.stringify(payload));
   };
 
-  const unsubscribe = client.getQueryCache().subscribe(() => {
-    if (stopped) return;
+  const unsubscribe = client.getQueryCache().subscribe((event) => {
+    if (stopped || !changesWhatIsStored(event)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void write(), WRITE_DEBOUNCE_MS);
   });

@@ -11,3 +11,11 @@ export const demoStorage: StateStorage = {
     memory.delete(name);
   },
 };
+
+/** Synchronous access to the same values; see the native module. */
+export const demoStorageNow = {
+  getItem: (name: string): string | null => memory.get(name) ?? null,
+  setItem: (name: string, value: string): void => {
+    memory.set(name, value);
+  },
+};

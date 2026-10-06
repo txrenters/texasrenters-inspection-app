@@ -37,6 +37,7 @@ import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { reportError } from '@/src/lib/error-log';
+import { useKeepAwakeWhile } from '@/src/lib/keep-awake';
 import { goBack } from '@/src/lib/navigation';
 import { withFiltersPhoto, withoutPhoto, withServicePhoto } from '@/src/utils/job-tasks';
 import { HomeButton } from '@/src/components/HomeButton';
@@ -66,6 +67,7 @@ import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
 import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
 import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
+import { setCaptureActive } from '@/src/media/capture-activity';
 import { frameClock, shutterClock } from '@/src/media/capture-clock';
 import { downscaleForUpload } from '@/src/media/downscale';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
@@ -515,6 +517,22 @@ export default function RoomCameraScreen() {
       camera?.stopRecording();
     };
   }, [camera]);
+
+  /**
+   * For the length of a take: the screen stays on, and uploads wait.
+   *
+   * Both for the iPhones that froze and closed during move-outs (2026-10-06).
+   * Low Power Mode locks the screen after thirty seconds of no touch, which a
+   * slow walkthrough never gives; and the previous room's video uploading
+   * alongside the camera was the load that tipped them over. `recording` is
+   * still true while the marked stills are cut after a stop, so that work is
+   * covered too.
+   */
+  useKeepAwakeWhile(recording, 'texasrenters-recording');
+  useEffect(() => {
+    setCaptureActive(recording);
+    return () => setCaptureActive(false);
+  }, [recording]);
 
   /**
    * Android's hardware back asks the same question the arrow does.

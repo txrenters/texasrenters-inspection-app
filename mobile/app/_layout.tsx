@@ -6,6 +6,7 @@ import { getSession } from '@/src/auth/session';
 import { createErrorBoundary } from '@/src/components/AppErrorBoundary';
 import { installGlobalErrorHandlers } from '@/src/lib/error-log';
 import { startErrorReporting } from '@/src/lib/error-reporter';
+import { installSessionBreadcrumb } from '@/src/lib/session-breadcrumb';
 import { ThemeProvider } from '@/src/providers/ThemeProvider';
 import { TexasRentersProviders } from '@/src/providers/TexasRentersProviders';
 import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
@@ -13,6 +14,10 @@ import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
 // Installed at module scope so errors thrown during the very first render —
 // before any effect has run — are still captured.
 installGlobalErrorHandlers();
+
+// Reports a previous session the system ended mid-take or mid-upload, which no
+// handler above can see, then starts keeping this session's breadcrumb.
+installSessionBreadcrumb();
 
 // Ships the log those handlers write. Started here rather than inside `(app)`
 // for the same reason the update prompt is: a crash on the login screen is

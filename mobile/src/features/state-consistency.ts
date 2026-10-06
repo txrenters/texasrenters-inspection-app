@@ -1,6 +1,6 @@
 import type { EntitySyncMetadata, SyncState } from '@texasrenters/shared';
 import { entityRevision, isOlderRevision, isRevisionedEntity } from '@texasrenters/shared';
-import type { QueryClient, QueryKey } from '@tanstack/react-query';
+import { replaceEqualDeep, type QueryClient, type QueryKey } from '@tanstack/react-query';
 
 const VERIFY_GUARD_MS = 30_000;
 const DELETE_TOMBSTONE_MS = 5 * 60_000;
@@ -79,8 +79,18 @@ export function failIntent(entityId: string, id: string) {
   return true;
 }
 
+/**
+ * The `structuralSharing` of every query: guards first, then sharing.
+ *
+ * `reconcile` builds every object and array afresh, so on its own it handed
+ * back a new `data` on every fetch -- a poll that changed nothing still
+ * re-rendered every screen reading it and rewrote the whole query cache to
+ * disk. `replaceEqualDeep` is what react-query does when this option is left
+ * alone: whatever is unchanged keeps its identity, so an unchanged poll is a
+ * no-op again.
+ */
 export function reconcileMobileState<T>(previous: unknown, incoming: T): T {
-  return reconcile(previous, incoming) as T;
+  return replaceEqualDeep(previous, reconcile(previous, incoming)) as T;
 }
 
 export function patchEntity(

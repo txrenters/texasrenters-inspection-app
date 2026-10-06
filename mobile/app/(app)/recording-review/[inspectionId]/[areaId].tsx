@@ -25,6 +25,21 @@ const ADDITIONAL_CATEGORIES: readonly {
   { value: 'OTHER', label: 'Other' },
 ];
 
+/**
+ * Back to the area screen the camera was opened from.
+ *
+ * `dismissTo`, never `replace`. This screen took the camera's place, so the
+ * area that opened it is directly underneath; replacing this screen with
+ * another copy of an area left the first one mounted below it. Room after room
+ * of a move-out stacked up that way -- eighteen area screens by the last room,
+ * each holding its photographs and polling the server every minute behind the
+ * camera, on a phone already short of memory (2026-10-06). An area missing from
+ * the stack is opened in this screen's place, as `replace` did.
+ */
+function backToArea(areaId: string) {
+  router.dismissTo(`/areas/${areaId}`);
+}
+
 export default function RecordingReviewScreen() {
   const theme = useThemeColors();
   const {
@@ -93,7 +108,7 @@ export default function RecordingReviewScreen() {
           accessibilityLabel="Back to room"
           accessibilityRole="button"
           className="mt-5 min-h-12 justify-center rounded-xl bg-primary px-6 py-3"
-          onPress={() => router.replace(`/areas/${areaId}`)}
+          onPress={() => backToArea(areaId)}
         >
           <Text className="font-bold text-primary-foreground">Back to room</Text>
         </Pressable>
@@ -136,11 +151,14 @@ export default function RecordingReviewScreen() {
       {
         onSuccess: () => {
           if (isAdditional) {
-            router.replace(`/areas/${areaId}`);
+            backToArea(areaId);
           } else if (nextRoom) {
+            // Back to the area that opened the camera, and that area becomes
+            // the next one: one area screen in the stack, never one per room.
+            backToArea(areaId);
             router.replace(`/areas/${nextRoom.id}`);
           } else {
-            router.replace(`/inspections/${inspectionId}`);
+            router.dismissTo(`/inspections/${inspectionId}`);
           }
         },
       },
@@ -360,7 +378,7 @@ export default function RecordingReviewScreen() {
             accessibilityState={{ busy: discarding, disabled: discarding }}
             className="min-h-12 flex-1 items-center justify-center rounded-xl bg-destructive/10 py-3"
             disabled={discarding}
-            onPress={() => void discardTake(() => router.replace(`/areas/${areaId}`))}
+            onPress={() => void discardTake(() => backToArea(areaId))}
           >
             <Text className="font-semibold text-destructive">
               {discarding ? 'Discarding…' : 'Discard'}

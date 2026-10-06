@@ -65,6 +65,8 @@ import {
 } from './offline-writes';
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
+import { noteUploading } from '../../lib/session-breadcrumb';
+import { isCaptureActive } from '../../media/capture-activity';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { roomRecordingStillUploading } from '../../media/room-recording-upload';
 import {
@@ -1691,10 +1693,36 @@ export class ApiUploadRepository implements UploadRepository {
       const remoteRecords = z
         .array(uploadSchema)
         .parse(await getJson('/api/v1/technician/uploads'));
+      /**
+       * A recording the server now holds is the server's to describe.
+       *
+       * A walkthrough sent to Cloudflare stays in this queue as COMPLETED, still
+       * "processing", and nothing ever moved it on: its id is the phone's, and
+       * the server lists the same video under its own (`serverVideoId`). So the
+       * list showed it twice, the copy here said "processing" for good, and
+       * `useUploads` polled every five seconds for as long as the app was open
+       * -- on every phone that had ever sent a video (2026-10-06). Handed over
+       * once the server says the bytes arrived, which is Cloudflare's webhook:
+       * until then this copy is the only one that knows the upload finished.
+       */
+      const arrived = new Set(
+        remoteRecords.filter((remote) => remote.status === 'COMPLETED').map((remote) => remote.mediaId),
+      );
+      const handedOver = localRecords.filter(
+        (local) => local.status === 'COMPLETED' && local.serverVideoId && arrived.has(local.serverVideoId),
+      );
+      if (handedOver.length) {
+        const { removeUpload } = useDemoStore.getState();
+        handedOver.forEach((local) => removeUpload(local.id));
+      }
+      const kept = localRecords.filter((local) => !handedOver.includes(local));
       return [
-        ...localRecords,
+        ...kept,
         ...remoteRecords.filter(
-          (remote) => !localRecords.some((local) => local.mediaId === remote.mediaId),
+          (remote) =>
+            !kept.some(
+              (local) => local.mediaId === remote.mediaId || local.serverVideoId === remote.mediaId,
+            ),
         ),
       ];
     } catch (error) {
@@ -1775,7 +1803,8 @@ export class ApiUploadRepository implements UploadRepository {
   // this independently of the Uploads screen, so field work can continue while
   // transfers happen and interrupted uploads recover when the app resumes.
   tick = async (): Promise<boolean> => {
-    if (uploadInFlight) return false;
+    // Nothing goes up while a room is being filmed; see `capture-activity`.
+    if (uploadInFlight || isCaptureActive()) return false;
     const now = Date.now();
     const pending = localUploads().find(
       (item) =>
@@ -1785,6 +1814,7 @@ export class ApiUploadRepository implements UploadRepository {
     );
     if (!pending) return false;
     uploadInFlight = true;
+    noteUploading(true);
     const store = useDemoStore.getState();
     try {
       const media = store.media.find((item) => item.id === pending.mediaId);
@@ -1837,6 +1867,7 @@ export class ApiUploadRepository implements UploadRepository {
         mimeType: 'video/mp4',
         filename: `${pending.roomName || 'recording'}.mp4`.replace(/\s+/g, '-').toLowerCase(),
         signal: undefined,
+        shouldPause: isCaptureActive,
         createSession: async () =>
           createStreamUploadSession({
             baseUrl,
@@ -1868,6 +1899,12 @@ export class ApiUploadRepository implements UploadRepository {
           lastError: undefined,
         });
         return true;
+      }
+      if (streamOutcome.kind === 'paused') {
+        // Waiting, not failing: no attempt spent, no backoff, no error shown.
+        // False, so the runner's drain stops here until the take ends.
+        store.updateUpload(pending.id, { status: 'PENDING', lastError: undefined });
+        return false;
       }
       if (streamOutcome.kind === 'failed') {
         store.updateUpload(pending.id, {
@@ -1994,6 +2031,7 @@ export class ApiUploadRepository implements UploadRepository {
       return true;
     } finally {
       uploadInFlight = false;
+      noteUploading(false);
     }
   };
 

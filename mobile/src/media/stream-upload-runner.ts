@@ -59,6 +59,12 @@ export type StreamUploadOutcome =
   | { kind: 'uploaded'; videoId: string; streamUid: string }
   /** No Stream credentials on this deployment — the caller keeps its old path. */
   | { kind: 'unavailable' }
+  /**
+   * Stopped between chunks because the camera started recording. Not a
+   * failure: nothing went wrong, and it carries on from Cloudflare's offset
+   * once the take ends.
+   */
+  | { kind: 'paused' }
   | { kind: 'failed'; retryable: boolean; message: string };
 
 /**
@@ -92,6 +98,8 @@ export async function runStreamUpload(options: {
   filename: string;
   unstableConnection?: boolean;
   signal?: AbortSignal;
+  /** True while the upload must wait; checked between chunks. See `capture-activity`. */
+  shouldPause?: () => boolean;
   /** Asks the backend for a session; resolves null when Stream is unconfigured. */
   createSession: () => Promise<StreamUploadSession | null>;
   /** Persists resume state after every confirmed chunk. */
@@ -145,6 +153,7 @@ export async function runStreamUpload(options: {
       localUri: options.localUri,
       chunkBytes: chunkSizeFor({ unstable: Boolean(options.unstableConnection) }),
       signal: options.signal,
+      shouldPause: options.shouldPause,
       onProgress: ({ uploadedBytes, totalBytes }) => {
         // Written after every confirmed chunk, because the interesting failures
         // — a force-quit, the OS reclaiming the app — leave no chance to save
@@ -157,6 +166,8 @@ export async function runStreamUpload(options: {
       },
     });
   } catch (error) {
+    // Asked to wait, and whatever the last chunk did, the next one waits too.
+    if (options.shouldPause?.()) return { kind: 'paused' };
     if (error instanceof TusUploadError) {
       // A dead session must not be retried against the same URL. Clearing it
       // makes the next attempt ask for a replacement while keeping the queue
