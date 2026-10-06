@@ -101,9 +101,41 @@ export class InspectionListQueryDto extends PaginationDto {
   @IsOptional() @IsUUID() technicianId?: string;
   @IsOptional() @IsEnum(InspectionType) inspectionType?: InspectionType;
   @IsOptional() @IsIn(['ASSIGNED', 'UNASSIGNED']) assignmentStatus?: string;
+  /**
+   * Where the visit stands, in the office's words (`VisitState`): Scheduled,
+   * In progress, Done, Could not get in, Follow-up, Cancelled. A raw status is
+   * still accepted for links written before. Until 2026-10-07 the filter
+   * offered six of the ten statuses, and its "Completed" left out the submitted
+   * visits the office counts as done.
+   */
   @IsOptional()
-  @IsIn(['SCHEDULED', 'IN_PROGRESS', 'PROCESSING', 'REVIEW_REQUIRED', 'COMPLETED', 'CANCELLED'])
+  @IsIn([
+    'SCHEDULED',
+    'IN_PROGRESS',
+    'DONE',
+    'COULD_NOT_GET_IN',
+    'FOLLOW_UP',
+    'CANCELLED',
+    'TECHNICIAN_SUBMITTED',
+    'PROCESSING',
+    'REVIEW_REQUIRED',
+    'UNDER_REVIEW',
+    'TBD',
+    'FOLLOW_UP_REQUIRED',
+    'COMPLETED',
+  ])
   status?: string;
+  /**
+   * One day, `YYYY-MM-DD`: the visits scheduled on it.
+   *
+   * `scheduledAt` is a date, stored as that day's UTC midnight, so a day is an
+   * equality -- not a range of Texas instants. The list used to send the Texas
+   * day's bounds, and the end of that day is the next morning in UTC: cut to a
+   * date against the column, it took the next day's visits in as well (the
+   * office, 2026-10-07: "if I search for a property or a schedule ... it will
+   * not show sometimes").
+   */
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) scheduledOn?: string;
   @IsOptional() @IsDateString() scheduledFrom?: string;
   @IsOptional() @IsDateString() scheduledTo?: string;
   @IsOptional() @IsIn(['true', 'false']) unassignedOnly?: string;

@@ -48,6 +48,7 @@ import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
 import { DONE_INSPECTION_STATUSES, isDoneInspectionStatus } from '../common/inspection-done';
+import { inspectionSearchWhere, inspectionStatusWhere } from './inspection-list-where';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import {
@@ -147,6 +148,11 @@ const ACTIVE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.TBD,
   InspectionStatus.FOLLOW_UP_REQUIRED,
 ];
+
+/** Still to happen -- a visit somebody has to be sent to (`isUpcomingVisit`). */
+const UPCOMING_INSPECTION_STATUSES: InspectionStatus[] = ACTIVE_INSPECTION_STATUSES.filter(
+  (status) => !DONE_INSPECTION_STATUSES.includes(status),
+);
 
 // An inspection can no longer transition once finalized or cancelled.
 /**
@@ -1490,6 +1496,13 @@ export class AdminService {
       ...(query.assignmentStatus === 'UNASSIGNED' || query.unassignedOnly === 'true'
         ? [{ assignments: { none: { isCurrent: true } } }]
         : []),
+      /**
+       * "Unassigned" on the list and the map means still waiting for somebody:
+       * a visit to come, nobody on it -- the dashboard's count, and its "Assign
+       * now" link. A cancelled or done visit needs nobody, and the list's
+       * "Unassigned only" used to show them too (2026-10-07).
+       */
+      ...(query.unassignedOnly === 'true' ? [{ status: { in: UPCOMING_INSPECTION_STATUSES } }] : []),
       // The quarter asked for, decided the same way `visitQuarter` decides the
       // tag on each row: by the plan first, then the programme title, and only
       // then by the day. A plan that starts fifteen days early puts its first
@@ -1537,38 +1550,40 @@ export class AdminService {
           ]
         : []),
     ];
+    /**
+     * Every narrowing as one more AND, so no two can overwrite each other:
+     * the visit state "Done" and the search are each an `OR` of their own.
+     */
+    const narrowing: Prisma.InspectionWhereInput[] = [
+      ...assignmentFilters,
+      ...(query.status ? [inspectionStatusWhere(query.status)] : []),
+      // The day itself: `scheduledAt` is a date, held as its UTC midnight.
+      ...(query.scheduledOn ? [{ scheduledAt: new Date(`${query.scheduledOn}T00:00:00.000Z`) }] : []),
+      ...(query.scheduledFrom || query.scheduledTo
+        ? [
+            {
+              scheduledAt: {
+                gte: query.scheduledFrom ? new Date(query.scheduledFrom) : undefined,
+                lte: query.scheduledTo ? new Date(query.scheduledTo) : undefined,
+              },
+            },
+          ]
+        : []),
+      ...inspectionSearchWhere(query.search),
+    ];
     const where: Prisma.InspectionWhereInput = {
       organizationId: user.organizationId,
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.portfolioId ? { propertywareBuilding: { portfolioId: query.portfolioId } } : {}),
-      ...(query.status ? { status: query.status as InspectionStatus } : {}),
       ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
-      ...(assignmentFilters.length ? { AND: assignmentFilters } : {}),
-      ...(query.scheduledFrom || query.scheduledTo
-        ? {
-            scheduledAt: {
-              gte: query.scheduledFrom ? new Date(query.scheduledFrom) : undefined,
-              lte: query.scheduledTo ? new Date(query.scheduledTo) : undefined,
-            },
-          }
-        : {}),
-      ...(query.search
-        ? {
-            OR: [
-              { propertywareBuilding: { name: { contains: query.search, mode: 'insensitive' } } },
-              {
-                propertywareBuilding: {
-                  addressLine1: { contains: query.search, mode: 'insensitive' },
-                },
-              },
-              { propertywareUnit: { name: { contains: query.search, mode: 'insensitive' } } },
-            ],
-          }
-        : {}),
+      ...(narrowing.length ? { AND: narrowing } : {}),
     };
     const select = {
       id: true,
       status: true,
+      // With the status, where the visit stands in the office's words: a done
+      // visit whose reason says the technician could not get in reads as that.
+      completionBlockedReason: true,
       inspectionType: true,
       baselineInspectionId: true,
       baselineInspection: {

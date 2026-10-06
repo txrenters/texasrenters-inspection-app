@@ -84,6 +84,7 @@ export * from './quarter-plan.js';
 export * from './tbp-visit-plan.js';
 export * from './time-segments.js';
 export * from './route-plan.js';
+export * from './visit-state.js';
 export * from './zone-rotation.js';
 export * from './live-route.js';
 export * from './navigation.js';

@@ -8,6 +8,8 @@ import {
   REPORTABLE_VISIT_SERVICES,
   servicesToReschedule,
   VISIT_SERVICE_LABEL,
+  visitStateLabel,
+  visitStateOf,
   type AdminInspection,
   type VisitDetails,
   type VisitFilterOutcome,
@@ -293,15 +295,22 @@ function visitState(inspection: AdminInspection): {
   variant: 'secondary' | 'info' | 'success' | 'warning';
   reason?: string;
 } {
-  if (inspection.status === 'CANCELLED') return { label: 'Cancelled', variant: 'secondary' };
-  const blocked = inspection.completionBlockedReason?.trim();
-  if (isFinishedStatus(inspection.status))
-    return blocked?.startsWith('Could not get in')
-      ? { label: 'Could not get in', variant: 'warning', reason: blocked }
-      : { label: 'Done', variant: 'success' };
-  if (inspection.status === 'FOLLOW_UP_REQUIRED') return { label: 'Follow-up required', variant: 'warning' };
-  if (inspection.status === 'IN_PROGRESS') return { label: 'In progress', variant: 'info' };
-  return { label: 'Scheduled', variant: 'secondary' };
+  // The shared rule (`visitStateOf`), so this card and the inspections list
+  // say the same thing about the same visit.
+  const state = visitStateOf(inspection);
+  const label = visitStateLabel(state);
+  switch (state) {
+    case 'DONE':
+      return { label, variant: 'success' };
+    case 'COULD_NOT_GET_IN':
+      return { label, variant: 'warning', reason: inspection.completionBlockedReason?.trim() };
+    case 'FOLLOW_UP':
+      return { label, variant: 'warning' };
+    case 'IN_PROGRESS':
+      return { label, variant: 'info' };
+    default:
+      return { label, variant: 'secondary' };
+  }
 }
 
 /**

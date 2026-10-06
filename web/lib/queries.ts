@@ -94,7 +94,6 @@ import {
 import { useCallback, useEffect, useRef } from 'react';
 
 import { api, apiUpload, type Page, queryString } from './api';
-import { businessDayRange } from './clock';
 import {
   beginEntityOperation,
   cancelAffectedQueries,
@@ -801,19 +800,14 @@ export const useTechnicianRoutes = (ids: readonly string[], date: string, enable
  * assignment made anywhere -- including from the map -- refreshes it.
  */
 export const useUnassignedOnDay = (date: string, enabled = true) => {
-  const range = businessDayRange(date);
-  const query = {
-    page: 1,
-    pageSize: 100,
-    unassignedOnly: true,
-    scheduledFrom: range?.from,
-    scheduledTo: range?.to,
-  };
+  // The day itself. `scheduledAt` is a date, so a range of Texas instants
+  // around it reached into the next day's visits as well (2026-10-07).
+  const query = { page: 1, pageSize: 100, unassignedOnly: true, scheduledOn: date };
   return useQuery({
     queryKey: keys.inspections(query),
     queryFn: ({ signal }) =>
       api<Page<AdminInspection>>(`/api/v1/admin/inspections${queryString(query)}`, { signal }),
-    enabled: enabled && Boolean(range),
+    enabled: enabled && /^\d{4}-\d{2}-\d{2}$/.test(date),
   });
 };
 /**

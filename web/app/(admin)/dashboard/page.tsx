@@ -95,7 +95,9 @@ export default function DashboardPage() {
             action={
               data.metrics.unassigned ? (
                 <Button asChild size="sm" variant="outline">
-                  <Link href="/inspections?unassigned=true">Assign now</Link>
+                  {/* Every date: the count is every upcoming visit with
+                      nobody on it, not today's. */}
+                  <Link href="/inspections?tech=unassigned&day=all">Assign now</Link>
                 </Button>
               ) : undefined
             }

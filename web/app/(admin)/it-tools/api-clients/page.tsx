@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { ApiClientDialog } from '@/components/api-client-dialog';
 import { CopyButton } from '@/components/api-reference/copy-button';
 import { PageHeader, SectionHeader } from '@/components/page-header';
+import { useProvidePageSearch } from '@/components/page-search';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import {
@@ -52,6 +53,7 @@ import { useApiClientMutations, useApiClients } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useSearchText } from '@/lib/use-search-text';
 import { useUrlState } from '@/lib/url-state';
+import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 20;
 
@@ -229,6 +231,15 @@ export default function ApiClientsPage() {
     setState({ search, page: 1 }),
   );
   const debouncedSearch = useDebouncedValue(state.search);
+  // In the header, as every list's search is (2026-10-07); this field stays
+  // only where the header has no room.
+  const inHeader = useProvidePageSearch({
+    label: 'Search API clients',
+    placeholder: 'Search API clients…',
+    value: state.search,
+    onChange: (search) => setState({ search, page: 1 }),
+    pending: state.search.trim() !== debouncedSearch.trim(),
+  });
   const clients = useApiClients({ page: state.page, pageSize: PAGE_SIZE, search: debouncedSearch });
   const { createClient, issueKey, revokeClient, revokeKey, updateClient } = useApiClientMutations();
 
@@ -281,7 +292,7 @@ export default function ApiClientsPage() {
 
       <Input
         aria-label="Search API clients"
-        className="mb-4 max-w-sm"
+        className={cn('mb-4 max-w-sm', inHeader && 'sm:hidden')}
         onChange={(event) => setSearchText(event.target.value)}
         placeholder="Search by name"
         type="search"

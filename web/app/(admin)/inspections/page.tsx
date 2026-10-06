@@ -1,17 +1,15 @@
 'use client';
 
+import { isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
 import { CheckCircle2Icon, ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import { DayFilter } from '@/components/day-filter';
 import { InspectionBulkDeleteDialog } from '@/components/inspection-bulk-delete-dialog';
-import {
-  InspectionDeleteDialog,
-  type DeletableInspection,
-} from '@/components/inspection-delete-dialog';
-import { ListToolbar, SelectFilter, enumOptions } from '@/components/list-toolbar';
-import { quarterOf, recentQuarters } from '@/lib/planning';
+import type { DeletableInspection } from '@/components/inspection-delete-dialog';
+import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -20,26 +18,17 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { dayEnd, dayStart, rangeLabel } from '@/lib/date-range';
-import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
-import { useInspections } from '@/lib/queries';
+import { businessToday } from '@/lib/clock';
+import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
+import { quarterOf, recentQuarters } from '@/lib/planning';
+import { useInspections, useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
 
 type InspectionRow = NonNullable<ReturnType<typeof useInspections>['data']>['items'][number];
-
-const STATUSES = [
-  'SCHEDULED',
-  'IN_PROGRESS',
-  'PROCESSING',
-  'REVIEW_REQUIRED',
-  'COMPLETED',
-  'CANCELLED',
-] as const;
 
 /**
  * What each type is *for*, keyed by `InspectionType`.
@@ -87,6 +76,15 @@ const DESCRIPTIONS: Record<string, { title: string; description: string }> = {
   },
 };
 
+/**
+ * The lists where the benefit package means something: its visits are
+ * occupied and HVAC inspections, and the combined list holds both. On a
+ * move-in or move-out list its column read "Enrolled" on nearly every row, and
+ * its two filters answered a question nobody asks there (the office,
+ * 2026-10-07: "lots of buttons and filters that is not really necessary").
+ */
+const PROGRAMME_TYPES = new Set(['', 'OCCUPIED', 'HVAC']);
+
 /** The office's own words, not a shorter paraphrase of them. */
 const TBP_LABEL = {
   ENROLLED: 'Enrolled',
@@ -95,186 +93,190 @@ const TBP_LABEL = {
   MIXED: 'Mixed',
 } as const;
 
-const COLUMNS: Array<Column<InspectionRow>> = [
-  {
-    key: 'property',
-    header: 'Property',
-    primary: true,
-    cell: (row) => row.propertywareBuilding?.name ?? 'Property snapshot',
-  },
-  {
-    key: 'unit',
-    header: 'Unit',
-    hideBelow: 'lg',
-    cell: (row) => row.propertywareUnit?.name ?? 'Entire property',
-  },
-  {
-    key: 'type',
-    header: 'Type',
-    hideBelow: 'md',
-    /**
-     * A move-out with no move-in to compare against cannot produce the report
-     * it exists for — `generate` refuses it outright. Flagged beside the type
-     * rather than in a column of its own, because it is a fact *about* being a
-     * move-out and only a move-out can carry it.
-     */
-    cell: (row) => (
-      <span className="flex items-center gap-1.5">
-        <StatusBadge value={row.inspectionType} />
-        {row.baselineMissing ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <TriangleAlertIcon
-                aria-label="No move-in baseline"
-                className="text-destructive size-3.5 shrink-0"
-              />
-            </TooltipTrigger>
-            <TooltipContent>
-              No move-in to compare against. The comparison cannot be generated.
-            </TooltipContent>
-          </Tooltip>
-        ) : null}
-      </span>
-    ),
-  },
-  {
-    key: 'scheduled',
-    header: 'Scheduled',
-    hideBelow: 'sm',
-    // The list's order, and the only one it has. Clicking turns it around --
-    // the next visits to happen, or the oldest still open (the office,
-    // 2026-09-21: "if I click the sort will rotate from that to newest").
-    sortable: true,
-    // With the quarter under it: a benefit-package visit belongs to one, and
-    // "which quarter was this?" is otherwise date arithmetic done by eye (the
-    // office, 2026-09-21).
-    //
-    // The API's answer, not this row's date. A plan may start fifteen days
-    // before its quarter, so Q4's first visits are scheduled in September, and
-    // reading the day put 36 HVAC visits under a Q3 that has no HVAC in it.
-    // The date is only the fallback, for a row served before the API said.
-    cell: (row) => (
-      <div className="min-w-0">
-        <div>{formatScheduledDate(row.scheduledAt)}</div>
-        <div className="text-muted-foreground text-xs">{row.quarter || quarterOf(row.scheduledAt)}</div>
-      </div>
-    ),
-  },
-  {
-    key: 'priority',
-    header: 'Priority',
-    hideBelow: 'xl',
-    cell: (row) => <StatusBadge value={row.priority} />,
-  },
-  { key: 'status', header: 'Status', cell: (row) => <StatusBadge value={row.status} /> },
-  {
-    key: 'evidence',
-    header: 'Evidence',
-    hideBelow: 'md',
-    /**
-     * Whether anything has actually been recorded against this inspection.
-     *
-     * Photographs, not areas. An inspection is created with its property's
-     * approved layout snapshotted onto it, so an area count says a plan existed
-     * — not that anybody walked the property. Two of the recovered move-ins
-     * carry exactly one area, the HVAC system, and no evidence whatsoever;
-     * counting areas would mark those as done and hide them from the very
-     * backlog they belong to.
-     */
-    cell: (row) =>
-      row.evidence && row.evidence.photos > 0 ? (
-        <Badge className="gap-1" variant="secondary">
-          <CheckCircle2Icon className="size-3" />
-          {formatCount(row.evidence.photos)}
-        </Badge>
-      ) : (
-        <span className="text-muted-foreground text-xs">Empty</span>
+/** The technician filter's "nobody yet". */
+const UNASSIGNED = 'unassigned';
+/** The day param's "every date". Absent is today. */
+const ALL_DATES = 'all';
+
+/** "Tuesday, October 7", for a day held as `yyyy-MM-dd`. Noon UTC is that date everywhere. */
+const dayName = (day: string) =>
+  new Date(`${day}T12:00:00.000Z`).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+
+const currentTechnician = (row: InspectionRow) =>
+  // `?? []`: a mutation response merged into this cache entry is a projection,
+  // and can briefly leave the record without its assignments array.
+  (row.assignments ?? []).find((assignment) => assignment.isCurrent)?.technician?.displayName ?? null;
+
+/** The columns, given which list this is. */
+function columnsFor(type: string): Array<Column<InspectionRow>> {
+  const columns: Array<Column<InspectionRow> | null> = [
+    {
+      key: 'property',
+      header: 'Property',
+      primary: true,
+      /**
+       * The property, its unit when it has one, and the two facts that are
+       * only ever exceptions: a priority that is not Standard, and a move-out
+       * with no move-in to compare against. They had columns of their own --
+       * "Entire property" and "Standard" down every row.
+       */
+      cell: (row) => (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate">{row.propertywareBuilding?.name ?? 'Property snapshot'}</span>
+            {row.priority && row.priority !== 'STANDARD' ? <StatusBadge value={row.priority} /> : null}
+            {row.baselineMissing ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <TriangleAlertIcon
+                    aria-label="No move-in baseline"
+                    className="text-destructive size-3.5 shrink-0"
+                  />
+                </TooltipTrigger>
+                <TooltipContent>No move-in to compare against. The comparison cannot be generated.</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
+          {row.propertywareUnit?.name ? (
+            <div className="text-muted-foreground truncate text-xs">{row.propertywareUnit.name}</div>
+          ) : null}
+        </div>
       ),
-  },
-  {
-    key: 'tbp',
-    header: 'TBP',
-    hideBelow: 'lg',
-    /**
-     * Benefit-package enrolment for the tenancy at this property.
-     *
-     * Three states, not a badge on the enrolled ones. 428 of 449 active
-     * tenancies are enrolled and 67 of 68 occupied inspections sit at one, so a
-     * badge that only marked enrolment would be present on almost every row and
-     * read as decoration — while the informative case, the exception, would be
-     * an *absence* of a badge and easy to miss.
-     *
-     * "Not verified" is the office's own third answer, carried through rather
-     * than folded into "no": seventeen tenancies have it and it means nobody
-     * has checked.
-     *
-     * A dash where there is no active tenancy at all — vacant, or a property
-     * the tenancy report does not cover. Saying "not enrolled" there would
-     * claim a fact about somebody who does not exist.
-     */
-    cell: (row) =>
-      row.tbp ? (
-        <Badge variant={row.tbp === 'ENROLLED' ? 'secondary' : 'outline'}>
-          {TBP_LABEL[row.tbp]}
-        </Badge>
-      ) : (
-        <span className="text-muted-foreground text-xs">{EMPTY}</span>
-      ),
-  },
-  {
-    key: 'technician',
-    header: 'Technician',
-    cell: (row) => {
-      // `?? []` for the same reason as the detail page: a mutation response
-      // merged into this cache entry is a projection, and can briefly leave the
-      // record without its assignments array.
-      const current = (row.assignments ?? []).find((assignment) => assignment.isCurrent);
-      // A dash was the only sign nobody had it. An inspection can be scheduled
-      // with "Leave unassigned" and then nothing ever raises it again, so the
-      // one place they are all listed has to say so in words.
-      return current?.technician?.displayName ?? <StatusBadge value="UNASSIGNED" />;
     },
-  },
-];
+    // On a type's own list every row is that type.
+    type
+      ? null
+      : {
+          key: 'type',
+          header: 'Type',
+          hideBelow: 'md',
+          cell: (row) => <StatusBadge value={row.inspectionType} />,
+        },
+    {
+      key: 'scheduled',
+      header: 'Scheduled',
+      hideBelow: 'sm',
+      // Sortable when the list spans dates; one day has no order to turn.
+      sortable: true,
+      // With its quarter: the API's answer, which knows a plan that starts
+      // fifteen days early puts its first visits in the quarter before. The
+      // date is only the fallback, for a row served before the API said.
+      cell: (row) => (
+        <div className="min-w-0">
+          <div>{formatScheduledDate(row.scheduledAt)}</div>
+          <div className="text-muted-foreground text-xs">{row.quarter || quarterOf(row.scheduledAt)}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      // Where the visit stands, in the inspection page's own words: a
+      // submitted visit is Done, not "Review required" (2026-10-07).
+      cell: (row) => <StatusBadge value={visitStateOf(row)} />,
+    },
+    {
+      key: 'technician',
+      header: 'Technician',
+      /**
+       * "Unassigned" only where somebody is still needed. A cancelled or done
+       * visit with nobody on it needs nobody, and flagging it filled the list
+       * with warnings about nothing.
+       */
+      cell: (row) =>
+        currentTechnician(row) ??
+        (isUpcomingVisit(visitStateOf(row)) ? (
+          <StatusBadge value="UNASSIGNED" />
+        ) : (
+          <span className="text-muted-foreground text-xs">{EMPTY}</span>
+        )),
+    },
+    {
+      key: 'evidence',
+      header: 'Evidence',
+      hideBelow: 'md',
+      /**
+       * Photographs, not areas: an inspection is created with its property's
+       * layout snapshotted onto it, so an area count says a plan existed -- not
+       * that anybody walked the property.
+       */
+      cell: (row) =>
+        row.evidence && row.evidence.photos > 0 ? (
+          <Badge className="gap-1" variant="secondary">
+            <CheckCircle2Icon className="size-3" />
+            {formatCount(row.evidence.photos)}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">Empty</span>
+        ),
+    },
+    PROGRAMME_TYPES.has(type)
+      ? {
+          key: 'tbp',
+          header: 'TBP',
+          hideBelow: 'lg',
+          /**
+           * Benefit-package enrolment for the tenancy at this property, the
+           * office's three answers; a dash where there is no active tenancy at
+           * all, rather than a claim about somebody who does not exist.
+           */
+          cell: (row) =>
+            row.tbp ? (
+              <Badge variant={row.tbp === 'ENROLLED' ? 'secondary' : 'outline'}>{TBP_LABEL[row.tbp]}</Badge>
+            ) : (
+              <span className="text-muted-foreground text-xs">{EMPTY}</span>
+            ),
+        }
+      : null,
+  ];
+  return columns.filter((column): column is Column<InspectionRow> => column !== null);
+}
 
 export default function InspectionsPage() {
   const permissions = usePermissions();
   const canManage = permissions.has('inspections:manage');
   const canDelete = permissions.has('inspections:delete');
-  // Held as the row rather than an id, so the confirmation can name the
-  // property without looking it back up after the list has already refetched.
-  const [pendingDelete, setPendingDelete] = useState<DeletableInspection | null>(null);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [state, setState] = useUrlState({
-    // Empty is newest first, which is what the list has always opened as. Kept
-    // as the absent value rather than a written 'desc' so the ordinary URL
-    // stays clean and an old link still means what it meant.
+    // Empty is newest first. Kept as the absent value so the ordinary URL stays
+    // clean and an old link still means what it meant.
     asc: false,
-    from: '',
+    /** A Texas day (`yyyy-MM-dd`), `all`, or absent for today. */
+    day: '',
     page: 1,
     q: '',
     quarter: '',
     status: '',
     tbp: false,
-    to: '',
+    /** A technician's id, `unassigned`, or absent for any. */
+    tech: '',
     type: '',
+    /** Read only: the dashboard's "Assign now" and older links. */
     unassigned: false,
   });
-  /**
-   * Clears the narrowing filters but keeps `type`, so clearing inside a section
-   * returns you to the whole of that type rather than to every inspection ever
-   * recorded. The type's own chip is still there to leave the section with.
-   *
-   * Not `reset` from `useUrlState`, which drops the entire query string.
-   */
-  const clearFilters = useCallback(
-    () => setState({ from: '', page: 1, q: '', quarter: '', status: '', tbp: false, to: '', unassigned: false }),
-    [setState],
-  );
 
   const debouncedSearch = useDebouncedValue(state.q);
   const isSearchPending = state.q.trim() !== debouncedSearch.trim();
+  const today = businessToday();
+  /**
+   * The day shown. The office opens a list on today's visits (2026-10-07), and
+   * steps through days from there. A search reaches every date unless a day
+   * was picked: somebody typing a technician or an address is looking for it
+   * wherever it is, and finding nothing because it is not today's was the
+   * "it will not show" this page was reported for.
+   */
+  const day =
+    state.day === ALL_DATES
+      ? null
+      : state.day || (state.q.trim() || state.unassigned ? null : today);
+  const technician = state.tech || (state.unassigned ? UNASSIGNED : '');
+  const programme = PROGRAMME_TYPES.has(state.type);
 
   const inspections = useInspections({
     page: state.page,
@@ -282,54 +284,45 @@ export default function InspectionsPage() {
     search: debouncedSearch,
     status: state.status,
     inspectionType: state.type,
-    // The API compares against `scheduledAt`, a timestamp, so a bare date would
-    // read as local midnight and drop everything scheduled later that day from
-    // the "to" end of the range. Both bounds are widened to cover the whole day
-    // the reader picked, which is what a date range means to them.
-    scheduledFrom: dayStart(state.from),
-    scheduledTo: dayEnd(state.to),
-    unassignedOnly: state.unassigned || undefined,
-    tbpOnly: state.tbp || undefined,
-    // The quarter itself, not the days it covers. The API decides membership
-    // by the plan that made the visit, which is the only thing that knows a
-    // September day belongs to Q4; a day range here would disagree with the
-    // tag shown on the very rows it returned.
-    quarter: state.quarter || undefined,
-    // Sorted by the API, not here: these are twenty rows of 1,533, and
-    // reordering the page in hand would put the oldest row *of this page*
-    // first while calling itself the oldest of the list.
+    // The day itself: `scheduledAt` is a date, so this is an equality.
+    scheduledOn: day ?? undefined,
+    technicianId: technician && technician !== UNASSIGNED ? technician : undefined,
+    unassignedOnly: technician === UNASSIGNED || undefined,
+    tbpOnly: (programme && state.tbp) || undefined,
+    // The quarter itself, not the days it covers: the API decides membership
+    // by the plan that made the visit.
+    quarter: (programme && state.quarter) || undefined,
+    // Sorted by the API, not here: these are twenty rows of thousands.
     scheduledOrder: state.asc ? 'asc' : undefined,
   });
+  const technicians = useTechnicians({ page: 1, pageSize: 100 });
 
   const busy = inspections.isLoading || isSearchPending || inspections.isPlaceholderData;
-  // `type` is deliberately not counted here. Opened from the sidebar it is the
-  // section you are in, not a filter you left on — so an empty move-out list
-  // must not offer "Clear filters", which would silently eject you from it.
-  const hasNarrowingFilters = Boolean(state.q.trim() || state.status || state.unassigned || state.tbp || state.quarter);
+  // The day is not counted: it is where the list is, and "Clear filters" goes
+  // back to today rather than throwing the reader into every date at once.
+  const hasNarrowingFilters = Boolean(
+    state.q.trim() || state.status || technician || (programme && (state.tbp || state.quarter)),
+  );
+  const total = inspections.data?.total ?? 0;
   const resultLabel = busy
     ? 'Searching inspections…'
-    : `${(inspections.data?.total ?? 0).toLocaleString()} inspections`;
+    : `${total.toLocaleString()} ${total === 1 ? 'inspection' : 'inspections'}${day ? ` on ${dayName(day)}` : ''}`;
 
-  /**
-   * Reached from the sidebar's sub-item, one type reads as its own section
-   * rather than as a filter someone left on — the title, the count, and the
-   * empty state all name the type.
-   *
-   * It is still only the `type` search param, so the toolbar's Type select and
-   * its removable chip keep working and stay in sync with the sidebar.
-   */
+  /** Back to the list as it opens: today, everything else cleared. The type stays: it is the section. */
+  const clearFilters = useCallback(
+    () =>
+      setState({ day: '', page: 1, q: '', quarter: '', status: '', tbp: false, tech: '', unassigned: false }),
+    [setState],
+  );
+
   const section = state.type ? DESCRIPTIONS[state.type] : undefined;
-  /**
-   * Creating from inside a section prefills that type, so the button in
-   * Move-out makes a move-out. Only when the type is one the section list
-   * recognizes — an unknown `?type=` must not be forwarded into the form.
-   */
-  const createHref = section
-    ? `/inspections/new?type=${encodeURIComponent(state.type)}`
-    : '/inspections/new';
-  const createLabel = section
-    ? `Create ${humanize(state.type).toLowerCase()} inspection`
-    : 'Create inspection';
+  // The type as the page's title spells it -- "move-out", "HVAC" -- not the
+  // enum humanized ("move out", "hvac").
+  const typeKind = section?.title.replace(/ inspections$/, '') ?? '';
+  const typeName = typeKind === typeKind.toUpperCase() ? typeKind : typeKind.toLowerCase();
+  const createHref = section ? `/inspections/new?type=${encodeURIComponent(state.type)}` : '/inspections/new';
+  const createLabel = section ? `Create ${typeName} inspection` : 'Create inspection';
+  const columns = useMemo(() => columnsFor(state.type), [state.type]);
 
   const rows = useMemo(() => inspections.data?.items ?? [], [inspections.data?.items]);
   const asDeletable = useCallback(
@@ -343,24 +336,14 @@ export default function InspectionsPage() {
   );
 
   /**
-   * Selection is narrowed to what is on screen **during render**, not by an
-   * effect that prunes the state.
-   *
-   * The effect version set state on every change to `rows`, and `rows` is a new
-   * reference whenever react-query re-derives the page — so it re-rendered,
-   * produced new rows, set state again, and blew the update depth. Deriving it
-   * instead cannot loop: nothing writes state during render, and a stale id
-   * lingering in `selectedIds` is invisible because every read goes through
-   * this.
-   *
-   * The guarantee is unchanged: the bulk bar can never offer to delete an
-   * inspection the reader cannot currently see.
+   * Selection narrowed to what is on screen **during render**, not by an
+   * effect that prunes the state -- that version looped on every re-derived
+   * page. The bulk bar can never offer to delete a row the reader cannot see.
    */
   const visibleSelection = useMemo(() => {
     const visible = new Set(rows.map((row) => row.id));
     return new Set([...selectedIds].filter((id) => visible.has(id)));
   }, [rows, selectedIds]);
-
   const selectedRows = rows.filter((row) => visibleSelection.has(row.id)).map(asDeletable);
 
   const toggleOne = useCallback((id: string, selected: boolean) => {
@@ -371,7 +354,6 @@ export default function InspectionsPage() {
       return next;
     });
   }, []);
-
   const toggleMany = useCallback((ids: string[], selected: boolean) => {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -383,53 +365,46 @@ export default function InspectionsPage() {
     });
   }, []);
 
+  const technicianOptions = [
+    { value: UNASSIGNED, label: 'Unassigned' },
+    ...[...(technicians.data?.items ?? [])]
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+      .map((entry) => ({ value: entry.id, label: entry.displayName })),
+  ];
+  const technicianName =
+    technician === UNASSIGNED ? 'Unassigned' : technicianOptions.find((option) => option.value === technician)?.label;
+
   const activeFilters = [
-    // No chip for `type`. It is the section, not a filter — leaving it is what
-    // the breadcrumb's "Inspections" link and the sidebar's parent item are for.
-    state.from || state.to
-      ? {
-          label: 'Scheduled',
-          value: rangeLabel(state.from, state.to),
-          onRemove: () => setState({ from: '', to: '', page: 1 }),
-        }
-      : null,
     state.status
       ? {
           label: 'Status',
-          value: humanize(state.status),
+          value: VISIT_STATES.find((entry) => entry.value === state.status)?.label ?? humanize(state.status),
           onRemove: () => setState({ status: '', page: 1 }),
         }
       : null,
-    state.unassigned
+    technician
       ? {
-          label: 'Assignment',
-          value: 'Unassigned only',
-          onRemove: () => setState({ unassigned: false, page: 1 }),
+          label: 'Technician',
+          value: technicianName ?? 'One technician',
+          onRemove: () => setState({ tech: '', unassigned: false, page: 1 }),
         }
       : null,
-    state.tbp
-      ? {
-          label: 'Programme',
-          value: 'Benefit package only',
-          onRemove: () => setState({ tbp: false, page: 1 }),
-        }
+    programme && state.tbp
+      ? { label: 'Programme', value: 'Benefit package', onRemove: () => setState({ tbp: false, page: 1 }) }
       : null,
-    state.quarter
-      ? {
-          label: 'Quarter',
-          value: state.quarter,
-          onRemove: () => setState({ quarter: '', page: 1 }),
-        }
+    programme && state.quarter
+      ? { label: 'Quarter', value: state.quarter, onRemove: () => setState({ quarter: '', page: 1 }) }
       : null,
   ].filter((filter) => filter !== null);
 
-  // Counted on the page rather than fetched: this covers the loaded page, which
-  // is enough to notice the problem exists. An inspection scheduled and never
-  // assigned reaches nobody, and nothing else raises it.
-  const unassignedOnPage =
-    inspections.data?.items.filter(
-      (inspection) => !(inspection.assignments ?? []).some((assignment) => assignment.isCurrent),
-    ).length ?? 0;
+  /**
+   * Upcoming visits on this page with nobody on them. A cancelled or done
+   * visit needs nobody, and counting them is how sixteen "unassigned" filled
+   * a page of mostly cancelled move-outs.
+   */
+  const unassignedOnPage = rows.filter(
+    (row) => isUpcomingVisit(visitStateOf(row)) && !currentTechnician(row),
+  ).length;
 
   return (
     <>
@@ -441,10 +416,7 @@ export default function InspectionsPage() {
             </Button>
           ) : undefined
         }
-        description={
-          section?.description ??
-          'Schedule, assign, and monitor the complete property inspection lifecycle.'
-        }
+        description={section?.description ?? 'Schedule, assign, and monitor the complete property inspection lifecycle.'}
         title={section?.title ?? 'Inspections'}
       />
 
@@ -452,39 +424,43 @@ export default function InspectionsPage() {
         activeFilters={activeFilters}
         filters={
           <>
-            {/* The type filter is gone: each type is its own page now, so
-                choosing one here would be a second, competing way to be in a
-                section — and one that leaves the sidebar and title disagreeing
-                with the list. Use the sidebar's sub-items instead.
-
-                Scheduled-date bounds took its place, because with the types
-                separated the question left is a historical one: which move-ins
-                did this property have before September. */}
-            <DatePicker
-              aria-label="Scheduled on or after"
-              className="w-[178px]"
-              // Bounded by the other end, so the calendar cannot produce an
-              // inverted range that returns nothing with no explanation.
-              max={state.to || undefined}
-              onChange={(from) => setState({ from, page: 1 })}
-              placeholder="Scheduled from"
-              value={state.from}
-            />
-            <DatePicker
-              aria-label="Scheduled on or before"
-              className="w-[178px]"
-              min={state.from || undefined}
-              onChange={(to) => setState({ to, page: 1 })}
-              placeholder="Scheduled to"
-              value={state.to}
+            {/* One day, as the timesheet picks one (2026-10-07). */}
+            <DayFilter
+              onChange={(next) => setState({ day: next === null ? ALL_DATES : next === today ? '' : next, page: 1 })}
+              value={day}
             />
             <SelectFilter
               allLabel="All statuses"
               label="Status"
               onChange={(status) => setState({ status, page: 1 })}
-              options={enumOptions(STATUSES)}
+              options={VISIT_STATES.map((entry) => ({ value: entry.value, label: entry.label }))}
               value={state.status}
             />
+            <SelectFilter
+              allLabel="All technicians"
+              label="Technician"
+              onChange={(tech) => setState({ tech, unassigned: false, page: 1 })}
+              options={technicianOptions}
+              value={technician}
+            />
+            {programme ? (
+              <>
+                <SelectFilter
+                  allLabel="Any quarter"
+                  label="Quarter"
+                  onChange={(quarter) => setState({ quarter, page: 1 })}
+                  options={recentQuarters().map((quarter) => ({ value: quarter, label: quarter }))}
+                  value={state.quarter}
+                />
+                <Label className="h-9 cursor-pointer gap-2 rounded-md border px-3 text-sm font-normal">
+                  <Checkbox
+                    checked={state.tbp}
+                    onCheckedChange={(checked) => setState({ tbp: checked === true, page: 1 })}
+                  />
+                  Benefit package
+                </Label>
+              </>
+            ) : null}
           </>
         }
         onClear={clearFilters}
@@ -492,52 +468,35 @@ export default function InspectionsPage() {
         pending={isSearchPending}
         resultLabel={resultLabel}
         search={state.q}
-        searchLabel="Search property or unit"
-        searchPlaceholder="Search inspections…"
-      >
-        <Label className="h-9 cursor-pointer gap-2 rounded-md border px-3 text-sm font-normal">
-          <Checkbox
-            checked={state.unassigned}
-            onCheckedChange={(checked) => setState({ unassigned: checked === true, page: 1 })}
-          />
-          Unassigned only
-        </Label>
-        <Label className="h-9 cursor-pointer gap-2 rounded-md border px-3 text-sm font-normal">
-          <Checkbox checked={state.tbp} onCheckedChange={(checked) => setState({ tbp: checked === true, page: 1 })} />
-          Benefit package only
-        </Label>
-        <SelectFilter
-          allLabel="Any quarter"
-          label="Quarter"
-          onChange={(quarter) => setState({ quarter, page: 1 })}
-          options={recentQuarters().map((quarter) => ({ value: quarter, label: quarter }))}
-          value={state.quarter}
-        />
-      </ListToolbar>
+        searchLabel={`Search ${section ? `${typeName} inspections` : 'inspections'} by property, address, unit or technician`}
+        searchPlaceholder={`Search ${section ? `${typeName} inspections` : 'inspections'}…`}
+      />
 
       {busy ? (
-        <DataTableSkeleton columns={COLUMNS} label="Loading inspections" rows={8} />
+        <DataTableSkeleton columns={columns} label="Loading inspections" rows={8} />
       ) : inspections.isError ? (
         <ErrorState error={inspections.error} retry={() => void inspections.refetch()} />
-      ) : !inspections.data?.items.length ? (
+      ) : !rows.length ? (
         <EmptyState
           description={
             hasNarrowingFilters
-              ? 'Adjust the filters to see matching inspections.'
-              : section
-                ? 'Nothing of this type has been scheduled yet. Other types are unaffected.'
-                : 'Create the first inspection from an active synchronized property.'
+              ? 'Nothing matches these filters. Clear them to see the whole list.'
+              : day
+                ? `Nothing ${typeName ? `of this type ` : ''}is scheduled on ${dayName(day)}. Step to another day, or show every date.`
+                : section
+                  ? 'Nothing of this type has been scheduled yet. Other types are unaffected.'
+                  : 'Create the first inspection from an active synchronized property.'
           }
           icon={ClipboardCheckIcon}
-          title={
-            section
-              ? `No ${humanize(state.type).toLowerCase()} inspections`
-              : 'No inspections found'
-          }
+          title={section ? `No ${typeName} inspections` : 'No inspections found'}
         >
           {hasNarrowingFilters ? (
             <Button onClick={clearFilters} variant="outline">
               Clear filters
+            </Button>
+          ) : day ? (
+            <Button onClick={() => setState({ day: ALL_DATES, page: 1 })} variant="outline">
+              Show every date
             </Button>
           ) : canManage ? (
             <Button asChild>
@@ -547,50 +506,34 @@ export default function InspectionsPage() {
         </EmptyState>
       ) : (
         <>
-          {unassignedOnPage ? (
+          {unassignedOnPage && technician !== UNASSIGNED ? (
             <Alert className="mb-4" role="status" variant="warning">
               <TriangleAlertIcon />
               <AlertDescription>
                 {unassignedOnPage === 1
-                  ? '1 inspection on this page has no technician assigned.'
-                  : `${unassignedOnPage} inspections on this page have no technician assigned.`}{' '}
-                They will not appear in anyone&apos;s queue until they do.
-                {!state.unassigned ? (
-                  <Button
-                    className="h-auto p-0 text-inherit underline"
-                    onClick={() => setState({ unassigned: true, page: 1 })}
-                    variant="link"
-                  >
-                    Show only unassigned
-                  </Button>
-                ) : null}
+                  ? '1 upcoming visit here has no technician, and will reach nobody until it does.'
+                  : `${unassignedOnPage} upcoming visits here have no technician, and will reach nobody until they do.`}{' '}
+                <Button
+                  className="h-auto p-0 text-inherit underline"
+                  onClick={() => setState({ tech: UNASSIGNED, unassigned: false, page: 1 })}
+                  variant="link"
+                >
+                  Show them
+                </Button>
               </AlertDescription>
             </Alert>
           ) : null}
 
-          {/* Sits directly above the table and only when something is picked —
-              a permanently visible bulk bar is chrome that reads as an action
-              even when there is nothing to act on. */}
+          {/* Above the table and only when something is picked. Deleting is
+              here and only here: a bin on every row was a button nobody should
+              be one stray click from. */}
           {canDelete && visibleSelection.size ? (
             <div className="border-primary bg-primary/5 mb-3 flex flex-wrap items-center gap-3 rounded-lg border p-2.5">
-              <span className="text-sm font-medium">
-                {visibleSelection.size} selected on this page
-              </span>
-              <Button
-                onClick={() => setSelectedIds(new Set())}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
+              <span className="text-sm font-medium">{visibleSelection.size} selected on this page</span>
+              <Button onClick={() => setSelectedIds(new Set())} size="sm" type="button" variant="ghost">
                 Clear
               </Button>
-              <Button
-                className="ml-auto"
-                onClick={() => setBulkOpen(true)}
-                size="sm"
-                type="button"
-                variant="destructive"
-              >
+              <Button className="ml-auto" onClick={() => setBulkOpen(true)} size="sm" type="button" variant="destructive">
                 <Trash2Icon />
                 Delete {visibleSelection.size} permanently
               </Button>
@@ -598,50 +541,22 @@ export default function InspectionsPage() {
           ) : null}
 
           <DataTable
-            // Only ever rendered with `inspections:delete`. The row itself is a
-            // link to the detail page, so this control carries `relative z-10`
-            // via RowActions to sit above the stretched link rather than under
-            // it — otherwise clicking the bin would just open the inspection.
-            actions={
-              canDelete
-                ? (row) => (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          aria-label={`Delete ${row.propertywareBuilding?.name ?? 'inspection'}`}
-                          className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                          onClick={() =>
-                            setPendingDelete({
-                              id: row.id,
-                              name: row.propertywareBuilding?.name ?? 'Inspection',
-                              unitName: row.propertywareUnit?.name,
-                              finalized: Boolean(row.finalizedAt),
-                            })
-                          }
-                          size="icon-sm"
-                          variant="ghost"
-                        >
-                          <Trash2Icon />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Delete permanently</TooltipContent>
-                    </Tooltip>
-                  )
-                : undefined
-            }
-            columns={COLUMNS}
+            columns={columns}
             label="Property inspections"
             rowHref={(row) => `/inspections/${row.id}`}
             rowKey={(row) => row.id}
             rows={rows}
             // Back to page one: page four of newest-first holds nothing a
-            // reader turning the list around was looking for, and the count
-            // above would keep saying 1,533 while the rows underneath changed.
-            sort={{
-              by: 'scheduled',
-              direction: state.asc ? 'asc' : 'desc',
-              onChange: () => setState({ asc: !state.asc, page: 1 }),
-            }}
+            // reader turning the list around was looking for.
+            sort={
+              day
+                ? undefined
+                : {
+                    by: 'scheduled',
+                    direction: state.asc ? 'asc' : 'desc',
+                    onChange: () => setState({ asc: !state.asc, page: 1 }),
+                  }
+            }
             selection={
               canDelete
                 ? {
@@ -649,8 +564,7 @@ export default function InspectionsPage() {
                     onToggle: toggleOne,
                     onToggleAll: toggleMany,
                     rowLabel: (id) =>
-                      rows.find((row) => row.id === id)?.propertywareBuilding?.name ??
-                      'this inspection',
+                      rows.find((row) => row.id === id)?.propertywareBuilding?.name ?? 'this inspection',
                     selected: visibleSelection,
                   }
                 : undefined
@@ -659,17 +573,11 @@ export default function InspectionsPage() {
           <Pagination
             onPage={(page) => setState({ page })}
             page={state.page}
-            total={inspections.data.total}
-            totalPages={inspections.data.totalPages}
+            total={inspections.data?.total ?? 0}
+            totalPages={inspections.data?.totalPages ?? 1}
           />
         </>
       )}
-
-      {/* No `redirectTo`: the list is not about the deleted record, and
-          navigating away would discard the filters mid-cleanup. */}
-      {pendingDelete ? (
-        <InspectionDeleteDialog inspection={pendingDelete} onClose={() => setPendingDelete(null)} />
-      ) : null}
 
       {bulkOpen && selectedRows.length ? (
         <InspectionBulkDeleteDialog
@@ -677,9 +585,7 @@ export default function InspectionsPage() {
           onClose={() => setBulkOpen(false)}
           // Only the ids that actually went. A partial failure leaves the rest
           // selected so they can be retried without hunting for them again.
-          onDeleted={(ids) =>
-            setSelectedIds((current) => new Set([...current].filter((id) => !ids.includes(id))))
-          }
+          onDeleted={(ids) => setSelectedIds((current) => new Set([...current].filter((id) => !ids.includes(id))))}
         />
       ) : null}
     </>
