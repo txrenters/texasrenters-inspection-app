@@ -7,15 +7,12 @@ import { InspectionComparisonPanel } from './inspection-comparison';
 /**
  * The move-in comparison, room by room and item by item (2026-10-03). On 5819
  * Flower Gate Dr it read "uncertain" for nearly every room; the items are what
- * the reviewer decides from.
+ * the verdict is drawn from.
  */
 
 const state = vi.hoisted(() => ({
   data: null as AdminInspectionComparison | null,
-  generateError: null as Error | null,
 }));
-
-const idle = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, error: null };
 
 vi.mock('@/lib/auth', () => ({
   usePermissions: () => ({ has: () => true }),
@@ -28,11 +25,6 @@ vi.mock('@/lib/queries', () => ({
     error: null,
     refetch: vi.fn(),
   }),
-  useAdminMutations: () => ({
-    generateComparison: { ...idle, error: state.generateError },
-    reviewComparison: idle,
-    overrideAreaComparison: idle,
-  }),
 }));
 
 const sound = { clean: true, undamaged: true, working: true, comment: null };
@@ -44,10 +36,10 @@ function entrance(fields: Partial<AdminAreaComparison> = {}): AdminAreaCompariso
     classification: 'NEW_DAMAGE',
     matchMethod: 'LOCAL_AREA_ID',
     matchConfidence: 1,
-    requiresReview: true,
     summary: 'New since move-in: Windows and locks. Already damaged at move-in: Floor and coverings.',
     moveOutAreaId: 'inspection-area-entrance',
-    aiNote: '1 AI finding calls damage new that the move-in already recorded; compare the photographs to see whether it got worse.',
+    aiNote:
+      '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.',
     items: [
       {
         itemId: 'floor',
@@ -91,30 +83,32 @@ function entrance(fields: Partial<AdminAreaComparison> = {}): AdminAreaCompariso
   };
 }
 
-function comparison(areas: AdminAreaComparison[]): AdminInspectionComparison {
+function comparison(
+  areas: AdminAreaComparison[],
+  fields: Partial<AdminInspectionComparison> = {},
+): AdminInspectionComparison {
   return {
     id: 'comparison-1',
     moveOutInspectionId: 'move-out-1',
     moveInInspectionId: 'move-in-1',
-    status: 'DRAFT',
     overallCondition: 'NEW_DAMAGE',
     version: 10,
     generator: 'DETERMINISTIC',
-    requiresReviewCount: 1,
     generatedAt: '2026-10-03T15:00:00.000Z',
+    recordingsProcessing: 0,
+    findingsToConfirm: 0,
     areas,
+    ...fields,
   };
 }
 
 beforeEach(() => {
-  state.generateError = null;
   state.data = comparison([
     entrance(),
     entrance({
       id: 'cmp-laundry',
       areaName: 'Laundry',
       classification: 'UNCHANGED',
-      requiresReview: false,
       summary: 'No change in condition on any item graded at both inspections.',
       moveOutAreaId: 'inspection-area-laundry',
       aiNote: null,
@@ -123,13 +117,13 @@ beforeEach(() => {
 });
 
 describe('the move-in comparison', () => {
-  it('opens a room that needs a decision on its items, side by side', () => {
+  it('opens a room with a finding waiting on its items, side by side', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
     const tables = screen.getAllByRole('table', {
       name: 'Checklist items, move-in against move-out',
     });
-    // The entrance needs a decision and opens; the laundry does not.
+    // The entrance has a finding to confirm and opens; the laundry does not.
     expect(tables).toHaveLength(1);
     const floor = within(tables[0]).getByRole('row', { name: /Floor and coverings/ });
     expect(within(floor).getByText('Damaged')).toBeInTheDocument();
@@ -139,7 +133,6 @@ describe('the move-in comparison', () => {
     expect(within(floor).getByText('Needs cleaning')).toBeInTheDocument();
     // The finding about the floor sits under it, with where it stands.
     expect(within(floor).getByText('Cracked floor tiles at the door')).toBeInTheDocument();
-    expect(within(floor).getByText(/Needs review/)).toBeInTheDocument();
     expect(
       within(within(tables[0]).getByRole('row', { name: /Windows and locks/ })).getByText(
         'New since move-in',
@@ -147,10 +140,10 @@ describe('the move-in comparison', () => {
     ).toBeInTheDocument();
   });
 
-  it('says why the AI sends a room to review, and links to the room’s evidence', () => {
+  it('says which findings are still to confirm, and links to the room’s evidence', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    expect(screen.getAllByText(/1 AI finding calls damage new/)).toHaveLength(1);
+    expect(screen.getAllByText(/waiting to be confirmed from the recording/)).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: "Open the room's evidence" })[0]).toHaveAttribute(
       'href',
       '/inspections/move-out-1?area=inspection-area-entrance',
@@ -174,78 +167,54 @@ describe('the move-in comparison', () => {
     expect(screen.getByText('2 already at move-in · 2 need cleaning')).toBeInTheDocument();
   });
 
-  it('asks for a regeneration when the comparison predates items', () => {
-    state.data = comparison([entrance({ items: [], aiNote: null })]);
+  it('names a room the record cannot settle for what it is', () => {
+    state.data = comparison([
+      entrance({
+        classification: 'NOT_COMPARABLE',
+        summary: 'Damaged at move-out, but not graded at move-in: Walls and ceilings.',
+      }),
+    ]);
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    expect(
-      screen.getByText(/generated before rooms were compared item by item\. Regenerate it/),
-    ).toBeInTheDocument();
-  });
-
-  it('says so when regenerating fails', () => {
-    state.generateError = new Error('No matching move-in baseline inspection was found.');
-    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
-
-    expect(
-      screen.getByText('No matching move-in baseline inspection was found.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Cannot be compared')).toBeInTheDocument();
   });
 });
 
 /**
- * Before it goes to an owner or tenant (the office, 2026-10-06): every room
- * decided, the evidence unchanged since it was drawn, and approved.
+ * Nothing to approve (the office, 2026-10-07): the comparison is drawn from the
+ * checklists and the confirmed findings, kept current, and sent when wanted.
  */
 describe('a comparison going out', () => {
-  it('holds the approval until every room is decided, and says why', () => {
-    state.data = { ...comparison([entrance()]), undecidedRooms: 2 };
+  it('can be shared as soon as it is here, with nothing to decide first', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    expect(screen.getByRole('button', { name: 'Approve comparison' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
+    for (const gone of ['Approve comparison', 'Reject', 'Override', 'Regenerate'])
+      expect(screen.queryByRole('button', { name: gone })).toBeNull();
+    // No room waits on a verdict. (A finding still says it waits for the office.)
+    expect(screen.queryByText(/Requires review/)).toBeNull();
+  });
+
+  it('says what has not reached it yet, without holding it back', () => {
+    state.data = comparison([entrance()], { recordingsProcessing: 2, findingsToConfirm: 1 });
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+
     expect(
-      screen.getByText('Decide the 2 rooms marked Requires review first (Override).'),
+      screen.getByText('2 move-out recordings are still being processed; their findings will follow.'),
     ).toBeInTheDocument();
-  });
-
-  it('says when the comparison is out of date, and holds the approval for a regenerate', () => {
-    state.data = {
-      ...comparison([entrance()]),
-      undecidedRooms: 0,
-      outOfDate: ['CHECKLIST_CHANGED'],
-      outOfDateText: 'A checklist answer changed after it was generated.',
-    };
-    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
-
-    expect(screen.getByText(/Out of date\. A checklist answer changed after it was generated\./)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Approve comparison' })).toBeDisabled();
-  });
-
-  it('offers to share only an approved comparison with nothing left to decide', () => {
-    state.data = { ...comparison([entrance()]), undecidedRooms: 0 };
-    const { unmount } = render(<InspectionComparisonPanel inspectionId="move-out-1" />);
-    const draft = screen.getByRole('button', { name: 'Share' });
-    expect(draft).toBeDisabled();
-    expect(draft).toHaveAttribute('title', expect.stringContaining('Not approved yet'));
-    unmount();
-
-    state.data = { ...comparison([entrance()]), status: 'APPROVED', undecidedRooms: 0, outOfDate: [] };
-    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+    expect(
+      screen.getByText(
+        '1 finding is waiting to be confirmed on the inspection page; it joins the report once confirmed.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
   });
 
-  it('asks why a room was changed, since the report prints the reason', () => {
-    state.data = { ...comparison([entrance()]), status: 'APPROVED', undecidedRooms: 0 };
+  it('says how a comparison comes to exist when there is none yet', () => {
+    state.data = null;
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Override' }));
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/sends it back for approval/)).toBeInTheDocument();
-    const save = within(dialog).getByRole('button', { name: 'Save override' });
-    expect(save).toBeDisabled();
-    fireEvent.change(within(dialog).getByLabelText('Reason, printed on the report'), {
-      target: { value: 'The move-in photographs show the same marks.' },
-    });
-    expect(save).toBeEnabled();
+    expect(screen.getByText(/made by itself once the move-out is submitted/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate/ })).toBeNull();
   });
 });

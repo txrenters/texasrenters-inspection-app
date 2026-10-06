@@ -226,14 +226,6 @@ function Room({ room, renderPhoto }: { room: ComparisonRoomView; renderPhoto: Co
           <Chip tone={room.tone}>{room.verdict}</Chip>
         </div>
         {room.sentence ? <p className="text-sm leading-relaxed">{room.sentence}</p> : null}
-        {/* The office's decision, beside the checklist it departs from, with
-            the reason it gave -- never a silent change of verdict. */}
-        {room.changedFrom ? (
-          <p className="bg-muted/60 rounded-md px-3 py-2 text-sm">
-            <span className="font-medium">Office review:</span> changed from “{room.changedFrom}”
-            {room.officeNote ? <> — {room.officeNote}</> : null}
-          </p>
-        ) : null}
       </header>
 
       {room.items.length ? (
@@ -356,14 +348,6 @@ export function ComparisonDocument({
             </div>
           ))}
         </dl>
-        {view.reviewedLabel ? (
-          <div className="border-t pt-4 text-sm">
-            <p className="font-medium">{view.reviewedLabel}</p>
-            {view.reviewNote ? (
-              <p className="text-muted-foreground mt-1 whitespace-pre-line">{view.reviewNote}</p>
-            ) : null}
-          </div>
-        ) : null}
       </header>
 
       <section className="space-y-3">

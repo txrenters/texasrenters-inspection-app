@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   AreaChecklistItemKind,
-  ComparisonStatus,
   FindingReviewStatus,
   InspectionAreaCompletionStatus,
   ReportShareKind,
@@ -27,7 +26,7 @@ import { REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MailService } from '../mail/mail.service';
 import { ComparisonReportService } from './comparison-report.service';
-import { ComparisonService, outOfDateText } from './comparison.service';
+import { ComparisonService } from './comparison.service';
 
 const SHARE_LIFETIME_DAYS = 30;
 
@@ -301,10 +300,10 @@ export class ReportShareService {
    * The public, unauthenticated comparison report: the move-in beside the
    * move-out, for the owner or tenant a link was sent to.
    *
-   * Served only while the comparison is approved. Regenerating it, or
-   * overriding a room, returns it to review -- and until someone approves it
-   * again the link says the report is being updated rather than showing a
-   * verdict nobody has stood behind.
+   * Brought up to date first, like the inspection report a link serves: a
+   * finding confirmed after the link went out is on the report the next time
+   * it is opened. It no longer waits on an approval -- there is none (the
+   * office, 2026-10-07; `ComparisonService`).
    */
   async publicComparisonReport(token: string) {
     const share = await this.resolveShare(token);
@@ -312,69 +311,37 @@ export class ReportShareService {
     // `withTenant` for the reason `publicReport` gives: the share lookup runs as
     // the system tenant, and every read after it must run as the organization.
     return withTenant(share.organizationId, async () => {
+      const { report, comparisons } = this.comparisonParts();
+      await comparisons.current(share.organizationId, share.inspectionId);
       const comparison = await this.prisma.inspectionComparison.findFirst({
         where: { moveOutInspectionId: share.inspectionId, organizationId: share.organizationId },
-        select: { status: true },
+        select: { id: true },
       });
       if (!comparison) throw NOT_AVAILABLE();
-      if (comparison.status !== ComparisonStatus.APPROVED)
-        throw new ApplicationError(
-          409,
-          'COMPARISON_REPORT_UPDATING',
-          'This comparison report is being updated. Please check back later, or contact your property manager.',
-        );
-      return this.comparisonParts().report.reportForShare(
-        share.organizationId,
-        share.inspectionId,
-        token,
-      );
+      return report.reportForShare(share.organizationId, share.inspectionId, token);
     });
   }
 
   /**
-   * A comparison is shared only once it says what was decided, about the
-   * evidence as it stands: approved, with no room left "Requires review", and
-   * not drawn from evidence that has changed since (`ComparisonService.readiness`).
+   * A comparison can be sent once there is one: the move-out submitted, and a
+   * move-in on record to compare it with.
    *
-   * The document says which rooms carry new damage, and that is the basis for
-   * money coming out of a deposit. A draft is the machine's pass before anybody
-   * has checked it.
+   * Nothing else stands in the way. Its verdicts come from the technician's
+   * checklists and the findings the office confirmed from the recordings, and
+   * it keeps itself current (`ComparisonService.current`). Sending it is the
+   * person's decision, recorded in the audit log with the link.
    */
   private async assertComparisonShareable(user: AuthenticatedUser, moveOutInspectionId: string) {
+    await this.comparisonParts().comparisons.current(user.organizationId, moveOutInspectionId);
     const comparison = await this.prisma.inspectionComparison.findFirst({
       where: { moveOutInspectionId, organizationId: user.organizationId },
-      select: {
-        id: true,
-        status: true,
-        moveOutInspectionId: true,
-        moveInInspectionId: true,
-        generatedAt: true,
-      },
+      select: { id: true },
     });
     if (!comparison)
       throw new ApplicationError(
         404,
         'COMPARISON_NOT_FOUND',
-        'No comparison has been generated for this inspection yet.',
-      );
-    if (comparison.status !== ComparisonStatus.APPROVED)
-      throw new ApplicationError(
-        409,
-        'COMPARISON_NOT_APPROVED',
-        'Approve the comparison before sharing it.',
-      );
-    const ready = await this.comparisonParts().comparisons.readiness(comparison);
-    if (ready.outOfDate.length)
-      throw new ApplicationError(
-        409,
-        'COMPARISON_OUT_OF_DATE',
-        `${outOfDateText(ready.outOfDate)} Regenerate and approve the comparison before sharing it.`,
-      );
-    if (ready.undecidedRooms)
-      throw new ApplicationError(
-        409,
-        'COMPARISON_ROOMS_UNDECIDED',
-        'Decide every room marked Requires review before sharing the comparison.',
+        'There is no comparison for this inspection yet: it is made once the move-out is submitted and its move-in is on record.',
       );
   }
 

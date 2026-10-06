@@ -10,10 +10,10 @@ const VISIBLE = { OR: [{ findingId: null }, { finding: { reviewStatus: { not: 'R
  * The move-in / move-out comparison, sent to owners and tenants by link (the
  * office, 2026-10-06), as the inspection report is.
  *
- * What is held to: a comparison goes out only once it says what was decided,
- * about the evidence as it stands -- approved, every room decided, and not
- * drawn from evidence that changed since -- and a link serves the document it
- * was created for, and nothing else.
+ * What is held to: a link serves the document it was created for, and nothing
+ * else, brought up to date before it is read or sent. Nothing waits on an
+ * approval -- there is none (the office, 2026-10-07): the comparison is drawn
+ * from the checklists and the findings the office confirmed.
  */
 
 const admin: AuthenticatedUser = {
@@ -27,20 +27,9 @@ const admin: AuthenticatedUser = {
   principalType: 'USER',
 };
 
-const COMPARISON = {
-  id: 'comparison-1',
-  status: 'APPROVED',
-  moveOutInspectionId: 'move-out-1',
-  moveInInspectionId: 'move-in-1',
-  generatedAt: new Date('2026-10-06T15:00:00Z'),
-};
+const COMPARISON = { id: 'comparison-1', moveOutInspectionId: 'move-out-1', moveInInspectionId: 'move-in-1' };
 
-function harness(
-  opts: {
-    comparison?: Record<string, unknown> | null;
-    ready?: { undecidedRooms: number; outOfDate: string[] };
-  } = {},
-) {
+function harness(opts: { comparison?: Record<string, unknown> | null } = {}) {
   const tx = {
     inspectionReportShare: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -63,9 +52,7 @@ function harness(
     $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
   };
   const mailer = { sendReportShare: jest.fn().mockResolvedValue({ status: 'SENT' }) };
-  const comparisons = {
-    readiness: jest.fn().mockResolvedValue(opts.ready ?? { undecidedRooms: 0, outOfDate: [] }),
-  };
+  const comparisons = { current: jest.fn().mockResolvedValue(undefined) };
   const comparisonReport = { reportForShare: jest.fn().mockResolvedValue({ areas: [] }) };
   const service = new ReportShareService(
     prisma as never,
@@ -78,7 +65,7 @@ function harness(
 }
 
 describe('issuing a comparison link', () => {
-  it('issues one for an approved, decided, current comparison, and emails its own words', async () => {
+  it('issues one as soon as there is a comparison, current, and emails its own words', async () => {
     const { service, tx, mailer, comparisons } = harness();
 
     const share = await service.createShare(admin, 'move-out-1', 'Tenant@Example.com', 'COMPARISON' as never);
@@ -86,8 +73,13 @@ describe('issuing a comparison link', () => {
     expect(share.kind).toBe('COMPARISON');
     expect(share.sharePath).toBe(`/comparison-report/${share.token}`);
     expect(tx.inspectionReportShare.create.mock.calls[0][0].data).toMatchObject({ kind: 'COMPARISON' });
-    expect(tx.auditLog.create.mock.calls[0][0].data.metadata).toMatchObject({ kind: 'COMPARISON' });
-    expect(comparisons.readiness).toHaveBeenCalledWith(expect.objectContaining({ id: 'comparison-1' }));
+    // Sending it is the person's decision, and the audit log has it.
+    expect(tx.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'REPORT_SHARE_CREATED',
+      actorUserId: admin.id,
+      metadata: expect.objectContaining({ kind: 'COMPARISON' }),
+    });
+    expect(comparisons.current).toHaveBeenCalledWith(admin.organizationId, 'move-out-1');
     expect(mailer.sendReportShare).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'tenant@example.com',
@@ -97,38 +89,16 @@ describe('issuing a comparison link', () => {
     );
   });
 
-  it('refuses before a comparison exists', async () => {
+  it('refuses before a comparison exists, and says when one will', async () => {
     const { service, tx } = harness({ comparison: null });
     await expect(
       service.createShare(admin, 'move-out-1', undefined, 'COMPARISON' as never),
-    ).rejects.toMatchObject({ status: 404, code: 'COMPARISON_NOT_FOUND' });
-    expect(tx.inspectionReportShare.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses a draft: nobody has stood behind its verdicts', async () => {
-    const { service, tx } = harness({ comparison: { ...COMPARISON, status: 'DRAFT' } });
-    await expect(
-      service.createShare(admin, 'move-out-1', undefined, 'COMPARISON' as never),
-    ).rejects.toMatchObject({ status: 409, code: 'COMPARISON_NOT_APPROVED' });
-    expect(tx.inspectionReportShare.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses one drawn from evidence that has changed since, saying what changed', async () => {
-    const { service } = harness({ ready: { undecidedRooms: 0, outOfDate: ['CHECKLIST_CHANGED'] } });
-    await expect(
-      service.createShare(admin, 'move-out-1', undefined, 'COMPARISON' as never),
     ).rejects.toMatchObject({
-      status: 409,
-      code: 'COMPARISON_OUT_OF_DATE',
-      message: expect.stringContaining('A checklist answer changed after it was generated.'),
+      status: 404,
+      code: 'COMPARISON_NOT_FOUND',
+      message: expect.stringContaining('once the move-out is submitted'),
     });
-  });
-
-  it('refuses one with a room still marked Requires review', async () => {
-    const { service } = harness({ ready: { undecidedRooms: 2, outOfDate: [] } });
-    await expect(
-      service.createShare(admin, 'move-out-1', undefined, 'COMPARISON' as never),
-    ).rejects.toMatchObject({ status: 409, code: 'COMPARISON_ROOMS_UNDECIDED' });
+    expect(tx.inspectionReportShare.create).not.toHaveBeenCalled();
   });
 
   it('leaves an inspection link as it always was', async () => {
@@ -138,7 +108,7 @@ describe('issuing a comparison link', () => {
 
     expect(share.kind).toBe('INSPECTION');
     expect(share.sharePath).toBe(`/report/${share.token}`);
-    expect(comparisons.readiness).not.toHaveBeenCalled();
+    expect(comparisons.current).not.toHaveBeenCalled();
     expect(mailer.sendReportShare).toHaveBeenCalledWith(expect.objectContaining({ kind: 'INSPECTION' }));
   });
 
@@ -156,8 +126,8 @@ describe('issuing a comparison link', () => {
 });
 
 describe('opening a comparison link', () => {
-  function opened(kind: string | undefined, status = 'APPROVED') {
-    const built = harness({ comparison: { ...COMPARISON, status } });
+  function opened(kind: string | undefined) {
+    const built = harness();
     Object.assign(built.prisma.inspectionReportShare, {
       findUnique: jest.fn().mockResolvedValue({
         inspectionId: 'move-out-1',
@@ -171,21 +141,25 @@ describe('opening a comparison link', () => {
     return built;
   }
 
-  it('serves the approved comparison, its photographs addressed through the token', async () => {
-    const { service, comparisonReport } = opened('COMPARISON');
+  it('serves the comparison as it stands now, its photographs addressed through the token', async () => {
+    const { service, comparisonReport, comparisons } = opened('COMPARISON');
 
     await expect(service.publicComparisonReport('token-1')).resolves.toEqual({ areas: [] });
+    // Brought up to date first: a finding confirmed after the link went out
+    // is on it the next time it is opened.
+    expect(comparisons.current).toHaveBeenCalledWith(admin.organizationId, 'move-out-1');
+    expect(comparisons.current.mock.invocationCallOrder[0]).toBeLessThan(
+      comparisonReport.reportForShare.mock.invocationCallOrder[0],
+    );
     expect(comparisonReport.reportForShare).toHaveBeenCalledWith(admin.organizationId, 'move-out-1', 'token-1');
   });
 
-  it('says the report is being updated while it is back in review, rather than showing a draft', async () => {
-    const { service, comparisonReport } = opened('COMPARISON', 'UNDER_REVIEW');
+  it('says the link is gone when the comparison is', async () => {
+    const built = opened('COMPARISON');
+    built.prisma.inspectionComparison.findFirst.mockResolvedValue(null);
 
-    await expect(service.publicComparisonReport('token-1')).rejects.toMatchObject({
-      status: 409,
-      code: 'COMPARISON_REPORT_UPDATING',
-    });
-    expect(comparisonReport.reportForShare).not.toHaveBeenCalled();
+    await expect(built.service.publicComparisonReport('token-1')).rejects.toMatchObject({ status: 404 });
+    expect(built.comparisonReport.reportForShare).not.toHaveBeenCalled();
   });
 
   it('serves a link only the document it was made for', async () => {

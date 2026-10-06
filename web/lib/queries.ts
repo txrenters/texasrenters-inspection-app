@@ -2617,59 +2617,6 @@ export function useAdminMutations() {
         ]);
       },
     }),
-    generateComparison: useMutation({
-      mutationFn: ({ id }: { id: string }) =>
-        api<AdminInspectionComparison>(`/api/v1/admin/inspections/${id}/comparison/generate`, {
-          method: 'POST',
-        }),
-      onSuccess: (data, variables) => {
-        client.setQueryData(keys.inspectionComparison(variables.id), data);
-        mergeAuthoritativeEntity(client, keys.all, data);
-        void verifyAffectedQueries(client, [keys.inspectionComparison(variables.id)]);
-      },
-    }),
-    reviewComparison: useMutation({
-      mutationFn: ({
-        comparisonId,
-        decision,
-        note,
-      }: {
-        inspectionId: string;
-        comparisonId: string;
-        decision: 'APPROVED' | 'REJECTED';
-        note?: string;
-      }) =>
-        api<AdminInspectionComparison>(`/api/v1/admin/comparisons/${comparisonId}/review`, {
-          method: 'POST',
-          body: JSON.stringify({ decision, note }),
-        }),
-      onSuccess: (data, variables) => {
-        client.setQueryData(keys.inspectionComparison(variables.inspectionId), data);
-        mergeAuthoritativeEntity(client, keys.all, data);
-        void verifyAffectedQueries(client, [keys.inspectionComparison(variables.inspectionId)]);
-      },
-    }),
-    overrideAreaComparison: useMutation({
-      mutationFn: ({
-        areaComparisonId,
-        classification,
-        reason,
-      }: {
-        inspectionId: string;
-        areaComparisonId: string;
-        classification: string;
-        reason?: string;
-      }) =>
-        api<AdminInspectionComparison>(
-          `/api/v1/admin/area-comparisons/${areaComparisonId}/override`,
-          { method: 'POST', body: JSON.stringify({ classification, reason }) },
-        ),
-      onSuccess: (data, variables) => {
-        client.setQueryData(keys.inspectionComparison(variables.inspectionId), data);
-        mergeAuthoritativeEntity(client, keys.all, data);
-        void verifyAffectedQueries(client, [keys.inspectionComparison(variables.inspectionId)]);
-      },
-    }),
     upsertChargeRule: useMutation({
       mutationFn: (input: { amount: number; code?: string; isActive?: boolean }) =>
         api<AdminChargeRule>('/api/v1/admin/charge-rules', {

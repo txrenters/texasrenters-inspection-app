@@ -757,19 +757,21 @@ describe('re-running the analysis on a recording', () => {
     expect(harness.service.reanalyze('media-1', ORGANIZATION_ID)).toBe(true);
   });
 
-  it('brings a draft comparison up to date, and never an approved one', async () => {
-    const draft = reanalysisHarness({ storedSegments: TIMED_NARRATION, comparisonStatus: 'DRAFT' });
-    draft.service.reanalyze('media-1', ORGANIZATION_ID);
-    await draft.settled();
-    expect(draft.comparison.generate).toHaveBeenCalledWith('move-out-1');
+  it('brings the comparison up to date, approved under the old rules or not', async () => {
+    // Nobody approves a comparison any more (2026-10-07): there is no
+    // decision a redraw could overwrite.
+    for (const comparisonStatus of ['DRAFT', 'APPROVED']) {
+      const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION, comparisonStatus });
+      harness.service.reanalyze('media-1', ORGANIZATION_ID);
+      await harness.settled();
+      expect(harness.comparison.generate).toHaveBeenCalledWith('move-out-1');
+    }
 
-    const approved = reanalysisHarness({
-      storedSegments: TIMED_NARRATION,
-      comparisonStatus: 'APPROVED',
-    });
-    approved.service.reanalyze('media-1', ORGANIZATION_ID);
-    await approved.settled();
-    expect(approved.comparison.generate).not.toHaveBeenCalled();
+    // A move-out with none yet gets its first when it is read.
+    const none = reanalysisHarness({ storedSegments: TIMED_NARRATION });
+    none.service.reanalyze('media-1', ORGANIZATION_ID);
+    await none.settled();
+    expect(none.comparison.generate).not.toHaveBeenCalled();
   });
 });
 

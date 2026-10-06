@@ -130,7 +130,7 @@ describe('comparison report', () => {
 
   /**
    * The pairing is read from `InspectionAreaComparison`, never recomputed. A
-   * second opinion here could disagree with the page the reviewer approved.
+   * second opinion here could disagree with the console's comparison.
    */
   it('pairs each side from the stored comparison row', async () => {
     const prisma = prismaDouble({
@@ -179,16 +179,15 @@ describe('comparison report', () => {
     expect(report.areas[0]?.moveOut).toBeNull();
   });
 
-  it("surfaces a reviewer's override alongside what it replaced", async () => {
+  it('carries what the office confirmed from the recording, and nothing of a review', async () => {
+    // Nobody approves or overrides a comparison any more (2026-10-07). A room
+    // can be new damage on a confirmed finding no checklist item carries; the
+    // report lists it by title.
     const prisma = prismaDouble({
       comparison: {
         ...comparison,
         areaComparisons: [
-          areaRow({
-            classification: 'UNCHANGED',
-            originalClassification: 'NEW_DAMAGE',
-            overrideReason: 'Pre-existing, see lease addendum',
-          }),
+          areaRow({ metadata: { items: [], aiNote: null, fromRecording: ['Door: hole beside the handle'] } }),
         ],
       },
       moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen']),
@@ -198,11 +197,10 @@ describe('comparison report', () => {
 
     const report = await service.report(user, 'move-out-1');
 
-    expect(report.areas[0]).toMatchObject({
-      classification: 'UNCHANGED',
-      originalClassification: 'NEW_DAMAGE',
-      overrideReason: 'Pre-existing, see lease addendum',
-    });
+    expect(report.areas[0].fromRecording).toEqual(['Door: hole beside the handle']);
+    expect(report.areas[0]).not.toHaveProperty('originalClassification');
+    expect(report.comparison).not.toHaveProperty('reviewedByName');
+    expect(report.comparison).not.toHaveProperty('status');
   });
 
   /**
@@ -265,7 +263,6 @@ describe('the comparison report an owner or tenant reads', () => {
     const prisma = prismaDouble({
       comparison: {
         ...comparison,
-        reviewNote: 'Checked against the move-in photographs.',
         areaComparisons: [areaRow({ metadata: { items, aiNote: 'Console only.' } })],
       },
       moveIn: inspectionRow('move-in-1', 'MOVE_IN', ['pa-kitchen']),
@@ -285,9 +282,8 @@ describe('the comparison report an owner or tenant reads', () => {
         cleaning: 'NEEDS_CLEANING',
       },
     ]);
-    // The AI's note to the reviewer never travels with the document.
+    // The console's note about findings to confirm never travels with the document.
     expect(JSON.stringify(report)).not.toContain('Console only.');
-    expect(report.comparison.reviewNote).toBe('Checked against the move-in photographs.');
   });
 
   it('has no items for a room compared before items were, rather than failing', async () => {

@@ -107,14 +107,6 @@ const styles = StyleSheet.create({
   roomFloor: { color: C.muted, fontSize: 8.5, marginTop: 1 },
   roomBody: { padding: 12 },
   sentence: { marginBottom: 6 },
-  officeNote: {
-    backgroundColor: C.surfaceSubtle,
-    borderRadius: 4,
-    paddingVertical: 5,
-    paddingHorizontal: 7,
-    marginBottom: 8,
-    fontSize: 8.5,
-  },
 
   // The item table: four columns that line up down the page.
   table: { marginBottom: 10 },
@@ -292,12 +284,6 @@ function Room({ room, images }: { room: ComparisonRoomView; images: ReportImages
       </View>
       <View style={styles.roomBody}>
         {room.sentence ? <Text style={styles.sentence}>{room.sentence}</Text> : null}
-        {room.changedFrom ? (
-          <Text style={styles.officeNote}>
-            <Text style={styles.bold}>Office review: </Text>
-            changed from “{room.changedFrom}”{room.officeNote ? ` — ${room.officeNote}` : ''}
-          </Text>
-        ) : null}
         {room.items.length ? (
           <View style={styles.table}>
             <View style={styles.headRow}>
@@ -375,9 +361,6 @@ export function ComparisonPdfDocument({ view, images }: { view: ComparisonView; 
               </View>
             ))}
           </View>
-          {view.reviewedLabel ? (
-            <Text style={[styles.coverMetaSub, { marginTop: 12 }]}>{view.reviewedLabel}</Text>
-          ) : null}
         </View>
 
         <Text style={styles.sectionTitle}>At a glance</Text>
@@ -393,7 +376,6 @@ export function ComparisonPdfDocument({ view, images }: { view: ComparisonView; 
 
         <Text style={styles.sectionTitle}>Summary</Text>
         <Text style={styles.sectionHint}>{view.headline}.</Text>
-        {view.reviewNote ? <Text style={[styles.sectionHint, { color: C.text }]}>{view.reviewNote}</Text> : null}
         {view.newDamage.length ? (
           <View>
             <Text style={styles.summaryHeading}>NEW SINCE MOVE-IN</Text>

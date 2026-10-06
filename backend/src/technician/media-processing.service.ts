@@ -8,7 +8,6 @@ import { Inject, Injectable, Logger, Optional, type OnModuleInit } from '@nestjs
 import {
   AiAnalysisStatus,
   AiProvider,
-  ComparisonStatus,
   FindingReviewStatus,
   FindingSource,
   InspectionStatus,
@@ -572,7 +571,7 @@ export class MediaProcessingService implements OnModuleInit {
         });
         // Before the completion is told, so a reviewer who sees it finished
         // never opens a comparison still counting the old findings.
-        await this.refreshDraftComparison(
+        await this.refreshComparison(
           media.inspectionId,
           media.inspectionArea.inspection.inspectionType,
         );
@@ -611,17 +610,18 @@ export class MediaProcessingService implements OnModuleInit {
   /**
    * Keep a move-out's comparison in step with findings that changed under it.
    *
-   * Only a draft. An approved comparison is a person's decision, which the
-   * comparison's own system trigger refuses to overwrite, and a move-out with
-   * none yet gets one when its review starts.
+   * Any comparison: none is approved by a person any more, so there is no
+   * decision to protect (the office, 2026-10-07). A move-out with none yet gets
+   * one when its review starts. Reading it would redraw it anyway
+   * (`ComparisonService.current`); this only spares the next reader the wait.
    */
-  private async refreshDraftComparison(inspectionId: string, inspectionType: string) {
+  private async refreshComparison(inspectionId: string, inspectionType: string) {
     if (inspectionType !== InspectionType.MOVE_OUT || !this.comparison) return;
     const existing = await this.prisma.inspectionComparison.findUnique({
       where: { moveOutInspectionId: inspectionId },
-      select: { status: true },
+      select: { id: true },
     });
-    if (existing?.status !== ComparisonStatus.DRAFT) return;
+    if (!existing) return;
     await this.comparison.generate(inspectionId).catch((error) => {
       this.logger.warn(
         `Comparison refresh skipped for ${inspectionId}: ${

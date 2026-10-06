@@ -1,79 +1,45 @@
 'use client';
 
-import type { AdminAreaComparison, ComparisonClassification } from '@texasrenters/shared';
+import type { AdminAreaComparison } from '@texasrenters/shared';
 import Link from 'next/link';
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 
 import { ComparisonItemsTable } from '@/components/comparison-items-table';
 import { ReportShareDialog } from '@/components/report-share-dialog';
-import { PageSkeleton } from '@/components/states';
-import { ErrorState } from '@/components/states';
-import { StatusBadge } from '@/components/status-badge';
-import {
-  CLASSIFICATIONS,
-  CLASSIFICATION_VARIANT,
-  classLabel,
-} from '@/lib/comparison-classification';
+import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Field, FieldLabel } from '@/components/ui/field';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Spinner } from '@/components/ui/spinner';
-import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
+import { CLASSIFICATION_VARIANT, classLabel } from '@/lib/comparison-classification';
 import { itemTotals } from '@/lib/comparison-items';
-import { comparisonShareBlockers } from '@/lib/comparison-share';
+import { comparisonWaitingOn } from '@/lib/comparison-waiting';
 import { formatDateTime, humanize } from '@/lib/format';
-import { useAdminMutations, useInspectionComparison } from '@/lib/queries';
-
+import { useInspectionComparison } from '@/lib/queries';
 
 /**
- * Move-in vs move-out comparison (spec §12). The draft is machine-generated; a
- * reviewer decides every room, approves it, and can then share it with the
- * owner or tenant (the office, 2026-10-06).
+ * Move-in vs move-out comparison (spec §12).
+ *
+ * Nothing to approve (the office, 2026-10-07). It used to be a draft a
+ * reviewer decided room by room and then approved before it could be shared,
+ * and the office found itself marking reviewed what the technician had already
+ * recorded. What the office reviews is the recordings -- confirming or
+ * rejecting the findings on the inspection page -- and the comparison is drawn
+ * from that and the two checklists, kept current by the server. It can be sent
+ * to the owner or tenant as soon as it is here.
  */
 export function InspectionComparisonPanel({ inspectionId }: { inspectionId: string }) {
   const permissions = usePermissions();
   const comparison = useInspectionComparison(inspectionId);
-  const mutations = useAdminMutations();
-  const [overrideArea, setOverrideArea] = useState<AdminAreaComparison | null>(null);
   const [sharing, setSharing] = useState(false);
-  // Rooms whose items are open. Unset means the default: open where the room
-  // needs a decision, so the reviewer lands on the evidence for it.
+  // Rooms whose items are open. Unset means the default: open where a finding
+  // is waiting to be confirmed, so the office lands on what it has to look at.
   const [opened, setOpened] = useState<Record<string, boolean>>({});
-  const canManage = permissions.has('inspections:manage');
-  const canReview = permissions.has('comparisons:review');
   const data = comparison.data;
   const totals = data ? itemTotals(data.areas) : null;
   const itemized = data?.areas.some((area) => area.items?.length) ?? false;
-  const blockers = data ? comparisonShareBlockers(data) : [];
-  const undecided = data?.undecidedRooms ?? 0;
-  /**
-   * What an approval waits for, said before it is pressed. The server refuses
-   * the same, so an approval can never put a room nobody decided, or verdicts
-   * drawn from evidence that has since changed, in front of an owner or tenant.
-   */
-  const approvalBlocker = data?.outOfDateText
-    ? 'Regenerate first: the comparison is out of date.'
-    : undecided
-      ? `Decide the ${undecided} ${undecided === 1 ? 'room' : 'rooms'} marked Requires review first (Override).`
-      : null;
+  const waiting = data ? comparisonWaitingOn(data) : [];
 
   return (
     <Card aria-labelledby="inspection-comparison-title" className="scroll-mt-20" id="comparison">
@@ -81,8 +47,9 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
         <div className="space-y-1">
           <CardTitle id="inspection-comparison-title">Move-in vs move-out</CardTitle>
           <CardDescription>
-            Drafted from both inspections' checklists. A reviewer decides every room and approves
-            it; an approved comparison can be shared with the owner or tenant.
+            Drawn from both inspections&apos; checklists and the findings confirmed from the
+            recordings, and kept up to date as they change. Share it with the owner or tenant
+            whenever it is ready.
           </CardDescription>
         </div>
         <div className="flex items-center gap-2">
@@ -93,17 +60,15 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             </Button>
           ) : null}
           {data && permissions.has('reports:share') ? (
-            <Button
-              disabled={blockers.length > 0}
-              onClick={() => setSharing(true)}
-              size="sm"
-              title={blockers[0] ?? 'Send the approved comparison to the owner or tenant'}
-              type="button"
-            >
+            <Button onClick={() => setSharing(true)} size="sm" type="button">
               Share
             </Button>
           ) : null}
-          {data ? <StatusBadge value={data.overallCondition} /> : null}
+          {data ? (
+            <Badge variant={CLASSIFICATION_VARIANT[data.overallCondition] ?? 'secondary'}>
+              {classLabel(data.overallCondition)}
+            </Badge>
+          ) : null}
         </div>
       </CardHeader>
 
@@ -113,61 +78,32 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
         ) : comparison.isError ? (
           <ErrorState error={comparison.error} retry={() => void comparison.refetch()} />
         ) : !data ? (
-          <div className="space-y-3 rounded-lg border border-dashed p-6 text-center">
+          <div className="rounded-lg border border-dashed p-6 text-center">
             <p className="text-muted-foreground text-sm">
-              No comparison has been generated yet. It is drafted automatically once move-out review
-              is ready.
+              No comparison yet. It is made by itself once the move-out is submitted and its move-in
+              is on record.
             </p>
-            {canManage ? (
-              <Button
-                disabled={mutations.generateComparison.isPending}
-                onClick={() => mutations.generateComparison.mutate({ id: inspectionId })}
-                type="button"
-                variant="outline"
-              >
-                {mutations.generateComparison.isPending ? <Spinner /> : null}
-                {mutations.generateComparison.isPending ? 'Generating…' : 'Generate comparison'}
-              </Button>
-            ) : null}
-            {mutations.generateComparison.error ? (
-              <Alert variant="destructive">
-                <AlertDescription>{mutations.generateComparison.error.message}</AlertDescription>
-              </Alert>
-            ) : null}
           </div>
         ) : (
           <>
-            {/* Verdicts are worked out when the comparison is generated; this
-                says when the evidence under them has moved since. */}
-            {data.outOfDateText ? (
-              <Alert variant="warning">
+            {/* What has not reached the report yet. Nothing to press: it
+                follows by itself. */}
+            {waiting.length ? (
+              <Alert variant="info">
                 <AlertDescription>
-                  Out of date. {data.outOfDateText}{' '}
-                  {canManage ? 'Regenerate it to compare the evidence as it is now.' : ''}
+                  <ul className="space-y-0.5">
+                    {waiting.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
                 </AlertDescription>
               </Alert>
             ) : null}
             <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="bg-muted/50 rounded-lg p-3">
-                <dt className="text-muted-foreground text-xs">Status</dt>
-                <dd className="mt-1">
-                  <StatusBadge value={data.status} />
-                </dd>
+                <dt className="text-muted-foreground text-xs">Updated</dt>
+                <dd className="mt-1 text-sm font-medium">{formatDateTime(data.generatedAt)}</dd>
               </div>
-              <div className="bg-muted/50 rounded-lg p-3">
-                <dt className="text-muted-foreground text-xs">Generated</dt>
-                <dd className="mt-1 text-sm font-medium">
-                  {formatDateTime(data.generatedAt)} · v{data.version}
-                </dd>
-              </div>
-              {data.requiresReviewCount > 0 ? (
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <dt className="text-muted-foreground text-xs">Needs review</dt>
-                  <dd className="text-warning mt-1 text-sm font-medium">
-                    {data.requiresReviewCount} area{data.requiresReviewCount === 1 ? '' : 's'}
-                  </dd>
-                </div>
-              ) : null}
               {itemized && totals ? (
                 <div className="bg-muted/50 rounded-lg p-3">
                   <dt className="text-muted-foreground text-xs">Item by item</dt>
@@ -181,115 +117,23 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   </dd>
                 </div>
               ) : null}
-              {data.reviewedByName ? (
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <dt className="text-muted-foreground text-xs">Reviewed</dt>
-                  <dd className="mt-1 text-sm font-medium">
-                    {data.reviewedByName}
-                    {data.reviewedAt ? ` · ${formatDateTime(data.reviewedAt)}` : ''}
-                  </dd>
-                </div>
-              ) : null}
             </dl>
-
-            {!itemized && data.areas.length ? (
-              <p className="text-muted-foreground text-sm">
-                This comparison was generated before rooms were compared item by item.
-                {canManage ? ' Regenerate it to see each checklist item at move-in and move-out.' : ''}
-              </p>
-            ) : null}
 
             <ul className="divide-y rounded-lg border">
               {data.areas.map((area) => (
                 <AreaComparisonRow
                   area={area}
-                  canReview={canReview}
                   inspectionId={inspectionId}
                   key={area.id}
-                  onOverride={() => setOverrideArea(area)}
                   onToggle={(next) => setOpened((current) => ({ ...current, [area.id]: next }))}
-                  open={opened[area.id] ?? (area.requiresReview && (area.items?.length ?? 0) > 0)}
+                  open={opened[area.id] ?? (Boolean(area.aiNote) && (area.items?.length ?? 0) > 0)}
                 />
               ))}
             </ul>
-
-            <div className="flex flex-wrap gap-2">
-              {canReview && (data.status === 'DRAFT' || data.status === 'UNDER_REVIEW') ? (
-                <>
-                  <Button
-                    disabled={mutations.reviewComparison.isPending || Boolean(approvalBlocker)}
-                    onClick={() =>
-                      mutations.reviewComparison.mutate({
-                        inspectionId,
-                        comparisonId: data.id,
-                        decision: 'APPROVED',
-                      })
-                    }
-                    type="button"
-                  >
-                    Approve comparison
-                  </Button>
-                  <Button
-                    disabled={mutations.reviewComparison.isPending}
-                    onClick={() =>
-                      mutations.reviewComparison.mutate({
-                        inspectionId,
-                        comparisonId: data.id,
-                        decision: 'REJECTED',
-                      })
-                    }
-                    type="button"
-                    variant="outline"
-                  >
-                    Reject
-                  </Button>
-                  {approvalBlocker ? (
-                    <p className="text-muted-foreground self-center text-xs">{approvalBlocker}</p>
-                  ) : null}
-                </>
-              ) : null}
-              {/*
-                Offered on an approved comparison too. The approval is the
-                reviewer's to supersede: regenerating returns the record to
-                draft and clears the reviewer, so nothing inherits a decision
-                nobody made about it. Only the automatic trigger is refused.
-              */}
-              {canManage ? (
-                <Button
-                  disabled={mutations.generateComparison.isPending}
-                  onClick={() => mutations.generateComparison.mutate({ id: inspectionId })}
-                  type="button"
-                  variant="outline"
-                >
-                  {mutations.generateComparison.isPending ? <Spinner /> : null}
-                  {mutations.generateComparison.isPending ? 'Regenerating…' : 'Regenerate'}
-                </Button>
-              ) : null}
-            </div>
-
-            {mutations.reviewComparison.error ? (
-              <Alert variant="destructive">
-                <AlertDescription>{mutations.reviewComparison.error.message}</AlertDescription>
-              </Alert>
-            ) : null}
-            {/* Regenerating could fail with nothing on screen to say so. */}
-            {mutations.generateComparison.error ? (
-              <Alert variant="destructive">
-                <AlertDescription>{mutations.generateComparison.error.message}</AlertDescription>
-              </Alert>
-            ) : null}
           </>
         )}
       </CardContent>
 
-      {overrideArea ? (
-        <OverrideAreaDialog
-          approved={data?.status === 'APPROVED'}
-          area={overrideArea}
-          inspectionId={inspectionId}
-          onClose={() => setOverrideArea(null)}
-        />
-      ) : null}
       {sharing ? (
         <ReportShareDialog inspectionId={inspectionId} kind="COMPARISON" onClose={() => setSharing(false)} />
       ) : null}
@@ -301,23 +145,19 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
  * One room's verdict, and under it the room's checklist item by item.
  *
  * The verdict alone was the whole row once, and on Flower Gate it read
- * "uncertain" for thirteen rooms of fifteen. The items are what a reviewer
- * decides from, so a room that needs a decision opens on them.
+ * "uncertain" for thirteen rooms of fifteen. The items are what the verdict is
+ * drawn from, so they are a click away, and open where a finding waits.
  */
 function AreaComparisonRow({
   area,
   inspectionId,
-  canReview,
   open,
   onToggle,
-  onOverride,
 }: {
   area: AdminAreaComparison;
   inspectionId: string;
-  canReview: boolean;
   open: boolean;
   onToggle: (open: boolean) => void;
-  onOverride: () => void;
 }) {
   const items = area.items ?? [];
   return (
@@ -331,31 +171,17 @@ function AreaComparisonRow({
             ) : null}
           </p>
           {area.summary ? <p className="text-muted-foreground text-sm">{area.summary}</p> : null}
-          {area.originalClassification && area.originalClassification !== area.classification ? (
-            <p className="text-muted-foreground text-xs">
-              Overridden from {classLabel(area.originalClassification)}
-              {area.overrideReason ? ` - ${area.overrideReason}` : ''}
-            </p>
-          ) : null}
-          {/* About unreviewed AI output, so on screen only: never on the report. */}
-          {area.aiNote ? <p className="text-warning text-xs">{area.aiNote}</p> : null}
+          {/* About unconfirmed AI output, so on screen only: never on the report. */}
+          {area.aiNote ? <p className="text-info text-xs">{area.aiNote}</p> : null}
           <p className="text-muted-foreground text-xs">
             {humanize(area.matchMethod).toLowerCase()}
             {area.matchConfidence ? ` · ${Math.round(area.matchConfidence * 100)}%` : ''}
           </p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Badge variant={CLASSIFICATION_VARIANT[area.classification] ?? 'secondary'}>
-            {classLabel(area.classification)}
-          </Badge>
-          {area.requiresReview ? <Badge variant="warning">Review</Badge> : null}
-          {canReview ? (
-            <Button onClick={onOverride} size="sm" type="button" variant="ghost">
-              Override
-            </Button>
-          ) : null}
-        </div>
+        <Badge variant={CLASSIFICATION_VARIANT[area.classification] ?? 'secondary'}>
+          {classLabel(area.classification)}
+        </Badge>
       </div>
 
       {items.length || area.moveOutAreaId ? (
@@ -384,107 +210,5 @@ function AreaComparisonRow({
         <ComparisonItemsTable items={items} otherFindings={area.otherFindings ?? []} />
       ) : null}
     </li>
-  );
-}
-
-function OverrideAreaDialog({
-  inspectionId,
-  area,
-  approved,
-  onClose,
-}: {
-  inspectionId: string;
-  area: AdminAreaComparison;
-  /** Overriding an approved comparison sends it back for approval. */
-  approved: boolean;
-  onClose: () => void;
-}) {
-  const mutation = useAdminMutations().overrideAreaComparison;
-  const [classification, setClassification] = useState<ComparisonClassification>(
-    area.classification,
-  );
-  const [reason, setReason] = useState('');
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    try {
-      await mutation.mutateAsync({
-        inspectionId,
-        areaComparisonId: area.id,
-        classification,
-        reason: reason.trim() || undefined,
-      });
-      onClose();
-    } catch {
-      // The mutation surfaces the sanitized API error inline.
-    }
-  }
-
-  return (
-    <Dialog onOpenChange={(next) => (next ? undefined : onClose())} open>
-      <DialogContent>
-        <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
-          <DialogHeader>
-            <DialogTitle>Override classification</DialogTitle>
-            <DialogDescription>
-              {area.areaName} - currently {classLabel(area.classification)}.
-              {approved
-                ? ' The comparison is approved: changing a room sends it back for approval, and its share links say “being updated” until then.'
-                : ''}
-            </DialogDescription>
-          </DialogHeader>
-
-          <Field>
-            <FieldLabel htmlFor="override-classification">Classification</FieldLabel>
-            <Select
-              onValueChange={(next) => setClassification(next as ComparisonClassification)}
-              value={classification}
-            >
-              <SelectTrigger className="w-full" id="override-classification">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CLASSIFICATIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor="override-reason">Reason, printed on the report</FieldLabel>
-            {/* Printed beside the verdict it changes, where the owner or
-                tenant reads it -- so it is required, and worth writing for
-                them: "The move-in photographs show the same marks." */}
-            <Textarea
-              id="override-reason"
-              maxLength={500}
-              onChange={(event) => setReason(event.target.value)}
-              required
-              rows={3}
-              value={reason}
-            />
-          </Field>
-
-          {mutation.error ? (
-            <Alert variant="destructive">
-              <AlertDescription>{mutation.error.message}</AlertDescription>
-            </Alert>
-          ) : null}
-
-          <DialogFooter>
-            <Button onClick={onClose} type="button" variant="outline">
-              Cancel
-            </Button>
-            <Button disabled={mutation.isPending || !reason.trim()} type="submit">
-              {mutation.isPending ? <Spinner /> : null}
-              {mutation.isPending ? 'Saving…' : 'Save override'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

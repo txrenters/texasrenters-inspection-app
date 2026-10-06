@@ -33,11 +33,8 @@ function area(extra: Partial<ComparisonReportArea> = {}): ComparisonReportArea {
     areaName: 'Kitchen',
     floorName: null,
     classification: 'NEW_DAMAGE',
-    originalClassification: null,
-    overrideReason: null,
     matchMethod: 'LOCAL_AREA_ID',
     matchConfidence: 1,
-    requiresReview: true,
     summary: 'New since move-in: Walls and ceilings. Needs cleaning: Oven.',
     items: [
       {
@@ -57,7 +54,7 @@ function area(extra: Partial<ComparisonReportArea> = {}): ComparisonReportArea {
   };
 }
 
-function report(areas: ComparisonReportArea[], extra: Partial<ComparisonReport['comparison']> = {}): ComparisonReport {
+function report(areas: ComparisonReportArea[]): ComparisonReport {
   return {
     brand: { name: 'TexasRenters.com' },
     property: {
@@ -70,17 +67,11 @@ function report(areas: ComparisonReportArea[], extra: Partial<ComparisonReport['
     },
     comparison: {
       id: 'comparison-1',
-      status: 'APPROVED',
       version: 3,
       overallCondition: 'NEW_DAMAGE',
-      requiresReviewCount: 1,
-      summary: 'Compared 1 area. 1 needs human review. Overall: NEW_DAMAGE.',
+      summary: 'Compared 1 area. Overall: NEW_DAMAGE.',
       // 9 PM in Houston on the 6th: already the 7th in UTC.
       generatedAt: '2026-10-07T02:00:00.000Z',
-      reviewedByName: 'Ana Lopez',
-      reviewedAt: '2026-10-07T02:00:00.000Z',
-      reviewNote: null,
-      ...extra,
     },
     moveIn: {
       inspectionId: 'move-in-1',
@@ -106,7 +97,7 @@ function report(areas: ComparisonReportArea[], extra: Partial<ComparisonReport['
 }
 
 describe('the comparison an owner or tenant reads', () => {
-  it('heads it with the property, both inspections, and who approved it, in Texas dates', () => {
+  it('heads it with the property and both inspections, in Texas dates', () => {
     const view = buildComparisonView(report([area()]));
 
     expect(view.title).toBe('318 Notional Harbor Ln');
@@ -114,28 +105,44 @@ describe('the comparison an owner or tenant reads', () => {
     expect(view.moveIn).toEqual({ label: 'Entry Inspection', date: 'Scheduled June 12, 2025', inspector: 'Moses' });
     // Completed 8:30 PM on 1 October in Houston, not the 2nd.
     expect(view.moveOut.date).toBe('Completed October 1, 2026');
-    expect(view.reviewedLabel).toBe('Reviewed by Ana Lopez on October 6, 2026');
     expect(view.generatedLabel).toBe('October 6, 2026');
-    expect(view.draft).toBe(false);
+  });
+
+  it('says how it was drawn, and claims no review nobody made (2026-10-07)', () => {
+    const view = buildComparisonView(report([area()]));
+
+    expect(view.disclaimer).toContain('checklists the inspectors recorded');
+    expect(view.disclaimer).toContain('confirmed from the move-out recordings');
+    expect(view.disclaimer).not.toMatch(/reviewed by|reviewer approved/i);
+    expect(JSON.stringify(view)).not.toMatch(/Reviewed by/);
   });
 
   it('counts only the new items in rooms whose verdict is new damage', () => {
     const view = buildComparisonView(
-      report([
-        area(),
-        // The office found the bathroom's "new" item already there at move-in.
-        area({
-          id: 'area-bath',
-          areaName: 'Bathroom',
-          classification: 'UNCHANGED',
-          originalClassification: 'NEW_DAMAGE',
-          overrideReason: 'Same crack in the move-in photographs.',
-        }),
-      ]),
+      report([area(), area({ id: 'area-bath', areaName: 'Bathroom', classification: 'UNCHANGED' })]),
     );
 
     expect(view.stats.find((stat) => stat.label === 'Items new since move-in')?.value).toBe(1);
     expect(view.newDamage.map((room) => room.name)).toEqual(['Kitchen']);
+  });
+
+  it('lists what the office confirmed from the recording with what is new', () => {
+    // No item says so: the office saw it on the move-out recording.
+    const view = buildComparisonView(
+      report([
+        area({
+          areaName: 'Bedroom 2',
+          items: [],
+          summary: 'Damage was recorded at move-out that the move-in did not record.',
+          fromRecording: ['Door: hole beside the handle'],
+        }),
+      ]),
+    );
+
+    expect(view.newDamage).toEqual([
+      { id: 'area-kitchen', name: 'Bedroom 2', items: ['Door: hole beside the handle'] },
+    ]);
+    expect(view.stats.find((stat) => stat.label === 'Items new since move-in')?.value).toBe(1);
   });
 
   it('says a skipped side once, by its reason', () => {
@@ -205,26 +212,24 @@ describe('the comparison an owner or tenant reads', () => {
     expect(view.rooms[0].items[0]).toMatchObject({ moveIn: 'Not checked', change: 'Sound at move-out' });
   });
 
-  it('prints a reviewer’s changed verdict with the reason, beside the checklist it departs from', () => {
+  it('says what the record cannot settle, in the comparison’s own words', () => {
     const room = buildComparisonView(
       report([
         area({
-          classification: 'UNCHANGED',
-          originalClassification: 'NEW_DAMAGE',
-          overrideReason: 'The move-in photographs show the same holes.',
+          classification: 'NOT_COMPARABLE',
+          items: [],
+          summary:
+            'Damage was recorded at both inspections, and the two did not grade the same items, so whether any of it is new cannot be told from the record.',
         }),
       ]),
     ).rooms[0];
 
-    expect(room.verdict).toBe('No new damage');
-    expect(room.changedFrom).toBe('New damage');
-    expect(room.officeNote).toBe('The move-in photographs show the same holes.');
-    // The checklist's own words stay, so the reader sees what was set aside.
-    expect(room.sentence).toBe('New since move-in: Walls and ceilings. Needs cleaning: Oven.');
+    expect(room.verdict).toBe('Cannot be compared');
+    expect(room.sentence).toMatch(/^Damage was recorded at both inspections/);
     expect(room.newDamage).toBe(false);
   });
 
-  it('never prints the machine’s note to the reviewer, nor match details', () => {
+  it('never prints match details or a stale sentence written for a reviewer', () => {
     const view = buildComparisonView(
       report([
         area({
@@ -271,13 +276,6 @@ describe('the comparison an owner or tenant reads', () => {
 
     expect(room.moveIn).toMatchObject({ name: 'Kitchen / Dining', renamed: true });
     expect(room.moveOut.renamed).toBe(false);
-  });
-
-  it('is a preview, with no approval to print, until the comparison is approved', () => {
-    const view = buildComparisonView(report([area()], { status: 'UNDER_REVIEW', reviewedByName: 'Ana Lopez' }));
-
-    expect(view.draft).toBe(true);
-    expect(view.reviewedLabel).toBeNull();
   });
 });
 

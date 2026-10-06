@@ -1,7 +1,10 @@
+import type { Prisma } from '@prisma/client';
+import { Logger } from '@nestjs/common';
 import { UserRole } from '@texasrenters/shared';
 
-import { baselineWhere, ComparisonService, keepOverrides } from '../src/admin/comparison.service';
+import { baselineWhere, COMPARISON_RULES, ComparisonService } from '../src/admin/comparison.service';
 import type { AuthenticatedUser } from '../src/common/auth';
+import { ApplicationError } from '../src/common/errors';
 
 const user: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
@@ -40,6 +43,9 @@ type FindingRow = {
   propertyAreaId: string;
   findingType: string;
   comparisonResult: string | null;
+  title?: string;
+  category?: string;
+  reviewStatus?: string;
 };
 type ResponseRow = {
   isUndamaged: boolean | null;
@@ -47,9 +53,24 @@ type ResponseRow = {
   inspectionArea: { propertyAreaId: string };
 };
 
-/** A finding row, shaped as `loadConditionSignals` selects it. */
-function damageFinding(propertyAreaId: string) {
-  return { propertyAreaId, findingType: 'POSSIBLE_NEW_DAMAGE', comparisonResult: null };
+/**
+ * A finding of new damage the office confirmed from the recording, shaped as
+ * `loadConditionSignals` selects it. Only a confirmed one is damage.
+ */
+function damageFinding(propertyAreaId: string, title = 'Wall: hole beside the door') {
+  return {
+    propertyAreaId,
+    findingType: 'POSSIBLE_NEW_DAMAGE',
+    comparisonResult: null,
+    title,
+    category: 'Walls',
+    reviewStatus: 'APPROVED',
+  };
+}
+
+/** The same, still waiting for the office: it moves nothing. */
+function pendingDamage(propertyAreaId: string) {
+  return { ...damageFinding(propertyAreaId), reviewStatus: 'PENDING_REVIEW' };
 }
 
 /** An area the AI assessed and found unremarkable: graded, but not damage. */
@@ -77,16 +98,18 @@ function dirtyItem(propertyAreaId: string) {
 }
 
 /**
- * The reads `readiness` makes, added to a double: by default nothing
- * undecided, nothing changed since generation, and the same move-in.
+ * The reads `staleness` makes, added to a double: by default nothing changed
+ * since the comparison was drawn, and the same move-in.
  */
-function withReadiness<T extends Record<string, unknown>>(
+function withStaleness<T extends Record<string, unknown>>(
   prisma: T,
   opts: {
-    undecided?: number;
     checklistChanged?: boolean;
     roomAdded?: boolean;
     latestMoveIn?: string;
+    findingChanged?: boolean;
+    photoAdded?: boolean;
+    recordingAdded?: boolean;
   } = {},
 ) {
   const part = (key: string) => {
@@ -94,15 +117,12 @@ function withReadiness<T extends Record<string, unknown>>(
     (prisma as Record<string, unknown>)[key] = existing;
     return existing;
   };
-  Object.assign(part('inspectionAreaComparison'), {
-    count: jest.fn().mockResolvedValue(opts.undecided ?? 0),
-  });
-  Object.assign(part('inspectionAreaChecklistResponse'), {
-    findFirst: jest.fn().mockResolvedValue(opts.checklistChanged ? { id: 'response-1' } : null),
-  });
-  Object.assign(part('inspectionArea'), {
-    findFirst: jest.fn().mockResolvedValue(opts.roomAdded ? { id: 'area-new' } : null),
-  });
+  const found = (yes: boolean | undefined, id: string) => jest.fn().mockResolvedValue(yes ? { id } : null);
+  Object.assign(part('inspectionAreaChecklistResponse'), { findFirst: found(opts.checklistChanged, 'response-1') });
+  Object.assign(part('inspectionArea'), { findFirst: found(opts.roomAdded, 'area-new') });
+  Object.assign(part('inspectionFinding'), { findFirst: found(opts.findingChanged, 'finding-1') });
+  Object.assign(part('inspectionPhoto'), { findFirst: found(opts.photoAdded, 'photo-1') });
+  Object.assign(part('inspectionMedia'), { findFirst: found(opts.recordingAdded, 'media-1') });
   const inspection = part('inspection');
   inspection.findUnique ??= jest.fn().mockResolvedValue(moveOutRecord());
   inspection.findFirst ??= jest
@@ -134,12 +154,7 @@ function moveOutRecord() {
 function generatePrisma(opts: {
   moveOut: Record<string, unknown>;
   moveIn: { id: string } | null;
-  existing?: {
-    id: string;
-    status: string;
-    version: number;
-    areaComparisons?: Array<Record<string, unknown>>;
-  } | null;
+  existing?: { id: string; status: string; version: number } | null;
   moveOutAreas: ReturnType<typeof area>[];
   moveInAreas: ReturnType<typeof area>[];
   moveOutMedia: ReturnType<typeof mediaRow>[];
@@ -152,6 +167,8 @@ function generatePrisma(opts: {
   const created: { data?: Record<string, unknown> } = {};
   const areaCreateMany = { data: [] as Array<Record<string, unknown>> };
   const tx = {
+    // The lock that keeps two redraws of one move-out from interleaving.
+    $executeRaw: jest.fn().mockResolvedValue(1),
     inspectionAreaComparison: {
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       createMany: jest.fn().mockImplementation((args: { data: Array<Record<string, unknown>> }) => {
@@ -160,6 +177,8 @@ function generatePrisma(opts: {
       }),
     },
     inspectionComparison: {
+      // Read under the lock.
+      findUnique: jest.fn().mockResolvedValue(opts.existing ?? null),
       create: jest.fn().mockImplementation((args: { data: Record<string, unknown> }) => {
         created.data = args.data;
         return Promise.resolve({ id: 'comparison-1' });
@@ -177,20 +196,16 @@ function generatePrisma(opts: {
       findFirst: jest.fn().mockResolvedValue(opts.moveIn),
     },
     inspectionComparison: {
-      findUnique: jest.fn().mockResolvedValue(opts.existing ?? null),
       findFirst: jest.fn().mockResolvedValue({
         id: 'comparison-1',
         moveOutInspectionId: opts.moveOut.id,
         moveInInspectionId: opts.moveIn?.id ?? null,
         status: 'DRAFT',
-        overallCondition: 'REQUIRES_REVIEW',
+        overallCondition: 'UNCHANGED',
         version: 1,
         generator: 'DETERMINISTIC',
-        requiresReviewCount: 0,
         summary: '',
-        reviewedById: null,
-        reviewedAt: null,
-        reviewNote: null,
+        metadata: { rules: COMPARISON_RULES },
         generatedAt: new Date(),
         areaComparisons: [],
       }),
@@ -218,10 +233,11 @@ function generatePrisma(opts: {
         .mockResolvedValueOnce(opts.moveOutResponses ?? [])
         .mockResolvedValueOnce(opts.moveInResponses ?? []),
     },
-    userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
+    // `load`, afterwards: recordings still with the AI.
+    inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
     $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
   };
-  withReadiness(prisma);
+  withStaleness(prisma);
   return { prisma, tx, created, areaCreateMany };
 }
 
@@ -235,6 +251,7 @@ const moveOut = {
   baselineInspectionId: 'move-in-1',
   scheduledAt: new Date('2026-07-01T00:00:00.000Z'),
 };
+
 
 describe('move-in vs move-out comparison (spec §12)', () => {
   it('flags new move-out damage and leaves clean areas unchanged', async () => {
@@ -251,22 +268,19 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     const byArea = Object.fromEntries(areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]));
     expect(byArea['pa-kitchen']).toMatchObject({
       classification: 'NEW_DAMAGE',
       matchMethod: 'LOCAL_AREA_ID',
-      requiresReview: true,
     });
     expect(byArea['pa-bed']).toMatchObject({
       classification: 'UNCHANGED',
-      requiresReview: false,
     });
     expect(created.data).toMatchObject({
       status: 'DRAFT',
       overallCondition: 'NEW_DAMAGE',
-      requiresReviewCount: 1,
       version: 1,
     });
   });
@@ -281,7 +295,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
    * regenerating or rejecting and regenerating never cleared it.
    */
   it('treats photographs as move-out evidence when an area has no recording', async () => {
-    const { prisma, areaCreateMany, created } = generatePrisma({
+    const { prisma, areaCreateMany } = generatePrisma({
       moveOut,
       moveIn: { id: 'move-in-1' },
       moveOutAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
@@ -293,20 +307,17 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     const byArea = Object.fromEntries(areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]));
     expect(byArea['pa-kitchen']).toMatchObject({
       classification: 'UNCHANGED',
       matchMethod: 'LOCAL_AREA_ID',
-      requiresReview: false,
     });
     // An area with neither a recording nor a photograph is still unevidenced.
     expect(byArea['pa-bed']).toMatchObject({
       classification: 'MISSING_MOVE_OUT_EVIDENCE',
-      requiresReview: true,
     });
-    expect(created.data).toMatchObject({ requiresReviewCount: 1 });
   });
 
   /**
@@ -334,12 +345,11 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     const byArea = Object.fromEntries(areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]));
     expect(byArea['pa-kitchen']).toMatchObject({
       classification: 'NEW_DAMAGE',
-      requiresReview: true,
     });
     expect(byArea['pa-bed']).toMatchObject({ classification: 'UNCHANGED' });
   });
@@ -365,11 +375,10 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(areaCreateMany.data[0]).toMatchObject({
       classification: 'UNCHANGED',
-      requiresReview: false,
     });
     expect(created.data).toMatchObject({ requiresReviewCount: 0 });
   });
@@ -395,13 +404,13 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(areaCreateMany.data[0]).toMatchObject({
-      classification: 'REQUIRES_REVIEW',
-      requiresReview: true,
+      // Said as what it is, rather than left for a reviewer to decide.
+      classification: 'NOT_COMPARABLE',
     });
-    expect(areaCreateMany.data[0]?.summary).toContain('recorded no condition for this area');
+    expect(areaCreateMany.data[0]?.summary).toContain('the move-in recorded no condition for this room');
     expect(areaCreateMany.data[0]?.classification).not.toBe('NEW_DAMAGE');
   });
 
@@ -441,7 +450,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(areaCreateMany.data.map((a) => a.position)).toEqual([0, 1, 2, 3]);
     // And position follows the build order rather than the area name.
@@ -466,11 +475,10 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     const classifications = areaCreateMany.data.map((a) => a.classification).sort();
     expect(classifications).toEqual(['MISSING_BASELINE', 'MISSING_MOVE_OUT_EVIDENCE']);
-    expect(areaCreateMany.data.every((a) => a.requiresReview)).toBe(true);
   });
 
   /**
@@ -491,7 +499,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(areaCreateMany.data[0]).toMatchObject({
       matchMethod: 'AREA_CATEGORY',
@@ -522,7 +530,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     const kitchen = areaCreateMany.data.find((a) => a.moveOutPropertyAreaId === 'pa-kitchen');
     expect(kitchen).toMatchObject({
@@ -549,7 +557,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(areaCreateMany.data).toHaveLength(1);
     expect(areaCreateMany.data[0]).toMatchObject({
@@ -559,38 +567,11 @@ describe('move-in vs move-out comparison (spec §12)', () => {
   });
 
   /**
-   * The automatic trigger fires whenever a move-out becomes ready for review.
-   * Letting it rewrite an approved comparison is the silent overwrite this
-   * guard exists to prevent: the reviewer would never learn their approval had
-   * gone.
+   * There is no approval to protect any more (the office, 2026-10-07): a
+   * comparison approved under the old rules is redrawn like any other, and the
+   * record forgets the approval rather than claiming one for the new verdicts.
    */
-  it('refuses to regenerate over an approved comparison on the system trigger', async () => {
-    const { prisma } = generatePrisma({
-      moveOut,
-      moveIn: { id: 'move-in-1' },
-      existing: { id: 'comparison-1', status: 'APPROVED', version: 2 },
-      moveOutAreas: [],
-      moveInAreas: [],
-      moveOutMedia: [],
-      moveOutFindings: [],
-      moveInFindings: [],
-    });
-    const service = new ComparisonService(prisma as never);
-
-    // No actor: this is the system asking.
-    await expect(service.generate('move-out-1')).rejects.toMatchObject({
-      status: 409,
-      code: 'COMPARISON_ALREADY_APPROVED',
-    });
-  });
-
-  /**
-   * A reviewer may regenerate their own approved comparison without rejecting
-   * it first. The approval does not carry over -- the record returns to DRAFT
-   * with the reviewer cleared, so the new draft never inherits a decision
-   * nobody made about it.
-   */
-  it('lets a reviewer regenerate an approved comparison, back to draft', async () => {
+  it('redraws a comparison approved under the old rules, keeping no approval', async () => {
     const { prisma, created } = generatePrisma({
       moveOut,
       moveIn: { id: 'move-in-1' },
@@ -603,7 +584,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(created.data).toMatchObject({
       status: 'DRAFT',
@@ -612,6 +593,121 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       reviewedAt: null,
       reviewNote: null,
     });
+  });
+
+  it('draws one at a time per move-out, reading the record under the lock', async () => {
+    const { prisma, tx, created } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1');
+
+    const [sql, key] = tx.$executeRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+    expect(key).toBe('comparison:move-out-1');
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.inspectionComparison.findUnique.mock.invocationCallOrder[0],
+    );
+    // The rules it was drawn under, so a later rule change redraws it.
+    expect(created.data?.metadata).toMatchObject({ rules: COMPARISON_RULES });
+    expect(tx.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'INSPECTION_COMPARISON_GENERATED',
+      actorUserId: null,
+      metadata: expect.objectContaining({ system: true, rules: COMPARISON_RULES }),
+    });
+  });
+
+  /**
+   * An AI finding nobody has looked at is not on the report, so it cannot be
+   * what makes a room "new damage" there either. The console says it waits.
+   */
+  it('lets an unconfirmed AI finding move nothing, and notes that it waits', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [pendingDamage('pa-kitchen')],
+      moveInFindings: [soundFinding('pa-kitchen')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1');
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      classification: 'UNCHANGED',
+      metadata: { aiNote: expect.stringContaining('waiting to be confirmed') },
+    });
+  });
+
+  it('names what the office confirmed, for the report to list', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [damageFinding('pa-kitchen', 'Wall: hole beside the door')],
+      moveInFindings: [soundFinding('pa-kitchen')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1');
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      classification: 'NEW_DAMAGE',
+      metadata: { fromRecording: ['Wall: hole beside the door'] },
+    });
+  });
+
+  it('says damage on both sides cannot be compared where no item was graded at both', async () => {
+    const { prisma, areaCreateMany, created } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 0, 4)],
+      moveOutFindings: [],
+      moveInFindings: [],
+      moveOutResponses: [failedItem('pa-kitchen')],
+      moveInResponses: [failedItem('pa-kitchen')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1');
+
+    expect(areaCreateMany.data[0]?.classification).toBe('NOT_COMPARABLE');
+    expect(areaCreateMany.data[0]?.summary).toContain('Damage was recorded at both inspections');
+    // Nothing could be compared at all: the headline says so.
+    expect(created.data).toMatchObject({ overallCondition: 'NOT_COMPARABLE' });
+  });
+
+  it('never leaves a room "requires review"', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen'), area('pa-garage', 'Garage', 'GARAGE'), area('pa-bed', 'Bedroom')],
+      moveInAreas: [area('pa-kitchen-old', 'Kitchen / Breakfast'), area('pa-bed', 'Bedroom')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1), mediaRow('pa-garage', 0), mediaRow('pa-bed', 0, 2)],
+      moveOutFindings: [pendingDamage('pa-kitchen')],
+      moveInFindings: [],
+      moveOutResponses: [failedItem('pa-bed')],
+      moveInResponses: [failedItem('pa-bed')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1');
+
+    expect(areaCreateMany.data.map((a) => a.classification)).not.toContain('REQUIRES_REVIEW');
+    expect(areaCreateMany.data.every((a) => a.requiresReview === undefined)).toBe(true);
   });
 
   it('bumps the version when regenerating a draft', async () => {
@@ -627,7 +723,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
     expect(created.data).toMatchObject({ version: 4, status: 'DRAFT' });
   });
 
@@ -644,7 +740,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     const service = new ComparisonService(prisma as never);
 
     await expect(
-      service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id }),
+      service.generate('move-out-1'),
     ).rejects.toMatchObject({ status: 409, code: 'MOVE_IN_BASELINE_NOT_FOUND' });
   });
 
@@ -661,139 +757,163 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     const service = new ComparisonService(prisma as never);
 
     await expect(
-      service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id }),
+      service.generate('move-out-1'),
     ).rejects.toMatchObject({ status: 422, code: 'NOT_A_MOVE_OUT' });
   });
 });
 
-describe('comparison review + override (spec §12)', () => {
-  it('approves a comparison and records the reviewer and audit event', async () => {
-    const tx = {
-      inspectionComparison: { update: jest.fn().mockResolvedValue({}) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    };
-    const prisma = {
-      inspectionComparison: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValueOnce({
-            id: 'comparison-1',
-            status: 'DRAFT',
-            moveOutInspectionId: 'move-out-1',
-            moveInInspectionId: 'move-in-1',
-            generatedAt: new Date(),
-          })
-          .mockResolvedValueOnce({
-            id: 'comparison-1',
-            moveOutInspectionId: 'move-out-1',
-            moveInInspectionId: 'move-in-1',
-            status: 'APPROVED',
-            overallCondition: 'UNCHANGED',
-            version: 1,
-            generator: 'DETERMINISTIC',
-            requiresReviewCount: 0,
-            summary: '',
-            reviewedById: user.id,
-            reviewedAt: new Date(),
-            reviewNote: null,
-            generatedAt: new Date(),
-            areaComparisons: [],
-          }),
-      },
-      userProfile: { findUnique: jest.fn().mockResolvedValue({ displayName: 'Administrator' }) },
-      inspectionArea: { findMany: jest.fn().mockResolvedValue([]) },
-      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
-      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
-    };
-    const service = new ComparisonService(withReadiness(prisma) as never);
-
-    await service.review(user, 'comparison-1', 'APPROVED');
-    expect(tx.inspectionComparison.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'comparison-1' },
-        data: expect.objectContaining({ status: 'APPROVED', reviewedById: user.id }),
-      }),
-    );
-    expect(tx.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ action: 'INSPECTION_COMPARISON_APPROVED' }),
-      }),
-    );
+/**
+ * Nobody approves a comparison (the office, 2026-10-07: the maintenance admin
+ * "will not going to mark review every everything"). It keeps itself current
+ * instead: wherever it is read, it is redrawn if anything under it moved.
+ */
+describe('a comparison that keeps itself current', () => {
+  const drawn = (metadata: Prisma.JsonValue = { rules: COMPARISON_RULES }) => ({
+    id: 'comparison-1',
+    moveOutInspectionId: 'move-out-1',
+    moveInInspectionId: 'move-in-1',
+    generatedAt: new Date('2026-10-06T15:00:00Z'),
+    metadata,
   });
 
-  it('overrides an area classification, preserving the original and auditing', async () => {
-    const tx = {
-      inspectionAreaComparison: {
-        update: jest.fn().mockResolvedValue({}),
-        findMany: jest
-          .fn()
-          .mockResolvedValue([{ classification: 'UNCHANGED', requiresReview: false }]),
+  function reading(
+    record: ReturnType<typeof drawn> | null,
+    changed: Parameters<typeof withStaleness>[1] = {},
+    moveOut: Record<string, unknown> | null = { inspectionType: 'MOVE_OUT', status: 'REVIEW_REQUIRED' },
+  ) {
+    const prisma = withStaleness(
+      {
+        inspectionComparison: { findFirst: jest.fn().mockResolvedValue(record) },
+        inspection: {
+          findUnique: jest.fn().mockResolvedValue(moveOutRecord()),
+          // With a record: the latest move-in. Without: the move-out itself.
+          findFirst: jest
+            .fn()
+            .mockResolvedValue(
+              record ? { id: changed.latestMoveIn ?? 'move-in-1', scheduledAt: new Date('2025-06-12') } : moveOut,
+            ),
+        },
       },
-      inspectionComparison: { update: jest.fn().mockResolvedValue({}) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    };
-    const prisma = {
-      inspectionAreaComparison: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'area-comparison-1',
-          classification: 'NEW_DAMAGE',
-          originalClassification: null,
-          comparisonId: 'comparison-1',
-          comparison: { moveOutInspectionId: 'move-out-1', status: 'DRAFT' },
-        }),
-      },
-      inspectionComparison: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'comparison-1',
-          moveOutInspectionId: 'move-out-1',
-          moveInInspectionId: 'move-in-1',
-          status: 'DRAFT',
-          overallCondition: 'UNCHANGED',
-          version: 1,
-          generator: 'DETERMINISTIC',
-          requiresReviewCount: 0,
-          summary: '',
-          reviewedById: null,
-          reviewedAt: null,
-          reviewNote: null,
-          generatedAt: new Date(),
-          areaComparisons: [],
-        }),
-      },
-      userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
-      inspectionArea: { findMany: jest.fn().mockResolvedValue([]) },
-      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
-      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
-    };
-    const service = new ComparisonService(withReadiness(prisma) as never);
+      changed,
+    );
+    const service = new ComparisonService(prisma as never);
+    const generate = jest.spyOn(service, 'generate').mockResolvedValue(null);
+    // The reads withStaleness added, typed for the assertions.
+    return { service, generate, prisma: prisma as unknown as Record<string, Record<string, jest.Mock>> };
+  }
 
-    await service.overrideArea(
-      user,
-      'area-comparison-1',
-      'UNCHANGED' as never,
-      'Pre-existing wear',
+  it('leaves alone a comparison nothing under has moved', async () => {
+    const { service, generate } = reading(drawn());
+
+    await service.current(user.organizationId, 'move-out-1');
+
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('redraws one made under the old rules, Requires review rooms and all', async () => {
+    const { service, generate } = reading(drawn({ moveInInspectionId: 'move-in-1' }));
+
+    await service.current(user.organizationId, 'move-out-1');
+
+    expect(generate).toHaveBeenCalledWith('move-out-1');
+  });
+
+  it('redraws one when a finding was confirmed, rejected or added after it was drawn', async () => {
+    const { service, generate } = reading(drawn(), { findingChanged: true });
+
+    await service.current(user.organizationId, 'move-out-1');
+
+    expect(generate).toHaveBeenCalledWith('move-out-1');
+  });
+
+  it('says what moved, each of the ways it can', async () => {
+    const cases = [
+      [{ checklistChanged: true }, 'CHECKLIST_CHANGED'],
+      [{ roomAdded: true }, 'ROOMS_CHANGED'],
+      [{ latestMoveIn: 'move-in-2' }, 'NEWER_MOVE_IN'],
+      [{ findingChanged: true }, 'FINDINGS_CHANGED'],
+      [{ photoAdded: true }, 'EVIDENCE_ADDED'],
+      [{ recordingAdded: true }, 'EVIDENCE_ADDED'],
+    ] as const;
+    for (const [changed, reason] of cases) {
+      const { service } = reading(drawn(), changed);
+      await expect(service.staleness(drawn())).resolves.toEqual([reason]);
+    }
+    await expect(reading(drawn()).service.staleness(drawn({}))).resolves.toEqual(['RULES_CHANGED']);
+  });
+
+  it('asks about findings and evidence since it was drawn, on the inspections it compares', async () => {
+    const { service, prisma } = reading(drawn());
+
+    await service.staleness(drawn());
+
+    const since = { gt: new Date('2026-10-06T15:00:00Z') };
+    expect(prisma.inspectionFinding.findFirst.mock.calls[0][0].where).toEqual({
+      inspectionId: { in: ['move-out-1', 'move-in-1'] },
+      updatedAt: since,
+    });
+    expect(prisma.inspectionPhoto.findFirst.mock.calls[0][0].where).toEqual({
+      inspectionArea: { inspectionId: 'move-out-1' },
+      createdAt: since,
+    });
+    expect(prisma.inspectionMedia.findFirst.mock.calls[0][0].where).toEqual({
+      inspectionId: 'move-out-1',
+      createdAt: since,
+    });
+  });
+
+  it('draws the first one once the move-out is submitted, and not before', async () => {
+    const submitted = reading(null, {}, { inspectionType: 'MOVE_OUT', status: 'TECHNICIAN_SUBMITTED' });
+    await submitted.service.current(user.organizationId, 'move-out-1');
+    expect(submitted.generate).toHaveBeenCalledWith('move-out-1');
+
+    for (const moveOut of [
+      { inspectionType: 'MOVE_OUT', status: 'IN_PROGRESS' },
+      { inspectionType: 'MOVE_IN', status: 'COMPLETED' },
+      null,
+    ]) {
+      const early = reading(null, {}, moveOut);
+      await early.service.current(user.organizationId, 'move-out-1');
+      expect(early.generate).not.toHaveBeenCalled();
+    }
+  });
+
+  it('scopes the move-out to the caller’s organization', async () => {
+    const { service, prisma } = reading(null);
+
+    await service.current(user.organizationId, 'move-out-1');
+
+    expect(prisma.inspectionComparison.findFirst.mock.calls[0][0].where).toEqual({
+      moveOutInspectionId: 'move-out-1',
+      organizationId: user.organizationId,
+    });
+    expect(prisma.inspection.findFirst.mock.calls[0][0].where).toEqual({
+      id: 'move-out-1',
+      organizationId: user.organizationId,
+    });
+  });
+
+  it('asks quietly about a move-out with no move-in on record, which it does on every read', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { service, generate } = reading(null, {}, { inspectionType: 'MOVE_OUT', status: 'COMPLETED' });
+    generate.mockRejectedValue(
+      new ApplicationError(409, 'MOVE_IN_BASELINE_NOT_FOUND', 'No matching move-in baseline inspection was found.'),
     );
-    expect(tx.inspectionAreaComparison.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'area-comparison-1' },
-        data: expect.objectContaining({
-          classification: 'UNCHANGED',
-          originalClassification: 'NEW_DAMAGE',
-          overriddenById: user.id,
-          requiresReview: false,
-        }),
-      }),
-    );
-    expect(tx.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          action: 'INSPECTION_AREA_COMPARISON_OVERRIDDEN',
-          metadata: expect.objectContaining({ from: 'NEW_DAMAGE', to: 'UNCHANGED' }),
-        }),
-      }),
-    );
+
+    await service.current(user.organizationId, 'move-out-1');
+
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('leaves the comparison as it is when it cannot be redrawn, and the read still answers', async () => {
+    const { service, generate } = reading(drawn(), { findingChanged: true });
+    generate.mockRejectedValue(new Error('No matching move-in baseline inspection was found.'));
+
+    await expect(service.current(user.organizationId, 'move-out-1')).resolves.toBeUndefined();
   });
 });
+
 
 /**
  * A move-out report is compared against the **latest** move-in for the
@@ -974,11 +1094,10 @@ describe('comparing a room item by item', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(areaCreateMany.data[0]).toMatchObject({
       classification: 'NEW_DAMAGE',
-      requiresReview: true,
       summary:
         'New since move-in: Windows and locks. Already damaged at move-in: Floor and coverings.',
       metadata: {
@@ -1003,7 +1122,7 @@ describe('comparing a room item by item', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+    await service.generate('move-out-1');
 
     expect(prisma.inspectionFinding.findMany.mock.calls[0][0].where).toMatchObject({
       reviewStatus: { not: 'REJECTED' },
@@ -1043,29 +1162,22 @@ describe('comparing a room item by item', () => {
           id: 'comparison-1',
           moveOutInspectionId: 'move-out-1',
           moveInInspectionId: 'move-in-1',
-          status: 'DRAFT',
-          overallCondition: 'REQUIRES_REVIEW',
+          overallCondition: 'UNCHANGED',
           version: 2,
           generator: 'DETERMINISTIC',
-          requiresReviewCount: 1,
           summary: '',
-          reviewedById: null,
-          reviewedAt: null,
-          reviewNote: null,
+          // Drawn under today's rules: reading it redraws nothing.
+          metadata: { rules: COMPARISON_RULES },
           generatedAt: new Date(),
           areaComparisons: [
             {
               id: 'area-comparison-1',
               areaName: 'Entrance',
               floorName: null,
-              classification: 'REQUIRES_REVIEW',
+              classification: 'UNCHANGED',
               matchMethod: 'LOCAL_AREA_ID',
               matchConfidence: 1,
-              requiresReview: true,
               summary: 'Already damaged at move-in: Floor and coverings.',
-              originalClassification: null,
-              overriddenAt: null,
-              overrideReason: null,
               moveOutPropertyAreaId: 'pa-entrance',
               metadata: {
                 items: [
@@ -1079,7 +1191,7 @@ describe('comparing a room item by item', () => {
                     cleaning: null,
                   },
                 ],
-                aiNote: '1 AI finding calls damage new that the move-in already recorded.',
+                aiNote: '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.',
               },
             },
           ],
@@ -1089,15 +1201,15 @@ describe('comparing a room item by item', () => {
         findMany: jest.fn().mockResolvedValue([{ id: 'inspection-area-entrance', propertyAreaId: 'pa-entrance' }]),
       },
       inspectionFinding: { findMany },
-      userProfile: { findUnique: jest.fn() },
+      inspectionMedia: { count: jest.fn().mockResolvedValue(1) },
     };
-    const service = new ComparisonService(withReadiness(prisma) as never);
+    const service = new ComparisonService(withStaleness(prisma) as never);
 
     const result = await service.get(user, 'move-out-1');
 
     expect(result?.areas[0]).toMatchObject({
       moveOutAreaId: 'inspection-area-entrance',
-      aiNote: '1 AI finding calls damage new that the move-in already recorded.',
+      aiNote: '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.',
       items: [
         {
           label: 'Floor and coverings',
@@ -1116,12 +1228,8 @@ describe('comparing a room item by item', () => {
   });
 });
 
-/**
- * The review of the comparison before it went to owners and tenants by link
- * (the office, 2026-10-06): what an approval stands behind, and what survives
- * a regenerate.
- */
-describe('a comparison fit to send', () => {
+
+describe('which move-in counts as a baseline', () => {
   it('compares against a move-in submitted but not yet through the AI', () => {
     // Submitted is done (2026-10-05): the checklist is complete at submission.
     const where = baselineWhere(moveOutRecord());
@@ -1130,200 +1238,5 @@ describe('a comparison fit to send', () => {
     );
     expect(where.status.in).not.toContain('IN_PROGRESS');
     expect(where.status.in).not.toContain('SCHEDULED');
-  });
-
-  function reviewing(ready: Parameters<typeof withReadiness>[1] = {}) {
-    const tx = {
-      inspectionComparison: { update: jest.fn().mockResolvedValue({}) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    };
-    const prisma = withReadiness(
-      {
-        inspectionComparison: {
-          findFirst: jest.fn().mockResolvedValue({
-            id: 'comparison-1',
-            status: 'DRAFT',
-            moveOutInspectionId: 'move-out-1',
-            moveInInspectionId: 'move-in-1',
-            generatedAt: new Date('2026-10-06T15:00:00Z'),
-          }),
-        },
-        $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
-      },
-      ready,
-    );
-    return { service: new ComparisonService(prisma as never), tx };
-  }
-
-  it('is not approved while a room still says Requires review', async () => {
-    const { service, tx } = reviewing({ undecided: 2 });
-
-    await expect(service.review(user, 'comparison-1', 'APPROVED')).rejects.toMatchObject({
-      status: 409,
-      code: 'COMPARISON_ROOMS_UNDECIDED',
-      message: expect.stringContaining('2 rooms'),
-    });
-    expect(tx.inspectionComparison.update).not.toHaveBeenCalled();
-  });
-
-  it('is not approved once the evidence under it has changed, and says what changed', async () => {
-    for (const [ready, words] of [
-      [{ checklistChanged: true }, 'A checklist answer changed after it was generated.'],
-      [{ roomAdded: true }, 'A room was added to one of the inspections after it was generated.'],
-      [{ latestMoveIn: 'move-in-2' }, 'A later move-in has been recorded since it was generated.'],
-    ] as const) {
-      const { service, tx } = reviewing(ready);
-      await expect(service.review(user, 'comparison-1', 'APPROVED')).rejects.toMatchObject({
-        status: 409,
-        code: 'COMPARISON_OUT_OF_DATE',
-        message: expect.stringContaining(words),
-      });
-      expect(tx.inspectionComparison.update).not.toHaveBeenCalled();
-    }
-  });
-
-  it('can still be rejected whatever its state', async () => {
-    const { service, tx } = reviewing({ undecided: 3, checklistChanged: true });
-    // What load reads afterwards is beside the point here.
-    await service.review(user, 'comparison-1', 'REJECTED').catch(() => undefined);
-    expect(tx.inspectionComparison.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'REJECTED' }) }),
-    );
-  });
-
-  function overriding(status: string) {
-    const tx = {
-      inspectionAreaComparison: {
-        update: jest.fn().mockResolvedValue({}),
-        findMany: jest.fn().mockResolvedValue([{ classification: 'UNCHANGED', requiresReview: false }]),
-      },
-      inspectionComparison: { update: jest.fn().mockResolvedValue({}) },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    };
-    const prisma = withReadiness({
-      inspectionAreaComparison: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'area-comparison-1',
-          classification: 'NEW_DAMAGE',
-          originalClassification: null,
-          comparisonId: 'comparison-1',
-          comparison: { moveOutInspectionId: 'move-out-1', status },
-        }),
-      },
-      // `load`, afterwards.
-      inspectionComparison: { findFirst: jest.fn().mockResolvedValue(null) },
-      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
-    });
-    return { service: new ComparisonService(prisma as never), tx };
-  }
-
-  it('needs the reason a room was changed, because the report prints it', async () => {
-    const { service, tx } = overriding('DRAFT');
-
-    for (const reason of [undefined, '', '   '])
-      await expect(
-        service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, reason),
-      ).rejects.toMatchObject({ status: 400, code: 'OVERRIDE_REASON_REQUIRED' });
-    expect(tx.inspectionAreaComparison.update).not.toHaveBeenCalled();
-
-    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, '  Same marks in the move-in photos. ');
-    expect(tx.inspectionAreaComparison.update.mock.calls[0][0].data.overrideReason).toBe(
-      'Same marks in the move-in photos.',
-    );
-  });
-
-  it('sends an approved comparison back for approval when a room is changed', async () => {
-    const { service, tx } = overriding('APPROVED');
-
-    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, 'Pre-existing');
-
-    expect(tx.inspectionComparison.update.mock.calls[0][0].data).toMatchObject({
-      status: 'UNDER_REVIEW',
-      reviewedById: null,
-      reviewedAt: null,
-    });
-    expect(tx.auditLog.create.mock.calls[0][0].data.metadata).toMatchObject({ approvalWithdrawn: true });
-  });
-
-  it('leaves a draft a draft when a room is changed', async () => {
-    const { service, tx } = overriding('DRAFT');
-
-    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, 'Pre-existing');
-
-    expect(tx.inspectionComparison.update.mock.calls[0][0].data.status).toBeUndefined();
-  });
-});
-
-describe('a reviewer’s decision, across a regenerate', () => {
-  const row = (classification: string, extra: Record<string, unknown> = {}) => ({
-    moveInPropertyAreaId: 'pa-kitchen',
-    moveOutPropertyAreaId: 'pa-kitchen',
-    areaName: 'Kitchen',
-    floorName: null,
-    classification,
-    matchMethod: 'LOCAL_AREA_ID',
-    matchConfidence: 1,
-    requiresReview: true,
-    summary: 'New since move-in: Walls and ceilings.',
-    ...extra,
-  });
-  const decided = {
-    moveInPropertyAreaId: 'pa-kitchen',
-    moveOutPropertyAreaId: 'pa-kitchen',
-    classification: 'UNCHANGED',
-    originalClassification: 'NEW_DAMAGE',
-    overriddenById: 'user-9',
-    overriddenAt: new Date('2026-10-06T16:00:00Z'),
-    overrideReason: 'The move-in photographs show the same marks.',
-  };
-
-  it('is kept where the machine still says what the reviewer set aside', () => {
-    const { results, kept } = keepOverrides([row('NEW_DAMAGE')] as never, [decided] as never);
-
-    expect(kept).toBe(1);
-    expect(results[0]).toMatchObject({
-      classification: 'UNCHANGED',
-      originalClassification: 'NEW_DAMAGE',
-      overrideReason: 'The move-in photographs show the same marks.',
-      requiresReview: false,
-      // The checklist's own words stay: the report prints both.
-      summary: 'New since move-in: Walls and ceilings.',
-    });
-  });
-
-  it('is dropped where the evidence moved the machine’s verdict, or the rooms differ', () => {
-    expect(keepOverrides([row('UNCHANGED', { requiresReview: false })] as never, [decided] as never).kept).toBe(0);
-    expect(
-      keepOverrides([row('NEW_DAMAGE', { moveInPropertyAreaId: 'pa-other' })] as never, [decided] as never).kept,
-    ).toBe(0);
-  });
-
-  it('survives regenerating the comparison', async () => {
-    const { prisma, areaCreateMany, tx } = generatePrisma({
-      moveOut,
-      moveIn: { id: 'move-in-1' },
-      existing: {
-        id: 'comparison-1',
-        status: 'DRAFT',
-        version: 2,
-        areaComparisons: [{ ...decided, moveInPropertyAreaId: 'pa-kitchen', moveOutPropertyAreaId: 'pa-kitchen' }],
-      },
-      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
-      moveInAreas: [area('pa-kitchen', 'Kitchen')],
-      moveOutMedia: [mediaRow('pa-kitchen', 1)],
-      moveOutFindings: [damageFinding('pa-kitchen')],
-      moveInFindings: [soundFinding('pa-kitchen')],
-    });
-    const service = new ComparisonService(prisma as never);
-
-    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
-
-    expect(areaCreateMany.data[0]).toMatchObject({
-      classification: 'UNCHANGED',
-      originalClassification: 'NEW_DAMAGE',
-      overrideReason: 'The move-in photographs show the same marks.',
-      requiresReview: false,
-    });
-    expect(tx.auditLog.create.mock.calls[0][0].data.metadata).toMatchObject({ keptOverrides: 1 });
   });
 });

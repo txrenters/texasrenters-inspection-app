@@ -6,16 +6,17 @@
  * by area, with the evidence that justifies each verdict underneath it.
  *
  * **The pairing is not recomputed here.** `InspectionAreaComparison` already
- * records which move-in area each move-out area was matched to, how confidently,
- * and what a reviewer decided about it. Re-matching would produce a second
- * opinion that could quietly disagree with the page the reviewer approved, so
- * this reads the stored rows and prints the verdict that was actually reviewed.
+ * records which move-in area each move-out area was matched to and the verdict
+ * drawn on it. Re-matching would produce a second opinion that could quietly
+ * disagree with the console's, so this reads the stored rows -- which the
+ * callers bring up to date first (`ComparisonService.current`).
  *
  * The visibility rules are the inspection report's, deliberately: only APPROVED
  * findings, and every photograph but a rejected finding's (`REPORT_VISIBLE_PHOTO`). This document
  * is charge-relevant and is sent to owners and tenants by share link (the
- * office, 2026-10-06), so it must never be the place unreviewed AI output first
- * appears.
+ * office, 2026-10-06), so it must never be the place unconfirmed AI output first
+ * appears. The verdicts follow the same rule: only a finding the office
+ * confirmed moves one.
  *
  * Each room carries the item-by-item comparison the verdict was drawn from, as
  * it was when the comparison was generated. Reading the two checklists live
@@ -65,6 +66,13 @@ function storedItems(metadata: Prisma.JsonValue | null): ComparisonReportItem[] 
     change: item.change,
     cleaning: item.cleaning,
   }));
+}
+
+/** What the office confirmed from the recording as new, stored with the verdict. */
+function storedFromRecording(metadata: Prisma.JsonValue | null): string[] {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+  const titles = (metadata as { fromRecording?: unknown }).fromRecording;
+  return Array.isArray(titles) ? titles.filter((title): title is string => typeof title === 'string') : [];
 }
 
 const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
@@ -127,15 +135,9 @@ export class ComparisonReportService {
         'No comparison has been generated for this inspection yet.',
       );
 
-    const [moveIn, moveOut, reviewer] = await Promise.all([
+    const [moveIn, moveOut] = await Promise.all([
       this.loadSide(comparison.moveInInspectionId, photoPath),
       this.loadSide(comparison.moveOutInspectionId, photoPath),
-      comparison.reviewedById
-        ? this.prisma.userProfile.findUnique({
-            where: { id: comparison.reviewedById },
-            select: { displayName: true },
-          })
-        : Promise.resolve(null),
     ]);
 
     const areas = comparison.areaComparisons.map((row) => ({
@@ -143,14 +145,12 @@ export class ComparisonReportService {
       areaName: row.areaName,
       floorName: row.floorName,
       classification: row.classification,
-      originalClassification: row.originalClassification,
-      overrideReason: row.overrideReason,
       matchMethod: row.matchMethod,
       matchConfidence: row.matchConfidence,
-      requiresReview: row.requiresReview,
       // Nullable in the table; a renderer should not have to null-check a caption.
       summary: row.summary ?? '',
       items: storedItems(row.metadata),
+      fromRecording: storedFromRecording(row.metadata),
       // Null on either side is meaningful: an area documented at move-in and
       // never revisited, or one that only exists at move-out. Those rows are
       // the point of the document, so they are carried rather than dropped.
@@ -168,15 +168,10 @@ export class ComparisonReportService {
       property: moveOut.property,
       comparison: {
         id: comparison.id,
-        status: comparison.status,
         version: comparison.version,
         overallCondition: comparison.overallCondition,
-        requiresReviewCount: comparison.requiresReviewCount,
         summary: comparison.summary ?? '',
         generatedAt: comparison.generatedAt.toISOString(),
-        reviewedByName: reviewer?.displayName ?? null,
-        reviewedAt: comparison.reviewedAt?.toISOString() ?? null,
-        reviewNote: comparison.reviewNote ?? null,
       },
       moveIn: moveIn.inspection,
       moveOut: moveOut.inspection,

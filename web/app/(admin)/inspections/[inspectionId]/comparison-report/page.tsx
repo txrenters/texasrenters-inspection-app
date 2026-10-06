@@ -15,7 +15,7 @@ import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
-import { comparisonShareBlockers } from '@/lib/comparison-share';
+import { comparisonWaitingOn } from '@/lib/comparison-waiting';
 import { useComparisonReport, useInspectionComparison } from '@/lib/queries';
 
 /**
@@ -23,8 +23,10 @@ import { useComparisonReport, useInspectionComparison } from '@/lib/queries';
  * link is sent: the same document the share link and its PDF render, so what
  * the office checks here is what goes out (the office, 2026-10-06).
  *
- * What stops it being shared -- not approved, a room still undecided, evidence
- * changed since it was generated -- is said above it, with the way out.
+ * Nothing stands between it and a link (the office, 2026-10-07): it used to
+ * wait for every room to be decided and the whole approved. What has not
+ * reached it yet -- recordings still processing, findings not yet confirmed --
+ * is said above it, and it follows them by itself.
  */
 export default function ComparisonReportPage() {
   const params = useParams<{ inspectionId: string }>();
@@ -45,7 +47,7 @@ export default function ComparisonReportPage() {
       />
     );
 
-  const blockers = comparison.data ? comparisonShareBlockers(comparison.data) : [];
+  const waiting = comparison.data ? comparisonWaitingOn(comparison.data) : [];
   const canShare = permissions.has('reports:share');
 
   return (
@@ -63,12 +65,7 @@ export default function ComparisonReportPage() {
             Print
           </Button>
           {canShare ? (
-            <Button
-              disabled={!comparison.data || blockers.length > 0}
-              onClick={() => setSharing(true)}
-              size="sm"
-              title={blockers[0]}
-            >
+            <Button disabled={!comparison.data} onClick={() => setSharing(true)} size="sm">
               <Share2Icon className="size-4" />
               Share with owner or tenant
             </Button>
@@ -78,21 +75,18 @@ export default function ComparisonReportPage() {
 
       <ComparisonDocument
         banner={
-          blockers.length ? (
-            <Alert className="print:hidden" variant="warning">
-              <AlertTitle>Not ready to share</AlertTitle>
+          waiting.length ? (
+            <Alert className="print:hidden" variant="info">
+              <AlertTitle>Still to come</AlertTitle>
               <AlertDescription>
                 <ul className="list-disc space-y-0.5 pl-4">
-                  {blockers.map((blocker) => (
-                    <li key={blocker}>{blocker}</li>
+                  {waiting.map((note) => (
+                    <li key={note}>{note}</li>
                   ))}
                 </ul>
-                <Link
-                  className="mt-1 inline-block font-medium underline underline-offset-4"
-                  href={`/inspections/${inspectionId}/comparison`}
-                >
-                  Open the comparison
-                </Link>
+                <p className="mt-1">
+                  You can share it now: a link always shows the report as it stands.
+                </p>
               </AlertDescription>
             </Alert>
           ) : null
