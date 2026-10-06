@@ -6,14 +6,12 @@
  * As with `buildReportView`, the renderers only style what this computes.
  * Everything a reader is told -- which verdict a room has and in what words, what
  * the two inspections recorded item by item, what needs cleaning, what the office
- * decided and why -- is decided here once, so the page, the PDF and the preview
- * cannot drift apart.
+ * confirmed from the recordings -- is decided here once, so the page, the PDF and
+ * the preview cannot drift apart.
  *
- * Written for the reader the link goes to, not for the reviewer (the office,
- * 2026-10-06). The comparison's working vocabulary -- "requires review", match
- * methods and their confidence, version numbers, the AI's notes -- stays in the
- * console. A verdict a reviewer changed is printed with the reason they gave,
- * beside the checklist it departs from, rather than silently.
+ * Written for the reader the link goes to, not for the office (2026-10-06). The
+ * comparison's working vocabulary -- match methods and their confidence,
+ * version numbers, the AI's notes -- stays in the console.
  *
  * Pure and dependency-free: it runs in Node for the PDF and in the browser.
  */
@@ -55,8 +53,10 @@ const VERDICT: Record<string, { label: string; tone: ComparisonToneName }> = {
   RESOLVED: { label: 'Better than at move-in', tone: 'sound' },
   MISSING_BASELINE: { label: 'Not recorded at move-in', tone: 'neutral' },
   MISSING_MOVE_OUT_EVIDENCE: { label: 'Not inspected at move-out', tone: 'neutral' },
-  NOT_COMPARABLE: { label: 'Not comparable', tone: 'neutral' },
-  // Never on an approved comparison: an approval waits for none.
+  // Damage the record cannot call new or old: its sentence says why.
+  NOT_COMPARABLE: { label: 'Cannot be compared', tone: 'neutral' },
+  // No longer drawn (2026-10-07); a comparison still holding one is redrawn
+  // before it is read.
   REQUIRES_REVIEW: { label: 'Under review', tone: 'neutral' },
 };
 
@@ -198,12 +198,11 @@ export interface ComparisonRoomView {
   newDamage: boolean;
   /** What the two inspections recorded, in a sentence or two. */
   sentence: string | null;
-  /** The office's reason, when a reviewer set the machine's verdict aside. */
-  officeNote: string | null;
-  /** The verdict the checklist alone gave, when the office changed it. */
-  changedFrom: string | null;
   items: ComparisonItemRowView[];
-  /** Labels of the items new since move-in. */
+  /**
+   * What is new since move-in: the checklist items, then what the office
+   * confirmed from the move-out recording.
+   */
   newItems: string[];
   /** Labels of the items that need cleaning. */
   cleaningItems: string[];
@@ -224,11 +223,6 @@ export interface ComparisonView {
   subtitle: string;
   moveIn: { label: string; date: string; inspector: string };
   moveOut: { label: string; date: string; inspector: string };
-  /** "Reviewed by Ana Lopez on October 6, 2026"; null until approved. */
-  reviewedLabel: string | null;
-  reviewNote: string | null;
-  /** Not approved: a preview, which no share link serves. */
-  draft: boolean;
   headline: string;
   stats: ComparisonStatView[];
   /** Rooms with new damage, and what is new in each. */
@@ -240,11 +234,18 @@ export interface ComparisonView {
   generatedLabel: string;
 }
 
+/**
+ * What the report is, said truthfully (2026-10-07): nobody approves a verdict
+ * any more. Each comes from the two checklists the technicians recorded and
+ * the findings the office confirmed from the move-out recordings -- the only
+ * findings printed.
+ */
 const DISCLAIMER =
   'This report sets the condition recorded at the move-in inspection beside the condition ' +
-  'recorded at move-out, room by room. Every verdict in it was reviewed by the TexasRenters ' +
-  'team, and only findings a reviewer approved are shown. It is informational: it does not by ' +
-  'itself authorize charges or determine responsibility for any condition described.';
+  'recorded at move-out, room by room. Each verdict is drawn from the checklists the ' +
+  'inspectors recorded and from findings the TexasRenters team confirmed from the move-out ' +
+  'recordings, which are the only findings shown. It is informational: it does not by itself ' +
+  'authorize charges or determine responsibility for any condition described.';
 
 function axisCell(value: boolean | null | undefined) {
   if (value === true) return 'Y';
@@ -302,11 +303,15 @@ function sideView(
 
 /**
  * What the record says about a room the checklists could not compare item by
- * item, in plain words. The machine's own sentence for these was written for the
- * reviewer ("needs a human review"), and is not printed.
+ * item, in plain words. Worded here rather than read from the comparison, so a
+ * comparison drawn under older rules -- whose sentences were written for a
+ * reviewer -- prints the same as a new one.
  */
 function sentenceWithoutItems(area: ComparisonReportArea, moveOut: ComparisonSideView) {
   switch (area.classification) {
+    case 'NOT_COMPARABLE':
+      // Why it cannot be compared differs room by room; the comparison says.
+      return area.summary.trim() || 'The two inspections did not record this room in a way that can be compared.';
     case 'MISSING_BASELINE':
       return 'The move-in inspection has no matching room, so there is nothing to compare it with.';
     case 'MISSING_MOVE_OUT_EVIDENCE':
@@ -331,19 +336,12 @@ function roomView(area: ComparisonReportArea): ComparisonRoomView {
   const items = area.items ?? [];
   const moveIn = sideView(area.moveIn, area.areaName, 'Not in the move-in inspection');
   const moveOut = sideView(area.moveOut, area.areaName, 'Not in the move-out inspection');
-  // The stored sentence is the checklist's own words only when the verdict was
-  // drawn item by item -- when some item was graded on both sides. Otherwise it
-  // is the machine's note to the reviewer.
+  // The stored sentence is the checklist's own words when the verdict was drawn
+  // item by item -- when some item was graded on both sides.
   const itemized = items.some(
     (item) => damageOf(item.moveIn) !== null && damageOf(item.moveOut) !== null,
   );
-  const overridden =
-    Boolean(area.originalClassification) && area.originalClassification !== area.classification;
-  const sentence = itemized
-    ? area.summary.trim() || null
-    : overridden
-      ? null
-      : sentenceWithoutItems(area, moveOut);
+  const sentence = itemized ? area.summary.trim() || null : sentenceWithoutItems(area, moveOut);
 
   const rows: ComparisonItemRowView[] = items.map((item) => {
     const change = comparisonChange(item);
@@ -378,10 +376,11 @@ function roomView(area: ComparisonReportArea): ComparisonRoomView {
     tone: COMPARISON_TONE[verdict.tone],
     newDamage: area.classification === 'NEW_DAMAGE' || area.classification === 'WORSENED',
     sentence,
-    officeNote: overridden ? area.overrideReason?.trim() || null : null,
-    changedFrom: overridden ? verdictOf(area.originalClassification as string).label : null,
     items: rows,
-    newItems: items.filter((item) => item.change === 'NEW_DAMAGE').map((item) => item.label),
+    newItems: [
+      ...items.filter((item) => item.change === 'NEW_DAMAGE').map((item) => item.label),
+      ...(area.fromRecording ?? []),
+    ],
     cleaningItems: items
       .filter((item) => item.cleaning === 'NEEDS_CLEANING')
       .map((item) => item.label),
@@ -408,15 +407,13 @@ export function buildComparisonView(report: ComparisonReport): ComparisonView {
   const cleaning = rooms
     .filter((room) => room.cleaningItems.length)
     .map((room) => ({ id: room.id, name: room.name, items: room.cleaningItems }));
-  // Counted in the rooms whose verdict is new damage: an item in a room the
-  // office decided otherwise is printed with that decision, not counted here.
+  // Counted in the rooms whose verdict is new damage, so the figure and the
+  // list beneath it always agree.
   const newItems = newDamage.reduce((total, room) => total + room.items.length, 0);
   const cleaningItems = rooms.reduce((total, room) => total + room.cleaningItems.length, 0);
 
   const property = report.property;
   const unit = property.unitName ? `, Unit ${property.unitName}` : '';
-  const reviewedOn = formatReportDay(report.comparison.reviewedAt, true);
-  const approved = report.comparison.status === 'APPROVED';
 
   return {
     brand: report.brand,
@@ -425,12 +422,6 @@ export function buildComparisonView(report: ComparisonReport): ComparisonView {
     subtitle: [property.city, property.state, property.postalCode].filter(Boolean).join(', '),
     moveIn: sideHeader(report.moveIn, 'Move-in inspection'),
     moveOut: sideHeader(report.moveOut, 'Move-out inspection'),
-    reviewedLabel:
-      approved && report.comparison.reviewedByName
-        ? `Reviewed by ${report.comparison.reviewedByName}${reviewedOn ? ` on ${reviewedOn}` : ''}`
-        : null,
-    reviewNote: approved ? report.comparison.reviewNote?.trim() || null : null,
-    draft: !approved,
     headline: newDamage.length
       ? `New damage recorded in ${newDamage.length} ${newDamage.length === 1 ? 'room' : 'rooms'}`
       : 'No new damage recorded at move-out',

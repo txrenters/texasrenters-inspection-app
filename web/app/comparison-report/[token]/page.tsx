@@ -53,11 +53,9 @@ export default function PublicComparisonReportPage() {
       .catch((cause) => {
         if (controller.signal.aborted) return;
         setError(
-          cause instanceof ApiError && cause.code === 'COMPARISON_REPORT_UPDATING'
-            ? cause.message
-            : cause instanceof ApiError && cause.status === 404
-              ? 'This report link is invalid, expired, or has been revoked. Contact your property manager for a new link.'
-              : 'The report could not be loaded right now. Please try again later.',
+          cause instanceof ApiError && cause.status === 404
+            ? 'This report link is invalid, expired, or has been revoked. Contact your property manager for a new link.'
+            : 'The report could not be loaded right now. Please try again later.',
         );
       });
     return () => controller.abort();

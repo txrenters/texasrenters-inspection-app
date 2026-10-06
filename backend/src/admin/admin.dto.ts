@@ -393,30 +393,6 @@ export class MergeInspectionAreasDto {
   @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
-const COMPARISON_CLASSIFICATIONS = [
-  'UNCHANGED',
-  'IMPROVED',
-  'NEW_DAMAGE',
-  'WORSENED',
-  'RESOLVED',
-  'MISSING_BASELINE',
-  'MISSING_MOVE_OUT_EVIDENCE',
-  'NOT_COMPARABLE',
-  'REQUIRES_REVIEW',
-] as const;
-
-/** Approve or reject a move-in vs move-out comparison (spec §12). */
-export class ComparisonReviewDto {
-  @IsIn(['APPROVED', 'REJECTED']) decision!: 'APPROVED' | 'REJECTED';
-  @IsOptional() @IsString() @MaxLength(1000) note?: string;
-}
-
-/** Override a single area comparison's classification, with an audit trail. */
-export class AreaComparisonOverrideDto {
-  @IsIn(COMPARISON_CLASSIFICATIONS) classification!: string;
-  @IsOptional() @IsString() @MaxLength(500) reason?: string;
-}
-
 /** Configure a charge rule (spec §13/§14) — e.g. the unauthorized-pet amount. */
 export class ChargeRuleDto {
   @IsOptional() @IsString() @MaxLength(60) code?: string;

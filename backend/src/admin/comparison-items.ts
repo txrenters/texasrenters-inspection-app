@@ -68,6 +68,12 @@ export type FindingSignal = {
   category: string;
   findingType: string;
   comparisonResult: string | null;
+  /**
+   * The office confirmed it from the recording (APPROVED -- an edit is stored
+   * as an approval too). Only a confirmed finding moves a verdict: the same
+   * rule that decides whether the report prints it.
+   */
+  confirmed: boolean;
 };
 
 /** Damaged or not working: true; graded sound: false; not graded for damage: null. */
@@ -153,40 +159,65 @@ function possiblyNew(finding: FindingSignal) {
   );
 }
 
+/**
+ * What a room's verdict can be. There is no "requires review": the office
+ * reviews the recordings and confirms the findings, and the report is drawn
+ * from that and from the technician's checklist (the office, 2026-10-07: the
+ * maintenance admin "will not going to mark review every everything that was
+ * recorded"). Where the record cannot say whether damage is new, the verdict
+ * says exactly that -- NOT_COMPARABLE -- rather than waiting on a person.
+ */
+export type RoomVerdict = 'NEW_DAMAGE' | 'WORSENED' | 'NOT_COMPARABLE' | 'UNCHANGED' | 'RESOLVED';
+
 export type ItemVerdict = {
-  classification:
-    | 'NEW_DAMAGE'
-    | 'REQUIRES_REVIEW'
-    | 'UNCHANGED'
-    | 'RESOLVED';
-  requiresReview: boolean;
+  classification: RoomVerdict;
   /**
-   * The technician's checklist, in words. Printed on the comparison report,
-   * which may reach a tenant, so it says only what the two inspections
-   * recorded and never repeats an AI finding nobody has reviewed.
+   * The technician's checklist, and the findings the office confirmed, in
+   * words. Printed on the comparison report, which may reach a tenant, so it
+   * never repeats an AI finding nobody has confirmed.
    */
   summary: string;
   /**
-   * Why the AI's findings send the room to review, for the console only. Null
-   * when they do not.
+   * What the office confirmed from the recording as new or worse, by title --
+   * listed on the report beside the checklist's new items, since no item
+   * carries it.
    */
+  fromRecording: string[];
+  /** For the console only: AI findings here still waiting to be confirmed. */
   aiNote: string | null;
 };
+
+/** The titles of the findings of new damage the office confirmed. */
+export function confirmedNewDamage(findings: FindingSignal[]) {
+  return findings
+    .filter((finding) => finding.confirmed && possiblyNew(finding))
+    .map((finding) => finding.title);
+}
+
+/**
+ * The AI's findings of new damage in a room that the office has not yet
+ * confirmed or rejected, said for the console. They are not on the report and
+ * move no verdict until confirmed; confirming one refreshes the comparison.
+ */
+export function waitingNote(findings: FindingSignal[]) {
+  const waiting = findings.filter((finding) => !finding.confirmed && possiblyNew(finding)).length;
+  if (!waiting) return null;
+  return waiting === 1
+    ? '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.'
+    : `${waiting} AI findings of new damage here are waiting to be confirmed from the recording; they join the report once confirmed.`;
+}
 
 /**
  * One room's verdict from its items, or null when the two inspections have no
  * item both graded for damage -- then there is nothing to compare item by item
  * and the caller falls back to counting defects.
  *
- * `findings` are the move-out's, decided or not, and never the rejected ones:
- * a finding the office rejected is not damage. They can only send a room to
- * review; the checklist is what decides whether damage is new.
+ * `findings` are the move-out's, never the rejected ones. A confirmed finding
+ * of new damage is new damage, whatever the checklist shows -- the office saw
+ * it on the recording -- and on an item the move-in already had damaged it is
+ * the item getting worse. An unconfirmed one moves nothing.
  */
-export function itemVerdict(
-  items: ComparedItem[],
-  findings: FindingSignal[],
-  weakMatch: boolean,
-): ItemVerdict | null {
+export function itemVerdict(items: ComparedItem[], findings: FindingSignal[]): ItemVerdict | null {
   const compared = items.filter(
     (item) => damageOf(item.moveIn) !== null && damageOf(item.moveOut) !== null,
   );
@@ -200,45 +231,42 @@ export function itemVerdict(
   const unknown = labels('NO_BASELINE');
   const cleaning = items.filter((item) => item.cleaning === 'NEEDS_CLEANING').map((item) => item.label);
 
+  // What the office confirmed from the recording, against the item each is
+  // about. A finding on an item the checklist already calls new adds nothing.
+  const onItem = (finding: FindingSignal) =>
+    items.find((item) => findingMatchesChecklistItem(finding, item));
+  const confirmed = findings.filter((finding) => finding.confirmed && possiblyNew(finding));
+  const worse = confirmed.filter((finding) => onItem(finding)?.change === 'ALREADY_DAMAGED');
+  const beyondChecklist = confirmed.filter((finding) => {
+    const change = onItem(finding)?.change;
+    return change !== 'ALREADY_DAMAGED' && change !== 'NEW_DAMAGE';
+  });
+  const titles = (list: FindingSignal[]) => nameList(list.map((finding) => finding.title));
+
   const sentences: string[] = [];
   if (fresh.length) sentences.push(`New since move-in: ${nameList(fresh)}.`);
+  if (beyondChecklist.length)
+    sentences.push(`Confirmed from the move-out recording: ${titles(beyondChecklist)}.`);
+  if (worse.length)
+    sentences.push(`Worse than at move-in, confirmed from the move-out recording: ${titles(worse)}.`);
   if (unknown.length)
     sentences.push(`Damaged at move-out, but not graded at move-in: ${nameList(unknown)}.`);
   if (existing.length) sentences.push(`Already damaged at move-in: ${nameList(existing)}.`);
   if (repaired.length)
     sentences.push(`Damaged at move-in, not at move-out: ${nameList(repaired)}.`);
-  if (!fresh.length && !unknown.length && !existing.length && !repaired.length)
+  if (sentences.length === 0)
     sentences.push('No change in condition on any item graded at both inspections.');
   if (cleaning.length) sentences.push(`Needs cleaning: ${nameList(cleaning)}.`);
-  const summary = sentences.join(' ');
-
-  // The AI's findings that claim new damage, against what the checklist says
-  // about the item each is about.
-  const claims = findings.filter(possiblyNew);
-  const onItem = (finding: FindingSignal) =>
-    items.find((item) => findingMatchesChecklistItem(finding, item));
-  const worse = claims.filter((finding) => onItem(finding)?.change === 'ALREADY_DAMAGED');
-  const unexplained = claims.filter((finding) => {
-    const item = onItem(finding);
-    return !item || item.change === 'NO_CHANGE' || item.change === 'REPAIRED' || item.change === 'NOT_GRADED';
+  const verdict = (classification: RoomVerdict): ItemVerdict => ({
+    classification,
+    summary: sentences.join(' '),
+    fromRecording: [...beyondChecklist, ...worse].map((finding) => finding.title),
+    aiNote: waitingNote(findings),
   });
-  const notes: string[] = [];
-  if (worse.length)
-    notes.push(
-      `${worse.length} AI ${worse.length === 1 ? 'finding calls' : 'findings call'} damage new that the move-in already recorded; compare the photographs to see whether it got worse.`,
-    );
-  if (unexplained.length)
-    notes.push(
-      `${unexplained.length} AI ${unexplained.length === 1 ? 'finding suggests' : 'findings suggest'} new damage the checklist does not show.`,
-    );
-  const aiNote = notes.length ? notes.join(' ') : null;
 
-  if (fresh.length) return { classification: 'NEW_DAMAGE', requiresReview: true, summary, aiNote };
-  if (unknown.length || aiNote)
-    return { classification: 'REQUIRES_REVIEW', requiresReview: true, summary, aiNote };
-  // A category-only pairing is an inference about which room this is.
-  if (weakMatch) return { classification: 'REQUIRES_REVIEW', requiresReview: true, summary, aiNote };
-  if (repaired.length && !existing.length)
-    return { classification: 'RESOLVED', requiresReview: false, summary, aiNote };
-  return { classification: 'UNCHANGED', requiresReview: false, summary, aiNote };
+  if (fresh.length || beyondChecklist.length) return verdict('NEW_DAMAGE');
+  if (worse.length) return verdict('WORSENED');
+  if (unknown.length) return verdict('NOT_COMPARABLE');
+  if (repaired.length && !existing.length) return verdict('RESOLVED');
+  return verdict('UNCHANGED');
 }

@@ -48,13 +48,11 @@ import {
   AdminFindingsQueryDto,
   AiScorecardQueryDto,
   ApprovePropertyAreasDto,
-  AreaComparisonOverrideDto,
   AssignmentDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
   ChargeReviewDto,
   ChargeRuleDto,
-  ComparisonReviewDto,
   CommitInspectionImportDto,
   CreateAdminInspectionDto,
   JobberBookingContextQueryDto,
@@ -123,7 +121,6 @@ import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 import { TechnicianSkillsService } from './technician-skills.service';
-import type { ComparisonClassification } from '@prisma/client';
 
 /**
  * The map's two feeds are tagged separately from the rest of this controller.
@@ -958,45 +955,14 @@ export class AdminController {
    */
   @Get('inspections/:inspectionId/comparison-report')
   @RequirePermissions('inspections:read')
-  inspectionComparisonReport(
+  async inspectionComparisonReport(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
   ) {
+    // Current first: the document is drawn from the stored comparison, which
+    // follows the evidence only when it is read (`ComparisonService.current`).
+    await this.comparison.current(request.user.organizationId, id);
     return this.comparisonReport.report(request.user, id);
-  }
-  @Post('inspections/:inspectionId/comparison/generate')
-  @RequirePermissions('inspections:manage')
-  generateInspectionComparison(
-    @Req() request: AuthenticatedRequest,
-    @Param('inspectionId') id: string,
-  ) {
-    return this.comparison.generate(id, {
-      organizationId: request.user.organizationId,
-      userId: request.user.id,
-    });
-  }
-  @Post('comparisons/:comparisonId/review')
-  @RequirePermissions('comparisons:review')
-  reviewComparison(
-    @Req() request: AuthenticatedRequest,
-    @Param('comparisonId') id: string,
-    @Body() body: ComparisonReviewDto,
-  ) {
-    return this.comparison.review(request.user, id, body.decision, body.note);
-  }
-  @Post('area-comparisons/:areaComparisonId/override')
-  @RequirePermissions('comparisons:review')
-  overrideAreaComparison(
-    @Req() request: AuthenticatedRequest,
-    @Param('areaComparisonId') id: string,
-    @Body() body: AreaComparisonOverrideDto,
-  ) {
-    return this.comparison.overrideArea(
-      request.user,
-      id,
-      body.classification as ComparisonClassification,
-      body.reason,
-    );
   }
   @Get('charge-rules')
   @ApiTags(CHARGES_TAG)

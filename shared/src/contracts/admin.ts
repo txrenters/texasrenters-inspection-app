@@ -688,18 +688,17 @@ export interface AdminAreaComparison {
   classification: ComparisonClassification;
   matchMethod: ComparisonMatchMethod;
   matchConfidence: number;
-  requiresReview: boolean;
   summary?: string | null;
-  originalClassification?: ComparisonClassification | null;
-  overriddenAt?: string | null;
-  overrideReason?: string | null;
   /** The move-out's own area, to open its evidence from the comparison. */
   moveOutAreaId?: string | null;
   /** Each checklist item, move-in against move-out. Empty for a comparison generated before items. */
   items?: AdminComparisonItem[];
   /** Move-out findings about none of the items. */
   otherFindings?: AdminComparisonFinding[];
-  /** Why the AI's findings send the room to review. Console only, never printed. */
+  /**
+   * AI findings of new damage here still waiting to be confirmed from the
+   * recording. Console only, never printed: they are not on the report yet.
+   */
   aiNote?: string | null;
 }
 
@@ -741,30 +740,26 @@ export interface AdminComparisonItem {
   findings: AdminComparisonFinding[];
 }
 
-/** Move-in vs move-out comparison for a move-out inspection (spec §12). */
+/**
+ * Move-in vs move-out comparison for a move-out inspection (spec §12).
+ *
+ * Nobody approves it (the office, 2026-10-07): it is drawn from the
+ * technician's checklists and the findings the office confirmed, kept current
+ * by the server, and can be sent as soon as it exists.
+ */
 export interface AdminInspectionComparison {
   id: string;
   moveOutInspectionId: string;
   moveInInspectionId: string;
-  status: ComparisonStatus;
   overallCondition: ComparisonClassification;
   version: number;
   generator: string;
-  requiresReviewCount: number;
   summary?: string | null;
-  reviewedByName?: string | null;
-  reviewedAt?: string | null;
-  reviewNote?: string | null;
   generatedAt: string;
-  /**
-   * Rooms still classified "Requires review". An approval and a share link
-   * both wait for none.
-   */
-  undecidedRooms?: number;
-  /** Why the comparison no longer describes its two inspections; empty when it does. */
-  outOfDate?: Array<'NEWER_MOVE_IN' | 'CHECKLIST_CHANGED' | 'ROOMS_CHANGED'>;
-  /** The same, in sentences, for the console. */
-  outOfDateText?: string | null;
+  /** Move-out recordings still being processed: their findings are yet to come. */
+  recordingsProcessing: number;
+  /** Move-out findings waiting to be confirmed; not on the report until they are. */
+  findingsToConfirm: number;
   areas: AdminAreaComparison[];
 }
 
@@ -1119,10 +1114,9 @@ export interface ComparisonReportAreaSide {
  * One row of the comparison: the same area on both sides, with the verdict.
  *
  * The pairing is **not** recomputed here. `InspectionAreaComparison` already
- * records which move-in area a move-out area was matched to, how confidently,
- * and what a reviewer decided -- so the report prints the verdict that was
- * actually reviewed rather than a second opinion that could disagree with the
- * console.
+ * records which move-in area a move-out area was matched to and the verdict
+ * drawn on it -- so the report prints the console's verdict rather than a
+ * second opinion that could disagree with it.
  *
  * Either side may be null: an area documented at move-in and never revisited,
  * or one that only exists at move-out. Those rows are the point of the
@@ -1133,12 +1127,8 @@ export interface ComparisonReportArea {
   areaName: string;
   floorName?: string | null;
   classification: string;
-  /** Set when a reviewer overrode the deterministic verdict; null otherwise. */
-  originalClassification?: string | null;
-  overrideReason?: string | null;
   matchMethod: string;
   matchConfidence: number;
-  requiresReview: boolean;
   summary: string;
   /**
    * The checklist, item by item, as the verdict was drawn from it when the
@@ -1147,6 +1137,11 @@ export interface ComparisonReportArea {
    * comparison generated before items were compared.
    */
   items?: ComparisonReportItem[];
+  /**
+   * New or worse damage the office confirmed from the move-out recording, by
+   * finding title: listed with the items new since move-in.
+   */
+  fromRecording?: string[];
   moveIn: ComparisonReportAreaSide | null;
   moveOut: ComparisonReportAreaSide | null;
 }
@@ -1181,16 +1176,10 @@ export interface ComparisonReport {
   };
   comparison: {
     id: string;
-    status: string;
     version: number;
     overallCondition: string;
-    requiresReviewCount: number;
     summary: string;
     generatedAt: string;
-    reviewedByName?: string | null;
-    reviewedAt?: string | null;
-    /** The approver's note, printed with the approval. */
-    reviewNote?: string | null;
   };
   moveIn: ComparisonReportSide;
   moveOut: ComparisonReportSide;

@@ -191,8 +191,8 @@ export default function ChargeReportPage() {
       {data.comparison ? (
         <ReportSection index={2} title="Move-in vs move-out comparison">
           <p className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-            Overall: <StatusBadge value={data.comparison.overallCondition} /> · status{' '}
-            {humanize(data.comparison.status).toLowerCase()}
+            {/* No status: nobody approves a comparison any more (2026-10-07). */}
+            Overall: <StatusBadge value={data.comparison.overallCondition} />
           </p>
           <ul className="divide-y rounded-lg border">
             {data.comparison.areas.map((area) => (

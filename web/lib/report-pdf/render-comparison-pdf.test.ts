@@ -34,15 +34,10 @@ const REPORT: ComparisonReport = {
   },
   comparison: {
     id: 'comparison-1',
-    status: 'APPROVED',
     version: 3,
     overallCondition: 'NEW_DAMAGE',
-    requiresReviewCount: 0,
     summary: '',
     generatedAt: '2026-10-06T15:00:00.000Z',
-    reviewedByName: 'Ana Lopez',
-    reviewedAt: '2026-10-06T16:00:00.000Z',
-    reviewNote: 'Checked against the move-in photographs.',
   },
   moveIn: {
     inspectionId: 'move-in-1',
@@ -68,11 +63,8 @@ const REPORT: ComparisonReport = {
       areaName: 'Kitchen',
       floorName: 'Ground Floor',
       classification: 'NEW_DAMAGE',
-      originalClassification: null,
-      overrideReason: null,
       matchMethod: 'LOCAL_AREA_ID',
       matchConfidence: 1,
-      requiresReview: false,
       summary: 'New since move-in: Walls and ceilings.',
       items: [
         {
@@ -114,11 +106,8 @@ const REPORT: ComparisonReport = {
       areaName: 'Garage',
       floorName: null,
       classification: 'MISSING_MOVE_OUT_EVIDENCE',
-      originalClassification: null,
-      overrideReason: null,
       matchMethod: 'LOCAL_AREA_ID',
       matchConfidence: 1,
-      requiresReview: true,
       summary: '',
       items: [],
       moveIn: {

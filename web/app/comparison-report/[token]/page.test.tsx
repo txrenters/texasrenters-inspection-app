@@ -6,7 +6,8 @@ import ComparisonReportPage from './page';
 
 /**
  * The move-in / move-out comparison an owner or tenant opens from a link (the
- * office, 2026-10-06).
+ * office, 2026-10-06). Nobody approves it (2026-10-07): it is drawn from the
+ * two checklists and the findings the office confirmed from the recordings.
  */
 
 const state = vi.hoisted(() => ({
@@ -31,6 +32,15 @@ vi.mock('next/image', () => ({
   default: (props: { alt: string }) => <img alt={props.alt} />,
 }));
 
+const emptySide = (roomId: string, name: string) => ({
+  roomId,
+  name,
+  completionStatus: 'COMPLETED',
+  checklist: [],
+  findings: [],
+  photos: [],
+});
+
 const REPORT: ComparisonReport = {
   brand: { name: 'TexasRenters.com' },
   property: {
@@ -43,15 +53,10 @@ const REPORT: ComparisonReport = {
   },
   comparison: {
     id: 'comparison-1',
-    status: 'APPROVED',
     version: 4,
     overallCondition: 'NEW_DAMAGE',
-    requiresReviewCount: 1,
-    summary: 'Compared 1 area. 1 needs human review. Overall: NEW_DAMAGE.',
+    summary: 'Compared 2 areas. Overall: NEW_DAMAGE.',
     generatedAt: '2026-10-06T15:00:00.000Z',
-    reviewedByName: 'Ana Lopez',
-    reviewedAt: '2026-10-06T16:00:00.000Z',
-    reviewNote: null,
   },
   moveIn: {
     inspectionId: 'move-in-1',
@@ -75,12 +80,9 @@ const REPORT: ComparisonReport = {
       id: 'area-1',
       areaName: 'Kitchen',
       floorName: null,
-      classification: 'UNCHANGED',
-      originalClassification: 'NEW_DAMAGE',
-      overrideReason: 'The move-in photographs show the same holes.',
+      classification: 'NEW_DAMAGE',
       matchMethod: 'AREA_CATEGORY',
       matchConfidence: 0.5,
-      requiresReview: false,
       summary: 'New since move-in: Walls and ceilings.',
       items: [
         {
@@ -93,11 +95,7 @@ const REPORT: ComparisonReport = {
         },
       ],
       moveIn: {
-        roomId: 'room-in',
-        name: 'Kitchen',
-        completionStatus: 'COMPLETED',
-        checklist: [],
-        findings: [],
+        ...emptySide('room-in', 'Kitchen'),
         photos: [
           {
             id: 'photo-in',
@@ -109,14 +107,20 @@ const REPORT: ComparisonReport = {
           },
         ],
       },
-      moveOut: {
-        roomId: 'room-out',
-        name: 'Kitchen',
-        completionStatus: 'COMPLETED',
-        checklist: [],
-        findings: [],
-        photos: [],
-      },
+      moveOut: emptySide('room-out', 'Kitchen'),
+    },
+    {
+      // New damage the office confirmed from the recording, on no item.
+      id: 'area-2',
+      areaName: 'Bedroom 2',
+      floorName: null,
+      classification: 'NEW_DAMAGE',
+      matchMethod: 'LOCAL_AREA_ID',
+      matchConfidence: 1,
+      summary: 'Damage was recorded at move-out that the move-in did not record.',
+      fromRecording: ['Door: hole beside the handle'],
+      moveIn: emptySide('room-in-2', 'Bedroom 2'),
+      moveOut: emptySide('room-out-2', 'Bedroom 2'),
     },
   ],
   generatedAt: '2026-10-06T16:30:00.000Z',
@@ -131,22 +135,37 @@ afterEach(() => {
 });
 
 describe('the comparison report from a share link', () => {
-  it('shows each room’s verdict, the office’s reason for changing it, and the items beneath', async () => {
+  it('shows each room’s verdict and the items beneath it', async () => {
     state.respond = () => Promise.resolve(REPORT);
     render(<ComparisonReportPage />);
 
     expect(await screen.findByRole('heading', { name: '318 Notional Harbor Ln' })).toBeTruthy();
     const room = screen.getByRole('region', { name: 'Kitchen' });
-    expect(within(room).getByText('No new damage')).toBeTruthy();
-    expect(within(room).getByText(/changed from “New damage”/)).toBeTruthy();
-    expect(within(room).getByText(/The move-in photographs show the same holes\./)).toBeTruthy();
+    expect(within(room).getByText('New damage')).toBeTruthy();
     const table = within(room).getByRole('table', { name: /Kitchen: each item/ });
     expect(within(table).getByText('New since move-in')).toBeTruthy();
     expect(within(table).getByText('Two holes')).toBeTruthy();
-    expect(screen.getByText('Reviewed by Ana Lopez on October 6, 2026')).toBeTruthy();
   });
 
-  it('never shows the reviewer’s working: match method, confidence, versions, "needs human review"', async () => {
+  it('lists what the office confirmed from the recording with what is new', async () => {
+    state.respond = () => Promise.resolve(REPORT);
+    render(<ComparisonReportPage />);
+
+    await screen.findByRole('heading', { name: '318 Notional Harbor Ln' });
+    expect(screen.getAllByText(/Door: hole beside the handle/).length).toBeGreaterThan(0);
+  });
+
+  it('says how it was drawn, and claims no review nobody made', async () => {
+    state.respond = () => Promise.resolve(REPORT);
+    const { container } = render(<ComparisonReportPage />);
+    await screen.findByRole('heading', { name: '318 Notional Harbor Ln' });
+
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/confirmed from the move-out recordings/);
+    expect(text).not.toMatch(/Reviewed by|reviewed by the TexasRenters team|Office review/);
+  });
+
+  it('never shows the office’s working: match method, confidence, versions', async () => {
     state.respond = () => Promise.resolve(REPORT);
     const { container } = render(<ComparisonReportPage />);
     await screen.findByRole('heading', { name: '318 Notional Harbor Ln' });
@@ -164,21 +183,6 @@ describe('the comparison report from a share link', () => {
     expect(screen.getByRole('link', { name: /Download PDF/ }).getAttribute('href')).toBe(
       '/comparison-report/token-1/pdf',
     );
-  });
-
-  it('says the report is being updated while it is back in review', async () => {
-    const { ApiError } = await import('@/lib/api');
-    state.respond = () =>
-      Promise.reject(
-        new ApiError(
-          409,
-          'COMPARISON_REPORT_UPDATING',
-          'This comparison report is being updated. Please check back later, or contact your property manager.',
-        ),
-      );
-    render(<ComparisonReportPage />);
-
-    expect((await screen.findByRole('alert')).textContent).toContain('being updated');
   });
 
   it('says a dead link is dead', async () => {

@@ -17,7 +17,7 @@ export const CLASSIFICATIONS: ReadonlyArray<{ value: ComparisonClassification; l
   { value: 'RESOLVED', label: 'Resolved' },
   { value: 'MISSING_BASELINE', label: 'Missing baseline' },
   { value: 'MISSING_MOVE_OUT_EVIDENCE', label: 'Missing move-out evidence' },
-  { value: 'NOT_COMPARABLE', label: 'Not comparable' },
+  { value: 'NOT_COMPARABLE', label: 'Cannot be compared' },
   { value: 'REQUIRES_REVIEW', label: 'Requires review' },
 ];
 
