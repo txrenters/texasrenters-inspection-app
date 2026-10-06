@@ -6,6 +6,7 @@ import { AppHeader } from '@/components/app-header';
 import { AppSidebar } from '@/components/app-sidebar';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { ImportDockProvider } from '@/components/import-dock';
+import { PageSearchProvider } from '@/components/page-search';
 import { AdminGuard } from '@/lib/auth';
 
 export function AppShell({
@@ -21,6 +22,8 @@ export function AppShell({
           rather than to the scrolling content, and above every route so
           navigating to the next property does not lose sight of it. */}
       <ImportDockProvider>
+      {/* A list page lends the header its search; see `page-search`. */}
+      <PageSearchProvider>
       <SidebarProvider defaultOpen={defaultSidebarOpen}>
         <AppSidebar />
         <SidebarInset className="bg-background min-w-0">
@@ -37,6 +40,7 @@ export function AppShell({
           </main>
         </SidebarInset>
       </SidebarProvider>
+      </PageSearchProvider>
       </ImportDockProvider>
     </AdminGuard>
   );

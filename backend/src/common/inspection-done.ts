@@ -1,5 +1,9 @@
-import { InspectionStatus } from '@prisma/client';
-import { FINISHED_INSPECTION_STATUSES } from '@texasrenters/shared';
+import { InspectionStatus, type Prisma } from '@prisma/client';
+import {
+  COULD_NOT_GET_IN_PREFIX,
+  FINISHED_INSPECTION_STATUSES,
+  type VisitState,
+} from '@texasrenters/shared';
 
 /**
  * The visit is done: the technician has submitted it, and everything after.
@@ -24,4 +28,33 @@ export const DONE_INSPECTION_STATUSES: InspectionStatus[] = FINISHED_INSPECTION_
 /** Whether an inspection's visit is done. */
 export function isDoneInspectionStatus(status: InspectionStatus): boolean {
   return DONE_INSPECTION_STATUSES.includes(status);
+}
+
+/**
+ * The inspections in one visit state (`visitStateOf`), as a query.
+ *
+ * "Could not get in" is a done visit whose reason says so. "Done" is every
+ * other done visit -- a blocked reason that says something else, or none. The
+ * `OR` with null is not decoration: `NOT startsWith` alone is false for a null
+ * reason in SQL, and would leave out nearly every done visit.
+ */
+export function visitStateWhere(state: VisitState): Prisma.InspectionWhereInput {
+  const couldNotGetIn = { startsWith: COULD_NOT_GET_IN_PREFIX };
+  switch (state) {
+    case 'SCHEDULED':
+      return { status: InspectionStatus.SCHEDULED };
+    case 'IN_PROGRESS':
+      return { status: InspectionStatus.IN_PROGRESS };
+    case 'FOLLOW_UP':
+      return { status: InspectionStatus.FOLLOW_UP_REQUIRED };
+    case 'CANCELLED':
+      return { status: InspectionStatus.CANCELLED };
+    case 'COULD_NOT_GET_IN':
+      return { status: { in: DONE_INSPECTION_STATUSES }, completionBlockedReason: couldNotGetIn };
+    case 'DONE':
+      return {
+        status: { in: DONE_INSPECTION_STATUSES },
+        OR: [{ completionBlockedReason: null }, { NOT: { completionBlockedReason: couldNotGetIn } }],
+      };
+  }
 }

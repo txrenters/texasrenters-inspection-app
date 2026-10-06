@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useProvidePageSearch } from '@/components/page-search';
 import { Spinner } from '@/components/ui/spinner';
 import { useSearchText } from '@/lib/use-search-text';
 import { cn } from '@/lib/utils';
@@ -29,8 +30,9 @@ export const ALL = '__all__';
  *
  * Not a panel. The old app wrapped these in a bordered, tinted box that was
  * visually heavier than the table it filtered — the eye landed on the filters
- * first and the data second. This is a plain row, and the only persistent
- * chrome is the search field.
+ * first and the data second. This is a plain row. The search itself is in the
+ * console's header (`useProvidePageSearch`); a phone, whose header has no room
+ * for it, gets it here.
  *
  * Active filters appear underneath as removable chips, so what is currently
  * narrowing the list is legible without opening each dropdown to check. That is
@@ -62,11 +64,20 @@ export function ListToolbar({
   children?: ReactNode;
 }) {
   const [text, setText] = useSearchText(search, onSearch);
+  // The header holds this list's search (the office, 2026-10-07: one search
+  // box, not two). This field stays only where the header has no room for one.
+  const inHeader = useProvidePageSearch({
+    label: searchLabel,
+    placeholder: searchPlaceholder,
+    value: search,
+    onChange: onSearch,
+    pending,
+  });
   const hasActive = Boolean(activeFilters?.length);
   return (
     <div className="space-y-3 pb-4">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-0 flex-1 sm:max-w-xs">
+        <div className={cn('relative min-w-0 flex-1 sm:max-w-xs', inHeader && 'sm:hidden')}>
           <SearchIcon
             aria-hidden
             className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"

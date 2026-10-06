@@ -60,6 +60,11 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   FOLLOW_UP_REQUIRED: { label: 'Follow-up required', tone: 'destructive', glyph: 'warning' },
   COMPLETED: { label: 'Completed', tone: 'success', glyph: 'success' },
   CANCELLED: { label: 'Cancelled', tone: 'muted', glyph: 'destructive' },
+  // Where a visit stands, in the office's words (`VisitState`): what the
+  // inspections list and the inspection page say.
+  DONE: { label: 'Done', tone: 'success', glyph: 'success' },
+  COULD_NOT_GET_IN: { label: 'Could not get in', tone: 'warning', glyph: 'warning' },
+  FOLLOW_UP: { label: 'Follow-up required', tone: 'destructive', glyph: 'warning' },
 
   // Area evidence review
   NOT_STARTED: { label: 'Not started', tone: 'muted', glyph: 'idle' },
