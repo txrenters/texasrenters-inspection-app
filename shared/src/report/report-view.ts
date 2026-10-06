@@ -184,6 +184,21 @@ export interface ReportChecklistRowView {
   comment: string;
 }
 
+/**
+ * What the inspector said in one recording of a room, as the report prints it:
+ * one run of text, each utterance opening with the minute and second it was
+ * spoken at -- "[0:05] Dining room has part pantry. [0:10] Need to ..." -- the
+ * way the maintenance team's own reports set it out (2026-10-07).
+ */
+export interface ReportNarrationView {
+  /** The clip's label, for an extra recording; null for the room's walkthrough. */
+  label: string | null;
+  text: string;
+}
+
+/** The heading over a room's narration, the office's own wording. */
+export const NARRATION_HEADING = 'Summary based on the recordings';
+
 export interface ReportRoomView {
   id: string;
   name: string;
@@ -195,9 +210,33 @@ export interface ReportRoomView {
   /** Condition rows, in the order an administrator authored the checklist. */
   checklist: ReportChecklistRowView[];
   photos: ReportPhotoView[];
+  /**
+   * The office's confirmed findings for the room. Kept on the view for the
+   * comparison report and the counts; the inspection report itself no longer
+   * prints them (the maintenance team, 2026-10-07: too much -- the table says
+   * what failed, the comments say why, and the narration says it verbatim).
+   */
   findings: ReportFindingView[];
-  /** False when the room has no checklist, photos or findings — render compactly. */
+  /** What was said walking the room, under its photographs. Empty when nothing was transcribed. */
+  narration: ReportNarrationView[];
+  /** False when the room has no checklist, photos, findings or narration — render compactly. */
   hasEvidence: boolean;
+}
+
+/** "0:05", "12:40" -- a second in the recording as the report prints it. */
+export function formatNarrationTime(seconds: number) {
+  const whole = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return `${minutes}:${rest < 10 ? '0' : ''}${rest}`;
+}
+
+/** One recording's lines as one run of text; see `ReportNarrationView`. */
+export function narrationText(lines: ReadonlyArray<{ start: number; text: string }>) {
+  return lines
+    .map((line) => `[${formatNarrationTime(line.start)}] ${line.text.trim()}`)
+    .filter((entry) => entry.length > '[0:00] '.length)
+    .join(' ');
 }
 
 /** Tri-state to printed cell. Null and undefined both mean "not assessed". */
@@ -371,15 +410,16 @@ export interface ReportView {
 }
 
 /**
- * What the report is, said truthfully: the findings section is the office's
- * confirmed findings, and the checklist comments are drawn from the recording
- * whether or not anyone has confirmed them yet (2026-10-07).
+ * What the report is, said truthfully: the checklist comments are drawn from
+ * the recording whether or not anyone has confirmed them yet, and the narration
+ * under each room's photographs is the recording itself, word for word
+ * (2026-10-07).
  */
 const DISCLAIMER =
-  'The findings listed in this report were reviewed and approved by the TexasRenters team ' +
-  'before publication. The comments beside the checklist are drawn automatically from the ' +
-  "inspector's walkthrough recording. This report is informational: it does not by itself " +
-  'authorize charges or determine responsibility for any condition described.';
+  'The condition table is as the inspector scored it. The comments beside the checklist are ' +
+  "drawn automatically from the inspector's walkthrough recording, and the summary under each " +
+  "area's photographs is that recording, word for word. This report is informational: it does " +
+  'not by itself authorize charges or determine responsibility for any condition described.';
 
 /** A photograph as a report prints it; shared with the comparison report. */
 export function reportPhotoView(photo: PublicReportPhoto): ReportPhotoView {
@@ -518,6 +558,14 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
           .join(' '),
       };
     });
+    // Defaulted like the checklist: a report from an older backend carries no
+    // narration, and a recording that said nothing prints nothing.
+    const narration: ReportNarrationView[] = (room.narration ?? [])
+      .map((recording) => ({
+        label: recording.label?.trim() || null,
+        text: narrationText(recording.lines),
+      }))
+      .filter((recording) => recording.text.length > 0);
     return {
       id: room.id,
       name: room.name,
@@ -528,7 +576,9 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       checklist,
       photos,
       findings: roomFindings,
-      hasEvidence: checklist.length > 0 || photos.length > 0 || roomFindings.length > 0,
+      narration,
+      hasEvidence:
+        checklist.length > 0 || photos.length > 0 || roomFindings.length > 0 || narration.length > 0,
     };
   });
 

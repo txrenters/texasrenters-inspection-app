@@ -1045,6 +1045,20 @@ export interface PublicInspectionReport {
      * a defect nobody observed.
      */
     checklist: PublicReportChecklistItem[];
+    /**
+     * What the inspector said while walking this room, word for word.
+     *
+     * One entry per recording whose transcription finished, the room's
+     * walkthrough first; each line carries the second it was spoken at. The
+     * printed report puts it under the room's photographs, as the maintenance
+     * team's own reports do (2026-10-07), in place of the findings list.
+     * Absent from a report built by an older backend.
+     */
+    narration?: Array<{
+      /** The clip's label, for an extra recording; null for the walkthrough. */
+      label?: string | null;
+      lines: Array<{ start: number; end: number; text: string }>;
+    }>;
   }>;
   findings: Array<{
     id: string;

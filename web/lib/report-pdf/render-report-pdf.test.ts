@@ -400,6 +400,44 @@ describe('the capture time on a photograph', () => {
   }, 60_000);
 });
 
+describe("the inspector's narration", () => {
+  it('prints it under the photographs, word for word, and prints no findings list', async () => {
+    mockPhotoFetch();
+
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        rooms: [
+          {
+            ...REPORT.rooms[0]!,
+            narration: [
+              {
+                label: null,
+                lines: [
+                  { start: 1, end: 4, text: 'We are now in the kitchen.' },
+                  { start: 65, end: 70, text: 'Countertop has a burn mark by the stove.' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { apiOrigin: 'http://x' },
+    );
+
+    const text = (await pageTexts(pdf)).flat().join(' ');
+    expect(text).toContain('Summary based on the recordings:');
+    expect(text).toContain('[0:01] We are now in the kitchen. [1:05] Countertop has a burn mark by the stove.');
+    // The findings' own wording used to print twice -- in a summary of
+    // findings and under the room. Neither is printed any more (2026-10-07).
+    expect(text).not.toContain('Summary of findings');
+    expect(text).not.toContain('A new burn mark beside the stove');
+    expect(text).not.toContain('At a glance');
+    // The one count kept, on the cover: the room this case keeps was completed.
+    expect(text).toContain('1 of 1');
+  }, 60_000);
+});
+
 describe("an occupied room's answers", () => {
   it('prints them under a Condition heading instead of three empty verdict columns', async () => {
     mockPhotoFetch();
