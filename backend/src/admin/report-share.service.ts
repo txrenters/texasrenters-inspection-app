@@ -11,6 +11,7 @@ import {
   VideoRecordingType,
 } from '@prisma/client';
 import {
+  checklistKindFor,
   filterLabel,
   HVAC_FILTERS_SECTION,
   inspectionAssessesFilters,
@@ -174,6 +175,65 @@ function narrationOf(
       },
     ];
   });
+}
+
+type ChecklistItemRow = {
+  id: string;
+  label: string;
+  keywords: string[];
+  kind: AreaChecklistItemKind;
+  responseType: string;
+  unit: string | null;
+};
+
+type ChecklistResponseRow = {
+  isClean: boolean | null;
+  isUndamaged: boolean | null;
+  isWorking: boolean | null;
+  comment: string | null;
+  textValue: string | null;
+  numericValue: { toString(): string } | null;
+  checklistItem: ChecklistItemRow;
+};
+
+/**
+ * The rows a room's table prints, in the form's order.
+ *
+ * A room checklist prints every live item of the room's form, answered or not,
+ * so a room nobody scored still shows what was asked, with blank cells (the
+ * office, 2026-10-07). An item answered and since archived keeps its row,
+ * after the live ones. The organization-wide lists -- HVAC, occupied -- print
+ * their responses as they always have: their rows are sectioned per area by
+ * other rules, and a blank reading says nothing.
+ */
+function checklistRows(
+  kind: ReturnType<typeof checklistKindFor>,
+  area: {
+    checklistResponses: ChecklistResponseRow[];
+    propertyArea: { checklistItems?: ChecklistItemRow[] };
+  },
+): ChecklistResponseRow[] {
+  if (kind !== 'ROOM') return area.checklistResponses;
+  const answered = new Map(
+    area.checklistResponses.map((response) => [response.checklistItem.id, response]),
+  );
+  const items = area.propertyArea.checklistItems ?? [];
+  const live = new Set(items.map((item) => item.id));
+  return [
+    ...items.map(
+      (item) =>
+        answered.get(item.id) ?? {
+          isClean: null,
+          isUndamaged: null,
+          isWorking: null,
+          comment: null,
+          textValue: null,
+          numericValue: null,
+          checklistItem: item,
+        },
+    ),
+    ...area.checklistResponses.filter((response) => !live.has(response.checklistItem.id)),
+  ];
 }
 
 /**
@@ -340,7 +400,7 @@ export class ReportShareService {
     // it silently turned every shared report into "This report is not
     // available." Wrapping the reads keeps the scope open across them.
     return withTenant(share.organizationId, () =>
-      this.buildPublicReport(share.inspectionId, token, share.createdBy.displayName),
+      this.buildPublicReport(share.inspectionId, token),
     );
   }
 
@@ -393,7 +453,7 @@ export class ReportShareService {
       );
   }
 
-  private async buildPublicReport(inspectionId: string, token: string, issuedBy: string) {
+  private async buildPublicReport(inspectionId: string, token: string) {
     const inspection = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
       select: {
@@ -438,7 +498,29 @@ export class ReportShareService {
             skipReason: true,
             completedAt: true,
             // source with the name: whether the area is the inspection's at all.
-            propertyArea: { select: { name: true, source: true, floor: { select: { name: true } } } },
+            propertyArea: {
+              select: {
+                name: true,
+                source: true,
+                floor: { select: { name: true } },
+                /**
+                 * The room's own checklist, scored or not.
+                 *
+                 * The office's report prints every row of a room's form and
+                 * leaves the cells blank where nothing was assessed; it never
+                 * drops the row. Reading only the responses left eleven of a
+                 * move-out's 22 rooms with no table at all (2026-10-07), which
+                 * the office read as the verdicts having been removed. Live items only: an archived item still prints when
+                 * it was answered, through its response below.
+                 */
+                checklistItems: {
+                  where: { kind: AreaChecklistItemKind.ROOM, archivedAt: null },
+                  orderBy: [{ sortOrder: 'asc' as const }, { label: 'asc' as const }],
+                  take: 100,
+                  select: { id: true, label: true, keywords: true, kind: true, responseType: true, unit: true },
+                },
+              },
+            },
             /**
              * The condition checklist as the technician scored it.
              *
@@ -556,7 +638,9 @@ export class ReportShareService {
             findingType: { not: FindingType.NO_CHANGE },
           },
           orderBy: { createdAt: 'asc' },
-          take: 300,
+          // A 22-room move-out filed 347 (2026-10-07); at 300 the last rooms
+          // walked lost their comments.
+          take: 1000,
           select: {
             propertyAreaId: true,
             title: true,
@@ -593,6 +677,7 @@ export class ReportShareService {
       contentPath: `/api/v1/reports/${encodeURIComponent(token)}/photos/${photo.id}`,
     });
     const filters = filtersRoom(inspection, areas);
+    const checklistKind = checklistKindFor(inspection.inspectionType);
     return {
       brand: this.brand(),
       property: {
@@ -621,13 +706,19 @@ export class ReportShareService {
          * Deduplicated: an administrator who is also the assigned technician
          * would otherwise be printed twice.
          */
+        /**
+         * The field only. The office's name used to lead this line -- whoever
+         * signed the report off, or issued the link -- and the maintenance
+         * team asked for it to come off (2026-10-07): the report names who
+         * walked the property, and an administrator generating the link is
+         * not that.
+         */
         inspector:
           [
             ...new Set(
-              [
-                inspection.finalizedBy?.displayName ?? issuedBy,
-                ...inspection.assignments.map((entry) => entry.technician.displayName),
-              ].filter((name): name is string => Boolean(name?.trim())),
+              inspection.assignments
+                .map((entry) => entry.technician.displayName)
+                .filter((name): name is string => Boolean(name?.trim())),
             ),
           ].join(' / ') || null,
         templateLabel: INSPECTION_TEMPLATE_LABEL[inspection.inspectionType] ?? null,
@@ -649,7 +740,7 @@ export class ReportShareService {
         // Nulls are carried through rather than coerced: the report prints an
         // empty cell for an unassessed axis, and a false would claim a defect
         // the technician never recorded.
-        checklist: area.checklistResponses.map((response) => ({
+        checklist: checklistRows(checklistKind, area).map((response) => ({
           id: response.checklistItem.id,
           label: response.checklistItem.label,
           keywords: response.checklistItem.keywords,
