@@ -353,6 +353,49 @@ async function pageTexts(pdf: Buffer) {
   return pages;
 }
 
+/** Each piece of text with the size it is set at, in points. */
+async function textSizes(pdf: Buffer) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const document = await getDocument({ data: new Uint8Array(pdf) }).promise;
+  const sizes = new Map<string, number>();
+  for (let number = 1; number <= document.numPages; number += 1) {
+    const content = await (await document.getPage(number)).getTextContent();
+    for (const item of content.items)
+      if ('str' in item && item.str.trim())
+        sizes.set(item.str.trim(), Math.round(Math.hypot(item.transform[0], item.transform[1]) * 10) / 10);
+  }
+  return sizes;
+}
+
+describe('the report’s type', () => {
+  // The maintenance team, 2026-10-08: Arial at 13.5, in the PDF too.
+  it('sets running text at 13.5 pt, headings above it and small labels below', async () => {
+    mockPhotoFetch();
+
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        rooms: [
+          {
+            ...REPORT.rooms[0]!,
+            actions: [{ heading: 'Cleaning', items: [{ text: 'Clean the windows.', details: [] }] }],
+          },
+        ],
+      },
+      { apiOrigin: 'http://x' },
+    );
+
+    const sizes = await textSizes(pdf);
+    // A wrapped line is its own piece of text, so this finds it by a fragment.
+    const sizeOf = (fragment: string) =>
+      [...sizes.entries()].find(([text]) => text.includes(fragment))?.[1];
+    expect(sizeOf('Clean the windows')).toBe(13.5);
+    expect(sizeOf('scratches on door')).toBe(13.5);
+    expect(sizeOf('Room by room')).toBeGreaterThan(13.5);
+    expect(sizeOf('Page 1 of')).toBeLessThan(13.5);
+  }, 60_000);
+});
+
 describe('a long report', () => {
   /**
    * Every report past ten pages failed to download.
@@ -424,13 +467,15 @@ describe('what each room needs, under its photographs', () => {
       { apiOrigin: 'http://x' },
     );
 
+    // Two columns: the extracted text interleaves their lines, so this checks
+    // what is printed, not the order across columns (`actionColumns` is
+    // tested for that below).
     const text = (await pageTexts(pdf)).flat().join(' ');
     const at = (needle: string) => text.indexOf(needle);
     expect(at('Summary based on the recordings:')).toBeGreaterThan(-1);
     expect(at('Repairs / Maintenance')).toBeGreaterThan(at('Summary based on the recordings:'));
-    expect(at('Bedroom entry door frame')).toBeGreaterThan(at('Touch-up paint needed on:'));
-    expect(at('Cleaning')).toBeGreaterThan(at('Bedroom entry door frame'));
-    expect(text).toContain('Clean windows inside and out.');
+    for (const needle of ['Touch-up paint needed on:', 'Bathroom door frame', 'Bedroom entry door frame', 'Cleaning', 'Clean windows inside and out.'])
+      expect(text).toContain(needle);
     // No timestamped point is printed any more (2026-10-07).
     expect(text).not.toMatch(/\[\d+:\d{2}\]/);
     // The findings' own wording used to print twice -- in a summary of
@@ -444,8 +489,9 @@ describe('what each room needs, under its photographs', () => {
 
   it('prints a long list in two columns, the second picking up where the first stops', async () => {
     mockPhotoFetch();
+    // Short, so each stays on one line of its column at 13.5 pt.
     const many = Array.from({ length: 12 }, (_, index) => ({
-      text: `Repair item number ${index + 1} on the wall beside the window.`,
+      text: `Repair item ${index + 1}.`,
       details: [],
     }));
 

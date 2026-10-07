@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildReportView, restatesChecklist } from '../src/index.js';
+import { REPORT_TYPE, buildReportView, restatesChecklist } from '../src/index.js';
 import type { PublicInspectionReport } from '../src/index.js';
 
 function report(overrides: Partial<PublicInspectionReport> = {}): PublicInspectionReport {
@@ -434,3 +434,10 @@ describe('a checklist row answered with one choice', () => {
   });
 });
 
+describe('the report’s type', () => {
+  // The maintenance team, 2026-10-08: Arial at 13.5, the web report and the PDF alike.
+  it('is Arial first, at 13.5 pt', () => {
+    expect(REPORT_TYPE.fontStack.startsWith('Arial,')).toBe(true);
+    expect(REPORT_TYPE.bodyPt).toBe(13.5);
+  });
+});

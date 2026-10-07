@@ -7,10 +7,17 @@
  * it that way: content logic added here silently diverges from the web report.
  */
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
-import { NARRATION_HEADING, REPORT_PALETTE } from '@texasrenters/shared';
+import { NARRATION_HEADING, REPORT_PALETTE, REPORT_TYPE } from '@texasrenters/shared';
 import type { ReportActionGroupView, ReportRoomView, ReportView } from '@texasrenters/shared';
 
 const C = REPORT_PALETTE;
+/**
+ * Running text, in points: 13.5 (the maintenance team, 2026-10-08). Every other
+ * size here is set from it -- headings above, small labels below -- so the PDF
+ * and the web report change together. Helvetica is the PDF's own Arial; see
+ * `REPORT_TYPE`.
+ */
+const B = REPORT_TYPE.bodyPt;
 
 /** Photo bytes keyed by photo id, as data URIs. */
 export type ReportImages = Map<string, string>;
@@ -20,8 +27,8 @@ const styles = StyleSheet.create({
     paddingTop: 46,
     paddingBottom: 56,
     paddingHorizontal: 44,
-    fontSize: 9.5,
-    lineHeight: 1.5,
+    fontSize: B,
+    lineHeight: 1.4,
     color: C.text,
     backgroundColor: C.surface,
     fontFamily: 'Helvetica',
@@ -39,19 +46,19 @@ const styles = StyleSheet.create({
   },
   coverKicker: {
     color: '#a9c0ee',
-    fontSize: 8.5,
+    fontSize: B * 0.75,
     letterSpacing: 2.2,
     fontFamily: 'Helvetica-Bold',
     marginBottom: 12,
   },
-  coverTitle: { color: '#ffffff', fontSize: 23, fontFamily: 'Helvetica-Bold', lineHeight: 1.25 },
-  coverSubtitle: { color: '#cfdcf5', fontSize: 11, marginTop: 5 },
+  coverTitle: { color: '#ffffff', fontSize: B * 2, fontFamily: 'Helvetica-Bold', lineHeight: 1.2 },
+  coverSubtitle: { color: '#cfdcf5', fontSize: B, marginTop: 5 },
   coverMetaRow: { flexDirection: 'row', marginTop: 18, gap: 26 },
-  coverMetaLabel: { color: '#a9c0ee', fontSize: 7.5, letterSpacing: 1.1 },
-  coverMetaValue: { color: '#ffffff', fontSize: 10.5, fontFamily: 'Helvetica-Bold', marginTop: 3 },
+  coverMetaLabel: { color: '#a9c0ee', fontSize: B * 0.7, letterSpacing: 1.1 },
+  coverMetaValue: { color: '#ffffff', fontSize: B, fontFamily: 'Helvetica-Bold', marginTop: 3 },
 
   // ---- generic -----------------------------------------------------------
-  sectionTitle: { fontSize: 13, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
+  sectionTitle: { fontSize: B * 1.3, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
   sectionHint: { color: C.muted, marginBottom: 12 },
 
   chip: {
@@ -59,7 +66,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 2.5,
     paddingHorizontal: 8,
-    fontSize: 8,
+    fontSize: B * 0.75,
     fontFamily: 'Helvetica-Bold',
   },
 
@@ -86,12 +93,12 @@ const styles = StyleSheet.create({
    * these sizes without tracking are noticeably harder to read.
    */
   roomName: {
-    fontSize: 11,
+    fontSize: B * 1.15,
     fontFamily: 'Helvetica-Bold',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  roomFloor: { color: C.muted, fontSize: 8.5, marginTop: 1 },
+  roomFloor: { color: C.muted, fontSize: B * 0.8, marginTop: 1 },
   roomBody: { padding: 12 },
 
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -107,14 +114,14 @@ const styles = StyleSheet.create({
     borderColor: C.border,
   },
   photoFrame: { position: 'relative', width: 160, height: 120 },
-  photoCaption: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', marginTop: 3 },
+  photoCaption: { fontSize: B * 0.75, fontFamily: 'Helvetica-Bold', marginTop: 3 },
   // On the photograph, bottom left, as the office's timestamp-camera reports
   // print it -- inside the frame, so the crop to fill the cell never cuts it.
   photoStamp: {
     position: 'absolute',
     left: 4,
     bottom: 4,
-    fontSize: 6,
+    fontSize: B * 0.5,
     color: '#FFFFFF',
     backgroundColor: 'rgba(0, 0, 0, 0.65)',
     paddingHorizontal: 3,
@@ -124,36 +131,38 @@ const styles = StyleSheet.create({
 
   // What the room needs, under its photographs (2026-10-07).
   narration: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.border },
-  narrationHeading: { fontSize: 9.5, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
+  narrationHeading: { fontSize: B * 1.05, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
   // Two columns (2026-10-08: "so it's not that long").
   actionColumns: { flexDirection: 'row', gap: 16 },
   actionColumn: { flexGrow: 1, flexBasis: 0 },
-  actionHeading: { fontSize: 9, fontFamily: 'Helvetica-Bold', marginTop: 4, marginBottom: 2 },
-  actionItem: { flexDirection: 'row', fontSize: 8.5, marginBottom: 1.5 },
-  actionMark: { width: 10 },
+  actionHeading: { fontSize: B, fontFamily: 'Helvetica-Bold', marginTop: 4, marginBottom: 2 },
+  actionItem: { flexDirection: 'row', fontSize: B, marginBottom: 2 },
+  actionMark: { width: B },
   actionText: { flexGrow: 1, flexBasis: 0 },
-  emptyRoom: { color: C.muted, fontSize: 8.5 },
+  emptyRoom: { color: C.muted, fontSize: B },
   // The condition table. Column widths are fixed rather than proportional so
   // the three verdict columns line up down the page the way the office's
   // printed reports do.
   checklistTable: { marginBottom: 8 },
   checklistRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: C.border },
   checklistHeadRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.border },
-  checklistHeadCell: { fontSize: 7, color: C.muted, paddingVertical: 3, paddingHorizontal: 4 },
-  checklistCell: { fontSize: 8, paddingVertical: 3, paddingHorizontal: 4 },
+  checklistHeadCell: { fontSize: B * 0.75, color: C.muted, paddingVertical: 4, paddingHorizontal: 4 },
+  checklistCell: { fontSize: B, paddingVertical: 4, paddingHorizontal: 4 },
+  // Widths for the larger type: the item a little narrower, the verdicts a
+  // little wider, so "Working" fits its column at 13.5 pt.
   checklistLabel: {
-    width: '32%',
+    width: '30%',
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    fontSize: 7.5,
+    letterSpacing: 0.3,
+    fontSize: B * 0.9,
   },
-  checklistAxis: { width: '11%', textAlign: 'center' },
+  checklistAxis: { width: '12%', textAlign: 'center' },
   // One answer where the three verdicts would be: the width of all three, so
   // the Comments column still lines up with the rows above and below it.
-  checklistAnswer: { width: '33%', textAlign: 'center', fontWeight: 700 },
+  checklistAnswer: { width: '36%', textAlign: 'center', fontWeight: 700 },
   checklistPass: { color: C.pass, fontWeight: 700 },
   checklistFail: { color: C.fail, fontWeight: 700 },
-  checklistComment: { width: '35%', color: C.muted },
+  checklistComment: { width: '34%', color: C.muted },
   quietRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -166,17 +175,17 @@ const styles = StyleSheet.create({
   // ---- closing -----------------------------------------------------------
   closingRow: { flexDirection: 'row', gap: 12, marginTop: 10, marginBottom: 4 },
   closingCell: { flex: 1 },
-  closingBody: { fontSize: 8.5, lineHeight: 1.4, marginTop: 2 },
+  closingBody: { fontSize: B, lineHeight: 1.4, marginTop: 2 },
   disclaimer: {
     marginTop: 16,
     padding: 12,
     backgroundColor: C.brandSoft,
     borderRadius: 6,
-    fontSize: 8.5,
+    fontSize: B * 0.8,
     color: C.brandDark,
     lineHeight: 1.6,
   },
-  brandLine: { color: C.muted, fontSize: 8, marginTop: 10 },
+  brandLine: { color: C.muted, fontSize: B * 0.75, marginTop: 10 },
 
   // ---- running furniture -------------------------------------------------
   footer: {
@@ -189,7 +198,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: C.border,
     paddingTop: 7,
-    fontSize: 7.5,
+    fontSize: B * 0.65,
     color: C.muted,
     /**
      * Never the page's line height.
@@ -298,7 +307,7 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
 }
 
 /** Characters to a line of a half-width column at the bullets' size, near enough. */
-const ACTION_COLUMN_CHARS = 50;
+const ACTION_COLUMN_CHARS = 34;
 
 type ActionColumn = Array<ReportActionGroupView & { continued: boolean }>;
 
