@@ -11,8 +11,8 @@
  *
  * Android binds either expo-camera's image-capture or its video-capture use
  * case, never both, so `takePictureAsync` has nothing to shoot with while a
- * recording runs. The shutter records the offset instead, and the frame is cut
- * out of the finished video by `extractMarkerStills`.
+ * recording runs. The shutter records the offset instead, and the server files
+ * that frame from the uploaded video (`marker-frames` on the backend).
  *
  * Written as one decision with two outcomes rather than an early return,
  * because an early return is what caused the bug this replaces: the marker path

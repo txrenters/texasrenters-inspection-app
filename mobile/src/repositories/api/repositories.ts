@@ -77,6 +77,7 @@ import {
   StreamSessionError,
   type StreamUploadSession,
 } from '../../media/stream-upload-runner';
+import { streamCaptureOf, type StreamCapture } from '../../media/stream-capture';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import type { ClosingComments } from '../../utils/closing-comments';
 import { isInspectedArea, resolveApiUrl } from '@texasrenters/shared';
@@ -551,10 +552,38 @@ async function createStreamUploadSession(input: {
   durationSeconds: number;
   localQueueId: string;
   idempotencyKey: string;
+  /** When the take ended. Without it the server dates the recording, and its photos, to now. */
+  recordedAt?: string;
+  capture?: StreamCapture;
 }): Promise<StreamUploadSession | null> {
   const { baseUrl, accessToken, ...body } = input;
   const url = resolveApiUrl(baseUrl, '/api/v1/inspection-videos/upload-session');
-  let response: Response;
+  let response = await askForUploadSession(url, accessToken, body);
+  /**
+   * The capture is never a condition of the upload. A backend from before it
+   * was sent refuses the field outright, and a summary it finds out of range
+   * would refuse the whole request -- either way the walkthrough would never go
+   * up. Asked once more without it: the video matters more than its summary.
+   */
+  if (response.status === 400 && body.capture)
+    response = await askForUploadSession(url, accessToken, { ...body, capture: undefined });
+  if (response.status === 503) return null;
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null)) as { message?: string } | null;
+    // Says whether asking again can help, so a refusal that will never change
+    // -- the inspection already submitted, the room reassigned -- shows the
+    // technician why instead of retrying silently every minute.
+    throw new StreamSessionError(
+      detail?.message ??
+        `The upload could not be started (${response.status} from ${new URL(url).host}).`,
+      sessionRefusalRetryable(response.status),
+      response.status,
+    );
+  }
+  return (await response.json()) as StreamUploadSession;
+}
+
+async function askForUploadSession(url: string, accessToken: string, body: object) {
   // Never left open on a stalled connection: the upload queue waits on this
   // one recording at a time, so a request that never answered held every
   // recording behind it (see `CHUNK_TIMEOUT_MS`). An abort lands in the catch
@@ -562,7 +591,7 @@ async function createStreamUploadSession(input: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPLOAD_SESSION_TIMEOUT_MS);
   try {
-    response = await fetch(url, {
+    return await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
@@ -582,7 +611,7 @@ async function createStreamUploadSession(input: {
      */
     const cause = error instanceof Error ? error.message : String(error);
     // `transport`: this is the fetch itself rejecting, so nothing was answered
-    // and nothing arrived. A status from this endpoint is handled below.
+    // and nothing arrived. A status from this endpoint is the caller's to read.
     throw new ApiConnectionError(
       `Could not reach ${new URL(url).host} to start the upload (${cause}). ` +
         'The recording is safe on this device and will retry.',
@@ -591,20 +620,6 @@ async function createStreamUploadSession(input: {
   } finally {
     clearTimeout(timer);
   }
-  if (response.status === 503) return null;
-  if (!response.ok) {
-    const detail = (await response.json().catch(() => null)) as { message?: string } | null;
-    // Says whether asking again can help, so a refusal that will never change
-    // -- the inspection already submitted, the room reassigned -- shows the
-    // technician why instead of retrying silently every minute.
-    throw new StreamSessionError(
-      detail?.message ??
-        `The upload could not be started (${response.status} from ${new URL(url).host}).`,
-      sessionRefusalRetryable(response.status),
-      response.status,
-    );
-  }
-  return (await response.json()) as StreamUploadSession;
 }
 
 const reportSchema = z.object({
@@ -1906,6 +1921,8 @@ export class ApiUploadRepository implements UploadRepository {
             durationSeconds: Math.max(1, Math.round(media.durationSeconds)),
             localQueueId: pending.id,
             idempotencyKey: media.id,
+            recordedAt: media.recordedAt,
+            capture: streamCaptureOf(media, pending.recordingType ?? 'PRIMARY_AREA'),
           }),
         persist: (patch) => store.updateUpload(pending.id, patch),
       });

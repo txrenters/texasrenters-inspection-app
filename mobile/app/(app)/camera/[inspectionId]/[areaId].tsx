@@ -63,12 +63,12 @@ import {
 } from '@/src/capture/guided-capture';
 import { SweepPromptSheet } from '@/src/capture/SweepPromptSheet';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
-import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
+import type { FrameMarker, PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
 import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
 import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
 import { setCaptureActive } from '@/src/media/capture-activity';
-import { frameClock, shutterClock } from '@/src/media/capture-clock';
+import { shutterClock } from '@/src/media/capture-clock';
 import { downscaleForUpload } from '@/src/media/downscale';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import {
@@ -76,7 +76,6 @@ import {
   deleteRoomSnapshot,
   persistRoomSnapshot,
 } from '@/src/media/local-snapshots';
-import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
 import { replaceOldEvidence } from '@/src/media/replace-evidence';
 import { pickPictureSize } from '@/src/media/picture-size';
 import { PHOTO_REVIEW_WINDOW_MS, reviewWindowEnd } from '@/src/media/snapshot-upload';
@@ -220,13 +219,10 @@ export default function RoomCameraScreen() {
   const captureSessionIdRef = useRef(newCaptureSessionId());
   const sessionStartedAtRef = useRef(new Date().toISOString());
   const snapshotTypesRef = useRef<PhotoCaptureType[]>([]);
-  // Video offsets the technician marked while recording. Turned into photos on
-  // this device once recording stops — Android cannot photograph mid-video, and
-  // a Stream recording never reaches the backend for server-side extraction.
-  const frameMarkersRef = useRef<number[]>([]);
-  // When the phone was asked to start recording, by its clock. A marked frame
-  // shows this moment plus its offset, so that is the time it is filed under.
-  const recordingStartedAtMsRef = useRef(0);
+  // The moments the technician marked while recording, and what each was for.
+  // Android cannot photograph mid-video; the server files these as photos from
+  // the uploaded recording.
+  const frameMarkersRef = useRef<FrameMarker[]>([]);
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
   /**
@@ -853,7 +849,6 @@ export default function RoomCameraScreen() {
           : 'Wall 1 registered. Begin one slow clockwise walkthrough.',
     );
     try {
-      recordingStartedAtMsRef.current = Date.now();
       stopRequestedRef.current = false;
       const result = await camera.recordAsync({
         maxDuration: MAX_RECORDING_SECONDS,
@@ -865,47 +860,10 @@ export default function RoomCameraScreen() {
       if (stoppedByLimit(secondsRef.current, stopRequestedRef.current))
         announce(`The ${MAX_RECORDING_SECONDS / 60}-minute limit was reached. The recording was saved.`);
       const stored = persistRecording(result.uri, inspectionId, areaId);
-
-      // Turn the moments marked during the walkthrough into real photos.
-      //
-      // Only Android reaches this with markers pending: iOS took a native still
-      // at each one already. The server used to cut these frames with ffmpeg,
-      // but a Cloudflare Stream recording never reaches the backend, so doing it
-      // here is what keeps the two platforms producing the same evidence.
-      //
-      // Runs now, while the file is still on the device — after cleanup the
-      // frames are unrecoverable. Failures are reported, never fatal: a frame
-      // that will not decode must not cost a finished walkthrough.
-      if (frameMarkersRef.current.length) {
-        const { stills, failures } = await extractMarkerStills(
-          stored.uri,
-          pairMarkers(frameMarkersRef.current, snapshotTypesRef.current),
-        );
-        for (const [index, still] of stills.entries()) {
-          const persisted = persistRoomSnapshot(still.uri, inspectionId, areaId);
-          addSnapshot(
-            buildRoomSnapshot({
-              ownerUserId,
-              inspectionId,
-              roomId: areaId,
-              uri: persisted.uri,
-              width: still.width,
-              height: still.height,
-              sizeBytes: persisted.sizeBytes,
-              captureType: still.captureType,
-              recordingSessionId: captureSessionIdRef.current,
-              videoTimestampMs: still.videoTimestampMs,
-              captureSource: 'VIDEO_FRAME_EXTRACTION',
-              clock: frameClock(recordingStartedAtMsRef.current, still.videoTimestampMs),
-              sequenceNumber: photoCount + index + 1,
-            }),
-          );
-        }
-        if (failures.length)
-          announce(
-            `${failures.length} marked moment${failures.length === 1 ? '' : 's'} could not be saved as a photo. The recording is unaffected.`,
-          );
-      }
+      // The moments marked on Android travel with the recording, and the
+      // server files each one as a photo from Cloudflare once the video is
+      // encoded. The phone used to decode the video here, once per marker,
+      // before the review screen could open (2026-10-06).
       setDraft(
         buildRecordingDraft({
           ownerUserId,
@@ -915,7 +873,7 @@ export default function RoomCameraScreen() {
           durationSeconds: Math.max(1, secondsRef.current),
           sizeBytes: stored.sizeBytes,
           recordingType: isAdditional ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
-          frameMarkersMs: frameMarkersRef.current,
+          frameMarkers: frameMarkersRef.current,
           // The same id every snapshot in this take carries, so review can find
           // them again — discarding a walkthrough has to take its photographs
           // with it, and they are already uploaded by then.
@@ -1189,10 +1147,14 @@ export default function RoomCameraScreen() {
       // image-capture or the video-capture use case, never both, so
       // takePictureAsync has nothing to shoot with while a video is running.
       // Rather than making the technician stop the walkthrough — the one thing
-      // a continuous 360° capture must not do — the shutter records the moment
-      // and extractMarkerStills cuts that frame out of the finished video.
+      // a continuous 360° capture must not do — the shutter records the moment,
+      // with the kind of photo it stands for, and the server files that frame
+      // from the uploaded video.
+      //
+      // Whole seconds, as the take's duration is counted: a moment past the
+      // duration the phone declares is one the server will not file.
       const atMs = secondsRef.current * 1000;
-      frameMarkersRef.current = [...frameMarkersRef.current, atMs];
+      frameMarkersRef.current = [...frameMarkersRef.current, { atMs, captureType }];
       snapshotTypesRef.current.push(captureType);
       setPhotoCount((count) => count + 1);
       if (captureType === 'AREA_OVERVIEW') setCaptureType('FINDING_CONTEXT');

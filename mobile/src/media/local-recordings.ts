@@ -1,7 +1,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
-import type { LocalMedia, VideoRecordingType } from '../domain/models';
+import type { FrameMarker, LocalMedia, VideoRecordingType } from '../domain/models';
 import type { GuidedCaptureSummary } from '../capture/guided-capture';
 
 const RECORDINGS_FOLDER = 'inspection-recordings';
@@ -17,7 +17,7 @@ type RecordingDraftInput = {
   sizeBytes?: number;
   recordingType?: VideoRecordingType;
   captureSummary?: GuidedCaptureSummary;
-  frameMarkersMs?: number[];
+  frameMarkers?: FrameMarker[];
   recordingSessionId?: string;
 };
 
@@ -30,10 +30,11 @@ export function buildRecordingDraft({
   sizeBytes,
   recordingType = 'PRIMARY_AREA',
   captureSummary,
-  frameMarkersMs,
+  frameMarkers,
   recordingSessionId,
 }: RecordingDraftInput): LocalMedia {
   const normalizedDuration = Math.max(1, Math.round(durationSeconds));
+  const markers = orderedMarkers(frameMarkers ?? []);
 
   return {
     id: `draft-${Date.now()}`,
@@ -59,12 +60,19 @@ export function buildRecordingDraft({
     // Sorted and de-duplicated here rather than at the call site: markers are
     // appended as the technician taps, and the server extracts frames in the
     // order it is given. Two taps inside the same second are one frame.
-    frameMarkersMs: frameMarkersMs?.length
-      ? [...new Set(frameMarkersMs.map((value) => Math.max(0, Math.round(value))))].sort(
-          (left, right) => left - right,
-        )
-      : undefined,
+    frameMarkersMs: markers.length ? markers.map((marker) => marker.atMs) : undefined,
+    frameMarkers: markers.length ? markers : undefined,
   };
+}
+
+/** One marker per moment, in order; the first tap at a moment names its kind. */
+function orderedMarkers(markers: readonly FrameMarker[]): FrameMarker[] {
+  const byMoment = new Map<number, FrameMarker>();
+  for (const marker of markers) {
+    const atMs = Math.max(0, Math.round(marker.atMs));
+    if (!byMoment.has(atMs)) byMoment.set(atMs, { atMs, captureType: marker.captureType });
+  }
+  return [...byMoment.values()].sort((left, right) => left.atMs - right.atMs);
 }
 
 export function persistRecording(

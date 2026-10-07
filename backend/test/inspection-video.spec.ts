@@ -154,6 +154,31 @@ describe('upload session creation', () => {
     expect(created.processingStatus).toBe('PENDING');
   });
 
+  it('stores how the room was filmed and the moments marked, as the multipart upload does', async () => {
+    // Every Stream recording used to reach the console with no coverage
+    // summary, and an Android phone cut its own marked frames (2026-10-06).
+    const { service, prisma } = build();
+    await service.createUploadSession(technician, {
+      ...validInput,
+      capture: {
+        coverageStatus: 'COMPLETE',
+        frameMarkers: [{ atMs: 12_000, captureType: 'FINDING_DETAIL' }],
+      } as never,
+    });
+
+    expect(prisma.inspectionMedia.create.mock.calls[0][0].data.captureSummary).toMatchObject({
+      coverageStatus: 'COMPLETE',
+      frameMarkersMs: [12_000],
+      frameMarkers: [{ atMs: 12_000, captureType: 'FINDING_DETAIL' }],
+    });
+  });
+
+  it('stores no summary for a phone that sent none', async () => {
+    const { service, prisma } = build();
+    await service.createUploadSession(technician, validInput);
+    expect(prisma.inspectionMedia.create.mock.calls[0][0].data).not.toHaveProperty('captureSummary');
+  });
+
   it('advertises chunk sizes Cloudflare will actually accept', async () => {
     // Cloudflare requires every tus chunk but the last to be a multiple of
     // 256 KiB; a client following these cannot produce a rejected chunk.
