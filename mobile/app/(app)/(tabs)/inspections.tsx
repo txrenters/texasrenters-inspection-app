@@ -193,9 +193,10 @@ export default function JobsScreen() {
     if (view === 'history') return historySections(rows, today);
     return scheduleSections({ day, today, rows, stillOpen: stillOpenRows });
   }, [searching, view, rows, today, day, stillOpenRows]);
-  // A single day's list needs no heading of its own: the row of controls above
-  // it already names the day.
-  const showSectionHeaders = searching || view === 'history' || sections.length > 1;
+  // The day's own jobs need no heading of their own in the schedule: the row of
+  // controls above already names the day. Every other group keeps its title --
+  // above all the still-open one, which without it reads as today's work.
+  const showSectionHeader = (key: string) => searching || view === 'history' || key !== day;
 
   const total = main.data?.pages[0]?.total ?? 0;
   const loading = main.isLoading || searchPending;
@@ -363,7 +364,7 @@ export default function JobsScreen() {
           </View>
         }
         renderSectionHeader={({ section }) =>
-          showSectionHeaders ? (
+          showSectionHeader(section.key) || sections.length > 1 ? (
             <Text
               accessibilityRole="header"
               className={`mb-2 mt-3 px-5 text-sm font-semibold ${
