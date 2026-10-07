@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { HomeButton } from '@/src/components/HomeButton';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { AdditionalVideoCategory } from '@/src/domain/models';
@@ -208,7 +209,9 @@ export default function RecordingReviewScreen() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 24 }}>
+      {/* The note sits under a video up to 420 points tall: without this the
+          keyboard covered it entirely. */}
+      <KeyboardAwareScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 24 }}>
         <View className="flex-row items-start gap-3">
           <View className="min-w-0 flex-1">
             <Text className="text-2xl font-bold text-foreground">Review recording</Text>
@@ -389,7 +392,7 @@ export default function RecordingReviewScreen() {
             </Text>
           </Pressable>
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
       {/* A sibling below the scroll, not an overlay across it.
           It was positioned absolutely, so the scroll had to reserve exactly its
           height — first a hard-coded 130, then a measurement. Both are a number
