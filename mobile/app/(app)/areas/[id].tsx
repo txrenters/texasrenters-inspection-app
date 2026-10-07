@@ -60,6 +60,7 @@ import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
 import { BottomSheet } from '@/src/components/BottomSheet';
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import {
   queryKeys,
   useFindings,
@@ -553,7 +554,8 @@ export default function AreaDetailScreen() {
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView
+      {/* Keeps the note being typed above the keyboard; see the component. */}
+      <KeyboardAwareScrollView
         ref={scrollRef}
         className="flex-1"
         // Clears the footer, which grows by the capture line when it shows.
@@ -1061,7 +1063,7 @@ export default function AreaDetailScreen() {
             variant="secondary"
           />
         )}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
         {/*

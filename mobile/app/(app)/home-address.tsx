@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2Icon, HomeIcon, MapPinIcon } from 'lucide-react-native';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { KeyboardAwareScrollView } from '@/src/components/KeyboardAwareScrollView';
 import { Button } from '@/src/components/ui';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import {
@@ -78,7 +79,7 @@ export default function HomeAddressScreen() {
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView
+      <KeyboardAwareScrollView
         className="flex-1"
         contentContainerStyle={{ paddingBottom: 48 }}
         keyboardShouldPersistTaps="handled"
@@ -175,7 +176,7 @@ export default function HomeAddressScreen() {
             />
           </View>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
