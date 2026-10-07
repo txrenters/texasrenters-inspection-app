@@ -430,10 +430,12 @@ describe('administrator inspection operations', () => {
         propertyArea: {
           findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]),
           // A back-to-market also gets its sign, supra and lockbox area
-          // (2026-10-08), found or created on the property.
+          // (2026-10-08), found or created on the property under an
+          // advisory lock.
           findFirst: jest.fn().mockResolvedValue(null),
           create: jest.fn().mockResolvedValue({ id: 'area-lockbox' }),
         },
+        $executeRaw: jest.fn().mockResolvedValue(1),
         property: { upsert: jest.fn().mockResolvedValue({}) },
       /**
        * An occupied inspection writes the organization's two-question

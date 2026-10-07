@@ -31,6 +31,7 @@ function client({ named = [] as { name: string }[], existing = null as { id: str
   };
   return {
     tx: {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       areaChecklistItem: { createMany },
       inspection: { create },
       property: { upsert: jest.fn().mockResolvedValue({}) },
@@ -165,20 +166,21 @@ describe('a back-to-market job booked before the area was built in', () => {
     status = 'IN_PROGRESS',
     names = ['Kitchen', 'Bedroom 2'],
   } = {}) {
+    // The names the job already has; the rooms the phone is sent are the
+    // ordered query, and empty here.
+    const findMany = jest.fn(async (args: { orderBy?: unknown }) =>
+      args.orderBy ? [] : names.map((name) => ({ propertyArea: { name } })),
+    );
     const tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 3 }) },
       property: { upsert: jest.fn().mockResolvedValue({}) },
       propertyArea: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'area-lockbox' }),
       },
-      inspectionArea: { upsert: jest.fn().mockResolvedValue({ id: 'room-lockbox' }) },
+      inspectionArea: { findMany, upsert: jest.fn().mockResolvedValue({ id: 'room-lockbox' }) },
     };
-    // The names the job already has; the rooms the phone is sent are the
-    // ordered query, and empty here.
-    const findMany = jest.fn(async (args: { orderBy?: unknown }) =>
-      args.orderBy ? [] : names.map((name) => ({ propertyArea: { name } })),
-    );
     const prisma = {
       inspectionArea: { findMany },
       $transaction: jest.fn(async (work: (client: typeof tx) => unknown) => work(tx)),
@@ -210,6 +212,32 @@ describe('a back-to-market job booked before the area was built in', () => {
       create: { inspectionId: 'inspection-1', propertyAreaId: 'area-lockbox' },
       update: {},
     });
+  });
+
+  it('looks again under the area’s lock, and adds nothing when another open got there first', async () => {
+    const { service, tx } = job();
+    // Nothing when the phone first looked; by the time the lock is held, the other open has committed.
+    tx.inspectionArea.findMany = jest.fn().mockResolvedValue([{ propertyArea: { name: LOCKBOX } }]);
+    await service.rooms(technician, 'inspection-1');
+
+    const [sql, key] = tx.$executeRaw.mock.calls[0] as [TemplateStringsArray, string];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock');
+    expect(key).toBe(`property-area:building-1::${LOCKBOX}`);
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.inspectionArea.findMany.mock.invocationCallOrder[0],
+    );
+    expect(tx.propertyArea.create).not.toHaveBeenCalled();
+    expect(tx.inspectionArea.upsert).not.toHaveBeenCalled();
+  });
+
+  it('takes the lock after the questions and the property row, as a booking does', async () => {
+    const { service, tx } = job();
+    await service.rooms(technician, 'inspection-1');
+    // `insertInspection` writes both before `btmLockboxPropertyArea` locks; the
+    // other order lets an open and a booking each wait on the other.
+    const locked = tx.$executeRaw.mock.invocationCallOrder[0];
+    expect(tx.areaChecklistItem.createMany.mock.invocationCallOrder[0]).toBeLessThan(locked);
+    expect(tx.property.upsert.mock.invocationCallOrder[0]).toBeLessThan(locked);
   });
 
   it('is left alone once it has one, the hand-made kind included', async () => {

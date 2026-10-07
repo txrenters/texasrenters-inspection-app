@@ -70,7 +70,9 @@ import {
   btmLockboxPropertyArea,
   ensureBtmLockboxChecklist,
   includesLockboxArea,
+  lockBtmLockboxArea,
 } from '../common/btm-lockbox-area';
+import { findOrCreateFloorlessArea } from '../common/floorless-area';
 import { jobStartTime } from './job-start-time';
 import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
@@ -1113,32 +1115,26 @@ export class TechnicianService {
           postalCode: building.postalCode || 'Not provided',
         },
       });
-      const where = {
-        propertyId: buildingId,
-        unitId: inspection.propertywareUnit?.id ?? null,
-        floorId: null,
-        name: SERVICE_PHOTO_AREA[service],
-      };
-      const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
-      const propertyAreaId =
-        existing?.id ??
-        (
-          await tx.propertyArea.create({
-            data: {
-              ...where,
-              inspectionOrder: 0,
-              // Never part of the walk: the checklist asks for these
-              // photographs, and the completion gate must not also demand them.
-              isRequired: false,
-              status: PropertyAreaStatus.APPROVED,
-              source: 'SYSTEM',
-              environment: AreaEnvironment.INDOOR,
-              category: AreaCategory.UTILITY,
-              notes: `Created automatically for ${SERVICE_PHOTO_AREA[service]} photographs. Not part of the floor plan.`,
-            },
-            select: { id: true },
-          })
-        ).id;
+      // Under a lock: the first two photographs of a job can arrive together.
+      const propertyAreaId = await findOrCreateFloorlessArea(
+        tx,
+        {
+          propertyId: buildingId,
+          unitId: inspection.propertywareUnit?.id ?? null,
+          name: SERVICE_PHOTO_AREA[service],
+        },
+        {
+          inspectionOrder: 0,
+          // Never part of the walk: the checklist asks for these
+          // photographs, and the completion gate must not also demand them.
+          isRequired: false,
+          status: PropertyAreaStatus.APPROVED,
+          source: 'SYSTEM',
+          environment: AreaEnvironment.INDOOR,
+          category: AreaCategory.UTILITY,
+          notes: `Created automatically for ${SERVICE_PHOTO_AREA[service]} photographs. Not part of the floor plan.`,
+        },
+      );
       const area = await tx.inspectionArea.upsert({
         where: { inspectionId_propertyAreaId: { inspectionId: id, propertyAreaId } },
         create: { inspectionId: id, propertyAreaId },
@@ -1485,12 +1481,19 @@ export class TechnicianService {
       return;
     const building = inspection.propertywareBuilding;
     if (!building) return;
-    const areas = await this.prisma.inspectionArea.findMany({
-      where: { inspectionId: inspection.id },
-      select: { propertyArea: { select: { name: true } } },
-    });
-    if (includesLockboxArea(areas.map((area) => area.propertyArea))) return;
+    const hasOne = async (client: Prisma.TransactionClient | PrismaService) => {
+      const areas = await client.inspectionArea.findMany({
+        where: { inspectionId: inspection.id },
+        select: { propertyArea: { select: { name: true } } },
+      });
+      return includesLockboxArea(areas.map((area) => area.propertyArea));
+    };
+    if (await hasOne(this.prisma)) return;
+    const place = { propertyId: building.id, unitId: inspection.propertywareUnit?.id ?? null };
     await this.prisma.$transaction(async (tx) => {
+      // The questions and the property row before the area's lock, the order
+      // `insertInspection` writes them in: the other way round, an open and a
+      // booking at the same house could each hold what the other waits for.
       await ensureBtmLockboxChecklist(tx, user.organizationId);
       // The area's property row, as `serviceArea` writes it.
       await tx.property.upsert({
@@ -1506,10 +1509,12 @@ export class TechnicianService {
           postalCode: building.postalCode || 'Not provided',
         },
       });
-      const propertyAreaId = await btmLockboxPropertyArea(tx, {
-        propertyId: building.id,
-        unitId: inspection.propertywareUnit?.id ?? null,
-      });
+      // Looked at again under the area's lock. Two opens of the same job at
+      // once -- two phones, a retry, a prefetch racing the screen -- both got
+      // past the look above, and the second must find what the first added.
+      await lockBtmLockboxArea(tx, place);
+      if (await hasOne(tx)) return;
+      const propertyAreaId = await btmLockboxPropertyArea(tx, place);
       await tx.inspectionArea.upsert({
         where: { inspectionId_propertyAreaId: { inspectionId: inspection.id, propertyAreaId } },
         create: { inspectionId: inspection.id, propertyAreaId },
