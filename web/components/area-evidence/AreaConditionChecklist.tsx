@@ -1,7 +1,7 @@
 'use client';
 
 import type { AreaChecklistEntry } from '@texasrenters/shared';
-import { CheckIcon, XIcon } from 'lucide-react';
+import { CheckIcon, SparklesIcon, XIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,7 +15,11 @@ import {
 } from '@/components/ui/table';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import { useRecordChecklistItem } from '@/lib/queries';
+import {
+  useFillAreaFromNarration,
+  useFillInspectionFromNarration,
+  useRecordChecklistItem,
+} from '@/lib/queries';
 
 /** The three axes the printed report scores, in the order it prints them. */
 const AXES = [
@@ -119,6 +123,51 @@ function AxisControl({
 }
 
 /**
+ * "Fill from narration": the rows nobody ticked, read from what the inspector
+ * said (2026-10-07). This room now, or every room in the background. Never
+ * over a person's answer, which the server enforces; every filled row is
+ * marked AI below, and any tap on it makes it the reviewer's.
+ */
+function FillFromNarration({ areaId, inspectionId }: { areaId: string; inspectionId: string }) {
+  const room = useFillAreaFromNarration(inspectionId, areaId);
+  const every = useFillInspectionFromNarration(inspectionId);
+  const busy = room.isPending || every.isPending;
+  const message = room.error
+    ? room.error.message
+    : every.error
+      ? every.error.message
+      : room.data
+        ? room.data.asked === 0
+          ? 'Every row here was answered by a person; nothing to fill.'
+          : room.data.filled === 0
+            ? `The narration said nothing about the ${room.data.asked} unticked rows.`
+            : `Filled ${room.data.filled} of ${room.data.asked} unticked rows from the narration.`
+        : every.data
+          ? every.data.queued
+            ? `Filling the unticked rows of ${every.data.areas} rooms from the narration. The checklists update as each room finishes, within a couple of minutes.`
+            : 'Every room is already being filled from the narration.'
+          : null;
+  return (
+    <div className="space-y-2 border-t px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button disabled={busy} onClick={() => room.mutate()} size="sm" type="button" variant="outline">
+          {room.isPending ? <Spinner className="size-3" /> : <SparklesIcon />}
+          Fill this room from the narration
+        </Button>
+        <Button disabled={busy} onClick={() => every.mutate()} size="sm" type="button" variant="ghost">
+          {every.isPending ? <Spinner className="size-3" /> : null}
+          Fill every room
+        </Button>
+      </div>
+      <p className={cn('text-xs', room.error || every.error ? 'text-destructive' : 'text-muted-foreground')}>
+        {message ??
+          'Ticks the rows nobody answered from what the inspector said. Rows a person answered are never changed.'}
+      </p>
+    </div>
+  );
+}
+
+/**
  * The area's checklist, scored during review.
  *
  * Moved here from the technician's device deliberately: the reviewer is the one
@@ -213,6 +262,14 @@ export function AreaConditionChecklist({
                     {item.comment ? (
                       <span className="text-muted-foreground block text-xs">{item.comment}</span>
                     ) : null}
+                    {/* Read from the narration, not ticked by a person. Any tap
+                        on a verdict makes the row the reviewer's. */}
+                    {item.source === 'AI' ? (
+                      <span className="text-muted-foreground mt-0.5 flex items-center gap-1 text-xs">
+                        <SparklesIcon aria-hidden className="size-3" />
+                        Filled by AI from the narration
+                      </span>
+                    ) : null}
                     {/* The moment in the walkthrough when the technician
                         answered. This is the point of capturing it: it turns an
                         hour of video into a list of places worth looking. */}
@@ -289,6 +346,12 @@ export function AreaConditionChecklist({
         ) : null}
         {record.error ? (
           <p className="text-destructive px-4 py-2 text-xs">{record.error.message}</p>
+        ) : null}
+        {/* Room checklists only. An occupied visit's answers and an HVAC
+            form (the one checklist with section headings) are recorded on site
+            by the person looking at the thing; the server refuses them too. */}
+        {canReview && !readOnlyReason && !answersOnly && checklist.every((item) => !item.section) ? (
+          <FillFromNarration areaId={areaId} inspectionId={inspectionId} />
         ) : null}
       </CardContent>
     </Card>

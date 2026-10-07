@@ -4,6 +4,9 @@ import { AdminModule } from '../src/admin/admin.module';
 import { ComparisonReportService } from '../src/admin/comparison-report.service';
 import { ComparisonService } from '../src/admin/comparison.service';
 import { ReportShareService } from '../src/admin/report-share.service';
+import { AdminController } from '../src/admin/admin.controller';
+import { ChecklistPrefillService } from '../src/technician/checklist-prefill.service';
+import { MediaProcessingService } from '../src/technician/media-processing.service';
 import { CacheInvalidationService } from '../src/cache/cache-invalidation.service';
 import { CacheModule } from '../src/cache/cache.module';
 import { PrismaService } from '../src/common/prisma.service';
@@ -119,5 +122,26 @@ describe('the admin module', () => {
 
     expect(service.comparisonReport).toBeInstanceOf(ComparisonReportService);
     expect(service.comparisons).toBeInstanceOf(ComparisonService);
+  });
+});
+
+/**
+ * The checklist filled from the narration (2026-10-07). Optional in both the
+ * console's controller and the pipeline, so a graph that cannot reach it would
+ * boot fine and answer "not available" -- or never fill anything on review.
+ */
+describe('the narration pre-fill', () => {
+  it('reaches the console and the pipeline', async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AdminModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+    const controller = moduleRef.get(AdminController) as unknown as { checklistPrefill?: unknown };
+    const pipeline = moduleRef.get(MediaProcessingService) as unknown as {
+      checklistPrefill?: unknown;
+    };
+
+    expect(controller.checklistPrefill).toBeInstanceOf(ChecklistPrefillService);
+    expect(pipeline.checklistPrefill).toBeInstanceOf(ChecklistPrefillService);
   });
 });

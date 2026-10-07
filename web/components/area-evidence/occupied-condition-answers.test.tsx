@@ -42,6 +42,8 @@ vi.mock('@/lib/queries', () => ({
       checklist,
     },
   }),
+  useFillAreaFromNarration: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
+  useFillInspectionFromNarration: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
   useRecordChecklistItem: () => ({ isPending: false, variables: undefined, error: null, mutate: () => {} }),
   useAdminMutations: () => ({
     approveFinding: { isPending: false, error: null, mutateAsync: async () => {} },

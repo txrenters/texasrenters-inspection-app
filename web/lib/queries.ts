@@ -62,6 +62,8 @@ import type {
   FindingRejectReason,
   AiSettings,
   AreaChecklistEntry,
+  AreaChecklistPrefillResult,
+  InspectionChecklistPrefillResult,
   AreaEvidenceBundle,
   AreaEvidenceSummary,
   AreaReviewMark,
@@ -500,6 +502,54 @@ export const useRecordChecklistItem = (inspectionId: string, areaId: string | nu
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId ?? '') });
       void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+    },
+  });
+};
+
+/**
+ * Fills one room's unticked condition rows from what the inspector said.
+ *
+ * Answered when the room is done (one AI call, a few seconds). Never replaces
+ * a person's answer; the server conditions every write on that.
+ */
+export const useFillAreaFromNarration = (inspectionId: string, areaId: string) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<AreaChecklistPrefillResult>(
+        `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/checklist-prefill`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId) });
+      void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+    },
+  });
+};
+
+/** When the console looks again while every room fills in the background. */
+const PREFILL_REFRESH_MS = [15_000, 35_000, 60_000, 100_000, 150_000];
+
+/**
+ * Fills every room's unticked rows, in the background.
+ *
+ * The server answers at once; the rooms finish over a minute or two. The
+ * summary key prefixes every area's, so refreshing it a few times brings each
+ * room's checklist and the "Checklist 0/8" counts up to date as they land.
+ */
+export const useFillInspectionFromNarration = (inspectionId: string) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<InspectionChecklistPrefillResult>(
+        `/api/v1/admin/inspections/${inspectionId}/checklist-prefill`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      for (const delay of PREFILL_REFRESH_MS)
+        setTimeout(() => {
+          void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+        }, delay);
     },
   });
 };

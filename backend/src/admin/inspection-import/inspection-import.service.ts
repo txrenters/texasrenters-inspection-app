@@ -1032,6 +1032,8 @@ export class InspectionImportService {
                 isUndamaged: worseOf(existingResponse.isUndamaged, item.isUndamaged),
                 isWorking: worseOf(existingResponse.isWorking, item.isWorking),
                 comment: joinComments(existingResponse.comment, item.comment),
+                // The office's imported report: a person's record from here on.
+                source: 'PERSON',
               },
             });
           else

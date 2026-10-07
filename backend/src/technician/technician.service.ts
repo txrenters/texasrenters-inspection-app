@@ -1928,7 +1928,8 @@ export class TechnicianService {
         recordedById: user.id,
         ...values,
       },
-      update: { recordedById: user.id, recordedAt: new Date(), ...values },
+      // The technician's answer, including one over the AI's narration pre-fill.
+      update: { recordedById: user.id, recordedAt: new Date(), source: 'PERSON', ...values },
       select: {
         checklistItemId: true,
         isClean: true,
