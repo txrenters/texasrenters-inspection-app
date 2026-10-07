@@ -146,6 +146,10 @@ export default function RecordingReviewScreen() {
                     : 'MANUALLY_CONFIRMED',
               }
             : undefined,
+          // The moments marked on Android, which the server files as photos.
+          // They used to stop here, so the phone had to cut them itself.
+          frameMarkersMs: draft.frameMarkersMs,
+          frameMarkers: draft.frameMarkers,
         },
       },
       {

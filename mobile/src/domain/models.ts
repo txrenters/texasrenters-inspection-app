@@ -364,6 +364,21 @@ export interface LocalMedia {
    * out of the uploaded video afterwards.
    */
   frameMarkersMs?: number[];
+  /**
+   * The same moments, each with the kind of photo the technician was taking.
+   *
+   * Sent with the Cloudflare upload so the server files each frame as that kind
+   * (2026-10-06); the phone no longer decodes the video to cut them itself.
+   * Absent on a take recorded by an earlier release, which did cut its own
+   * frames -- so nothing is sent for it, and nothing is filed twice.
+   */
+  frameMarkers?: FrameMarker[];
+}
+
+/** A moment marked during a take, and the kind of photo it stands for. */
+export interface FrameMarker {
+  atMs: number;
+  captureType: PhotoCaptureType;
 }
 
 export type PhotoCaptureType =

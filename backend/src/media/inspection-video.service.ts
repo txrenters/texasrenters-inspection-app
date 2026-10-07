@@ -15,6 +15,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
+import type { RecordingCaptureDto } from './inspection-video.dto';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
 import { isAiFiled } from '../technician/ai-filed-frames';
@@ -108,6 +109,36 @@ export interface UploadSessionInput {
   /** Client-generated; makes a retried session request return the same session. */
   idempotencyKey: string;
   recordedAt?: string;
+  /** The guided capture's account of the take; see `RecordingCaptureDto`. */
+  capture?: RecordingCaptureDto;
+}
+
+/**
+ * The capture summary a Stream recording stores, in the shape the multipart
+ * upload has always stored (`captureSummaryFromDto`), plus each marker's kind
+ * so the photograph filed for it is the kind the technician was taking.
+ */
+export function captureSummaryOf(capture: RecordingCaptureDto): Prisma.InputJsonValue {
+  const markers = capture.frameMarkers ?? [];
+  return {
+    captureSessionId: capture.captureSessionId ?? null,
+    capturePolicyVersion: capture.capturePolicyVersion ?? null,
+    coverageStatus: capture.coverageStatus ?? 'INCOMPLETE',
+    sensorConfidence: capture.sensorConfidence ?? 'UNAVAILABLE',
+    clockwiseRotationDegrees: capture.clockwiseRotationDegrees ?? 0,
+    counterClockwiseRotationDegrees: capture.counterClockwiseRotationDegrees ?? 0,
+    startHeadingDegrees: capture.startHeadingDegrees ?? null,
+    endHeadingDegrees: capture.endHeadingDegrees ?? null,
+    returnedToStart: capture.returnedToStart ?? false,
+    sensorSupported: capture.sensorSupported ?? false,
+    manualConfirmation: capture.manualConfirmation ?? false,
+    evidenceComplete: capture.evidenceComplete ?? false,
+    snapshotCount: capture.snapshotCount ?? 0,
+    findingMarkerCount: capture.findingMarkerCount ?? 0,
+    // What `readFrameMarkers` and the console read; `frameMarkers` adds the kinds.
+    frameMarkersMs: markers.map((marker) => marker.atMs),
+    frameMarkers: markers.map((marker) => ({ atMs: marker.atMs, captureType: marker.captureType })),
+  };
 }
 
 @Injectable()
@@ -759,6 +790,7 @@ export class InspectionVideoService {
         uploadBytesCompleted: 0,
         localQueueId: input.localQueueId ?? null,
         recordedAt: input.recordedAt ? new Date(input.recordedAt) : new Date(),
+        ...(input.capture ? { captureSummary: captureSummaryOf(input.capture) } : {}),
         uploadStatus: MediaUploadStatus.SESSION_CREATED,
         processingStatus: MediaProcessingStatus.PENDING,
       },
@@ -1354,6 +1386,9 @@ export class InspectionVideoService {
         uploadBytesTotal: input.fileSize,
         uploadBytesCompleted: 0,
         retryCount: { increment: 1 },
+        // A session first asked for by an app from before the capture was sent
+        // learns it here, when the updated app asks again.
+        ...(input.capture ? { captureSummary: captureSummaryOf(input.capture) } : {}),
       },
     });
     this.logger.log({

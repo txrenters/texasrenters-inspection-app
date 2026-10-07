@@ -36,6 +36,7 @@ import {
 } from './deepgram-transcription';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { captureTimeForFrame } from '../common/photo-capture-time';
+import { fetchStreamFrame, markerPhotoKey, readFrameMarkers, readMarkers } from './marker-frames';
 import { removeOrphanedAiFrames } from './ai-filed-frames';
 import { houseRulesLines } from './house-rules';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
@@ -157,29 +158,11 @@ function describeAnswer(answer: {
  */
 type Baseline = { text: string | null; established: boolean };
 
-/** Hard ceiling on frames cut from one recording, whatever the client asked for. */
-const MAX_EXTRACTED_FRAMES = 60;
+// Moved to `marker-frames`; re-exported for the readers that import it here.
+export { readFrameMarkers };
 
-/**
- * Reads technician frame markers back out of the stored capture summary.
- *
- * Bounded by the recording length: a marker past the end yields no frame, and
- * trusting a client-supplied offset unchecked would let one recording spawn
- * arbitrarily many ffmpeg passes.
- */
-export function readFrameMarkers(captureSummary: unknown, durationSeconds: number): number[] {
-  if (!captureSummary || typeof captureSummary !== 'object') return [];
-  const raw = (captureSummary as { frameMarkersMs?: unknown }).frameMarkersMs;
-  if (!Array.isArray(raw)) return [];
-  const limitMs = Math.max(0, durationSeconds) * 1000;
-  const valid = raw.filter(
-    (value): value is number =>
-      typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= limitMs,
-  );
-  return [...new Set(valid.map((value) => Math.round(value)))]
-    .sort((left, right) => left - right)
-    .slice(0, MAX_EXTRACTED_FRAMES);
-}
+/** How long the signed frame URL for one recording's markers may be used. */
+const MARKER_FRAME_TOKEN_TTL_SECONDS = 10 * 60;
 
 export { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE };
 
@@ -818,6 +801,9 @@ export class MediaProcessingService implements OnModuleInit {
     // endpoint takes bytes, not a URL, so using it would mean proxying the
     // video after all.
     if (!media.storageKey) {
+      // Before the transcript, and never in its way: the technician's marked
+      // moments are their evidence whether or not the narration transcribes.
+      await this.fileStreamMarkerFrames(media);
       if (deepgramKey) return this.transcribeStreamRecording(media, job, deepgramKey);
       /**
        * No Deepgram key: fetch the recording once and transcribe it with OpenAI.
@@ -906,6 +892,92 @@ export class MediaProcessingService implements OnModuleInit {
       });
       throw error;
     }
+  }
+
+  /**
+   * The moments a technician marked while recording, filed as photographs from
+   * Cloudflare's frames (see `marker-frames`).
+   *
+   * Only for a Stream recording, whose bytes never reach this backend; a
+   * bucket-backed one has its frames cut by `extractMarkerFrames` from the
+   * bytes it already holds. Idempotent per moment, so a re-run or a retried
+   * webhook files nothing twice, and best-effort per marker: one frame
+   * Cloudflare will not render costs only that frame, never the transcript.
+   */
+  private async fileStreamMarkerFrames(media: {
+    id: string;
+    streamUid: string | null;
+    durationSeconds: number;
+    organizationId: string;
+    inspectionId: string;
+    inspectionAreaId: string;
+    technicianId: string;
+    captureSummary: unknown;
+    recordedAt: Date | null;
+  }) {
+    const markers = readMarkers(media.captureSummary, media.durationSeconds);
+    const customer = this.stream?.customerCode;
+    if (!markers.length || !media.streamUid || !customer) return;
+    let base: string;
+    try {
+      const { token } = this.stream!.signPlaybackToken(media.streamUid, MARKER_FRAME_TOKEN_TTL_SECONDS);
+      base = `https://customer-${customer}.cloudflarestream.com/${token}/thumbnails/thumbnail.jpg`;
+    } catch (error) {
+      this.logger.warn(
+        `Marker frames not filed for ${media.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+      return;
+    }
+
+    let filed = 0;
+    for (const [index, marker] of markers.entries()) {
+      const idempotencyKey = markerPhotoKey(media.id, marker.atMs);
+      try {
+        const existing = await this.prisma.inspectionPhoto.findUnique({
+          where: { idempotencyKey },
+          select: { id: true },
+        });
+        if (existing) continue;
+        const bytes = await fetchStreamFrame(`${base}?time=${(marker.atMs / 1000).toFixed(3)}s&height=1080`);
+        if (!bytes) continue;
+        const storageKey = `organizations/${media.organizationId}/inspections/${media.inspectionId}/photos/${idempotencyKey}.jpg`;
+        await this.storage.putBytes(storageKey, bytes, 'image/jpeg');
+        await this.prisma.inspectionPhoto
+          .create({
+            data: {
+              organizationId: media.organizationId,
+              inspectionId: media.inspectionId,
+              inspectionAreaId: media.inspectionAreaId,
+              capturedById: media.technicianId,
+              provider: this.storage.providerName(),
+              storageKey,
+              captureType: marker.captureType,
+              sequenceNumber: index + 1,
+              mimeType: 'image/jpeg',
+              sizeBytes: bytes.byteLength,
+              idempotencyKey,
+              ...captureTimeForFrame(media, marker.atMs),
+              metadata: {
+                captureSource: 'VIDEO_FRAME_EXTRACTION',
+                videoTimestampMs: marker.atMs,
+                sourceMediaId: media.id,
+              },
+            },
+          })
+          .catch(async (error: unknown) => {
+            await this.storage.delete(storageKey).catch(() => undefined);
+            throw error;
+          });
+        filed += 1;
+      } catch (error) {
+        this.logger.warn(
+          `Marker frame at ${marker.atMs}ms not filed for ${media.id}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+    if (filed) await this.event(media.id, 'FRAMES_EXTRACTED', { count: filed, source: 'cloudflare' });
   }
 
   /**
