@@ -292,6 +292,9 @@ export const inspectionPageSchema = z.object({
   total: z.number(),
   totalPages: z.number(),
 });
+const jobDaysSchema = z.array(
+  z.object({ day: z.string(), total: z.number(), open: z.number() }),
+);
 
 // Exported for the offline round-trip test: rooms are cached and re-parsed
 // from their own stored output, so this shape has to survive the trip.
@@ -969,10 +972,21 @@ export class ApiInspectionRepository implements InspectionRepository {
     if (filters.statuses?.length) query.set('status', filters.statuses.join(','));
     if (filters.search?.trim()) query.set('search', filters.search.trim());
     if (filters.dueToday) query.set('dueToday', 'true');
+    if (filters.scheduledOn) query.set('scheduledOn', filters.scheduledOn);
+    if (filters.scheduledBefore) query.set('scheduledBefore', filters.scheduledBefore);
+    if (filters.order) query.set('order', filters.order);
     const result = await cachedApiRecord(`inspections:${query.toString()}`, inspectionPageSchema, () =>
       getJson(`/api/v1/technician/inspections?${query.toString()}`),
     );
     return { ...result, items: await withSavedStarts(result.items) };
+  }
+  async jobDays(range: { from: string; to: string; statuses?: readonly InspectionStatus[] }) {
+    const query = new URLSearchParams({ from: range.from, to: range.to });
+    if (range.statuses?.length) query.set('status', range.statuses.join(','));
+    // Cached like the list, so the calendar keeps its dots without signal.
+    return cachedApiRecord(`job-days:${query.toString()}`, jobDaysSchema, () =>
+      getJson(`/api/v1/technician/inspections/days?${query.toString()}`),
+    );
   }
   async list(filters: InspectionListFilters = {}) {
     return (await this.listPage(filters)).items;

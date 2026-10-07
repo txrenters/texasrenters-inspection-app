@@ -6,6 +6,7 @@ import {
   MAX_SERVICE_REASON,
 } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
+import { JOB_DAY_PATTERN } from './technician-job-list';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -145,6 +146,54 @@ export class TechnicianInspectionListQueryDto {
   @Transform(({ value }) => value === true || value === 'true' || value === '1')
   @IsBoolean()
   dueToday?: boolean;
+
+  /**
+   * One Texas day, `YYYY-MM-DD` -- the day the Jobs list's calendar is on.
+   *
+   * A date, where `dueToday` is a flag, because the technician picks it: the
+   * day strip and the calendar name the day outright. Strict ISO, so a day that
+   * does not exist ("2026-02-31") is a 400 rather than an Invalid Date.
+   */
+  @IsOptional()
+  @Matches(JOB_DAY_PATTERN)
+  @IsISO8601({ strict: true })
+  scheduledOn?: string;
+
+  /** Everything scheduled before this day: the jobs still open from earlier days. */
+  @IsOptional()
+  @Matches(JOB_DAY_PATTERN)
+  @IsISO8601({ strict: true })
+  scheduledBefore?: string;
+
+  /** `recent` for History, newest first; the round's order otherwise. */
+  @IsOptional()
+  @IsIn(['schedule', 'recent'])
+  order?: 'schedule' | 'recent';
+}
+
+/** The day strip's dots: how many jobs each day holds, for a range of days. */
+export class TechnicianJobDaysQueryDto {
+  @Matches(JOB_DAY_PATTERN)
+  @IsISO8601({ strict: true })
+  from!: string;
+
+  @Matches(JOB_DAY_PATTERN)
+  @IsISO8601({ strict: true })
+  to!: string;
+
+  /** The same status set the list is showing, so a dot never promises a row that is not there. */
+  @IsOptional()
+  @Transform(({ value }) => {
+    const raw: unknown[] = Array.isArray(value) ? value : [value];
+    return raw
+      .flatMap((entry) => (typeof entry === 'string' ? entry.split(',') : [entry]))
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : entry))
+      .filter((entry) => entry !== '');
+  })
+  @IsArray()
+  @ArrayMaxSize(TECHNICIAN_FILTERABLE_STATUSES.length)
+  @IsIn(TECHNICIAN_FILTERABLE_STATUSES, { each: true })
+  status?: string[];
 }
 
 export class TechnicianFindingsQueryDto {

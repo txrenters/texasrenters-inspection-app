@@ -57,7 +57,7 @@ import {
 } from '@/src/utils/job-tasks';
 import { INSPECTION_STATUS_TONE_CLASS, inspectionStatusPresentation } from '@/src/utils/inspection-status';
 import { evaluateSubmissionGate } from '@/src/utils/submission-gate';
-import { formatVisitWindow } from '@/src/utils/visit-window';
+import { formatVisitDay, formatVisitWindow } from '@/src/utils/visit-window';
 
 registerIcons(AlertTriangleIcon, CalendarXIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIcon, PlayCircleIcon);
 
@@ -344,7 +344,10 @@ export default function JobScreen() {
             <ClockIcon size={14} className="text-muted-foreground" />
             {/* The window only when the office booked one: `scheduledAt` is a date. */}
             <Text className="text-xs text-muted-foreground">
-              {new Date(item.scheduledAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              {/* `formatVisitDay`, which reads the date column as the date it
+                  is. Formatting it in the phone's zone printed Oct 6 in Texas
+                  for a visit booked on Oct 7. */}
+              {formatVisitDay(item.scheduledAt)}
               {formatVisitWindow(item) ? ` · ${formatVisitWindow(item)}` : ''}
             </Text>
           </View>

@@ -113,6 +113,21 @@ export interface InspectionListFilters {
    * for.
    */
   dueToday?: boolean;
+  /** One Texas day, `YYYY-MM-DD`: the day the Jobs calendar is on. */
+  scheduledOn?: string;
+  /** Everything before this day: the jobs still open from earlier days. */
+  scheduledBefore?: string;
+  /** `recent` for History, newest first; the round's order otherwise. */
+  order?: 'schedule' | 'recent';
+}
+
+/** How many jobs a day holds, for a dot on the Jobs calendar. */
+export interface JobDayCount {
+  /** `YYYY-MM-DD`. */
+  day: string;
+  total: number;
+  /** Still to do: assigned or in progress. */
+  open: number;
 }
 
 /**
@@ -257,6 +272,12 @@ export interface InspectionRepository {
   mapSession(options: MapSessionOptions): Promise<MapTileSession | null>;
   dashboard(): Promise<DashboardSummary>;
   listPage(filters?: InspectionListFilters): Promise<InspectionPage>;
+  /** Jobs per day from `from` to `to`, both included; only days that hold any. */
+  jobDays(range: {
+    from: string;
+    to: string;
+    statuses?: readonly InspectionStatus[];
+  }): Promise<JobDayCount[]>;
   list(filters?: InspectionListFilters): Promise<Inspection[]>;
   get(id: string): Promise<Inspection>;
   context(id: string): Promise<InspectionContext>;

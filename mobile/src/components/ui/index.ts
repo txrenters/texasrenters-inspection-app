@@ -27,3 +27,4 @@ export {
   StatsRowSkeleton,
   UploadListSkeleton,
 } from './Skeleton';
+export { SegmentedControl } from './SegmentedControl';

@@ -7,7 +7,7 @@ import {
   inspectionStatusPresentation,
   isFieldActive,
   isSubmittedToOffice,
-  statusesForFilter,
+  SUBMITTED_STATUSES,
 } from '../src/utils/inspection-status';
 
 const ALL_STATUSES: InspectionStatus[] = [
@@ -104,43 +104,23 @@ describe('inspection status presentation', () => {
 });
 
 /**
- * The chips are what the server gets asked to filter by. They used to be
- * applied on-device over a fixed 25-record page, so every chip shared one
- * window of the *oldest* work — and "Submitted", covering seven statuses,
- * crowded the Assigned and In Progress chips a technician works from.
+ * The Jobs list asks the server for two groups: what is still open (the jobs
+ * still open from earlier days) and what has been handed over (History).
  */
-describe('statusesForFilter', () => {
-  it('asks the server for nothing on All, so the server applies its own visibility rule', () => {
-    // Not "every status": the list must keep hiding CANCELLED, and that
-    // decision belongs to the server rather than a list the client maintains.
-    expect(statusesForFilter('ALL')).toBeUndefined();
-  });
-
-  it('expands Submitted to every handed-over status', () => {
-    expect(statusesForFilter('SUBMITTED')).toEqual(ALL_STATUSES.filter(isSubmittedToOffice));
-    // The chip's whole purpose: a walkthrough that has just gone to the office.
-    expect(statusesForFilter('SUBMITTED')).toContain('TECHNICIAN_SUBMITTED');
-  });
-
-  it('passes a single-status chip through unchanged', () => {
-    expect(statusesForFilter('SCHEDULED')).toEqual(['SCHEDULED']);
-    expect(statusesForFilter('IN_PROGRESS')).toEqual(['IN_PROGRESS']);
-    expect(statusesForFilter('COMPLETED')).toEqual(['COMPLETED']);
+describe('the Jobs list’s status groups', () => {
+  it('puts every handed-over status in History, the walkthrough just sent among them', () => {
+    expect(SUBMITTED_STATUSES).toEqual(ALL_STATUSES.filter(isSubmittedToOffice));
+    expect(SUBMITTED_STATUSES).toContain('TECHNICIAN_SUBMITTED');
   });
 
   it('never asks for CANCELLED, which the server refuses', () => {
-    const chips = ['ALL', 'SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'COMPLETED'] as const;
-    for (const chip of chips) expect(statusesForFilter(chip) ?? []).not.toContain('CANCELLED');
+    expect([...FIELD_ACTIVE_STATUSES, ...SUBMITTED_STATUSES]).not.toContain('CANCELLED');
   });
 
-  it('covers the whole enum across Assigned, In Progress and Submitted', () => {
-    // Nothing except CANCELLED may be unreachable: a status no chip can show is
-    // work that exists on the server and cannot be found on the handset.
-    const reachable = new Set([
-      ...statusesForFilter('SCHEDULED')!,
-      ...statusesForFilter('IN_PROGRESS')!,
-      ...statusesForFilter('SUBMITTED')!,
-    ]);
+  it('reaches every status but CANCELLED between them', () => {
+    // A status neither group can show is work that exists on the server and
+    // cannot be found on the handset.
+    const reachable = new Set([...FIELD_ACTIVE_STATUSES, ...SUBMITTED_STATUSES]);
     expect(ALL_STATUSES.filter((status) => !reachable.has(status))).toEqual(['CANCELLED']);
   });
 });

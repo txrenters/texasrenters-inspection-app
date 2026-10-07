@@ -96,14 +96,7 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
         // Out of every list before the refetch, rather than after it.
         if (JOB_LEAVES_THE_PHONE.has(event.kind)) leaveThePhone(event.inspectionId);
         refreshAssignments();
-        void verifyQueries(queryClient, [
-          queryKeys.inspection(event.inspectionId),
-          // The outstanding list, on every kind rather than only
-          // EVIDENCE_REQUESTED: resolving a request, finishing an inspection or
-          // losing an assignment all change what is still waiting, and a badge
-          // that only ever counts up is worse than none.
-          queryKeys.openEvidenceRequests,
-        ]);
+        void verifyQueries(queryClient, [queryKeys.inspection(event.inspectionId)]);
         // Not only when no token is registered: a foreground push arrives and
         // is then dropped without being shown, so a technician working inside
         // one inspection heard nothing about the next one. See

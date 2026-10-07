@@ -85,10 +85,20 @@ import type {
   TechnicianFilterOutcomeDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
+  TechnicianJobDaysQueryDto,
   TechnicianMediaUploadDto,
   TechnicianPhotoUploadDto,
   TechnicianSaveServicesDto,
 } from './technician.dto';
+import {
+  jobDay,
+  jobDayCounts,
+  jobDayWhere,
+  jobListOrder,
+  MAX_JOB_DAY_RANGE_DAYS,
+  technicianJobSearchWhere,
+  type JobDayCount,
+} from './technician-job-list';
 
 
 /** One photograph a checklist points at: the handset's key for it, then the photograph once it lands. */
@@ -632,7 +642,10 @@ export class TechnicianService {
 
   async inspections(
     user: AuthenticatedUser,
-    query: Pick<TechnicianInspectionListQueryDto, 'page' | 'pageSize' | 'status' | 'search' | 'dueToday'> = {
+    query: Pick<
+      TechnicianInspectionListQueryDto,
+      'page' | 'pageSize' | 'status' | 'search' | 'dueToday' | 'scheduledOn' | 'scheduledBefore' | 'order'
+    > = {
       page: 1,
       pageSize: 25,
     },
@@ -652,35 +665,17 @@ export class TechnicianService {
        * to another zone — would otherwise ask for the wrong day and be given
        * it. The server owns the definition; see `business-day.ts`.
        */
-      ...(query.dueToday ? { scheduledAt: dayBounds() } : {}),
-      ...(query.search
-        ? {
-            OR: [
-              {
-                propertywareBuilding: {
-                  name: { contains: query.search, mode: 'insensitive' as const },
-                },
-              },
-              {
-                propertywareBuilding: {
-                  addressLine1: { contains: query.search, mode: 'insensitive' as const },
-                },
-              },
-              {
-                propertywareUnit: {
-                  name: { contains: query.search, mode: 'insensitive' as const },
-                },
-              },
-            ],
-          }
-        : {}),
+      ...(query.dueToday ? { scheduledAt: dayBounds() } : jobDayWhere(query)),
+      // Every word somewhere, as an AND beside the narrowing above -- never a
+      // top-level OR, which would widen it. See `technicianJobSearchWhere`.
+      AND: technicianJobSearchWhere(query.search),
     } satisfies Prisma.InspectionWhereInput;
     const [records, total] = await Promise.all([
       this.prisma.inspection.findMany({
         relationLoadStrategy: 'join',
         where,
         select: technicianInspectionSummarySelect,
-        orderBy: { scheduledAt: 'asc' },
+        orderBy: jobListOrder(query.order),
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
@@ -693,6 +688,34 @@ export class TechnicianService {
       total,
       totalPages: Math.ceil(total / query.pageSize),
     };
+  }
+
+  /**
+   * How many of this technician's jobs each day holds, for the Jobs list's day
+   * strip: a dot under a day with work on it. One grouped query for the whole
+   * range, rather than a list request per day.
+   */
+  async jobDays(user: AuthenticatedUser, query: TechnicianJobDaysQueryDto): Promise<JobDayCount[]> {
+    const from = jobDay(query.from);
+    const to = jobDay(query.to);
+    const days = (to.getTime() - from.getTime()) / 86_400_000;
+    if (days < 0 || days > MAX_JOB_DAY_RANGE_DAYS)
+      throw new ApplicationError(
+        400,
+        'JOB_DAY_RANGE_INVALID',
+        `Ask for at most ${MAX_JOB_DAY_RANGE_DAYS} days, with from no later than to.`,
+      );
+    const rows = await this.prisma.inspection.groupBy({
+      by: ['scheduledAt', 'status'],
+      where: {
+        organizationId: user.organizationId,
+        status: query.status?.length ? { in: query.status as InspectionStatus[] } : visibleStatuses,
+        assignments: { some: { technicianId: user.id, isCurrent: true } },
+        scheduledAt: { gte: from, lte: to },
+      },
+      _count: { _all: true },
+    });
+    return jobDayCounts(rows);
   }
 
   async inspection(user: AuthenticatedUser, id: string) {

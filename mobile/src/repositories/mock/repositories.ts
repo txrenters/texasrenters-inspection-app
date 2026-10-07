@@ -10,13 +10,22 @@ import type {
   InspectionListFilters,
   InspectionPage,
   InspectionRepository,
+  JobDayCount,
   MediaRepository,
   PropertyRepository,
   TechnicianHome,
   UploadRepository,
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
-import type { DemoRole, DemoUser, Finding, InspectionRoom, LocalMedia } from '../../domain/models';
+import type {
+  DemoRole,
+  DemoUser,
+  Finding,
+  Inspection,
+  InspectionRoom,
+  InspectionStatus,
+  LocalMedia,
+} from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
 import { isRoomSummary } from '../../utils/ai-review';
 import { demoUsers, inspections, properties, rooms } from './data';
@@ -170,11 +179,20 @@ export class MockInspectionRepository implements InspectionRepository {
     const search = filters.search?.trim().toLowerCase();
     // Mirrors the server: filter first, then slice. Filtering after the slice
     // is the bug this whole change is about, so the demo must not model it.
-    const matched = inspections.filter(
-      (inspection) =>
-        (!filters.statuses?.length || filters.statuses.includes(inspection.status)) &&
-        (!search || inspection.property.address.toLowerCase().includes(search)),
-    );
+    const day = (inspection: Inspection) => inspection.scheduledAt.slice(0, 10);
+    const matched = inspections
+      .filter(
+        (inspection) =>
+          (!filters.statuses?.length || filters.statuses.includes(inspection.status)) &&
+          (!search || inspection.property.address.toLowerCase().includes(search)) &&
+          (!filters.scheduledOn || day(inspection) === filters.scheduledOn) &&
+          (!filters.scheduledBefore || day(inspection) < filters.scheduledBefore),
+      )
+      .sort((a, b) =>
+        filters.order === 'recent'
+          ? b.scheduledAt.localeCompare(a.scheduledAt)
+          : a.scheduledAt.localeCompare(b.scheduledAt),
+      );
     const page = filters.page ?? 1;
     const pageSize = filters.pageSize ?? INSPECTION_PAGE_SIZE;
     return {
@@ -184,6 +202,20 @@ export class MockInspectionRepository implements InspectionRepository {
       total: matched.length,
       totalPages: Math.max(1, Math.ceil(matched.length / pageSize)),
     };
+  }
+  async jobDays(range: { from: string; to: string; statuses?: readonly InspectionStatus[] }) {
+    await mockDelay();
+    const counts = new Map<string, JobDayCount>();
+    for (const inspection of inspections) {
+      const day = inspection.scheduledAt.slice(0, 10);
+      if (day < range.from || day > range.to) continue;
+      if (range.statuses?.length && !range.statuses.includes(inspection.status)) continue;
+      const entry = counts.get(day) ?? { day, total: 0, open: 0 };
+      entry.total += 1;
+      if (inspection.status === 'SCHEDULED' || inspection.status === 'IN_PROGRESS') entry.open += 1;
+      counts.set(day, entry);
+    }
+    return [...counts.values()].sort((a, b) => a.day.localeCompare(b.day));
   }
   async list(filters: InspectionListFilters = {}) {
     return (await this.listPage(filters)).items;
