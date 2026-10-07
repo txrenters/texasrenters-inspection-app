@@ -156,6 +156,35 @@ export function reportFatalNow(error: unknown, source = 'uncaught'): void {
   }
 }
 
+/** The server keeps 8,000 characters of a report's detail; a little under, so redaction cannot push it over. */
+const OS_REPORT_DETAIL_MAX = 7_900;
+
+/**
+ * Records what the operating system said about how the app last ended -- see
+ * `os-exit-reports`. Its detail is the report itself rather than a JavaScript
+ * stack, so it keeps far more than the six lines a stack is cut to. A report
+ * already in the log is not added twice.
+ */
+export async function recordOsReports(
+  reports: { id: string; at: string; message: string; detail: string; fatal: boolean }[],
+): Promise<void> {
+  if (!reports.length) return;
+  const entries = await load();
+  const known = new Set(entries.map((entry) => entry.id));
+  const fresh: LoggedError[] = reports
+    .filter((report) => !known.has(report.id))
+    .map((report) => ({
+      id: report.id,
+      at: report.at,
+      source: 'os-exit',
+      message: redact(report.message).slice(0, 500),
+      stack: redact(report.detail).slice(0, OS_REPORT_DETAIL_MAX),
+      fatal: report.fatal,
+    }));
+  if (!fresh.length) return;
+  await persist([...fresh, ...entries].slice(0, MAX_ENTRIES));
+}
+
 function readNow(): LoggedError[] {
   try {
     const raw = demoStorageNow.getItem(STORAGE_KEY);

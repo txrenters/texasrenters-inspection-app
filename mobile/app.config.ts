@@ -107,6 +107,13 @@ const config: ExpoConfig = {
    * resolution in them -- so every iPhone photograph went up at full sensor
    * resolution, and a gallery import never met the cap at all. Measured:
    * uploads of one photograph taking 20 to 82 seconds.
+   *
+   * **Not bumped for `modules/exit-reasons` (2026-10-07), on purpose.** It is
+   * loaded with `requireOptionalNativeModule`, which answers null on a binary
+   * built without it, so an update cannot break an older 1.3.0 build -- it
+   * just reports nothing there. A bump would have cut every installed phone off
+   * from updates until a new build reached all of them. That exception is the
+   * module's alone: anything imported normally still needs the bump.
    */
   version: '1.3.0',
   orientation: 'portrait',

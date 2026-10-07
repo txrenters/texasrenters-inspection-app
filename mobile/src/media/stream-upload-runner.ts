@@ -6,6 +6,7 @@ import {
   TusUploadError,
   uploadFileInChunks,
 } from './tus-upload';
+import { nativeWholeFileSender, type WholeFileSender } from './whole-file-upload';
 
 /**
  * Sends one queued recording straight to Cloudflare Stream.
@@ -104,6 +105,11 @@ export async function runStreamUpload(options: {
   createSession: () => Promise<StreamUploadSession | null>;
   /** Persists resume state after every confirmed chunk. */
   persist: (patch: Partial<UploadItem>) => void;
+  /**
+   * The platform's uploader for a fresh recording that fits one request; null
+   * keeps every byte on the chunked path.
+   */
+  wholeFile?: WholeFileSender | null;
 }): Promise<StreamUploadOutcome> {
   let session: StreamUploadSession | null = null;
 
@@ -154,6 +160,7 @@ export async function runStreamUpload(options: {
       chunkBytes: chunkSizeFor({ unstable: Boolean(options.unstableConnection) }),
       signal: options.signal,
       shouldPause: options.shouldPause,
+      wholeFile: options.wholeFile === undefined ? nativeWholeFileSender() : (options.wholeFile ?? undefined),
       onProgress: ({ uploadedBytes, totalBytes }) => {
         // Written after every confirmed chunk, because the interesting failures
         // — a force-quit, the OS reclaiming the app — leave no chance to save
