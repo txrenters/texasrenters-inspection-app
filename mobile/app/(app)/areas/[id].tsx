@@ -59,13 +59,10 @@ import { replaceOldEvidence } from '@/src/media/replace-evidence';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
-import { EvidenceRequestCard } from '@/src/components/EvidenceRequestCard';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import {
   queryKeys,
-  useEvidenceRequests,
   useFindings,
-  useResolveEvidenceRequest,
   useRecordChecklistItem,
   useRoom,
   useRoomChecklist,
@@ -188,13 +185,8 @@ export default function AreaDetailScreen() {
   const chosenCapture = useDemoStore((state) => state.captureModeByArea[id]);
   const setCaptureMode = useDemoStore((state) => state.setCaptureMode);
   const [captureChoice, setCaptureChoice] = useState<'open' | 'change' | null>(null);
-  // Scoped to this area: a request about the kitchen is not this room's problem,
-  // and showing it here would send the technician to the wrong place.
   const uploadActions = useUploadActions();
   const updateArea = useUpdateArea(inspectionId, id);
-  const evidenceRequests = useEvidenceRequests(inspectionId);
-  const resolveRequest = useResolveEvidenceRequest(inspectionId);
-  const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
   const theme = useThemeColors();
   /**
    * The photos taken on this device for this area, newest first.
@@ -637,14 +629,6 @@ export default function AreaDetailScreen() {
             </Text>
           </View>
         ) : null}
-
-        {/* First thing in the area, above the baseline: an outstanding request
-            is the reason the technician is standing here again. */}
-        <EvidenceRequestCard
-          onResolve={(requestId) => resolveRequest.mutate(requestId)}
-          requests={areaRequests}
-          resolving={resolveRequest.isPending}
-        />
 
         {/* Before anything is filmed the screen is a briefing: what this room
             was like, and how to walk it. Both drop away once a recording

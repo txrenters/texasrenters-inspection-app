@@ -265,10 +265,11 @@ export default function HomeScreen() {
           <SectionHeader
             action={
               <Pressable
-                accessibilityLabel="See all jobs"
+                accessibilityLabel="See today's jobs"
                 accessibilityRole="button"
                 className={`min-h-11 justify-center px-1 ${PRESS_ROW}`}
-                onPress={() => router.push('/inspections')}
+                // Today's schedule, wherever the Jobs calendar was left.
+                onPress={() => router.navigate({ pathname: '/inspections', params: { day: 'today' } })}
               >
                 <Text className="text-sm font-semibold text-primary">See all</Text>
               </Pressable>

@@ -3,14 +3,13 @@ import { Tabs } from 'expo-router';
 import {
   HomeIcon,
   ClipboardListIcon,
-  InboxIcon,
   UploadCloudIcon,
   CogIcon,
   type LucideIcon,
 } from 'lucide-react-native';
 import { Platform, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAssignedInspectionCount, useOpenEvidenceRequests } from '@/src/features/queries';
+import { useAssignedInspectionCount } from '@/src/features/queries';
 import { TabBarBackground } from '@/src/components/ui/TabBarBackground';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -102,15 +101,11 @@ export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   // See ANDROID_MIN_BOTTOM_INSET: the reported inset is 0 on this build.
   const androidBottomInset = Math.max(insets.bottom, ANDROID_MIN_BOTTOM_INSET);
-  // Assigned-but-not-started work. Live: the realtime provider invalidates the
-  // inspection queries when an assignment lands, so this moves without the
-  // technician reopening anything.
+  // Today's assigned-but-not-started work. Live: the realtime provider
+  // invalidates the inspection queries when an assignment lands, so this moves
+  // without the technician reopening anything.
   const assigned = useAssignedInspectionCount();
   const assignedCount = assigned.data ?? 0;
-  // Kept live by the realtime gateway: the badge changes the moment the office
-  // asks for something, not on the next poll.
-  const openRequests = useOpenEvidenceRequests();
-  const requestCount = openRequests.data?.length ?? 0;
 
   return (
     <Tabs
@@ -195,38 +190,14 @@ export default function TabsLayout() {
           },
           tabBarAccessibilityLabel:
             assignedCount > 0
-              ? `Jobs, ${assignedCount} assigned and not started`
+              ? `Jobs, ${assignedCount} today not started`
               : 'Jobs',
           tabBarIcon: tabGlyph(ClipboardListIcon),
         }}
       />
-      <Tabs.Screen
-        name="requests"
-        options={{
-          title: 'Requests',
-          // Same rule as Inspections: undefined, never 0, or an empty dot sits
-          // on the tab for ever.
-          tabBarBadge: requestCount > 0 ? requestCount : undefined,
-          tabBarBadgeStyle: {
-            // `chart-4` is the app's "waiting on you" tone, so this badge and
-            // the pending pills inside the screens now say the same thing in
-            // the same colour. It was a loose amber pair (`#f59e0b`/`#b45309`)
-            // that matched nothing else.
-            backgroundColor: theme.chart4,
-            // Light mode's chart-4 is a dark ochre and dark mode's is a light
-            // amber, so the legible label is the opposing surface rather than a
-            // fixed white — which was 2.2:1 against the amber before.
-            color: theme.isDark ? theme.background : theme.card,
-            fontSize: 11,
-            fontWeight: '700',
-          },
-          tabBarAccessibilityLabel:
-            requestCount > 0
-              ? `Requests, ${requestCount} area${requestCount === 1 ? '' : 's'} the office is waiting on`
-              : 'Requests',
-          tabBarIcon: tabGlyph(InboxIcon),
-        }}
-      />
+      {/* No Requests tab (2026-10-07). The console has no way to ask for
+          evidence -- nothing there calls the endpoint -- so the tab was always
+          empty, and its badge and the area screen's card polled for nothing. */}
       <Tabs.Screen
         name="uploads"
         options={{

@@ -1,5 +1,6 @@
 import { useIsFocused } from '@react-navigation/native';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
 import { Alert } from 'react-native';
 import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
@@ -88,6 +89,8 @@ export const queryKeys = {
   dashboard: ['dashboard'] as const,
   inspections: (filters: object = {}) => ['inspections', filters] as const,
   inspectionsRoot: ['inspections'] as const,
+  /** Under the `inspections` root, so a refresh of the lists refreshes the calendar's dots. */
+  jobDays: (range: object) => ['inspections', 'days', range] as const,
   inspection: (id: string) => ['inspection', id] as const,
   inspectionContext: (id: string) => ['inspection', id, 'context'] as const,
   inspectionReport: (id: string) => ['inspection', id, 'report'] as const,
@@ -112,8 +115,6 @@ export const queryKeys = {
   roomPhotosRoot: ['roomPhotos'] as const,
   roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
   roomChecklist: (roomId: string) => ['roomChecklist', roomId] as const,
-  evidenceRequests: (inspectionId: string) => ['evidenceRequests', inspectionId] as const,
-  openEvidenceRequests: ['openEvidenceRequests'] as const,
   property: (id: string) => ['property', id] as const,
   floorPlan: (id: string) => ['floorPlan', id] as const,
   uploads: ['uploads'] as const,
@@ -259,7 +260,21 @@ export function useDashboard() {
  * The filters are part of the key, so each chip keeps its own pages and
  * switching back to one does not refetch from scratch.
  */
-export function useInspectionPages(filters: InspectionListFilters = {}) {
+export function useInspectionPages(
+  filters: InspectionListFilters = {},
+  {
+    keepPrevious = true,
+    enabled = true,
+  }: {
+    /**
+     * Show the last answer while a new one loads. Right for a search being
+     * typed; wrong for a new day, where yesterday's jobs under today's heading
+     * would be a lie -- the Jobs calendar turns it off and prefetches instead.
+     */
+    keepPrevious?: boolean;
+    enabled?: boolean;
+  } = {},
+) {
   return useInfiniteQuery({
     queryKey: queryKeys.inspections(filters),
     queryFn: ({ pageParam }) => repositories.inspections.listPage({ ...filters, page: pageParam }),
@@ -270,12 +285,51 @@ export function useInspectionPages(filters: InspectionListFilters = {}) {
     getNextPageParam: (last) => (last.page < last.totalPages ? last.page + 1 : undefined),
     refetchInterval: assignmentRefreshInterval,
     refetchIntervalInBackground: false,
+    placeholderData: keepPrevious ? (previous) => previous : undefined,
+    enabled,
+  });
+}
+
+/**
+ * Loads a list's first page ahead of the technician asking for it, so the
+ * calendar's next and previous day open instantly. Same key and loader as
+ * `useInspectionPages`, so the prefetched page is the one the list then reads.
+ */
+export function usePrefetchInspectionPages() {
+  const client = useQueryClient();
+  return useCallback(
+    (filters: InspectionListFilters) =>
+      client.prefetchInfiniteQuery({
+        queryKey: queryKeys.inspections(filters),
+        queryFn: ({ pageParam }) =>
+          repositories.inspections.listPage({ ...filters, page: pageParam as number }),
+        initialPageParam: 1,
+        staleTime: 30_000,
+      }),
+    [client],
+  );
+}
+
+/**
+ * How many jobs each day holds, for the dots on the Jobs calendar. Kept under
+ * the `inspections` root, so whatever refreshes the lists refreshes the dots.
+ */
+export function useJobDays(range: {
+  from: string;
+  to: string;
+  statuses?: readonly InspectionStatus[];
+}) {
+  return useQuery({
+    queryKey: queryKeys.jobDays(range),
+    queryFn: () => repositories.inspections.jobDays(range),
+    refetchInterval: assignmentRefreshInterval,
+    refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,
   });
 }
 
 /**
- * How many inspections are assigned and not yet started, for the tab badge.
+ * How many of today's jobs are assigned and not yet started, for the tab badge.
  *
  * Asks for a single row and reads the server's `total` rather than counting a
  * page. A badge is a count, so it must not be the length of whatever happened
@@ -285,9 +339,13 @@ export function useInspectionPages(filters: InspectionListFilters = {}) {
  * SCHEDULED only. IN_PROGRESS is work the technician has already picked up and
  * knows about; badging it would leave a number sitting there all day with
  * nothing to act on, which is how people learn to ignore badges.
+ *
+ * Today only (2026-10-07). It counted every assigned job on any date -- next
+ * month's included -- so the number on the tab matched nothing the Jobs
+ * calendar, which opens on today, ever showed.
  */
 export function useAssignedInspectionCount() {
-  const filters = { statuses: ['SCHEDULED'] as const, pageSize: 1 };
+  const filters = { statuses: ['SCHEDULED'] as const, pageSize: 1, dueToday: true };
   return useQuery({
     queryKey: queryKeys.inspections({ ...filters, view: 'badge' }),
     queryFn: () => repositories.inspections.listPage({ ...filters }),
@@ -733,47 +791,6 @@ export function useFinding(id: string, inspectionId?: string) {
     queryKey: queryKeys.findingForInspection(id, inspectionId),
     queryFn: () => repositories.findings.get(id, inspectionId),
     enabled: Boolean(id),
-  });
-}
-
-/**
- * Open requests from the office for more evidence.
- *
- * Polled on the same cadence as assignments: a request is the reason an
- * inspection came back to the technician, so it has to appear without them
- * knowing to pull-to-refresh.
- */
-/**
- * Everything the office is waiting on, across assignments.
- *
- * Kept fresh by the realtime gateway rather than a tight poll — the interval is
- * the fallback for a dropped socket, not the delivery mechanism.
- */
-export function useOpenEvidenceRequests() {
-  return useQuery({
-    queryKey: queryKeys.openEvidenceRequests,
-    queryFn: () => repositories.inspections.openEvidenceRequests(),
-    refetchInterval: assignmentRefreshInterval,
-    refetchIntervalInBackground: false,
-  });
-}
-
-export function useEvidenceRequests(inspectionId: string) {
-  return useQuery({
-    queryKey: queryKeys.evidenceRequests(inspectionId),
-    queryFn: () => repositories.inspections.evidenceRequests(inspectionId),
-    enabled: Boolean(inspectionId),
-    refetchInterval: assignmentRefreshInterval,
-    refetchIntervalInBackground: false,
-  });
-}
-
-export function useResolveEvidenceRequest(inspectionId: string) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (requestId: string) => repositories.inspections.resolveEvidenceRequest(requestId),
-    onSuccess: () =>
-      client.invalidateQueries({ queryKey: queryKeys.evidenceRequests(inspectionId) }),
   });
 }
 

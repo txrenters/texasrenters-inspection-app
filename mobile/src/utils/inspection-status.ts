@@ -123,36 +123,6 @@ export const INSPECTION_STATUSES = Object.keys(PRESENTATION) as InspectionStatus
  * does not.
  */
 export const FIELD_ACTIVE_STATUSES: readonly InspectionStatus[] = FIELD_ACTIVE;
+/** History on the Jobs tab: everything handed over, whatever happened to it since. */
 export const SUBMITTED_STATUSES: readonly InspectionStatus[] =
   INSPECTION_STATUSES.filter(isSubmittedToOffice);
-
-/**
- * Chips the list offers. Narrower than InspectionStatus on purpose: CANCELLED
- * is not offered, and the server refuses it, so it must not be spellable here.
- */
-export type InspectionFilterKey =
-  | 'ALL'
-  | 'TODAY'
-  | 'SUBMITTED'
-  | 'SCHEDULED'
-  | 'IN_PROGRESS'
-  | 'COMPLETED';
-
-/**
- * Statuses to request for a chip, or `undefined` for "let the server decide" —
- * which is everything except CANCELLED.
- */
-export function statusesForFilter(key: InspectionFilterKey): readonly InspectionStatus[] | undefined {
-  if (key === 'ALL') return undefined;
-  // Today is a date, not a status: every status still shows, narrowed to the
-  // one day. Returning a status set here would quietly hide this morning's
-  // finished work from a technician looking at their own round.
-  if (key === 'TODAY') return undefined;
-  if (key === 'SUBMITTED') return SUBMITTED_STATUSES;
-  return [key];
-}
-
-/** Whether a chip narrows to today's round rather than to a status. */
-export function isDueTodayFilter(key: InspectionFilterKey): boolean {
-  return key === 'TODAY';
-}
