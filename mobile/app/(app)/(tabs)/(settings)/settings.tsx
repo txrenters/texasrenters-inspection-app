@@ -30,9 +30,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import {
   isShiftTrackingActive,
   startShiftTracking,
@@ -51,7 +49,7 @@ import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
-import { GroupLabel, ScreenHeader } from '@/src/components/ui';
+import { GroupLabel } from '@/src/components/ui';
 
 registerIcons(
   BellIcon,
@@ -104,7 +102,6 @@ const LOCATION_ACCESS_DESCRIPTION: Record<LocationAccess, string> = {
 };
 
 export default function SettingsScreen() {
-  const tabBarInset = useTabBarInset();
   // Recording is automatic now, so this switch is a pause rather than a start.
   // It still reads the OS on mount: the Android service can be stopped from its
   // own notification, and a switch that disagreed with the notification would
@@ -260,14 +257,14 @@ export default function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
+    // The scroll view is the screen, so the large title collapses into the bar
+    // as it scrolls.
+    <ScrollView
+        className="flex-1 bg-background"
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
       >
-        <ScreenHeader title="Settings" subtitle="Configure your inspection workflow" />
-
         <View className="mx-5 mt-5 flex-row items-center gap-4 rounded-2xl bg-card p-5">
           <View className="h-14 w-14 items-center justify-center rounded-full bg-primary/10">
             <UserIcon size={24} className="text-primary" />
@@ -451,7 +448,6 @@ export default function SettingsScreen() {
           </Text>
         </Pressable>
       </ScrollView>
-    </SafeAreaView>
   );
 }
 

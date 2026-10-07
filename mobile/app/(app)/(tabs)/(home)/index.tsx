@@ -7,9 +7,7 @@ import {
   Settings2Icon,
 } from 'lucide-react-native';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import type { Inspection } from '@/src/domain/models';
 import {
   InspectionUrgencyBadge,
@@ -26,7 +24,7 @@ import { formatVisitDateAndWindow, formatVisitDay } from '@/src/utils/visit-wind
 import { greetingFor } from '@/src/utils/greeting';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
-import { PRESS_ROW, ScreenHeader, SectionHeader } from '@/src/components/ui';
+import { PRESS_ROW, SectionHeader } from '@/src/components/ui';
 
 registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon, Settings2Icon);
 
@@ -97,7 +95,6 @@ function AssignedInspectionRow({ inspection }: { inspection: Inspection }) {
 }
 
 export default function HomeScreen() {
-  const tabBarInset = useTabBarInset();
   const dashboard = useDashboard();
   const dayRoute = useDayRoute();
   // Bound to a user-initiated pull only. Wiring this to `isRefetching` made the
@@ -136,34 +133,42 @@ export default function HomeScreen() {
     });
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={pull.refreshing}
-            onRefresh={pull.onRefresh}
-            tintColor={theme.primary}
-          />
-        }
-      >
-        {/* "Ready for your inspections today" is a strange thing to read on a
+    // The scroll view is the screen itself, so the large title collapses into
+    // the bar as it scrolls and content passes under the glass.
+    <ScrollView
+      className="flex-1 bg-background"
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ paddingBottom: 24 }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={pull.refreshing}
+          onRefresh={pull.onRefresh}
+          tintColor={theme.primary}
+        />
+      }
+    >
+        {/* The greeting under the bar's "Home", not as the title itself: at a
+            large title's size "Good afternoon, Maya" does not fit a phone's
+            width and would be cut off.
+
+            "Ready for your inspections today" is a strange thing to read on a
             screen with no inspections on it — and the first thing a new
             technician sees. It only claims that when there is something to
             be ready for. */}
-        <ScreenHeader
-          eyebrow={today}
-          subtitle={
-            neverAssigned
+        <View className="px-5 pb-2 pt-1">
+          <Text className="text-sm text-muted-foreground">{today}</Text>
+          <Text className="mt-0.5 text-xl font-semibold text-foreground">
+            {greeting}, {firstName}
+          </Text>
+          <Text className="mt-0.5 text-sm text-muted-foreground">
+            {neverAssigned
               ? 'Nothing assigned to you yet'
               : assigned.length + inProgress.length > 0
                 ? 'Ready for your jobs today'
-                : 'No jobs pending right now'
-          }
-          title={`${greeting}, ${firstName}`}
-        />
+                : 'No jobs pending right now'}
+          </Text>
+        </View>
 
         {dashboard.isError ? (
           <View className="mx-5 mt-5 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">
@@ -314,7 +319,6 @@ export default function HomeScreen() {
             ))}
           </View>
         ) : null}
-      </ScrollView>
-    </SafeAreaView>
+    </ScrollView>
   );
 }

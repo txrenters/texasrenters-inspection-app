@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as Updates from 'expo-updates';
 import {
   AlertTriangleIcon,
@@ -17,10 +17,7 @@ import {
   WifiOffIcon,
 } from 'lucide-react-native';
 import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
-import { goBack } from '@/src/lib/navigation';
 import { environment } from '@/src/config/environment';
 import { useUploads } from '@/src/features/queries';
 import { evaluateUploadGate } from '@/src/lib/connectivity';
@@ -199,26 +196,15 @@ export default function DiagnosticsScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView
-        className="flex-1"
+    <ScrollView
+        className="flex-1 bg-background"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingBottom: 48 }}
         showsVerticalScrollIndicator={false}
       >
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back to settings"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
-            onPress={() => goBack()}
-          >
-            <BackGlyph size={18} className="text-foreground" />
-          </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text className="text-lg font-bold text-foreground">Diagnostics</Text>
-            <Text className="text-xs text-muted-foreground">Live device and upload health</Text>
-          </View>
-        </View>
+        <Stack.Screen options={{ title: 'Diagnostics' }} />
+        <Text className="px-5 pb-1 pt-1 text-sm text-muted-foreground">Live device and upload health</Text>
 
         <View className="mx-5 mt-2 rounded-2xl bg-card p-5">
           <View className="mb-3 flex-row items-center gap-2">
@@ -410,7 +396,6 @@ export default function DiagnosticsScreen() {
             </Text>
           )}
         </View>
-      </ScrollView>
-    </SafeAreaView>
+    </ScrollView>
   );
 }

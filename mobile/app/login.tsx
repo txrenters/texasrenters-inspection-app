@@ -41,7 +41,7 @@ export default function LoginScreen() {
     }
     try {
       const user = await login.mutateAsync({ email, password, takeOver });
-      router.replace(user.mustChangePassword ? '/change-password' : '/(app)/(tabs)');
+      router.replace(user.mustChangePassword ? '/change-password' : '/(app)/(tabs)/(home)');
     } catch {
       // The repository returns a safe, technician-facing error message.
     }

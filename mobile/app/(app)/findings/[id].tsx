@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
   ClockIcon,
@@ -9,10 +9,8 @@ import {
   SparklesIcon,
 } from 'lucide-react-native';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
-import { goBack } from '@/src/lib/navigation';
+import { BelowHeader } from '@/src/lib/native-header';
 import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFinding } from '@/src/features/queries';
@@ -98,15 +96,17 @@ export default function FindingDetailScreen() {
 
   if (finding.isLoading) {
     return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <BelowHeader className="bg-background">
+        <Stack.Screen options={{ title: 'AI finding', headerRight: () => <HomeButton /> }} />
         <DetailSkeleton sections={3} />
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
   if (!finding.data) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-background px-6">
+      <BelowHeader className="items-center justify-center bg-background px-6">
+        <Stack.Screen options={{ title: 'AI finding', headerRight: () => <HomeButton /> }} />
         <AlertTriangleIcon size={34} className="text-destructive" />
         <Text className="mt-4 text-xl font-bold text-foreground">Finding unavailable</Text>
         <Text className="mt-2 text-center text-sm leading-6 text-muted-foreground">
@@ -122,7 +122,7 @@ export default function FindingDetailScreen() {
         >
           <Text className="font-bold text-primary-foreground">Try again</Text>
         </Pressable>
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
@@ -132,31 +132,18 @@ export default function FindingDetailScreen() {
   const timestamps = formatTimestampRange(item.videoTimestampStart, item.videoTimestampEnd);
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
+    <View className="flex-1 bg-background">
+      <Stack.Screen options={{ title: 'AI finding', headerRight: () => <HomeButton /> }} />
       <ScrollView
         className="flex-1"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
-            onPress={() => goBack()}
-          >
-            <BackGlyph size={18} className="text-foreground" />
-          </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text className="text-lg font-bold text-foreground" numberOfLines={1}>
-              AI Finding
-            </Text>
-            <Text className="text-xs text-muted-foreground" numberOfLines={1}>
-              {item.roomName}
-            </Text>
-          </View>
-          <HomeButton />
-        </View>
+        <Text numberOfLines={1} className="px-5 pb-1 pt-1 text-sm text-muted-foreground">
+          {item.roomName}
+        </Text>
 
         <View className={`mx-5 mt-2 rounded-2xl border p-5 ${TONE_SURFACE[tone]}`}>
           <Text className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -258,6 +245,6 @@ export default function FindingDetailScreen() {
           </Text>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }

@@ -16,9 +16,7 @@ import {
   WifiOffIcon,
 } from 'lucide-react-native';
 import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import type { UploadItem } from '@/src/domain/models';
 import { useUploadActions, useUploads } from '@/src/features/queries';
 import { useLiveUploadProgress } from '@/src/features/useLiveUploadProgress';
@@ -32,7 +30,7 @@ import { progressBarWidth, progressPercent } from '@/src/utils/upload-progress';
 import { describeUpload } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
-import { Button, ScreenHeader } from '@/src/components/ui';
+import { Button } from '@/src/components/ui';
 import { sendVideosNow, useVideoGate } from '@/src/media/video-hold';
 
 registerIcons(
@@ -235,7 +233,6 @@ function UploadRow({
 }
 
 export default function UploadsScreen() {
-  const tabBarInset = useTabBarInset();
   const uploads = useUploads();
   const pull = usePullToRefresh([uploads.refetch]);
   const actions = useUploadActions();
@@ -278,11 +275,14 @@ export default function UploadsScreen() {
     .reduce((total, item) => total + item.estimatedSizeMb, 0);
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <FlatList
+    // The list is the screen, so the large title collapses into the bar as it
+    // scrolls and the rows pass under the glass.
+    <FlatList
+        className="flex-1 bg-background"
+        contentInsetAdjustmentBehavior="automatic"
         data={sorted}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
+        contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -293,11 +293,6 @@ export default function UploadsScreen() {
         }
         ListHeaderComponent={
           <View>
-            <ScreenHeader
-              subtitle="Manage and monitor all evidence uploads"
-              title="Upload Center"
-            />
-
             {uploads.isError ? (
               <View className="mx-5 mt-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3">
                 <Text className="text-sm text-destructive">
@@ -373,7 +368,7 @@ export default function UploadsScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="Open upload settings"
                   className="h-9 w-9 items-center justify-center rounded-full bg-chart-4/15 active:scale-95"
-                  onPress={() => router.push('/(app)/(tabs)/settings')}
+                  onPress={() => router.push('/(app)/(tabs)/(settings)/settings')}
                 >
                   <SettingsIcon size={16} className="text-chart-4" />
                 </Pressable>
@@ -444,6 +439,5 @@ export default function UploadsScreen() {
           )
         }
       />
-    </SafeAreaView>
   );
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import {
   CameraIcon,
   CheckCircle2Icon,
@@ -24,9 +24,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Badge, type BadgeTone } from '@/src/components/ui';
 import { AreaAnalysisCard } from '@/src/areas/AreaAnalysisCard';
 import { OccupiedConditionCard } from '@/src/areas/OccupiedConditionCard';
@@ -38,6 +36,7 @@ import {
   deriveAreaStatus,
   type AreaStatusDescriptor,
 } from '@/src/utils/area-status';
+import { BelowHeader } from '@/src/lib/native-header';
 import { goBack } from '@/src/lib/navigation';
 import {
   asksLockboxQuestions,
@@ -281,7 +280,8 @@ export default function AreaDetailScreen() {
       goBack();
     };
     return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <BelowHeader className="bg-background">
+        <Stack.Screen options={{ title: 'Area', headerRight: () => <HomeButton /> }} />
         <View className="flex-1 justify-center gap-3 px-6">
           <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
             This area could not be opened
@@ -301,15 +301,16 @@ export default function AreaDetailScreen() {
             variant="secondary"
           />
         </View>
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
   if (room.isLoading || !room.data) {
     return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <BelowHeader className="bg-background">
+        <Stack.Screen options={{ title: '', headerRight: () => <HomeButton /> }} />
         <DetailSkeleton sections={3} />
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
@@ -578,11 +579,16 @@ export default function AreaDetailScreen() {
   const answeredRows = Math.max(0, requiredRows - (unansweredItems?.length ?? requiredRows));
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
+    <View className="flex-1 bg-background">
+      {/* The area's name is the bar's title; what kind of room it is, its
+          state and its rename sit just under it. */}
+      <Stack.Screen options={{ title: item.name, headerRight: () => <HomeButton /> }} />
       {/* Keeps the note being typed above the keyboard; see the component. */}
       <KeyboardAwareScrollView
         ref={scrollRef}
         className="flex-1"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
         // Clears the footer, which grows by the capture line when it shows.
         contentContainerStyle={{ paddingBottom: !requiresRecording && chosenCapture ? 196 : 150 }}
         showsVerticalScrollIndicator={false}
@@ -594,19 +600,12 @@ export default function AreaDetailScreen() {
           />
         }
       >
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Pressable
-            accessibilityLabel="Back"
-            accessibilityRole="button"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
-            hitSlop={8}
-            onPress={() => goBack()}
-          >
-            <BackGlyph size={18} className="text-foreground" />
-          </Pressable>
+        <View className="flex-row items-center gap-3 px-5 pb-3 pt-1">
           <View className="min-w-0 flex-1">
             <View className="flex-row items-center gap-2">
-              <Text className="min-w-0 shrink text-lg font-bold text-foreground">{item.name}</Text>
+              <Text className="min-w-0 shrink text-sm text-muted-foreground">
+                {item.floorName} · {item.isRequired ? 'Required' : 'Optional'} room
+              </Text>
               {/* Offered only for an area this technician added. One from a
                   floor plan is the office's catalog record, reused by every
                   future inspection of the property, so renaming it from the
@@ -627,11 +626,7 @@ export default function AreaDetailScreen() {
                 </Pressable>
               ) : null}
             </View>
-            <Text className="text-xs text-muted-foreground">
-              {item.floorName} · {item.isRequired ? 'Required' : 'Optional'} room
-            </Text>
           </View>
-          <HomeButton />
           {/* `deriveAreaStatus` already returns a cased label, which is also
               what stops a raw `RECORDING_SAVED` reaching the screen when the
               server sends a status outside the union. */}
@@ -1444,6 +1439,6 @@ export default function AreaDetailScreen() {
           visible={checklistOpen}
         />
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 }
