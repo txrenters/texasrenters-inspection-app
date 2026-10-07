@@ -16,6 +16,8 @@ import { PlanBuildGuard } from './plan-build-guard';
 import { PlanDayMoveService } from './plan-day-move.service';
 import { PlanDayRouteController } from './plan-day-route.controller';
 import { PlanningController } from './planning.controller';
+import { PropertyServiceStatusController } from './property-service-status.controller';
+import { PropertyServiceStatusService } from './property-service-status.service';
 import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpGroupFileController } from './tbp-group-file.controller';
 import { TbpPlanService } from './tbp-plan.service';
@@ -31,6 +33,8 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     GroupTemplateController,
     LeaseInspectionsController,
     PlanDayRouteController,
+    // The office's switches on a property: they run the lease schedule (2026-10-08).
+    PropertyServiceStatusController,
   ],
   providers: [
     TbpPlanService,
@@ -45,6 +49,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     GroupTemplateGateway,
     LateMoveOutService,
     PlanDayMoveService,
+    PropertyServiceStatusService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })

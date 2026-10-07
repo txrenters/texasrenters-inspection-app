@@ -34,6 +34,7 @@ import {
   withInspectionLink,
 } from '@texasrenters/shared';
 
+import { leftBenefitPackage, SERVICE_SWITCHES_SELECT } from '../admin/property-service-status';
 import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { isDoneInspectionStatus } from '../common/inspection-done';
@@ -801,23 +802,27 @@ export class TbpPlanService {
    * paying for is the worse error — but they are counted so the console can
    * say so rather than letting them vanish between the tenant list and the
    * plan.
+   *
+   * A property the office has switched out of the package -- or out of
+   * management altogether -- is not enrolled, whatever Propertyware still says
+   * (the office, 2026-10-08: Propertyware is updated late).
    */
   private async enrolledTenancies(organizationId: string) {
     const tenancies = await this.prisma.propertywareTenant.findMany({
       where: { organizationId, isActive: true },
-      select: { ...TENANT_SELECT, tbpEnrollment: true },
+      select: { ...TENANT_SELECT, tbpEnrollment: true, building: { select: { serviceStatus: { select: SERVICE_SWITCHES_SELECT } } } },
       orderBy: { externalId: 'asc' },
     });
 
     const enrolled: PlanTenant[] = [];
     let unverified = 0;
     for (const tenancy of tenancies) {
-      const { tbpEnrollment, ...rest } = tenancy;
+      const { tbpEnrollment, building, ...rest } = tenancy;
       if (isTbpEnrolled(tbpEnrollment)) {
         // Zone 5 is not part of the benefit package (the office, 2026-10-02):
         // no visit, so a quarter has nothing there to hold back. A visit already
         // made for one goes with the next generation, as any tenancy's that left.
-        if (isTbpZone(rest.zone)) enrolled.push(rest);
+        if (isTbpZone(rest.zone) && !leftBenefitPackage(building?.serviceStatus)) enrolled.push(rest);
       } else if ((tbpEnrollment ?? '').trim().toLowerCase() !== 'no') unverified += 1;
     }
     return { enrolled, unverified };

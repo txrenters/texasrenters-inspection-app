@@ -398,6 +398,7 @@ enum ChargeSource {
 
 model Organization {
   propertyGeofences PropertyGeofence[]
+  propertyServiceStatuses PropertyServiceStatus[]
   timeSegments      TimeSegment[]
   timeAdjustments   TimeAdjustment[]
   trackingGaps      TrackingGap[]
@@ -579,6 +580,8 @@ model AiEvaluationRun {
 
 model UserProfile {
   geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
+  managementEndsMarked PropertyServiceStatus[] @relation("ManagementEndedBy")
+  tbpOptOutsMarked     PropertyServiceStatus[] @relation("TbpOptedOutBy")
   timeSegments         TimeSegment[]      @relation("TimeSegmentTechnician")
   timeAdjustmentsMade  TimeAdjustment[]   @relation("TimeAdjustmentAdmin")
   trackingGaps         TrackingGap[]      @relation("TrackingGapTechnician")
@@ -1514,6 +1517,7 @@ model PropertywarePortfolioOwner {
 
 model PropertywareBuilding {
   geofence PropertyGeofence?
+  serviceStatus PropertyServiceStatus?
   timeSegments TimeSegment[]
   tbpPlanStops TbpQuarterPlanStop[]
   id                  String                 @id @default(uuid()) @db.Uuid
@@ -3858,6 +3862,41 @@ model PropertyGeofence {
   organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   building     PropertywareBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
   updatedBy    UserProfile?         @relation("GeofenceUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+}
+
+/// What the office knows about a property before Propertyware says it (the
+/// office, 2026-10-08: Propertyware "was not yet updated").
+///
+/// Propertyware is updated late, so a property whose owner has ended the
+/// management contract, or that has left the tenant benefit package, still
+/// looks managed and enrolled there for days or weeks -- and the lease
+/// schedule kept booking its move-outs and move-ins. These are the office's
+/// own switches, on a table of their own so no Propertyware sync can write
+/// over them. No row: neither switch is on.
+model PropertyServiceStatus {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  buildingId     String @unique @db.Uuid
+
+  /// The owner ended Texas Renters' management of the property: nothing more
+  /// is booked there -- no move-out, no move-in, no benefit-package visit.
+  managementEndedAt   DateTime?
+  managementEndedById String?   @db.Uuid
+
+  /// The property left the tenant benefit package: no more quarterly occupied
+  /// and HVAC visits. Move-ins and move-outs go on as before.
+  tbpOptedOutAt   DateTime?
+  tbpOptedOutById String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  building          PropertywareBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  managementEndedBy UserProfile?         @relation("ManagementEndedBy", fields: [managementEndedById], references: [id], onDelete: SetNull)
+  tbpOptedOutBy     UserProfile?         @relation("TbpOptedOutBy", fields: [tbpOptedOutById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
 }

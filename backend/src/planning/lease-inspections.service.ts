@@ -28,6 +28,7 @@ import {
 } from '@texasrenters/shared';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
+import { managementHasEnded } from '../admin/property-service-status';
 import { jobInWords } from '../common/job-in-words';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { businessDate } from '../common/business-day';
@@ -58,6 +59,10 @@ import { queueLeaseBookingsInJobber } from './lease-jobber-bookings';
  * lease's dates move, and called off when the lease no longer asks for it --
  * but only while it is still this schedule's own. One the office has started,
  * moved by hand or cancelled is theirs.
+ *
+ * A property whose owner ended the management -- switched on in the console,
+ * because Propertyware is told late (2026-10-08) -- asks for nothing: what was
+ * booked here is called off, and nothing more is booked until it is off again.
  */
 
 /** How near the day an inspection the office booked has to be to count as the one the lease asks for. */
@@ -84,7 +89,12 @@ interface LeaseRow {
   scheduledMoveOutDate: Date | null;
   noticeGivenDate: Date | null;
   deactivatedAt: Date | null;
-  building: { addressLine1: string | null; city: string | null };
+  building: {
+    addressLine1: string | null;
+    city: string | null;
+    /** The office's switches; absent or null when it has set none. */
+    serviceStatus?: { managementEndedAt: Date | null } | null;
+  };
 }
 
 interface ScheduleRow {
@@ -174,6 +184,8 @@ interface ReconcileInput {
   technicianId: string | null;
   booked: BookedInspections;
   dryRun: boolean;
+  /** The office switched on that the owner ended the management: nothing is wanted. */
+  managementEnded: boolean;
 }
 
 @Injectable()
@@ -193,14 +205,22 @@ export class LeaseInspectionService {
    * A dry run reads everything a run would -- the same checks a booking makes
    * included -- and writes nothing, so the console can show what the schedule
    * is about to do before anyone switches it on.
+   *
+   * `buildingId` runs it for one property's leases only: what the console does
+   * the moment somebody turns that property's management switch, so its
+   * bookings are called off (or booked again) then rather than overnight.
    */
-  async run(organizationId: string, options: { dryRun?: boolean; now?: Date } = {}): Promise<LeaseScheduleRun> {
+  async run(
+    organizationId: string,
+    options: { dryRun?: boolean; now?: Date; buildingId?: string } = {},
+  ): Promise<LeaseScheduleRun> {
     const dryRun = Boolean(options.dryRun);
     const today = businessDate(options.now ?? new Date());
 
     const leases: LeaseRow[] = await this.prisma.propertywareLease.findMany({
       where: {
         organizationId,
+        ...(options.buildingId ? { buildingId: options.buildingId } : {}),
         OR: [{ isActive: true }, { deactivatedAt: { gte: dateOf(addDays(today, -DROPPED_LEASE_DAYS)) } }],
       },
       select: {
@@ -214,7 +234,9 @@ export class LeaseInspectionService {
         scheduledMoveOutDate: true,
         noticeGivenDate: true,
         deactivatedAt: true,
-        building: { select: { addressLine1: true, city: true } },
+        building: {
+          select: { addressLine1: true, city: true, serviceStatus: { select: { managementEndedAt: true } } },
+        },
       },
       orderBy: [{ endDate: 'asc' }, { id: 'asc' }],
     });
@@ -254,7 +276,10 @@ export class LeaseInspectionService {
         droppedOn: lease.isActive || !lease.deactivatedAt ? null : businessDate(lease.deactivatedAt),
         renewed: !lease.isActive && onReport.has(renewalKey(lease)),
       };
-      return { lease, dates, due: inspectionsDue(dates, today) };
+      // The owner ended the management: the lease may run on in Propertyware,
+      // but Texas Renters walks nothing there any more (the office, 2026-10-08).
+      const managementEnded = managementHasEnded(lease.building.serviceStatus);
+      return { lease, dates, managementEnded, due: managementEnded ? [] : inspectionsDue(dates, today) };
     });
     // Whose day has already passed, and not booked yet: three a working day
     // from the next one, soonest first, not all on one morning (2026-09-18).
@@ -267,7 +292,7 @@ export class LeaseInspectionService {
       today,
     );
 
-    for (const { lease, dates, due } of plans) {
+    for (const { lease, dates, managementEnded, due } of plans) {
       for (const kind of KINDS) {
         const found = due.find((entry) => entry.kind === kind) ?? null;
         const spreadTo = spread.get(rowKey(lease.id, kind));
@@ -282,6 +307,7 @@ export class LeaseInspectionService {
           technicianId: technicians[kind],
           booked,
           dryRun,
+          managementEnded,
         });
         if (!change) continue;
         run.counts[change.action] += 1;
@@ -294,7 +320,7 @@ export class LeaseInspectionService {
     // Jobber again.
     const jobber = dryRun
       ? null
-      : await queueLeaseBookingsInJobber(this.prisma, organizationId, today).catch((error) => {
+      : await queueLeaseBookingsInJobber(this.prisma, organizationId, today, options.buildingId).catch((error) => {
           this.logger.warn({
             event: 'lease_jobber_booking_failed',
             organizationId,
@@ -861,7 +887,14 @@ async function cancelBooked(
 }
 
 /** Why a lease does not ask for its move-out or move-in today. */
-function notAskedReason({ dates, kind, today }: Pick<ReconcileInput, 'dates' | 'kind' | 'today'>): string {
+function notAskedReason({
+  dates,
+  kind,
+  today,
+  managementEnded,
+}: Pick<ReconcileInput, 'dates' | 'kind' | 'today' | 'managementEnded'>): string {
+  if (managementEnded)
+    return 'The owner ended Texas Renters’ management of this property (switched on in the console): nothing more is booked there.';
   if (kind === 'MOVE_IN' && !tenantIsLeaving(dates))
     return 'The tenant is no longer leaving: the lease was renewed or the notice withdrawn.';
   if (!dates.isActive) return 'The lease is no longer on Propertyware’s report.';

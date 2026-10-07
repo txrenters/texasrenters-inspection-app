@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { bookingFromTenancy, jobberBookingText, type JobberBookingInput } from '@texasrenters/shared';
 
+import { managementHasEnded } from '../admin/property-service-status';
 import { tenancyOnFile } from '../admin/tenancy-on-file';
 import type { PrismaService } from '../common/prisma.service';
 import { linkedJobberProperty } from '../integrations/jobber/jobber.booking';
@@ -34,7 +35,9 @@ import { resolveVisitType, visitTypeRules } from '../integrations/jobber/jobber.
  * existed alike, so a failure here is simply tried again on the next run. Only
  * while bookings are switched on (JOBBER_BOOKING_ENABLED) and Jobber is
  * connected; a property not linked to a Jobber property is left here, said so
- * on its schedule row, and tried again once someone links it.
+ * on its schedule row, and tried again once someone links it. Nothing is sent
+ * for a property whose owner ended the management (2026-10-08) -- not even one
+ * the office moved by hand, which the lease run leaves for a person to cancel.
  */
 export interface LeaseJobberBookings {
   queued: number;
@@ -50,6 +53,8 @@ export async function queueLeaseBookingsInJobber(
   prisma: PrismaService,
   organizationId: string,
   today: string,
+  /** Only this property's, as the lease run was. */
+  buildingId?: string,
 ): Promise<LeaseJobberBookings | null> {
   if (!getJobberConfig().bookingEnabled) return null;
   const connection = await prisma.jobberConnection.findUnique({
@@ -63,6 +68,7 @@ export async function queueLeaseBookingsInJobber(
       organizationId,
       outcome: LeaseInspectionOutcome.SCHEDULED,
       inspection: {
+        ...(buildingId ? { propertywareBuildingId: buildingId } : {}),
         status: InspectionStatus.SCHEDULED,
         startedAt: null,
         jobberVisitId: null,
@@ -84,7 +90,9 @@ export async function queueLeaseBookingsInJobber(
           propertywareBuildingId: true,
           propertywareUnitId: true,
           propertywareLeaseId: true,
-          propertywareBuilding: { select: { name: true, addressLine1: true } },
+          propertywareBuilding: {
+            select: { name: true, addressLine1: true, serviceStatus: { select: { managementEndedAt: true } } },
+          },
           propertywareUnit: { select: { addressLine1: true } },
         },
       },
@@ -97,6 +105,7 @@ export async function queueLeaseBookingsInJobber(
     if (!inspection?.propertywareBuildingId) continue;
     // Only what the lease schedule books; anything else here is not its to send.
     if (inspection.inspectionType !== 'MOVE_OUT' && inspection.inspectionType !== 'MOVE_IN') continue;
+    if (managementHasEnded(inspection.propertywareBuilding?.serviceStatus)) continue;
     const place = { buildingId: inspection.propertywareBuildingId, unitId: inspection.propertywareUnitId };
     const link = await linkedJobberProperty(prisma, organizationId, place);
     if (link.status !== 'LINKED') {

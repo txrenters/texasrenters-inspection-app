@@ -15,6 +15,7 @@ import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { PageHeader } from '@/components/page-header';
 import { PropertyDetailsPanel } from '@/components/property-details-panel';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
+import { PropertyServiceCard } from '@/components/property-service-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -154,6 +155,25 @@ export default function PropertyDetailPage() {
   if (!property.data) return <PageSkeleton cards={3} />;
   const item = property.data;
 
+  const badges = [
+    isDemoProperty(item) ? (
+      <Badge key="demo" variant="warning">
+        Demo
+      </Badge>
+    ) : null,
+    // The office's switches (2026-10-08), beside the Create inspection button,
+    // so nobody books a visit here without seeing that nothing more should be.
+    item.serviceStatus?.managementEnded ? (
+      <Badge key="service" variant="destructive">
+        Management ended
+      </Badge>
+    ) : item.serviceStatus?.tbpOptedOut ? (
+      <Badge key="service" variant="warning">
+        No benefit package
+      </Badge>
+    ) : null,
+  ].filter(Boolean);
+
   const areaSource =
     item.totalArea?.source === 'PROPERTYWARE_BUILDING'
       ? 'From Propertyware'
@@ -198,7 +218,7 @@ export default function PropertyDetailPage() {
         /* Carried over from the list, because this is the screen the Create
            inspection button is on — the last place somebody should discover
            they have been looking at a demo property is after booking a visit. */
-        badges={isDemoProperty(item) ? <Badge variant="warning">Demo</Badge> : null}
+        badges={badges.length ? badges : null}
         description={formatAddress(item)}
         title={item.name}
       />
@@ -272,6 +292,14 @@ export default function PropertyDetailPage() {
         </TabsList>
 
         <TabsContent className="mt-2" value="details">
+          {/*
+            First, ahead of Propertyware's own details: these are the office's
+            word on the property where Propertyware has not caught up, and they
+            decide whether anything more is booked here (2026-10-08).
+          */}
+          <div className="mb-4">
+            <PropertyServiceCard propertyId={item.id} propertyName={item.name} />
+          </div>
           <PropertyDetailsPanel canSeePrivate={permissions.has('properties:manage')} property={item} />
 
           {/*

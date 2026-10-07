@@ -25,7 +25,7 @@ const group = (name: string, buildingIds: string[], extra: Partial<GroupTemplate
 
 /** A tenancy as the tenant report left it, at a building. */
 const tenancy = (
-  building: { id: string; addressLine1: string; postalCode?: string; latitude?: number | null; longitude?: number | null; geocodePrecision?: string; geofence?: { latitude: number; longitude: number } | null },
+  building: { id: string; addressLine1: string; postalCode?: string; latitude?: number | null; longitude?: number | null; geocodePrecision?: string; geofence?: { latitude: number; longitude: number } | null; serviceStatus?: { managementEndedAt: Date | null; tbpOptedOutAt: Date | null } | null },
   extra: { leaseName?: string; zone?: string; hvacPlan?: string; tbpEnrollment?: string; unitName?: string | null } = {},
 ) => ({
   leaseName: extra.leaseName ?? 'Tenant',
@@ -42,6 +42,7 @@ const tenancy = (
     latitude: building.latitude === undefined ? 29.8 : building.latitude,
     longitude: building.longitude === undefined ? -95.39 : building.longitude,
     geofence: building.geofence ?? null,
+    serviceStatus: building.serviceStatus ?? null,
   },
 });
 
@@ -158,6 +159,21 @@ describe('the Group maker’s properties', () => {
       tenancies: [
         tenancy({ id: 'b-main', addressLine1: '1 Main St' }),
         tenancy({ id: 'b-far', addressLine1: '9 Far Rd' }, { zone: 'Zone 5' }),
+      ],
+    });
+
+    const { properties } = await service.properties(ORG);
+
+    expect(properties.map((property) => property.buildingId)).toEqual(['b-main']);
+  });
+
+  /** Switched out on the property's page (2026-10-08), ahead of Propertyware. */
+  it('leaves out a property switched out of the package or out of management', async () => {
+    const { service } = build({
+      tenancies: [
+        tenancy({ id: 'b-main', addressLine1: '1 Main St' }),
+        tenancy({ id: 'b-out', addressLine1: '2 Out St', serviceStatus: { managementEndedAt: null, tbpOptedOutAt: new Date() } }),
+        tenancy({ id: 'b-gone', addressLine1: '3 Gone St', serviceStatus: { managementEndedAt: new Date(), tbpOptedOutAt: null } }),
       ],
     });
 
