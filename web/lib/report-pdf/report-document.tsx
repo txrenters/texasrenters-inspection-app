@@ -8,7 +8,7 @@
  */
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 import { NARRATION_HEADING, REPORT_PALETTE } from '@texasrenters/shared';
-import type { ReportRoomView, ReportView } from '@texasrenters/shared';
+import type { ReportActionGroupView, ReportRoomView, ReportView } from '@texasrenters/shared';
 
 const C = REPORT_PALETTE;
 
@@ -123,6 +123,9 @@ const styles = StyleSheet.create({
   // What the room needs, under its photographs (2026-10-07).
   narration: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.border },
   narrationHeading: { fontSize: 9.5, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
+  // Two columns (2026-10-08: "so it's not that long").
+  actionColumns: { flexDirection: 'row', gap: 16 },
+  actionColumn: { flexGrow: 1, flexBasis: 0 },
   actionHeading: { fontSize: 9, fontFamily: 'Helvetica-Bold', marginTop: 4, marginBottom: 2 },
   actionItem: { flexDirection: 'row', fontSize: 8.5, marginBottom: 1.5 },
   actionMark: { width: 10 },
@@ -292,6 +295,66 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
   );
 }
 
+/** Characters to a line of a half-width column at the bullets' size, near enough. */
+const ACTION_COLUMN_CHARS = 50;
+
+type ActionColumn = Array<ReportActionGroupView & { continued: boolean }>;
+
+/**
+ * The room's bullets split into two columns of about equal height.
+ *
+ * @react-pdf has no CSS columns, so the split is made here: each bullet is
+ * weighed by the lines it will take (its places beneath it included, and its
+ * group's heading when it opens one), and the cut falls where the two halves
+ * are closest. A bullet is never split. A group cut in two repeats its
+ * heading, marked "(continued)", at the top of the right-hand column. Layout
+ * only: what is listed, and in what order, is the view model's.
+ */
+export function actionColumns(groups: ReportActionGroupView[]): [ActionColumn, ActionColumn] {
+  const lines = (text: string) => Math.max(1, Math.ceil(text.length / ACTION_COLUMN_CHARS));
+  const entries = groups.flatMap((group, groupIndex) =>
+    group.items.map((item, index) => ({
+      groupIndex,
+      item,
+      weight:
+        lines(item.text) +
+        item.details.reduce((total, detail) => total + lines(detail), 0) +
+        (index === 0 ? 1.5 : 0),
+    })),
+  );
+  const total = entries.reduce((sum, entry) => sum + entry.weight, 0);
+  let cut = entries.length;
+  let best = Number.POSITIVE_INFINITY;
+  let running = 0;
+  // Never an empty left column; an empty right one only when there is one bullet.
+  for (let index = 1; index <= entries.length; index += 1) {
+    running += entries[index - 1].weight;
+    const gap = Math.abs(total - 2 * running);
+    if (gap < best) {
+      best = gap;
+      cut = index;
+    }
+  }
+  const column = (part: typeof entries, startsMidGroup: boolean): ActionColumn => {
+    const result: ActionColumn = [];
+    for (const entry of part) {
+      const last = result[result.length - 1];
+      if (last && last.heading === groups[entry.groupIndex].heading) last.items.push(entry.item);
+      else
+        result.push({
+          heading: groups[entry.groupIndex].heading,
+          continued: startsMidGroup && result.length === 0,
+          items: [entry.item],
+        });
+    }
+    return result;
+  };
+  const left = entries.slice(0, cut);
+  const right = entries.slice(cut);
+  const midGroup = left.length > 0 && right.length > 0 && left[left.length - 1].groupIndex === right[0].groupIndex;
+  return [column(left, false), column(right, midGroup)];
+}
+
 function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) {
   const photos = room.photos.filter((photo) => images.has(photo.id));
   return (
@@ -330,28 +393,36 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
         {room.actions.length ? (
           <View style={styles.narration}>
             <Text style={styles.narrationHeading}>{NARRATION_HEADING}:</Text>
-            {/* Under the office's headings. A bullet
+            {/* Two balanced columns under the office's headings. A bullet
                 and an en dash: both are in the PDF's standard font, where a
                 hollow circle is not. */}
-            {room.actions.map((group) => (
-              <View key={group.heading}>
-                <Text style={styles.actionHeading}>{group.heading}</Text>
-                {group.items.map((item, index) => (
-                  <View key={index}>
-                    <View style={styles.actionItem}>
-                      <Text style={styles.actionMark}>{'•'}</Text>
-                      <Text style={styles.actionText}>{item.text}</Text>
+            <View style={styles.actionColumns}>
+              {actionColumns(room.actions).map((column, columnIndex) => (
+                <View key={columnIndex} style={styles.actionColumn}>
+                  {column.map((group) => (
+                    <View key={group.heading}>
+                      <Text style={styles.actionHeading}>
+                        {group.continued ? `${group.heading} (continued)` : group.heading}
+                      </Text>
+                      {group.items.map((item, index) => (
+                        <View key={index} wrap={false}>
+                          <View style={styles.actionItem}>
+                            <Text style={styles.actionMark}>{'•'}</Text>
+                            <Text style={styles.actionText}>{item.text}</Text>
+                          </View>
+                          {item.details.map((detail, detailIndex) => (
+                            <View key={detailIndex} style={[styles.actionItem, { paddingLeft: 10 }]}>
+                              <Text style={styles.actionMark}>{'–'}</Text>
+                              <Text style={styles.actionText}>{detail}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      ))}
                     </View>
-                    {item.details.map((detail, detailIndex) => (
-                      <View key={detailIndex} style={[styles.actionItem, { paddingLeft: 10 }]}>
-                        <Text style={styles.actionMark}>{'–'}</Text>
-                        <Text style={styles.actionText}>{detail}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ))}
-              </View>
-            ))}
+                  ))}
+                </View>
+              ))}
+            </View>
           </View>
         ) : null}
         {!room.checklist.length && !photos.length && !room.actions.length ? (
