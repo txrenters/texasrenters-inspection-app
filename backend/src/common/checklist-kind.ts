@@ -1,5 +1,5 @@
 import type { AreaChecklistItemKind, Prisma } from '@prisma/client';
-import { hvacSectionOf } from '@texasrenters/shared';
+import { BTM_LOCKBOX_SECTION, hvacSectionOf, isBtmLockboxArea } from '@texasrenters/shared';
 
 /** What `checklistKindFor` can answer. Widened here so both helpers agree. */
 export type ChecklistKind = 'ROOM' | 'AIR_CONDITIONING' | 'OCCUPIED' | 'NONE';
@@ -43,16 +43,33 @@ export function checklistItemsAreOrganizationWide(kind: ChecklistKind): boolean 
  *
  * An HVAC inspection is walked in the office report's sections, one area each
  * -- Attic, Filters, A/C unit, Thermostat -- and each area asks its own
- * section's items, found by the area's name. Every other area asks the whole
- * list: an occupied room, and the single "HVAC System" area of an inspection
- * created before the sections were areas.
+ * section's items, found by the area's name. Any other HVAC area asks the
+ * whole list: the single "HVAC System" area of an inspection created before
+ * the sections were areas.
+ *
+ * The occupied list is split strictly instead. Its sign, supra and lockbox
+ * area asks only its own section (Moses, 2026-10-08), and every other room
+ * asks only the items with no section -- the two condition questions. Asking
+ * "the whole list" there would put "Key functioning?" in every bedroom.
  */
 export function checklistSectionWhere(
   kind: ChecklistKind,
   areaName: string | null | undefined,
 ): Prisma.AreaChecklistItemWhereInput {
   const section = checklistSectionFor(kind, areaName);
+  if (kind === 'OCCUPIED') return { section };
   return section ? { section } : {};
+}
+
+/** `checklistSectionWhere` over an item already loaded, for a summary that reads every area's items at once. */
+export function checklistItemAsked(
+  kind: ChecklistKind,
+  areaName: string | null | undefined,
+  itemSection: string | null,
+): boolean {
+  const section = checklistSectionFor(kind, areaName);
+  if (kind === 'OCCUPIED') return itemSection === section;
+  return !section || itemSection === section;
 }
 
 /**
@@ -65,5 +82,7 @@ export function checklistSectionFor(
   kind: ChecklistKind,
   areaName: string | null | undefined,
 ): string | null {
-  return kind === 'AIR_CONDITIONING' ? hvacSectionOf(areaName) : null;
+  if (kind === 'AIR_CONDITIONING') return hvacSectionOf(areaName);
+  if (kind === 'OCCUPIED') return isBtmLockboxArea(areaName) ? BTM_LOCKBOX_SECTION : null;
+  return null;
 }

@@ -40,10 +40,15 @@ import {
 } from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
 import {
+  asksLockboxQuestions,
+  BTM_LOCKBOX_SECTION,
   checklistKindFor,
   hvacSectionOf,
   hvacUnansweredItems,
+  InspectionType,
   inspectionRequiresAreaRecording,
+  lockboxUnansweredMessage,
+  unansweredLockboxQuestions,
 } from '@texasrenters/shared';
 
 import {
@@ -327,10 +332,27 @@ export default function AreaDetailScreen() {
    * and the server still refuses a section left unanswered.
    */
   const hvacSection = isEquipmentVisit ? hvacSectionOf(item.name) : null;
+  /**
+   * The sign, supra and lockbox area (Moses, 2026-10-08): both its questions
+   * answered before it submits, the notes optional -- the server's rule too.
+   */
+  const lockboxArea = asksLockboxQuestions(item.inspectionType, item.name);
+  /**
+   * Its own questions, once they have arrived -- as for an HVAC section, until
+   * then there is nothing to answer and the server still decides. Picked out
+   * by section: a server from before them sends a hand-named area the
+   * condition pair, which stays a condition card answerable as it always was.
+   */
+  const lockboxQuestions = lockboxArea
+    ? (conditionItems.data ?? []).filter((entry) => entry.section === BTM_LOCKBOX_SECTION)
+    : [];
+  const asksLockbox = lockboxQuestions.length > 0;
   const unansweredItems =
     hvacSection && conditionItems.data
       ? hvacUnansweredItems(conditionItems.data, (entry) => entry).map((entry) => entry.label)
-      : undefined;
+      : asksLockbox
+        ? unansweredLockboxQuestions(lockboxQuestions)
+        : undefined;
   const roomFindings = (findings.data ?? []).filter((finding) => finding.roomId === item.id);
   const hasRecording = Boolean(media.data?.length);
   // The primary walkthrough is what the pipeline analyses, so it is the one to
@@ -370,6 +392,9 @@ export default function AreaDetailScreen() {
     // in a property they are trying to leave.
     uploadSettled: hasRecording && item.uploadStatus !== 'FAILED',
     unansweredItems,
+    unansweredWording: asksLockbox
+      ? { label: 'Both questions answered', hint: lockboxUnansweredMessage }
+      : undefined,
   });
   const gate = areaCompletionGate(requirements);
   // The same derivation the inspection list uses, rather than this screen's own
@@ -854,6 +879,7 @@ export default function AreaDetailScreen() {
             <OccupiedConditionCard
               assessments={conditionAssessments}
               items={conditionItems.data ?? []}
+              lockbox={asksLockbox}
               onRecord={recordAnswer}
             />
           ) : null}
@@ -1052,8 +1078,14 @@ export default function AreaDetailScreen() {
           nothing. The server refuses a removal with evidence anyway, but a
           control that is going to be refused should not be offered — and
           hiding it keeps the two actions from looking interchangeable.
+
+          Never for a back-to-market visit's sign, supra and lockbox: every one
+          of those visits ends there (Moses, 2026-10-08), and the server
+          refuses it. It can still be skipped, with a reason.
         */}
-        {hasAnyEvidence || alreadyFinished ? null : (
+        {hasAnyEvidence ||
+        alreadyFinished ||
+        (lockboxArea && item.inspectionType === InspectionType.BACK_TO_MARKET) ? null : (
           <Button
             accessibilityHint="Asks to confirm, then takes this area off the inspection"
             accessibilityLabel="Remove this area from the inspection"

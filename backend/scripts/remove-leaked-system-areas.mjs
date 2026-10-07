@@ -64,6 +64,12 @@ async function main() {
       where: {
         propertyArea: { source: 'SYSTEM' },
         inspection: { inspectionType: { in: ROOM_WALKS } },
+        // Not leaked: the one system area a room walk inspects, a
+        // back-to-market visit's sign, supra and lockbox (2026-10-08).
+        NOT: {
+          propertyArea: { name: 'Sign, supra and lockbox' },
+          inspection: { inspectionType: 'BACK_TO_MARKET' },
+        },
       },
       select: {
         id: true,

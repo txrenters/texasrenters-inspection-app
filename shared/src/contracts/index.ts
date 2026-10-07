@@ -68,6 +68,7 @@ export * from './password-policy.js';
 export * from './area-checklist-template.js';
 export * from './hvac-checklist.js';
 export * from './occupied-checklist.js';
+export * from './btm-lockbox.js';
 export * from './standard-layout.js';
 export * from './checklist-choices.js';
 export * from './checklist-comment.js';

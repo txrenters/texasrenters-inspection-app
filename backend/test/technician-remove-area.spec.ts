@@ -40,6 +40,7 @@ function build({
   findings = 0,
   answers = 0,
   remaining = 0,
+  areaName = 'Bedroom 3',
 } = {}) {
   const tx = {
     inspectionAreaStatusHistory: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
@@ -57,7 +58,7 @@ function build({
         id: ROOM_ID,
         inspectionId: 'inspection-1',
         propertyAreaId: AREA_ID,
-        propertyArea: { name: 'Bedroom 3' },
+        propertyArea: { name: areaName },
         media: [],
       }),
     },
@@ -198,5 +199,28 @@ describe('what happens to the property layout', () => {
     const { service, tx } = build({ remaining: 0 });
     await service.removeArea(technician, ROOM_ID);
     expect(tx.propertyArea.updateMany.mock.calls[0][0].where.source).toBe('STANDARD_TEMPLATE');
+  });
+});
+
+describe("a back-to-market visit's sign, supra and lockbox", () => {
+  // Every back-to-market visit ends there (Moses, 2026-10-08): it can be
+  // skipped with a reason, never taken off the visit.
+  it('is never removed', async () => {
+    const { service, tx } = build({
+      inspection: { status: 'IN_PROGRESS', finalizedAt: null, inspectionType: 'BACK_TO_MARKET' },
+      areaName: 'Sign, supra and lockbox',
+    });
+    await expect(service.removeArea(technician, ROOM_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'LOCKBOX_AREA_REQUIRED',
+    });
+    expect(tx.inspectionArea.delete).not.toHaveBeenCalled();
+  });
+
+  it('leaves the visit’s other rooms removable', async () => {
+    const { service } = build({
+      inspection: { status: 'IN_PROGRESS', finalizedAt: null, inspectionType: 'BACK_TO_MARKET' },
+    });
+    await expect(service.removeArea(technician, ROOM_ID)).resolves.toMatchObject({ removed: true });
   });
 });

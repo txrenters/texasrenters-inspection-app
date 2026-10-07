@@ -1324,6 +1324,9 @@ export class FloorPlanAdminService {
         organizationId: user.organizationId,
         propertyAreaId: null,
         kind: AreaChecklistItemKind.OCCUPIED,
+        // What every room asks. The sign, supra and lockbox questions share
+        // the list in their own section and are asked in that one area only.
+        section: null,
         archivedAt: null,
       },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],

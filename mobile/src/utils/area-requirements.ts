@@ -23,6 +23,11 @@ export type AreaEvidence = {
    * checklist is a guide, or when its items have not arrived yet.
    */
   unansweredItems?: readonly string[];
+  /**
+   * How to say it, where the questions are not an HVAC section's: the sign,
+   * supra and lockbox area asks two Yes/No questions, not three axes.
+   */
+  unansweredWording?: { label: string; hint: (labels: readonly string[]) => string };
 };
 
 /**
@@ -110,10 +115,12 @@ export function deriveAreaRequirements(
   if (evidence.unansweredItems)
     requirements.push({
       key: 'checklist',
-      label: 'Every checklist item answered',
+      label: evidence.unansweredWording?.label ?? 'Every checklist item answered',
       met: evidence.unansweredItems.length === 0,
       blocking: true,
-      hint: evidence.unansweredItems.length ? hvacUnansweredMessage(evidence.unansweredItems) : undefined,
+      hint: evidence.unansweredItems.length
+        ? (evidence.unansweredWording?.hint ?? hvacUnansweredMessage)(evidence.unansweredItems)
+        : undefined,
     });
 
   // A baseline only has to be acknowledged when one exists to review against.

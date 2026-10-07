@@ -31,6 +31,11 @@ import {
 import { ApplicationError } from '../common/errors';
 import { DONE_INSPECTION_STATUSES } from '../common/inspection-done';
 import type { PrismaService } from '../common/prisma.service';
+import {
+  btmLockboxPropertyArea,
+  ensureBtmLockboxChecklist,
+  includesLockboxArea,
+} from '../common/btm-lockbox-area';
 
 /**
  * Every rule that decides what an inspection *is*, independent of who asked.
@@ -1078,6 +1083,24 @@ export async function insertInspection(
       inspectionSeedsStandardLayout(plan.inspectionType) && !plan.scopedAreas.length
         ? (await ensureStandardLayout(tx, plan)).map((area) => area.id)
         : plan.scopedAreas.map((area) => area.id);
+    /**
+     * A back-to-market visit always ends at the sign, supra and lockbox
+     * (Moses, 2026-10-08) -- unless the office picked an area that already is
+     * one, which a technician may have added by hand at this property.
+     */
+    if (plan.inspectionType === InspectionType.BACK_TO_MARKET) {
+      await ensureBtmLockboxChecklist(tx, plan.organizationId);
+      const chosen = areaIds.length
+        ? await tx.propertyArea.findMany({ where: { id: { in: areaIds } }, select: { name: true } })
+        : [];
+      if (!includesLockboxArea(chosen)) {
+        await ensureAreaProperty(tx, plan);
+        areaIds = [
+          ...areaIds,
+          await btmLockboxPropertyArea(tx, { propertyId: plan.property.id, unitId: plan.unit?.id ?? null }),
+        ];
+      }
+    }
   }
   try {
     return await tx.inspection.create({
