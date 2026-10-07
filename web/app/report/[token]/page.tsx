@@ -211,16 +211,23 @@ function Room({ room }: { room: ReportRoomView }) {
 
       {/* What the room needs, from the summary of its recordings, under the
           office's own headings. The timestamped points themselves are not
-          printed (the maintenance team, 2026-10-07); the console has them. */}
+          printed (the maintenance team, 2026-10-07); the console has them.
+
+          Two columns from tablet width up, and on paper (2026-10-08: "so it's
+          not that long"). CSS columns rather than a grid of groups, so one
+          long Repairs list balances across both columns instead of leaving the
+          second one short. A bullet never splits between columns, and a
+          heading never ends a column on its own. */}
       {room.actions.length ? (
         <div className="space-y-2 border-t pt-4">
           <h4 className="text-sm font-semibold">{NARRATION_HEADING}:</h4>
+          <div className="gap-x-8 sm:columns-2 print:columns-2" data-testid="room-actions">
           {room.actions.map((group) => (
-            <div className="space-y-1 pt-1" key={group.heading}>
-              <h5 className="text-sm font-semibold">{group.heading}</h5>
+            <div className="mb-3" key={group.heading}>
+              <h5 className="mb-1 text-sm font-semibold break-after-avoid">{group.heading}</h5>
               <ul className="list-disc space-y-0.5 pl-5 text-sm leading-relaxed">
                 {group.items.map((item, index) => (
-                  <li key={index}>
+                  <li className="break-inside-avoid" key={index}>
                     {item.text}
                     {item.details.length ? (
                       <ul className="list-[circle] pl-5">
@@ -234,6 +241,7 @@ function Room({ room }: { room: ReportRoomView }) {
               </ul>
             </div>
           ))}
+          </div>
         </div>
       ) : null}
 

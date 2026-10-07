@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderReportPdf, reportFileName } from './render-report-pdf';
+import { actionColumns } from './report-document';
 import { buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport } from '@texasrenters/shared';
 
@@ -441,6 +442,23 @@ describe('what each room needs, under its photographs', () => {
     expect(text).toContain('1 of 1');
   }, 60_000);
 
+  it('prints a long list in two columns, the second picking up where the first stops', async () => {
+    mockPhotoFetch();
+    const many = Array.from({ length: 12 }, (_, index) => ({
+      text: `Repair item number ${index + 1} on the wall beside the window.`,
+      details: [],
+    }));
+
+    const pdf = await renderReportPdf(
+      { ...REPORT, rooms: [{ ...REPORT.rooms[0]!, actions: [{ heading: 'Repairs / Maintenance', items: many }] }] },
+      { apiOrigin: 'http://x' },
+    );
+
+    const text = (await pageTexts(pdf)).flat().join(' ');
+    for (const item of many) expect(text).toContain(item.text);
+    expect(text).toContain('Repairs / Maintenance (continued)');
+  }, 60_000);
+
   it('prints no heading for a room with nothing listed', async () => {
     mockPhotoFetch();
 
@@ -491,3 +509,48 @@ describe("an occupied room's answers", () => {
     expect(text).not.toContain('Undam.');
   }, 60_000);
 });
+
+describe('splitting what a room needs into two columns', () => {
+  const item = (text: string, details: string[] = []) => ({ text, details });
+
+  it('cuts where the two halves are about equal, keeping every bullet in order', () => {
+    const groups = [
+      { heading: 'Repairs / Maintenance', items: [item('a'), item('b'), item('c'), item('d')] },
+      { heading: 'Cleaning', items: [item('e'), item('f')] },
+    ];
+
+    const [left, right] = actionColumns(groups);
+
+    const order = [...left, ...right].flatMap((group) => group.items.map((entry) => entry.text));
+    expect(order).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+    expect(left.flatMap((group) => group.items)).toHaveLength(3);
+    // The repairs carry on in the second column under their heading, marked.
+    expect(right[0]).toMatchObject({ heading: 'Repairs / Maintenance', continued: true });
+    expect(right[1]).toMatchObject({ heading: 'Cleaning', continued: false });
+  });
+
+  it('weighs a bullet by the places listed beneath it', () => {
+    const [left, right] = actionColumns([
+      {
+        heading: 'Repairs / Maintenance',
+        items: [item('Touch-up paint needed on:', ['Door frame', 'Trim', 'Closet door', 'Window sill']), item('b'), item('c')],
+      },
+    ]);
+
+    expect(left.flatMap((group) => group.items.map((entry) => entry.text))).toEqual(['Touch-up paint needed on:']);
+    expect(right[0].items.map((entry) => entry.text)).toEqual(['b', 'c']);
+  });
+
+  it('keeps a single bullet in the first column, and a group that starts a column unmarked', () => {
+    expect(actionColumns([{ heading: 'Cleaning', items: [item('only')] }])).toEqual([
+      [{ heading: 'Cleaning', continued: false, items: [item('only')] }],
+      [],
+    ]);
+    const [, right] = actionColumns([
+      { heading: 'Painting', items: [item('a')] },
+      { heading: 'Cleaning', items: [item('b')] },
+    ]);
+    expect(right).toEqual([{ heading: 'Cleaning', continued: false, items: [item('b')] }]);
+  });
+});
+
