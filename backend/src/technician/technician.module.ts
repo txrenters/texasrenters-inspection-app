@@ -11,6 +11,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { RoutingModule } from '../routing/routing.module';
 import { TimeTrackingModule } from '../time-tracking/time-tracking.module';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
+import { ChecklistPrefillService } from './checklist-prefill.service';
 import { MediaProcessingService } from './media-processing.service';
 import { VisualReviewService } from './visual-review.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
@@ -41,6 +42,8 @@ import { TrackingStatusStore } from './tracking-status.store';
     MediaProcessingService,
     // The AI's look at a recording's frames, after the narration's analysis.
     VisualReviewService,
+    // The condition checklist filled from the narration where nobody ticked it.
+    ChecklistPrefillService,
     // Lets the pipeline ask Cloudflare for a media URL when a recording lives
     // there rather than in the bucket.
     CloudflareStreamService,
@@ -68,6 +71,13 @@ import { TrackingStatusStore } from './tracking-status.store';
   // optional and nothing exported it, so Nest passed undefined and every "Add
   // photo" and accepted frame suggestion answered "Photo storage is not
   // configured" (2026-10-03) -- with storage configured all along.
-  exports: [MediaProcessingService, TechnicianLocationService, InspectionMediaStorageService],
+  //
+  // `ChecklistPrefillService` for the console's "Fill from narration".
+  exports: [
+    MediaProcessingService,
+    TechnicianLocationService,
+    InspectionMediaStorageService,
+    ChecklistPrefillService,
+  ],
 })
 export class TechnicianModule {}

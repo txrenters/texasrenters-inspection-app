@@ -411,12 +411,14 @@ export interface ReportView {
 
 /**
  * What the report is, said truthfully: the checklist comments are drawn from
- * the recording whether or not anyone has confirmed them yet, and the narration
- * under each room's photographs is the recording itself, word for word
- * (2026-10-07).
+ * the recording whether or not anyone has confirmed them yet, the narration
+ * under each room's photographs is the recording itself, word for word, and a
+ * row the inspector left unscored may have been read from that recording by
+ * the narration pre-fill (2026-10-07).
  */
 const DISCLAIMER =
-  'The condition table is as the inspector scored it. The comments beside the checklist are ' +
+  'The condition table is as the inspector scored it; rows left unscored on site are read ' +
+  "from the inspector's own words in the walkthrough recording. The comments beside the checklist are " +
   "drawn automatically from the inspector's walkthrough recording, and the summary under each " +
   "area's photographs is that recording, word for word. This report is informational: it does " +
   'not by itself authorize charges or determine responsibility for any condition described.';

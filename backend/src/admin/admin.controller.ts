@@ -6,6 +6,7 @@ import {
   Delete,
   Get,
   Header,
+  HttpCode,
   Inject,
   Param,
   Optional,
@@ -32,6 +33,7 @@ import {
   type AuthenticatedRequest,
 } from '../common/auth';
 import { businessDayFromQuery } from '../common/business-day';
+import { ApplicationError } from '../common/errors';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { PasswordResetService } from '../auth/password-reset.service';
 import { InspectionImportService } from './inspection-import/inspection-import.service';
@@ -41,6 +43,7 @@ import { RouteService } from '../routing/route.service';
 import { TechnicianTimelineService } from '../technician/technician-timeline.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
+import { ChecklistPrefillService } from '../technician/checklist-prefill.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
 import { MailService } from '../mail/mail.service';
@@ -178,7 +181,22 @@ export class AdminController {
     @Optional()
     @Inject(CacheInvalidationService)
     private readonly cacheInvalidation?: CacheInvalidationService,
+    // Last and optional only so suites building this with `new` keep their
+    // shape; `module-graph.spec` proves Nest hands it over.
+    @Optional()
+    @Inject(ChecklistPrefillService)
+    private readonly checklistPrefill?: ChecklistPrefillService,
   ) {}
+
+  private prefill() {
+    if (!this.checklistPrefill)
+      throw new ApplicationError(
+        503,
+        'CHECKLIST_PREFILL_UNAVAILABLE',
+        'Filling the checklist from the narration is not available.',
+      );
+    return this.checklistPrefill;
+  }
 
   @Get('profile') profile(@Req() request: AuthenticatedRequest) {
     return this.service.profile(request.user);
@@ -879,6 +897,41 @@ export class AdminController {
    * the report prints from. PUT, not PATCH: the body is the item's complete
    * assessment, so clearing a control clears it on the server.
    */
+  /**
+   * Fill every room's unticked condition rows from the narration, in the
+   * background. Same permission as ticking them by hand: it writes to the
+   * record the report prints from. Never replaces a person's answer.
+   */
+  @Post('inspections/:inspectionId/checklist-prefill')
+  @RequirePermissions('inspections:manage')
+  @HttpCode(202)
+  prefillInspectionChecklist(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+  ) {
+    return this.prefill().queueInspection(
+      request.user.organizationId,
+      inspectionId,
+      request.user.id,
+      'REVIEWER',
+    );
+  }
+  /** The same for one room, answered when it is done. */
+  @Post('inspections/:inspectionId/areas/:areaId/checklist-prefill')
+  @RequirePermissions('inspections:manage')
+  @HttpCode(200)
+  prefillAreaChecklist(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+  ) {
+    return this.prefill().fillArea(
+      request.user.organizationId,
+      inspectionId,
+      areaId,
+      request.user.id,
+    );
+  }
   @Put('inspections/:inspectionId/areas/:areaId/checklist/:itemId')
   @RequirePermissions('inspections:manage')
   recordAreaChecklistItem(

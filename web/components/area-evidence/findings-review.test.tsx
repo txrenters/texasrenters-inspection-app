@@ -23,6 +23,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@/lib/queries', () => ({
   useAreaEvidence: () => ({ isLoading: false, isError: false, refetch: () => {}, data: state.bundle }),
+  useFillAreaFromNarration: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
+  useFillInspectionFromNarration: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
   useRecordChecklistItem: () => ({ isPending: false, variables: undefined, error: null, mutate: () => {} }),
   useAdminMutations: () => ({
     approveFinding: { isPending: false, error: null, mutateAsync: state.approve },

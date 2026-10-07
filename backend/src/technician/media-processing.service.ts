@@ -40,6 +40,7 @@ import { removeOrphanedAiFrames } from './ai-filed-frames';
 import { houseRulesLines } from './house-rules';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
 import { VisualReviewService } from './visual-review.service';
+import { ChecklistPrefillService } from './checklist-prefill.service';
 
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
@@ -319,6 +320,10 @@ export class MediaProcessingService implements OnModuleInit {
     @Optional() @Inject(VisualReviewService) private readonly visualReview?: VisualReviewService,
     // The office's house rules and past decisions, read into every analysis.
     @Optional() @Inject(AiGuidanceService) private readonly guidance?: AiGuidanceService,
+    // The checklist rows nobody ticked, filled from the narration on review.
+    @Optional()
+    @Inject(ChecklistPrefillService)
+    private readonly checklistPrefill?: ChecklistPrefillService,
   ) {}
 
   /**
@@ -1893,7 +1898,7 @@ export class MediaProcessingService implements OnModuleInit {
     const [inspection, unfinished] = await Promise.all([
       this.prisma.inspection.findUnique({
         where: { id: inspectionId },
-        select: { status: true, inspectionType: true },
+        select: { status: true, inspectionType: true, organizationId: true },
       }),
       this.prisma.inspectionMedia.count({
         where: {
@@ -1923,6 +1928,11 @@ export class MediaProcessingService implements OnModuleInit {
         data: { status: InspectionStatus.REVIEW_REQUIRED },
       });
       if (count === 0) return;
+      // Every recording is transcribed: fill the condition rows the technician
+      // did not tick from what they said (2026-10-07). In the background, and
+      // never over a person's answer; see ChecklistPrefillService.
+      if (this.checklistPrefill)
+        await this.checklistPrefill.afterSubmission(inspection.organizationId, inspectionId);
       // Now that move-out findings are ready, draft the move-in vs move-out
       // comparison (spec §12). Best-effort: a failure never blocks review.
       if (inspection.inspectionType === InspectionType.MOVE_OUT && this.comparison)

@@ -192,6 +192,12 @@ enum PhotoCaptureType {
   SUPPORTING_EVIDENCE
 }
 
+/// Who wrote a checklist answer; see InspectionAreaChecklistResponse.source.
+enum ChecklistAnswerSource {
+  PERSON
+  AI
+}
+
 enum VideoRecordingType {
   PRIMARY_AREA
   ADDITIONAL_ISSUE
@@ -1161,6 +1167,11 @@ model InspectionAreaChecklistResponse {
   /// an assessment made outside a recording — the web review screen, or a
   /// technician scoring after the fact.
   videoTimestampSeconds Int?
+  /// Who wrote the answer. AI is the narration pre-fill
+  /// (`ChecklistPrefillService`): it fills only a row nobody answered, never
+  /// replaces a person's answer, and any person's write turns the row back to
+  /// PERSON. The console marks AI rows so a reviewer can tell them apart.
+  source                ChecklistAnswerSource @default(PERSON)
   recordedById          String?           @db.Uuid
   recordedAt            DateTime          @default(now())
   createdAt             DateTime          @default(now())

@@ -1,5 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { FindingReviewStatus, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
+import {
+  ChecklistAnswerSource,
+  FindingReviewStatus,
+  PhotoCaptureType,
+  VideoRecordingType,
+} from '@prisma/client';
 import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import {
   checklistItemsAreOrganizationWide,
@@ -230,7 +235,13 @@ export class AreaEvidenceService {
         recordedById: user.id,
         ...values,
       },
-      update: { recordedById: user.id, recordedAt: new Date(), ...values },
+      // A person's answer, including one written over the AI's pre-fill.
+      update: {
+        recordedById: user.id,
+        recordedAt: new Date(),
+        source: ChecklistAnswerSource.PERSON,
+        ...values,
+      },
       select: {
         checklistItemId: true,
         isClean: true,
@@ -239,6 +250,7 @@ export class AreaEvidenceService {
         comment: true,
         recordedAt: true,
         videoTimestampSeconds: true,
+        source: true,
       },
     });
     return {
@@ -249,6 +261,7 @@ export class AreaEvidenceService {
       comment: response.comment,
       recordedAt: response.recordedAt.toISOString(),
       videoTimestampSeconds: response.videoTimestampSeconds,
+      source: response.source,
     };
   }
 
@@ -803,6 +816,7 @@ export class AreaEvidenceService {
               textValue: true,
               recordedAt: true,
               videoTimestampSeconds: true,
+              source: true,
             },
           },
         },
@@ -980,6 +994,8 @@ export class AreaEvidenceService {
           textValue: response?.textValue ?? null,
           recordedAt: response?.recordedAt.toISOString() ?? null,
           videoTimestampSeconds: response?.videoTimestampSeconds ?? null,
+          // AI when the narration pre-fill wrote it; null when unanswered.
+          source: response?.source ?? null,
         };
       }),
       findings: findings.map((finding) => ({

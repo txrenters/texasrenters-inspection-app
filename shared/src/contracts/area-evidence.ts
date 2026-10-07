@@ -291,6 +291,12 @@ export interface AreaChecklistEntry {
   comment: string | null;
   recordedAt: string | null;
   /**
+   * Who wrote the answer: AI when the narration pre-fill filled a row nobody
+   * ticked, PERSON otherwise. Null when unanswered, and absent from an older
+   * backend. Any tap by a person makes it PERSON.
+   */
+  source?: 'PERSON' | 'AI' | null;
+  /**
    * Seconds into the area's recording when this was answered, so a reviewer can
    * jump to the moment instead of scrubbing. Null when the assessment was made
    * outside a recording — on the web, or after the fact.
@@ -412,4 +418,21 @@ export interface AdminEvidenceRequest {
   requestedAt: string;
   resolvedAt?: string | null;
   inspectionArea: { propertyArea: { name: string } };
+}
+
+/** What "Fill from narration" answered for one room. */
+export interface AreaChecklistPrefillResult {
+  inspectionAreaId: string;
+  areaName: string;
+  /** Rows nobody had answered, which the AI was asked about. */
+  asked: number;
+  /** Rows the narration answered. */
+  filled: number;
+}
+
+/** What "Fill every room" answered: the work runs in the background. */
+export interface InspectionChecklistPrefillResult {
+  /** False when a run for this inspection is already going. */
+  queued: boolean;
+  areas: number;
 }
