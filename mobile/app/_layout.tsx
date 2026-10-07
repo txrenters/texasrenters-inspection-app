@@ -6,6 +6,7 @@ import { getSession } from '@/src/auth/session';
 import { createErrorBoundary } from '@/src/components/AppErrorBoundary';
 import { installGlobalErrorHandlers } from '@/src/lib/error-log';
 import { startErrorReporting } from '@/src/lib/error-reporter';
+import { startOsExitReports } from '@/src/lib/os-exit-reports';
 import { installSessionBreadcrumb } from '@/src/lib/session-breadcrumb';
 import { ThemeProvider } from '@/src/providers/ThemeProvider';
 import { TexasRentersProviders } from '@/src/providers/TexasRentersProviders';
@@ -24,6 +25,10 @@ installSessionBreadcrumb();
 // exactly the report that was impossible to see, and it has no session to
 // report under. The token, when there is one, only decides attribution.
 startErrorReporting(async () => (await getSession())?.accessToken ?? null);
+
+// Why the operating system closed the app last time -- out of memory, the
+// watchdog, a crash -- which the breadcrumb above can see happened but not why.
+startOsExitReports();
 
 /** expo-router renders this instead of a white screen when a route throws. */
 export const ErrorBoundary = createErrorBoundary('root');

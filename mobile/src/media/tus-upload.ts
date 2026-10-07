@@ -1,5 +1,7 @@
 import { File } from 'expo-file-system';
 
+import { headerValue, WHOLE_FILE_MAX_BYTES, type WholeFileSender } from './whole-file-upload';
+
 /**
  * A minimal tus client, sized for one job: sending a local recording to a
  * Cloudflare Stream upload URL, resumably.
@@ -107,6 +109,12 @@ export async function uploadFileInChunks(options: {
    */
   shouldPause?: () => boolean;
   onProgress?: (progress: TusProgress) => void;
+  /**
+   * Sends a fresh recording that fits one request through the platform's own
+   * uploader instead (see `whole-file-upload`). Anything it cannot finish is
+   * picked up here, in chunks, from wherever Cloudflare says it got to.
+   */
+  wholeFile?: WholeFileSender;
 }): Promise<number> {
   const file = new File(options.localUri);
   if (!file.exists)
@@ -120,6 +128,16 @@ export async function uploadFileInChunks(options: {
   const chunkBytes = alignChunkSize(options.chunkBytes ?? DEFAULT_CHUNK_BYTES);
   let offset = await fetchUploadOffset(options.uploadUrl, options.signal);
   options.onProgress?.({ uploadedBytes: offset, totalBytes });
+
+  if (options.wholeFile && offset === 0 && totalBytes <= WHOLE_FILE_MAX_BYTES) {
+    // Not started during a take, nor while videos are held -- but once handed
+    // to the platform it is let finish: it costs JavaScript nothing, and
+    // stopping it would only mean sending the rest again in chunks.
+    if (options.signal?.aborted || options.shouldPause?.())
+      throw new TusUploadError('Upload was paused.', 'retryable');
+    offset = await sendWholeFile(options.wholeFile, options.uploadUrl, options.localUri, totalBytes, options.onProgress);
+    if (offset >= totalBytes) return offset;
+  }
 
   const handle = file.open();
   try {
@@ -174,6 +192,60 @@ export async function uploadFileInChunks(options: {
   } finally {
     handle.close();
   }
+  return offset;
+}
+
+/** How often a whole-file upload's progress is passed on; the platform reports far more often. */
+export const WHOLE_FILE_PROGRESS_MS = 2_000;
+
+/**
+ * One PATCH carrying the whole file, through the platform's uploader.
+ *
+ * Returns Cloudflare's offset afterwards. Only a dead upload link is thrown as
+ * such; any other refusal of the one large request is answered by asking
+ * Cloudflare where it is, so the chunked loop can carry on from there.
+ */
+async function sendWholeFile(
+  send: WholeFileSender,
+  uploadUrl: string,
+  localUri: string,
+  totalBytes: number,
+  onProgress?: (progress: TusProgress) => void,
+): Promise<number> {
+  let reportedAt = 0;
+  let response: Awaited<ReturnType<WholeFileSender>>;
+  try {
+    response = await send({
+      url: uploadUrl,
+      localUri,
+      headers: {
+        'Tus-Resumable': TUS_VERSION,
+        'Upload-Offset': '0',
+        'Content-Type': 'application/offset+octet-stream',
+      },
+      onProgress: (sentBytes) => {
+        // Saved to the queue, and so to storage, every time it is passed on.
+        const now = Date.now();
+        if (now - reportedAt < WHOLE_FILE_PROGRESS_MS) return;
+        reportedAt = now;
+        onProgress?.({ uploadedBytes: Math.min(sentBytes, totalBytes), totalBytes });
+      },
+    });
+  } catch (error) {
+    // The platform's own timeouts end a stalled request (60 seconds without a
+    // byte, on both), so this is a lost connection, worth another attempt.
+    throw unreachable(uploadUrl, error);
+  }
+  if (!response) throw new TusUploadError('Upload was paused.', 'retryable');
+  if (response.status === 404 || response.status === 410 || response.status === 403)
+    throw new TusUploadError('Upload session expired before it finished.', 'permanent', response.status);
+
+  const confirmed = Number(headerValue(response.headers, 'upload-offset'));
+  const offset =
+    response.status >= 200 && response.status < 300 && Number.isFinite(confirmed) && confirmed > 0
+      ? confirmed
+      : await fetchUploadOffset(uploadUrl);
+  onProgress?.({ uploadedBytes: offset, totalBytes });
   return offset;
 }
 
@@ -260,21 +332,27 @@ async function request(
     // as a plain `FetchError`, never an `AbortError`.
     if (controller.signal.aborted || (error as { name?: string }).name === 'AbortError')
       throw new TusUploadError('Upload was paused.', 'retryable');
-    // Names the host and the underlying reason. "Could not reach Cloudflare"
-    // was true but undiagnosable: it did not distinguish a phone with no
-    // signal from a network that blocks upload.cloudflarestream.com
-    // specifically, and those need different answers from whoever is helping.
-    const host = (() => {
-      try {
-        return new URL(url).host;
-      } catch {
-        return 'Cloudflare';
-      }
-    })();
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new TusUploadError(`The upload could not reach ${host} (${reason}).`, 'retryable');
+    throw unreachable(url, error);
   } finally {
     clearTimeout(timer);
     init.signal?.removeEventListener?.('abort', pause);
   }
+}
+
+/**
+ * Names the host and the underlying reason. "Could not reach Cloudflare" was
+ * true but undiagnosable: it did not distinguish a phone with no signal from a
+ * network that blocks upload.cloudflarestream.com specifically, and those need
+ * different answers from whoever is helping.
+ */
+function unreachable(url: string, error: unknown) {
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return 'Cloudflare';
+    }
+  })();
+  const reason = error instanceof Error ? error.message : String(error);
+  return new TusUploadError(`The upload could not reach ${host} (${reason}).`, 'retryable');
 }

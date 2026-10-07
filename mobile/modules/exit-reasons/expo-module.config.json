@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["ExitReasonsModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.exitreasons.ExitReasonsModule"]
+  }
+}
