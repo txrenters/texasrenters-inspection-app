@@ -6,7 +6,8 @@ import { ComparisonService } from '../src/admin/comparison.service';
 import { ReportShareService } from '../src/admin/report-share.service';
 import { AdminController } from '../src/admin/admin.controller';
 import { ChecklistPrefillService } from '../src/technician/checklist-prefill.service';
-import { MediaProcessingService } from '../src/technician/media-processing.service';
+import { MediaProcessingService } from '../src/technician/media-processing.service';
+import { RecordingSummaryService } from '../src/technician/recording-summary.service';
 import { CacheInvalidationService } from '../src/cache/cache-invalidation.service';
 import { CacheModule } from '../src/cache/cache.module';
 import { PrismaService } from '../src/common/prisma.service';
@@ -136,12 +137,19 @@ describe('the narration pre-fill', () => {
       .overrideProvider(PrismaService)
       .useValue({})
       .compile();
-    const controller = moduleRef.get(AdminController) as unknown as { checklistPrefill?: unknown };
+    const controller = moduleRef.get(AdminController) as unknown as {
+      checklistPrefill?: unknown;
+      recordingSummary?: unknown;
+    };
     const pipeline = moduleRef.get(MediaProcessingService) as unknown as {
       checklistPrefill?: unknown;
+      recordingSummary?: unknown;
     };
 
     expect(controller.checklistPrefill).toBeInstanceOf(ChecklistPrefillService);
     expect(pipeline.checklistPrefill).toBeInstanceOf(ChecklistPrefillService);
+    // And the report's summary of each room's recordings (2026-10-07).
+    expect(controller.recordingSummary).toBeInstanceOf(RecordingSummaryService);
+    expect(pipeline.recordingSummary).toBeInstanceOf(RecordingSummaryService);
   });
 });

@@ -196,6 +196,12 @@ export interface ReportNarrationView {
   text: string;
 }
 
+/** One heading of what a room needs, and its bullets; a bullet may list its places beneath it. */
+export interface ReportActionGroupView {
+  heading: string;
+  items: Array<{ text: string; details: string[] }>;
+}
+
 /** The heading over a room's narration, the office's own wording. */
 export const NARRATION_HEADING = 'Summary based on the recordings';
 
@@ -219,6 +225,12 @@ export interface ReportRoomView {
   findings: ReportFindingView[];
   /** What was said walking the room, under its photographs. Empty when nothing was transcribed. */
   narration: ReportNarrationView[];
+  /**
+   * What the room needs, under the office's headings -- "Repairs /
+   * Maintenance", "Painting", "Cleaning" -- printed after the narration. Empty
+   * when the narration is the word-for-word transcript rather than a summary.
+   */
+  actions: ReportActionGroupView[];
   /** False when the room has no checklist, photos, findings or narration — render compactly. */
   hasEvidence: boolean;
 }
@@ -411,16 +423,18 @@ export interface ReportView {
 
 /**
  * What the report is, said truthfully: the checklist comments are drawn from
- * the recording whether or not anyone has confirmed them yet, the narration
- * under each room's photographs is the recording itself, word for word, and a
- * row the inspector left unscored may have been read from that recording by
- * the narration pre-fill (2026-10-07).
+ * the recording whether or not anyone has confirmed them yet, the summary
+ * under each room's photographs is drawn from the recording with its moments
+ * (word for word until it has been summarized), and a row the inspector left
+ * unscored may have been read from that recording by the narration pre-fill
+ * (2026-10-07).
  */
 const DISCLAIMER =
   'The condition table is as the inspector scored it; rows left unscored on site are read ' +
   "from the inspector's own words in the walkthrough recording. The comments beside the checklist are " +
   "drawn automatically from the inspector's walkthrough recording, and the summary under each " +
-  "area's photographs is that recording, word for word. This report is informational: it does " +
+  "area's photographs is drawn from that recording, each point at the moment it was said. " +
+  'This report is informational: it does ' +
   'not by itself authorize charges or determine responsibility for any condition described.';
 
 /** A photograph as a report prints it; shared with the comparison report. */
@@ -579,6 +593,17 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       photos,
       findings: roomFindings,
       narration,
+      actions: (room.actions ?? [])
+        .map((group) => ({
+          heading: group.heading,
+          items: group.items
+            .map((item) => ({
+              text: item.text.trim(),
+              details: (item.details ?? []).map((detail) => detail.trim()).filter(Boolean),
+            }))
+            .filter((item) => item.text.length > 0),
+        }))
+        .filter((group) => group.heading.trim() && group.items.length > 0),
       hasEvidence:
         checklist.length > 0 || photos.length > 0 || roomFindings.length > 0 || narration.length > 0,
     };

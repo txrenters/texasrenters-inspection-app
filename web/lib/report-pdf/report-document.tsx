@@ -127,6 +127,10 @@ const styles = StyleSheet.create({
   narrationHeading: { fontSize: 9.5, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
   narrationText: { fontSize: 8.5, lineHeight: 1.5, marginBottom: 4 },
   narrationLabel: { fontFamily: 'Helvetica-Bold' },
+  actionHeading: { fontSize: 9, fontFamily: 'Helvetica-Bold', marginTop: 4, marginBottom: 2 },
+  actionItem: { flexDirection: 'row', fontSize: 8.5, marginBottom: 1.5 },
+  actionMark: { width: 10 },
+  actionText: { flexGrow: 1, flexBasis: 0 },
   emptyRoom: { color: C.muted, fontSize: 8.5 },
   // The condition table. Column widths are fixed rather than proportional so
   // the three verdict columns line up down the page the way the office's
@@ -338,6 +342,28 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
                 ) : null}
                 {recording.text}
               </Text>
+            ))}
+            {/* What the room needs, under the office's headings. A bullet
+                and an en dash: both are in the PDF's standard font, where a
+                hollow circle is not. */}
+            {room.actions.map((group) => (
+              <View key={group.heading}>
+                <Text style={styles.actionHeading}>{group.heading}</Text>
+                {group.items.map((item, index) => (
+                  <View key={index}>
+                    <View style={styles.actionItem}>
+                      <Text style={styles.actionMark}>{'•'}</Text>
+                      <Text style={styles.actionText}>{item.text}</Text>
+                    </View>
+                    {item.details.map((detail, detailIndex) => (
+                      <View key={detailIndex} style={[styles.actionItem, { paddingLeft: 10 }]}>
+                        <Text style={styles.actionMark}>{'–'}</Text>
+                        <Text style={styles.actionText}>{detail}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ))}
+              </View>
             ))}
           </View>
         ) : null}

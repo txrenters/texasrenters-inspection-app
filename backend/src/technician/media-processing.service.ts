@@ -41,6 +41,7 @@ import { houseRulesLines } from './house-rules';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
 import { VisualReviewService } from './visual-review.service';
 import { ChecklistPrefillService } from './checklist-prefill.service';
+import { RecordingSummaryService } from './recording-summary.service';
 
 // 4: the transcript carries its timings, the move-out baseline is the
 // comparison's move-in with its checklist, and reviewed findings are not raised
@@ -324,6 +325,10 @@ export class MediaProcessingService implements OnModuleInit {
     @Optional()
     @Inject(ChecklistPrefillService)
     private readonly checklistPrefill?: ChecklistPrefillService,
+    // Each room's narration summarized for the report, on review.
+    @Optional()
+    @Inject(RecordingSummaryService)
+    private readonly recordingSummary?: RecordingSummaryService,
   ) {}
 
   /**
@@ -1933,6 +1938,10 @@ export class MediaProcessingService implements OnModuleInit {
       // never over a person's answer; see ChecklistPrefillService.
       if (this.checklistPrefill)
         await this.checklistPrefill.afterSubmission(inspection.organizationId, inspectionId);
+      // And the report's summary of each room's recordings, also in the
+      // background; until it lands the report prints the narration verbatim.
+      if (this.recordingSummary)
+        await this.recordingSummary.afterSubmission(inspection.organizationId, inspectionId);
       // Now that move-out findings are ready, draft the move-in vs move-out
       // comparison (spec §12). Best-effort: a failure never blocks review.
       if (inspection.inspectionType === InspectionType.MOVE_OUT && this.comparison)

@@ -63,6 +63,8 @@ import type {
   AiSettings,
   AreaChecklistEntry,
   AreaChecklistPrefillResult,
+  AreaRecordingSummaryView,
+  InspectionRecordingSummaryResult,
   InspectionChecklistPrefillResult,
   AreaEvidenceBundle,
   AreaEvidenceSummary,
@@ -523,6 +525,42 @@ export const useFillAreaFromNarration = (inspectionId: string, areaId: string) =
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId) });
       void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+    },
+  });
+};
+
+/**
+ * Summarizes one room's recordings for the report, answered when it is done.
+ * The room's evidence carries the summary, so it is refetched.
+ */
+export const useSummarizeAreaRecordings = (inspectionId: string, areaId: string) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<AreaRecordingSummaryView | null>(
+        `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/recording-summary`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId) });
+    },
+  });
+};
+
+/** Summarizes every room in the background; see `useFillInspectionFromNarration`. */
+export const useSummarizeInspectionRecordings = (inspectionId: string) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<InspectionRecordingSummaryResult>(
+        `/api/v1/admin/inspections/${inspectionId}/recording-summary`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      for (const delay of PREFILL_REFRESH_MS)
+        setTimeout(() => {
+          void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+        }, delay);
     },
   });
 };

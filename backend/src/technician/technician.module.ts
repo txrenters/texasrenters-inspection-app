@@ -12,6 +12,7 @@ import { RoutingModule } from '../routing/routing.module';
 import { TimeTrackingModule } from '../time-tracking/time-tracking.module';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { ChecklistPrefillService } from './checklist-prefill.service';
+import { RecordingSummaryService } from './recording-summary.service';
 import { MediaProcessingService } from './media-processing.service';
 import { VisualReviewService } from './visual-review.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
@@ -44,6 +45,8 @@ import { TrackingStatusStore } from './tracking-status.store';
     VisualReviewService,
     // The condition checklist filled from the narration where nobody ticked it.
     ChecklistPrefillService,
+    // Each room's recordings summarized for the report.
+    RecordingSummaryService,
     // Lets the pipeline ask Cloudflare for a media URL when a recording lives
     // there rather than in the bucket.
     CloudflareStreamService,
@@ -78,6 +81,7 @@ import { TrackingStatusStore } from './tracking-status.store';
     TechnicianLocationService,
     InspectionMediaStorageService,
     ChecklistPrefillService,
+    RecordingSummaryService,
   ],
 })
 export class TechnicianModule {}

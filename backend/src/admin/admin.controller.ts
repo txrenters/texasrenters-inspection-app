@@ -44,6 +44,7 @@ import { TechnicianTimelineService } from '../technician/technician-timeline.ser
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { ChecklistPrefillService } from '../technician/checklist-prefill.service';
+import { RecordingSummaryService } from '../technician/recording-summary.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
 import { MailService } from '../mail/mail.service';
@@ -186,7 +187,20 @@ export class AdminController {
     @Optional()
     @Inject(ChecklistPrefillService)
     private readonly checklistPrefill?: ChecklistPrefillService,
+    @Optional()
+    @Inject(RecordingSummaryService)
+    private readonly recordingSummary?: RecordingSummaryService,
   ) {}
+
+  private summaries() {
+    if (!this.recordingSummary)
+      throw new ApplicationError(
+        503,
+        'RECORDING_SUMMARY_UNAVAILABLE',
+        'Summarizing the recordings is not available.',
+      );
+    return this.recordingSummary;
+  }
 
   private prefill() {
     if (!this.checklistPrefill)
@@ -897,6 +911,40 @@ export class AdminController {
    * the report prints from. PUT, not PATCH: the body is the item's complete
    * assessment, so clearing a control clears it on the server.
    */
+  /**
+   * Summarize every room's recordings for the report, in the background.
+   * `inspections:manage`: it rewrites what the report prints under each room.
+   */
+  @Post('inspections/:inspectionId/recording-summary')
+  @RequirePermissions('inspections:manage')
+  @HttpCode(202)
+  summarizeInspectionRecordings(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+  ) {
+    return this.summaries().queueInspection(
+      request.user.organizationId,
+      inspectionId,
+      request.user.id,
+      'REVIEWER',
+    );
+  }
+  /** The same for one room, answered with its summary when it is done. */
+  @Post('inspections/:inspectionId/areas/:areaId/recording-summary')
+  @RequirePermissions('inspections:manage')
+  @HttpCode(200)
+  summarizeAreaRecordings(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+  ) {
+    return this.summaries().summarizeArea(
+      request.user.organizationId,
+      inspectionId,
+      areaId,
+      request.user.id,
+    );
+  }
   /**
    * Fill every room's unticked condition rows from the narration, in the
    * background. Same permission as ticking them by hand: it writes to the

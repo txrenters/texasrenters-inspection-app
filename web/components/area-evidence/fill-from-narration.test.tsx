@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@/lib/queries', () => ({
   useRecordChecklistItem: () => ({ isPending: false, variables: undefined, error: null, mutate: () => {} }),
+  useSummarizeAreaRecordings: () => ({ isPending: false, isSuccess: false, error: null, data: undefined, mutate: () => {} }),
+  useSummarizeInspectionRecordings: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
   useFillAreaFromNarration: () => ({
     isPending: false,
     error: null,

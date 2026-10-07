@@ -25,11 +25,12 @@ import { ApiError, publicApi } from '@/lib/api';
  * how it is worded comes from the shared `buildReportView`, which the PDF
  * renderer also consumes — see shared/src/report/report-view.ts.
  *
- * Each area prints its condition table, its photographs, and under them what
- * the inspector said walking it, word for word. The findings cards that used
- * to follow the photographs, and the summary of findings that opened the
- * report, are gone at the maintenance team's request (2026-10-07): the table
- * says what failed, the comments say why, and the narration says it verbatim.
+ * Each area prints its condition table, its photographs, and under them the
+ * summary of its recordings: each point at the moment it was said, then what
+ * the room needs as Repairs / Maintenance, Painting and Cleaning (the
+ * maintenance team, 2026-10-07). A room not summarized yet prints its
+ * narration word for word. The findings cards and the summary of findings that
+ * opened the report are gone at the same team's request.
  */
 
 /** Grid thumbnails; the backend caches this width (see ALLOWED_PHOTO_WIDTHS). */
@@ -222,6 +223,26 @@ function Room({ room }: { room: ReportRoomView }) {
               ) : null}
               {recording.text}
             </p>
+          ))}
+          {/* What the room needs, under the office's own headings. */}
+          {room.actions.map((group) => (
+            <div className="space-y-1 pt-1" key={group.heading}>
+              <h5 className="text-sm font-semibold">{group.heading}</h5>
+              <ul className="list-disc space-y-0.5 pl-5 text-sm leading-relaxed">
+                {group.items.map((item, index) => (
+                  <li key={index}>
+                    {item.text}
+                    {item.details.length ? (
+                      <ul className="list-[circle] pl-5">
+                        {item.details.map((detail, detailIndex) => (
+                          <li key={detailIndex}>{detail}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
         </div>
       ) : null}

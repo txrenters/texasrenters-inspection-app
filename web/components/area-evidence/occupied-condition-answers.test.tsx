@@ -42,6 +42,8 @@ vi.mock('@/lib/queries', () => ({
       checklist,
     },
   }),
+  useSummarizeAreaRecordings: () => ({ isPending: false, isSuccess: false, error: null, data: undefined, mutate: () => {} }),
+  useSummarizeInspectionRecordings: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
   useFillAreaFromNarration: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
   useFillInspectionFromNarration: () => ({ isPending: false, error: null, data: undefined, mutate: () => {} }),
   useRecordChecklistItem: () => ({ isPending: false, variables: undefined, error: null, mutate: () => {} }),

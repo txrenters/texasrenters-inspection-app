@@ -273,6 +273,12 @@ export interface AreaEvidenceBundle {
    */
   checklist: AreaChecklistEntry[];
   counts: AreaEvidenceCounts;
+  /**
+   * What the report prints under the area's photographs, when it has been
+   * written: the narration tidied into its points, with their moments, and
+   * what the room needs. Null until generated; absent from an older backend.
+   */
+  recordingSummary?: AreaRecordingSummaryView | null;
 }
 
 /**
@@ -433,6 +439,57 @@ export interface AreaChecklistPrefillResult {
 /** What "Fill every room" answered: the work runs in the background. */
 export interface InspectionChecklistPrefillResult {
   /** False when a run for this inspection is already going. */
+  queued: boolean;
+  areas: number;
+}
+
+/**
+ * The office's three groups for what a room needs, in the order the report
+ * prints them (the maintenance team's sample, 2026-10-07).
+ */
+export const RECORDING_ACTION_GROUPS = ['REPAIRS', 'PAINTING', 'CLEANING'] as const;
+export type RecordingActionGroup = (typeof RECORDING_ACTION_GROUPS)[number];
+export const RECORDING_ACTION_HEADING: Record<RecordingActionGroup, string> = {
+  REPAIRS: 'Repairs / Maintenance',
+  PAINTING: 'Painting',
+  CLEANING: 'Cleaning',
+};
+
+/** One thing a room needs: "Touch-up paint needed on:", with its places beneath. */
+export interface RecordingAction {
+  text: string;
+  details: string[];
+}
+
+/**
+ * A room's recordings, summarized for the report.
+ *
+ * Each recording is its points in order, each at the second it was said in
+ * that recording -- the narration with the filler taken out, never anything it
+ * did not say. Then what the room needs, grouped as the office groups it.
+ */
+export interface RecordingSummary {
+  recordings: Array<{
+    mediaId: string;
+    /** An extra clip's label; null for the room's walkthrough. */
+    label: string | null;
+    lines: Array<{ start: number; text: string }>;
+  }>;
+  actions: Array<{ group: RecordingActionGroup; items: RecordingAction[] }>;
+}
+
+/** The summary as the console shows it. */
+export interface AreaRecordingSummaryView extends RecordingSummary {
+  generatedAt: string;
+  /**
+   * False once a recording has been added or transcribed since: the report
+   * then prints the narration word for word until it is summarized again.
+   */
+  current: boolean;
+}
+
+/** What "Summarize every room" answered: the work runs in the background. */
+export interface InspectionRecordingSummaryResult {
   queued: boolean;
   areas: number;
 }

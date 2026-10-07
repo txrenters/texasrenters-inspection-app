@@ -31,6 +31,7 @@ import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { FindingsReview } from './FindingsReview';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { ReanalyzeControl, ReanalyzeStatus, canReanalyze } from './ReanalyzeControl';
+import { RecordingSummaryCard } from './RecordingSummaryCard';
 import { RecordingTranscript } from './RecordingTranscript';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface, recordingFrame } from './RecordingSurface';
@@ -582,6 +583,18 @@ export function AreaDetailPanel({
                   {additionalRecordings.map(renderRecording)}
                 </div>
               ) : null}
+              {/* What the report prints under the room's photographs. */}
+              <RecordingSummaryCard
+                areaId={areaId}
+                canManage={canManage}
+                inspectionId={inspectionId}
+                onSeek={
+                  primaryRecording
+                    ? (seconds) => seekTo(primaryRecording.id, seconds)
+                    : undefined
+                }
+                summary={bundle.recordingSummary}
+              />
             </>
           ) : (
             <EmptyTab
