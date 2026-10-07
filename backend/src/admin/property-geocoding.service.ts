@@ -20,6 +20,7 @@ import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-
 import { mostCommon } from '../planning/group-template.service';
 import { GOOGLE_GEOCODE_SOURCE, GoogleGeocodingClient } from './google-geocoding.client';
 import { propertyPosition } from './property-position';
+import { leftBenefitPackage, SERVICE_SWITCHES_SELECT } from './property-service-status';
 
 /**
  * Turns property addresses into points on a map.
@@ -469,7 +470,12 @@ export class PropertyGeocodingService {
     const [tenancies, members] = await Promise.all([
       this.prisma.propertywareTenant.findMany({
         where: { organizationId: user.organizationId, isActive: true, propertywareBuildingId: { not: null } },
-        select: { propertywareBuildingId: true, zone: true, tbpEnrollment: true },
+        select: {
+          propertywareBuildingId: true,
+          zone: true,
+          tbpEnrollment: true,
+          building: { select: { serviceStatus: { select: SERVICE_SWITCHES_SELECT } } },
+        },
       }),
       planning
         ? this.prisma.tbpGroupTemplateMember.findMany({
@@ -485,7 +491,9 @@ export class PropertyGeocodingService {
       const building = tenancy.propertywareBuildingId!;
       zonesOf.set(building, [...(zonesOf.get(building) ?? []), zoneNumberOf(tenancy.zone)]);
       // Zone 5 is not part of the package (2026-10-02): drawn as any other property, not as TBP.
-      if (isTbpEnrolled(tenancy.tbpEnrollment) && isTbpZone(tenancy.zone)) enrolled.add(building);
+      // Nor is one the office switched out of the package or out of management (2026-10-08).
+      if (isTbpEnrolled(tenancy.tbpEnrollment) && isTbpZone(tenancy.zone) && !leftBenefitPackage(tenancy.building?.serviceStatus))
+        enrolled.add(building);
     }
     return {
       // The zone most of its tenancies are filed under, as the Group maker reads it.

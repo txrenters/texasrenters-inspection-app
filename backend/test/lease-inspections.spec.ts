@@ -416,6 +416,70 @@ describe('keeping them in step with the leases', () => {
   });
 });
 
+/**
+ * The office (2026-10-08): Propertyware is told late when an owner ends the
+ * management, so the property's page has a switch, and the schedule obeys it.
+ */
+describe('a property whose owner ended the management', () => {
+  const ended = (over: Record<string, unknown> = {}) =>
+    lease({
+      building: { addressLine1: '1 Main St', city: 'Houston', serviceStatus: { managementEndedAt: new Date('2026-09-17T15:00:00Z') } },
+      ...over,
+    });
+  /** The move-out it booked for the day after the lease ends, untouched. */
+  const booked = (inspection: Record<string, unknown> = {}) =>
+    row({ dueOn: date('2026-10-21'), scheduledOn: date('2026-10-21') }, { scheduledAt: date('2026-10-21'), ...inspection });
+
+  it('books no move-out and no move-in there, whatever the lease says', async () => {
+    // Notice given: a move-out on the 21st and a move-in after it, anywhere else.
+    const { service } = build({ leases: [ended({ sourceStatus: 'Active - Notice Given', noticeGivenDate: date('2026-08-20') })] });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([]);
+    expect(resolveInspectionPlan).not.toHaveBeenCalled();
+    expect(insertInspection).not.toHaveBeenCalled();
+  });
+
+  it('calls off the move-out it booked there, says why, and tells the technician', async () => {
+    const { service, tx, events } = build({ leases: [ended()], rows: [booked()] });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([
+      expect.objectContaining({ kind: 'MOVE_OUT', action: 'CALL_OFF', detail: expect.stringContaining('ended Texas Renters’ management') }),
+    ]);
+    expect(tx.inspection.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'inspection-1' },
+      data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: expect.stringContaining('management') }),
+    }));
+    expect(events.publish).toHaveBeenCalledWith('amy', 'inspection-1', 'CANCELLED', expect.any(String));
+    expect(tx.leaseScheduledInspection.update).toHaveBeenCalledWith({
+      where: { id: 'row-1' },
+      data: expect.objectContaining({ outcome: LeaseInspectionOutcome.CALLED_OFF }),
+    });
+  });
+
+  it('leaves one moved by hand for the office to cancel', async () => {
+    const { service, prisma } = build({ leases: [ended()], rows: [booked({ scheduledAt: date('2026-10-23') })] });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([]);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('runs for one property when asked, as turning its switch does', async () => {
+    const { service, prisma } = build({ leases: [] });
+
+    await service.run('org-1', { now: NOW, buildingId: 'building-1' });
+
+    expect(prisma.propertywareLease.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-1', buildingId: 'building-1' }) }),
+    );
+  });
+});
+
 /** The office (2026-09-18): "what we want to automate is the upcoming that has not yet scheduled on the jobber". */
 describe('what the office books itself', () => {
   it('comes first: one booked here gives way when the office books the same move-out after it', async () => {

@@ -81,6 +81,24 @@ describe('lease visits booked in Jobber too', () => {
     });
   });
 
+  it('asks only for the one property’s when the lease run was for one', async () => {
+    const { prisma } = build([]);
+
+    await queueLeaseBookingsInJobber(prisma as never, 'org-1', '2026-10-01', 'building-1');
+
+    expect(prisma.leaseScheduledInspection.findMany.mock.calls[0][0].where.inspection).toMatchObject({ propertywareBuildingId: 'building-1' });
+  });
+
+  it('sends nothing for a property whose owner ended the management, even one moved by hand', async () => {
+    const { prisma, tx } = build([
+      scheduled({ propertywareBuilding: { name: 'Main', addressLine1: '1 Main St', serviceStatus: { managementEndedAt: date('2026-09-30') } } }),
+    ]);
+
+    await expect(queueLeaseBookingsInJobber(prisma as never, 'org-1', '2026-10-01')).resolves.toEqual({ queued: 0, notLinked: 0, alreadyInJobber: 0 });
+    expect(linkedJobberProperty).not.toHaveBeenCalled();
+    expect(tx.jobberOutboundTask.create).not.toHaveBeenCalled();
+  });
+
   it('queues a move-out as the office titles one, with the tenant who is leaving', async () => {
     const { prisma, tx } = build([scheduled()]);
 

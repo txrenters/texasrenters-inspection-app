@@ -69,6 +69,7 @@ import {
 } from './demo-property';
 import { inspectionEvidenceTimes, inspectionSpan } from './inspection-timing';
 import { detailsView, ownerView, privateDetails } from './property-details-view';
+import { SERVICE_STATUS_VIEW_SELECT, serviceStatusView } from './property-service-status';
 import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
@@ -1237,6 +1238,9 @@ export class AdminService {
         geofence: {
           select: { enterRadiusMeters: true, exitRadiusMeters: true, latitude: true, longitude: true },
         },
+        // The office's switches: management ended, benefit package opted out
+        // (2026-10-08). Their page has its own request; this is for the badges.
+        serviceStatus: { select: SERVICE_STATUS_VIEW_SELECT },
         portfolio: { select: { id: true, externalId: true, name: true } },
         units: {
           where: { isActive: true },
@@ -1286,6 +1290,7 @@ export class AdminService {
       geofence,
       details,
       ownerDetails,
+      serviceStatus,
       ...rest
     } = property;
     // The relevant lease for a unit is its active lease; a unit with none reads
@@ -1296,6 +1301,7 @@ export class AdminService {
       category,
       details: detailsView(details),
       owner: ownerView(ownerDetails),
+      serviceStatus: serviceStatusView(serviceStatus),
       /**
        * Always answered, never null.
        *

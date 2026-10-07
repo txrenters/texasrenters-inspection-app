@@ -2,6 +2,7 @@ import type { InspectionType } from '../enums/index.js';
 import type { FindingRejectReason } from './ai-guidance.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
+import type { PropertyServiceStatus } from './property-service.js';
 import type { JobberBookingStatus } from './visit-details-writer.js';
 import type { VisitServicesReport } from './visit-services.js';
 
@@ -238,6 +239,11 @@ export interface AdminProperty {
   details?: PropertyDetailsView | null;
   /** Its owners, from the property-owner report, without their phones. */
   owner?: PropertyOwnerView | null;
+  /**
+   * What the office has said ahead of Propertyware: the owner ended the
+   * management, or the property left the benefit package. Absent from an older API.
+   */
+  serviceStatus?: PropertyServiceStatus;
 }
 
 export interface AdminFloorPlan {

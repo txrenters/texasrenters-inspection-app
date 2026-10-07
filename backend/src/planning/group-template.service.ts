@@ -12,6 +12,7 @@ import {
 } from '@texasrenters/shared';
 
 import { BUILDING_POSITION_SELECT, propertyPosition } from '../admin/property-position';
+import { leftBenefitPackage, SERVICE_SWITCHES_SELECT } from '../admin/property-service-status';
 import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
@@ -235,6 +236,7 @@ export class GroupTemplateService {
             postalCode: true,
             geocodePrecision: true,
             ...BUILDING_POSITION_SELECT,
+            serviceStatus: { select: SERVICE_SWITCHES_SELECT },
           },
         },
       },
@@ -244,8 +246,15 @@ export class GroupTemplateService {
     const byBuilding = new Map<string, { building: NonNullable<(typeof tenancies)[number]['building']>; tenancies: typeof tenancies }>();
     for (const tenancy of tenancies) {
       const building = tenancy.building;
-      // A quarter's tenancies, and no others: zone 5 is not part of the package (2026-10-02).
-      if (!building || !isTbpEnrolled(tenancy.tbpEnrollment) || !isTbpZone(tenancy.zone)) continue;
+      // A quarter's tenancies, and no others: zone 5 is not part of the package
+      // (2026-10-02), and nor is a property the office switched out of it (2026-10-08).
+      if (
+        !building ||
+        !isTbpEnrolled(tenancy.tbpEnrollment) ||
+        !isTbpZone(tenancy.zone) ||
+        leftBenefitPackage(building.serviceStatus)
+      )
+        continue;
       const entry = byBuilding.get(building.id);
       if (entry) entry.tenancies.push(tenancy);
       else byBuilding.set(building.id, { building, tenancies: [tenancy] });

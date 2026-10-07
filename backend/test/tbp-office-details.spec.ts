@@ -465,6 +465,23 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     expect(stopUpsert).not.toHaveBeenCalled();
   });
 
+  /**
+   * The office's switches on the property's page (2026-10-08): Propertyware still
+   * says "Yes" for weeks after the property leaves the package or management.
+   */
+  it('makes no visit at a property switched out of the package, or out of management', async () => {
+    for (const serviceStatus of [
+      { managementEndedAt: null, tbpOptedOutAt: new Date('2026-10-01T15:00:00Z') },
+      { managementEndedAt: new Date('2026-10-01T15:00:00Z'), tbpOptedOutAt: null },
+    ]) {
+      const { service, stopUpsert } = build({}, { building: { serviceStatus } });
+
+      await service.generate('org-1', { year: 2026, quarter: 4 });
+
+      expect(stopUpsert).not.toHaveBeenCalled();
+    }
+  });
+
   /** The office adds the unit to the tenant report (2026-09-18), so nobody has to choose it. */
   it('takes the unit the tenant report names, and writes the title at its door', async () => {
     const { service, stopUpsert } = build({}, { unitName: '1/2' });

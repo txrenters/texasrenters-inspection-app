@@ -32,7 +32,7 @@ function build(permissions: string[]) {
   ]);
   const prisma = {
     propertywareBuilding: {
-      findMany: jest.fn().mockResolvedValue([building('grouped'), building('ungrouped'), building('other'), building('far')]),
+      findMany: jest.fn().mockResolvedValue([building('grouped'), building('ungrouped'), building('other'), building('far'), building('opted')]),
     },
     propertywareTenant: {
       findMany: jest.fn().mockResolvedValue([
@@ -41,6 +41,13 @@ function build(permissions: string[]) {
         { propertywareBuildingId: 'ungrouped', zone: '4', tbpEnrollment: ' yes ' },
         { propertywareBuildingId: 'other', zone: 'Not Set', tbpEnrollment: 'Not Verified' },
         { propertywareBuildingId: 'far', zone: 'Zone 5', tbpEnrollment: 'Yes' },
+        // Propertyware still says yes; the office has switched it out (2026-10-08).
+        {
+          propertywareBuildingId: 'opted',
+          zone: '3',
+          tbpEnrollment: 'Yes',
+          building: { serviceStatus: { managementEndedAt: null, tbpOptedOutAt: new Date('2026-10-01T15:00:00Z') } },
+        },
       ]),
     },
     tbpGroupTemplateMember: { findMany: members },
@@ -79,6 +86,12 @@ describe('a property on the map, for somebody who reads the planning', () => {
     const rows = byId(await build(['properties:read', 'planning:read']).positions());
 
     expect(rows.get('far')).toMatchObject({ zone: '5', tbpEnrolled: false });
+  });
+
+  it('says a property the office switched out of the package is off it, whatever Propertyware says', async () => {
+    const rows = byId(await build(['properties:read', 'planning:read']).positions());
+
+    expect(rows.get('opted')).toMatchObject({ zone: '3', tbpEnrolled: false });
   });
 
   it('reads only the active template', async () => {
