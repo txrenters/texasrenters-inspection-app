@@ -1046,24 +1046,12 @@ export interface PublicInspectionReport {
      */
     checklist: PublicReportChecklistItem[];
     /**
-     * What the inspector said while walking this room, word for word.
-     *
-     * One entry per recording whose transcription finished, the room's
-     * walkthrough first; each line carries the second it was spoken at. The
-     * printed report puts it under the room's photographs, as the maintenance
-     * team's own reports do (2026-10-07), in place of the findings list.
-     * Absent from a report built by an older backend.
-     */
-    narration?: Array<{
-      /** The clip's label, for an extra recording; null for the walkthrough. */
-      label?: string | null;
-      lines: Array<{ start: number; end: number; text: string }>;
-    }>;
-    /**
      * What the room needs, grouped as the office groups it -- "Repairs /
-     * Maintenance", "Painting", "Cleaning" -- printed under the narration.
-     * Present only when the narration above is the room's summary rather than
-     * its word-for-word transcript (2026-10-07); empty groups are left out.
+     * Maintenance", "Painting", "Cleaning" -- from the summary of its
+     * recordings, printed under its photographs. Empty until the room is
+     * summarized, or once a recording arrives after its summary; empty groups
+     * are left out. The recordings' transcript itself is not part of the
+     * report (the maintenance team, 2026-10-07): the console shows it.
      */
     actions?: Array<{ heading: string; items: Array<{ text: string; details: string[] }> }>;
   }>;

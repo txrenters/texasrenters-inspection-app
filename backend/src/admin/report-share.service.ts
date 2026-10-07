@@ -8,7 +8,6 @@ import {
   InspectionAreaCompletionStatus,
   ReportShareKind,
   TranscriptionStatus,
-  VideoRecordingType,
 } from '@prisma/client';
 import {
   checklistKindFor,
@@ -132,7 +131,7 @@ function filtersRoom(
         comment: filter.comment ?? null,
       })),
       // Filters are scored on a form, not narrated on a walkthrough.
-      narration: [] as NonNullable<PublicInspectionReport['rooms'][number]['narration']>,
+      actions: [] as NonNullable<PublicInspectionReport['rooms'][number]['actions']>,
     },
     photos: (photoArea?.photos ?? []).filter((photo) => photoIds.has(photo.id)) as never[],
   };
@@ -140,79 +139,38 @@ function filtersRoom(
 
 /**
  * A room has one walkthrough and, rarely, a few extra clips; more than this on
- * one room is a retake loop, and a report is not the place to print it.
+ * one room is a retake loop.
  */
 const MAX_REPORT_RECORDINGS = 10;
 
 /**
- * A room's narration as the report prints it, from its recordings' stored
- * transcripts. A recording that was transcribed but said nothing is dropped,
- * and the walkthrough carries no label: it is the room's own recording.
- */
-function narrationOf(
-  recordings: ReadonlyArray<{
-    recordingType: VideoRecordingType;
-    label: string | null;
-    transcriptionJob: {
-      segments: ReadonlyArray<{ startSeconds: number; endSeconds: number; text: string }>;
-    } | null;
-  }>,
-): NonNullable<PublicInspectionReport['rooms'][number]['narration']> {
-  return recordings.flatMap((recording) => {
-    const lines = (recording.transcriptionJob?.segments ?? [])
-      .map((segment) => ({
-        start: segment.startSeconds,
-        end: Math.max(segment.startSeconds, segment.endSeconds),
-        text: segment.text.trim(),
-      }))
-      .filter((line) => line.text.length > 0);
-    if (!lines.length) return [];
-    return [
-      {
-        label:
-          recording.recordingType === VideoRecordingType.PRIMARY_AREA
-            ? null
-            : recording.label?.trim() || null,
-        lines,
-      },
-    ];
-  });
-}
-
-/**
- * What a room prints under its photographs.
+ * What a room prints under its photographs: what it needs, under the office's
+ * three headings, from the room's summary (the maintenance team, 2026-10-07).
  *
- * Its summary when there is one and it is about the recordings the room has
- * now: each recording's points at their seconds, then what the room needs under
- * the office's three headings (the maintenance team, 2026-10-07). Otherwise the
- * narration word for word, as before -- a room whose summary is missing, failed
- * or stale still says what was said. The summary's media ids are only compared,
- * never printed.
+ * Only while the summary is about the recordings the room has now; a room not
+ * summarized yet, or with a recording added since, prints nothing there. The
+ * transcript itself is not sent at all -- the report stopped printing it
+ * (2026-10-07), and a public link should not carry words nobody reads, which
+ * can name a tenant or a way in. The recordings' ids are only compared.
  */
-function roomNarration(
-  recordings: ReadonlyArray<Parameters<typeof narrationOf>[0][number] & { id: string }>,
+function roomActions(
+  recordings: ReadonlyArray<{
+    id: string;
+    transcriptionJob: { segments: ReadonlyArray<{ text: string }> } | null;
+  }>,
   stored: unknown,
-): Pick<PublicInspectionReport['rooms'][number], 'narration' | 'actions'> {
-  const verbatim = narrationOf(recordings);
+): NonNullable<PublicInspectionReport['rooms'][number]['actions']> {
   const spoken = recordings
     .filter((recording) =>
       (recording.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),
     )
     .map((recording) => recording.id);
   const read = readStoredSummary(stored, spoken);
-  if (!read?.current) return { narration: verbatim, actions: [] };
-  return {
-    narration: read.summary.recordings
-      .map((recording) => ({
-        label: recording.label,
-        lines: recording.lines.map((line) => ({ start: line.start, end: line.start, text: line.text })),
-      }))
-      .filter((recording) => recording.lines.length > 0),
-    actions: read.summary.actions.map((group) => ({
-      heading: RECORDING_ACTION_HEADING[group.group],
-      items: group.items.map((item) => ({ text: item.text, details: [...item.details] })),
-    })),
-  };
+  if (!read?.current) return [];
+  return read.summary.actions.map((group) => ({
+    heading: RECORDING_ACTION_HEADING[group.group],
+    items: group.items.map((item) => ({ text: item.text, details: [...item.details] })),
+  }));
 }
 
 type ChecklistItemRow = {
@@ -620,29 +578,17 @@ export class ReportShareService {
               },
             },
             /**
-             * The room's recordings, for the narration printed under its
-             * photographs: what the inspector said, word for word, which the
-             * maintenance team's own reports carry in place of a findings
-             * list (2026-10-07). The walkthrough first, then any extra clip,
-             * each in the order it was made. Only a finished transcription is
-             * printed; a pending or failed one is left out rather than shown
-             * half-done on a document a tenant may be handed.
+             * The room's transcribed recordings, only to tell whether its summary is
+             * still about them: their ids, and whether anything was said. Never printed.
              */
             media: {
               where: { transcriptionJob: { status: TranscriptionStatus.COMPLETED } },
-              orderBy: [{ recordingType: 'asc' as const }, { createdAt: 'asc' as const }],
               take: MAX_REPORT_RECORDINGS,
               select: {
-                // For whether the room's summary is about these recordings; never printed.
                 id: true,
-                recordingType: true,
-                label: true,
                 transcriptionJob: {
                   select: {
-                    segments: {
-                      orderBy: [{ startSeconds: 'asc' as const }, { endSeconds: 'asc' as const }],
-                      select: { startSeconds: true, endSeconds: true, text: true },
-                    },
+                    segments: { where: { text: { not: '' } }, take: 5, select: { text: true } },
                   },
                 },
               },
@@ -813,7 +759,7 @@ export class ReportShareService {
                 }
               : {}),
         })),
-        ...roomNarration(area.media ?? [], area.recordingSummary),
+        actions: roomActions(area.media ?? [], area.recordingSummary),
       })),
       findings: inspection.findings.map((finding) => ({
         id: finding.id,

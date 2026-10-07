@@ -65,7 +65,7 @@ describe('the summary for the report', () => {
     expect(onSeek).toHaveBeenCalledWith(58);
   });
 
-  it('says the report prints the narration word for word when there is no summary, or it is stale', () => {
+  it('says when the report lists nothing for the room: no summary yet, or a stale one', () => {
     const { unmount } = render(
       <RecordingSummaryCard areaId="a" canManage inspectionId="i" summary={null} />,
     );

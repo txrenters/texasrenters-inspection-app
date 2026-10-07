@@ -493,3 +493,18 @@ export interface InspectionRecordingSummaryResult {
   queued: boolean;
   areas: number;
 }
+
+/**
+ * Every area's summary on one page: the inspection's "Summaries of all areas"
+ * tab (the maintenance team, 2026-10-07). Areas in walk order.
+ */
+export interface InspectionRecordingSummaries {
+  areas: Array<{
+    inspectionAreaId: string;
+    name: string;
+    floorName: string | null;
+    /** Whether any of its recordings was transcribed with something said. */
+    recorded: boolean;
+    summary: AreaRecordingSummaryView | null;
+  }>;
+}

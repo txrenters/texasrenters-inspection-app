@@ -13,7 +13,14 @@ import { cn } from '@/lib/utils';
  * detail page and only for MOVE_OUT, and the charge report had a route and no
  * entry point at all. A reviewer had to know the URL.
  */
-export type InspectionTabKey = 'overview' | 'comparison' | 'charges';
+export type InspectionTabKey = 'overview' | 'comparison' | 'summaries' | 'charges';
+
+/**
+ * The inspections walked room by room on video, whose recordings are
+ * summarized: a move-in and a move-out. The others record nothing to
+ * summarize, and an always-empty tab would teach reviewers to ignore the row.
+ */
+const SUMMARIZED_TYPES = new Set(['MOVE_IN', 'MOVE_OUT']);
 
 /**
  * The comparison tab is offered only on a move-out.
@@ -42,12 +49,16 @@ export function InspectionTabs({
     ...(inspectionType === 'MOVE_OUT'
       ? [{ key: 'comparison' as const, label: 'Move-in comparison', href: `${base}/comparison` }]
       : []),
+    // Every area's summary on one page (the maintenance team, 2026-10-07).
+    ...(SUMMARIZED_TYPES.has(inspectionType)
+      ? [{ key: 'summaries' as const, label: 'Summaries of all areas', href: `${base}/summaries` }]
+      : []),
     ...(active === 'charges'
       ? [{ key: 'charges' as const, label: 'Charges', href: `${base}/charge-report` }]
       : []),
   ];
-  // A bar holding only the page you are on says nothing: a move-in, an
-  // occupied or an HVAC inspection has just its overview now.
+  // A bar holding only the page you are on says nothing: an occupied or an
+  // HVAC inspection has just its overview now.
   if (tabs.length < 2) return null;
 
   return (

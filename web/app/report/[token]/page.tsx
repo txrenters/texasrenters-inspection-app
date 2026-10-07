@@ -25,11 +25,11 @@ import { ApiError, publicApi } from '@/lib/api';
  * how it is worded comes from the shared `buildReportView`, which the PDF
  * renderer also consumes — see shared/src/report/report-view.ts.
  *
- * Each area prints its condition table, its photographs, and under them the
- * summary of its recordings: each point at the moment it was said, then what
- * the room needs as Repairs / Maintenance, Painting and Cleaning (the
- * maintenance team, 2026-10-07). A room not summarized yet prints its
- * narration word for word. The findings cards and the summary of findings that
+ * Each area prints its condition table, its photographs, and under them what
+ * the room needs as Repairs / Maintenance, Painting and Cleaning, from the
+ * summary of its recordings (the maintenance team, 2026-10-07). The recordings'
+ * transcript is not printed; the console shows it with the summary's
+ * timestamped points. The findings cards and the summary of findings that
  * opened the report are gone at the same team's request.
  */
 
@@ -209,22 +209,12 @@ function Room({ room }: { room: ReportRoomView }) {
         </div>
       ) : null}
 
-      {/* What was said walking the room, under the photographs it describes
-          and in the inspector's own words. One run of text per recording,
-          each utterance opening with its minute and second, as the office's
-          own reports set it out. Nothing is summarised or reworded here. */}
-      {room.narration.length ? (
+      {/* What the room needs, from the summary of its recordings, under the
+          office's own headings. The timestamped points themselves are not
+          printed (the maintenance team, 2026-10-07); the console has them. */}
+      {room.actions.length ? (
         <div className="space-y-2 border-t pt-4">
           <h4 className="text-sm font-semibold">{NARRATION_HEADING}:</h4>
-          {room.narration.map((recording, index) => (
-            <p className="text-sm leading-relaxed" key={index}>
-              {recording.label ? (
-                <span className="font-medium">{recording.label}: </span>
-              ) : null}
-              {recording.text}
-            </p>
-          ))}
-          {/* What the room needs, under the office's own headings. */}
           {room.actions.map((group) => (
             <div className="space-y-1 pt-1" key={group.heading}>
               <h5 className="text-sm font-semibold">{group.heading}</h5>

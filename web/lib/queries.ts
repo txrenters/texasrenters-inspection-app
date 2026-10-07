@@ -64,6 +64,7 @@ import type {
   AreaChecklistEntry,
   AreaChecklistPrefillResult,
   AreaRecordingSummaryView,
+  InspectionRecordingSummaries,
   InspectionRecordingSummaryResult,
   InspectionChecklistPrefillResult,
   AreaEvidenceBundle,
@@ -154,6 +155,12 @@ export const keys = {
   areaEvidenceSummary: (id: string) => ['admin', 'inspection', id, 'area-evidence'] as const,
   areaEvidence: (id: string, areaId: string) =>
     ['admin', 'inspection', id, 'area-evidence', areaId] as const,
+  /**
+   * Every area's summary, under the area-evidence prefix so that whatever
+   * refreshes the areas -- "Summarize every room" among them -- refreshes this.
+   */
+  recordingSummaries: (id: string) =>
+    ['admin', 'inspection', id, 'area-evidence', 'recording-summaries'] as const,
   inspectionAreas: (id: string) => ['admin', 'inspection', id, 'areas'] as const,
   evidenceRequests: (id: string) => ['admin', 'inspection', id, 'evidence-requests'] as const,
   inspectionComparison: (id: string) => ['admin', 'inspection', id, 'comparison'] as const,
@@ -543,9 +550,22 @@ export const useSummarizeAreaRecordings = (inspectionId: string, areaId: string)
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId) });
+      void client.invalidateQueries({ queryKey: keys.recordingSummaries(inspectionId) });
     },
   });
 };
+
+/** Every area's summary, for the "Summaries of all areas" tab. */
+export const useInspectionRecordingSummaries = (inspectionId: string) =>
+  useQuery({
+    queryKey: keys.recordingSummaries(inspectionId),
+    queryFn: ({ signal }) =>
+      api<InspectionRecordingSummaries>(
+        `/api/v1/admin/inspections/${inspectionId}/recording-summaries`,
+        { signal },
+      ),
+    enabled: Boolean(inspectionId),
+  });
 
 /** Summarizes every room in the background; see `useFillInspectionFromNarration`. */
 export const useSummarizeInspectionRecordings = (inspectionId: string) => {
