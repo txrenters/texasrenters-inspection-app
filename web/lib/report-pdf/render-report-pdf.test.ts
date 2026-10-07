@@ -400,8 +400,8 @@ describe('the capture time on a photograph', () => {
   }, 60_000);
 });
 
-describe("the inspector's narration", () => {
-  it('prints it under the photographs, word for word, and prints no findings list', async () => {
+describe('what each room needs, under its photographs', () => {
+  it('prints the groups under the office’s headings, with no transcript and no findings list', async () => {
     mockPhotoFetch();
 
     const pdf = await renderReportPdf(
@@ -410,43 +410,6 @@ describe("the inspector's narration", () => {
         rooms: [
           {
             ...REPORT.rooms[0]!,
-            narration: [
-              {
-                label: null,
-                lines: [
-                  { start: 1, end: 4, text: 'We are now in the kitchen.' },
-                  { start: 65, end: 70, text: 'Countertop has a burn mark by the stove.' },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      { apiOrigin: 'http://x' },
-    );
-
-    const text = (await pageTexts(pdf)).flat().join(' ');
-    expect(text).toContain('Summary based on the recordings:');
-    expect(text).toContain('[0:01] We are now in the kitchen. [1:05] Countertop has a burn mark by the stove.');
-    // The findings' own wording used to print twice -- in a summary of
-    // findings and under the room. Neither is printed any more (2026-10-07).
-    expect(text).not.toContain('Summary of findings');
-    expect(text).not.toContain('A new burn mark beside the stove');
-    expect(text).not.toContain('At a glance');
-    // The one count kept, on the cover: the room this case keeps was completed.
-    expect(text).toContain('1 of 1');
-  }, 60_000);
-
-  it('prints what the room needs under the office’s headings, after the summary', async () => {
-    mockPhotoFetch();
-
-    const pdf = await renderReportPdf(
-      {
-        ...REPORT,
-        rooms: [
-          {
-            ...REPORT.rooms[0]!,
-            narration: [{ label: null, lines: [{ start: 58, end: 58, text: 'Touch-up paint needed on the bathroom door frame.' }] }],
             actions: [
               {
                 heading: 'Repairs / Maintenance',
@@ -462,11 +425,28 @@ describe("the inspector's narration", () => {
 
     const text = (await pageTexts(pdf)).flat().join(' ');
     const at = (needle: string) => text.indexOf(needle);
-    expect(at('[0:58] Touch-up paint needed on the bathroom door frame.')).toBeGreaterThan(-1);
-    expect(at('Repairs / Maintenance')).toBeGreaterThan(at('[0:58]'));
+    expect(at('Summary based on the recordings:')).toBeGreaterThan(-1);
+    expect(at('Repairs / Maintenance')).toBeGreaterThan(at('Summary based on the recordings:'));
     expect(at('Bedroom entry door frame')).toBeGreaterThan(at('Touch-up paint needed on:'));
     expect(at('Cleaning')).toBeGreaterThan(at('Bedroom entry door frame'));
     expect(text).toContain('Clean windows inside and out.');
+    // No timestamped point is printed any more (2026-10-07).
+    expect(text).not.toMatch(/\[\d+:\d{2}\]/);
+    // The findings' own wording used to print twice -- in a summary of
+    // findings and under the room. Neither is printed any more (2026-10-07).
+    expect(text).not.toContain('Summary of findings');
+    expect(text).not.toContain('A new burn mark beside the stove');
+    expect(text).not.toContain('At a glance');
+    // The one count kept, on the cover: the room this case keeps was completed.
+    expect(text).toContain('1 of 1');
+  }, 60_000);
+
+  it('prints no heading for a room with nothing listed', async () => {
+    mockPhotoFetch();
+
+    const pdf = await renderReportPdf(REPORT, { apiOrigin: 'http://x' });
+
+    expect((await pageTexts(pdf)).flat().join(' ')).not.toContain('Summary based on the recordings');
   }, 60_000);
 });
 

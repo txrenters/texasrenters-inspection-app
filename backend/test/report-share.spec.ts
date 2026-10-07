@@ -231,31 +231,23 @@ describe('inspection report shares', () => {
     ]);
     expect(report.property.addressLine1).toBe('1458 Oak Ridge Dr');
     expect(report.rooms).toHaveLength(1);
-    // Only a finished transcription is printed, and nothing of the recording
-    // itself travels: no ids, no playback, no technician.
+    // Only a finished transcription counts, and nothing of the recording
+    // travels: no ids, no playback, no technician -- and no transcript.
     const mediaQuery = findingsQuery.select as unknown as {
       areas: { select: { media: { where: unknown; select: Record<string, unknown> } } };
     };
     expect(mediaQuery.areas.select.media.where).toEqual({
       transcriptionJob: { status: 'COMPLETED' },
     });
-    // `id` only to tell whether the room's summary is about these recordings.
+    // Only to tell whether the room's summary is about these recordings.
     expect(Object.keys(mediaQuery.areas.select.media.select).sort()).toEqual([
       'id',
-      'label',
-      'recordingType',
       'transcriptionJob',
     ]);
-    expect(report.rooms[0].narration).toEqual([
-      {
-        label: null,
-        lines: [
-          { start: 1, end: 4, text: 'We are in the kitchen.' },
-          { start: 9, end: 9, text: 'Burn mark by the stove.' },
-        ],
-      },
-      { label: 'Under the sink', lines: [{ start: 0, end: 2, text: 'Leak.' }] },
-    ]);
+    // The transcript left the report (the maintenance team, 2026-10-07).
+    expect(report.rooms[0]).not.toHaveProperty('narration');
+    expect(JSON.stringify(report)).not.toContain('We are in the kitchen');
+    expect(report.rooms[0].actions).toEqual([]);
     expect(report.findings).toHaveLength(1);
     // Findings resolve to the per-inspection room so the view model can group them.
     expect(report.findings[0].roomId).toBe('area-1');
@@ -294,7 +286,7 @@ describe('inspection report shares', () => {
     expect(JSON.stringify(report)).not.toMatch(/internalNotes|technician|organizationId/);
   });
 
-  it('prints a room’s summary and what it needs while the summary is about its recordings', async () => {
+  it('prints what a room needs while its summary is about its recordings, and never the transcript', async () => {
     const recording = (id: string) => ({
       id,
       recordingType: 'PRIMARY_AREA',
@@ -350,18 +342,16 @@ describe('inspection report shares', () => {
     };
 
     const current = await reportWith([recording('media-1')]);
-    expect(current.rooms[0].narration).toEqual([
-      { label: null, lines: [{ start: 0, end: 0, text: 'Door needs touch-up paint.' }] },
-    ]);
     expect(current.rooms[0].actions).toEqual([
       { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint on the door.', details: [] }] },
     ]);
-    // The recordings' ids decide, and are never printed.
+    // The recordings' ids decide, and are never printed; nor is the
+    // transcript, or the summary's timestamped points.
     expect(JSON.stringify(current)).not.toContain('media-1');
+    expect(JSON.stringify(current)).not.toContain('touch-up paint.');
 
-    // A recording added after the summary: the narration word for word, nothing needed listed.
+    // A recording added after the summary: nothing listed until it is summarized again.
     const stale = await reportWith([recording('media-1'), recording('media-2')]);
-    expect(stale.rooms[0].narration?.[0].lines[0].text).toBe('Um, door needs, uh, touch-up paint.');
     expect(stale.rooms[0].actions).toEqual([]);
   });
 

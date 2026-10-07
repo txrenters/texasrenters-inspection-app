@@ -26,13 +26,11 @@ describe('inspection tabs', () => {
   });
 
   /**
-   * A move-in *is* the baseline, so there is nothing to compare it against --
-   * and with Charges hidden, every other inspection has only its overview,
-   * which a bar of one tab does not need to say.
+   * With Charges hidden, an inspection that records no rooms on video has only
+   * its overview, which a bar of one tab does not need to say.
    */
   it('shows no bar at all where the overview is the only section', () => {
     for (const type of [
-      'MOVE_IN',
       'OCCUPIED',
       'BACK_TO_MARKET',
       'HVAC',
@@ -47,6 +45,27 @@ describe('inspection tabs', () => {
       expect(screen.queryByRole('navigation', { name: 'Inspection sections' })).toBeNull();
       unmount();
     }
+  });
+
+  // Every area's summary on one page (the maintenance team, 2026-10-07).
+  it('offers the summaries of all areas on a move-in and a move-out', () => {
+    for (const type of ['MOVE_IN', 'MOVE_OUT']) {
+      const { unmount } = render(
+        <InspectionTabs active="overview" inspectionId={ID} inspectionType={type} />,
+      );
+      expect(screen.getByRole('link', { name: 'Summaries of all areas' })).toHaveAttribute(
+        'href',
+        `/inspections/${ID}/summaries`,
+      );
+      unmount();
+    }
+    // A move-in is the baseline: summaries, but no comparison.
+    render(<InspectionTabs active="summaries" inspectionId={ID} inspectionType="MOVE_IN" />);
+    expect(screen.queryByRole('link', { name: 'Move-in comparison' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Summaries of all areas' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
   });
 
   it('marks the open section for assistive tech, not colour alone', () => {

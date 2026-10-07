@@ -300,3 +300,49 @@ describe('summarizing one room', () => {
     });
   });
 });
+
+describe('every area’s summary, for the summaries tab', () => {
+  it('lists areas in walk order, marking a summary stale as the report would', async () => {
+    const stored = (mediaIds: string[]) => ({
+      version: 1,
+      mediaIds,
+      recordings: [{ mediaId: mediaIds[0], label: null, lines: [{ start: 0, text: 'Entering.' }] }],
+      actions: [],
+    });
+    const spoken = (id: string) => ({ id, transcriptionJob: { segments: [{ text: 'Door needs paint.' }] } });
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', inspectionType: 'MOVE_OUT', finalizedAt: null }),
+      },
+      inspectionArea: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'a1', recordingSummary: stored(['m1']), recordingSummaryAt: new Date('2026-10-07T15:00:00Z'), propertyArea: { name: 'Bedroom 1', floor: { name: 'Upstairs' } }, media: [spoken('m1')] },
+          { id: 'a2', recordingSummary: stored(['m2']), recordingSummaryAt: new Date('2026-10-07T15:00:00Z'), propertyArea: { name: 'Kitchen', floor: null }, media: [spoken('m2'), spoken('m3')] },
+          { id: 'a3', recordingSummary: null, recordingSummaryAt: null, propertyArea: { name: 'Garage', floor: null }, media: [] },
+        ]),
+      },
+    };
+    const service = new RecordingSummaryService(prisma as never, {} as never);
+
+    const { areas } = await service.listForInspection('org-1', 'inspection-1');
+
+    expect(prisma.inspectionArea.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { propertyArea: { inspectionOrder: 'asc' } } }),
+    );
+    expect(areas.map((area) => [area.name, area.recorded, area.summary?.current ?? null])).toEqual([
+      ['Bedroom 1', true, true],
+      ['Kitchen', true, false],
+      ['Garage', false, null],
+    ]);
+    expect(areas[0]).toMatchObject({ floorName: 'Upstairs', summary: { generatedAt: '2026-10-07T15:00:00.000Z' } });
+  });
+
+  it('refuses an inspection of another organization as not found', async () => {
+    const prisma = { inspection: { findFirst: jest.fn().mockResolvedValue(null) } };
+    const service = new RecordingSummaryService(prisma as never, {} as never);
+
+    await expect(service.listForInspection('org-2', 'inspection-1')).rejects.toMatchObject({
+      code: 'INSPECTION_NOT_FOUND',
+    });
+  });
+});

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { TranscriptionStatus, VideoRecordingType } from '@prisma/client';
-import type { AreaRecordingSummaryView } from '@texasrenters/shared';
+import type { AreaRecordingSummaryView, InspectionRecordingSummaries } from '@texasrenters/shared';
 
 import {
   AiProviderSettingsService,
@@ -119,6 +119,64 @@ export class RecordingSummaryService {
       inspection.finalizedAt,
     );
     return view;
+  }
+
+  /**
+   * Every area's summary, in walk order, for the "Summaries of all areas" tab.
+   * A summary is marked stale exactly as the report judges it: a recording
+   * transcribed since it was written.
+   */
+  async listForInspection(
+    organizationId: string,
+    inspectionId: string,
+  ): Promise<InspectionRecordingSummaries> {
+    await this.inspection(organizationId, inspectionId);
+    const areas = await this.prisma.inspectionArea.findMany({
+      where: { inspectionId },
+      orderBy: { propertyArea: { inspectionOrder: 'asc' } },
+      take: 100,
+      select: {
+        id: true,
+        recordingSummary: true,
+        recordingSummaryAt: true,
+        propertyArea: { select: { name: true, floor: { select: { name: true } } } },
+        media: {
+          where: { transcriptionJob: { status: TranscriptionStatus.COMPLETED } },
+          select: {
+            id: true,
+            transcriptionJob: {
+              select: { segments: { where: { text: { not: '' } }, take: 5, select: { text: true } } },
+            },
+          },
+        },
+      },
+    });
+    return {
+      areas: areas.map((area) => {
+        const spoken = area.media
+          .filter((media) =>
+            (media.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),
+          )
+          .map((media) => media.id);
+        const read = area.recordingSummaryAt
+          ? readStoredSummary(area.recordingSummary, spoken)
+          : null;
+        return {
+          inspectionAreaId: area.id,
+          name: area.propertyArea.name,
+          floorName: area.propertyArea.floor?.name ?? null,
+          recorded: spoken.length > 0,
+          summary:
+            read && area.recordingSummaryAt
+              ? {
+                  ...read.summary,
+                  generatedAt: area.recordingSummaryAt.toISOString(),
+                  current: read.current,
+                }
+              : null,
+        };
+      }),
+    };
   }
 
   private async inspection(organizationId: string, inspectionId: string) {

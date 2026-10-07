@@ -120,13 +120,9 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
 
-  // What was said walking the room, under its photographs: the office's own
-  // reports set it as one run of text with the minute and second of each
-  // utterance in brackets, and this prints it the same way.
+  // What the room needs, under its photographs (2026-10-07).
   narration: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.border },
   narrationHeading: { fontSize: 9.5, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
-  narrationText: { fontSize: 8.5, lineHeight: 1.5, marginBottom: 4 },
-  narrationLabel: { fontFamily: 'Helvetica-Bold' },
   actionHeading: { fontSize: 9, fontFamily: 'Helvetica-Bold', marginTop: 4, marginBottom: 2 },
   actionItem: { flexDirection: 'row', fontSize: 8.5, marginBottom: 1.5 },
   actionMark: { width: 10 },
@@ -303,7 +299,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
     // rather than leaving most of a page blank.
     <View
       style={styles.roomCard}
-      wrap={room.checklist.length + photos.length + room.narration.length > 4}
+      wrap={room.checklist.length + photos.length + room.actions.length > 4}
     >
       <View style={styles.roomHeader}>
         <View>
@@ -327,23 +323,14 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
             ))}
           </View>
         ) : null}
-        {/* The inspector's words, under the photographs they describe. The
-            findings cards that used to print here are gone (2026-10-07); the
-            narration is the recording itself, not a reading of it. Wrappable:
-            a long walkthrough has to be allowed across a page break rather
-            than clipped. */}
-        {room.narration.length ? (
+        {/* What the room needs, from the summary of its recordings. The
+            timestamped points are not printed (the maintenance team,
+            2026-10-07). Wrappable: a long list has to be allowed across a
+            page break rather than clipped. */}
+        {room.actions.length ? (
           <View style={styles.narration}>
             <Text style={styles.narrationHeading}>{NARRATION_HEADING}:</Text>
-            {room.narration.map((recording, index) => (
-              <Text key={index} style={styles.narrationText}>
-                {recording.label ? (
-                  <Text style={styles.narrationLabel}>{recording.label}: </Text>
-                ) : null}
-                {recording.text}
-              </Text>
-            ))}
-            {/* What the room needs, under the office's headings. A bullet
+            {/* Under the office's headings. A bullet
                 and an en dash: both are in the PDF's standard font, where a
                 hollow circle is not. */}
             {room.actions.map((group) => (
@@ -367,7 +354,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
             ))}
           </View>
         ) : null}
-        {!room.checklist.length && !photos.length && !room.narration.length ? (
+        {!room.checklist.length && !photos.length && !room.actions.length ? (
           <Text style={styles.emptyRoom}>
             {room.skipReason
               ? `Not inspected — ${room.skipReason}`

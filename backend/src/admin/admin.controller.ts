@@ -911,6 +911,15 @@ export class AdminController {
    * the report prints from. PUT, not PATCH: the body is the item's complete
    * assessment, so clearing a control clears it on the server.
    */
+  /** Every area's summary on one page: the "Summaries of all areas" tab. */
+  @Get('inspections/:inspectionId/recording-summaries')
+  @RequirePermissions('inspections:read')
+  inspectionRecordingSummaries(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+  ) {
+    return this.summaries().listForInspection(request.user.organizationId, inspectionId);
+  }
   /**
    * Summarize every room's recordings for the report, in the background.
    * `inspections:manage`: it rewrites what the report prints under each room.

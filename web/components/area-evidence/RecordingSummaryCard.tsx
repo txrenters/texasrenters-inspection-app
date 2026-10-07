@@ -18,13 +18,76 @@ import {
 import { cn } from '@/lib/utils';
 
 /**
- * What the shared report prints under this room's photographs (2026-10-07):
- * each point of the recordings at the moment it was said, then what the room
- * needs as Repairs / Maintenance, Painting and Cleaning. Shown here so the
- * office reads it before an owner or tenant does, and can write it again.
+ * A summary's points at their moments, then what the room needs under the
+ * office's headings. Shared by the Recording tab's card and the "Summaries of
+ * all areas" page, so the two cannot show a summary differently.
+ */
+export function RecordingSummaryBody({
+  onSeek,
+  summary,
+}: {
+  /** Plays the room's walkthrough from a point's moment, when a player is mounted. */
+  onSeek?: (seconds: number) => void;
+  summary: AreaRecordingSummaryView;
+}) {
+  return (
+    <div className={cn('space-y-3 text-sm', !summary.current && 'opacity-60')}>
+      {summary.recordings.map((recording) => (
+        <p className="leading-relaxed" key={recording.mediaId}>
+          {recording.label ? <span className="font-medium">{recording.label}: </span> : null}
+          {recording.lines.map((line, index) => (
+            <span key={index}>
+              {index ? ' ' : ''}
+              {onSeek && !recording.label ? (
+                <button
+                  className="text-muted-foreground hover:text-foreground tabular-nums underline underline-offset-2"
+                  onClick={() => onSeek(line.start)}
+                  type="button"
+                >
+                  [{formatSeconds(line.start)}]
+                </button>
+              ) : (
+                <span className="text-muted-foreground tabular-nums">
+                  [{formatSeconds(line.start)}]
+                </span>
+              )}{' '}
+              {line.text}
+            </span>
+          ))}
+        </p>
+      ))}
+      {summary.actions.map((group) => (
+        <div className="space-y-1" key={group.group}>
+          <p className="font-semibold">{RECORDING_ACTION_HEADING[group.group]}</p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {group.items.map((item, index) => (
+              <li key={index}>
+                {item.text}
+                {item.details.length ? (
+                  <ul className="list-[circle] pl-5">
+                    {item.details.map((detail, detailIndex) => (
+                      <li key={detailIndex}>{detail}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The summary of this room's recordings (2026-10-07): each point at the moment
+ * it was said, then what the room needs as Repairs / Maintenance, Painting and
+ * Cleaning. The shared report prints only that last part, under the room's
+ * photographs; the timestamped points are for the office, here and on the
+ * "Summaries of all areas" tab.
  *
  * Until a room is summarized -- or once a recording arrives after its summary
- * -- the report prints the narration word for word instead, and this says so.
+ * -- the report lists nothing under its photographs, and this says so.
  */
 export function RecordingSummaryCard({
   areaId,
@@ -61,59 +124,13 @@ export function RecordingSummaryCard({
         <CardDescription>
           {summary
             ? summary.current
-              ? `Written by AI from the recordings ${formatDateTime(summary.generatedAt)}. The report prints this under the room’s photographs.`
-              : 'A recording arrived after this summary was written, so the report prints the narration word for word until it is summarized again.'
-            : 'Not summarized yet. The report prints the narration word for word.'}
+              ? `Written by AI from the recordings ${formatDateTime(summary.generatedAt)}. The report prints the repairs, painting and cleaning under the room’s photographs.`
+              : 'A recording arrived after this summary was written, so the report lists nothing under the room’s photographs until it is summarized again.'
+            : 'Not summarized yet. The report lists nothing under the room’s photographs until it is.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {summary ? (
-          <div className={cn('space-y-3 text-sm', !summary.current && 'opacity-60')}>
-            {summary.recordings.map((recording) => (
-              <p className="leading-relaxed" key={recording.mediaId}>
-                {recording.label ? <span className="font-medium">{recording.label}: </span> : null}
-                {recording.lines.map((line, index) => (
-                  <span key={index}>
-                    {index ? ' ' : ''}
-                    {onSeek && !recording.label ? (
-                      <button
-                        className="text-muted-foreground hover:text-foreground tabular-nums underline underline-offset-2"
-                        onClick={() => onSeek(line.start)}
-                        type="button"
-                      >
-                        [{formatSeconds(line.start)}]
-                      </button>
-                    ) : (
-                      <span className="text-muted-foreground tabular-nums">
-                        [{formatSeconds(line.start)}]
-                      </span>
-                    )}{' '}
-                    {line.text}
-                  </span>
-                ))}
-              </p>
-            ))}
-            {summary.actions.map((group) => (
-              <div className="space-y-1" key={group.group}>
-                <p className="font-semibold">{RECORDING_ACTION_HEADING[group.group]}</p>
-                <ul className="list-disc space-y-0.5 pl-5">
-                  {group.items.map((item, index) => (
-                    <li key={index}>
-                      {item.text}
-                      {item.details.length ? (
-                        <ul className="list-[circle] pl-5">
-                          {item.details.map((detail, detailIndex) => (
-                            <li key={detailIndex}>{detail}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        {summary ? <RecordingSummaryBody onSeek={onSeek} summary={summary} /> : null}
 
         {canManage ? (
           <div className="space-y-2">

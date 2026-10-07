@@ -184,25 +184,16 @@ export interface ReportChecklistRowView {
   comment: string;
 }
 
-/**
- * What the inspector said in one recording of a room, as the report prints it:
- * one run of text, each utterance opening with the minute and second it was
- * spoken at -- "[0:05] Dining room has part pantry. [0:10] Need to ..." -- the
- * way the maintenance team's own reports set it out (2026-10-07).
- */
-export interface ReportNarrationView {
-  /** The clip's label, for an extra recording; null for the room's walkthrough. */
-  label: string | null;
-  text: string;
-}
-
 /** One heading of what a room needs, and its bullets; a bullet may list its places beneath it. */
 export interface ReportActionGroupView {
   heading: string;
   items: Array<{ text: string; details: string[] }>;
 }
 
-/** The heading over a room's narration, the office's own wording. */
+/**
+ * The heading over what a room needs, the office's own wording. The
+ * timestamped points it once headed stay in the console (2026-10-07).
+ */
 export const NARRATION_HEADING = 'Summary based on the recordings';
 
 export interface ReportRoomView {
@@ -220,35 +211,18 @@ export interface ReportRoomView {
    * The office's confirmed findings for the room. Kept on the view for the
    * comparison report and the counts; the inspection report itself no longer
    * prints them (the maintenance team, 2026-10-07: too much -- the table says
-   * what failed, the comments say why, and the narration says it verbatim).
+   * what failed, the comments say why, and the summary says what to do).
    */
   findings: ReportFindingView[];
-  /** What was said walking the room, under its photographs. Empty when nothing was transcribed. */
-  narration: ReportNarrationView[];
   /**
-   * What the room needs, under the office's headings -- "Repairs /
-   * Maintenance", "Painting", "Cleaning" -- printed after the narration. Empty
-   * when the narration is the word-for-word transcript rather than a summary.
+   * What the room needs, from the summary of its recordings, under the
+   * office's headings -- "Repairs / Maintenance", "Painting", "Cleaning" --
+   * printed under its photographs. The recordings' transcript is not printed
+   * (the maintenance team, 2026-10-07); the console shows it.
    */
   actions: ReportActionGroupView[];
-  /** False when the room has no checklist, photos, findings or narration — render compactly. */
+  /** False when the room has no checklist, photos, findings or actions — render compactly. */
   hasEvidence: boolean;
-}
-
-/** "0:05", "12:40" -- a second in the recording as the report prints it. */
-export function formatNarrationTime(seconds: number) {
-  const whole = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(whole / 60);
-  const rest = whole % 60;
-  return `${minutes}:${rest < 10 ? '0' : ''}${rest}`;
-}
-
-/** One recording's lines as one run of text; see `ReportNarrationView`. */
-export function narrationText(lines: ReadonlyArray<{ start: number; text: string }>) {
-  return lines
-    .map((line) => `[${formatNarrationTime(line.start)}] ${line.text.trim()}`)
-    .filter((entry) => entry.length > '[0:00] '.length)
-    .join(' ');
 }
 
 /** Tri-state to printed cell. Null and undefined both mean "not assessed". */
@@ -423,17 +397,16 @@ export interface ReportView {
 
 /**
  * What the report is, said truthfully: the checklist comments are drawn from
- * the recording whether or not anyone has confirmed them yet, the summary
- * under each room's photographs is drawn from the recording with its moments
- * (word for word until it has been summarized), and a row the inspector left
- * unscored may have been read from that recording by the narration pre-fill
- * (2026-10-07).
+ * the recording whether or not anyone has confirmed them yet, what each room
+ * needs is drawn from a summary of its recordings, and a row the inspector
+ * left unscored may have been read from that recording by the narration
+ * pre-fill (2026-10-07).
  */
 const DISCLAIMER =
   'The condition table is as the inspector scored it; rows left unscored on site are read ' +
   "from the inspector's own words in the walkthrough recording. The comments beside the checklist are " +
-  "drawn automatically from the inspector's walkthrough recording, and the summary under each " +
-  "area's photographs is drawn from that recording, each point at the moment it was said. " +
+  "drawn automatically from the inspector's walkthrough recording, and the repairs, painting " +
+  "and cleaning listed under each area's photographs are drawn from a summary of that recording. " +
   'This report is informational: it does ' +
   'not by itself authorize charges or determine responsibility for any condition described.';
 
@@ -574,14 +547,19 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
           .join(' '),
       };
     });
-    // Defaulted like the checklist: a report from an older backend carries no
-    // narration, and a recording that said nothing prints nothing.
-    const narration: ReportNarrationView[] = (room.narration ?? [])
-      .map((recording) => ({
-        label: recording.label?.trim() || null,
-        text: narrationText(recording.lines),
+    // Defaulted: a room not summarized, and a report from an older backend,
+    // carry none, and an empty group prints nothing.
+    const actions: ReportActionGroupView[] = (room.actions ?? [])
+      .map((group) => ({
+        heading: group.heading,
+        items: group.items
+          .map((item) => ({
+            text: item.text.trim(),
+            details: (item.details ?? []).map((detail) => detail.trim()).filter(Boolean),
+          }))
+          .filter((item) => item.text.length > 0),
       }))
-      .filter((recording) => recording.text.length > 0);
+      .filter((group) => group.heading.trim() && group.items.length > 0);
     return {
       id: room.id,
       name: room.name,
@@ -592,20 +570,9 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       checklist,
       photos,
       findings: roomFindings,
-      narration,
-      actions: (room.actions ?? [])
-        .map((group) => ({
-          heading: group.heading,
-          items: group.items
-            .map((item) => ({
-              text: item.text.trim(),
-              details: (item.details ?? []).map((detail) => detail.trim()).filter(Boolean),
-            }))
-            .filter((item) => item.text.length > 0),
-        }))
-        .filter((group) => group.heading.trim() && group.items.length > 0),
+      actions,
       hasEvidence:
-        checklist.length > 0 || photos.length > 0 || roomFindings.length > 0 || narration.length > 0,
+        checklist.length > 0 || photos.length > 0 || roomFindings.length > 0 || actions.length > 0,
     };
   });
 
