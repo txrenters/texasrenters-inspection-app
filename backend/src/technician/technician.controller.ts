@@ -49,6 +49,7 @@ import {
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
+  TechnicianJobDaysQueryDto,
   TechnicianMediaUploadDto,
   TechnicianNoteDto,
   TechnicianPhotoUploadDto,
@@ -298,6 +299,13 @@ export class TechnicianController {
     @Query() query: TechnicianInspectionListQueryDto,
   ) {
     return this.service.inspections(request.user, query);
+  }
+  // Above `inspections/:inspectionId`, which would otherwise take "days" for an id.
+  @Get('inspections/days') jobDays(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: TechnicianJobDaysQueryDto,
+  ) {
+    return this.service.jobDays(request.user, query);
   }
   @Get('inspections/:inspectionId') inspection(
     @Req() request: AuthenticatedRequest,
