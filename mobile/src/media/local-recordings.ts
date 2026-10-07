@@ -5,7 +5,8 @@ import type { LocalMedia, VideoRecordingType } from '../domain/models';
 import type { GuidedCaptureSummary } from '../capture/guided-capture';
 
 const RECORDINGS_FOLDER = 'inspection-recordings';
-const FALLBACK_MEGABYTES_PER_SECOND = 0.66;
+/** 4 Mbps of video plus the sound, when the file's own size is unknown. */
+const FALLBACK_MEGABYTES_PER_SECOND = 0.52;
 
 type RecordingDraftInput = {
   ownerUserId?: string;
@@ -101,6 +102,25 @@ export function deleteDraftRecording(uri: string) {
   if (Platform.OS === 'web' || !isManagedRecording(uri)) return;
   const file = new File(uri);
   if (file.exists) file.delete();
+}
+
+/**
+ * Frees a recording the server now holds (the office, 2026-10-06).
+ *
+ * Every walkthrough used to stay on the phone for good -- "keep the durable
+ * local file after server confirmation" -- with only Settings' Clear Local Cache
+ * to remove it. At tens of megabytes a room, a week of move-outs filled a phone,
+ * and a full phone is one that cannot record. Called once the server reports
+ * the video arrived (Cloudflare's encode done), never before: until then this
+ * file is the only copy. Never throws -- a file that will not delete is a
+ * nuisance, not a failure of the upload that just succeeded.
+ */
+export function releaseUploadedRecording(uri: string) {
+  try {
+    deleteDraftRecording(uri);
+  } catch {
+    // Left for Clear Local Cache.
+  }
 }
 
 export function clearLocalRecordings() {

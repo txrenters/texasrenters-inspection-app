@@ -85,11 +85,26 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       if (!areNotificationsEnabled()) void unregisterRemotePushDevice();
       socket?.disconnect();
       socket = io(`${baseUrl}/technician-events`, {
-        auth: { accessToken: session.accessToken },
+        /**
+         * Read on every connection, so a reconnect carries the token as it is
+         * now. A token captured once meant tearing the socket down and building
+         * it again every time the session renewed -- every twenty-odd minutes --
+         * and each rebuild refreshed the job lists.
+         */
+        auth: (send) => {
+          void getSession()
+            .then((current) => send({ accessToken: current?.accessToken }))
+            .catch(() => send({}));
+        },
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 1_000,
-        reconnectionDelayMax: 10_000,
+        /**
+         * A minute at most between tries. Ten seconds, forever, with no signal
+         * in a basement or on a rural road, kept the radio waking for a
+         * connection that could not happen (2026-10-06).
+         */
+        reconnectionDelayMax: 60_000,
       });
       socket.on('technician:ready', refreshAssignments);
       socket.on('inspection:changed', (event: InspectionChangedEvent) => {
@@ -111,13 +126,27 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       void connect().catch(() => undefined);
     };
 
+    /**
+     * Connected while the app is on screen, and only then.
+     *
+     * An iPhone keeps this app running in a pocket for its location task, and
+     * the socket ran with it: a ping every 25 seconds, and reconnections in
+     * every dead zone, all day, for events nobody could see. Away from the
+     * screen a change reaches the technician as a push; back on it, the lists
+     * are refreshed and the socket resumes.
+     */
     const appState = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
+      if (state !== 'active') {
+        socket?.disconnect();
+        return;
+      }
       refreshAssignments();
-      if (!socket?.connected) connectSafely();
+      if (socket) {
+        if (!socket.connected) socket.connect();
+      } else connectSafely();
     });
-    // The socket authenticates with a token captured at connect, so it has to
-    // be rebuilt when the session changes and torn down when it goes.
+    // Built once per signed-in session -- the token is read on each connection
+    // (see `auth` above) -- and torn down when the session goes.
     /**
      * The Settings toggle, followed while the app runs.
      *
@@ -137,11 +166,13 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       });
     });
     const unsubscribeSession = onSessionChange((session) => {
-      if (session) connectSafely();
-      else {
+      if (!session) {
         socket?.disconnect();
         socket = undefined;
+        return;
       }
+      // A renewed session needs no new socket: the next connection reads it.
+      if (!socket && AppState.currentState === 'active') connectSafely();
     });
     void loadNotifications()
       .then((Notifications) => {
@@ -153,7 +184,9 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
         });
       })
       .catch(() => undefined);
-    connectSafely();
+    // Not when iOS started the app in the background for its location task:
+    // the socket waits for the screen, like every reconnection.
+    if (AppState.currentState !== 'background') connectSafely();
 
     return () => {
       disposed = true;

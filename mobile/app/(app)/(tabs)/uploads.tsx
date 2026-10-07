@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { useMemo } from 'react';
 import {
   AlertTriangleIcon,
+  BatteryLowIcon,
   CheckCircle2Icon,
   ClockIcon,
   HardDriveIcon,
@@ -31,10 +32,12 @@ import { progressBarWidth, progressPercent } from '@/src/utils/upload-progress';
 import { describeUpload } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
-import { ScreenHeader } from '@/src/components/ui';
+import { Button, ScreenHeader } from '@/src/components/ui';
+import { sendVideosNow, useVideoGate } from '@/src/media/video-hold';
 
 registerIcons(
   AlertTriangleIcon,
+  BatteryLowIcon,
   CheckCircle2Icon,
   ClockIcon,
   HardDriveIcon,
@@ -258,6 +261,8 @@ export default function UploadsScreen() {
     wifiOnlyUploads,
     connectivity: { isOnline, isMetered, type: '' },
   });
+  // The same hold the queue obeys before each video; see `video-hold`.
+  const videoHold = useVideoGate();
   // Live transfer progress, overlaid on the cached list: without this the bar
   // never moves during an upload. See useLiveUploadProgress.
   const items = useLiveUploadProgress(uploads.data);
@@ -374,6 +379,31 @@ export default function UploadsScreen() {
                 </Pressable>
               )}
             </View>
+
+            {/* Videos held for Wi-Fi or a charger in Low Power Mode. Said here,
+                beside the count it holds back, with the one tap that sends them
+                anyway -- a move-out cannot be submitted until they arrive. */}
+            {gate.allowed && !videoHold.allowed && pendingCount > 0 ? (
+              <View
+                accessibilityRole="alert"
+                className="mx-5 mt-3 gap-3 rounded-2xl border border-chart-4/25 bg-chart-4/10 p-4"
+              >
+                <View className="flex-row items-center gap-3">
+                  <View className="h-10 w-10 items-center justify-center rounded-full bg-chart-4/15">
+                    <BatteryLowIcon size={18} className="text-chart-4" />
+                  </View>
+                  <View className="min-w-0 flex-1">
+                    <Text className="text-sm font-semibold text-foreground">
+                      {pendingCount} video{pendingCount === 1 ? '' : 's'} waiting for Wi-Fi or a charger
+                    </Text>
+                    <Text className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                      {videoHold.reason}
+                    </Text>
+                  </View>
+                </View>
+                <Button label="Send now over mobile data" onPress={sendVideosNow} variant="secondary" />
+              </View>
+            ) : null}
 
             <View className="mb-3 mt-5 flex-row items-center justify-between px-5">
               <Text className="text-lg font-semibold text-foreground">Upload Queue</Text>

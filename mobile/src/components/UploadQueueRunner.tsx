@@ -3,7 +3,10 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { queryKeys } from '../features/queries';
+import { followPowerState } from '../lib/power-state';
 import { isCaptureActive, subscribeToCaptureActivity } from '../media/capture-activity';
+import { sweepReleasedRecordings } from '../media/recording-cleanup';
+import { subscribeToVideoGate, videoGate } from '../media/video-hold';
 import { snapshotsAwaitingUpload, uploadSnapshotNow } from '../media/snapshot-upload';
 import { useDemoStore } from '../stores/demo.store';
 import { verifyQueries } from '../features/state-consistency';
@@ -141,12 +144,28 @@ export function UploadQueueRunner() {
     const unsubscribeCapture = subscribeToCaptureActivity((recording) => {
       if (!recording) void flush();
     });
+    // And the moment a held video may go: a charger, Wi-Fi, or "Send now".
+    const unsubscribeVideoGate = subscribeToVideoGate(() => {
+      if (videoGate().allowed) void flush();
+    });
     return () => {
       clearInterval(timer);
       subscription.remove();
       unsubscribeCapture();
+      unsubscribeVideoGate();
     };
   }, [flush]);
+
+  // Low Power Mode and the charger, as the phone announces them; read by the
+  // video hold here and by the location task.
+  useEffect(() => followPowerState(), []);
+
+  // Recordings already handed to the server, from before they were deleted on
+  // hand-over; see `recording-cleanup`. Once a launch, after the store loads.
+  const hydrated = useDemoStore((state) => state.hasHydrated);
+  useEffect(() => {
+    if (hydrated) sweepReleasedRecordings();
+  }, [hydrated]);
 
   return null;
 }

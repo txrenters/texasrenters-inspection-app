@@ -1,12 +1,20 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { haversineMeters, normaliseMotion } from '@texasrenters/shared';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
-import { currentBatteryPercent } from './battery';
+import { readPowerState } from '../lib/power-state';
+import { cachedBatteryPercent, currentBatteryPercent } from './battery';
 import { sendRecordedFixes } from './location-sender';
 import { appendLocationFixes, readLastFixAt, readLastKeptFix, rememberKeptFix } from './location-storage';
 import type { QueuedFix } from './location-queue';
+import {
+  advanceMotion,
+  profileFor,
+  STILL_UNKNOWN,
+  type Motion,
+  type TrackingProfile,
+} from './tracking-profile';
 
 /**
  * Recording where a technician is, the whole time they are signed in.
@@ -161,6 +169,76 @@ export const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
 };
 
 /**
+ * The rate on site, and in Low Power Mode (the office, 2026-10-06). See
+ * `tracking-profile` for when it applies and why the accuracy stays.
+ *
+ * Half a minute on Android. iOS ignores the interval and delivers on distance,
+ * so there it is a fix per 25 m moved: a technician working through a house
+ * wakes the app a handful of times instead of once a second, and the moment they
+ * drive off the fixes come back at road speed. A phone that stays put is then
+ * silent, which the timesheet already reads as still there ("a quiet phone does
+ * not stop the clock").
+ */
+const SETTLED_UPDATES: Location.LocationTaskOptions = {
+  ...BACKGROUND_UPDATES,
+  timeInterval: 30_000,
+  distanceInterval: Platform.OS === 'ios' ? 25 : 0,
+};
+
+/** The task's options for a profile. `BACKGROUND_UPDATES` is the moving one. */
+export function optionsFor(profile: TrackingProfile): Location.LocationTaskOptions {
+  return profile === 'SETTLED' ? SETTLED_UPDATES : BACKGROUND_UPDATES;
+}
+
+/**
+ * The profile the task is running with, and the motion that decides the next.
+ *
+ * Module state, held by the process the task runs in. A process the OS starts
+ * afresh begins at `MOVING` -- the dense rate, never the sparse one -- and
+ * settles again five minutes later if the technician has not moved.
+ */
+let activeProfile: TrackingProfile = 'MOVING';
+let motion: Motion = STILL_UNKNOWN;
+
+/** How old a fix may be and still say anything about moving or standing now. */
+const MOTION_MAX_AGE_MS = 15 * 60_000;
+
+/**
+ * Follows what the technician is doing: moving, settled, or saving power.
+ *
+ * From inside the task, so it works with the phone in a pocket. Re-registering
+ * a running task only restarts its location updates: on Android the foreground
+ * service is left as it is (expo-location starts one only when none is
+ * running), so this is safe from the background where starting one is not.
+ */
+async function followMotion(delivered: readonly QueuedFix[]) {
+  const now = Date.now();
+  for (const fix of delivered) {
+    const at = Date.parse(fix.recordedAt);
+    // Only what is current. A backlog delivered after an outage says where the
+    // technician was, not whether they are standing still now.
+    if (Number.isFinite(at) && now - at < MOTION_MAX_AGE_MS)
+      motion = advanceMotion(motion, {
+        latitude: fix.latitude,
+        longitude: fix.longitude,
+        accuracyMeters: fix.accuracyMeters ?? null,
+        at,
+      });
+  }
+  const { lowPower } = await readPowerState();
+  const wanted = profileFor({ motion, lowPower, now });
+  if (wanted === activeProfile) return;
+  const previous = activeProfile;
+  activeProfile = wanted;
+  try {
+    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, optionsFor(wanted));
+  } catch {
+    // Not applied: try again on the next batch.
+    activeProfile = previous;
+  }
+}
+
+/**
  * Which of the delivered fixes are worth keeping.
  *
  * The rule the OS used to apply, plus the floor it could not: a fix is kept
@@ -192,7 +270,9 @@ export async function keepWorthwhile(delivered: readonly QueuedFix[]): Promise<Q
     last = { latitude: fix.latitude, longitude: fix.longitude, at };
   }
 
-  if (last) await rememberKeptFix(last);
+  // Written only when something was kept. It was written on every delivery --
+  // once a second on an iPhone in a car -- with the same value it already held.
+  if (last && kept.length) await rememberKeptFix(last);
   return kept;
 }
 
@@ -211,15 +291,17 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
   if (!locations?.length) return;
 
-  // Once for the batch, not once per fix: at a fix every three seconds the
-  // charge cannot have moved between two of them. Null when the phone will not
-  // say, which is a different fact from "nearly flat".
-  const batteryPercent = await currentBatteryPercent();
+  // At most once a minute, not once per batch: batches come once a second on
+  // an iPhone in a car, and the charge cannot have moved between two of them.
+  // Null when the phone will not say, which is a different fact from "nearly
+  // flat".
+  const batteryPercent = await cachedBatteryPercent();
 
   // The device's own clock at the moment of each fix. The API keeps that
   // separately from when it heard about it, so a batch delivered after an
   // outage still draws the route in the order it was walked.
   const delivered: QueuedFix[] = locations.map((location) => toQueuedFix(location, batteryPercent));
+  await followMotion(delivered);
   const fixes = await keepWorthwhile(delivered);
   if (!fixes.length) return;
 
@@ -416,7 +498,7 @@ async function startBackgroundUpdates(): Promise<boolean> {
       return true;
     }
 
-    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, BACKGROUND_UPDATES);
+    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, optionsFor(activeProfile));
     return true;
   } catch {
     return false;
@@ -432,6 +514,13 @@ async function startBackgroundUpdates(): Promise<boolean> {
  * restart asks the OS for a position straight away, which is itself a fix.
  */
 export const STALLED_AFTER_MS = 3 * 60_000;
+
+/**
+ * The same, settled. An iPhone settled in a house reports per 25 m moved, so
+ * minutes of quiet are the recording working; restarting it every check would
+ * spend the battery this profile exists to save.
+ */
+export const SETTLED_STALLED_AFTER_MS = 20 * 60_000;
 
 /** The parts of the task's options that differ from build to build. */
 function optionsKey(options: Partial<Location.LocationTaskOptions> | null | undefined) {
@@ -473,21 +562,22 @@ async function refreshBackgroundUpdates() {
     const current = await TaskManager.getTaskOptionsAsync<Partial<Location.LocationTaskOptions>>(
       SHIFT_LOCATION_TASK,
     ).catch(() => null);
+    const wanted = optionsFor(activeProfile);
     const lastFixAt = await readLastFixAt();
-    const stalled = lastFixAt === null || Date.now() - lastFixAt > STALLED_AFTER_MS;
+    const stalledAfter = activeProfile === 'SETTLED' ? SETTLED_STALLED_AFTER_MS : STALLED_AFTER_MS;
+    const stalled = lastFixAt === null || Date.now() - lastFixAt > stalledAfter;
     // Options that cannot be read say nothing about being out of date. Treating
     // them as different would stop and start the service -- notification and
     // all -- on every check, on a phone where nothing is wrong.
-    const outdated = current !== null && optionsKey(current) !== optionsKey(BACKGROUND_UPDATES);
+    const outdated = current !== null && optionsKey(current) !== optionsKey(wanted);
     if (!stalled && !outdated) return;
 
     const serviceChanged =
       outdated &&
-      JSON.stringify(current?.foregroundService ?? null) !==
-        JSON.stringify(BACKGROUND_UPDATES.foregroundService);
+      JSON.stringify(current?.foregroundService ?? null) !== JSON.stringify(wanted.foregroundService);
     if (serviceChanged)
       await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
-    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, BACKGROUND_UPDATES);
+    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, wanted);
   } catch {
     // Left as it was. The next foreground, or the next check, tries again.
   }
@@ -496,6 +586,9 @@ async function refreshBackgroundUpdates() {
 export async function stopShiftTracking() {
   foregroundWatch?.remove();
   foregroundWatch = null;
+  // The next shift starts dense, and settles on its own evidence.
+  activeProfile = 'MOVING';
+  motion = STILL_UNKNOWN;
   await stopBackgroundUpdates();
 }
 
