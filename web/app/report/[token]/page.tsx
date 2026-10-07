@@ -1,6 +1,6 @@
 'use client';
 
-import { NARRATION_HEADING, buildReportView } from '@texasrenters/shared';
+import { NARRATION_HEADING, REPORT_TYPE, buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport, ReportRoomView } from '@texasrenters/shared';
 import { DownloadIcon } from 'lucide-react';
 import Image from 'next/image';
@@ -36,12 +36,12 @@ import { ApiError, publicApi } from '@/lib/api';
 /**
  * Grid thumbnails, at the widths the backend caches (see ALLOWED_PHOTO_WIDTHS):
  * the browser picks the smaller copy where a photograph is small and the larger
- * on a sharp screen. Three a row on a wide page shows them about 270 px wide.
+ * on a sharp screen. Three a row on a wide page shows them about 310 px wide.
  */
 const THUMB_WIDTH = 320;
 const THUMB_WIDTH_SHARP = 640;
 /** Two a row on a phone, three from 640 px up. */
-const THUMB_SIZES = '(min-width: 640px) 280px, 50vw';
+const THUMB_SIZES = '(min-width: 640px) 320px, 50vw';
 const FULL_WIDTH = 1000;
 
 function photoUrl(contentPath: string, width: number) {
@@ -89,9 +89,9 @@ function Room({ room }: { room: ReportRoomView }) {
               the data and in the accessibility tree — a screen reader says
               "Bathroom" rather than spelling it out letter by letter, which is
               what it does with a hard-uppercased word. */}
-          <h3 className="font-semibold tracking-wide uppercase">{room.name}</h3>
+          <h3 className="text-[1.15em] font-semibold tracking-wide uppercase">{room.name}</h3>
           {room.floorName ? (
-            <p className="text-muted-foreground text-xs">{room.floorName}</p>
+            <p className="text-muted-foreground text-[0.8em]">{room.floorName}</p>
           ) : null}
         </div>
         <Badge variant={room.inspected ? 'success' : 'secondary'}>{room.statusLabel}</Badge>
@@ -106,7 +106,7 @@ function Room({ room }: { room: ReportRoomView }) {
           printing "N" would publish a defect nobody observed. */}
       {room.checklist.length ? (
         <div className="overflow-hidden rounded-lg border">
-          <Table className="table-fixed">
+          <Table className="table-fixed text-[1em] [&_thead_th]:text-[0.8em]">
             {/* `colgroup` rather than per-cell widths: `table-fixed` reads the
                 first row to size the columns, so without it each room's table
                 sizes itself from its own longest comment and no two line up
@@ -149,7 +149,7 @@ function Room({ room }: { room: ReportRoomView }) {
                       a vertically centred Y three lines down from its own row
                       label belongs to no row a reader can identify. */}
                   <TableHead
-                    className="text-foreground h-auto py-3 align-top text-xs font-medium tracking-wide whitespace-normal uppercase"
+                    className="text-foreground h-auto py-3 align-top text-[0.9em] font-medium tracking-wide whitespace-normal uppercase"
                     scope="row"
                   >
                     {row.label}
@@ -170,7 +170,7 @@ function Room({ room }: { room: ReportRoomView }) {
                       <AxisCell value={row.working} />
                     </>
                   )}
-                  <TableCell className="text-muted-foreground py-3 align-top text-xs leading-relaxed">
+                  <TableCell className="text-muted-foreground py-3 align-top text-[1em] leading-relaxed">
                     {row.comment}
                   </TableCell>
                 </TableRow>
@@ -212,7 +212,7 @@ function Room({ room }: { room: ReportRoomView }) {
               </a>
               {photo.caption ? (
                 <figcaption>
-                  <p className="text-xs font-medium">{photo.caption}</p>
+                  <p className="text-[0.85em] font-medium">{photo.caption}</p>
                 </figcaption>
               ) : null}
             </figure>
@@ -231,12 +231,12 @@ function Room({ room }: { room: ReportRoomView }) {
           heading never ends a column on its own. */}
       {room.actions.length ? (
         <div className="space-y-2 border-t pt-4">
-          <h4 className="text-sm font-semibold">{NARRATION_HEADING}:</h4>
+          <h4 className="text-[1.05em] font-semibold">{NARRATION_HEADING}:</h4>
           <div className="gap-x-8 sm:columns-2 print:columns-2" data-testid="room-actions">
           {room.actions.map((group) => (
             <div className="mb-3" key={group.heading}>
-              <h5 className="mb-1 text-sm font-semibold break-after-avoid">{group.heading}</h5>
-              <ul className="list-disc space-y-0.5 pl-5 text-sm leading-relaxed">
+              <h5 className="mb-1 text-[1em] font-semibold break-after-avoid">{group.heading}</h5>
+              <ul className="list-disc space-y-0.5 pl-5 text-[1em] leading-relaxed">
                 {group.items.map((item, index) => (
                   <li className="break-inside-avoid" key={index}>
                     {item.text}
@@ -257,7 +257,7 @@ function Room({ room }: { room: ReportRoomView }) {
       ) : null}
 
       {!room.hasEvidence ? (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-[1em]">
           {room.skipReason
             ? `Not inspected — ${room.skipReason}`
             : 'No issues were recorded for this room.'}
@@ -267,10 +267,19 @@ function Room({ room }: { room: ReportRoomView }) {
   );
 }
 
+/**
+ * Arial, running text at 13.5 pt (the maintenance team, 2026-10-08); every
+ * size inside is relative to it, so this is the one place the size is set.
+ * A little wider than before, so the condition table keeps its columns at the
+ * larger size.
+ */
 function ReportShell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="bg-muted/40 min-h-dvh py-6 sm:py-10">
-      <div className="mx-auto w-full max-w-4xl px-4">{children}</div>
+    <main
+      className="bg-muted/40 min-h-dvh py-6 sm:py-10"
+      style={{ fontFamily: REPORT_TYPE.fontStack, fontSize: `${REPORT_TYPE.bodyPt}pt` }}
+    >
+      <div className="mx-auto w-full max-w-5xl px-4">{children}</div>
     </main>
   );
 }
@@ -305,8 +314,8 @@ export default function PublicReportPage() {
     return (
       <ReportShell>
         <div className="bg-card space-y-2 rounded-xl border p-8 text-center" role="alert">
-          <h1 className="text-xl font-semibold tracking-tight">Report unavailable</h1>
-          <p className="text-muted-foreground text-sm text-pretty">{error}</p>
+          <h1 className="text-[1.5em] font-semibold tracking-tight">Report unavailable</h1>
+          <p className="text-muted-foreground text-[1em] text-pretty">{error}</p>
         </div>
       </ReportShell>
     );
@@ -348,9 +357,9 @@ export default function PublicReportPage() {
                 src="/texasrenterslogo-transparent.png"
                 width={600}
               />
-              <h1 className="text-2xl font-semibold tracking-tight text-balance">{view.title}</h1>
+              <h1 className="text-[1.75em] leading-tight font-semibold tracking-tight text-balance">{view.title}</h1>
               {view.subtitle ? (
-                <p className="text-muted-foreground text-sm">{view.subtitle}</p>
+                <p className="text-muted-foreground text-[1em]">{view.subtitle}</p>
               ) : null}
             </div>
             {/* Hidden on paper: a download button printed onto a report that
@@ -369,25 +378,25 @@ export default function PublicReportPage() {
               not claim an inspector it does not have. */}
           <dl className="grid gap-4 border-t pt-4 sm:grid-cols-2">
             <div className="space-y-0.5">
-              <dt className="text-muted-foreground text-xs font-medium">Inspection template</dt>
-              <dd className="text-sm font-medium">{view.templateLabel}</dd>
+              <dt className="text-muted-foreground text-[0.8em] font-medium">Inspection template</dt>
+              <dd className="text-[1em] font-medium">{view.templateLabel}</dd>
             </div>
             {view.inspectorLabel ? (
               <div className="space-y-0.5">
-                <dt className="text-muted-foreground text-xs font-medium">Inspector</dt>
-                <dd className="text-sm font-medium">{view.inspectorLabel}</dd>
+                <dt className="text-muted-foreground text-[0.8em] font-medium">Inspector</dt>
+                <dd className="text-[1em] font-medium">{view.inspectorLabel}</dd>
               </div>
             ) : null}
             <div className="space-y-0.5">
-              <dt className="text-muted-foreground text-xs font-medium">Date</dt>
-              <dd className="text-sm font-medium">{view.dateLabel}</dd>
+              <dt className="text-muted-foreground text-[0.8em] font-medium">Date</dt>
+              <dd className="text-[1em] font-medium">{view.dateLabel}</dd>
             </div>
             {/* The one count the report keeps. The findings counters and the
                 summary of findings that followed this header are gone with
                 the findings lists they counted (2026-10-07). */}
             <div className="space-y-0.5">
-              <dt className="text-muted-foreground text-xs font-medium">Rooms inspected</dt>
-              <dd className="text-sm font-medium tabular-nums">
+              <dt className="text-muted-foreground text-[0.8em] font-medium">Rooms inspected</dt>
+              <dd className="text-[1em] font-medium tabular-nums">
                 {view.summary.roomsInspected} of {view.summary.roomsTotal}
               </dd>
             </div>
@@ -395,7 +404,7 @@ export default function PublicReportPage() {
         </header>
 
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold tracking-tight">Room by room</h2>
+          <h2 className="text-[1.3em] font-semibold tracking-tight">Room by room</h2>
           <div className="grid gap-4">
             {roomsWithEvidence.map((room) => (
               <Room key={room.id} room={room} />
@@ -405,14 +414,14 @@ export default function PublicReportPage() {
 
         {quietRooms.length ? (
           <section className="space-y-3">
-            <h2 className="text-lg font-semibold tracking-tight">Other areas</h2>
-            <p className="text-muted-foreground text-sm">
+            <h2 className="text-[1.3em] font-semibold tracking-tight">Other areas</h2>
+            <p className="text-muted-foreground text-[1em]">
               Inspected with nothing to report, or not accessible on the day.
             </p>
             <ul className="bg-card divide-y rounded-xl border">
               {quietRooms.map((room) => (
                 <li className="flex items-center justify-between gap-3 p-4" key={room.id}>
-                  <span className="min-w-0 text-sm">
+                  <span className="min-w-0 text-[1em]">
                     <span className="font-medium tracking-wide uppercase">{room.name}</span>
                     {room.floorName ? ` · ${room.floorName}` : ''}
                     {room.skipReason ? ` — ${room.skipReason}` : ''}
@@ -431,14 +440,14 @@ export default function PublicReportPage() {
           <section className="grid gap-4 border-t pt-6 sm:grid-cols-3 print:break-inside-avoid">
             {view.closingNotes.map((note) => (
               <div key={note.label}>
-                <h3 className="text-muted-foreground text-xs font-medium">{note.label}</h3>
-                <p className="mt-1 text-sm whitespace-pre-line">{note.body}</p>
+                <h3 className="text-muted-foreground text-[0.8em] font-medium">{note.label}</h3>
+                <p className="mt-1 text-[1em] whitespace-pre-line">{note.body}</p>
               </div>
             ))}
           </section>
         ) : null}
 
-        <footer className="text-muted-foreground space-y-2 border-t pt-6 text-xs">
+        <footer className="text-muted-foreground space-y-2 border-t pt-6 text-[0.8em]">
           <p className="text-pretty">{view.disclaimer}</p>
           <p>
             {[
