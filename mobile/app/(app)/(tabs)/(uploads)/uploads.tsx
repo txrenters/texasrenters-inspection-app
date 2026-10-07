@@ -362,7 +362,7 @@ export default function UploadsScreen() {
                   accessibilityRole="button"
                   accessibilityLabel="Open upload settings"
                   className="h-9 w-9 items-center justify-center rounded-full bg-chart-4/15 active:scale-95"
-                  onPress={() => router.push('/(app)/(tabs)/settings')}
+                  onPress={() => router.push('/(app)/(tabs)/(settings)/settings')}
                 >
                   <SettingsIcon size={16} className="text-chart-4" />
                 </Pressable>
