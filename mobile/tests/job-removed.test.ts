@@ -68,8 +68,8 @@ describe('where a tapped notification opens', () => {
   });
 
   it('opens the list for a job that was taken away, since the job is no longer there', () => {
-    expect(notificationTarget({ inspectionId: 'a', kind: 'CANCELLED' })).toBe('/(app)/(tabs)/inspections');
-    expect(notificationTarget({ inspectionId: 'a', kind: 'REASSIGNED' })).toBe('/(app)/(tabs)/inspections');
+    expect(notificationTarget({ inspectionId: 'a', kind: 'CANCELLED' })).toBe('/(app)/(tabs)/(jobs)/inspections');
+    expect(notificationTarget({ inspectionId: 'a', kind: 'REASSIGNED' })).toBe('/(app)/(tabs)/(jobs)/inspections');
   });
 
   it('opens nothing for a notification that names no job', () => {

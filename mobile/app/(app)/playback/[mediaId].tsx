@@ -1,12 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { RotateCwIcon } from 'lucide-react-native';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
-import { goBack } from '@/src/lib/navigation';
+import { BelowHeader } from '@/src/lib/native-header';
 import { environment } from '@/src/config/environment';
 import { registerIcons } from '@/src/lib/icons';
 import { resolveMobilePlayback } from '@/src/media/playback-source';
@@ -54,21 +53,9 @@ export default function PlaybackScreen() {
   // screen and ran under the home indicator, so the last of the frame and the
   // native controls sat in the unreachable strip.
   return (
-    <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-        <Pressable
-          accessibilityLabel="Back"
-          accessibilityRole="button"
-          className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
-          hitSlop={8}
-          onPress={() => goBack()}
-        >
-          <BackGlyph size={18} className="text-foreground" />
-        </Pressable>
-        <Text className="min-w-0 flex-1 text-lg font-bold text-foreground" numberOfLines={1}>
-          {title || 'Recording'}
-        </Text>
-      </View>
+    <BelowHeader className="bg-background">
+      <Stack.Screen options={{ title: title || 'Recording' }} />
+      <SafeAreaView edges={['bottom']} className="flex-1">
 
       {playback.isLoading ? (
         <Centred>
@@ -108,7 +95,8 @@ export default function PlaybackScreen() {
           />
         </View>
       )}
-    </SafeAreaView>
+      </SafeAreaView>
+    </BelowHeader>
   );
 }
 

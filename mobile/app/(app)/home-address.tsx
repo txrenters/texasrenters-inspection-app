@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2Icon, HomeIcon, MapPinIcon } from 'lucide-react-native';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ScrollView, Text, TextInput, View } from 'react-native';
+import { Stack } from 'expo-router';
 
 import { Button } from '@/src/components/ui';
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import {
   useClearTechnicianHome,
   useSetTechnicianHome,
   useTechnicianHome,
 } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
-import { goBack } from '@/src/lib/navigation';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import { ApiConnectionError } from '@/src/storage/offline-record-cache';
 
@@ -77,27 +75,16 @@ export default function HomeAddressScreen() {
   const matched = save.data?.matchedAddress ?? null;
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView
-        className="flex-1"
+    <ScrollView
+        className="flex-1 bg-background"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingBottom: 48 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back to settings"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
-            onPress={() => goBack()}
-          >
-            <BackGlyph size={18} className="text-foreground" />
-          </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text className="text-lg font-bold text-foreground">Home address</Text>
-            <Text className="text-xs text-muted-foreground">Where your route starts each day</Text>
-          </View>
-        </View>
+        <Stack.Screen options={{ title: 'Home address' }} />
+        <Text className="px-5 pb-1 pt-1 text-sm text-muted-foreground">Where your route starts each day</Text>
 
         <View className="mx-5 mt-2 rounded-2xl bg-card p-4">
           <Text className="text-sm leading-5 text-muted-foreground">
@@ -175,7 +162,6 @@ export default function HomeAddressScreen() {
             />
           </View>
         ) : null}
-      </ScrollView>
-    </SafeAreaView>
+    </ScrollView>
   );
 }

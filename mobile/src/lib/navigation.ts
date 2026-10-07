@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 
 /** Where every screen falls back to when there is no stack to unwind. */
-const HOME = '/(app)/(tabs)' as const;
+const HOME = '/(app)/(tabs)/(home)' as const;
 
 /**
  * Goes back, or home when there is nowhere to go back to.

@@ -82,6 +82,6 @@ function strip(value: unknown, inspectionId: string): unknown {
  */
 export function notificationTarget(data: unknown): string | null {
   if (!isRecord(data) || typeof data.inspectionId !== 'string') return null;
-  if (typeof data.kind === 'string' && JOB_LEAVES_THE_PHONE.has(data.kind)) return '/(app)/(tabs)/inspections';
+  if (typeof data.kind === 'string' && JOB_LEAVES_THE_PHONE.has(data.kind)) return '/(app)/(tabs)/(jobs)/inspections';
   return `/(app)/inspections/${data.inspectionId}`;
 }

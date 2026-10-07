@@ -32,6 +32,9 @@
         "EXPO_PUBLIC_ENABLE_DEMO_DATA": "false",
         "EXPO_PUBLIC_ENABLE_TEST_VIDEO_PICKER": "false",
         "EXPO_PUBLIC_USE_ADB_REVERSE": "false"
+      },
+      "ios": {
+        "image": "latest"
       }
     },
     "production-apk": {

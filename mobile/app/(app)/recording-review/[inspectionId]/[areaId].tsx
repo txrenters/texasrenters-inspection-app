@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 
 import { HomeButton } from '@/src/components/HomeButton';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -12,6 +12,7 @@ import { deleteDraftRecording } from '@/src/media/local-recordings';
 import { discardCaptureSession } from '@/src/media/discard-capture-session';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { nextInspectionRoom } from '@/src/utils/room-workflow';
+import { BelowHeader } from '@/src/lib/native-header';
 import { useThemeColors } from '@/src/lib/theme-colors';
 
 const ADDITIONAL_CATEGORIES: readonly {
@@ -39,6 +40,30 @@ const ADDITIONAL_CATEGORIES: readonly {
 function backToArea(areaId: string) {
   router.dismissTo(`/areas/${areaId}`);
 }
+
+/**
+ * The bar: no back chevron (the stack hides it -- this screen took the
+ * camera's place, and the take is not saved until it is confirmed here), and
+ * Home, which asks first. The take is on the device but not submitted; leaving
+ * keeps the file in the queue but abandons the note and the confirmation.
+ */
+const reviewHeader = (
+  <Stack.Screen
+    options={{
+      title: 'Review recording',
+      headerRight: () => (
+        <HomeButton
+          confirm={{
+            title: 'Leave this recording?',
+            detail:
+              'The video stays saved on this device, but the note you have typed here is not kept. You can come back to the area and review it again.',
+            leaveLabel: 'Leave',
+          }}
+        />
+      ),
+    }}
+  />
+);
 
 export default function RecordingReviewScreen() {
   const theme = useThemeColors();
@@ -99,7 +124,8 @@ export default function RecordingReviewScreen() {
 
   if (!draft) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-background px-6">
+      <BelowHeader className="items-center justify-center bg-background px-6">
+        {reviewHeader}
         <Text className="text-xl font-bold text-foreground">No recording to review</Text>
         <Text className="mt-2 text-center text-muted-foreground">
           Return to the room and record a video first.
@@ -112,7 +138,7 @@ export default function RecordingReviewScreen() {
         >
           <Text className="font-bold text-primary-foreground">Back to room</Text>
         </Pressable>
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
@@ -203,27 +229,17 @@ export default function RecordingReviewScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 24 }}>
-        <View className="flex-row items-start gap-3">
-          <View className="min-w-0 flex-1">
-            <Text className="text-2xl font-bold text-foreground">Review recording</Text>
-            <Text className="mt-1 text-sm text-muted-foreground">
-              {room.data?.name ?? 'Room'} · Stored on this device
-            </Text>
-          </View>
-          {/* The take is on the device but not submitted; leaving now keeps the
-              file in the queue but abandons this screen's note and confirmation,
-              so it asks first. */}
-          <HomeButton
-            confirm={{
-              title: 'Leave this recording?',
-              detail:
-                'The video stays saved on this device, but the note you have typed here is not kept. You can come back to the area and review it again.',
-              leaveLabel: 'Leave',
-            }}
-          />
-        </View>
+    <SafeAreaView edges={['bottom']} className="flex-1 bg-background">
+      {reviewHeader}
+      <ScrollView
+        className="flex-1"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{ padding: 20, paddingBottom: 24 }}
+      >
+        <Text className="text-sm text-muted-foreground">
+          {room.data?.name ?? 'Room'} · Stored on this device
+        </Text>
         <VideoView
           player={player}
           nativeControls
