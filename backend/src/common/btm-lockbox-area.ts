@@ -12,6 +12,7 @@ import {
   isBtmLockboxArea,
 } from '@texasrenters/shared';
 
+import { findOrCreateFloorlessArea, lockFloorlessArea } from './floorless-area';
 import type { PrismaService } from './prisma.service';
 
 /**
@@ -24,6 +25,8 @@ import type { PrismaService } from './prisma.service';
  */
 
 type Client = Prisma.TransactionClient | PrismaService;
+
+type LockboxPlace = { propertyId: string; unitId: string | null };
 
 /** After every room of the walk: the sign and the lockbox are the last thing done on the way out. */
 export const BTM_LOCKBOX_INSPECTION_ORDER = 10_000;
@@ -66,23 +69,14 @@ export async function ensureBtmLockboxChecklist(client: Client, organizationId: 
  * works. `isInspectedArea` lets a back-to-market visit see it.
  *
  * The property row must exist already (`ensureAreaProperty`, or the
- * inspection's own building for one already booked).
+ * inspection's own building for one already booked). Inside a transaction:
+ * see `findOrCreateFloorlessArea` for why two at once would make two.
  */
-export async function btmLockboxPropertyArea(
-  client: Client,
-  place: { propertyId: string; unitId: string | null },
-): Promise<string> {
-  const where = {
-    propertyId: place.propertyId,
-    unitId: place.unitId,
-    floorId: null,
-    name: BTM_LOCKBOX_AREA_NAME,
-  };
-  const existing = await client.propertyArea.findFirst({ where, select: { id: true } });
-  if (existing) return existing.id;
-  const created = await client.propertyArea.create({
-    data: {
-      ...where,
+export function btmLockboxPropertyArea(client: Client, place: LockboxPlace): Promise<string> {
+  return findOrCreateFloorlessArea(
+    client,
+    { ...place, name: BTM_LOCKBOX_AREA_NAME },
+    {
       inspectionOrder: BTM_LOCKBOX_INSPECTION_ORDER,
       isRequired: true,
       status: PropertyAreaStatus.APPROVED,
@@ -91,9 +85,12 @@ export async function btmLockboxPropertyArea(
       category: AreaCategory.OTHER_OUTDOOR,
       notes: 'Created automatically for back-to-market inspections. Not part of the floor plan.',
     },
-    select: { id: true },
-  });
-  return created.id;
+  );
+}
+
+/** The lock `btmLockboxPropertyArea` takes, for a caller that must look before it. */
+export function lockBtmLockboxArea(client: Client, place: LockboxPlace) {
+  return lockFloorlessArea(client, { ...place, name: BTM_LOCKBOX_AREA_NAME });
 }
 
 /** Whether any of these areas already is one -- a technician may have added it by hand. */

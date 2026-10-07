@@ -81,6 +81,7 @@ function build(record = job()) {
     propertyArea: { findFirst: jest.Mock; create: jest.Mock };
     property: { upsert: jest.Mock };
     jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   } = {
     inspection: {
@@ -99,6 +100,8 @@ function build(record = job()) {
     // The photographs this job holds, which the fixtures' registers point at.
     inspectionPhoto: { findMany: jest.fn().mockResolvedValue(JOB_PHOTOS) },
     jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
+    // The service area's advisory lock (`findOrCreateFloorlessArea`).
+    $executeRaw: jest.fn().mockResolvedValue(1),
     $transaction: jest.fn(async (run: (tx: unknown) => unknown) => run(prisma)),
   } as never;
   const service = new TechnicianService(

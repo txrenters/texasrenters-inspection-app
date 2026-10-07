@@ -29,7 +29,8 @@ function client({ named = [] as { name: string }[] } = {}) {
   const createMany = jest.fn().mockResolvedValue({ count: 0 });
   const create = jest.fn().mockResolvedValue({ id: 'inspection-1' });
   // A back-to-market visit also gets its sign, supra and lockbox area: the
-  // chosen areas' names are read, and the property's area found or created.
+  // chosen areas' names are read, and the property's area found or created
+  // under an advisory lock.
   const propertyArea = {
     findMany: jest.fn().mockResolvedValue(named),
     findFirst: jest.fn().mockResolvedValue(null),
@@ -37,6 +38,7 @@ function client({ named = [] as { name: string }[] } = {}) {
   };
   return {
     tx: {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       areaChecklistItem: { createMany },
       inspection: { create },
       property: { upsert: jest.fn().mockResolvedValue({}) },
