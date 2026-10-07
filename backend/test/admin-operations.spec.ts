@@ -427,7 +427,14 @@ describe('administrator inspection operations', () => {
         propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
         propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
         propertywareLease: { findFirst: jest.fn() },
-        propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+        propertyArea: {
+          findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]),
+          // A back-to-market also gets its sign, supra and lockbox area
+          // (2026-10-08), found or created on the property.
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'area-lockbox' }),
+        },
+        property: { upsert: jest.fn().mockResolvedValue({}) },
       /**
        * An occupied inspection writes the organization's two-question
        * checklist on the way past (`ensureOccupiedChecklist`), so a double

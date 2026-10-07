@@ -11,7 +11,7 @@ import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters
 import {
   checklistItemsAreOrganizationWide,
   checklistKindWhere,
-  checklistSectionFor,
+  checklistItemAsked,
   checklistSectionWhere,
 } from '../common/checklist-kind';
 import type {
@@ -515,12 +515,11 @@ export class AreaEvidenceService {
         reviewers,
       );
       // The same narrowing `areaEvidence` applies in its query: an
-      // organization-wide list is asked whole, or one HVAC section of it.
-      const section = checklistSectionFor(kind, area.propertyArea.name);
+      // organization-wide list is asked whole, or one section of it.
       const asked = checklistItems.filter(
         (item) =>
           (organizationWide || item.propertyAreaId === area.propertyArea.id) &&
-          (!section || item.section === section),
+          checklistItemAsked(kind, area.propertyArea.name, item.section),
       );
       const askedIds = new Set(asked.map((item) => item.id));
       // The Condition tab's rule (`isChecklistItemAssessed`): a reading, a line

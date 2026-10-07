@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import {
+  BTM_LOCKBOX_AREA_NAME,
   HVAC_FILTERS_SECTION,
   inspectionWalksRooms,
   isInspectedArea,
@@ -20,6 +21,10 @@ import {
  */
 export function inspectedAreaWhere(inspectionType: string): Prisma.InspectionAreaWhereInput {
   const equipment = { source: { in: [...NON_ROOM_SOURCES] } };
+  // A back-to-market visit's sign, supra and lockbox is the one system area a
+  // room walk inspects (Moses, 2026-10-08).
+  if (inspectionType === 'BACK_TO_MARKET')
+    return { NOT: { propertyArea: { ...equipment, name: { not: BTM_LOCKBOX_AREA_NAME } } } };
   if (inspectionWalksRooms(inspectionType)) return { NOT: { propertyArea: equipment } };
   const excluded: Prisma.InspectionAreaWhereInput[] = [
     { propertyArea: { ...equipment, name: { in: [...SERVICE_PHOTO_AREA_NAMES] } } },

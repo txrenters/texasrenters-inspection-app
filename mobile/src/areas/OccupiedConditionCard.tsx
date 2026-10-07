@@ -1,7 +1,7 @@
 import { Text, View } from 'react-native';
 import { choiceInvitesComment } from '@texasrenters/shared';
 
-import { ChoiceField, CommentField } from '../capture/ChecklistAnswerFields';
+import { ChoiceField, CommentField, TextField } from '../capture/ChecklistAnswerFields';
 import type { ChecklistItem } from '../capture/area-checklist';
 import type { ChecklistAssessment } from '../domain/models';
 
@@ -42,6 +42,7 @@ export function OccupiedConditionCard({
   items,
   assessments,
   onRecord,
+  lockbox = false,
 }: {
   items: readonly ChecklistItem[];
   /** Current answers, keyed by checklist item id. */
@@ -54,6 +55,12 @@ export function OccupiedConditionCard({
     itemId: string,
     patch: { textValue?: string | null; comment?: string | null },
   ) => void;
+  /**
+   * The sign, supra and lockbox area (Moses, 2026-10-08): its own two questions,
+   * both required, and a notes box -- see `btm-lockbox` in shared. No comment
+   * box opens under a "No": the notes box below is where that goes.
+   */
+  lockbox?: boolean;
 }) {
   // Nothing to ask is not an error. An occupied inspection created before the
   // organization-wide rows existed has no items, and an empty bordered card
@@ -62,13 +69,26 @@ export function OccupiedConditionCard({
 
   return (
     <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
-      <Text className="text-base font-bold text-foreground">Condition</Text>
+      <Text className="text-base font-bold text-foreground">{lockbox ? 'Sign, supra and lockbox' : 'Condition'}</Text>
       <Text className="mt-1 text-sm leading-5 text-muted-foreground">
-        How the room presented itself. Optional — anything that needs fixing belongs in a finding.
+        {lockbox
+          ? 'Both questions are needed before this area can be submitted. Notes are optional.'
+          : 'How the room presented itself. Optional — anything that needs fixing belongs in a finding.'}
       </Text>
       {items.map((item) => {
         const current = assessments.get(item.id);
         const answer = current?.textValue ?? null;
+        if (item.responseType === 'TEXT')
+          return (
+            <View className="mt-4" key={item.id}>
+              <Text className="text-sm font-semibold text-foreground">{item.label}</Text>
+              <TextField
+                item={item}
+                onChange={(next) => onRecord(item.id, { textValue: next })}
+                value={answer}
+              />
+            </View>
+          );
         return (
           <View className="mt-4" key={item.id}>
             <Text className="text-sm font-semibold text-foreground">{item.label}</Text>
@@ -79,7 +99,7 @@ export function OccupiedConditionCard({
             />
             {/* Asked only when the answer says something was wrong — prompted
                 rather than required, for the reasons in `choiceInvitesComment`. */}
-            {choiceInvitesComment(answer) ? (
+            {!lockbox && choiceInvitesComment(answer) ? (
               <CommentField
                 item={item}
                 onChange={(next) => onRecord(item.id, { comment: next })}

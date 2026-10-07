@@ -47,6 +47,8 @@ function build({
   // refusing. `media` above is only the newest, as `technicianRoomSelect` reads.
   recordings = [] as { id: string; uploadStatus: string; streamUid: string | null }[],
   stream = undefined as { getVideo: jest.Mock } | undefined,
+  // The organization's sign, supra and lockbox questions; none before any was asked.
+  lockboxQuestions = 3,
 } = {}) {
   const update = jest.fn().mockResolvedValue({
     id: ROOM_ID,
@@ -76,7 +78,10 @@ function build({
       update: jest.fn().mockResolvedValue({}),
     },
     // An HVAC section's items, and what the technician has answered in it.
-    areaChecklistItem: { findMany: jest.fn().mockResolvedValue(items) },
+    areaChecklistItem: {
+      findMany: jest.fn().mockResolvedValue(items),
+      count: jest.fn().mockResolvedValue(lockboxQuestions),
+    },
     inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue(responses) },
   };
   const service = new TechnicianService(
@@ -324,5 +329,67 @@ describe('completing a section of an HVAC inspection', () => {
       status: 409,
       code: 'ROOM_EVIDENCE_REQUIRED',
     });
+  });
+});
+
+describe("completing a back-to-market visit's sign, supra and lockbox", () => {
+  // Moses, 2026-10-08: "Installed?" and "Key functioning?" both answered before
+  // the area submits; the notes are optional; a photograph as everywhere else.
+  const LOCKBOX = 'Sign, supra and lockbox';
+  const answered = (label: string, textValue: string | null) => ({ textValue, checklistItem: { label } });
+
+  it('refuses while a question is unanswered, and names it', async () => {
+    const { service, update } = build({
+      inspectionType: 'BACK_TO_MARKET',
+      areaName: LOCKBOX,
+      photos: 2,
+      responses: [answered('Installed?', 'Yes')],
+    });
+    await expect(service.completeRoom(technician, ROOM_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'LOCKBOX_QUESTIONS_UNANSWERED',
+      message: 'Answer "Key functioning?" before submitting this area.',
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('accepts both answered, a No as readily as a Yes, with no notes', async () => {
+    const { service, update } = build({
+      inspectionType: 'BACK_TO_MARKET',
+      areaName: LOCKBOX,
+      photos: 1,
+      responses: [answered('Installed?', 'Yes'), answered('Key functioning?', 'No')],
+    });
+    await service.completeRoom(technician, ROOM_ID);
+    expect(update.mock.calls[0][0].data.completionStatus).toBe('COMPLETED');
+  });
+
+  it('still needs a photograph', async () => {
+    const { service } = build({
+      inspectionType: 'BACK_TO_MARKET',
+      areaName: LOCKBOX,
+      photos: 0,
+      responses: [answered('Installed?', 'Yes'), answered('Key functioning?', 'Yes')],
+    });
+    await expect(service.completeRoom(technician, ROOM_ID)).rejects.toMatchObject({
+      code: 'ROOM_EVIDENCE_REQUIRED',
+    });
+  });
+
+  it('owes nothing where the questions were never written, rather than never finishing', async () => {
+    const { service, update } = build({
+      inspectionType: 'BACK_TO_MARKET',
+      areaName: LOCKBOX,
+      photos: 1,
+      lockboxQuestions: 0,
+    });
+    await service.completeRoom(technician, ROOM_ID);
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('asks nothing of the visit’s other rooms', async () => {
+    const { service, update } = build({ inspectionType: 'BACK_TO_MARKET', areaName: 'Kitchen', photos: 1 });
+    await service.completeRoom(technician, ROOM_ID);
+    expect(update).toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import { InspectionType } from '../enums/index.js';
 import { NON_ROOM_SOURCES } from './standard-layout.js';
 import { SERVICE_PHOTO_AREA } from './visit-services.js';
 import { HVAC_FILTERS_SECTION } from './hvac-checklist.js';
+import { BTM_LOCKBOX_AREA_NAME, isBtmLockboxArea } from './btm-lockbox.js';
 
 /**
  * Which areas an inspection covers, and how that set is arrived at.
@@ -208,6 +209,10 @@ export function isInspectedArea(
 ): boolean {
   if (!area.source || !NON_ROOM_SOURCES.includes(area.source)) return true;
   if (SERVICE_PHOTO_AREA_NAMES.has(area.name ?? '')) return false;
+  // The one system area a room walk does inspect: a back-to-market visit's
+  // sign, supra and lockbox (Moses, 2026-10-08). System, so no other visit to
+  // the property ever lists it as a room.
+  if (inspectionType === InspectionType.BACK_TO_MARKET && area.name === BTM_LOCKBOX_AREA_NAME) return true;
   // An HVAC inspection's Filters section, unless it was already submitted: the
   // filters are scored on the AC filter change now (Moses, 2026-10-01), and one
   // walked before that keeps its evidence on the report.
@@ -269,6 +274,20 @@ export function checklistKindFor(
         ? 'AIR_CONDITIONING'
         : 'ROOM';
   }
+}
+
+/**
+ * Whether an area asks the sign, supra and lockbox questions instead of the
+ * condition card: a back-to-market visit's own area, or one a technician named
+ * that by hand on an occupied-style visit before it was built in. Both answer
+ * the same rows, and both must answer them before the area submits. See
+ * `btm-lockbox`.
+ */
+export function asksLockboxQuestions(
+  inspectionType: string | null | undefined,
+  areaName: string | null | undefined,
+): boolean {
+  return checklistKindFor(inspectionType) === 'OCCUPIED' && isBtmLockboxArea(areaName);
 }
 
 /**

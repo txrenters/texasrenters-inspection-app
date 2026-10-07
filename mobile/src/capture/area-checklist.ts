@@ -1,4 +1,7 @@
 import {
+  asksLockboxQuestions,
+  BTM_LOCKBOX_CHECKLIST,
+  BTM_LOCKBOX_SECTION,
   OCCUPIED_CHECKLIST,
   checklistKindFor,
   checklistTemplateForKind,
@@ -122,6 +125,17 @@ export function checklistForArea(
    * Read from the same `OCCUPIED_CHECKLIST` the server writes its rows from, so
    * the offline list and the one that arrives cannot disagree.
    */
+  // The sign, supra and lockbox asks its own questions, not the condition
+  // pair -- offline as online (Moses, 2026-10-08).
+  if (asksLockboxQuestions(area.inspectionType, area.name))
+    return BTM_LOCKBOX_CHECKLIST.map((item) => ({
+      id: item.label,
+      label: item.label,
+      section: BTM_LOCKBOX_SECTION,
+      responseType: item.responseType,
+      choices: item.choices,
+      keywords: [],
+    }));
   if (kind === 'OCCUPIED')
     return OCCUPIED_CHECKLIST.map((item) => ({
       id: item.label,

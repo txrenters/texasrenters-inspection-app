@@ -25,16 +25,26 @@ import { checklistItemsAreOrganizationWide } from '../src/common/checklist-kind'
 const ORGANIZATION = '11111111-1111-4111-8111-111111111111';
 
 /** Records what was written without needing a database behind it. */
-function client() {
+function client({ named = [] as { name: string }[] } = {}) {
   const createMany = jest.fn().mockResolvedValue({ count: 0 });
   const create = jest.fn().mockResolvedValue({ id: 'inspection-1' });
+  // A back-to-market visit also gets its sign, supra and lockbox area: the
+  // chosen areas' names are read, and the property's area found or created.
+  const propertyArea = {
+    findMany: jest.fn().mockResolvedValue(named),
+    findFirst: jest.fn().mockResolvedValue(null),
+    create: jest.fn().mockResolvedValue({ id: 'area-lockbox' }),
+  };
   return {
     tx: {
       areaChecklistItem: { createMany },
       inspection: { create },
+      property: { upsert: jest.fn().mockResolvedValue({}) },
+      propertyArea,
     } as unknown as InspectionCreationClient,
     createMany,
     create,
+    propertyArea,
   };
 }
 
@@ -108,9 +118,17 @@ describe('the occupied checklist is written where the technician will look for i
     const { tx, createMany } = client();
     await insertInspection(tx, plan(InspectionType.BACK_TO_MARKET), details);
 
-    expect(createMany).toHaveBeenCalledTimes(1);
-    const rows = createMany.mock.calls[0][0].data as { kind: AreaChecklistItemKind; propertyAreaId: string | null }[];
+    // The condition questions, then the sign, supra and lockbox's own
+    // (Moses, 2026-10-08) -- all organization-wide occupied rows.
+    expect(createMany).toHaveBeenCalledTimes(2);
+    const rows = createMany.mock.calls.flatMap(([call]) => call.data) as {
+      kind: AreaChecklistItemKind;
+      propertyAreaId: string | null;
+      label: string;
+      section: string | null;
+    }[];
     expect(rows.every((row) => row.kind === AreaChecklistItemKind.OCCUPIED && row.propertyAreaId === null)).toBe(true);
+    expect(rows.filter((row) => !row.section).map((row) => row.label)).toEqual(['Room condition', 'Overall condition']);
   });
 
   it.each([[InspectionType.MOVE_OUT], [InspectionType.MOVE_IN]])(

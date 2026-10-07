@@ -1,6 +1,11 @@
 import {
   answerWithChoices,
   bookedFilters,
+  asksLockboxQuestions,
+  BTM_LOCKBOX_SECTION,
+  isBtmLockboxArea,
+  unansweredLockboxQuestions,
+  lockboxUnansweredMessage,
   checklistKindFor,
   hvacSectionOf,
   hvacUnansweredItems,
@@ -61,6 +66,11 @@ import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
 import { DONE_INSPECTION_STATUSES } from '../common/inspection-done';
 import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
+import {
+  btmLockboxPropertyArea,
+  ensureBtmLockboxChecklist,
+  includesLockboxArea,
+} from '../common/btm-lockbox-area';
 import { jobStartTime } from './job-start-time';
 import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
@@ -1429,6 +1439,7 @@ export class TechnicianService {
 
   async rooms(user: AuthenticatedUser, inspectionId: string) {
     const inspection = await this.assignedInspection(user, inspectionId);
+    await this.ensureLockboxArea(user, inspection);
     const rooms = await this.prisma.inspectionArea.findMany({
       relationLoadStrategy: 'join',
       where: { inspectionId },
@@ -1440,6 +1451,71 @@ export class TechnicianService {
       take: 100,
     });
     return inspectedAreas(inspection.inspectionType, rooms).map((room) => this.mapRoom(room));
+  }
+
+  /**
+   * A back-to-market job booked before the sign, supra and lockbox area was
+   * built in (Moses, 2026-10-08) gets it the first time the phone opens it.
+   *
+   * Only one still to be done -- scheduled or in progress. A submitted or
+   * finalized inspection keeps exactly the areas it was walked with. Nothing
+   * is added where an area already is one, which includes the ones
+   * technicians added by hand before this; and the area cannot be removed
+   * (`removeArea`), so this never brings back something somebody took out.
+   */
+  private async ensureLockboxArea(
+    user: AuthenticatedUser,
+    inspection: {
+      id: string;
+      inspectionType: string;
+      status: string;
+      propertywareBuilding: {
+        id: string;
+        name: string;
+        addressLine1: string | null;
+        city: string | null;
+        state: string | null;
+        postalCode: string | null;
+      } | null;
+      propertywareUnit: { id: string } | null;
+    },
+  ) {
+    if (inspection.inspectionType !== InspectionType.BACK_TO_MARKET) return;
+    if (inspection.status !== InspectionStatus.SCHEDULED && inspection.status !== InspectionStatus.IN_PROGRESS)
+      return;
+    const building = inspection.propertywareBuilding;
+    if (!building) return;
+    const areas = await this.prisma.inspectionArea.findMany({
+      where: { inspectionId: inspection.id },
+      select: { propertyArea: { select: { name: true } } },
+    });
+    if (includesLockboxArea(areas.map((area) => area.propertyArea))) return;
+    await this.prisma.$transaction(async (tx) => {
+      await ensureBtmLockboxChecklist(tx, user.organizationId);
+      // The area's property row, as `serviceArea` writes it.
+      await tx.property.upsert({
+        where: { id: building.id },
+        update: {},
+        create: {
+          id: building.id,
+          organizationId: user.organizationId,
+          name: building.name,
+          addressLine1: building.addressLine1 || 'Address not provided',
+          city: building.city || 'Not provided',
+          state: building.state || 'TX',
+          postalCode: building.postalCode || 'Not provided',
+        },
+      });
+      const propertyAreaId = await btmLockboxPropertyArea(tx, {
+        propertyId: building.id,
+        unitId: inspection.propertywareUnit?.id ?? null,
+      });
+      await tx.inspectionArea.upsert({
+        where: { inspectionId_propertyAreaId: { inspectionId: inspection.id, propertyAreaId } },
+        create: { inspectionId: inspection.id, propertyAreaId },
+        update: {},
+      });
+    });
   }
 
   /**
@@ -1706,6 +1782,12 @@ export class TechnicianService {
    */
   async roomChecklist(user: AuthenticatedUser, roomId: string) {
     const room = await this.assignedRoom(user, roomId);
+    // The sign, supra and lockbox questions exist before they are asked for,
+    // including for an area a technician named that by hand on a visit the
+    // organization's rows predate. Both are required to submit the area, so
+    // an empty list here would leave it impossible to finish.
+    if (asksLockboxQuestions(room.inspection.inspectionType, room.propertyArea.name))
+      await ensureBtmLockboxChecklist(this.prisma, user.organizationId);
     const [items, responses] = await Promise.all([
       this.prisma.areaChecklistItem.findMany({
         // Filtered by kind, not just by area. An area carries both sets once it
@@ -1885,7 +1967,7 @@ export class TechnicianService {
     const item = identity
       ? await this.prisma.areaChecklistItem.findFirst({
           where: { ...identity, archivedAt: null, ...scope },
-          select: { id: true, responseType: true, choices: true },
+          select: { id: true, responseType: true, choices: true, section: true },
         })
       : null;
     if (!item)
@@ -1905,10 +1987,12 @@ export class TechnicianService {
      *
      * The occupied condition questions are checkboxes since 2026-09-15 ("Clean,
      * Needs attention"), stored in the order the question offers them; every
-     * other choice is still exactly one option.
+     * other choice is still exactly one option -- the sign, supra and lockbox
+     * questions too, which share the occupied list in their own section: a
+     * lockbox is not "Yes, No".
      */
     const answered = input.textValue?.trim() || null;
-    const ticksSeveral = item.responseType === 'CHOICE' && kind === 'OCCUPIED';
+    const ticksSeveral = item.responseType === 'CHOICE' && kind === 'OCCUPIED' && !item.section;
     const picked =
       item.responseType === 'CHOICE' && answered
         ? ticksSeveral
@@ -2247,6 +2331,15 @@ export class TechnicianService {
         'Areas cannot be changed after the inspection is finalized.',
       );
 
+    // Every back-to-market visit ends here (Moses, 2026-10-08). Skipping it,
+    // with a reason, stays possible; taking it off the visit does not.
+    if (inspection?.inspectionType === InspectionType.BACK_TO_MARKET && isBtmLockboxArea(room.propertyArea.name))
+      throw new ApplicationError(
+        409,
+        'LOCKBOX_AREA_REQUIRED',
+        'The sign, supra and lockbox area is part of every back-to-market inspection. Skip it with a reason instead.',
+      );
+
     /**
      * Findings are counted by `propertyAreaId`, not `inspectionAreaId`.
      *
@@ -2420,6 +2513,7 @@ export class TechnicianService {
   async completeRoom(user: AuthenticatedUser, id: string) {
     const existing = await this.assignedRoom(user, id);
     await this.assertHvacSectionAnswered(user, existing);
+    await this.assertLockboxAnswered(user, existing);
     let hasRecording = existing.media.some(
       (item) => item.uploadStatus === MediaUploadStatus.UPLOADED,
     );
@@ -2679,6 +2773,50 @@ export class TechnicianService {
         'HVAC_CHECKLIST_INCOMPLETE',
         hvacUnansweredMessage(unanswered.map((item) => item.label)),
         [{ unanswered: unanswered.map((item) => item.label) }],
+      );
+  }
+
+  /**
+   * The sign, supra and lockbox area is finished with both its questions
+   * answered (the office, 2026-10-08) -- the notes stay optional. The same
+   * shared rule gates the handset's Submit, so the two cannot disagree.
+   */
+  private async assertLockboxAnswered(user: AuthenticatedUser, room: {
+    id: string;
+    inspection: { inspectionType: string };
+    propertyArea: { name: string };
+  }) {
+    if (!asksLockboxQuestions(room.inspection.inspectionType, room.propertyArea.name)) return;
+    const [questions, responses] = await Promise.all([
+      this.prisma.areaChecklistItem.count({
+        where: {
+          organizationId: user.organizationId,
+          propertyAreaId: null,
+          kind: AreaChecklistItemKind.OCCUPIED,
+          section: BTM_LOCKBOX_SECTION,
+          archivedAt: null,
+        },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.findMany({
+        where: {
+          inspectionAreaId: room.id,
+          checklistItem: { kind: AreaChecklistItemKind.OCCUPIED, section: BTM_LOCKBOX_SECTION },
+        },
+        select: { textValue: true, checklistItem: { select: { label: true } } },
+      }),
+    ]);
+    // Nothing was ever asked here -- no rows for this organization yet -- so
+    // nothing can be owed. Refusing would leave the area impossible to finish.
+    if (!questions) return;
+    const unanswered = unansweredLockboxQuestions(
+      responses.map((response) => ({ label: response.checklistItem.label, textValue: response.textValue })),
+    );
+    if (unanswered.length)
+      throw new ApplicationError(
+        409,
+        'LOCKBOX_QUESTIONS_UNANSWERED',
+        lockboxUnansweredMessage(unanswered),
+        [{ unanswered }],
       );
   }
 
