@@ -95,16 +95,18 @@ const styles = StyleSheet.create({
   roomBody: { padding: 12 },
 
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  photoCell: { width: 152 },
+  // Three a row, filling it: the room body is 498 pt wide, less two 8 pt gaps
+  // (2026-10-08: bigger photographs). 4:3, as the cameras shoot.
+  photoCell: { width: 160 },
   photo: {
-    width: 152,
-    height: 114,
+    width: 160,
+    height: 120,
     objectFit: 'cover',
     borderRadius: 4,
     borderWidth: 1,
     borderColor: C.border,
   },
-  photoFrame: { position: 'relative', width: 152, height: 114 },
+  photoFrame: { position: 'relative', width: 160, height: 120 },
   photoCaption: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', marginTop: 3 },
   // On the photograph, bottom left, as the office's timestamp-camera reports
   // print it -- inside the frame, so the crop to fill the cell never cuts it.

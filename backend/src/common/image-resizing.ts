@@ -19,7 +19,10 @@ import { join } from 'node:path';
  * this and caches each width as its own stored object — an open integer would
  * let anyone fill the bucket with variants.
  */
-export const ALLOWED_PHOTO_WIDTHS = [320, 1000] as const;
+// 640 since 2026-10-08: the report shows three photographs a row instead of
+// four, each about 270 px wide -- 540 device pixels on a phone or a laptop's
+// sharp screen, which a 320 px copy only blurs up to.
+export const ALLOWED_PHOTO_WIDTHS = [320, 640, 1000] as const;
 export type AllowedPhotoWidth = (typeof ALLOWED_PHOTO_WIDTHS)[number];
 
 export function isAllowedPhotoWidth(value: number): value is AllowedPhotoWidth {

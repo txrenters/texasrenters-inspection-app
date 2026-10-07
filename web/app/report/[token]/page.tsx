@@ -33,8 +33,15 @@ import { ApiError, publicApi } from '@/lib/api';
  * opened the report are gone at the same team's request.
  */
 
-/** Grid thumbnails; the backend caches this width (see ALLOWED_PHOTO_WIDTHS). */
+/**
+ * Grid thumbnails, at the widths the backend caches (see ALLOWED_PHOTO_WIDTHS):
+ * the browser picks the smaller copy where a photograph is small and the larger
+ * on a sharp screen. Three a row on a wide page shows them about 270 px wide.
+ */
 const THUMB_WIDTH = 320;
+const THUMB_WIDTH_SHARP = 640;
+/** Two a row on a phone, three from 640 px up. */
+const THUMB_SIZES = '(min-width: 640px) 280px, 50vw';
 const FULL_WIDTH = 1000;
 
 function photoUrl(contentPath: string, width: number) {
@@ -173,8 +180,10 @@ function Room({ room }: { room: ReportRoomView }) {
         </div>
       ) : null}
 
+      {/* Three a row at most (the maintenance team, 2026-10-08): four made
+          each photograph too small to see what it shows. */}
       {room.photos.length ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {room.photos.map((photo) => (
             <figure className="space-y-1.5 print:break-inside-avoid" key={photo.id}>
               <a
@@ -189,7 +198,9 @@ function Room({ room }: { room: ReportRoomView }) {
                   alt={photo.caption ?? `Photo of ${room.name}`}
                   className="aspect-[4/3] w-full object-cover transition-transform hover:scale-105"
                   loading="lazy"
-                  src={photoUrl(photo.contentPath, THUMB_WIDTH)}
+                  sizes={THUMB_SIZES}
+                  src={photoUrl(photo.contentPath, THUMB_WIDTH_SHARP)}
+                  srcSet={`${photoUrl(photo.contentPath, THUMB_WIDTH)} ${THUMB_WIDTH}w, ${photoUrl(photo.contentPath, THUMB_WIDTH_SHARP)} ${THUMB_WIDTH_SHARP}w`}
                 />
                 {/* On the photograph, as the office's timestamp-camera reports
                     print it, in Texas time with its zone. */}
