@@ -114,8 +114,15 @@ const config: ExpoConfig = {
    * just reports nothing there. A bump would have cut every installed phone off
    * from updates until a new build reached all of them. That exception is the
    * module's alone: anything imported normally still needs the bump.
+   *
+   * 1.4.0 for UIKit's own tab bar (`NativeTabs`) and navigation bars on every
+   * screen (2026-10-07). No new package -- the native views are
+   * react-native-screens' -- but the native tab bar is not something a 1.3.0
+   * binary has ever drawn, and Liquid Glass comes only with a build made with
+   * the iOS 26 SDK (`image: latest` in eas.json). A bundle that changed the
+   * whole navigation shell is not one to land on a binary nobody tested it on.
    */
-  version: '1.3.0',
+  version: '1.4.0',
   orientation: 'portrait',
   scheme: 'texasrenters-inspection',
   icon: './assets/icon.png',

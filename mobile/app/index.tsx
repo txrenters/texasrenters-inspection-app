@@ -9,5 +9,5 @@ export default function RootIndex() {
     return <ScreenLoader label="Verifying secure access…" />;
   }
   if (user.data?.mustChangePassword) return <Redirect href="/change-password" />;
-  return <Redirect href={user.data ? '/(app)/(tabs)' : '/login'} />;
+  return <Redirect href={user.data ? '/(app)/(tabs)/(home)' : '/login'} />;
 }

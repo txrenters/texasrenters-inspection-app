@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
   CameraIcon,
@@ -11,19 +11,18 @@ import {
   Settings2Icon,
 } from 'lucide-react-native';
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { applyAreaOrder, loadAreaOrder, saveAreaOrder } from '@/src/areas/area-order';
 import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useRooms, useSkipAreas } from '@/src/features/queries';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
+import { BelowHeader } from '@/src/lib/native-header';
 import { goBack } from '@/src/lib/navigation';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import { deriveAreaStatus, pickUpNextArea, type AreaStatusDescriptor } from '@/src/utils/area-status';
@@ -194,9 +193,10 @@ export default function JobInspectionScreen() {
 
   if (inspection.isLoading || !inspection.data) {
     return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <BelowHeader className="bg-background">
+        <Stack.Screen options={{ title: 'Inspection', headerRight: () => <HomeButton /> }} />
         <DetailSkeleton sections={3} />
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
@@ -262,35 +262,23 @@ export default function JobInspectionScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
+    <View className="flex-1 bg-background">
+      <Stack.Screen
+        options={{ title: INSPECTION_TITLE[item.type] ?? 'Inspection', headerRight: () => <HomeButton /> }}
+      />
       <ScrollView
         className="flex-1"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingBottom: 120 }}
         // Off while a row is held, so one finger cannot scroll and rearrange at once.
         scrollEnabled={!draggingArea}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={theme.primary} />}
       >
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Pressable
-            accessibilityLabel="Back to the job"
-            accessibilityRole="button"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
-            hitSlop={8}
-            onPress={() => goBack()}
-          >
-            <BackGlyph size={18} className="text-foreground" />
-          </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text numberOfLines={1} className="text-lg font-bold text-foreground">
-              {INSPECTION_TITLE[item.type] ?? 'Inspection'}
-            </Text>
-            <Text numberOfLines={1} className="text-xs text-muted-foreground">
-              {item.property.address}
-            </Text>
-          </View>
-          <HomeButton />
-        </View>
+        <Text numberOfLines={1} className="px-5 pb-3 pt-1 text-sm text-muted-foreground">
+          {item.property.address}
+        </Text>
 
         <View className="mx-5 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-center justify-between">
@@ -498,6 +486,6 @@ export default function JobInspectionScreen() {
         // Straight into the new area: the technician is standing in it.
         onAdded={(roomId) => router.push(`/areas/${roomId}`)}
       />
-    </SafeAreaView>
+    </View>
   );
 }

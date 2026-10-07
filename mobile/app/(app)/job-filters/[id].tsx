@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import {
   CameraIcon,
   CheckCircle2Icon,
@@ -11,7 +11,6 @@ import {
 } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   filterAssessed,
@@ -27,11 +26,11 @@ import { BottomSheet } from '@/src/components/BottomSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { ServiceAnswerSheet } from '@/src/components/ServiceAnswerSheet';
 import { Button, Card, Loader } from '@/src/components/ui';
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFiltersArea, useInspection, useInspectionActions } from '@/src/features/queries';
 import { importFromGallery } from '@/src/media/gallery-import';
 import { registerIcons } from '@/src/lib/icons';
+import { BelowHeader } from '@/src/lib/native-header';
 import { goBack } from '@/src/lib/navigation';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -498,9 +497,10 @@ export default function JobFiltersScreen() {
 
   if (inspection.isLoading || !inspection.data) {
     return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <BelowHeader className="bg-background">
+        <Stack.Screen options={{ title: 'AC filter change', headerRight: () => <HomeButton /> }} />
         <DetailSkeleton sections={3} />
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
@@ -633,27 +633,17 @@ export default function JobFiltersScreen() {
     (rules.changeAsked || !toPhotograph.length ? '' : ' (optional)');
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 240 }}>
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Button
-            accessibilityLabel="Back"
-            className="h-9 w-9 px-0 py-0"
-            icon={<BackGlyph size={18} className="text-foreground" />}
-            label=""
-            onPress={() => goBack()}
-            variant="secondary"
-          />
-          <View className="min-w-0 flex-1">
-            <Text numberOfLines={1} className="text-lg font-bold text-foreground">
-              AC filter change
-            </Text>
-            <Text numberOfLines={1} className="text-xs text-muted-foreground">
-              {item.property.address}
-            </Text>
-          </View>
-          <HomeButton />
-        </View>
+    <View className="flex-1 bg-background">
+      <Stack.Screen options={{ title: 'AC filter change', headerRight: () => <HomeButton /> }} />
+      <ScrollView
+        className="flex-1"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{ paddingBottom: 240 }}
+      >
+        <Text numberOfLines={1} className="px-5 pb-3 pt-1 text-sm text-muted-foreground">
+          {item.property.address}
+        </Text>
 
         <Card className="mx-5 gap-2">
           <Text className="text-sm text-foreground">
@@ -875,6 +865,6 @@ export default function JobFiltersScreen() {
         title="AC filter change"
         visible={wholeService}
       />
-    </SafeAreaView>
+    </View>
   );
 }

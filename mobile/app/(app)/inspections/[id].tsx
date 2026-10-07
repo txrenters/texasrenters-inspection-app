@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useIsFocused } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
   CalendarXIcon,
@@ -12,7 +12,6 @@ import {
   PlayCircleIcon,
 } from 'lucide-react-native';
 import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   parseVisitDetails,
   reportableServices,
@@ -28,13 +27,12 @@ import { NoAccessSheet } from '@/src/components/NoAccessSheet';
 import { NotDoneSheet } from '@/src/components/NotDoneSheet';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { Button } from '@/src/components/ui';
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFiltersArea, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { useSecondNow } from '@/src/features/useSecondNow';
 import { registerIcons } from '@/src/lib/icons';
-import { goBack } from '@/src/lib/navigation';
+import { BelowHeader } from '@/src/lib/native-header';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import { deriveAreaStatus } from '@/src/utils/area-status';
 import {
@@ -95,26 +93,15 @@ const INSPECTION_TYPE_LABEL: Record<string, string> = {
 
 const isService = (task: JobTask): task is JobTask & { key: ReportableVisitService } => task.key !== 'inspection';
 
+/** The platform's bar: "Job", the back chevron, and the way home. */
+const jobHeader = <Stack.Screen options={{ title: 'Job', headerRight: () => <HomeButton /> }} />;
+
 /** A job no longer on this technician's schedule, opened from a list or a notification. */
 function JobRemoved() {
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
-      <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-        <Pressable
-          accessibilityLabel="Back"
-          accessibilityRole="button"
-          className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
-          hitSlop={8}
-          onPress={() => goBack()}
-        >
-          <BackGlyph size={18} className="text-foreground" />
-        </Pressable>
-        <Text numberOfLines={1} className="min-w-0 flex-1 text-lg font-bold text-foreground">
-          Job
-        </Text>
-        <HomeButton />
-      </View>
-      <View className="mx-5 items-center gap-3 rounded-2xl bg-card p-6">
+    <BelowHeader className="bg-background">
+      {jobHeader}
+      <View className="mx-5 mt-2 items-center gap-3 rounded-2xl bg-card p-6">
         <View className="h-12 w-12 items-center justify-center rounded-xl bg-muted">
           <CalendarXIcon size={22} className="text-muted-foreground" />
         </View>
@@ -125,10 +112,10 @@ function JobRemoved() {
         <Button
           className="mt-2 self-stretch"
           label="Back to my jobs"
-          onPress={() => router.replace('/(app)/(tabs)/inspections')}
+          onPress={() => router.replace('/(app)/(tabs)/(jobs)/inspections')}
         />
       </View>
-    </SafeAreaView>
+    </BelowHeader>
   );
 }
 
@@ -169,9 +156,10 @@ export default function JobScreen() {
 
   if (inspection.isLoading || !inspection.data) {
     return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+      <BelowHeader className="bg-background">
+        {jobHeader}
         <DetailSkeleton sections={3} />
-      </SafeAreaView>
+      </BelowHeader>
     );
   }
 
@@ -275,7 +263,7 @@ export default function JobScreen() {
           setEnding(null);
           setClosingComments(EMPTY_CLOSING_COMMENTS);
           Alert.alert('Job ended', 'It is with the office. Any photos still sending keep uploading.', [
-            { text: 'Done', onPress: () => router.replace('/(app)/(tabs)/inspections') },
+            { text: 'Done', onPress: () => router.replace('/(app)/(tabs)/(jobs)/inspections') },
           ]);
         },
         onError: (error) =>
@@ -295,30 +283,17 @@ export default function JobScreen() {
     : tasks;
 
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
+    <View className="flex-1 bg-background">
+      {jobHeader}
       <ScrollView
         className="flex-1"
+        // Under the transparent bar, scrolled clear of it by the system.
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingBottom: 150 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={theme.primary} />}
       >
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <Pressable
-            accessibilityLabel="Back"
-            accessibilityRole="button"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
-            hitSlop={8}
-            onPress={() => goBack()}
-          >
-            <BackGlyph size={18} className="text-foreground" />
-          </Pressable>
-          <Text numberOfLines={1} className="min-w-0 flex-1 text-lg font-bold text-foreground">
-            Job
-          </Text>
-          <HomeButton />
-        </View>
-
-        <View className="mx-5 gap-3 rounded-2xl bg-card p-5">
+        <View className="mx-5 mt-2 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-start gap-3">
             <View className="h-11 w-11 items-center justify-center rounded-xl bg-primary/10">
               <MapPinIcon size={20} className="text-primary" />
@@ -501,6 +476,6 @@ export default function JobScreen() {
         onReport={(reason) => actions.couldNotAccess.mutate(reason, { onSettled: () => setNoAccessOpen(false) })}
         visible={noAccessOpen}
       />
-    </SafeAreaView>
+    </View>
   );
 }
