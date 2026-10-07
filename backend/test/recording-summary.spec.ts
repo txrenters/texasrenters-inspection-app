@@ -131,34 +131,54 @@ describe('checking the model’s summary against what was said', () => {
     ]);
   });
 
-  it('keeps an action that cites what was said, in the office’s order, and drops one that does not', () => {
+  const ITEMS = [
+    { id: 'item-doors', label: 'Doors and locks' },
+    { id: 'item-windows', label: 'Windows and locks' },
+  ];
+
+  it('keeps an action that cites what was said, one line, beside the item it names', () => {
     const summary = acceptedSummary(
       JSON.stringify({
         recordings: [],
         actions: {
-          cleaning: [{ text: 'Clean windows inside and out.', from: [123] }],
+          cleaning: [{ text: 'Clean the window inside and out.', item: 'c2', from: [123] }],
           repairs: [
-            { text: 'Touch-up paint needed on:', details: ['Bathroom door frame', ''], from: [58] },
-            { text: 'Replace the water heater.', from: [58] },
-            { text: 'Replace keyed bedroom door knobs.', from: [999] },
-            { text: 'Install missing cover plate in closet area.', from: [20] },
+            // A list of places beneath it is not taken (2026-10-08: it only said it twice).
+            { text: 'Apply touch-up paint to the bathroom door frame', item: 'c1', details: ['Bathroom door frame'], from: [58] },
+            { text: 'Replace the water heater.', item: null, from: [58] },
+            { text: 'Replace keyed bedroom door knobs.', item: 'c1', from: [999] },
+            // An item the room does not have: kept, on no item.
+            { text: 'Install missing cover plate in closet area.', item: 'c9', from: [20] },
           ],
           painting: [],
         },
       }),
       [BEDROOM, CLOSET],
+      ITEMS,
     );
 
     expect(summary.actions).toEqual([
       {
         group: 'REPAIRS',
         items: [
-          { text: 'Touch-up paint needed on:', details: ['Bathroom door frame'] },
-          { text: 'Install missing cover plate in closet area.', details: [] },
+          { text: 'Apply touch-up paint to the bathroom door frame', details: [], itemId: 'item-doors', itemLabel: 'Doors and locks' },
+          { text: 'Install missing cover plate in closet area', details: [], itemId: null, itemLabel: null },
         ],
       },
-      { group: 'CLEANING', items: [{ text: 'Clean windows inside and out.', details: [] }] },
+      {
+        group: 'CLEANING',
+        items: [{ text: 'Clean the window inside and out', details: [], itemId: 'item-windows', itemLabel: 'Windows and locks' }],
+      },
     ]);
+  });
+
+  it('asks for one line per action, naming its item from the room’s checklist', () => {
+    const prompt = summaryPrompt('Bedroom 1', 'move-out inspection', [BEDROOM], ITEMS);
+
+    expect(prompt).toContain('c1: Doors and locks');
+    expect(prompt).toContain('c2: Windows and locks');
+    expect(prompt).toContain('Never a separate list of places');
+    expect(prompt).not.toContain('"details"');
   });
 
   it('refuses an answer that is not the object asked for', () => {
@@ -184,7 +204,7 @@ describe('checking the model’s summary against what was said', () => {
 
 describe('reading a stored summary back', () => {
   const stored = {
-    version: 1,
+    version: 2,
     mediaIds: ['media-1', 'media-2'],
     recordings: [{ mediaId: 'media-1', label: null, lines: [{ start: 0, text: 'Entering.' }] }],
     actions: [],
@@ -195,7 +215,17 @@ describe('reading a stored summary back', () => {
   });
 
   it('is stale once a recording was added since', () => {
-    expect(readStoredSummary(stored, ['media-1', 'media-2', 'media-3'])?.current).toBe(false);
+    expect(readStoredSummary(stored, ['media-1', 'media-2', 'media-3'])).toMatchObject({
+      current: false,
+      staleReason: 'RECORDINGS',
+    });
+  });
+
+  it('is stale when written before actions named their item, until summarized again', () => {
+    expect(readStoredSummary({ ...stored, version: 1 }, ['media-1', 'media-2'])).toMatchObject({
+      current: false,
+      staleReason: 'FORMAT',
+    });
   });
 
   it('is nothing at all when the column is empty or not understood', () => {
@@ -213,7 +243,7 @@ function harness({ media = [BEDROOM] as SummaryRecording[] } = {}) {
       findFirst: jest.fn().mockResolvedValue({ id: 'area-1' }),
       findUniqueOrThrow: jest.fn().mockResolvedValue({
         id: 'area-1',
-        propertyArea: { name: 'Master Bedroom' },
+        propertyArea: { name: 'Master Bedroom', checklistItems: [{ id: 'item-windows', label: 'Windows and locks' }] },
         media: media.map((recording) => ({
           id: recording.mediaId,
           recordingType: recording.primary ? 'PRIMARY_AREA' : 'ADDITIONAL_ISSUE',
@@ -242,7 +272,7 @@ function harness({ media = [BEDROOM] as SummaryRecording[] } = {}) {
               type: 'output_text',
               text: JSON.stringify({
                 recordings: [{ recording: 1, lines: [point(0, 'Entering main bedroom; the door is functional but keyed.')] }],
-                actions: { cleaning: [{ text: 'Clean windows inside and out.', from: [123] }] },
+                actions: { cleaning: [{ text: 'Clean windows inside and out.', item: 'c1', from: [123] }] },
               }),
             },
           ],
@@ -268,10 +298,15 @@ describe('summarizing one room', () => {
     const view = await service.summarizeArea('org-1', 'inspection-1', 'area-1', 'user-1');
 
     const stored = prisma.inspectionArea.update.mock.calls[0][0].data.recordingSummary;
-    expect(stored.version).toBe(1);
+    expect(stored.version).toBe(2);
     expect(stored.mediaIds).toEqual(['media-1']);
     expect(view?.current).toBe(true);
-    expect(view?.actions).toEqual([{ group: 'CLEANING', items: [{ text: 'Clean windows inside and out.', details: [] }] }]);
+    expect(view?.actions).toEqual([
+      {
+        group: 'CLEANING',
+        items: [{ text: 'Clean windows inside and out', details: [], itemId: 'item-windows', itemLabel: 'Windows and locks' }],
+      },
+    ]);
     expect(aiSettings.recordUsage).toHaveBeenCalledWith('org-1', expect.anything(), 'RECORDING_SUMMARY', expect.anything(), 'area-1');
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -304,7 +339,7 @@ describe('summarizing one room', () => {
 describe('every area’s summary, for the summaries tab', () => {
   it('lists areas in walk order, marking a summary stale as the report would', async () => {
     const stored = (mediaIds: string[]) => ({
-      version: 1,
+      version: 2,
       mediaIds,
       recordings: [{ mediaId: mediaIds[0], label: null, lines: [{ start: 0, text: 'Entering.' }] }],
       actions: [],

@@ -29,6 +29,12 @@ import { normaliseSpeech } from './checklist-prefill.service';
  * - **Every action cites its lines,** and shares a word with them.
  */
 
+/** A room checklist item an action can belong to. */
+export interface SummaryItem {
+  id: string;
+  label: string;
+}
+
 /** One recording's narration as it is handed to the model. */
 export interface SummaryRecording {
   mediaId: string;
@@ -39,9 +45,7 @@ export interface SummaryRecording {
 
 const MAX_POINT_CHARS = 400;
 const MAX_ACTION_CHARS = 200;
-const MAX_DETAIL_CHARS = 150;
 const MAX_ACTIONS_PER_GROUP = 12;
-const MAX_DETAILS = 6;
 
 /** Words too common to show that a point came from a line. */
 const COMMON = new Set([
@@ -72,6 +76,7 @@ export function summaryPrompt(
   roomName: string,
   inspectionLabel: string,
   recordings: SummaryRecording[],
+  items: SummaryItem[] = [],
 ) {
   const narration = recordings.map((recording, index) =>
     [
@@ -94,15 +99,22 @@ export function summaryPrompt(
     '   - "text": one or two clear sentences saying what the inspector said there.',
     '   Keep every observation, recommendation and measurement. Drop filler, false starts and repetition, and join lines that make one point under the first line\'s second. Use the inspector\'s own words where you can. Never add a condition, cause, cost or recommendation that was not said, and keep the inspector\'s opinions as theirs ("recommend", "suggest").',
     '',
-    '2. What the room needs, as short action bullets in three groups:',
+    '2. What the room needs, as short actions in three groups:',
     '   - "repairs": repairs, replacements, installs and removals, including touch-up paint on a particular spot;',
     '   - "painting": repainting walls, ceilings or the room;',
     '   - "cleaning": cleaning of any kind.',
-    '   Each bullet has "text"; "details" listing the places it applies to when one action covers several; and "from", the seconds of the lines it comes from. Only what the inspector said needs doing, nothing that is fine. Leave a group empty when nothing applies.',
+    '   Each action has:',
+    '   - "text": ONE short line, at most 12 words, that names the thing it is about -- "Wipe down the door completely", "Clean the window inside and out", "Shampoo and vacuum the carpet", "Apply touch-up paint to walls 2 and 3". Never a separate list of places, and never a word that only repeats another: say it once;',
+    '   - "item": the reference of the checklist item below that the action is about, or null when it is about none of them;',
+    '   - "from": the seconds of the lines it comes from.',
+    '   Only what the inspector said needs doing, nothing that is fine. Leave a group empty when nothing applies.',
+    '',
+    'Checklist items of this room:',
+    ...(items.length ? items.map((item, index) => `c${index + 1}: ${item.label}`) : ['(none)']),
     '',
     'Answer with only this JSON, for example:',
     '{"recordings":[{"recording":1,"lines":[{"at":0,"text":"Entering main bedroom; the door is functional but has a keyed knob."}]}],',
-    ' "actions":{"repairs":[{"text":"Touch-up paint needed on:","details":["Bathroom door frame","Bedroom entry door frame"],"from":[58,74]}],"painting":[],"cleaning":[{"text":"Clean windows inside and out.","details":[],"from":[123]}]}}',
+    ' "actions":{"repairs":[{"text":"Apply touch-up paint to the bathroom and entry door frames","item":"c1","from":[58,74]}],"painting":[],"cleaning":[{"text":"Clean the window inside and out","item":"c4","from":[123]}]}}',
   ].join('\n');
 }
 
@@ -110,7 +122,7 @@ const pointSchema = z.object({ at: z.number(), text: z.string() });
 const recordingSchema = z.object({ recording: z.number().int(), lines: z.array(z.unknown()).max(300) });
 const actionSchema = z.object({
   text: z.string(),
-  details: z.array(z.unknown()).max(20).optional().catch([]),
+  item: z.string().nullable().optional().catch(null),
   from: z.array(z.unknown()).max(40).optional().catch([]),
 });
 const answerSchema = z.object({
@@ -172,7 +184,11 @@ function recordingPoints(recording: SummaryRecording, offered: unknown[] | undef
  * about the whole: an answer that is not the JSON object asked for is refused,
  * and the room keeps printing its narration word for word.
  */
-export function acceptedSummary(text: string, recordings: SummaryRecording[]): RecordingSummary {
+export function acceptedSummary(
+  text: string,
+  recordings: SummaryRecording[],
+  items: SummaryItem[] = [],
+): RecordingSummary {
   let raw: unknown;
   try {
     raw = JSON.parse(jsonIn(text, '{'));
@@ -199,29 +215,29 @@ export function acceptedSummary(text: string, recordings: SummaryRecording[]): R
     for (const line of recording.lines)
       lineAt.set(line.start, [...(lineAt.get(line.start) ?? []), line.text]);
 
+  const byRef = new Map(items.map((item, index) => [`c${index + 1}`, item]));
   const actions = RECORDING_ACTION_GROUPS.map((group) => {
     const seen = new Set<string>();
-    const items: Array<{ text: string; details: string[] }> = [];
+    const kept: RecordingSummary['actions'][number]['items'] = [];
     for (const entry of answer.data.actions?.[GROUP_KEY[group]] ?? []) {
       const parsed = actionSchema.safeParse(entry);
       if (!parsed.success) continue;
-      const itemText = parsed.data.text.trim().replace(/\s+/g, ' ');
-      if (!itemText || itemText.length > MAX_ACTION_CHARS || seen.has(itemText.toLowerCase())) continue;
-      const details = (parsed.data.details ?? [])
-        .filter((detail): detail is string => typeof detail === 'string')
-        .map((detail) => detail.trim().replace(/\s+/g, ' '))
-        .filter((detail) => detail.length > 0 && detail.length <= MAX_DETAIL_CHARS)
-        .slice(0, MAX_DETAILS);
+      // One line, with no full stop: it prints in a table cell.
+      const actionText = parsed.data.text.trim().replace(/\s+/g, ' ').replace(/\.$/, '');
+      if (!actionText || actionText.length > MAX_ACTION_CHARS || seen.has(actionText.toLowerCase())) continue;
       const cited = (parsed.data.from ?? [])
         .filter((second): second is number => typeof second === 'number')
         .flatMap((second) => lineAt.get(second) ?? []);
       // Cites a line that was said, and shares a word with it.
-      if (!cited.length || !grounded([itemText, ...details].join(' '), cited.join(' '), 0.01)) continue;
-      seen.add(itemText.toLowerCase());
-      items.push({ text: itemText, details });
-      if (items.length >= MAX_ACTIONS_PER_GROUP) break;
+      if (!cited.length || !grounded(actionText, cited.join(' '), 0.01)) continue;
+      // An item that was asked, or none: a reference the room does not have
+      // goes on the "Other" row rather than beside the wrong item.
+      const item = parsed.data.item ? byRef.get(parsed.data.item.trim()) : undefined;
+      seen.add(actionText.toLowerCase());
+      kept.push({ text: actionText, details: [], itemId: item?.id ?? null, itemLabel: item?.label ?? null });
+      if (kept.length >= MAX_ACTIONS_PER_GROUP) break;
     }
-    return { group, items };
+    return { group, items: kept };
   }).filter((entry) => entry.items.length > 0);
 
   return {
@@ -234,9 +250,17 @@ export function acceptedSummary(text: string, recordings: SummaryRecording[]): R
   };
 }
 
-/** The stored column, as written by `RecordingSummaryService`. */
+/**
+ * The stored column, as written by `RecordingSummaryService`.
+ *
+ * Version 2 (2026-10-08): every action one line, naming the checklist item it
+ * belongs to. A version-1 summary is read -- the console shows it -- but is not
+ * current: the report prints actions in their items' Comments cells now, and a
+ * version-1 action names no item.
+ */
+export const STORED_SUMMARY_VERSION = 2;
 const storedSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   mediaIds: z.array(z.string()),
   recordings: z.array(
     z.object({
@@ -248,7 +272,14 @@ const storedSchema = z.object({
   actions: z.array(
     z.object({
       group: z.enum(RECORDING_ACTION_GROUPS),
-      items: z.array(z.object({ text: z.string(), details: z.array(z.string()) })),
+      items: z.array(
+        z.object({
+          text: z.string(),
+          details: z.array(z.string()),
+          itemId: z.string().nullable().optional(),
+          itemLabel: z.string().nullable().optional(),
+        }),
+      ),
     }),
   ),
 });
@@ -263,13 +294,16 @@ export type StoredRecordingSummary = z.infer<typeof storedSchema>;
 export function readStoredSummary(
   stored: unknown,
   currentMediaIds: string[],
-): { summary: RecordingSummary; current: boolean } | null {
+): { summary: RecordingSummary; current: boolean; staleReason: 'RECORDINGS' | 'FORMAT' | null } | null {
   const parsed = storedSchema.safeParse(stored);
   if (!parsed.success) return null;
   const was = [...parsed.data.mediaIds].sort().join(',');
   const now = [...currentMediaIds].sort().join(',');
+  const staleReason =
+    was !== now ? 'RECORDINGS' : parsed.data.version < STORED_SUMMARY_VERSION ? 'FORMAT' : null;
   return {
     summary: { recordings: parsed.data.recordings, actions: parsed.data.actions },
-    current: was === now,
+    current: staleReason === null,
+    staleReason,
   };
 }

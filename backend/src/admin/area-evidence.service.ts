@@ -132,7 +132,9 @@ function reviewMark(
 /** A stored recording summary as the console shows it, or null when there is none. */
 function summaryView(stored: unknown, at: Date | null, currentMediaIds: string[]) {
   const read = at ? readStoredSummary(stored, currentMediaIds) : null;
-  return read && at ? { ...read.summary, generatedAt: at.toISOString(), current: read.current } : null;
+  return read && at
+    ? { ...read.summary, generatedAt: at.toISOString(), current: read.current, staleReason: read.staleReason }
+    : null;
 }
 
 @Injectable()

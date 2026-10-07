@@ -7,8 +7,8 @@
  * it that way: content logic added here silently diverges from the web report.
  */
 import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
-import { NARRATION_HEADING, REPORT_PALETTE, REPORT_TYPE } from '@texasrenters/shared';
-import type { ReportActionGroupView, ReportRoomView, ReportView } from '@texasrenters/shared';
+import { REPORT_PALETTE, REPORT_TYPE } from '@texasrenters/shared';
+import type { ReportRoomView, ReportView } from '@texasrenters/shared';
 
 const C = REPORT_PALETTE;
 /**
@@ -129,16 +129,6 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
 
-  // What the room needs, under its photographs (2026-10-07).
-  narration: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.border },
-  narrationHeading: { fontSize: B * 1.05, fontFamily: 'Helvetica-Bold', marginBottom: 3 },
-  // Two columns (2026-10-08: "so it's not that long").
-  actionColumns: { flexDirection: 'row', gap: 16 },
-  actionColumn: { flexGrow: 1, flexBasis: 0 },
-  actionHeading: { fontSize: B, fontFamily: 'Helvetica-Bold', marginTop: 4, marginBottom: 2 },
-  actionItem: { flexDirection: 'row', fontSize: B, marginBottom: 2 },
-  actionMark: { width: B },
-  actionText: { flexGrow: 1, flexBasis: 0 },
   emptyRoom: { color: C.muted, fontSize: B },
   // The condition table. Column widths are fixed rather than proportional so
   // the three verdict columns line up down the page the way the office's
@@ -146,23 +136,31 @@ const styles = StyleSheet.create({
   checklistTable: { marginBottom: 8 },
   checklistRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: C.border },
   checklistHeadRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.border },
-  checklistHeadCell: { fontSize: B * 0.75, color: C.muted, paddingVertical: 4, paddingHorizontal: 4 },
-  checklistCell: { fontSize: B, paddingVertical: 4, paddingHorizontal: 4 },
-  // Widths for the larger type: the item a little narrower, the verdicts a
-  // little wider, so "Working" fits its column at 13.5 pt.
+  checklistHeadCell: { fontSize: B * 0.7, color: C.muted, paddingVertical: 3, paddingHorizontal: 3 },
+  checklistCell: { fontSize: B * 0.85, paddingVertical: 3, paddingHorizontal: 3 },
+  /*
+   * Tight verdict columns, as InspectCloud sets them, so the Comments column --
+   * where what each item needs is printed -- has the room (the maintenance
+   * team, 2026-10-08). Their headings are set small enough that "Undamaged"
+   * fits whole.
+   */
   checklistLabel: {
-    width: '30%',
+    width: '27%',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
-    fontSize: B * 0.9,
+    fontSize: B * 0.75,
   },
-  checklistAxis: { width: '12%', textAlign: 'center' },
+  checklistAxis: { width: '8%', textAlign: 'center', paddingHorizontal: 1 },
+  checklistAxisHead: { fontSize: 6.5 },
   // One answer where the three verdicts would be: the width of all three, so
   // the Comments column still lines up with the rows above and below it.
-  checklistAnswer: { width: '36%', textAlign: 'center', fontWeight: 700 },
+  checklistAnswer: { width: '24%', textAlign: 'center', fontWeight: 700 },
   checklistPass: { color: C.pass, fontWeight: 700 },
   checklistFail: { color: C.fail, fontWeight: 700 },
-  checklistComment: { width: '34%', color: C.muted },
+  checklistComment: { width: '49%' },
+  // Arial 9 (2026-10-08: "Arial size 9 for that part").
+  commentNote: { fontSize: REPORT_TYPE.commentPt, color: C.muted, lineHeight: 1.3 },
+  commentAction: { fontSize: REPORT_TYPE.commentPt, lineHeight: 1.3 },
   quietRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -269,9 +267,11 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
           <Text style={[styles.checklistHeadCell, styles.checklistAnswer]}>Condition</Text>
         ) : (
           <>
-            <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Clean</Text>
-            <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Undam.</Text>
-            <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Working</Text>
+            <Text style={[styles.checklistHeadCell, styles.checklistAxis, styles.checklistAxisHead]}>Clean</Text>
+            <Text style={[styles.checklistHeadCell, styles.checklistAxis, styles.checklistAxisHead]}>
+              Undamaged
+            </Text>
+            <Text style={[styles.checklistHeadCell, styles.checklistAxis, styles.checklistAxisHead]}>Working</Text>
           </>
         )}
         <Text style={[styles.checklistHeadCell, styles.checklistComment]}>Comments</Text>
@@ -299,71 +299,20 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
               </Text>
             </>
           )}
-          <Text style={[styles.checklistCell, styles.checklistComment]}>{row.comment}</Text>
+          {/* The reviewer's comment, then what the room needs that is about
+              this item, from the summary of its recordings, one line each. */}
+          <View style={[styles.checklistCell, styles.checklistComment]}>
+            {row.comment ? <Text style={styles.commentNote}>{row.comment}</Text> : null}
+            {row.actions.map((action) => (
+              <Text key={action} style={styles.commentAction}>
+                {action}
+              </Text>
+            ))}
+          </View>
         </View>
       ))}
     </View>
   );
-}
-
-/** Characters to a line of a half-width column at the bullets' size, near enough. */
-const ACTION_COLUMN_CHARS = 34;
-
-type ActionColumn = Array<ReportActionGroupView & { continued: boolean }>;
-
-/**
- * The room's bullets split into two columns of about equal height.
- *
- * @react-pdf has no CSS columns, so the split is made here: each bullet is
- * weighed by the lines it will take (its places beneath it included, and its
- * group's heading when it opens one), and the cut falls where the two halves
- * are closest. A bullet is never split. A group cut in two repeats its
- * heading, marked "(continued)", at the top of the right-hand column. Layout
- * only: what is listed, and in what order, is the view model's.
- */
-export function actionColumns(groups: ReportActionGroupView[]): [ActionColumn, ActionColumn] {
-  const lines = (text: string) => Math.max(1, Math.ceil(text.length / ACTION_COLUMN_CHARS));
-  const entries = groups.flatMap((group, groupIndex) =>
-    group.items.map((item, index) => ({
-      groupIndex,
-      item,
-      weight:
-        lines(item.text) +
-        item.details.reduce((total, detail) => total + lines(detail), 0) +
-        (index === 0 ? 1.5 : 0),
-    })),
-  );
-  const total = entries.reduce((sum, entry) => sum + entry.weight, 0);
-  let cut = entries.length;
-  let best = Number.POSITIVE_INFINITY;
-  let running = 0;
-  // Never an empty left column; an empty right one only when there is one bullet.
-  for (let index = 1; index <= entries.length; index += 1) {
-    running += entries[index - 1].weight;
-    const gap = Math.abs(total - 2 * running);
-    if (gap < best) {
-      best = gap;
-      cut = index;
-    }
-  }
-  const column = (part: typeof entries, startsMidGroup: boolean): ActionColumn => {
-    const result: ActionColumn = [];
-    for (const entry of part) {
-      const last = result[result.length - 1];
-      if (last && last.heading === groups[entry.groupIndex].heading) last.items.push(entry.item);
-      else
-        result.push({
-          heading: groups[entry.groupIndex].heading,
-          continued: startsMidGroup && result.length === 0,
-          items: [entry.item],
-        });
-    }
-    return result;
-  };
-  const left = entries.slice(0, cut);
-  const right = entries.slice(cut);
-  const midGroup = left.length > 0 && right.length > 0 && left[left.length - 1].groupIndex === right[0].groupIndex;
-  return [column(left, false), column(right, midGroup)];
 }
 
 function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) {
@@ -373,7 +322,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
     // rather than leaving most of a page blank.
     <View
       style={styles.roomCard}
-      wrap={room.checklist.length + photos.length + room.actions.length > 4}
+      wrap={room.checklist.length + photos.length > 4}
     >
       <View style={styles.roomHeader}>
         <View>
@@ -397,46 +346,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
             ))}
           </View>
         ) : null}
-        {/* What the room needs, from the summary of its recordings. The
-            timestamped points are not printed (the maintenance team,
-            2026-10-07). Wrappable: a long list has to be allowed across a
-            page break rather than clipped. */}
-        {room.actions.length ? (
-          <View style={styles.narration}>
-            <Text style={styles.narrationHeading}>{NARRATION_HEADING}:</Text>
-            {/* Two balanced columns under the office's headings. A bullet
-                and an en dash: both are in the PDF's standard font, where a
-                hollow circle is not. */}
-            <View style={styles.actionColumns}>
-              {actionColumns(room.actions).map((column, columnIndex) => (
-                <View key={columnIndex} style={styles.actionColumn}>
-                  {column.map((group) => (
-                    <View key={group.heading}>
-                      <Text style={styles.actionHeading}>
-                        {group.continued ? `${group.heading} (continued)` : group.heading}
-                      </Text>
-                      {group.items.map((item, index) => (
-                        <View key={index} wrap={false}>
-                          <View style={styles.actionItem}>
-                            <Text style={styles.actionMark}>{'•'}</Text>
-                            <Text style={styles.actionText}>{item.text}</Text>
-                          </View>
-                          {item.details.map((detail, detailIndex) => (
-                            <View key={detailIndex} style={[styles.actionItem, { paddingLeft: 10 }]}>
-                              <Text style={styles.actionMark}>{'–'}</Text>
-                              <Text style={styles.actionText}>{detail}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      ))}
-                    </View>
-                  ))}
-                </View>
-              ))}
-            </View>
-          </View>
-        ) : null}
-        {!room.checklist.length && !photos.length && !room.actions.length ? (
+        {!room.checklist.length && !photos.length ? (
           <Text style={styles.emptyRoom}>
             {room.skipReason
               ? `Not inspected — ${room.skipReason}`

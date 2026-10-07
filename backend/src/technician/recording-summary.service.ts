@@ -1,5 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { TranscriptionStatus, VideoRecordingType } from '@prisma/client';
+import {
+  AreaChecklistItemKind,
+  ChecklistResponseType,
+  TranscriptionStatus,
+  VideoRecordingType,
+} from '@prisma/client';
 import type { AreaRecordingSummaryView, InspectionRecordingSummaries } from '@texasrenters/shared';
 
 import {
@@ -15,6 +20,7 @@ import {
   readStoredSummary,
   summaryPrompt,
   type StoredRecordingSummary,
+  STORED_SUMMARY_VERSION,
   type SummaryRecording,
 } from './recording-summary';
 
@@ -172,6 +178,7 @@ export class RecordingSummaryService {
                   ...read.summary,
                   generatedAt: area.recordingSummaryAt.toISOString(),
                   current: read.current,
+                  staleReason: read.staleReason,
                 }
               : null,
         };
@@ -238,7 +245,23 @@ export class RecordingSummaryService {
       where: { id: inspectionAreaId },
       select: {
         id: true,
-        propertyArea: { select: { name: true } },
+        propertyArea: {
+          select: {
+            name: true,
+            // The room's own checklist, so each action can name the item it is
+            // about and print in that item's Comments cell (2026-10-08).
+            checklistItems: {
+              where: {
+                kind: AreaChecklistItemKind.ROOM,
+                archivedAt: null,
+                responseType: ChecklistResponseType.STATUS,
+              },
+              orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+              take: 60,
+              select: { id: true, label: true },
+            },
+          },
+        },
         media: {
           where: { transcriptionJob: { status: TranscriptionStatus.COMPLETED } },
           orderBy: [{ recordingType: 'asc' }, { createdAt: 'asc' }],
@@ -279,6 +302,7 @@ export class RecordingSummaryService {
         areaName,
         `${inspection.inspectionType.toLowerCase().replace(/_/g, '-')} inspection`,
         recordings,
+        area.propertyArea.checklistItems,
       ),
       {
         maxTokens: 6_000,
@@ -291,9 +315,9 @@ export class RecordingSummaryService {
     await this.aiSettings
       .recordUsage(organizationId, configuration, USAGE_OPERATION, usage, inspectionAreaId)
       .catch(() => undefined);
-    const summary = acceptedSummary(text, recordings);
+    const summary = acceptedSummary(text, recordings, area.propertyArea.checklistItems);
     const stored: StoredRecordingSummary = {
-      version: 1,
+      version: STORED_SUMMARY_VERSION,
       mediaIds: recordings.map((recording) => recording.mediaId),
       ...summary,
     };
@@ -313,6 +337,7 @@ export class RecordingSummaryService {
         ...(readStoredSummary(stored, stored.mediaIds)?.summary ?? summary),
         generatedAt: at.toISOString(),
         current: true,
+        staleReason: null,
       },
     };
   }
