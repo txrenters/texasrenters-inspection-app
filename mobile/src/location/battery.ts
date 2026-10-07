@@ -36,3 +36,22 @@ export async function currentBatteryPercent(
     return null;
   }
 }
+
+let lastRead: { at: number; percent: number | null } | null = null;
+
+/**
+ * The same reading, asked of the phone at most once a minute.
+ *
+ * "Once per delivery" was once every second or so on an iPhone in a car, a
+ * native call per batch for a number that moves a percent every few minutes.
+ */
+export async function cachedBatteryPercent(
+  maxAgeMs = 60_000,
+  now = Date.now(),
+  read?: () => Promise<number>,
+): Promise<number | null> {
+  if (lastRead && now - lastRead.at < maxAgeMs) return lastRead.percent;
+  const percent = await currentBatteryPercent(read);
+  lastRead = { at: now, percent };
+  return percent;
+}

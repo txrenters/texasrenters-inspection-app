@@ -67,6 +67,8 @@ import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { noteUploading } from '../../lib/session-breadcrumb';
 import { isCaptureActive } from '../../media/capture-activity';
+import { videoGate } from '../../media/video-hold';
+import { releaseUploadedRecording } from '../../media/local-recordings';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { roomRecordingStillUploading } from '../../media/room-recording-upload';
 import {
@@ -1726,8 +1728,16 @@ export class ApiUploadRepository implements UploadRepository {
         (local) => local.status === 'COMPLETED' && local.serverVideoId && arrived.has(local.serverVideoId),
       );
       if (handedOver.length) {
-        const { removeUpload } = useDemoStore.getState();
-        handedOver.forEach((local) => removeUpload(local.id));
+        const { media, removeMedia, removeUpload } = useDemoStore.getState();
+        handedOver.forEach((local) => {
+          removeUpload(local.id);
+          // And the file, now the server holds it; see `releaseUploadedRecording`.
+          const recording = media.find((item) => item.id === local.mediaId);
+          if (recording) {
+            releaseUploadedRecording(recording.uri);
+            removeMedia(recording.id);
+          }
+        });
       }
       const kept = localRecords.filter((local) => !handedOver.includes(local));
       return [
@@ -1818,7 +1828,9 @@ export class ApiUploadRepository implements UploadRepository {
   // transfers happen and interrupted uploads recover when the app resumes.
   tick = async (): Promise<boolean> => {
     // Nothing goes up while a room is being filmed; see `capture-activity`.
-    if (uploadInFlight || isCaptureActive()) return false;
+    // Nor in Low Power Mode on mobile data, unless the technician said send
+    // now; see `video-hold`.
+    if (uploadInFlight || isCaptureActive() || !videoGate().allowed) return false;
     const now = Date.now();
     const pending = localUploads().find(
       (item) =>
@@ -1881,7 +1893,7 @@ export class ApiUploadRepository implements UploadRepository {
         mimeType: 'video/mp4',
         filename: `${pending.roomName || 'recording'}.mp4`.replace(/\s+/g, '-').toLowerCase(),
         signal: undefined,
-        shouldPause: isCaptureActive,
+        shouldPause: () => isCaptureActive() || !videoGate().allowed,
         createSession: async () =>
           createStreamUploadSession({
             baseUrl,

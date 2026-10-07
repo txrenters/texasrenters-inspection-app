@@ -17,6 +17,7 @@ import * as TaskManager from 'expo-task-manager';
 
 import {
   BACKGROUND_UPDATES,
+  optionsFor,
   ensureShiftTracking,
   isShiftTrackingActive,
   keepWorthwhile,
@@ -70,6 +71,7 @@ jest.mock('expo-task-manager', () => ({
 // A getter, not the object itself: the factory runs when the module under test
 // is imported, before `mockAppState` has been initialised.
 jest.mock('react-native', () => ({
+  Platform: { OS: 'android' },
   AppState: {
     get currentState() {
       return mockAppState.currentState;
@@ -583,5 +585,44 @@ describe('thinning what the OS delivers', () => {
     mockReadLastKept.mockResolvedValue({ latitude: 29.76, longitude: -95.37, at: Date.parse(at(0)) });
 
     expect(await keepWorthwhile([fixAt(3, 1)])).toHaveLength(0);
+  });
+});
+
+describe('the rate, following the technician (2026-10-06)', () => {
+  const HOUSE = { latitude: 29.7604, longitude: -95.3698 };
+  const located = (minutesAgo: number, metresNorth = 0) => ({
+    coords: {
+      latitude: HOUSE.latitude + metresNorth / 111_320,
+      longitude: HOUSE.longitude,
+      accuracy: 6,
+      heading: null,
+      speed: null,
+    },
+    timestamp: Date.now() - minutesAgo * 60_000,
+  });
+
+  afterEach(async () => {
+    // The next shift starts dense: the profile is module state.
+    await stopShiftTracking();
+  });
+
+  it('settles after five minutes in one place, and goes dense again on leaving', async () => {
+    await recordLocationsTask({ data: { locations: [located(6), located(1, 15)] } });
+    expect(mockStartUpdates).toHaveBeenLastCalledWith(TASK, optionsFor('SETTLED'));
+    expect(optionsFor('SETTLED').timeInterval).toBe(30_000);
+    expect(optionsFor('SETTLED').accuracy).toBe(Location.Accuracy.High);
+
+    await recordLocationsTask({ data: { locations: [located(0, 400)] } });
+    expect(mockStartUpdates).toHaveBeenLastCalledWith(TASK, BACKGROUND_UPDATES);
+  });
+
+  it('keeps the dense rate while the technician is still on the move', async () => {
+    await recordLocationsTask({ data: { locations: [located(2), located(1, 300), located(0, 600)] } });
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('is not settled by a backlog delivered after an outage', async () => {
+    await recordLocationsTask({ data: { locations: [located(60), located(40)] } });
+    expect(mockStartUpdates).not.toHaveBeenCalled();
   });
 });

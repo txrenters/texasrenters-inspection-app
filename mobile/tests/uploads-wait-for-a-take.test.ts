@@ -104,6 +104,20 @@ describe('an upload Cloudflare has finished', () => {
 
     expect(useDemoStore.getState().uploads).toHaveLength(1);
   });
+
+  it('leaves the phone with the recording it came from (2026-10-06)', async () => {
+    // Every walkthrough used to stay on the phone for good; a week of
+    // move-outs filled it, and a full phone cannot record.
+    useDemoStore.setState({
+      uploads: [sent()],
+      media: [{ id: 'local-media-1', uri: 'file:///recordings/kitchen.mp4' } as never],
+    });
+    serverLists([serverRow('COMPLETED')]);
+
+    await new ApiUploadRepository().list();
+
+    expect(useDemoStore.getState().media).toHaveLength(0);
+  });
 });
 
 describe('the queue while a room is being filmed', () => {

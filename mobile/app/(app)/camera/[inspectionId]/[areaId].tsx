@@ -109,6 +109,9 @@ registerIcons(
  */
 const CAMERA_REBIND_TIMEOUT_MS = 1_500;
 
+/** The walkthrough's bitrate: about 30 MB a minute at 720p. See the camera's props. */
+const VIDEO_BITRATE = 4_000_000;
+
 /**
  * How far two fingers must spread or close before it counts as a pinch.
  *
@@ -1465,6 +1468,15 @@ export default function RoomCameraScreen() {
         responsiveOrientationWhenOrientationLocked
         mute={false}
         videoQuality="720p"
+        /**
+         * 4 Mbps, the office's choice (2026-10-06). Unset, each phone used its
+         * own default for 720p, typically 8 to 12 Mbps -- a three-minute room
+         * of 120 to 220 MB, every byte encoded, stored and sent over mobile
+         * data on a move-out's battery. 4 Mbps keeps a nail hole sharp in a
+         * walkthrough filmed at walking pace. On iOS it applies only because
+         * `recordAsync` names the codec (`avc1`).
+         */
+        videoBitrate={VIDEO_BITRATE}
         /**
          * Capture at roughly 2048 on the long edge, not at the sensor's full
          * twelve megapixels. Undefined until the camera has told us what it
