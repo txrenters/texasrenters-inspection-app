@@ -209,6 +209,29 @@ describe("the inspector's narration under a room", () => {
     expect(older.rooms[0].narration).toEqual([]);
   });
 
+  it('carries what the room needs under its headings, leaving out an empty one', () => {
+    const view = buildReportView(
+      report({
+        rooms: [
+          {
+            ...ROOM,
+            narration: [{ label: null, lines: [{ start: 58, end: 58, text: 'Touch-up paint needed.' }] }],
+            actions: [
+              { heading: 'Repairs / Maintenance', items: [{ text: ' Touch-up paint needed on: ', details: ['Bathroom door frame', ' '] }] },
+              { heading: 'Painting', items: [] },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(view.rooms[0].actions).toEqual([
+      { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint needed on:', details: ['Bathroom door frame'] }] },
+    ]);
+    // A report from a backend that predates summaries has none.
+    expect(buildReportView(report({ rooms: [ROOM] })).rooms[0].actions).toEqual([]);
+  });
+
   it('keeps the words as they were spoken', () => {
     // Verbatim is the point: nothing is cut, reworded or capitalised.
     expect(narrationText([{ start: 754, text: 'need to full repaint the door' }])).toBe(

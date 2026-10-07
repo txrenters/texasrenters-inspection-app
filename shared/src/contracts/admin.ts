@@ -1059,6 +1059,13 @@ export interface PublicInspectionReport {
       label?: string | null;
       lines: Array<{ start: number; end: number; text: string }>;
     }>;
+    /**
+     * What the room needs, grouped as the office groups it -- "Repairs /
+     * Maintenance", "Painting", "Cleaning" -- printed under the narration.
+     * Present only when the narration above is the room's summary rather than
+     * its word-for-word transcript (2026-10-07); empty groups are left out.
+     */
+    actions?: Array<{ heading: string; items: Array<{ text: string; details: string[] }> }>;
   }>;
   findings: Array<{
     id: string;

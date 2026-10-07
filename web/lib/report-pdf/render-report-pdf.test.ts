@@ -436,6 +436,38 @@ describe("the inspector's narration", () => {
     // The one count kept, on the cover: the room this case keeps was completed.
     expect(text).toContain('1 of 1');
   }, 60_000);
+
+  it('prints what the room needs under the office’s headings, after the summary', async () => {
+    mockPhotoFetch();
+
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        rooms: [
+          {
+            ...REPORT.rooms[0]!,
+            narration: [{ label: null, lines: [{ start: 58, end: 58, text: 'Touch-up paint needed on the bathroom door frame.' }] }],
+            actions: [
+              {
+                heading: 'Repairs / Maintenance',
+                items: [{ text: 'Touch-up paint needed on:', details: ['Bathroom door frame', 'Bedroom entry door frame'] }],
+              },
+              { heading: 'Cleaning', items: [{ text: 'Clean windows inside and out.', details: [] }] },
+            ],
+          },
+        ],
+      },
+      { apiOrigin: 'http://x' },
+    );
+
+    const text = (await pageTexts(pdf)).flat().join(' ');
+    const at = (needle: string) => text.indexOf(needle);
+    expect(at('[0:58] Touch-up paint needed on the bathroom door frame.')).toBeGreaterThan(-1);
+    expect(at('Repairs / Maintenance')).toBeGreaterThan(at('[0:58]'));
+    expect(at('Bedroom entry door frame')).toBeGreaterThan(at('Touch-up paint needed on:'));
+    expect(at('Cleaning')).toBeGreaterThan(at('Bedroom entry door frame'));
+    expect(text).toContain('Clean windows inside and out.');
+  }, 60_000);
 });
 
 describe("an occupied room's answers", () => {

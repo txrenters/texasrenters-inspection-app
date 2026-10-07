@@ -1,6 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
-  AiProvider,
   AreaChecklistItemKind,
   ChecklistAnswerSource,
   ChecklistResponseType,
@@ -12,12 +11,12 @@ import { z } from 'zod';
 
 import {
   AiProviderSettingsService,
-  type AiTokenUsage,
   type ResolvedAiConfiguration,
 } from '../admin/ai-provider-settings.service';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withTenant } from '../database/tenant-context';
+import { askAi, jsonIn } from './ai-text';
 
 /**
  * The condition checklist, pre-filled from what the inspector said.
@@ -179,17 +178,6 @@ const answerSchema = z.object({
   quote: z.string().max(500),
 });
 
-/** The JSON array in a model's answer, without any fence around it. */
-function jsonArray(text: string) {
-  const stripped = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '');
-  const start = stripped.indexOf('[');
-  const end = stripped.lastIndexOf(']');
-  return start >= 0 && end > start ? stripped.slice(start, end + 1) : stripped;
-}
-
 /**
  * The model's answer, validated, as the rows to write.
  *
@@ -205,7 +193,7 @@ export function acceptedAnswers(
 ): PrefillAnswer[] {
   let raw: unknown;
   try {
-    raw = JSON.parse(jsonArray(text));
+    raw = JSON.parse(jsonIn(text, '['));
   } catch {
     raw = null;
   }
@@ -240,27 +228,6 @@ export function acceptedAnswers(
   }
   return answers;
 }
-
-const anthropicSchema = z.object({
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
-  usage: z
-    .object({ input_tokens: z.number().nonnegative(), output_tokens: z.number().nonnegative() })
-    .optional(),
-});
-const openAiSchema = z.object({
-  output: z.array(
-    z.object({
-      content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
-    }),
-  ),
-  usage: z
-    .object({
-      input_tokens: z.number().nonnegative(),
-      output_tokens: z.number().nonnegative(),
-      total_tokens: z.number().nonnegative(),
-    })
-    .optional(),
-});
 
 @Injectable()
 export class ChecklistPrefillService {
@@ -462,7 +429,13 @@ export class ChecklistPrefillService {
       items,
       recordings,
     );
-    const { text, usage } = await this.ask(configuration, prompt);
+    const { text, usage } = await askAi(configuration, prompt, {
+      maxTokens: 4_000,
+      timeoutMs: CALL_TIMEOUT_MS,
+      failureCode: 'AI_CHECKLIST_FAILED',
+      onRejected: (status, message) =>
+        this.logger.warn(`Checklist pre-fill rejected (HTTP ${status}): ${message}`),
+    });
     await this.aiSettings
       .recordUsage(organizationId, configuration, USAGE_OPERATION, usage, inspectionAreaId)
       .catch(() => undefined);
@@ -558,77 +531,5 @@ export class ChecklistPrefillService {
           error instanceof Error ? error.stack : String(error),
         ),
       );
-  }
-
-  private async ask(
-    configuration: ResolvedAiConfiguration,
-    prompt: string,
-  ): Promise<{ text: string; usage: AiTokenUsage }> {
-    const anthropic = configuration.provider === AiProvider.ANTHROPIC;
-    const response = anthropic
-      ? await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': configuration.apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: configuration.modelId,
-            max_tokens: 4_000,
-            messages: [{ role: 'user', content: prompt }],
-          }),
-        })
-      : await fetch('https://api.openai.com/v1/responses', {
-          method: 'POST',
-          signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${configuration.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: configuration.modelId,
-            max_output_tokens: 8_000,
-            reasoning: { effort: 'low' },
-            input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
-          }),
-        });
-    const payload: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      const message =
-        (payload as { error?: { message?: string } } | null)?.error?.message ?? 'unknown error';
-      this.logger.warn(`Checklist pre-fill rejected (HTTP ${response.status}): ${message}`);
-      throw new ApplicationError(
-        502,
-        'AI_CHECKLIST_FAILED',
-        'The AI provider did not answer. Try again in a minute.',
-      );
-    }
-    if (anthropic) {
-      const parsed = anthropicSchema.parse(payload);
-      const inputTokens = parsed.usage?.input_tokens ?? 0;
-      const outputTokens = parsed.usage?.output_tokens ?? 0;
-      return {
-        text: parsed.content
-          .filter((part) => part.type === 'text')
-          .map((part) => part.text ?? '')
-          .join('\n'),
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
-      };
-    }
-    const parsed = openAiSchema.parse(payload);
-    return {
-      text: parsed.output
-        .flatMap((part) => part.content ?? [])
-        .filter((part) => part.type === 'output_text')
-        .map((part) => part.text ?? '')
-        .join('\n'),
-      usage: {
-        inputTokens: parsed.usage?.input_tokens ?? 0,
-        outputTokens: parsed.usage?.output_tokens ?? 0,
-        totalTokens: parsed.usage?.total_tokens ?? 0,
-      },
-    };
   }
 }

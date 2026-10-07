@@ -16,9 +16,11 @@ import {
   HVAC_FILTERS_SECTION,
   inspectionAssessesFilters,
   SERVICE_PHOTO_AREA,
+  RECORDING_ACTION_HEADING,
   type PublicInspectionReport,
   type VisitServicesReport,
 } from '@texasrenters/shared';
+import { readStoredSummary } from '../technician/recording-summary';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -175,6 +177,42 @@ function narrationOf(
       },
     ];
   });
+}
+
+/**
+ * What a room prints under its photographs.
+ *
+ * Its summary when there is one and it is about the recordings the room has
+ * now: each recording's points at their seconds, then what the room needs under
+ * the office's three headings (the maintenance team, 2026-10-07). Otherwise the
+ * narration word for word, as before -- a room whose summary is missing, failed
+ * or stale still says what was said. The summary's media ids are only compared,
+ * never printed.
+ */
+function roomNarration(
+  recordings: ReadonlyArray<Parameters<typeof narrationOf>[0][number] & { id: string }>,
+  stored: unknown,
+): Pick<PublicInspectionReport['rooms'][number], 'narration' | 'actions'> {
+  const verbatim = narrationOf(recordings);
+  const spoken = recordings
+    .filter((recording) =>
+      (recording.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),
+    )
+    .map((recording) => recording.id);
+  const read = readStoredSummary(stored, spoken);
+  if (!read?.current) return { narration: verbatim, actions: [] };
+  return {
+    narration: read.summary.recordings
+      .map((recording) => ({
+        label: recording.label,
+        lines: recording.lines.map((line) => ({ start: line.start, end: line.start, text: line.text })),
+      }))
+      .filter((recording) => recording.lines.length > 0),
+    actions: read.summary.actions.map((group) => ({
+      heading: RECORDING_ACTION_HEADING[group.group],
+      items: group.items.map((item) => ({ text: item.text, details: [...item.details] })),
+    })),
+  };
 }
 
 type ChecklistItemRow = {
@@ -497,6 +535,9 @@ export class ReportShareService {
             completionStatus: true,
             skipReason: true,
             completedAt: true,
+            // The recordings summarized for the report (2026-10-07), printed in
+            // place of the narration word for word while it is current.
+            recordingSummary: true,
             // source with the name: whether the area is the inspection's at all.
             propertyArea: {
               select: {
@@ -592,6 +633,8 @@ export class ReportShareService {
               orderBy: [{ recordingType: 'asc' as const }, { createdAt: 'asc' as const }],
               take: MAX_REPORT_RECORDINGS,
               select: {
+                // For whether the room's summary is about these recordings; never printed.
+                id: true,
                 recordingType: true,
                 label: true,
                 transcriptionJob: {
@@ -770,7 +813,7 @@ export class ReportShareService {
                 }
               : {}),
         })),
-        narration: narrationOf(area.media ?? []),
+        ...roomNarration(area.media ?? [], area.recordingSummary),
       })),
       findings: inspection.findings.map((finding) => ({
         id: finding.id,

@@ -3,8 +3,10 @@ import {
   ChecklistAnswerSource,
   FindingReviewStatus,
   PhotoCaptureType,
+  TranscriptionStatus,
   VideoRecordingType,
 } from '@prisma/client';
+import { readStoredSummary } from '../technician/recording-summary';
 import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import {
   checklistItemsAreOrganizationWide,
@@ -127,6 +129,12 @@ function reviewMark(
  * deliberately media-free so the review screen can list every area without
  * pulling a single byte of video or image.
  */
+/** A stored recording summary as the console shows it, or null when there is none. */
+function summaryView(stored: unknown, at: Date | null, currentMediaIds: string[]) {
+  const read = at ? readStoredSummary(stored, currentMediaIds) : null;
+  return read && at ? { ...read.summary, generatedAt: at.toISOString(), current: read.current } : null;
+}
+
 @Injectable()
 export class AreaEvidenceService {
   constructor(
@@ -621,6 +629,9 @@ export class AreaEvidenceService {
         technicianNote: true,
         reviewedAt: true,
         reviewedById: true,
+        // What the report prints under the photographs; see RecordingSummaryService.
+        recordingSummary: true,
+        recordingSummaryAt: true,
         propertyArea: {
           select: {
             id: true,
@@ -672,6 +683,13 @@ export class AreaEvidenceService {
             orderBy: { createdAt: 'desc' },
             take: 1,
             select: { eventType: true, createdAt: true, payloadSummary: true },
+          },
+          // Whether its narration is in, for whether the summary is current.
+          transcriptionJob: {
+            select: {
+              status: true,
+              segments: { where: { text: { not: '' } }, take: 1, select: { id: true } },
+            },
           },
         },
       }),
@@ -954,6 +972,17 @@ export class AreaEvidenceService {
             reviewStatus: summaryFinding.reviewStatus,
           }
         : null,
+      recordingSummary: summaryView(
+        area.recordingSummary,
+        area.recordingSummaryAt,
+        recordings
+          .filter(
+            (recording) =>
+              recording.transcriptionJob?.status === TranscriptionStatus.COMPLETED &&
+              recording.transcriptionJob.segments.length > 0,
+          )
+          .map((recording) => recording.id),
+      ),
       recordings: recordings.map((recording, index) => ({
         id: recording.id,
         recordingType: recording.recordingType,

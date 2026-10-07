@@ -239,7 +239,9 @@ describe('inspection report shares', () => {
     expect(mediaQuery.areas.select.media.where).toEqual({
       transcriptionJob: { status: 'COMPLETED' },
     });
+    // `id` only to tell whether the room's summary is about these recordings.
     expect(Object.keys(mediaQuery.areas.select.media.select).sort()).toEqual([
+      'id',
       'label',
       'recordingType',
       'transcriptionJob',
@@ -290,6 +292,77 @@ describe('inspection report shares', () => {
       },
     ]);
     expect(JSON.stringify(report)).not.toMatch(/internalNotes|technician|organizationId/);
+  });
+
+  it('prints a room’s summary and what it needs while the summary is about its recordings', async () => {
+    const recording = (id: string) => ({
+      id,
+      recordingType: 'PRIMARY_AREA',
+      label: null,
+      transcriptionJob: {
+        segments: [{ startSeconds: 0, endSeconds: 4, text: 'Um, door needs, uh, touch-up paint.' }],
+      },
+    });
+    const summary = {
+      version: 1,
+      mediaIds: ['media-1'],
+      recordings: [{ mediaId: 'media-1', label: null, lines: [{ start: 0, text: 'Door needs touch-up paint.' }] }],
+      actions: [{ group: 'REPAIRS', items: [{ text: 'Touch-up paint on the door.', details: [] }] }],
+    };
+    const area = (media: unknown[]) => ({
+      id: 'area-1',
+      propertyAreaId: 'property-area-1',
+      completionStatus: 'COMPLETED',
+      skipReason: null,
+      completedAt: new Date(),
+      recordingSummary: summary,
+      propertyArea: { name: 'Kitchen', source: 'FLOOR_PLAN', floor: null, checklistItems: [] },
+      checklistResponses: [],
+      photos: [],
+      media,
+    });
+    const reportWith = async (media: unknown[]) => {
+      const prisma = {
+        inspectionReportShare: {
+          findUnique: jest.fn().mockResolvedValue({
+            inspectionId: 'inspection-1',
+            expiresAt: new Date(Date.now() + 86_400_000),
+            revokedAt: null,
+            createdBy: { displayName: 'Operations Team' },
+          }),
+        },
+        inspection: {
+          findUnique: jest.fn().mockResolvedValue({
+            inspectionType: 'MOVE_OUT',
+            assignments: [],
+            status: 'COMPLETED',
+            scheduledAt: new Date(),
+            completedAt: new Date(),
+            propertywareBuilding: null,
+            propertywareUnit: null,
+            areas: [area(media)],
+            findings: [],
+          }),
+        },
+        inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      return new ReportShareService(prisma as never).publicReport('valid-token');
+    };
+
+    const current = await reportWith([recording('media-1')]);
+    expect(current.rooms[0].narration).toEqual([
+      { label: null, lines: [{ start: 0, end: 0, text: 'Door needs touch-up paint.' }] },
+    ]);
+    expect(current.rooms[0].actions).toEqual([
+      { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint on the door.', details: [] }] },
+    ]);
+    // The recordings' ids decide, and are never printed.
+    expect(JSON.stringify(current)).not.toContain('media-1');
+
+    // A recording added after the summary: the narration word for word, nothing needed listed.
+    const stale = await reportWith([recording('media-1'), recording('media-2')]);
+    expect(stale.rooms[0].narration?.[0].lines[0].text).toBe('Um, door needs, uh, touch-up paint.');
+    expect(stale.rooms[0].actions).toEqual([]);
   });
 
   it('withholds only the photos of a finding nobody approved', async () => {

@@ -1836,6 +1836,12 @@ model InspectionArea {
   // arrives after it. Plain id, as summaryConfirmedById is.
   reviewedAt           DateTime?
   reviewedById         String?                           @db.Uuid
+  /// The room's recordings summarized for the report (`RecordingSummaryService`):
+  /// each recording's points at their seconds, and what the room needs. Carries
+  /// the recordings it was written from, so a later recording makes it stale
+  /// and the report falls back to the narration word for word.
+  recordingSummary     Json?
+  recordingSummaryAt   DateTime?
   createdAt            DateTime                          @default(now())
   updatedAt            DateTime                          @updatedAt
   inspection           Inspection                        @relation(fields: [inspectionId], references: [id])
