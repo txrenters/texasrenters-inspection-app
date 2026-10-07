@@ -182,7 +182,16 @@ export interface ReportChecklistRowView {
   undamaged: string;
   working: string;
   comment: string;
+  /**
+   * What the room needs that is about this item, from the summary of its
+   * recordings, one line each, printed in the Comments cell under the comment
+   * (the maintenance team, 2026-10-08: the summary "fits on the last column").
+   */
+  actions: string[];
 }
+
+/** The row that carries what the room needs that is about none of its items. */
+export const OTHER_ROW_LABEL = 'Other';
 
 /**
  * The report's type (the maintenance team, 2026-10-08): Arial, running text at
@@ -197,19 +206,13 @@ export interface ReportChecklistRowView {
 export const REPORT_TYPE = {
   fontStack: 'Arial, "Liberation Sans", Arimo, Helvetica, sans-serif',
   bodyPt: 13.5,
+  /**
+   * The Comments column, where what each item needs is printed: Arial 9 (the
+   * maintenance team, 2026-10-08: "Arial size 9 for that part"), so the
+   * summary fits beside the verdicts.
+   */
+  commentPt: 9,
 } as const;
-
-/** One heading of what a room needs, and its bullets; a bullet may list its places beneath it. */
-export interface ReportActionGroupView {
-  heading: string;
-  items: Array<{ text: string; details: string[] }>;
-}
-
-/**
- * The heading over what a room needs, the office's own wording. The
- * timestamped points it once headed stay in the console (2026-10-07).
- */
-export const NARRATION_HEADING = 'Summary based on the recordings';
 
 export interface ReportRoomView {
   id: string;
@@ -229,14 +232,7 @@ export interface ReportRoomView {
    * what failed, the comments say why, and the summary says what to do).
    */
   findings: ReportFindingView[];
-  /**
-   * What the room needs, from the summary of its recordings, under the
-   * office's headings -- "Repairs / Maintenance", "Painting", "Cleaning" --
-   * printed under its photographs. The recordings' transcript is not printed
-   * (the maintenance team, 2026-10-07); the console shows it.
-   */
-  actions: ReportActionGroupView[];
-  /** False when the room has no checklist, photos, findings or actions — render compactly. */
+  /** False when the room has no checklist, photos or findings — render compactly. */
   hasEvidence: boolean;
 }
 
@@ -509,6 +505,21 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     // Defaulted: a report generated against a backend that predates
     // assessments has no checklist at all, which prints as no table rather
     // than an empty one.
+    /**
+     * What the room needs, from its summary, by the checklist item each action
+     * is about (2026-10-08). `actions` is absent while the room has no current
+     * summary; present, even empty, it is summarized.
+     */
+    const summarized = room.actions !== undefined;
+    const actionsByItem = new Map<string, string[]>();
+    const unassigned: string[] = [];
+    for (const group of room.actions ?? [])
+      for (const action of group.items) {
+        const text = action.text.trim();
+        if (!text) continue;
+        if (action.itemId) actionsByItem.set(action.itemId, [...(actionsByItem.get(action.itemId) ?? []), text]);
+        else unassigned.push(text);
+      }
     const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => {
       /**
        * A failed axis is explained by what the walkthrough found about it.
@@ -530,7 +541,9 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       const failed =
         item.isClean === false || item.isUndamaged === false || item.isWorking === false;
       const written = item.comment?.trim() || '';
-      const borrowed = failed
+      // A summarized room says what each item needs in its own words; the
+      // findings' titles are for a room that has no current summary.
+      const borrowed = failed && !summarized
         ? [
             ...new Set(
               (notesByRoom.get(room.id) ?? [])
@@ -560,21 +573,28 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         comment: [written, borrowed.filter((text) => text !== written).join('; ')]
           .filter(Boolean)
           .join(' '),
+        actions: actionsByItem.get(item.id) ?? [],
       };
     });
-    // Defaulted: a room not summarized, and a report from an older backend,
-    // carry none, and an empty group prints nothing.
-    const actions: ReportActionGroupView[] = (room.actions ?? [])
-      .map((group) => ({
-        heading: group.heading,
-        items: group.items
-          .map((item) => ({
-            text: item.text.trim(),
-            details: (item.details ?? []).map((detail) => detail.trim()).filter(Boolean),
-          }))
-          .filter((item) => item.text.length > 0),
-      }))
-      .filter((group) => group.heading.trim() && group.items.length > 0);
+    // What the room needs that is about none of its items -- or about one no
+    // longer on its checklist -- on a row of its own, after the rest.
+    const rowIds = new Set(checklist.map((row) => row.id));
+    const other = [
+      ...unassigned,
+      ...[...actionsByItem.entries()].filter(([id]) => !rowIds.has(id)).flatMap(([, texts]) => texts),
+    ];
+    if (other.length)
+      checklist.push({
+        id: `${room.id}-other`,
+        label: OTHER_ROW_LABEL,
+        kind: 'AXES',
+        answer: '',
+        clean: '',
+        undamaged: '',
+        working: '',
+        comment: '',
+        actions: other,
+      });
     return {
       id: room.id,
       name: room.name,
@@ -585,9 +605,7 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       checklist,
       photos,
       findings: roomFindings,
-      actions,
-      hasEvidence:
-        checklist.length > 0 || photos.length > 0 || roomFindings.length > 0 || actions.length > 0,
+      hasEvidence: checklist.length > 0 || photos.length > 0 || roomFindings.length > 0,
     };
   });
 

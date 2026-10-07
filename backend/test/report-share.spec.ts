@@ -247,7 +247,8 @@ describe('inspection report shares', () => {
     // The transcript left the report (the maintenance team, 2026-10-07).
     expect(report.rooms[0]).not.toHaveProperty('narration');
     expect(JSON.stringify(report)).not.toContain('We are in the kitchen');
-    expect(report.rooms[0].actions).toEqual([]);
+    // Not summarized: no actions at all, so the Comments come from the findings.
+    expect(report.rooms[0].actions).toBeUndefined();
     expect(report.findings).toHaveLength(1);
     // Findings resolve to the per-inspection room so the view model can group them.
     expect(report.findings[0].roomId).toBe('area-1');
@@ -296,10 +297,15 @@ describe('inspection report shares', () => {
       },
     });
     const summary = {
-      version: 1,
+      version: 2,
       mediaIds: ['media-1'],
       recordings: [{ mediaId: 'media-1', label: null, lines: [{ start: 0, text: 'Door needs touch-up paint.' }] }],
-      actions: [{ group: 'REPAIRS', items: [{ text: 'Touch-up paint on the door.', details: [] }] }],
+      actions: [
+        {
+          group: 'REPAIRS',
+          items: [{ text: 'Touch-up paint on the door', details: [], itemId: 'item-1', itemLabel: 'Doors and locks' }],
+        },
+      ],
     };
     const area = (media: unknown[]) => ({
       id: 'area-1',
@@ -342,17 +348,19 @@ describe('inspection report shares', () => {
     };
 
     const current = await reportWith([recording('media-1')]);
+    // With the item each is about, which the report prints it beside.
     expect(current.rooms[0].actions).toEqual([
-      { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint on the door.', details: [] }] },
+      { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint on the door', details: [], itemId: 'item-1' }] },
     ]);
     // The recordings' ids decide, and are never printed; nor is the
     // transcript, or the summary's timestamped points.
     expect(JSON.stringify(current)).not.toContain('media-1');
-    expect(JSON.stringify(current)).not.toContain('touch-up paint.');
+    expect(JSON.stringify(current)).not.toContain('Door needs touch-up paint.');
 
-    // A recording added after the summary: nothing listed until it is summarized again.
+    // A recording added after the summary: no actions until it is summarized
+    // again, and the Comments come from the findings meanwhile.
     const stale = await reportWith([recording('media-1'), recording('media-2')]);
-    expect(stale.rooms[0].actions).toEqual([]);
+    expect(stale.rooms[0].actions).toBeUndefined();
   });
 
   it('withholds only the photos of a finding nobody approved', async () => {

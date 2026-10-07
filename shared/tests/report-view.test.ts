@@ -162,37 +162,67 @@ describe('inspection report view model', () => {
  * not (`checklistNotes`): 10830 Harston Dr printed no comment at all while its
  * 227 findings waited to be confirmed.
  */
-describe('what a room needs, under its photographs', () => {
-  it('carries the groups under their headings, leaving out an empty one', () => {
-    const view = buildReportView(
+describe('what a room needs, in the Comments column', () => {
+  // The maintenance team, 2026-10-08: the summary "fits on the last column".
+  const DOOR = { id: 'item-door', label: 'Doors and locks', isClean: false, isUndamaged: false, isWorking: true, comment: null };
+  const WALLS = { id: 'item-walls', label: 'Walls and ceilings', isClean: true, isUndamaged: false, isWorking: true, comment: 'Tenant painted one wall' };
+  const summarized = (actions: NonNullable<PublicInspectionReport['rooms'][number]['actions']>) =>
+    buildReportView(
       report({
-        rooms: [
-          {
-            ...ROOM,
-            actions: [
-              { heading: 'Repairs / Maintenance', items: [{ text: ' Touch-up paint needed on: ', details: ['Bathroom door frame', ' '] }] },
-              { heading: 'Painting', items: [] },
-            ],
-          },
-        ],
+        rooms: [{ ...ROOM, checklist: [DOOR, WALLS], actions }],
+        checklistNotes: [{ roomId: 'area-1', roomName: 'Kitchen', category: 'Doors', title: 'Door: scratches by the handle' }],
       }),
-    );
+    ).rooms[0];
 
-    expect(view.rooms[0].actions).toEqual([
-      { heading: 'Repairs / Maintenance', items: [{ text: 'Touch-up paint needed on:', details: ['Bathroom door frame'] }] },
+  it('prints each action beside the item it is about, after the reviewer’s own comment', () => {
+    const room = summarized([
+      { heading: 'Repairs / Maintenance', items: [{ text: 'Wipe down the door completely', details: [], itemId: 'item-door' }] },
+      { heading: 'Painting', items: [{ text: 'Apply touch-up paint to walls 3 and 4', details: [], itemId: 'item-walls' }] },
     ]);
-    // A room with nothing but what it needs still prints, rather than being
-    // filed under "Other areas" as if nothing had been found there.
-    expect(view.rooms[0].hasEvidence).toBe(true);
-    // The transcript is no part of the report (2026-10-07).
-    expect(view.rooms[0]).not.toHaveProperty('narration');
+
+    expect(room.checklist.map((row) => [row.label, row.comment, row.actions])).toEqual([
+      // A summarized room says what each item needs; the findings' titles are not added.
+      ['Doors and locks', '', ['Wipe down the door completely']],
+      ['Walls and ceilings', 'Tenant painted one wall', ['Apply touch-up paint to walls 3 and 4']],
+    ]);
   });
 
-  it('has none for a room not summarized, or from a backend that predates summaries', () => {
-    const view = buildReportView(report({ rooms: [ROOM] }));
+  it('puts what is about none of the items -- or about one gone from the checklist -- on an Other row, last', () => {
+    const room = summarized([
+      {
+        heading: 'Cleaning',
+        items: [
+          { text: 'Remove items left behind', details: [], itemId: null },
+          { text: 'Clean the old shelf', details: [], itemId: 'item-archived' },
+        ],
+      },
+    ]);
 
-    expect(view.rooms[0].actions).toEqual([]);
-    expect(view.rooms[0].hasEvidence).toBe(false);
+    expect(room.checklist.at(-1)).toMatchObject({
+      label: 'Other',
+      clean: '',
+      undamaged: '',
+      working: '',
+      actions: ['Remove items left behind', 'Clean the old shelf'],
+    });
+    expect(room.checklist).toHaveLength(3);
+  });
+
+  it('keeps the findings’ titles for a room with no current summary', () => {
+    const room = buildReportView(
+      report({
+        rooms: [{ ...ROOM, checklist: [DOOR] }],
+        checklistNotes: [{ roomId: 'area-1', roomName: 'Kitchen', category: 'Doors', title: 'Door: scratches by the handle' }],
+      }),
+    ).rooms[0];
+
+    expect(room.checklist[0]).toMatchObject({ comment: 'Door: scratches by the handle', actions: [] });
+    expect(room.checklist).toHaveLength(1);
+  });
+
+  it('adds no Other row when everything has its item, and none for a summary that needs nothing', () => {
+    expect(summarized([]).checklist).toHaveLength(2);
+    expect(summarized([]).checklist.every((row) => row.actions.length === 0)).toBe(true);
   });
 });
 

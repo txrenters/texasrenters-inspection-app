@@ -1052,14 +1052,22 @@ export interface PublicInspectionReport {
      */
     checklist: PublicReportChecklistItem[];
     /**
-     * What the room needs, grouped as the office groups it -- "Repairs /
-     * Maintenance", "Painting", "Cleaning" -- from the summary of its
-     * recordings, printed under its photographs. Empty until the room is
-     * summarized, or once a recording arrives after its summary; empty groups
-     * are left out. The recordings' transcript itself is not part of the
-     * report (the maintenance team, 2026-10-07): the console shows it.
+     * What the room needs, from the summary of its recordings, grouped as the
+     * office groups it -- "Repairs / Maintenance", "Painting", "Cleaning". Each
+     * action names the checklist item it belongs to, and the report prints it
+     * in that item's Comments cell (the maintenance team, 2026-10-08); one that
+     * belongs to no item goes on an "Other" row.
+     *
+     * **Absent** while the room has no current summary -- not summarized yet,
+     * a recording added since, or written before actions named their item --
+     * and the Comments then come from the findings as before. Present and
+     * empty: summarized, and nothing is needed. The recordings' transcript is
+     * never part of the report; the console shows it.
      */
-    actions?: Array<{ heading: string; items: Array<{ text: string; details: string[] }> }>;
+    actions?: Array<{
+      heading: string;
+      items: Array<{ text: string; details: string[]; itemId?: string | null }>;
+    }>;
   }>;
   findings: Array<{
     id: string;

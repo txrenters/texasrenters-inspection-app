@@ -131,7 +131,7 @@ function filtersRoom(
         comment: filter.comment ?? null,
       })),
       // Filters are scored on a form, not narrated on a walkthrough.
-      actions: [] as NonNullable<PublicInspectionReport['rooms'][number]['actions']>,
+      actions: undefined as PublicInspectionReport['rooms'][number]['actions'],
     },
     photos: (photoArea?.photos ?? []).filter((photo) => photoIds.has(photo.id)) as never[],
   };
@@ -147,8 +147,11 @@ const MAX_REPORT_RECORDINGS = 10;
  * What a room prints under its photographs: what it needs, under the office's
  * three headings, from the room's summary (the maintenance team, 2026-10-07).
  *
- * Only while the summary is about the recordings the room has now; a room not
- * summarized yet, or with a recording added since, prints nothing there. The
+ * Each action carries the checklist item it is about, and the report prints it
+ * in that item's Comments cell (2026-10-08). Undefined -- not an empty list --
+ * while the room has no current summary (not summarized yet, a recording added
+ * since, or written before actions named their item), so the report knows to
+ * draw the Comments from the findings as before. The
  * transcript itself is not sent at all -- the report stopped printing it
  * (2026-10-07), and a public link should not carry words nobody reads, which
  * can name a tenant or a way in. The recordings' ids are only compared.
@@ -159,17 +162,21 @@ function roomActions(
     transcriptionJob: { segments: ReadonlyArray<{ text: string }> } | null;
   }>,
   stored: unknown,
-): NonNullable<PublicInspectionReport['rooms'][number]['actions']> {
+): PublicInspectionReport['rooms'][number]['actions'] {
   const spoken = recordings
     .filter((recording) =>
       (recording.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),
     )
     .map((recording) => recording.id);
   const read = readStoredSummary(stored, spoken);
-  if (!read?.current) return [];
+  if (!read?.current) return undefined;
   return read.summary.actions.map((group) => ({
     heading: RECORDING_ACTION_HEADING[group.group],
-    items: group.items.map((item) => ({ text: item.text, details: [...item.details] })),
+    items: group.items.map((item) => ({
+      text: item.text,
+      details: [...item.details],
+      itemId: item.itemId ?? null,
+    })),
   }));
 }
 

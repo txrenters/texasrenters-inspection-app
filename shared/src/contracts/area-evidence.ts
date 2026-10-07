@@ -455,10 +455,23 @@ export const RECORDING_ACTION_HEADING: Record<RecordingActionGroup, string> = {
   CLEANING: 'Cleaning',
 };
 
-/** One thing a room needs: "Touch-up paint needed on:", with its places beneath. */
+/**
+ * One thing a room needs, in one line that names what it is about: "Wipe
+ * down the door completely", "Shampoo and vacuum the carpet" (the maintenance
+ * team, 2026-10-08: a list of places beneath an action only said it twice).
+ */
 export interface RecordingAction {
   text: string;
+  /** Always empty in a summary written since 2026-10-08; an older one may list places. */
   details: string[];
+  /**
+   * The room checklist item it belongs to, so the report prints it in that
+   * item's Comments cell. Null for one that belongs to none of them, which
+   * the report prints on an "Other" row.
+   */
+  itemId?: string | null;
+  /** That item's label when the summary was written, for the console. */
+  itemLabel?: string | null;
 }
 
 /**
@@ -482,10 +495,12 @@ export interface RecordingSummary {
 export interface AreaRecordingSummaryView extends RecordingSummary {
   generatedAt: string;
   /**
-   * False once a recording has been added or transcribed since: the report
-   * then prints the narration word for word until it is summarized again.
+   * False when the report does not print it: a recording was added or
+   * transcribed since (`RECORDINGS`), or it was written before actions were
+   * tied to checklist items (`FORMAT`). Summarizing again makes it current.
    */
   current: boolean;
+  staleReason?: 'RECORDINGS' | 'FORMAT' | null;
 }
 
 /** What "Summarize every room" answered: the work runs in the background. */

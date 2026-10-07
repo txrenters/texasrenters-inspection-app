@@ -1,12 +1,13 @@
 'use client';
 
-import { NARRATION_HEADING, REPORT_TYPE, buildReportView } from '@texasrenters/shared';
+import { REPORT_TYPE, buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport, ReportRoomView } from '@texasrenters/shared';
 import { DownloadIcon } from 'lucide-react';
 import Image from 'next/image';
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 
+import { ReportPhotoViewer } from '@/components/report-photo-viewer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -25,11 +26,11 @@ import { ApiError, publicApi } from '@/lib/api';
  * how it is worded comes from the shared `buildReportView`, which the PDF
  * renderer also consumes — see shared/src/report/report-view.ts.
  *
- * Each area prints its condition table, its photographs, and under them what
- * the room needs as Repairs / Maintenance, Painting and Cleaning, from the
- * summary of its recordings (the maintenance team, 2026-10-07). The recordings'
- * transcript is not printed; the console shows it with the summary's
- * timestamped points. The findings cards and the summary of findings that
+ * Each area prints its condition table and its photographs. What the room
+ * needs, from the summary of its recordings, prints in the table's Comments
+ * column beside the item it is about (the maintenance team, 2026-10-08); the
+ * console keeps the summary's timestamped points and its Repairs / Painting /
+ * Cleaning grouping. A photograph opens over the page. The findings cards and the summary of findings that
  * opened the report are gone at the same team's request.
  */
 
@@ -62,10 +63,10 @@ function AxisCell({ value }: { value: string }) {
       aria-label={value || 'Not assessed'}
       className={
         value === 'Y'
-          ? 'text-success py-3 align-top font-semibold'
+          ? 'text-success px-1 py-2 text-center align-top font-semibold'
           : value === 'N'
-            ? 'text-destructive py-3 align-top font-semibold'
-            : 'py-3 align-top'
+            ? 'text-destructive px-1 py-2 text-center align-top font-semibold'
+            : 'px-1 py-2 text-center align-top'
       }
     >
       {value}
@@ -77,6 +78,8 @@ function Room({ room }: { room: ReportRoomView }) {
   // An occupied room answers each question once. Heading it with three verdict
   // columns it never fills is what made its answers look missing.
   const answersOnly = room.checklist.every((row) => row.kind === 'ANSWER');
+  // The photograph open over the page, or none (2026-10-08: not a new tab).
+  const [viewing, setViewing] = useState<number | null>(null);
   return (
     // `print:break-inside-avoid`: a page break between a room's verdicts and
     // the photographs proving them is what makes a printed report hard to read.
@@ -106,17 +109,21 @@ function Room({ room }: { room: ReportRoomView }) {
           printing "N" would publish a defect nobody observed. */}
       {room.checklist.length ? (
         <div className="overflow-hidden rounded-lg border">
-          <Table className="table-fixed text-[1em] [&_thead_th]:text-[0.8em]">
+          <Table className="table-fixed text-[1em] [&_thead_th]:text-[0.75em]">
             {/* `colgroup` rather than per-cell widths: `table-fixed` reads the
                 first row to size the columns, so without it each room's table
                 sizes itself from its own longest comment and no two line up
-                down the page. The office's report prints one grid, not six. */}
+                down the page. The office's report prints one grid, not six.
+
+                Tight verdict columns, as InspectCloud sets them, so the
+                Comments column -- where what each item needs is printed --
+                has the room (the maintenance team, 2026-10-08). */}
             <colgroup>
-              <col className="w-[30%]" />
-              <col className="w-[9%]" />
-              <col className="w-[12%]" />
-              <col className="w-[10%]" />
-              <col className="w-[39%]" />
+              <col className="w-[24%]" />
+              <col className="w-[6%]" />
+              <col className="w-[6%]" />
+              <col className="w-[6%]" />
+              <col className="w-[58%]" />
             </colgroup>
             {/* `static`, and an opaque background.
                 `TableHeader` is sticky by default for the console's long list
@@ -127,19 +134,27 @@ function Room({ room }: { room: ReportRoomView }) {
                 made that read as overlapping text rather than as a bar. */}
             <TableHeader className="bg-muted lg:static print:table-header-group">
               <TableRow className="hover:bg-transparent">
-                <TableHead scope="col">Room / item</TableHead>
+                <TableHead className="align-bottom" scope="col">
+                  Room / item
+                </TableHead>
                 {answersOnly ? (
-                  <TableHead colSpan={3} scope="col">
+                  <TableHead className="align-bottom" colSpan={3} scope="col">
                     Condition
                   </TableHead>
                 ) : (
-                  <>
-                    <TableHead scope="col">Clean</TableHead>
-                    <TableHead scope="col">Undamaged</TableHead>
-                    <TableHead scope="col">Working</TableHead>
-                  </>
+                  // Set upright, as InspectCloud's are, so three narrow
+                  // columns still carry their whole names.
+                  ['Clean', 'Undamaged', 'Working'].map((axis) => (
+                    <TableHead className="h-auto px-1 py-2 align-bottom" key={axis} scope="col">
+                      <span className="mx-auto block w-fit rotate-180 whitespace-nowrap [writing-mode:vertical-rl]">
+                        {axis}
+                      </span>
+                    </TableHead>
+                  ))
                 )}
-                <TableHead scope="col">Comments</TableHead>
+                <TableHead className="align-bottom" scope="col">
+                  Comments
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -149,7 +164,7 @@ function Room({ room }: { room: ReportRoomView }) {
                       a vertically centred Y three lines down from its own row
                       label belongs to no row a reader can identify. */}
                   <TableHead
-                    className="text-foreground h-auto py-3 align-top text-[0.9em] font-medium tracking-wide whitespace-normal uppercase"
+                    className="text-foreground h-auto py-2 align-top text-[0.8em] font-medium tracking-wide whitespace-normal uppercase"
                     scope="row"
                   >
                     {row.label}
@@ -160,7 +175,7 @@ function Room({ room }: { room: ReportRoomView }) {
                   {row.kind === 'ANSWER' ? (
                     // One answer where the three verdicts would be, so the
                     // Comments column still lines up down the page.
-                    <TableCell className="py-3 align-top font-semibold" colSpan={3}>
+                    <TableCell className="py-2 align-top font-semibold" colSpan={3}>
                       {row.answer}
                     </TableCell>
                   ) : (
@@ -170,8 +185,18 @@ function Room({ room }: { room: ReportRoomView }) {
                       <AxisCell value={row.working} />
                     </>
                   )}
-                  <TableCell className="text-muted-foreground py-3 align-top text-[1em] leading-relaxed">
-                    {row.comment}
+                  {/* The reviewer's comment, then what the room needs that is
+                      about this item, from the summary of its recordings, one
+                      line each. Arial 9 (2026-10-08), so it fits beside the
+                      verdicts. */}
+                  <TableCell
+                    className="py-2 align-top leading-snug whitespace-normal"
+                    style={{ fontSize: `${REPORT_TYPE.commentPt}pt` }}
+                  >
+                    {row.comment ? <p className="text-muted-foreground">{row.comment}</p> : null}
+                    {row.actions.map((action) => (
+                      <p key={action}>{action}</p>
+                    ))}
                   </TableCell>
                 </TableRow>
               ))}
@@ -184,13 +209,14 @@ function Room({ room }: { room: ReportRoomView }) {
           each photograph too small to see what it shows. */}
       {room.photos.length ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {room.photos.map((photo) => (
+          {room.photos.map((photo, index) => (
             <figure className="space-y-1.5 print:break-inside-avoid" key={photo.id}>
-              <a
-                className="focus-visible:ring-ring/50 relative block overflow-hidden rounded-lg border focus-visible:ring-[3px] focus-visible:outline-none"
-                href={photoUrl(photo.contentPath, FULL_WIDTH)}
-                rel="noreferrer"
-                target="_blank"
+              {/* Opens over the page, not in a new tab (2026-10-08). */}
+              <button
+                aria-label={`Open ${photo.caption ?? `photograph ${index + 1}`} of ${room.name}`}
+                className="focus-visible:ring-ring/50 relative block w-full cursor-zoom-in overflow-hidden rounded-lg border focus-visible:ring-[3px] focus-visible:outline-none"
+                onClick={() => setViewing(index)}
+                type="button"
               >
                 {/* Plain <img>: these are token-scoped API URLs, not optimizable assets. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -209,7 +235,7 @@ function Room({ room }: { room: ReportRoomView }) {
                     {photo.stamp}
                   </span>
                 ) : null}
-              </a>
+              </button>
               {photo.caption ? (
                 <figcaption>
                   <p className="text-[0.85em] font-medium">{photo.caption}</p>
@@ -220,41 +246,19 @@ function Room({ room }: { room: ReportRoomView }) {
         </div>
       ) : null}
 
-      {/* What the room needs, from the summary of its recordings, under the
-          office's own headings. The timestamped points themselves are not
-          printed (the maintenance team, 2026-10-07); the console has them.
-
-          Two columns from tablet width up, and on paper (2026-10-08: "so it's
-          not that long"). CSS columns rather than a grid of groups, so one
-          long Repairs list balances across both columns instead of leaving the
-          second one short. A bullet never splits between columns, and a
-          heading never ends a column on its own. */}
-      {room.actions.length ? (
-        <div className="space-y-2 border-t pt-4">
-          <h4 className="text-[1.05em] font-semibold">{NARRATION_HEADING}:</h4>
-          <div className="gap-x-8 sm:columns-2 print:columns-2" data-testid="room-actions">
-          {room.actions.map((group) => (
-            <div className="mb-3" key={group.heading}>
-              <h5 className="mb-1 text-[1em] font-semibold break-after-avoid">{group.heading}</h5>
-              <ul className="list-disc space-y-0.5 pl-5 text-[1em] leading-relaxed">
-                {group.items.map((item, index) => (
-                  <li className="break-inside-avoid" key={index}>
-                    {item.text}
-                    {item.details.length ? (
-                      <ul className="list-[circle] pl-5">
-                        {item.details.map((detail, detailIndex) => (
-                          <li key={detailIndex}>{detail}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          </div>
-        </div>
-      ) : null}
+      <ReportPhotoViewer
+        index={viewing}
+        onClose={() => setViewing(null)}
+        onIndexChange={setViewing}
+        roomName={room.name}
+        slides={room.photos.map((photo, index) => ({
+          id: photo.id,
+          src: photoUrl(photo.contentPath, FULL_WIDTH),
+          alt: photo.caption ?? `Photograph ${index + 1} of ${room.name}`,
+          caption: photo.caption,
+          stamp: photo.stamp,
+        }))}
+      />
 
       {!room.hasEvidence ? (
         <p className="text-muted-foreground text-[1em]">

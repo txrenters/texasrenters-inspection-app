@@ -63,6 +63,10 @@ export function RecordingSummaryBody({
             {group.items.map((item, index) => (
               <li key={index}>
                 {item.text}
+                {/* The checklist item it prints beside on the report. */}
+                {item.itemLabel ? (
+                  <span className="text-muted-foreground"> · {item.itemLabel}</span>
+                ) : null}
                 {item.details.length ? (
                   <ul className="list-[circle] pl-5">
                     {item.details.map((detail, detailIndex) => (
@@ -124,9 +128,11 @@ export function RecordingSummaryCard({
         <CardDescription>
           {summary
             ? summary.current
-              ? `Written by AI from the recordings ${formatDateTime(summary.generatedAt)}. The report prints the repairs, painting and cleaning under the room’s photographs.`
-              : 'A recording arrived after this summary was written, so the report lists nothing under the room’s photographs until it is summarized again.'
-            : 'Not summarized yet. The report lists nothing under the room’s photographs until it is.'}
+              ? `Written by AI from the recordings ${formatDateTime(summary.generatedAt)}. The report prints each action in the Comments column, beside the item it is about.`
+              : summary.staleReason === 'FORMAT'
+                ? 'Written before actions were tied to checklist items. Summarize again: until then the report’s Comments come from the findings.'
+                : 'A recording arrived after this summary was written. Summarize again: until then the report’s Comments come from the findings.'
+            : 'Not summarized yet. The report’s Comments come from the findings until it is.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

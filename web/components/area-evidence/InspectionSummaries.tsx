@@ -58,8 +58,8 @@ export function InspectionSummaries({ inspectionId }: { inspectionId: string }) 
             {summarized} of {recorded.length} recorded areas summarized
           </CardTitle>
           <CardDescription>
-            Written by AI from each room’s recordings. The shared report prints each room’s
-            repairs, painting and cleaning under its photographs.
+            Written by AI from each room’s recordings. The shared report prints each action in
+            the room’s Comments column, beside the item it is about.
           </CardDescription>
         </CardHeader>
         {canManage ? (
@@ -184,8 +184,9 @@ function AreaSummary({
         )}
         {area.summary && !area.summary.current ? (
           <p className="text-muted-foreground text-xs">
-            A recording arrived after this summary was written; the report lists nothing for this
-            room until it is summarized again.
+            {area.summary.staleReason === 'FORMAT'
+              ? 'Written before actions were tied to checklist items. Summarize again to put them in the report’s Comments column.'
+              : 'A recording arrived after this summary was written. Summarize again to update the report.'}
           </p>
         ) : null}
         {canManage && area.recorded ? (
