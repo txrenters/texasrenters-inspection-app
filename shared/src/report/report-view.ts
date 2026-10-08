@@ -321,9 +321,44 @@ const ECHO_WORDS = new Set(
     'all both some the and with ha have had are wa were been being its their also appear seem ' +
     'require required requiring need needed needing check fail failed failing not non functional ' +
     'functioning function working work operational operating clean cleaned unclean cleaning ' +
-    'cleanliness dirty dirt damage damaged unknown room'
+    'cleanliness dirty dirt damage damaged unknown room component'
   ).split(' '),
 );
+
+/**
+ * What a finding's description wraps an echo in, beyond `ECHO_WORDS`: who
+ * said it and where, and that nothing more was said ("The technician's
+ * checklist marks the floor as damaged; the narration does not specify
+ * where"). Never the name of a thing or of a defect, so a description that
+ * says what is wrong, or where, always has a word left over.
+ */
+const NARRATION_WORDS = matchTokens(
+  'technician inspector narration narrated transcript walkthrough video recording ' +
+    'say said state stated stating mention mentioned mentioning describe describing description ' +
+    'specify specifies specified specifying specific specifically identify identifies identified ' +
+    'identifying indicate indicated indicating record note noting mark list grade ' +
+    'graded show shown confirm confirmed visible seen does did done this that these those there ' +
+    'which what why how where when whether but yet nor however although though while only just ' +
+    'during per into from about than beyond other such further more information given provided ' +
+    'location extent nature type kind cause reason exact exactly precise clear clearly unclear ' +
+    'explicit explicitly can could would should may might will they them was has its',
+);
+
+/** Whether `text` uses no word but the row's own, the room's name and `filler`. */
+function onlyRowWords(
+  text: string,
+  item: Pick<PublicReportChecklistItem, 'label' | 'keywords'>,
+  roomName: string,
+  filler: ReadonlySet<string>[],
+) {
+  const known = matchTokens(item.label);
+  for (const keyword of item.keywords ?? []) for (const word of matchTokens(keyword)) known.add(word);
+  for (const word of matchTokens(roomName)) known.add(word);
+  return [...matchTokens(text)].every(
+    (word) =>
+      filler.some((words) => words.has(word)) || [...known].some((other) => sameSubject(word, other)),
+  );
+}
 
 /**
  * A title that says nothing the row does not: "Walls and ceilings: not clean",
@@ -341,12 +376,29 @@ export function restatesChecklist(
   item: Pick<PublicReportChecklistItem, 'label' | 'keywords'>,
   roomName = '',
 ) {
-  const known = matchTokens(item.label);
-  for (const keyword of item.keywords ?? []) for (const word of matchTokens(keyword)) known.add(word);
-  for (const word of matchTokens(roomName)) known.add(word);
-  const said = [...matchTokens(title)];
-  return said.every(
-    (word) => ECHO_WORDS.has(word) || [...known].some((other) => sameSubject(word, other)),
+  return onlyRowWords(title, item, roomName, [ECHO_WORDS]);
+}
+
+/**
+ * A finding that is a checklist answer said back, title and description both.
+ *
+ * The analysis wrote one for every failed axis of a row, from every recording
+ * of the room: 20906 Greenfield Trl's move-out (2026-10-09) had "Kitchen floor
+ * or coverings are not clean", "... are damaged", "... component not working"
+ * and "Kitchen floor recorded damaged" on the one "Floor and coverings" row it
+ * had already scored N, N, N. A title that only echoes the row is still kept
+ * when its description says what is wrong or where: that is what a reviewer
+ * needs, worded badly. "Kitchen floor needs sweeping, mopping and sanitizing"
+ * names the work, and is kept too.
+ */
+export function findingRestatesChecklist(
+  finding: { title: string; description: string },
+  item: Pick<PublicReportChecklistItem, 'label' | 'keywords'>,
+  roomName = '',
+) {
+  return (
+    restatesChecklist(finding.title, item, roomName) &&
+    onlyRowWords(finding.description, item, roomName, [ECHO_WORDS, NARRATION_WORDS])
   );
 }
 

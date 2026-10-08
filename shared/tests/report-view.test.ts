@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { REPORT_TYPE, buildReportView, restatesChecklist } from '../src/index.js';
+import {
+  REPORT_TYPE,
+  buildReportView,
+  findingRestatesChecklist,
+  restatesChecklist,
+} from '../src/index.js';
 import type { PublicInspectionReport } from '../src/index.js';
 
 function report(overrides: Partial<PublicInspectionReport> = {}): PublicInspectionReport {
@@ -416,6 +421,52 @@ describe('explaining a failed checklist row', () => {
     );
 
     expect(row.comment).toBe('Wall: multiple cracks');
+  });
+});
+
+describe('a finding that only says a checklist answer back', () => {
+  const FLOOR = { label: 'Floor and coverings', keywords: ['floor', 'carpet', 'tile'] };
+
+  it.each([
+    // 20906 Greenfield Trl's move-out (2026-10-09): one per failed axis, on a
+    // Kitchen row scored N, N, N, described the ways the analysis describes them.
+    ['Kitchen floor or coverings are not clean', 'The technician recorded the kitchen floor and coverings as not clean.'],
+    ['Kitchen floor or coverings are damaged', 'The checklist marks the floor or coverings as damaged; the narration does not describe the damage.'],
+    ['Kitchen floor or covering component not working', 'The checklist records the floor component as not working; the narration does not specify which part or why.'],
+    ['Kitchen floor recorded damaged', "The technician's assessment indicates the kitchen floor is damaged, but no specific damage was described."],
+    ['Floor and coverings recorded damaged and not working', 'Recorded as damaged and not working during the walkthrough; no further details were given.'],
+    ['Kitchen floor is not clean', 'The narration states the kitchen floor is not clean without identifying the location or extent.'],
+  ])('"%s" is one', (title, description) => {
+    expect(findingRestatesChecklist({ title, description }, FLOOR, 'Kitchen')).toBe(true);
+  });
+
+  it.each([
+    // The work the floor needs, named.
+    ['Kitchen floor needs sweeping, mopping and sanitizing', 'The technician says the kitchen floor is dirty.'],
+    // A specific defect in the title.
+    ['Kitchen floor: tile cracked by the dishwasher', 'The checklist marks the floor as damaged.'],
+    // A title that only echoes, and a description that says what and where.
+    ['Kitchen floor recorded damaged', 'Two deep gouges in the vinyl in front of the stove, each about three inches long.'],
+    ['Kitchen floor is not clean', 'Grease and food debris along the base of the cabinets.'],
+  ])('"%s" is not, because it says more', (title, description) => {
+    expect(findingRestatesChecklist({ title, description }, FLOOR, 'Kitchen')).toBe(false);
+  });
+
+  it('is about the row it names, not another row in the room', () => {
+    const finding = {
+      title: 'Kitchen floor recorded damaged',
+      description: 'The technician recorded the kitchen floor as damaged.',
+    };
+
+    expect(
+      findingRestatesChecklist(finding, { label: 'Walls and ceilings', keywords: ['wall'] }, 'Kitchen'),
+    ).toBe(false);
+  });
+
+  it('reads "component" as the row, on the report too', () => {
+    expect(
+      restatesChecklist('Kitchen floor or covering component not working', FLOOR, 'Kitchen'),
+    ).toBe(true);
   });
 });
 

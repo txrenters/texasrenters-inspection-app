@@ -420,6 +420,10 @@ function reanalysisHarness(
     storedSegments?: Array<{ startSeconds: number; endSeconds: number; text: string }>;
     comparisonStatus?: string | null;
     finding?: Record<string, unknown>;
+    /** The model's whole answer, in place of the one `finding`. */
+    findings?: Array<Record<string, unknown>>;
+    /** This room's own checklist answers on the move-out. */
+    answers?: unknown[];
     analysis?: 'ok' | 'invalid';
     /** The AI's look at the frames; absent unless a test is about it. */
     visualReview?: { enabled: jest.Mock; review: jest.Mock };
@@ -459,7 +463,7 @@ function reanalysisHarness(
       // This recording's own answers are read by area; the move-in's through
       // the relation, by inspection and room.
       findMany: jest.fn(async (args: { where: { inspectionAreaId?: string } }) =>
-        args.where.inspectionAreaId ? [] : (opts.moveInAnswers ?? []),
+        args.where.inspectionAreaId ? (opts.answers ?? []) : (opts.moveInAnswers ?? []),
       ),
     },
     inspectionFinding: {
@@ -511,7 +515,9 @@ function reanalysisHarness(
     })),
     recordUsage: jest.fn().mockResolvedValue(undefined),
   };
-  const answer = [{ ...FINDING, ...opts.finding }];
+  const answer = opts.findings?.map((finding) => ({ ...FINDING, ...finding })) ?? [
+    { ...FINDING, ...opts.finding },
+  ];
   global.fetch = jest.fn().mockResolvedValue({
     ok: true,
     status: 200,
@@ -738,6 +744,104 @@ describe('re-running the analysis on a recording', () => {
     expect(prompt).toContain('Do not repeat the title');
     expect(prompt).toContain('recommendedReview: an empty string unless');
     expect(prompt).not.toContain('one actionable sentence for the human reviewer');
+    // The timestamp rule no longer supposes a finding about an item nobody mentions.
+    expect(prompt).not.toContain('nobody talks about');
+    expect(prompt).toContain("no line carries a time, use its checklist item's [at Ns] time");
+  });
+
+  // 20906 Greenfield Trl's move-out (2026-10-09): 372 findings, the Kitchen's
+  // "Floor and coverings" row scored N, N, N and filed again for each axis.
+  const ECHOES = [
+    {
+      category: 'Flooring',
+      title: 'Entrance floor or coverings are not clean',
+      description: 'The technician recorded the entrance floor and coverings as not clean.',
+    },
+    {
+      category: 'Flooring',
+      title: 'Entrance floor or covering component not working',
+      description: 'The checklist records the floor as not working; the narration does not specify why.',
+    },
+    {
+      category: 'Flooring',
+      title: 'Entrance floor recorded damaged',
+      description: 'The narration states the floor is damaged without identifying the location.',
+    },
+  ];
+  const FLOOR_SCORED_N = {
+    isClean: false,
+    isUndamaged: false,
+    isWorking: false,
+    comment: null,
+    videoTimestampSeconds: null,
+    checklistItem: { label: 'Floor and coverings', keywords: ['floor', 'carpet'] },
+  };
+
+  it('stores no finding that only says a failed checklist answer back', async () => {
+    const harness = reanalysisHarness({
+      storedSegments: TIMED_NARRATION,
+      answers: [
+        FLOOR_SCORED_N,
+        {
+          isClean: true,
+          isUndamaged: true,
+          isWorking: true,
+          comment: null,
+          videoTimestampSeconds: null,
+          checklistItem: { label: 'Doors and locks', keywords: ['door', 'lock'] },
+        },
+      ],
+      findings: [
+        ...ECHOES,
+        // What is wrong with the same row, and the work it needs.
+        {
+          category: 'Flooring',
+          title: 'Entrance floor: tile cracked by the door',
+          description: 'One tile is cracked corner to corner.',
+        },
+        {
+          category: 'Flooring',
+          title: 'Entrance floor needs sweeping and mopping',
+          description: 'The technician says the floor is dirty.',
+        },
+        // A row that passed: this says nothing back, it disagrees, and a person decides.
+        {
+          category: 'Doors',
+          title: 'Entrance door damaged',
+          description: 'The technician recorded the door as damaged.',
+        },
+      ],
+    });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    const rows = harness.prisma.inspectionFinding.createMany.mock.calls[0][0].data as Array<{
+      title: string;
+      reviewStatus: string;
+    }>;
+    expect(rows.map((row) => row.title)).toEqual([
+      'Room condition summary',
+      'Entrance floor: tile cracked by the door',
+      'Entrance floor needs sweeping and mopping',
+      'Entrance door damaged',
+    ]);
+    expect(rows.every((row) => row.reviewStatus === 'PENDING_REVIEW')).toBe(true);
+  });
+
+  it('keeps them while nobody has scored the row: then they are all the office has', async () => {
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION, findings: ECHOES });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    const rows = harness.prisma.inspectionFinding.createMany.mock.calls[0][0].data as Array<{
+      title: string;
+    }>;
+    expect(rows.map((row) => row.title)).toEqual([
+      'Room condition summary',
+      ...ECHOES.map((echo) => echo.title),
+    ]);
   });
 
   it('leaves the earlier findings and the recording alone when the new analysis is unusable', async () => {
@@ -882,7 +986,7 @@ describe('the office teaches the analysis', () => {
     expect(teaching.lessons).toHaveBeenCalledWith(ORGANIZATION_ID, 'Entrance', 'move-out-1');
     // The analysis records the rules it ran under, for the scorecard.
     expect(harness.prisma.aiAnalysisJob.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ promptVersion: '8', guidanceVersion: 3 }),
+      data: expect.objectContaining({ promptVersion: '9', guidanceVersion: 3 }),
     });
   });
 
