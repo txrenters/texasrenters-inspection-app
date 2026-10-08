@@ -82,11 +82,7 @@ export default function PublicComparisonReportPage() {
             <Skeleton className="h-8 w-2/3" />
             <Skeleton className="h-4 w-1/2" />
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {Array.from({ length: 4 }, (_, index) => (
-              <Skeleton className="h-20 rounded-lg" key={index} />
-            ))}
-          </div>
+          <Skeleton className="h-28 rounded-lg" />
           <Skeleton className="h-40 rounded-lg" />
           <span className="sr-only">Loading your comparison report.</span>
         </div>

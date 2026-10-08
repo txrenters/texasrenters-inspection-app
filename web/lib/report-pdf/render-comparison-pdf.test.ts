@@ -184,11 +184,11 @@ describe('comparison report PDF', () => {
     // photographs are the same bytes, which @react-pdf stores once.
     expect(embeddedJpegCount(pdf)).toBe(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/api/v1/reports/tok/photos/photo-in?w=1000',
+      'http://localhost:3000/api/v1/reports/tok/photos/photo-in?w=640',
       expect.anything(),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:3000/api/v1/reports/tok/photos/photo-out?w=1000',
+      'http://localhost:3000/api/v1/reports/tok/photos/photo-out?w=640',
       expect.anything(),
     );
   }, 30_000);

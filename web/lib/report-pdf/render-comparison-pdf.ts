@@ -1,24 +1,29 @@
 import { buildComparisonView } from '@texasrenters/shared';
 import type { ComparisonReport, ComparisonView, ReportPhotoView } from '@texasrenters/shared';
 
-import { ComparisonPdfDocument } from './comparison-document';
+import { ComparisonPdfDocument, comparisonPdfPhotos } from './comparison-document';
 import type { ReportImages } from './report-document';
 import type { RenderOptions } from './render-report-pdf';
 
-/** The width the backend caches; the same variant the inspection report's PDF embeds. */
-const PHOTO_WIDTH = 1000;
+/**
+ * A width the backend caches. The comparison prints its photographs small --
+ * three a side in a room, a grid at the end -- so the 640 copy is sharp and
+ * holds about twice the photographs in the same bytes as the 1000 one did.
+ */
+const PHOTO_WIDTH = 640;
 /**
  * Caps the work one comparison can do. Two inspections' photographs, so more
- * than an inspection report's 60 -- taken a room at a time, both sides of each,
- * so a long report loses its last rooms' photographs evenly rather than one
- * whole side.
+ * than an inspection report's 60. Taken in the order the PDF prints them -- each
+ * room's first few, then the rest -- so the cap thins the pages at the end,
+ * never a room's own.
  */
-const MAX_EMBEDDED_PHOTOS = 90;
+const MAX_EMBEDDED_PHOTOS = 180;
 const PHOTO_CONCURRENCY = 6;
 
-/** The photographs in reading order: room by room, move-in then move-out. */
+/** The photographs in the order they are fetched: each room's first few, then the rest. */
 export function comparisonPhotos(view: ComparisonView): ReportPhotoView[] {
-  return view.rooms.flatMap((room) => [...room.moveIn.photos, ...room.moveOut.photos]);
+  const { inline, later } = comparisonPdfPhotos(view);
+  return [...inline, ...later.flatMap((group) => group.photos)];
 }
 
 /**

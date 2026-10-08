@@ -14,8 +14,9 @@ describe('one side’s grades in words', () => {
     expect(gradeText({ clean: null, undamaged: null, working: false, comment: null })).toBe('Not working');
   });
 
-  it('says sound, or only clean or dirty when that is all that was graded', () => {
-    expect(gradeText({ clean: true, undamaged: true, working: true, comment: null })).toBe('Sound');
+  // "Good", the report's word (2026-10-09): "sound" is an inspector's.
+  it('says good, or only clean or dirty when that is all that was graded', () => {
+    expect(gradeText({ clean: true, undamaged: true, working: true, comment: null })).toBe('Good');
     expect(gradeText({ clean: true, undamaged: null, working: null, comment: null })).toBe('Clean');
     expect(gradeText({ clean: false, undamaged: null, working: null, comment: null })).toBe('Dirty');
   });
