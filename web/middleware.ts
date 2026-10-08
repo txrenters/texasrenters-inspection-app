@@ -52,15 +52,19 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     // Everything except auth pages, the session route handlers, public
-    // homeowner reports and comparison reports, Next.js internals, and static
+    // homeowner reports and comparison reports, the privacy policy and support
+    // page the App Store listing links to, Next.js internals, and static
     // assets. Anchored at the start of the path, so the console's own
     // /inspections/:id/comparison-report stays behind sign-in.
+    //
+    // `privacy$` and `support$` are whole paths, not prefixes: App Review opens
+    // both signed out, and nothing beneath either should be open by accident.
     //
     // Audio extensions are in that list for the notification chime. Without
     // them the middleware treated /notification.mp3 as a protected route: a
     // browser holding a valid cookie still got the file, so it appeared to
     // work, but a lapsed session made the Audio element fetch the login page
     // instead and the sound simply stopped, with nothing to indicate why.
-    '/((?!login|forgot-password|reset-password|report/|comparison-report/|api/session|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|wav|ogg)$).*)',
+    '/((?!login|forgot-password|reset-password|report/|comparison-report/|privacy$|support$|api/session|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|wav|ogg)$).*)',
   ],
 };
