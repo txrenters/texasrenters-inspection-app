@@ -121,7 +121,9 @@ export function RecordingTranscript({
                 : 'This recording has not been transcribed.'}
         </p>
       ) : (
-        <ol className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        // The whole narration, as long as it runs: the page scrolls, not a box
+        // inside it (2026-10-08).
+        <ol className="p-1.5">
           {lines.map((line, index) => {
             const finding = findingOf(line);
             const showTitle = finding && !titled.has(finding.id);
@@ -131,7 +133,8 @@ export function RecordingTranscript({
             return (
               <li key={`${line.start}-${index}`}>
                 {showTitle ? (
-                  <p className="text-warning truncate px-2 pt-2 text-xs font-medium">{finding.title}</p>
+                  // Wrapped, never cut with an ellipsis.
+                  <p className="text-warning px-2 pt-2 text-xs font-medium">{finding.title}</p>
                 ) : null}
                 <button
                   aria-current={playing ? 'true' : undefined}

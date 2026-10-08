@@ -55,6 +55,17 @@ describe('the transcript beside the video', () => {
     ]);
   });
 
+  // The maintenance team, 2026-10-08: "the transcript is cut" -- it scrolled
+  // inside a box the video's height, and long finding titles ended in "...".
+  it('is not a box of its own to scroll, and cuts no finding title short', () => {
+    show({ findings: [{ id: 'f1', title: 'Vinyl lifting at the doorway, and the strip beside it missing', start: 18, end: 22 }] });
+
+    expect(screen.getByRole('list').className).not.toMatch(/overflow|max-h/);
+    expect(screen.getByText('Vinyl lifting at the doorway, and the strip beside it missing').className).not.toMatch(
+      /truncate/,
+    );
+  });
+
   it('plays the recording from a line that is clicked', () => {
     show();
 

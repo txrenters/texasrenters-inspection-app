@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { ApiError, publicApi } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 /**
  * Homeowner-facing report. Presentation only: what appears, in what order, and
@@ -61,13 +62,12 @@ function AxisCell({ value }: { value: string }) {
   return (
     <TableCell
       aria-label={value || 'Not assessed'}
-      className={
-        value === 'Y'
-          ? 'text-success px-1 py-2 text-center align-top font-semibold'
-          : value === 'N'
-            ? 'text-destructive px-1 py-2 text-center align-top font-semibold'
-            : 'px-1 py-2 text-center align-top'
-      }
+      // A box of its own, the letter in the middle of it (2026-10-08: "lines on
+      // the Y and N, centred, so it is not scattered to look at").
+      className={cn(
+        'border-x px-1 py-2 text-center align-middle font-semibold',
+        value === 'Y' ? 'text-success' : value === 'N' ? 'text-destructive' : '',
+      )}
     >
       {value}
     </TableCell>
@@ -109,7 +109,9 @@ function Room({ room }: { room: ReportRoomView }) {
           printing "N" would publish a defect nobody observed. */}
       {room.checklist.length ? (
         <div className="overflow-hidden rounded-lg border">
-          <Table className="table-fixed text-[1em] [&_thead_th]:text-[0.75em]">
+          {/* Arial 13.5 throughout (the maintenance team, 2026-10-08: "Arial
+              13.5, all of it"), headings, items, verdicts and comments alike. */}
+          <Table className="table-fixed text-[1em] [&_thead_th]:text-[1em]">
             {/* `colgroup` rather than per-cell widths: `table-fixed` reads the
                 first row to size the columns, so without it each room's table
                 sizes itself from its own longest comment and no two line up
@@ -119,11 +121,11 @@ function Room({ room }: { room: ReportRoomView }) {
                 Comments column -- where what each item needs is printed --
                 has the room (the maintenance team, 2026-10-08). */}
             <colgroup>
-              <col className="w-[24%]" />
+              <col className="w-[26%]" />
               <col className="w-[6%]" />
               <col className="w-[6%]" />
               <col className="w-[6%]" />
-              <col className="w-[58%]" />
+              <col className="w-[56%]" />
             </colgroup>
             {/* `static`, and an opaque background.
                 `TableHeader` is sticky by default for the console's long list
@@ -144,9 +146,13 @@ function Room({ room }: { room: ReportRoomView }) {
                 ) : (
                   // Set upright, as InspectCloud's are, so three narrow
                   // columns still carry their whole names.
+                  // `leading-none`: a turned heading sits in a line box taller
+                  // than its letters, and with the usual line height that
+                  // pushed it off the middle of its column, away from the Y
+                  // and N beneath it.
                   ['Clean', 'Undamaged', 'Working'].map((axis) => (
-                    <TableHead className="h-auto px-1 py-2 align-bottom" key={axis} scope="col">
-                      <span className="mx-auto block w-fit rotate-180 whitespace-nowrap [writing-mode:vertical-rl]">
+                    <TableHead className="h-auto border-x px-1 py-2 align-bottom" key={axis} scope="col">
+                      <span className="mx-auto block w-fit rotate-180 leading-none whitespace-nowrap [writing-mode:vertical-rl]">
                         {axis}
                       </span>
                     </TableHead>
@@ -160,11 +166,13 @@ function Room({ room }: { room: ReportRoomView }) {
             <TableBody>
               {room.checklist.map((row) => (
                 <TableRow className="print:break-inside-avoid" key={row.id}>
-                  {/* `align-top`: a borrowed finding runs to several lines, and
-                      a vertically centred Y three lines down from its own row
-                      label belongs to no row a reader can identify. */}
+                  {/* Centred in its row: with the lines drawn round every cell
+                      the row is a box of its own, so an item, its verdicts and
+                      its comment read across it however many lines the
+                      comment runs to. The item in capitals, as InspectCloud
+                      sets it; the comment never (2026-10-08). */}
                   <TableHead
-                    className="text-foreground h-auto py-2 align-top text-[0.8em] font-medium tracking-wide whitespace-normal uppercase"
+                    className="text-foreground h-auto py-2 align-middle text-[1em] font-medium tracking-wide whitespace-normal uppercase"
                     scope="row"
                   >
                     {row.label}
@@ -175,7 +183,7 @@ function Room({ room }: { room: ReportRoomView }) {
                   {row.kind === 'ANSWER' ? (
                     // One answer where the three verdicts would be, so the
                     // Comments column still lines up down the page.
-                    <TableCell className="py-2 align-top font-semibold" colSpan={3}>
+                    <TableCell className="border-x py-2 text-center align-middle font-semibold" colSpan={3}>
                       {row.answer}
                     </TableCell>
                   ) : (
@@ -187,12 +195,8 @@ function Room({ room }: { room: ReportRoomView }) {
                   )}
                   {/* The reviewer's comment, then what the room needs that is
                       about this item, from the summary of its recordings, one
-                      line each. Arial 9 (2026-10-08), so it fits beside the
-                      verdicts. */}
-                  <TableCell
-                    className="py-2 align-top leading-snug whitespace-normal"
-                    style={{ fontSize: `${REPORT_TYPE.commentPt}pt` }}
-                  >
+                      line each -- in the sentence case it was written in. */}
+                  <TableCell className="py-2 align-middle leading-snug whitespace-normal normal-case">
                     {row.comment ? <p className="text-muted-foreground">{row.comment}</p> : null}
                     {row.actions.map((action) => (
                       <p key={action}>{action}</p>

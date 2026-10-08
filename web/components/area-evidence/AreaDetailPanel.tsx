@@ -421,6 +421,10 @@ export function AreaDetailPanel({
       className="grid gap-4 @3xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] @3xl:items-start"
       key={recording.id}
     >
+      {/* The video stays in view while the whole transcript beside it is
+          read down the page (the maintenance team, 2026-10-08: the
+          transcript looked cut, scrolled inside a box the video's height). */}
+      <div className="@3xl:sticky @3xl:top-[calc(var(--app-header-height)+0.75rem)]">
       <RecordingCard
         activeId={activeRecording}
         areaId={bundle.area.id}
@@ -435,8 +439,9 @@ export function AreaDetailPanel({
         recording={recording}
         startSeconds={seek?.recordingId === recording.id ? seek.seconds : null}
       />
+      </div>
+      {/* All of it, every line: no height limit, no scrolling inside a box. */}
       <RecordingTranscript
-        className="max-h-96 @3xl:sticky @3xl:top-[calc(var(--app-header-height)+0.75rem)] @3xl:max-h-[min(75vh,44rem)]"
         findings={findingSpansFor(recording)}
         mediaId={recording.id}
         onSeek={(seconds) => seekTo(recording.id, seconds)}
