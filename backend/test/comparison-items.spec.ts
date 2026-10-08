@@ -102,6 +102,84 @@ describe("a room's items, paired", () => {
     expect(items.at(-1)).toMatchObject({ label: 'Microwave', moveOut: null, change: 'NOT_GRADED' });
     expect(items.some((item) => item.label === 'Supply air temperature')).toBe(false);
   });
+
+  /**
+   * 20906 Greenfield Trl's entrance (2026-10-09): the rooms were paired by name,
+   * so each inspection answered its own area's items and no id was shared. Paired
+   * by id, all seven rows were listed -- each item twice, "not checked" on one
+   * side -- and the damaged floor read "not recorded at move-in".
+   */
+  it('pairs by name where the two rooms are different areas', () => {
+    const items = compareItems(
+      [
+        row('mi-doors', 'Doors and locks', [true, true, true]),
+        row('mi-walls', 'Walls and ceilings', [true, true, true]),
+        row('mi-floor', 'Floor and coverings', [true, true, true]),
+      ],
+      [
+        row('mo-floor', 'Floor and coverings', [false, false, false]),
+        row('mo-walls', 'Walls and ceilings', [true, true, true]),
+        row('mo-doors', 'Doors and locks', [true, true, true]),
+        row('mo-lights', 'Lights and power points', [true, true, true]),
+      ],
+    );
+
+    expect(items.map((item) => [item.itemId, item.label, item.change, item.cleaning])).toEqual([
+      ['mo-floor', 'Floor and coverings', 'NEW_DAMAGE', 'NEEDS_CLEANING'],
+      ['mo-walls', 'Walls and ceilings', 'NO_CHANGE', null],
+      ['mo-doors', 'Doors and locks', 'NO_CHANGE', null],
+      ['mo-lights', 'Lights and power points', 'NO_CHANGE', null],
+    ]);
+    expect(items[3].moveIn).toBeNull();
+    expect(itemVerdict(items, [])).toMatchObject({
+      classification: 'NEW_DAMAGE',
+      summary: 'New since move-in: Floor and coverings. Needs cleaning: Floor and coverings.',
+    });
+  });
+
+  it('reads "&" as "and" and a plural as its singular', () => {
+    const items = compareItems(
+      [row('a', 'Walls & ceiling', [true, true, true]), row('b', 'Toilet & Roll Holders', [true, true, true])],
+      [row('c', 'Walls and ceilings', [true, false, true]), row('d', 'Toilet and roll holder', [true, true, true])],
+    );
+
+    expect(items.map((item) => [item.label, item.change])).toEqual([
+      ['Walls and ceilings', 'NEW_DAMAGE'],
+      ['Toilet and roll holder', 'NO_CHANGE'],
+    ]);
+  });
+
+  it('pairs the same item before the same name, each item once', () => {
+    const items = compareItems(
+      [
+        row('front', 'Doors and locks', [true, false, true]),
+        row('closet', 'Doors and locks', [true, true, true]),
+      ],
+      [
+        row('closet', 'Doors and locks', [true, true, true]),
+        row('patio', 'Doors and locks', [true, false, true]),
+      ],
+    );
+
+    // The closet door is the same item at both; the patio door takes the one
+    // left, rather than the closet's being counted twice.
+    expect(items.map((item) => [item.itemId, item.change])).toEqual([
+      ['closet', 'NO_CHANGE'],
+      ['patio', 'ALREADY_DAMAGED'],
+    ]);
+  });
+
+  it('leaves differently named items apart', () => {
+    const items = compareItems(
+      [row('a', 'Garage door and opener', [true, true, true])],
+      [row('b', 'Doors and locks', [true, false, true])],
+    );
+
+    expect(items.map((item) => [item.label, item.change])).toEqual([
+      ['Doors and locks', 'NO_BASELINE'],
+      ['Garage door and opener', 'NOT_GRADED'],
+    ]);
+  });
 });
 
 /** A move-out finding as the verdict weighs it: unconfirmed unless said. */
