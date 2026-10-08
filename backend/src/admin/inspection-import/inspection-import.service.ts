@@ -165,7 +165,7 @@ function joinComments(left: string | null, right: string | null): string | null 
 }
 
 /** Where the uploaded report itself is kept, keyed by its own content. */
-const sourceKey = (organizationId: string, fingerprint: string) =>
+export const sourceKey = (organizationId: string, fingerprint: string) =>
   `${organizationId}/imported/${fingerprint.slice(0, 16)}/source.pdf`;
 
 const isStale = (updatedAt: Date) => Date.now() - updatedAt.getTime() > IMPORT_STALE_AFTER_MS;

@@ -6,6 +6,7 @@
  * pdf.js is small enough to read in a sitting.
  */
 import type { ReportCell } from './inspect-cloud-report';
+import { drawnText, respace } from './inspect-cloud-spacing';
 
 /** Anything smaller is a rule or an icon, not a photograph from the walk. */
 const SMALLEST_PHOTO = 32;
@@ -22,12 +23,24 @@ export interface ExtractedPhoto {
  *
  * The legacy build is the one that runs under Node without a DOM. Fonts are
  * never fetched: the report's own metrics are all the parser reads.
+ *
+ * Each run's spaces are then checked against the glyphs the page actually
+ * drew (see `inspect-cloud-spacing.ts`), because pdf.js invents a space inside
+ * a word wherever this generator's rounding leaves a hole, which turned
+ * "shower" into "s hower" in every comment. That needs the operator list, and
+ * building one decodes every photograph: 29 seconds for a 75-page report
+ * against half a second for its text. Photographs are not read here, so
+ * `maxImageSize` drops them before they are decoded. pdf.js announces each one
+ * it drops, hundreds a report, so this document is opened with its warnings
+ * off.
  */
 export async function readPages(bytes: Buffer): Promise<Array<{ number: number; cells: ReportCell[] }>> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const document = await pdfjs.getDocument({
     data: new Uint8Array(bytes),
     useSystemFonts: true,
+    maxImageSize: 1,
+    verbosity: pdfjs.VerbosityLevel.ERRORS,
   }).promise;
 
   try {
@@ -35,7 +48,11 @@ export async function readPages(bytes: Buffer): Promise<Array<{ number: number; 
     for (let number = 1; number <= document.numPages; number += 1) {
       const page = await document.getPage(number);
       const content = await page.getTextContent();
-      const cells = content.items.flatMap((item) => {
+      const texts = respace(
+        content.items.map((item) => ('str' in item ? item.str : '')),
+        drawnText(await page.getOperatorList(), pdfjs.OPS),
+      );
+      const cells = content.items.flatMap((item, index) => {
         if (!('str' in item) || !item.str.trim()) return [];
         const transform = item.transform as number[];
         return [
@@ -43,7 +60,7 @@ export async function readPages(bytes: Buffer): Promise<Array<{ number: number; 
             x: transform[4]!,
             y: Math.round(transform[5]!),
             width: item.width ?? 0,
-            text: item.str.replace(/\s+/g, ' ').trim(),
+            text: texts[index]!.replace(/\s+/g, ' ').trim(),
             // The three column headers are drawn on a slant; every value in
             // the table is upright.
             rotated: Math.abs(transform[1]!) > 0.01 || Math.abs(transform[2]!) > 0.01,
