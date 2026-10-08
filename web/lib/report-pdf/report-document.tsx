@@ -18,6 +18,10 @@ const C = REPORT_PALETTE;
  * `REPORT_TYPE`.
  */
 const B = REPORT_TYPE.bodyPt;
+/** The condition table's lines (2026-10-08: drawn round every cell, as InspectCloud's are). */
+const GRID = 0.75;
+/** Tall enough for "Undamaged", turned upright, at 13.5 pt. */
+const AXIS_HEAD_HEIGHT = 82;
 
 /** Photo bytes keyed by photo id, as data URIs. */
 export type ReportImages = Map<string, string>;
@@ -130,37 +134,59 @@ const styles = StyleSheet.create({
   },
 
   emptyRoom: { color: C.muted, fontSize: B },
-  // The condition table. Column widths are fixed rather than proportional so
-  // the three verdict columns line up down the page the way the office's
-  // printed reports do.
-  checklistTable: { marginBottom: 8 },
-  checklistRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: C.border },
-  checklistHeadRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.border },
-  checklistHeadCell: { fontSize: B * 0.7, color: C.muted, paddingVertical: 3, paddingHorizontal: 3 },
-  checklistCell: { fontSize: B * 0.85, paddingVertical: 3, paddingHorizontal: 3 },
   /*
-   * Tight verdict columns, as InspectCloud sets them, so the Comments column --
-   * where what each item needs is printed -- has the room (the maintenance
-   * team, 2026-10-08). Their headings are set small enough that "Undamaged"
-   * fits whole.
+   * The condition table, drawn as a grid, as InspectCloud draws it (the
+   * maintenance team, 2026-10-08): a line round every cell, each Y and N in
+   * the middle of its own box, and everything at Arial 13.5 -- headings, items,
+   * verdicts and comments alike. The verdict columns are narrow, their headings
+   * turned upright to fit, so the Comments column has the room. Widths are
+   * fixed rather than proportional so the columns line up down the page.
    */
-  checklistLabel: {
-    width: '27%',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-    fontSize: B * 0.75,
+  checklistTable: {
+    marginBottom: 8,
+    borderWidth: GRID,
+    borderColor: C.border,
   },
-  checklistAxis: { width: '8%', textAlign: 'center', paddingHorizontal: 1 },
-  checklistAxisHead: { fontSize: 6.5 },
+  checklistHeadRow: { flexDirection: 'row', backgroundColor: C.surfaceSubtle },
+  checklistRow: { flexDirection: 'row', borderTopWidth: GRID, borderTopColor: C.border },
+  // Every cell centres what it holds, top to bottom, so a row reads across.
+  checklistCell: { paddingVertical: 4, paddingHorizontal: 4, justifyContent: 'center' },
+  checklistHeadText: { fontSize: B, color: C.muted },
+  checklistLabel: { width: '30%' },
+  checklistLabelText: { fontSize: B, textTransform: 'uppercase', letterSpacing: 0.3 },
+  checklistAxis: {
+    width: '7%',
+    alignItems: 'center',
+    borderLeftWidth: GRID,
+    borderLeftColor: C.border,
+    paddingHorizontal: 0,
+  },
+  checklistAxisHead: { height: AXIS_HEAD_HEIGHT, paddingVertical: 0 },
+  // Turned to read upwards, about its own middle, which sits in the middle of
+  // its column: wider than the column flat, it fits once turned.
+  checklistAxisHeadText: {
+    width: AXIS_HEAD_HEIGHT - 6,
+    fontSize: B,
+    color: C.muted,
+    textAlign: 'center',
+    transform: 'rotate(-90deg)',
+  },
+  checklistAxisText: { fontSize: B, fontFamily: 'Helvetica-Bold' },
   // One answer where the three verdicts would be: the width of all three, so
   // the Comments column still lines up with the rows above and below it.
-  checklistAnswer: { width: '24%', textAlign: 'center', fontWeight: 700 },
-  checklistPass: { color: C.pass, fontWeight: 700 },
-  checklistFail: { color: C.fail, fontWeight: 700 },
-  checklistComment: { width: '49%' },
-  // Arial 9 (2026-10-08: "Arial size 9 for that part").
-  commentNote: { fontSize: REPORT_TYPE.commentPt, color: C.muted, lineHeight: 1.3 },
-  commentAction: { fontSize: REPORT_TYPE.commentPt, lineHeight: 1.3 },
+  checklistAnswer: {
+    width: '21%',
+    alignItems: 'center',
+    borderLeftWidth: GRID,
+    borderLeftColor: C.border,
+  },
+  checklistAnswerText: { fontSize: B, fontFamily: 'Helvetica-Bold' },
+  checklistPass: { color: C.pass },
+  checklistFail: { color: C.fail },
+  checklistComment: { width: '49%', borderLeftWidth: GRID, borderLeftColor: C.border },
+  // In the sentence case they were written in: only the items are in capitals.
+  commentNote: { fontSize: B, color: C.muted, lineHeight: 1.3 },
+  commentAction: { fontSize: B, lineHeight: 1.3 },
   quietRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -262,42 +288,44 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
   return (
     <View style={styles.checklistTable}>
       <View style={styles.checklistHeadRow}>
-        <Text style={[styles.checklistHeadCell, styles.checklistLabel]}>Room / item</Text>
+        <View style={[styles.checklistCell, styles.checklistLabel, { justifyContent: 'flex-end' }]}>
+          <Text style={styles.checklistHeadText}>Room / item</Text>
+        </View>
         {answersOnly ? (
-          <Text style={[styles.checklistHeadCell, styles.checklistAnswer]}>Condition</Text>
+          <View style={[styles.checklistCell, styles.checklistAnswer, { justifyContent: 'flex-end' }]}>
+            <Text style={styles.checklistHeadText}>Condition</Text>
+          </View>
         ) : (
-          <>
-            <Text style={[styles.checklistHeadCell, styles.checklistAxis, styles.checklistAxisHead]}>Clean</Text>
-            <Text style={[styles.checklistHeadCell, styles.checklistAxis, styles.checklistAxisHead]}>
-              Undamaged
-            </Text>
-            <Text style={[styles.checklistHeadCell, styles.checklistAxis, styles.checklistAxisHead]}>Working</Text>
-          </>
+          ['Clean', 'Undamaged', 'Working'].map((axis) => (
+            <View key={axis} style={[styles.checklistCell, styles.checklistAxis, styles.checklistAxisHead]}>
+              <Text style={styles.checklistAxisHeadText}>{axis}</Text>
+            </View>
+          ))
         )}
-        <Text style={[styles.checklistHeadCell, styles.checklistComment]}>Comments</Text>
+        <View style={[styles.checklistCell, styles.checklistComment, { justifyContent: 'flex-end' }]}>
+          <Text style={styles.checklistHeadText}>Comments</Text>
+        </View>
       </View>
       {room.checklist.map((row) => (
-        // Wrappable. A row whose comment borrows two findings can run longer
-        // than the space left on the page, and `wrap={false}` there does not
-        // move it — it clips it, losing the explanation the column exists for.
+        // Wrappable. A row whose comment runs long can be longer than the space
+        // left on the page, and `wrap={false}` there does not move it -- it
+        // clips it, losing the explanation the column exists for.
         <View key={row.id} style={styles.checklistRow}>
-          <Text style={[styles.checklistCell, styles.checklistLabel]}>{row.label}</Text>
+          <View style={[styles.checklistCell, styles.checklistLabel]}>
+            <Text style={styles.checklistLabelText}>{row.label}</Text>
+          </View>
           {row.kind === 'ANSWER' ? (
-            <Text style={[styles.checklistCell, styles.checklistAnswer]}>{row.answer}</Text>
+            <View style={[styles.checklistCell, styles.checklistAnswer]}>
+              <Text style={styles.checklistAnswerText}>{row.answer}</Text>
+            </View>
           ) : (
-            <>
-              {/* Colour is an accent on the letter, never a substitute for it —
-                  the table has to survive a monochrome print. */}
-              <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.clean)]}>
-                {row.clean}
-              </Text>
-              <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.undamaged)]}>
-                {row.undamaged}
-              </Text>
-              <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.working)]}>
-                {row.working}
-              </Text>
-            </>
+            // Colour is an accent on the letter, never a substitute for it --
+            // the table has to survive a monochrome print.
+            [row.clean, row.undamaged, row.working].map((value, index) => (
+              <View key={index} style={[styles.checklistCell, styles.checklistAxis]}>
+                <Text style={[styles.checklistAxisText, axisTone(value)]}>{value}</Text>
+              </View>
+            ))
           )}
           {/* The reviewer's comment, then what the room needs that is about
               this item, from the summary of its recordings, one line each. */}

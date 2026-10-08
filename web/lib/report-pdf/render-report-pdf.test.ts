@@ -388,11 +388,66 @@ describe('the report’s type', () => {
     // A wrapped line is its own piece of text, so this finds it by a fragment.
     const sizeOf = (fragment: string) =>
       [...sizes.entries()].find(([text]) => text.includes(fragment))?.[1];
-    // The Comments column, where what each item needs prints: Arial 9 (2026-10-08).
-    expect(sizeOf('Clean the windows')).toBe(9);
-    expect(sizeOf('scratches on door')).toBe(9);
+    // The condition table, comments included: Arial 13.5, all of it (2026-10-08).
+    expect(sizeOf('Clean the windows')).toBe(13.5);
+    expect(sizeOf('scratches on door')).toBe(13.5);
+    expect(sizeOf('DOORS AND LOCKS')).toBe(13.5);
     expect(sizeOf('Room by room')).toBeGreaterThan(13.5);
     expect(sizeOf('Page 1 of')).toBeLessThan(13.5);
+  }, 60_000);
+});
+
+/** Each piece of text where it is drawn: its left edge, baseline, direction and width, in points. */
+async function textPlaces(pdf: Buffer) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const document = await getDocument({ data: new Uint8Array(pdf) }).promise;
+  const places: Array<{ str: string; x: number; y: number; upright: boolean; width: number; page: number }> = [];
+  for (let number = 1; number <= document.numPages; number += 1) {
+    const content = await (await document.getPage(number)).getTextContent();
+    for (const item of content.items)
+      if ('str' in item && item.str.trim())
+        places.push({
+          str: item.str.trim(),
+          x: item.transform[4],
+          y: item.transform[5],
+          // Turned to read upwards: the text runs up the page, not across it.
+          upright: Math.abs(item.transform[0]) < 0.01 && item.transform[1] > 0,
+          width: item.width,
+          page: number,
+        });
+  }
+  return places;
+}
+
+describe('the condition table, drawn as a grid', () => {
+  // The maintenance team, 2026-10-08: lines on the Y and N, centred, "not
+  // scattered" -- as InspectCloud's are.
+  it('turns each verdict heading upright, over the middle of its column, right above its letter', async () => {
+    mockPhotoFetch();
+
+    const pdf = await renderReportPdf(
+      { ...REPORT, rooms: [{ ...REPORT.rooms[0]!, checklist: [REPORT.rooms[0]!.checklist[0]!] }] },
+      { apiOrigin: 'http://x' },
+    );
+
+    const places = await textPlaces(pdf);
+    const heading = (name: string) => places.find((place) => place.str === name)!;
+    // Doors and locks: not clean, damaged, working -- N, N, Y.
+    const letters = places.filter((place) => place.str === 'N' || place.str === 'Y');
+    expect(letters.map((letter) => letter.str)).toEqual(['N', 'N', 'Y']);
+
+    ['Clean', 'Undamaged', 'Working'].forEach((name, index) => {
+      const head = heading(name);
+      expect(head.upright).toBe(true);
+      // An upright line's letters stand to the left of its baseline: their
+      // middle is about a third of the size in from it.
+      const headMiddle = head.x - 13.5 * 0.26;
+      const letter = letters[index]!;
+      const letterMiddle = letter.x + letter.width / 2;
+      expect(Math.abs(headMiddle - letterMiddle)).toBeLessThan(3);
+      // And the heading sits above the letter, not beside it.
+      expect(head.y).toBeGreaterThan(letter.y);
+    });
   }, 60_000);
 });
 

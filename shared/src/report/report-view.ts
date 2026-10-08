@@ -196,7 +196,9 @@ export const OTHER_ROW_LABEL = 'Other';
 /**
  * The report's type (the maintenance team, 2026-10-08): Arial, running text at
  * 13.5 pt, in the web report and the PDF alike, with headings scaled up from it
- * and small labels -- a photograph's time, the footer -- below it.
+ * and small labels -- a photograph's time, the footer -- below it. The
+ * condition table is 13.5 throughout, its comments included ("Arial 13.5, all
+ * of it", the same day, after a morning at 9).
  *
  * The web report names Arial first. The PDF uses its standard Helvetica, which
  * Arial was drawn to match character for character, and which PDF viewers on
@@ -206,12 +208,6 @@ export const OTHER_ROW_LABEL = 'Other';
 export const REPORT_TYPE = {
   fontStack: 'Arial, "Liberation Sans", Arimo, Helvetica, sans-serif',
   bodyPt: 13.5,
-  /**
-   * The Comments column, where what each item needs is printed: Arial 9 (the
-   * maintenance team, 2026-10-08: "Arial size 9 for that part"), so the
-   * summary fits beside the verdicts.
-   */
-  commentPt: 9,
 } as const;
 
 export interface ReportRoomView {
