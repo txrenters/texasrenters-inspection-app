@@ -115,26 +115,64 @@ function side(row: ChecklistRow | undefined): ItemSide | null {
 }
 
 /**
+ * An item's name as both inspections would recognise it: "Walls & ceiling" is
+ * "Walls and ceilings".
+ */
+function itemNameKey(label: string) {
+  return label
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((word) => (word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word))
+    .join(' ');
+}
+
+/**
  * Pair one room's checklist across the two inspections by item. Only status
  * items: a reading or a line of text has no damaged or sound to compare. In the
  * move-out's order, then anything only the move-in answered.
+ *
+ * The same item first, and then the same name. Items belong to the property
+ * area, so two inspections of one area answer the same item ids; but a room
+ * paired by name or by the AI is two areas, and their items never share an id.
+ * Paired by id alone, every item of such a room was listed twice, once "not
+ * checked" on each side -- and damage on an item the move-in had graded sound
+ * read as "not recorded at move-in" (20906 Greenfield Trl, 2026-10-09).
  */
 export function compareItems(moveInRows: ChecklistRow[], moveOutRows: ChecklistRow[]) {
   const status = (row: ChecklistRow) => row.checklistItem.responseType === 'STATUS';
-  const before = new Map(moveInRows.filter(status).map((row) => [row.checklistItem.id, row]));
+  const before = moveInRows.filter(status);
   const after = moveOutRows.filter(status);
-  const ids = [
-    ...after.map((row) => row.checklistItem.id),
-    ...[...before.keys()].filter((id) => !after.some((row) => row.checklistItem.id === id)),
+
+  const paired = new Map<ChecklistRow, ChecklistRow>();
+  const used = new Set<ChecklistRow>();
+  const pair = (outRow: ChecklistRow, match: (inRow: ChecklistRow) => boolean) => {
+    if (paired.has(outRow)) return;
+    const inRow = before.find((candidate) => !used.has(candidate) && match(candidate));
+    if (!inRow) return;
+    paired.set(outRow, inRow);
+    used.add(inRow);
+  };
+  for (const outRow of after) pair(outRow, (inRow) => inRow.checklistItem.id === outRow.checklistItem.id);
+  for (const outRow of after) {
+    const name = itemNameKey(outRow.checklistItem.label);
+    pair(outRow, (inRow) => itemNameKey(inRow.checklistItem.label) === name);
+  }
+
+  const rows: Array<[ChecklistRow | undefined, ChecklistRow | undefined]> = [
+    ...after.map((outRow): [ChecklistRow | undefined, ChecklistRow] => [paired.get(outRow), outRow]),
+    ...before
+      .filter((inRow) => !used.has(inRow))
+      .map((inRow): [ChecklistRow, undefined] => [inRow, undefined]),
   ];
-  return ids.map((itemId): ComparedItem => {
-    const outRow = after.find((row) => row.checklistItem.id === itemId);
-    const inRow = before.get(itemId);
+  return rows.map(([inRow, outRow]): ComparedItem => {
     const item = (outRow ?? inRow)!.checklistItem;
     const moveIn = side(inRow);
     const moveOut = side(outRow);
     return {
-      itemId,
+      itemId: item.id,
       label: item.label,
       keywords: item.keywords,
       moveIn,

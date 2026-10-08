@@ -101,9 +101,11 @@ export function baselineWhere(moveOut: {
  * ones made before 2026-10-07 still hold "Requires review" rooms, which no
  * rule produces any more, and they are redrawn the next time they are read.
  */
-export const COMPARISON_RULES = 3;
+export const COMPARISON_RULES = 4;
 // 3 (2026-10-08): rooms in the office's order, the entrance first; "Gameroom"
 // pairs with "Game Room"; and the AI pairs what the names cannot (area-pairing).
+// 4 (2026-10-09): a room paired by name or by the AI pairs its items by name,
+// not only by id, so they are no longer each listed twice (compareItems).
 
 /** Why a comparison no longer describes its two inspections; see `staleness`. */
 export type ComparisonOutOfDate =
