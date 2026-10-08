@@ -20,8 +20,10 @@ const C = REPORT_PALETTE;
 const B = REPORT_TYPE.bodyPt;
 /** The condition table's lines (2026-10-08: drawn round every cell, as InspectCloud's are). */
 const GRID = 0.75;
-/** Tall enough for "Undamaged", turned upright, at 13.5 pt. */
-const AXIS_HEAD_HEIGHT = 82;
+/** Tall enough for "Undamaged", slanted at 50 degrees, at 13.5 pt. */
+const AXIS_HEAD_HEIGHT = 74;
+/** The verdict headings' slant (the maintenance team, 2026-10-09: "around 50 degrees"). */
+const AXIS_HEAD_SLANT = 50;
 
 /** Photo bytes keyed by photo id, as data URIs. */
 export type ReportImages = Map<string, string>;
@@ -161,15 +163,20 @@ const styles = StyleSheet.create({
     borderLeftColor: C.border,
     paddingHorizontal: 0,
   },
-  checklistAxisHead: { height: AXIS_HEAD_HEIGHT, paddingVertical: 0 },
-  // Turned to read upwards, about its own middle, which sits in the middle of
-  // its column: wider than the column flat, it fits once turned.
+  checklistAxisHead: { height: AXIS_HEAD_HEIGHT, paddingVertical: 0, position: 'relative' },
+  // Slanted at 50 degrees, rising from the middle of its column over the Y and
+  // N beneath it, as InspectCloud's are: anchored at the bottom-left of the
+  // name and turned about that corner, so it starts where its column is and
+  // leans over the next one, which has room above its own heading.
   checklistAxisHeadText: {
-    width: AXIS_HEAD_HEIGHT - 6,
+    position: 'absolute',
+    left: '45%',
+    bottom: 4,
+    width: 80,
     fontSize: B,
     color: C.muted,
-    textAlign: 'center',
-    transform: 'rotate(-90deg)',
+    transformOrigin: 'left bottom',
+    transform: `rotate(-${AXIS_HEAD_SLANT}deg)`,
   },
   checklistAxisText: { fontSize: B, fontFamily: 'Helvetica-Bold' },
   // One answer where the three verdicts would be: the width of all three, so

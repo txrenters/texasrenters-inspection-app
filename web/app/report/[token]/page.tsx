@@ -144,15 +144,21 @@ function Room({ room }: { room: ReportRoomView }) {
                     Condition
                   </TableHead>
                 ) : (
-                  // Set upright, as InspectCloud's are, so three narrow
-                  // columns still carry their whole names.
-                  // `leading-none`: a turned heading sits in a line box taller
-                  // than its letters, and with the usual line height that
-                  // pushed it off the middle of its column, away from the Y
-                  // and N beneath it.
+                  // Slanted at 50 degrees, rising from the middle of their
+                  // column over the Y and N beneath, as InspectCloud's are
+                  // (the maintenance team, 2026-10-09), so three narrow
+                  // columns still carry their whole names. On a phone the
+                  // columns are too narrow for a slant -- the names would run
+                  // into each other -- so there they stand upright.
+                  // Anchored at the bottom-left of the name and turned about
+                  // it; `leading-none` keeps the line box the letters' height.
                   ['Clean', 'Undamaged', 'Working'].map((axis) => (
-                    <TableHead className="h-auto border-x px-1 py-2 align-bottom" key={axis} scope="col">
-                      <span className="mx-auto block w-fit rotate-180 leading-none whitespace-nowrap [writing-mode:vertical-rl]">
+                    <TableHead
+                      className="relative h-[6.1em] border-x p-0 align-bottom sm:h-[5.4em]"
+                      key={axis}
+                      scope="col"
+                    >
+                      <span className="absolute bottom-[0.45em] left-[calc(50%+0.45em)] origin-bottom-left -rotate-90 leading-none whitespace-nowrap sm:left-[calc(50%-0.2em)] sm:-rotate-[50deg]">
                         {axis}
                       </span>
                     </TableHead>

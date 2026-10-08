@@ -401,7 +401,7 @@ describe('the report’s type', () => {
 async function textPlaces(pdf: Buffer) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const document = await getDocument({ data: new Uint8Array(pdf) }).promise;
-  const places: Array<{ str: string; x: number; y: number; upright: boolean; width: number; page: number }> = [];
+  const places: Array<{ str: string; x: number; y: number; angle: number; width: number; page: number }> = [];
   for (let number = 1; number <= document.numPages; number += 1) {
     const content = await (await document.getPage(number)).getTextContent();
     for (const item of content.items)
@@ -410,8 +410,8 @@ async function textPlaces(pdf: Buffer) {
           str: item.str.trim(),
           x: item.transform[4],
           y: item.transform[5],
-          // Turned to read upwards: the text runs up the page, not across it.
-          upright: Math.abs(item.transform[0]) < 0.01 && item.transform[1] > 0,
+          // The direction the line runs, in degrees up from the horizontal.
+          angle: (Math.atan2(item.transform[1], item.transform[0]) * 180) / Math.PI,
           width: item.width,
           page: number,
         });
@@ -422,7 +422,8 @@ async function textPlaces(pdf: Buffer) {
 describe('the condition table, drawn as a grid', () => {
   // The maintenance team, 2026-10-08: lines on the Y and N, centred, "not
   // scattered" -- as InspectCloud's are.
-  it('turns each verdict heading upright, over the middle of its column, right above its letter', async () => {
+  // 2026-10-09: the headings slanted "around 50 degrees", as InspectCloud's are.
+  it('slants each verdict heading at 50 degrees, rising from its column, over its letter, clear of the rest', async () => {
     mockPhotoFetch();
 
     const pdf = await renderReportPdf(
@@ -438,16 +439,22 @@ describe('the condition table, drawn as a grid', () => {
 
     ['Clean', 'Undamaged', 'Working'].forEach((name, index) => {
       const head = heading(name);
-      expect(head.upright).toBe(true);
-      // An upright line's letters stand to the left of its baseline: their
-      // middle is about a third of the size in from it.
-      const headMiddle = head.x - 13.5 * 0.26;
+      expect(Math.abs(head.angle - 50)).toBeLessThan(0.5);
+      // It starts over its own letter -- within a column's half-width of it --
+      // and above it.
       const letter = letters[index]!;
-      const letterMiddle = letter.x + letter.width / 2;
-      expect(Math.abs(headMiddle - letterMiddle)).toBeLessThan(3);
-      // And the heading sits above the letter, not beside it.
-      expect(head.y).toBeGreaterThan(letter.y);
+      expect(Math.abs(head.x - (letter.x + letter.width / 2))).toBeLessThan(12);
+      expect(head.y).toBeGreaterThan(letter.y + 13.5);
     });
+    // The last one leans over the Comments heading, and passes above it.
+    const working = heading('Working');
+    const comments = heading('Comments');
+    const rise = Math.tan((50 * Math.PI) / 180);
+    expect(working.y + (comments.x - working.x) * rise).toBeGreaterThan(comments.y + 13.5);
+    // And the slanted names stand clear of each other: a column apart, they
+    // are further apart, square to their slant, than a line of 13.5 pt.
+    const gap = (heading('Undamaged').x - heading('Clean').x) * Math.sin((50 * Math.PI) / 180);
+    expect(gap).toBeGreaterThan(13.5 * 1.2);
   }, 60_000);
 });
 
