@@ -697,10 +697,17 @@ export interface AdminAreaComparison {
   summary?: string | null;
   /** The move-out's own area, to open its evidence from the comparison. */
   moveOutAreaId?: string | null;
+  /** The move-in room it was compared with, by the move-in's name; null when there is none. */
+  moveInAreaName?: string | null;
   /** Each checklist item, move-in against move-out. Empty for a comparison generated before items. */
   items?: AdminComparisonItem[];
   /** Move-out findings about none of the items. */
   otherFindings?: AdminComparisonFinding[];
+  /**
+   * New or worse damage the office confirmed from the move-out recording, by
+   * finding title -- what the report counts beside the new items.
+   */
+  fromRecording?: string[];
   /**
    * AI findings of new damage here still waiting to be confirmed from the
    * recording. Console only, never printed: they are not on the report yet.
