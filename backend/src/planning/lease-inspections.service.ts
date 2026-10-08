@@ -44,10 +44,10 @@ import { queueLeaseBookingsInJobber } from './lease-jobber-bookings';
  * The office used to book these in Jobber by hand. Jobber is on its way out --
  * "PW will be there just for the integration" -- so this books them here, from
  * the lease dates the tenant sync already holds: a move-out the day after every
- * tenancy ends, booked sixty days ahead, for the technician who handles
- * move-outs (Moses), and a move-in twenty-two days after a leaving tenant goes,
- * for the one who handles move-ins (Amy). The rules themselves are
- * `inspectionsDue` in shared.
+ * tenancy ends, booked sixty days ahead -- at once when the tenant has given
+ * notice (2026-10-08) -- for the technician who handles move-outs (Moses), and
+ * a move-in twenty-two days after a leaving tenant goes, for the one who handles
+ * move-ins (Amy). The rules themselves are `inspectionsDue` in shared.
  *
  * What the office has booked comes first: "what we want to automate is the
  * upcoming that has not yet scheduled on the jobber". One the office booked near
@@ -909,7 +909,8 @@ function notAskedReason({
     return tenancyEndsOn(dates)
       ? 'The lease has ended with the tenant still there, month-to-month or not yet updated in Propertyware: the office books this move-out.'
       : 'The lease has no end date in Propertyware.';
-  return `Its move-out is the day after the lease ends, ${spoken(workingDayOnOrAfter(dueOn))}: it is booked ${BOOKED_DAYS_AHEAD.MOVE_OUT} days before.`;
+  // Only a lease without notice gets here: one with notice is always asked for.
+  return `No notice given in Propertyware: its move-out, the day after the lease ends (${spoken(workingDayOnOrAfter(dueOn))}), is booked ${BOOKED_DAYS_AHEAD.MOVE_OUT} days before, or as soon as the tenant gives notice.`;
 }
 
 /** What the office reads on the inspection about where it came from. */

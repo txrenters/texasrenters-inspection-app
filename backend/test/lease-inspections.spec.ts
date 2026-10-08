@@ -151,6 +151,26 @@ describe('booking the move-outs and move-ins the leases call for', () => {
     expect(run.changes).toEqual([]);
   });
 
+  it('books at once the move-out of a tenant who has given notice, however far off (2026-10-08)', async () => {
+    // Propertyware's scheduled move-out is Sunday 20 December, ninety-three days off.
+    const { service, tx } = build({
+      leases: [
+        lease({
+          sourceStatus: 'Active - Notice Given',
+          noticeGivenDate: date('2026-09-15'),
+          scheduledMoveOutDate: date('2026-12-20'),
+          endDate: date('2026-12-28'),
+        }),
+      ],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    // The move-in after it (11 January) still waits for its ninety days.
+    expect(run.changes.map((change) => `${change.kind} ${change.action} ${change.scheduledOn}`)).toEqual(['MOVE_OUT BOOK 2026-12-21']);
+    expect(tx.inspectionAssignment.create).toHaveBeenCalledWith({ data: expect.objectContaining({ technicianId: 'moses' }) });
+  });
+
   it('books a move-in twenty-two days after a leaving tenant goes, for whoever handles move-ins', async () => {
     const { service, tx } = build({
       leases: [lease({ sourceStatus: 'Active - Notice Given', noticeGivenDate: date('2026-09-01'), endDate: date('2026-10-31') })],
@@ -310,6 +330,22 @@ describe('keeping them in step with the leases', () => {
     expect(tx.inspection.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'inspection-1' },
       data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: expect.stringContaining('Mon, Dec 21, 2026') }),
+    }));
+  });
+
+  it('calls off a move-out booked on notice when the notice is withdrawn, until sixty days before', async () => {
+    // Booked on notice for Monday 21 December; Propertyware now says "Active", with no notice.
+    const { service, tx } = build({
+      leases: [lease({ endDate: date('2026-12-20') })],
+      rows: [row({ dueOn: date('2026-12-21'), scheduledOn: date('2026-12-21') }, { scheduledAt: date('2026-12-21') })],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes[0]).toMatchObject({ action: 'CALL_OFF', detail: expect.stringContaining('No notice given in Propertyware') });
+    expect(tx.inspection.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'inspection-1' },
+      data: expect.objectContaining({ status: InspectionStatus.CANCELLED }),
     }));
   });
 
