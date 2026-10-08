@@ -11,31 +11,28 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { changeMeta, findingStatus, gradeText } from '@/lib/comparison-items';
+import { changeMeta, gradeText, isWaiting } from '@/lib/comparison-items';
 import { cn } from '@/lib/utils';
 
-function FindingLine({ finding }: { finding: AdminComparisonFinding }) {
+/** A finding the office confirmed, under the item it is about. */
+function ConfirmedLine({ finding }: { finding: AdminComparisonFinding }) {
   return (
     <li className="text-muted-foreground text-xs">
       <span className="text-foreground">{finding.title}</span>
       {' · '}
-      {finding.source === 'AI_VISION'
-        ? 'spotted by AI'
-        : finding.source === 'REVIEWER'
-          ? 'added by a reviewer'
-          : 'AI finding'}
-      {' · '}
-      {findingStatus(finding.reviewStatus)}
+      {finding.source === 'REVIEWER' ? 'added by a reviewer' : 'confirmed'}
     </li>
   );
 }
 
 /**
  * One room's checklist, move-in against move-out, item by item: what each
- * inspection recorded, what changed, and the move-out's findings about it.
+ * inspection recorded, what changed, and what the office confirmed about it.
  *
- * Items that did not change are kept, quieter: "the windows were fine at both"
- * is part of the answer, and a reviewer disputing a charge needs to see it.
+ * Only the findings the office has confirmed are listed (2026-10-09). The ones
+ * still waiting were every line of this table once -- 51 in one kitchen, most
+ * of them the checklist's own marks said again -- and nothing here can confirm
+ * them; the room counts them and links to the inspection page instead.
  */
 export function ComparisonItemsTable({
   items,
@@ -44,70 +41,74 @@ export function ComparisonItemsTable({
   items: AdminComparisonItem[];
   otherFindings: AdminComparisonFinding[];
 }) {
+  const confirmedElsewhere = otherFindings.filter((finding) => !isWaiting(finding));
   return (
     <div className="grid gap-2">
-      <Table aria-label="Checklist items, move-in against move-out">
-        {/* A short table inside a card: no sticky header to pin. */}
-        <TableHeader className="lg:static">
-          <TableRow>
-            <TableHead>Item</TableHead>
-            <TableHead>Move-in</TableHead>
-            <TableHead>Move-out</TableHead>
-            <TableHead>Change</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((item) => {
-            const meta = changeMeta(item);
-            const quiet =
-              (item.change === 'NO_CHANGE' || item.change === 'NOT_GRADED') &&
-              !item.cleaning &&
-              !item.findings.length;
-            return (
-              <TableRow className={cn(quiet && 'text-muted-foreground')} key={item.itemId}>
-                <TableCell className="align-top font-medium whitespace-normal">
-                  {item.label}
-                  {item.findings.length ? (
-                    <ul className="mt-1 grid gap-0.5 font-normal">
-                      {item.findings.map((finding) => (
-                        <FindingLine finding={finding} key={finding.id} />
-                      ))}
-                    </ul>
-                  ) : null}
-                </TableCell>
-                <TableCell className="align-top whitespace-normal">
-                  {gradeText(item.moveIn)}
-                  {item.moveIn?.comment ? (
-                    <p className="text-muted-foreground text-xs italic">{item.moveIn.comment}</p>
-                  ) : null}
-                </TableCell>
-                <TableCell className="align-top whitespace-normal">
-                  {gradeText(item.moveOut)}
-                  {item.moveOut?.comment ? (
-                    <p className="text-muted-foreground text-xs italic">{item.moveOut.comment}</p>
-                  ) : null}
-                </TableCell>
-                <TableCell className="align-top">
-                  <div className="flex flex-wrap gap-1">
-                    <Badge variant={meta.variant}>{meta.label}</Badge>
-                    {item.cleaning === 'NEEDS_CLEANING' ? (
-                      <Badge variant="info">Needs cleaning</Badge>
+      {items.length ? (
+        <Table aria-label="Checklist items, move-in against move-out">
+          {/* A short table inside a card: no sticky header to pin. */}
+          <TableHeader className="lg:static">
+            <TableRow>
+              <TableHead>Item</TableHead>
+              <TableHead>Move-in</TableHead>
+              <TableHead>Move-out</TableHead>
+              <TableHead>Result</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((item) => {
+              const meta = changeMeta(item);
+              const quiet =
+                (item.change === 'NO_CHANGE' || item.change === 'NOT_GRADED') && !item.cleaning;
+              const confirmed = item.findings.filter((finding) => !isWaiting(finding));
+              return (
+                <TableRow className={cn(quiet && 'text-muted-foreground')} key={item.itemId}>
+                  <TableCell className="align-top font-medium whitespace-normal">
+                    {item.label}
+                    {confirmed.length ? (
+                      <ul className="mt-1 grid gap-0.5 font-normal">
+                        {confirmed.map((finding) => (
+                          <ConfirmedLine finding={finding} key={finding.id} />
+                        ))}
+                      </ul>
                     ) : null}
-                  </div>
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-      {otherFindings.length ? (
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
+                    {gradeText(item.moveIn)}
+                    {item.moveIn?.comment ? (
+                      <p className="text-muted-foreground text-xs italic">{item.moveIn.comment}</p>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
+                    {gradeText(item.moveOut)}
+                    {item.moveOut?.comment ? (
+                      <p className="text-muted-foreground text-xs italic">{item.moveOut.comment}</p>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="align-top">
+                    <div className="flex flex-wrap gap-1">
+                      {quiet ? (
+                        <span className="text-xs">{meta.label}</span>
+                      ) : item.change !== 'NO_CHANGE' && item.change !== 'NOT_GRADED' ? (
+                        <Badge variant={meta.variant}>{meta.label}</Badge>
+                      ) : null}
+                      {item.cleaning === 'NEEDS_CLEANING' ? (
+                        <Badge variant="warning">Needs cleaning</Badge>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      ) : null}
+      {confirmedElsewhere.length ? (
         <div className="grid gap-1">
-          <p className="text-muted-foreground text-xs font-medium">
-            Findings about no checklist item
-          </p>
+          <p className="text-muted-foreground text-xs font-medium">Also confirmed in this room</p>
           <ul className="grid gap-0.5">
-            {otherFindings.map((finding) => (
-              <FindingLine finding={finding} key={finding.id} />
+            {confirmedElsewhere.map((finding) => (
+              <ConfirmedLine finding={finding} key={finding.id} />
             ))}
           </ul>
         </div>

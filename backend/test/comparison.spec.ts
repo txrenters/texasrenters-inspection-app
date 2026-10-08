@@ -1179,6 +1179,7 @@ describe('comparing a room item by item', () => {
               matchConfidence: 1,
               summary: 'Already damaged at move-in: Floor and coverings.',
               moveOutPropertyAreaId: 'pa-entrance',
+              moveInPropertyAreaId: 'pa-front-entry',
               metadata: {
                 items: [
                   {
@@ -1192,13 +1193,21 @@ describe('comparing a room item by item', () => {
                   },
                 ],
                 aiNote: '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.',
+                fromRecording: ['Door: hole beside the handle'],
               },
             },
           ],
         }),
       },
       inspectionArea: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'inspection-area-entrance', propertyAreaId: 'pa-entrance' }]),
+        // The move-out's rows, to open one; the move-in's, for their names.
+        findMany: jest.fn().mockImplementation((args: { where: { inspectionId: string } }) =>
+          Promise.resolve(
+            args.where.inspectionId === 'move-in-1'
+              ? [{ propertyAreaId: 'pa-front-entry', propertyArea: { name: 'Front entry' } }]
+              : [{ id: 'inspection-area-entrance', propertyAreaId: 'pa-entrance' }],
+          ),
+        ),
       },
       inspectionFinding: { findMany },
       inspectionMedia: { count: jest.fn().mockResolvedValue(1) },
@@ -1209,6 +1218,10 @@ describe('comparing a room item by item', () => {
 
     expect(result?.areas[0]).toMatchObject({
       moveOutAreaId: 'inspection-area-entrance',
+      // Paired with a differently named room: the console says which.
+      moveInAreaName: 'Front entry',
+      // Counted with the new items, as the report counts it.
+      fromRecording: ['Door: hole beside the handle'],
       aiNote: '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.',
       items: [
         {

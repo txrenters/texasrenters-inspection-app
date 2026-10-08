@@ -7,7 +7,8 @@ import { InspectionComparisonPanel } from './inspection-comparison';
 /**
  * The move-in comparison, room by room and item by item (2026-10-03). On 5819
  * Flower Gate Dr it read "uncertain" for nearly every room; the items are what
- * the verdict is drawn from.
+ * the verdict is drawn from. Laid out to be scanned (2026-10-09): four figures,
+ * filters, a line a room, and inside a room only what changed.
  */
 
 const state = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ function entrance(fields: Partial<AdminAreaComparison> = {}): AdminAreaCompariso
     matchConfidence: 1,
     summary: 'New since move-in: Windows and locks. Already damaged at move-in: Floor and coverings.',
     moveOutAreaId: 'inspection-area-entrance',
+    moveInAreaName: 'Entrance',
     aiNote:
       '1 AI finding of new damage here is waiting to be confirmed from the recording; it joins the report once confirmed.',
     items: [
@@ -66,7 +68,16 @@ function entrance(fields: Partial<AdminAreaComparison> = {}): AdminAreaCompariso
         moveOut: { clean: true, undamaged: false, working: true, comment: null },
         change: 'NEW_DAMAGE',
         cleaning: null,
-        findings: [],
+        findings: [
+          {
+            id: 'finding-window',
+            title: 'Window pane cracked',
+            severity: 'MEDIUM',
+            findingType: 'POSSIBLE_NEW_DAMAGE',
+            reviewStatus: 'APPROVED',
+            source: 'AI_VISION',
+          },
+        ],
       },
       {
         itemId: 'lights',
@@ -83,6 +94,34 @@ function entrance(fields: Partial<AdminAreaComparison> = {}): AdminAreaCompariso
   };
 }
 
+const laundry: AdminAreaComparison = {
+  id: 'cmp-laundry',
+  areaName: 'Laundry',
+  classification: 'UNCHANGED',
+  matchMethod: 'LOCAL_AREA_ID',
+  matchConfidence: 1,
+  summary: 'No change in condition on any item graded at both inspections.',
+  moveOutAreaId: 'inspection-area-laundry',
+  moveInAreaName: 'Laundry',
+  items: [
+    { itemId: 'walls', label: 'Walls and ceilings', moveIn: sound, moveOut: sound, change: 'NO_CHANGE', cleaning: null, findings: [] },
+  ],
+  otherFindings: [],
+};
+
+const stairs: AdminAreaComparison = {
+  id: 'cmp-stairs',
+  areaName: 'Stairs',
+  classification: 'MISSING_BASELINE',
+  matchMethod: 'UNMATCHED',
+  matchConfidence: 0,
+  summary: 'The move-in inspection has no matching room, so there is nothing to compare it with.',
+  moveOutAreaId: 'inspection-area-stairs',
+  moveInAreaName: null,
+  items: [],
+  otherFindings: [],
+};
+
 function comparison(
   areas: AdminAreaComparison[],
   fields: Partial<AdminInspectionComparison> = {},
@@ -96,75 +135,107 @@ function comparison(
     generator: 'DETERMINISTIC',
     generatedAt: '2026-10-03T15:00:00.000Z',
     recordingsProcessing: 0,
-    findingsToConfirm: 0,
+    findingsToConfirm: 1,
     areas,
     ...fields,
   };
 }
 
 beforeEach(() => {
-  state.data = comparison([
-    entrance(),
-    entrance({
-      id: 'cmp-laundry',
-      areaName: 'Laundry',
-      classification: 'UNCHANGED',
-      summary: 'No change in condition on any item graded at both inspections.',
-      moveOutAreaId: 'inspection-area-laundry',
-      aiNote: null,
-    }),
-  ]);
+  state.data = comparison([entrance(), laundry, stairs]);
 });
 
+function rowFor(name: RegExp) {
+  return screen.getByRole('button', { name });
+}
+
 describe('the move-in comparison', () => {
-  it('opens a room with a finding waiting on its items, side by side', () => {
+  it('opens on the rooms that need something, a line each', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    const tables = screen.getAllByRole('table', {
-      name: 'Checklist items, move-in against move-out',
-    });
-    // The entrance has a finding to confirm and opens; the laundry does not.
-    expect(tables).toHaveLength(1);
-    const floor = within(tables[0]).getByRole('row', { name: /Floor and coverings/ });
+    expect(screen.getByRole('button', { name: /Needs attention/ })).toHaveAttribute('aria-pressed', 'true');
+    const entranceRow = rowFor(/^Entrance/);
+    expect(entranceRow).toHaveTextContent('1 new · 1 already at move-in · 1 to clean');
+    expect(entranceRow).toHaveTextContent('1 to confirm');
+    // Nothing to act on, or nothing to compare: under their own filters.
+    expect(screen.queryByRole('button', { name: /^Laundry/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Stairs/ })).toBeNull();
+    // No room opens by itself, and the office's matching words are gone.
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByText(/local area id|100%/i)).toBeNull();
+  });
+
+  it('shows a room only what changed, and the rest on request', () => {
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+    fireEvent.click(rowFor(/^Entrance/));
+
+    const table = screen.getByRole('table', { name: 'Checklist items, move-in against move-out' });
+    const floor = within(table).getByRole('row', { name: /Floor and coverings/ });
     expect(within(floor).getByText('Damaged')).toBeInTheDocument();
     expect(within(floor).getByText('Damaged · dirty')).toBeInTheDocument();
     expect(within(floor).getByText('Tiles chipped at the door')).toBeInTheDocument();
     expect(within(floor).getByText('Already at move-in')).toBeInTheDocument();
     expect(within(floor).getByText('Needs cleaning')).toBeInTheDocument();
-    // The finding about the floor sits under it, with where it stands.
-    expect(within(floor).getByText('Cracked floor tiles at the door')).toBeInTheDocument();
     expect(
-      within(within(tables[0]).getByRole('row', { name: /Windows and locks/ })).getByText(
-        'New since move-in',
-      ),
+      within(within(table).getByRole('row', { name: /Windows and locks/ })).getByText('New since move-in'),
     ).toBeInTheDocument();
+    expect(within(table).queryByRole('row', { name: /Lights and power points/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more item' }));
+    expect(screen.getByRole('row', { name: /Lights and power points/ })).toBeInTheDocument();
   });
 
-  it('says which findings are still to confirm, and links to the room’s evidence', () => {
+  it('lists what the office confirmed, and counts what is still to confirm with a way to it', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+    fireEvent.click(rowFor(/^Entrance/));
 
-    expect(screen.getAllByText(/waiting to be confirmed from the recording/)).toHaveLength(1);
-    expect(screen.getAllByRole('link', { name: "Open the room's evidence" })[0]).toHaveAttribute(
+    expect(screen.getByText('Window pane cracked')).toBeInTheDocument();
+    // Waiting: counted, not listed -- it cannot be confirmed from here.
+    expect(screen.queryByText('Cracked floor tiles at the door')).toBeNull();
+    expect(
+      screen.getByText('1 finding here waiting to be confirmed; not on the report until confirmed.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review in the inspection' })).toHaveAttribute(
       'href',
       '/inspections/move-out-1?area=inspection-area-entrance',
     );
   });
 
-  it('opens and closes a room’s items on request', () => {
+  it('sums up the comparison in four figures, the findings to confirm linking to them', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show 3 items' }));
-    expect(screen.getAllByRole('table')).toHaveLength(2);
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Hide items' })[0]);
-    expect(screen.getAllByRole('table')).toHaveLength(1);
+    expect(screen.getByText('Rooms with new damage').parentElement?.parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Items damaged since move-in').parentElement?.parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Items to clean').parentElement?.parentElement).toHaveTextContent('1');
+    expect(screen.getByRole('link', { name: 'Review on the inspection page' })).toHaveAttribute(
+      'href',
+      '/inspections/move-out-1',
+    );
   });
 
-  it('totals the items across the rooms', () => {
+  it('filters the rooms', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    expect(screen.getByText('2 new since move-in (2 rooms)')).toBeInTheDocument();
-    expect(screen.getByText('2 already at move-in · 2 need cleaning')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Only in one inspection/ }));
+    expect(rowFor(/^Stairs/)).toHaveTextContent('Move-out only');
+    expect(rowFor(/^Stairs/)).toHaveTextContent('Not at move-in');
+    expect(screen.queryByRole('button', { name: /^Entrance/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /All rooms/ }));
+    expect(rowFor(/^Laundry/)).toHaveTextContent('Nothing changed');
+    fireEvent.click(rowFor(/^Laundry/));
+    expect(screen.getByText('Nothing changed on the 1 item checked.')).toBeInTheDocument();
+  });
+
+  it('says which move-in room a differently named one was compared with', () => {
+    state.data = comparison([
+      entrance({ areaName: 'Downstairs living room', moveInAreaName: 'Living Room', matchMethod: 'AI_SUGGESTED' }),
+    ]);
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+
+    expect(rowFor(/Downstairs living room/)).toHaveTextContent('Compared with the move-in’s “Living Room”');
+    fireEvent.click(rowFor(/Downstairs living room/));
+    expect(screen.getByText(/Paired by AI: check that/)).toBeInTheDocument();
   });
 
   it('names a room the record cannot settle for what it is', () => {
@@ -176,7 +247,7 @@ describe('the move-in comparison', () => {
     ]);
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    expect(screen.getByText('Cannot be compared')).toBeInTheDocument();
+    expect(screen.getByText("Can't tell what's new")).toBeInTheDocument();
   });
 });
 
@@ -189,9 +260,12 @@ describe('a comparison going out', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
     expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Open report' })).toHaveAttribute(
+      'href',
+      '/inspections/move-out-1/comparison-report',
+    );
     for (const gone of ['Approve comparison', 'Reject', 'Override', 'Regenerate'])
       expect(screen.queryByRole('button', { name: gone })).toBeNull();
-    // No room waits on a verdict. (A finding still says it waits for the office.)
     expect(screen.queryByText(/Requires review/)).toBeNull();
   });
 
@@ -202,11 +276,7 @@ describe('a comparison going out', () => {
     expect(
       screen.getByText('2 move-out recordings are still being processed; their findings will follow.'),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '1 finding is waiting to be confirmed on the inspection page; it joins the report once confirmed.',
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Findings to confirm')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
   });
 

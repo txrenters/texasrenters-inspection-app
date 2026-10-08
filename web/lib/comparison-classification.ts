@@ -9,15 +9,17 @@ import { humanize } from '@/lib/format';
  * row that reads "New damage" in red on screen must not read "Requires review"
  * in amber on the document somebody disputes. Shared so the two cannot drift.
  */
+// In the words the report uses (2026-10-09): "Missing baseline" told the office
+// what the code lacked, not what happened to the room.
 export const CLASSIFICATIONS: ReadonlyArray<{ value: ComparisonClassification; label: string }> = [
-  { value: 'UNCHANGED', label: 'Unchanged' },
-  { value: 'IMPROVED', label: 'Improved' },
+  { value: 'UNCHANGED', label: 'No new damage' },
+  { value: 'IMPROVED', label: 'Better than at move-in' },
   { value: 'NEW_DAMAGE', label: 'New damage' },
-  { value: 'WORSENED', label: 'Worsened' },
-  { value: 'RESOLVED', label: 'Resolved' },
-  { value: 'MISSING_BASELINE', label: 'Missing baseline' },
-  { value: 'MISSING_MOVE_OUT_EVIDENCE', label: 'Missing move-out evidence' },
-  { value: 'NOT_COMPARABLE', label: 'Cannot be compared' },
+  { value: 'WORSENED', label: 'Worse than at move-in' },
+  { value: 'RESOLVED', label: 'Better than at move-in' },
+  { value: 'MISSING_BASELINE', label: 'Not at move-in' },
+  { value: 'MISSING_MOVE_OUT_EVIDENCE', label: 'Not at move-out' },
+  { value: 'NOT_COMPARABLE', label: "Can't tell what's new" },
   { value: 'REQUIRES_REVIEW', label: 'Requires review' },
 ];
 

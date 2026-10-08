@@ -156,16 +156,20 @@ type ConditionSignals = {
 };
 
 /** What `generate` keeps on an area row beside the verdict, for the console. */
-type AreaDetail = { items: ComparedItem[]; aiNote: string | null };
+type AreaDetail = { items: ComparedItem[]; aiNote: string | null; fromRecording: string[] };
 
 function areaDetail(metadata: Prisma.JsonValue | null): AreaDetail | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const items = (metadata as { items?: unknown }).items;
   if (!Array.isArray(items)) return null;
   const aiNote = (metadata as { aiNote?: unknown }).aiNote;
+  const fromRecording = (metadata as { fromRecording?: unknown }).fromRecording;
   return {
     items: items as ComparedItem[],
     aiNote: typeof aiNote === 'string' ? aiNote : null,
+    fromRecording: Array.isArray(fromRecording)
+      ? fromRecording.filter((title): title is string => typeof title === 'string')
+      : [],
   };
 }
 
@@ -1103,12 +1107,20 @@ export class ComparisonService {
       },
     });
     if (!record) return null;
-    const [moveOutAreas, findings, recordingsProcessing] = await Promise.all([
+    const [moveOutAreas, moveInAreas, findings, recordingsProcessing] = await Promise.all([
       // The move-out's own area rows, so the console can open one from here.
       this.prisma.inspectionArea.findMany({
         where: { inspectionId: record.moveOutInspectionId },
         select: { id: true, propertyAreaId: true },
       }),
+      // The move-in's names, so a room paired with a differently named one
+      // says which, rather than how it was matched (2026-10-09).
+      record.moveInInspectionId
+        ? this.prisma.inspectionArea.findMany({
+            where: { inspectionId: record.moveInInspectionId },
+            select: { propertyAreaId: true, propertyArea: { select: { name: true } } },
+          })
+        : [],
       // Read now rather than kept with the comparison: a re-run of the AI
       // replaces undecided findings, and decisions move on after generation.
       this.prisma.inspectionFinding.findMany({
@@ -1138,6 +1150,9 @@ export class ComparisonService {
       }),
     ]);
     const areaIdFor = new Map(moveOutAreas.map((area) => [area.propertyAreaId, area.id]));
+    const moveInNameFor = new Map(
+      moveInAreas.map((area) => [area.propertyAreaId, area.propertyArea?.name ?? null]),
+    );
     return {
       id: record.id,
       moveOutInspectionId: record.moveOutInspectionId,
@@ -1166,6 +1181,9 @@ export class ComparisonService {
         summary: area.summary,
         moveOutAreaId: area.moveOutPropertyAreaId
           ? (areaIdFor.get(area.moveOutPropertyAreaId) ?? null)
+          : null,
+        moveInAreaName: area.moveInPropertyAreaId
+          ? (moveInNameFor.get(area.moveInPropertyAreaId) ?? null)
           : null,
         ...this.itemDetail(
           areaDetail(area.metadata),
@@ -1201,7 +1219,8 @@ export class ComparisonService {
       reviewStatus: finding.reviewStatus,
       source: finding.source,
     });
-    if (!detail) return { items: [], otherFindings: findings.map(strip), aiNote: null };
+    if (!detail)
+      return { items: [], otherFindings: findings.map(strip), aiNote: null, fromRecording: [] };
     const placed = new Set<(typeof findings)[number]>();
     const items = detail.items.map(({ keywords, ...item }) => {
       const about = findings.filter(
@@ -1216,6 +1235,9 @@ export class ComparisonService {
       items,
       otherFindings: findings.filter((finding) => !placed.has(finding)).map(strip),
       aiNote: detail.aiNote,
+      // What the office confirmed as new on no item: counted with the new
+      // items, as the report counts it.
+      fromRecording: detail.fromRecording,
     };
   }
 
