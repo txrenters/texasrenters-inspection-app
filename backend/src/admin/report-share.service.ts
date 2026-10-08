@@ -16,6 +16,7 @@ import {
   inspectionAssessesFilters,
   SERVICE_PHOTO_AREA,
   RECORDING_ACTION_HEADING,
+  sortAreasBySequence,
   type PublicInspectionReport,
   type VisitServicesReport,
 } from '@texasrenters/shared';
@@ -653,7 +654,12 @@ export class ReportShareService {
      * filters" photo area printed as a room of its own, of filters, in a report
      * about the property's condition (the office, 2026-09-29).
      */
-    const areas = inspectedAreas(inspection.inspectionType, inspection.areas);
+    // The office's order, the entrance first (2026-10-08). The HVAC filters'
+    // table is placed after the Attic below; neither is a room the order names.
+    const areas = sortAreasBySequence(
+      inspectedAreas(inspection.inspectionType, inspection.areas),
+      (area) => area.propertyArea.name,
+    );
     // Findings carry the catalog area id; rooms are per-inspection areas. Map
     // one to the other so the view model can group without guessing by name.
     const roomIdByPropertyArea = new Map(areas.map((area) => [area.propertyAreaId, area.id]));

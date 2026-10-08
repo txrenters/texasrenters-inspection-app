@@ -94,4 +94,5 @@ export * from './technician-location.js';
 export * from './technician-timeline.js';
 export * from './property-details.js';
 export * from './property-service.js';
+export * from './area-sequence.js';
 export * from './technician-trail.js';

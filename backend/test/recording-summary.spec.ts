@@ -337,7 +337,7 @@ describe('summarizing one room', () => {
 });
 
 describe('every area’s summary, for the summaries tab', () => {
-  it('lists areas in walk order, marking a summary stale as the report would', async () => {
+  it('lists areas in the office’s order, marking a summary stale as the report would', async () => {
     const stored = (mediaIds: string[]) => ({
       version: 2,
       mediaIds,
@@ -364,12 +364,13 @@ describe('every area’s summary, for the summaries tab', () => {
     expect(prisma.inspectionArea.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { propertyArea: { inspectionOrder: 'asc' } } }),
     );
+    // In the office's order (2026-10-08): the kitchen before the bedrooms.
     expect(areas.map((area) => [area.name, area.recorded, area.summary?.current ?? null])).toEqual([
-      ['Bedroom 1', true, true],
       ['Kitchen', true, false],
+      ['Bedroom 1', true, true],
       ['Garage', false, null],
     ]);
-    expect(areas[0]).toMatchObject({ floorName: 'Upstairs', summary: { generatedAt: '2026-10-07T15:00:00.000Z' } });
+    expect(areas[1]).toMatchObject({ floorName: 'Upstairs', summary: { generatedAt: '2026-10-07T15:00:00.000Z' } });
   });
 
   it('refuses an inspection of another organization as not found', async () => {

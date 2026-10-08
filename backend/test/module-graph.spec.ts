@@ -5,6 +5,7 @@ import { ComparisonReportService } from '../src/admin/comparison-report.service'
 import { ComparisonService } from '../src/admin/comparison.service';
 import { ReportShareService } from '../src/admin/report-share.service';
 import { AdminController } from '../src/admin/admin.controller';
+import { AiProviderSettingsService } from '../src/admin/ai-provider-settings.service';
 import { ChecklistPrefillService } from '../src/technician/checklist-prefill.service';
 import { MediaProcessingService } from '../src/technician/media-processing.service';
 import { RecordingSummaryService } from '../src/technician/recording-summary.service';
@@ -151,5 +152,11 @@ describe('the narration pre-fill', () => {
     // And the report's summary of each room's recordings (2026-10-07).
     expect(controller.recordingSummary).toBeInstanceOf(RecordingSummaryService);
     expect(pipeline.recordingSummary).toBeInstanceOf(RecordingSummaryService);
+    // And the comparison's AI room pairing (2026-10-08), in both modules that
+    // provide the comparison: optional, so only this test sees it go missing.
+    const comparisons = moduleRef.get(ComparisonService) as unknown as { aiSettings?: unknown };
+    expect(comparisons.aiSettings).toBeInstanceOf(AiProviderSettingsService);
+    const pipelineComparison = (pipeline as unknown as { comparison?: { aiSettings?: unknown } }).comparison;
+    expect(pipelineComparison?.aiSettings).toBeInstanceOf(AiProviderSettingsService);
   });
 });

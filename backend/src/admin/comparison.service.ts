@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   ComparisonClassification,
   ComparisonMatchMethod,
@@ -18,6 +18,17 @@ import { ApplicationError } from '../common/errors';
 import { inspectedAreaWhere } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/room-summary';
+import { sortAreasBySequence } from '@texasrenters/shared';
+import { askAi } from '../technician/ai-text';
+import { AiProviderSettingsService } from './ai-provider-settings.service';
+import {
+  acceptedPairs,
+  pairingKey,
+  pairingPrompt,
+  readStoredPairing,
+  type AreaPair,
+  type StoredPairing,
+} from './area-pairing';
 import {
   compareItems,
   confirmedNewDamage,
@@ -90,7 +101,9 @@ export function baselineWhere(moveOut: {
  * ones made before 2026-10-07 still hold "Requires review" rooms, which no
  * rule produces any more, and they are redrawn the next time they are read.
  */
-export const COMPARISON_RULES = 2;
+export const COMPARISON_RULES = 3;
+// 3 (2026-10-08): rooms in the office's order, the entrance first; "Gameroom"
+// pairs with "Game Room"; and the AI pairs what the names cannot (area-pairing).
 
 /** Why a comparison no longer describes its two inspections; see `staleness`. */
 export type ComparisonOutOfDate =
@@ -109,6 +122,11 @@ function rulesOf(metadata: Prisma.JsonValue | null) {
 
 function normalizeName(name: string) {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Letters and digits only: "Gameroom" and "Game Room", "Office." and "Office". */
+function compactName(name: string) {
+  return normalizeName(name).replace(/[^a-z0-9]/g, '');
 }
 
 type AreaRow = {
@@ -182,7 +200,15 @@ type AreaResult = {
 export class ComparisonService {
   private readonly logger = new Logger(ComparisonService.name);
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    // For pairing the rooms the names cannot (area-pairing). Optional so the
+    // suites building this with `new` keep their shape; without it the
+    // comparison pairs by the rules alone, as it always has.
+    @Optional()
+    @Inject(AiProviderSettingsService)
+    private readonly aiSettings?: AiProviderSettingsService,
+  ) {}
 
   /** The comparison for a move-out inspection, current, or null if there can be none yet. */
   async get(user: AuthenticatedUser, moveOutInspectionId: string) {
@@ -290,12 +316,21 @@ export class ComparisonService {
         this.loadAreaEvidenceCounts(moveOut.id),
       ]);
 
+    // The rooms the rules leave unpaired, paired by the AI where it is sure --
+    // asked once for each set of leftovers, and kept with the comparison.
+    const aiPairing = await this.aiPairing(
+      moveOut.organizationId,
+      moveOut.id,
+      moveOutAreas,
+      moveInAreas,
+    );
     const areaResults = this.buildAreaComparisons(
       moveOutAreas,
       moveInAreas,
       moveOutCondition,
       moveInCondition,
       moveOutEvidence,
+      aiPairing?.pairs ?? [],
     );
     const overallCondition = this.overallCondition(areaResults);
     const summary = this.summaryText(overallCondition, areaResults.length);
@@ -306,6 +341,7 @@ export class ComparisonService {
       moveInAreaCount: moveInAreas.length,
       matchedAreas: areaResults.filter((a) => a.matchMethod !== ComparisonMatchMethod.UNMATCHED)
         .length,
+      ...(aiPairing ? { aiPairing } : {}),
     } satisfies Prisma.InputJsonValue;
 
     await this.prisma.$transaction(async (tx) => {
@@ -697,14 +733,77 @@ export class ComparisonService {
    * part of the answer, which is why `baselineAreaFor` walks this same list
    * rather than matching one area on its own.
    */
-  private pairAreas(moveOutAreas: AreaRow[], moveInAreas: AreaRow[]) {
+  private pairAreas(moveOutAreas: AreaRow[], moveInAreas: AreaRow[], aiPairs: readonly AreaPair[] = []) {
     const used = new Set<string>();
-    const pairs = moveOutAreas.map((mo) => {
+    const pairs: Array<{ mo: AreaRow; match: AreaMatch | null }> = moveOutAreas.map((mo) => {
       const match = this.matchArea(mo, moveInAreas, used);
       if (match) used.add(match.area.propertyAreaId);
       return { mo, match };
     });
+    // Then the AI's, for what the rules left: never over a rule's match, and
+    // only to a move-in room still free.
+    for (const pair of pairs) {
+      if (pair.match) continue;
+      const ai = aiPairs.find((entry) => entry.moveOut === pair.mo.propertyAreaId);
+      const area = ai && !used.has(ai.moveIn) ? moveInAreas.find((mi) => mi.propertyAreaId === ai.moveIn) : undefined;
+      if (!ai || !area) continue;
+      used.add(area.propertyAreaId);
+      pair.match = { area, method: ComparisonMatchMethod.AI_SUGGESTED, confidence: ai.confidence };
+    }
     return { pairs, used };
+  }
+
+  /** The AI's pairs the comparison keeps, if it has any. */
+  private async storedPairing(moveOutInspectionId: string) {
+    const comparison = await this.prisma.inspectionComparison.findUnique({
+      where: { moveOutInspectionId },
+      select: { metadata: true },
+    });
+    return readStoredPairing(comparison?.metadata ?? null);
+  }
+
+  /**
+   * The AI's pairing of the rooms the rules left unpaired (area-pairing), or
+   * null when there is nothing to pair or no AI to ask.
+   *
+   * Asked once per set of leftovers: the answer is kept in the comparison's
+   * metadata under the leftovers' key, and a redraw with the same leftovers
+   * reuses it. A failure is not kept, so the next redraw asks again.
+   */
+  private async aiPairing(
+    organizationId: string,
+    moveOutInspectionId: string,
+    moveOutAreas: AreaRow[],
+    moveInAreas: AreaRow[],
+  ): Promise<StoredPairing | null> {
+    const { pairs, used } = this.pairAreas(moveOutAreas, moveInAreas);
+    const leftOut = pairs.filter((pair) => !pair.match).map((pair) => pair.mo);
+    const leftIn = moveInAreas.filter((mi) => !used.has(mi.propertyAreaId));
+    if (!leftOut.length || !leftIn.length) return null;
+    // Without an AI there are no pairs to keep or to ask for.
+    if (!this.aiSettings) return null;
+    const key = pairingKey(leftOut, leftIn);
+    const stored = await this.storedPairing(moveOutInspectionId);
+    if (stored?.key === key) return stored;
+    try {
+      const configuration = await this.aiSettings.resolve(organizationId);
+      const { text, usage } = await askAi(configuration, pairingPrompt(leftOut, leftIn), {
+        maxTokens: 1_500,
+        timeoutMs: 60_000,
+        failureCode: 'AI_AREA_PAIRING_FAILED',
+        onRejected: (status, message) =>
+          this.logger.warn(`Room pairing rejected (HTTP ${status}): ${message}`),
+      });
+      await this.aiSettings
+        .recordUsage(organizationId, configuration, 'AREA_PAIRING', usage, moveOutInspectionId)
+        .catch(() => undefined);
+      return { key, pairs: acceptedPairs(text, leftOut, leftIn) };
+    } catch (error) {
+      this.logger.warn(
+        `Room pairing skipped for ${moveOutInspectionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -742,7 +841,16 @@ export class ComparisonService {
       this.loadAreas(moveOut.id, InspectionType.MOVE_OUT),
       this.loadAreas(moveIn.id, InspectionType.MOVE_IN),
     ]);
-    const paired = this.pairAreas(moveOutAreas, moveInAreas).pairs.find(
+    // The rules' pairing, and where they leave this room unpaired, the AI's
+    // pairs the comparison keeps -- so this reads the room the comparison does.
+    const byRules = this.pairAreas(moveOutAreas, moveInAreas).pairs.find(
+      (pair) => pair.mo.propertyAreaId === propertyAreaId,
+    );
+    const aiPairs =
+      this.aiSettings && byRules && !byRules.match
+        ? ((await this.storedPairing(moveOutInspectionId))?.pairs ?? [])
+        : [];
+    const paired = this.pairAreas(moveOutAreas, moveInAreas, aiPairs).pairs.find(
       (pair) => pair.mo.propertyAreaId === propertyAreaId,
     );
     return {
@@ -760,8 +868,9 @@ export class ComparisonService {
     moveOutCondition: ConditionSignals,
     moveInCondition: ConditionSignals,
     moveOutEvidence: Map<string, number>,
+    aiPairs: readonly AreaPair[] = [],
   ): AreaResult[] {
-    const { pairs, used: usedMoveIn } = this.pairAreas(moveOutAreas, moveInAreas);
+    const { pairs, used: usedMoveIn } = this.pairAreas(moveOutAreas, moveInAreas, aiPairs);
     const results: AreaResult[] = [];
 
     for (const { mo, match } of pairs) {
@@ -825,7 +934,10 @@ export class ComparisonService {
         summary: 'Recorded at move-in; this room was not part of the move-out inspection.',
       });
     }
-    return results;
+    // In the office's order, the entrance first (2026-10-08) -- a room seen only
+    // at move-in in its place among the rest, not trailing after them. Pairing
+    // above still walks the move-out's own order, which it depends on.
+    return sortAreasBySequence(results, (result) => result.areaName);
   }
 
   private matchArea(mo: AreaRow, moveInAreas: AreaRow[], used: Set<string>): AreaMatch | null {
@@ -846,8 +958,12 @@ export class ComparisonService {
     });
     if (aliasHit)
       return { area: aliasHit, method: ComparisonMatchMethod.APPROVED_ALIAS, confidence: 0.9 };
-    // 3. Normalized name equality.
-    const nameHit = candidates.find((mi) => normalizeName(mi.name) === moNorm);
+    // 3. Normalized name equality -- spaces and punctuation aside, so
+    // "Gameroom" is "Game Room" and "Office." is "Office".
+    const moCompact = compactName(mo.name);
+    const nameHit =
+      candidates.find((mi) => normalizeName(mi.name) === moNorm) ??
+      (moCompact ? candidates.find((mi) => compactName(mi.name) === moCompact) : undefined);
     if (nameHit)
       return { area: nameHit, method: ComparisonMatchMethod.NORMALIZED_NAME, confidence: 0.8 };
     /*
@@ -864,8 +980,15 @@ export class ComparisonService {
      * indistinguishable from evidence once it is printed.
      */
     if (mo.category) {
+      // Numbered rooms are told apart by their numbers: the only bedroom left
+      // on a floor is not "Bedroom 3" when it is called "Bedroom 2".
+      const numbers = (name: string) => (name.match(/\d+/g) ?? []).join(',');
+      const moNumbers = numbers(mo.name);
       const sameCategory = candidates.filter(
-        (mi) => mi.category === mo.category && (mi.floorName ?? '') === (mo.floorName ?? ''),
+        (mi) =>
+          mi.category === mo.category &&
+          (mi.floorName ?? '') === (mo.floorName ?? '') &&
+          !(moNumbers && numbers(mi.name) && numbers(mi.name) !== moNumbers),
       );
       if (sameCategory.length === 1)
         return {

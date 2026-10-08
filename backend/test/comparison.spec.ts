@@ -1240,3 +1240,188 @@ describe('which move-in counts as a baseline', () => {
     expect(where.status.in).not.toContain('SCHEDULED');
   });
 });
+
+/**
+ * The rooms in the office's order, and the AI pairing what the names cannot
+ * (the maintenance team, 2026-10-08).
+ */
+describe('pairing and ordering the rooms', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  /** An AI that answers `answer`, counted. */
+  function ai(answer: unknown) {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        output: [{ content: [{ type: 'output_text', text: JSON.stringify(answer) }] }],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const settings = {
+      resolve: jest.fn().mockResolvedValue({ provider: 'OPENAI', modelId: 'model-x', apiKey: 'test-key' }),
+      recordUsage: jest.fn().mockResolvedValue(undefined),
+    };
+    return { fetchMock, settings };
+  }
+
+  /** The comparison read before a draw, for the AI's kept pairs. */
+  function previousComparison(prisma: { inspectionComparison: unknown }, metadata: unknown) {
+    (prisma.inspectionComparison as Record<string, unknown>).findUnique = jest
+      .fn()
+      .mockResolvedValue(metadata === undefined ? null : { metadata });
+  }
+
+  it('pairs "Gameroom" with "Game Room" by name, without asking the AI', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-game-out', 'Gameroom', 'INDOOR_ROOM', '2')],
+      moveInAreas: [area('pa-game-in', 'Game Room', 'INDOOR_ROOM', '2'), area('pa-den', 'Den', 'INDOOR_ROOM', '2')],
+      moveOutMedia: [mediaRow('pa-game-out', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    const { fetchMock, settings } = ai([]);
+    previousComparison(prisma, undefined);
+
+    await new ComparisonService(prisma as never, settings as never).generate('move-out-1');
+
+    expect(areaCreateMany.data.find((row) => row.moveOutPropertyAreaId === 'pa-game-out')).toMatchObject({
+      matchMethod: 'NORMALIZED_NAME',
+      moveInPropertyAreaId: 'pa-game-in',
+    });
+    // Nothing left on the move-out side, so nothing to ask.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('pairs what the names cannot through the AI, marked as its suggestion and kept', async () => {
+    const { prisma, areaCreateMany, created } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [
+        area('pa-office-out', 'Office. Front Of The Home.', 'INDOOR_ROOM', '1'),
+        area('pa-bed-out', 'Bedroom 3 (Right-Right)', 'BEDROOM', '2'),
+      ],
+      moveInAreas: [
+        area('pa-office-in', 'Office Front', 'INDOOR_ROOM', '1'),
+        area('pa-bed-in', 'Bedroom 2', 'BEDROOM', '2'),
+        area('pa-study', 'Study', 'INDOOR_ROOM', '1'),
+      ],
+      moveOutMedia: [mediaRow('pa-office-out', 1), mediaRow('pa-bed-out', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    // The office pair is sure; the bedrooms carry different numbers, and are refused.
+    const { fetchMock, settings } = ai([
+      { moveOut: 'o1', moveIn: 'i1', confidence: 0.95 },
+      { moveOut: 'o2', moveIn: 'i2', confidence: 0.9 },
+    ]);
+    previousComparison(prisma, undefined);
+
+    await new ComparisonService(prisma as never, settings as never).generate('move-out-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(areaCreateMany.data.find((row) => row.moveOutPropertyAreaId === 'pa-office-out')).toMatchObject({
+      matchMethod: 'AI_SUGGESTED',
+      moveInPropertyAreaId: 'pa-office-in',
+      matchConfidence: 0.75,
+    });
+    expect(areaCreateMany.data.find((row) => row.moveOutPropertyAreaId === 'pa-bed-out')).toMatchObject({
+      matchMethod: 'UNMATCHED',
+    });
+    expect((created.data?.metadata as { aiPairing?: { pairs: unknown[] } }).aiPairing?.pairs).toEqual([
+      { moveOut: 'pa-office-out', moveIn: 'pa-office-in', confidence: 0.75 },
+    ]);
+    expect(settings.recordUsage).toHaveBeenCalledWith(
+      moveOut.organizationId,
+      expect.anything(),
+      'AREA_PAIRING',
+      expect.anything(),
+      'move-out-1',
+    );
+  });
+
+  it('does not ask again for the same leftovers', async () => {
+    const setup = () =>
+      generatePrisma({
+        moveOut,
+        moveIn: { id: 'move-in-1' },
+        moveOutAreas: [area('pa-office-out', 'Office. Front Of The Home.')],
+        moveInAreas: [area('pa-office-in', 'Office Front'), area('pa-study', 'Study')],
+        moveOutMedia: [mediaRow('pa-office-out', 1)],
+        moveOutFindings: [],
+        moveInFindings: [],
+      });
+    const first = setup();
+    const { fetchMock, settings } = ai([{ moveOut: 'o1', moveIn: 'i1', confidence: 0.9 }]);
+    previousComparison(first.prisma, undefined);
+    await new ComparisonService(first.prisma as never, settings as never).generate('move-out-1');
+    const kept = first.created.data?.metadata;
+
+    const second = setup();
+    previousComparison(second.prisma, kept);
+    await new ComparisonService(second.prisma as never, settings as never).generate('move-out-1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second.areaCreateMany.data[0]).toMatchObject({
+      matchMethod: 'AI_SUGGESTED',
+      moveInPropertyAreaId: 'pa-office-in',
+    });
+  });
+
+  it('lists the rooms in the office’s order, the entrance first, a move-in-only room in its place', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-bed', 'Bedroom 1'), area('pa-garage', 'Garage', 'GARAGE'), area('pa-entry', 'Entrance')],
+      moveInAreas: [
+        area('pa-bed', 'Bedroom 1'),
+        area('pa-garage', 'Garage', 'GARAGE'),
+        area('pa-entry', 'Entrance'),
+        area('pa-kitchen', 'Kitchen', 'KITCHEN'),
+      ],
+      moveOutMedia: [mediaRow('pa-bed', 1), mediaRow('pa-garage', 1), mediaRow('pa-entry', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+
+    await new ComparisonService(prisma as never).generate('move-out-1');
+
+    expect(areaCreateMany.data.map((row) => [row.areaName, row.position])).toEqual([
+      ['Entrance', 0],
+      ['Kitchen', 1],
+      ['Bedroom 1', 2],
+      ['Garage', 3],
+    ]);
+  });
+
+  it('carries on by the rules alone when the AI cannot be reached', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-office-out', 'Office. Front Of The Home.')],
+      moveInAreas: [area('pa-office-in', 'Office Front'), area('pa-study', 'Study')],
+      moveOutMedia: [mediaRow('pa-office-out', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }) as unknown as typeof fetch;
+    const settings = {
+      resolve: jest.fn().mockResolvedValue({ provider: 'OPENAI', modelId: 'model-x', apiKey: 'test-key' }),
+      recordUsage: jest.fn(),
+    };
+    previousComparison(prisma, undefined);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    await new ComparisonService(prisma as never, settings as never).generate('move-out-1');
+
+    expect(areaCreateMany.data[0]).toMatchObject({ matchMethod: 'UNMATCHED' });
+  });
+});
