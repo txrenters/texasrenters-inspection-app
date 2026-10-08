@@ -11,6 +11,10 @@
  *   is booked, not when it is walked. The tenancy ends on Propertyware's
  *   scheduled move-out where it has one, and otherwise on the lease's end date.
  *   Moses takes the move-outs.
+ * - **A tenant who has given notice gets their move-out booked at once**, however
+ *   far off (2026-10-08). Sixty days is for a lease simply running to its end,
+ *   which may yet renew; a tenant who has said they are going has fixed the day,
+ *   and the office looked for it in Jobber the week the notice went in.
  * - **A tenant who is leaving gets a move-in twenty-two days after they go**,
  *   for the make-ready: twenty-two days is the quickest turnaround the office
  *   has had. Leaving means notice given, an eviction, or the lease gone from
@@ -89,12 +93,16 @@ export function workingDayOnOrAfter(date: string): string {
 /** The day the tenancy ends: the scheduled move-out where Propertyware has one, else the lease's end. */
 export const tenancyEndsOn = (lease: LeaseDates) => lease.scheduledMoveOutDate ?? lease.endDate;
 
+/** Whether the tenant has told the office they are going: a notice date in Propertyware, or "Notice Given" in its status. */
+export function noticeGiven(lease: LeaseDates): boolean {
+  return Boolean(lease.noticeGivenDate) || (lease.status ?? '').toLowerCase().includes('notice');
+}
+
 /** Whether the tenant is leaving: notice given, an eviction, or the lease gone from the report unrenewed. */
 export function tenantIsLeaving(lease: LeaseDates): boolean {
   if (lease.renewed) return false;
   if (!lease.isActive) return true;
-  const status = (lease.status ?? '').toLowerCase();
-  return Boolean(lease.noticeGivenDate) || status.includes('notice') || status.includes('eviction');
+  return noticeGiven(lease) || (lease.status ?? '').toLowerCase().includes('eviction');
 }
 
 /**
@@ -122,8 +130,9 @@ export function moveOutDueOn(lease: LeaseDates, today: string): string | null {
 export function inspectionsDue(lease: LeaseDates, today: string): DueInspection[] {
   const due: DueInspection[] = [];
 
+  // Sixty days ahead, or at once when the tenant has given notice (2026-10-08).
   const moveOut = moveOutDueOn(lease, today);
-  if (moveOut && moveOut <= addDays(today, MOVE_OUT_BOOKED_DAYS_AHEAD))
+  if (moveOut && (noticeGiven(lease) || moveOut <= addDays(today, MOVE_OUT_BOOKED_DAYS_AHEAD)))
     due.push({ kind: 'MOVE_OUT', dueOn: moveOut, scheduledOn: bookableDay(moveOut, today) });
 
   const leaving = tenantIsLeaving(lease) ? leavingOn(lease) : null;

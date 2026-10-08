@@ -6,6 +6,7 @@ import {
   isWorkingDay,
   leavingOn,
   moveOutDueOn,
+  noticeGiven,
   spreadOverdue,
   tenantIsLeaving,
   workingDayOnOrAfter,
@@ -73,6 +74,33 @@ describe('a move-out', () => {
     ]);
   });
 
+  /** The office (2026-10-08): notice given, scheduled move-out 12/20, "should be 12/21" -- and nothing booked. */
+  it('is booked at once, however far off, when the tenant has given notice', () => {
+    const notice = lease({
+      status: 'Active - Notice Given',
+      noticeGivenDate: '2026-09-15',
+      scheduledMoveOutDate: '2026-12-20',
+      endDate: '2026-12-28',
+    });
+    expect(noticeGiven(notice)).toBe(true);
+    // Ninety-three days off: Monday 21 December, the day after the scheduled move-out.
+    expect(inspectionsDue(notice, TODAY)).toEqual([{ kind: 'MOVE_OUT', dueOn: '2026-12-21', scheduledOn: '2026-12-21' }]);
+  });
+
+  it('counts "Notice Given" in the status as notice, with or without the date', () => {
+    expect(noticeGiven(lease({ status: 'Active - Notice Given' }))).toBe(true);
+    expect(noticeGiven(lease({ noticeGivenDate: '2026-09-01' }))).toBe(true);
+    expect(noticeGiven(lease())).toBe(false);
+    // Ends Friday 29 January: the Saturday after goes on Monday 1 February.
+    expect(inspectionsDue(lease({ status: 'Active - Notice Given', endDate: '2027-01-29' }), TODAY)).toEqual([
+      { kind: 'MOVE_OUT', dueOn: '2027-01-30', scheduledOn: '2027-02-01' },
+    ]);
+  });
+
+  it('still waits for the sixty days for an eviction, whose day is not the tenant’s to fix', () => {
+    expect(inspectionsDue(lease({ status: 'Eviction', endDate: '2026-12-20' }), TODAY)).toEqual([]);
+  });
+
   it('is not booked once the lease has ended, nor for a tenancy that has already gone month-to-month', () => {
     expect(inspectionsDue(lease({ endDate: '2026-09-10' }), TODAY)).toEqual([]);
     expect(inspectionsDue(lease({ status: 'Going MTM', endDate: '2026-06-30' }), TODAY)).toEqual([]);
@@ -113,15 +141,21 @@ describe('a move-in', () => {
     expect(inspectionsDue(lease({ isActive: false, endDate: '2026-07-31', droppedOn: '2026-08-01' }), TODAY)).toEqual([]);
   });
 
-  it('is booked up to ninety days ahead, sooner than the move-out before it', () => {
+  it('is booked up to ninety days ahead, notice or not (2026-10-08: "move-in follows the same rule for now")', () => {
     // Out Friday 20 November: the move-in on Saturday 12 December (so Monday the 14th) is inside the
-    // ninety days, the move-out on the 21st not yet inside the sixty.
+    // ninety days; the move-out on the 21st (so Monday the 23rd) goes at once, on notice.
     expect(
       inspectionsDue(lease({ status: 'Active - Notice Given', noticeGivenDate: '2026-09-01', endDate: '2026-11-20' }), TODAY),
-    ).toEqual([{ kind: 'MOVE_IN', dueOn: '2026-12-12', scheduledOn: '2026-12-14' }]);
+    ).toEqual([
+      { kind: 'MOVE_OUT', dueOn: '2026-11-21', scheduledOn: '2026-11-23' },
+      { kind: 'MOVE_IN', dueOn: '2026-12-12', scheduledOn: '2026-12-14' },
+    ]);
+    // Out 31 January: the move-out is booked, the move-in on 22 February not yet.
     expect(
-      inspectionsDue(lease({ status: 'Active - Notice Given', noticeGivenDate: '2026-09-01', endDate: '2027-01-31' }), TODAY),
-    ).toEqual([]);
+      inspectionsDue(lease({ status: 'Active - Notice Given', noticeGivenDate: '2026-09-01', endDate: '2027-01-31' }), TODAY).map(
+        (entry) => entry.kind,
+      ),
+    ).toEqual(['MOVE_OUT']);
   });
 });
 
