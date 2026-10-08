@@ -64,6 +64,17 @@ describe('the paths it guards', () => {
     expect(guarded('/comparison-report/abc123/pdf')).toBe(false);
   });
 
+  it('leaves the privacy policy and support page open, for App Review and anyone the listing sends', () => {
+    expect(guarded('/privacy')).toBe(false);
+    expect(guarded('/support')).toBe(false);
+  });
+
+  it('opens only those two paths, not anything that begins with them', () => {
+    expect(guarded('/privacy/anything')).toBe(true);
+    expect(guarded('/supporting')).toBe(true);
+    expect(guarded('/settings')).toBe(true);
+  });
+
   it('keeps the console’s comparison report behind sign-in', () => {
     expect(guarded('/inspections/9f0c/comparison-report')).toBe(true);
     expect(guarded('/inspections/9f0c/comparison')).toBe(true);
