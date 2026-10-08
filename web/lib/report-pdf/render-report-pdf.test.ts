@@ -458,6 +458,32 @@ describe('the condition table, drawn as a grid', () => {
   }, 60_000);
 });
 
+describe('words in the condition table', () => {
+  // At 13.5 pt the library split item names mid-word ("CEIL- INGS").
+  it('wrap whole, never broken with a hyphen', async () => {
+    mockPhotoFetch();
+    const row = (id: string, label: string) => ({ id, label, isClean: true, isUndamaged: true, isWorking: true, comment: null });
+
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        rooms: [
+          {
+            ...REPORT.rooms[0]!,
+            checklist: [row('w', 'Walls and ceilings'), row('b', 'Blinds and curtains'), row('l', 'Lights and power points')],
+          },
+        ],
+      },
+      { apiOrigin: 'http://x' },
+    );
+
+    const pieces = (await textPlaces(pdf)).map((place) => place.str);
+    expect(pieces.some((piece) => /[A-Z]-$/.test(piece))).toBe(false);
+    expect(pieces.join(' ')).toMatch(/CEILINGS/);
+    expect(pieces.join(' ')).toMatch(/CURTAINS/);
+  }, 60_000);
+});
+
 describe('a long report', () => {
   /**
    * Every report past ten pages failed to download.
