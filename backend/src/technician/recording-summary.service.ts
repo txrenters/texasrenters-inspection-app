@@ -5,6 +5,7 @@ import {
   TranscriptionStatus,
   VideoRecordingType,
 } from '@prisma/client';
+import { sortAreasBySequence } from '@texasrenters/shared';
 import type { AreaRecordingSummaryView, InspectionRecordingSummaries } from '@texasrenters/shared';
 
 import {
@@ -158,7 +159,8 @@ export class RecordingSummaryService {
       },
     });
     return {
-      areas: areas.map((area) => {
+      // The office's order, the entrance first (2026-10-08).
+      areas: sortAreasBySequence(areas, (area) => area.propertyArea.name).map((area) => {
         const spoken = area.media
           .filter((media) =>
             (media.transcriptionJob?.segments ?? []).some((segment) => segment.text.trim()),

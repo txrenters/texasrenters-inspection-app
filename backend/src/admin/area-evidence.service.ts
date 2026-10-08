@@ -7,7 +7,11 @@ import {
   VideoRecordingType,
 } from '@prisma/client';
 import { readStoredSummary } from '../technician/recording-summary';
-import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters/shared';
+import {
+  checklistKindFor,
+  inspectionRequiresAreaRecording,
+  sortAreasBySequence,
+} from '@texasrenters/shared';
 import {
   checklistItemsAreOrganizationWide,
   checklistKindWhere,
@@ -379,7 +383,12 @@ export class AreaEvidenceService {
      * "AC filters" photo area, whose photographs the console shows beside the
      * filter change's answers instead.
      */
-    const areas = inspectedAreas(inspection.inspectionType, attached);
+    // In the office's order, the entrance first (2026-10-08); rooms the order
+    // ranks alike keep the walk order they were read in above.
+    const areas = sortAreasBySequence(
+      inspectedAreas(inspection.inspectionType, attached),
+      (area) => area.propertyArea.name,
+    );
     if (!attached.length)
       return {
         inspectionId,
