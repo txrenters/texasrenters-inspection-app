@@ -2,7 +2,19 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
-afterEach(cleanup);
+// The real timer, kept before any test installs fake ones: waiting on a faked
+// setTimeout would never end.
+const realSetTimeout = globalThis.setTimeout;
+
+// Unmount, then let one macrotask pass. Radix hands focus back from a
+// setTimeout(0) after a dialog unmounts; after a file's last test that timer
+// used to run once jsdom had gone, and jsdom refused the event it built ("not
+// of type 'Event'") -- an unhandled error that failed the whole run with every
+// test passing (CI on #440, 2026-10-08). See dialog-closes-before-file-ends.
+afterEach(async () => {
+  cleanup();
+  await new Promise((resolve) => realSetTimeout(resolve, 0));
+});
 
 // jsdom has no ResizeObserver. This stub invokes the callback synchronously on
 // observe so a test can read a stubbed clientWidth/Height deterministically.
