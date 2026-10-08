@@ -16,6 +16,7 @@ import {
   PhotoCaptureType,
   TranscriptionStatus,
 } from '@prisma/client';
+import { findingRestatesChecklist } from '@texasrenters/shared';
 import { z } from 'zod';
 
 import { ApplicationError } from '../common/errors';
@@ -50,8 +51,10 @@ import { RecordingSummaryService } from './recording-summary.service';
 // 7: every problem, one per finding, titled and described specifically, and
 // no stock advice in recommendedReview. 8: no finding that only repeats a
 // checklist answer, and a title of at most eight words -- the report prints it
-// as the checklist row's comment.
-export const PROMPT_VERSION = '8';
+// as the checklist row's comment. 9: no timestamp rule for "a checklist item
+// nobody talks about", which still asked for one; and what still only says a
+// failed answer back is dropped before it is stored (`withoutChecklistEchoes`).
+export const PROMPT_VERSION = '9';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -244,6 +247,39 @@ export function withoutUnfoundedTenantLean(
     item.comparisonResult === 'EXISTING_CONDITION' ||
     item.comparisonResult === 'NORMAL_WEAR';
   return unfounded ? { ...item, possibleResponsibility: 'UNDETERMINED' } : item;
+}
+
+/**
+ * The findings left once those that only say a failed checklist answer back
+ * are taken out.
+ *
+ * The prompt has asked for none since version 8, but asking is all it did,
+ * and before that it asked for them: one per failed axis, from every recording
+ * of the room, worded a new way each time (20906 Greenfield Trl's move-out:
+ * 372 findings, the Kitchen's "Floor and coverings" row scored N, N, N and
+ * filed again for each axis). The row already says it, on the report and on
+ * the comparison.
+ * A finding about a row that passed, or nobody scored, is not an echo of
+ * anything and is left for a person; so is one whose description says what is
+ * wrong or where (see `findingRestatesChecklist`).
+ */
+export function withoutChecklistEchoes<T extends { title: string; description: string }>(
+  findings: T[],
+  answers: ReadonlyArray<{
+    label: string;
+    keywords?: string[];
+    isClean: boolean | null;
+    isUndamaged: boolean | null;
+    isWorking: boolean | null;
+  }>,
+  roomName: string,
+): T[] {
+  const failed = answers.filter(
+    (answer) => answer.isClean === false || answer.isUndamaged === false || answer.isWorking === false,
+  );
+  return findings.filter(
+    (finding) => !failed.some((answer) => findingRestatesChecklist(finding, answer, roomName)),
+  );
 }
 
 const openAiTextSchema = z.object({
@@ -1433,14 +1469,23 @@ export class MediaProcessingService implements OnModuleInit {
         'INVALID_AI_FINDINGS',
         'The AI findings did not pass validation and were discarded.',
       );
+    const roomName = media.inspectionArea.propertyArea.name;
+    const [summary, ...findings] = this.ensureSummaryFirst(parsed.data, roomName);
+    const kept = withoutChecklistEchoes(findings, assessments, roomName);
+    if (kept.length < findings.length)
+      this.logger.log({
+        event: 'checklist_echoes_dropped',
+        mediaId: media.id,
+        dropped: findings.length - kept.length,
+        kept: kept.length,
+      });
     return {
-      items: this.ensureSummaryFirst(parsed.data, media.inspectionArea.propertyArea.name).map(
-        (item) =>
-          withoutUnfoundedTenantLean(
-            item,
-            media.inspectionArea.inspection.inspectionType === InspectionType.MOVE_OUT &&
-              !baseline.established,
-          ),
+      items: [summary, ...kept].map((item) =>
+        withoutUnfoundedTenantLean(
+          item,
+          media.inspectionArea.inspection.inspectionType === InspectionType.MOVE_OUT &&
+            !baseline.established,
+        ),
       ),
       usage: result.usage,
     };
@@ -1671,12 +1716,14 @@ export class MediaProcessingService implements OnModuleInit {
         isWorking: true,
         comment: true,
         videoTimestampSeconds: true,
-        checklistItem: { select: { label: true } },
+        // What a finding that only says the answer back is recognised by.
+        checklistItem: { select: { label: true, keywords: true } },
       },
       orderBy: { videoTimestampSeconds: 'asc' },
     });
     return responses.map((response) => ({
       label: response.checklistItem.label,
+      keywords: response.checklistItem.keywords ?? [],
       isClean: response.isClean,
       isUndamaged: response.isUndamaged,
       isWorking: response.isWorking,
@@ -1851,8 +1898,10 @@ export class MediaProcessingService implements OnModuleInit {
       // to the moment the technician talks about the problem.
       'videoTimestampStart and videoTimestampEnd (integer seconds within the duration): the stretch of the',
       '  recording where a reviewer can see what the finding is about. Take them from the transcript lines',
-      '  in which the technician talks about it — the first such line\'s start to the last one\'s end. For a',
-      '  checklist item nobody talks about, use its [at Ns] time and a few seconds after. Never estimate',
+      // Not "for a checklist item nobody talks about": since prompt 8 there is
+      // no finding for one, and the line still read as an invitation to file it.
+      '  in which the technician talks about it — the first such line\'s start to the last one\'s end. When',
+      '  no line carries a time, use its checklist item\'s [at Ns] time and a few seconds after. Never estimate',
       '  a time: when neither the transcript nor an [at Ns] gives one, use 0 for both,',
       'severity (LOW|MEDIUM|HIGH), possibleResponsibility (TENANT_REVIEW_REQUIRED|OWNER_REVIEW_REQUIRED|UNDETERMINED),',
       'confidence (0-1), recommendedReview (as above; usually an empty string).',
