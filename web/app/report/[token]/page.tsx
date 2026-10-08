@@ -144,21 +144,51 @@ function Room({ room }: { room: ReportRoomView }) {
                     Condition
                   </TableHead>
                 ) : (
-                  // Set upright, as InspectCloud's are, so three narrow
-                  // columns still carry their whole names.
-                  // `leading-none`: a turned heading sits in a line box taller
-                  // than its letters, and with the usual line height that
-                  // pushed it off the middle of its column, away from the Y
-                  // and N beneath it.
-                  ['Clean', 'Undamaged', 'Working'].map((axis) => (
-                    <TableHead className="h-auto border-x px-1 py-2 align-bottom" key={axis} scope="col">
-                      <span className="mx-auto block w-fit rotate-180 leading-none whitespace-nowrap [writing-mode:vertical-rl]">
+                  // Slanted at 50 degrees, rising from the middle of their
+                  // column over the Y and N beneath, as InspectCloud's are
+                  // (the maintenance team, 2026-10-09), so three narrow
+                  // columns still carry their whole names. On a phone the
+                  // columns are too narrow for a slant -- the names would run
+                  // into each other -- so there they stand upright.
+                  //
+                  // The column lines slant with them (2026-10-09: "slant the
+                  // lines for that label too"): from each column's bottom
+                  // corner up at the same 50 degrees, so each name sits in a
+                  // slanted band of its own and the lines below carry on
+                  // straight from where these start.
+                  //
+                  // Each name is anchored at its bottom-left and turned about
+                  // it. With the lines a column apart, the band is the
+                  // column's width times sin 50 across; the name -- one line,
+                  // `leading-none`, 1em -- is centred in it when its corner
+                  // sits (0.5em + its 0.45em lift x cos 50) / sin 50 = 1.03em
+                  // right of the column's middle.
+                  ['Clean', 'Undamaged', 'Working'].map((axis, index) => (
+                    <TableHead
+                      className="relative h-[6.1em] border-x p-0 align-bottom sm:h-[5.6em] sm:border-x-0"
+                      key={axis}
+                      scope="col"
+                    >
+                      <span
+                        aria-hidden
+                        className="bg-border pointer-events-none absolute bottom-0 left-0 hidden h-px w-[7.31em] origin-bottom-left -rotate-[50deg] sm:block"
+                      />
+                      {index === 2 ? (
+                        <span
+                          aria-hidden
+                          className="bg-border pointer-events-none absolute bottom-0 left-full hidden h-px w-[7.31em] origin-bottom-left -rotate-[50deg] sm:block"
+                        />
+                      ) : null}
+                      <span className="absolute bottom-[0.45em] left-[calc(50%+0.45em)] origin-bottom-left -rotate-90 leading-none whitespace-nowrap sm:left-[calc(50%+1.03em)] sm:-rotate-[50deg]">
                         {axis}
                       </span>
                     </TableHead>
                   ))
                 )}
-                <TableHead className="align-bottom" scope="col">
+                {/* Centred in its wide column, as InspectCloud's is: at the
+                    left it sat right where the last slanted line and
+                    "Working" rise over it. */}
+                <TableHead className="text-center align-bottom" scope="col">
                   Comments
                 </TableHead>
               </TableRow>

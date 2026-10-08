@@ -6,9 +6,17 @@
  * the public web page renders too — see shared/src/report/report-view.ts. Keep
  * it that way: content logic added here silently diverges from the web report.
  */
-import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
+import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 import { REPORT_PALETTE, REPORT_TYPE } from '@texasrenters/shared';
 import type { ReportRoomView, ReportView } from '@texasrenters/shared';
+
+/**
+ * Words wrap whole, never broken with a hyphen. At 13.5 pt (2026-10-08) the
+ * library's default split a room's items mid-word -- "WALLS AND CEIL- INGS" --
+ * where moving the word to the next line was what a reader expects. Set once,
+ * for every document this process renders.
+ */
+Font.registerHyphenationCallback((word) => [word]);
 
 const C = REPORT_PALETTE;
 /**
@@ -20,8 +28,20 @@ const C = REPORT_PALETTE;
 const B = REPORT_TYPE.bodyPt;
 /** The condition table's lines (2026-10-08: drawn round every cell, as InspectCloud's are). */
 const GRID = 0.75;
-/** Tall enough for "Undamaged", turned upright, at 13.5 pt. */
-const AXIS_HEAD_HEIGHT = 82;
+/** Tall enough for "Undamaged", slanted at 50 degrees, at 13.5 pt. */
+const AXIS_HEAD_HEIGHT = 74;
+/** The verdict headings' slant (the maintenance team, 2026-10-09: "around 50 degrees"). */
+const AXIS_HEAD_SLANT = 50;
+const SLANT_SIN = Math.sin((AXIS_HEAD_SLANT * Math.PI) / 180);
+const SLANT_COS = Math.cos((AXIS_HEAD_SLANT * Math.PI) / 180);
+/** How far a heading is lifted off the bottom of its row. */
+const AXIS_HEAD_LIFT = 4;
+/**
+ * Where a heading's bottom-left corner sits, right of its column's middle, so
+ * the name -- one line of 13.5 pt -- is centred between the two slanted lines
+ * a column apart: (half the line + its lift x cos) / sin.
+ */
+const AXIS_HEAD_OFFSET = (B / 2 + AXIS_HEAD_LIFT * SLANT_COS) / SLANT_SIN;
 
 /** Photo bytes keyed by photo id, as data URIs. */
 export type ReportImages = Map<string, string>;
@@ -161,15 +181,41 @@ const styles = StyleSheet.create({
     borderLeftColor: C.border,
     paddingHorizontal: 0,
   },
-  checklistAxisHead: { height: AXIS_HEAD_HEIGHT, paddingVertical: 0 },
-  // Turned to read upwards, about its own middle, which sits in the middle of
-  // its column: wider than the column flat, it fits once turned.
+  // The lines between the headings slant with them (2026-10-09), so the head
+  // row has none of its own upright.
+  checklistAxisHead: {
+    height: AXIS_HEAD_HEIGHT,
+    paddingVertical: 0,
+    position: 'relative',
+    borderLeftWidth: 0,
+  },
+  // A column line, from the column's bottom corner up at the headings' slant
+  // to the top of the row: the line below carries on straight from it.
+  checklistAxisHeadLine: {
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+    width: AXIS_HEAD_HEIGHT / SLANT_SIN,
+    height: GRID,
+    backgroundColor: C.border,
+    transformOrigin: 'left bottom',
+    transform: `rotate(-${AXIS_HEAD_SLANT}deg)`,
+  },
+  // Slanted at 50 degrees, rising from the middle of its column over the Y and
+  // N beneath it, as InspectCloud's are: anchored at the bottom-left of the
+  // name and turned about that corner, so it starts where its column is and
+  // leans over the next one, which has room above its own heading.
   checklistAxisHeadText: {
-    width: AXIS_HEAD_HEIGHT - 6,
+    position: 'absolute',
+    left: '50%',
+    marginLeft: AXIS_HEAD_OFFSET,
+    bottom: AXIS_HEAD_LIFT,
+    width: 80,
     fontSize: B,
+    lineHeight: 1,
     color: C.muted,
-    textAlign: 'center',
-    transform: 'rotate(-90deg)',
+    transformOrigin: 'left bottom',
+    transform: `rotate(-${AXIS_HEAD_SLANT}deg)`,
   },
   checklistAxisText: { fontSize: B, fontFamily: 'Helvetica-Bold' },
   // One answer where the three verdicts would be: the width of all three, so
@@ -298,11 +344,21 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
         ) : (
           ['Clean', 'Undamaged', 'Working'].map((axis) => (
             <View key={axis} style={[styles.checklistCell, styles.checklistAxis, styles.checklistAxisHead]}>
+              <View style={styles.checklistAxisHeadLine} />
+              {axis === 'Working' ? <View style={[styles.checklistAxisHeadLine, { left: '100%' }]} /> : null}
               <Text style={styles.checklistAxisHeadText}>{axis}</Text>
             </View>
           ))
         )}
-        <View style={[styles.checklistCell, styles.checklistComment, { justifyContent: 'flex-end' }]}>
+        <View
+          style={[
+            styles.checklistCell,
+            styles.checklistComment,
+            // The line before it slants up from Working's corner instead; and
+            // centred, clear of that line and of "Working" leaning over it.
+            { justifyContent: 'flex-end', alignItems: 'center', borderLeftWidth: answersOnly ? GRID : 0 },
+          ]}
+        >
           <Text style={styles.checklistHeadText}>Comments</Text>
         </View>
       </View>
