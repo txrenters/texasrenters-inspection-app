@@ -141,10 +141,43 @@ describe('the comparison report from a share link', () => {
 
     expect(await screen.findByRole('heading', { name: '318 Notional Harbor Ln' })).toBeTruthy();
     const room = screen.getByRole('region', { name: 'Kitchen' });
-    expect(within(room).getByText('New damage')).toBeTruthy();
     const table = within(room).getByRole('table', { name: /Kitchen: each item/ });
-    expect(within(table).getByText('New since move-in')).toBeTruthy();
+    expect(within(table).getByText('New damage')).toBeTruthy();
+    expect(within(table).getByText('Good')).toBeTruthy();
+    expect(within(table).getByText('Damaged')).toBeTruthy();
     expect(within(table).getByText('Two holes')).toBeTruthy();
+  });
+
+  it('opens on what was found, and keeps the rooms the inspections do not share for the end', async () => {
+    state.respond = () =>
+      Promise.resolve({
+        ...REPORT,
+        areas: [
+          ...REPORT.areas,
+          {
+            id: 'area-3',
+            areaName: 'Formal Dining Room',
+            floorName: 'Added areas',
+            classification: 'MISSING_BASELINE',
+            matchMethod: 'UNMATCHED',
+            matchConfidence: 0,
+            summary: '',
+            moveIn: null,
+            moveOut: emptySide('room-out-3', 'Formal Dining Room'),
+          },
+        ],
+      });
+    render(<ComparisonReportPage />);
+
+    const found = await screen.findByRole('region', { name: 'What we found' });
+    expect(within(found).getByText('New damage in 2 rooms.')).toBeTruthy();
+    expect(within(found).getByText("1 room couldn't be compared.")).toBeTruthy();
+    const rest = screen.getByRole('region', { name: "Rooms we couldn't compare" });
+    expect(within(rest).getByText('Formal Dining Room')).toBeTruthy();
+    expect(within(rest).getByText('Only in the move-out inspection')).toBeTruthy();
+    // Not a room of its own among the compared ones, and no "Added areas" floor.
+    expect(screen.queryByRole('region', { name: 'Formal Dining Room' })).toBeNull();
+    expect(screen.queryByText('Added areas')).toBeNull();
   });
 
   it('lists what the office confirmed from the recording with what is new', async () => {
