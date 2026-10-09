@@ -6,14 +6,16 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 
 import { CheckRow, RemoveButton, Rows } from '@/components/booking-form-controls';
+import { SECTION_LABEL } from '@/components/panel';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { bookingFromForm, bookingUnavailableReason, type BookingFormState } from '@/lib/jobber-booking';
+import { cn } from '@/lib/utils';
 
 /** Where the link back to the inspection goes, before the inspection has an address. */
 const LINK_PLACEHOLDER = '(a link to this inspection)';
@@ -68,21 +70,36 @@ export function JobberBookingCard({
     onChange({ ...form, [key]: value });
   const offered = Boolean(context) && !unavailable;
 
+  // What booking here does, said under the switch that does it rather than
+  // over the card (console-development); kept beside the status lines when
+  // there is no switch, so the card still says what it is for.
+  const rule = (
+    <FieldDescription>
+      Creates the visit in Jobber in the office&apos;s Details format for this kind of
+      inspection, with a link back to it and completion steps that point technicians at the app.
+    </FieldDescription>
+  );
+
   return (
     <Card aria-labelledby="jobber-booking-title">
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div className="grid gap-1.5">
-          <CardTitle id="jobber-booking-title">Book in Jobber</CardTitle>
-          <CardDescription>
-            Creates the visit in Jobber in the office&apos;s Details format for this kind of
-            inspection, with a link back to it and completion steps that point technicians at the app.
-          </CardDescription>
-        </div>
-        {offered ? (
-          <Switch aria-label="Book this visit in Jobber" checked={book} onCheckedChange={onBookChange} />
-        ) : null}
+      <CardHeader>
+        {/* A section name, as the form's other cards (console-development). */}
+        <CardTitle id="jobber-booking-title" variant="label">
+          Book in Jobber
+        </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-5">
+        {offered ? (
+          <Field>
+            <label className="flex w-fit cursor-pointer items-center gap-2.5 text-sm font-medium">
+              <Switch aria-label="Book this visit in Jobber" checked={book} onCheckedChange={onBookChange} />
+              Book this visit in Jobber
+            </label>
+            {rule}
+          </Field>
+        ) : (
+          rule
+        )}
         {loading ? (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <Spinner /> Checking Jobber for this property…
@@ -112,9 +129,12 @@ export function JobberBookingCard({
           </p>
         ) : (
           <>
-            <div className="grid gap-5 md:grid-cols-2">
+            {/* Two columns only when there is a second one to fill: on any
+                visit but an occupied one the zone stood alone beside an empty
+                half of the card (console-development). */}
+            <div className={cn('grid gap-5', occupied && 'md:grid-cols-2')}>
               <div className="grid content-start gap-4">
-                <Field>
+                <Field className={occupied ? undefined : 'md:max-w-xs'}>
                   <FieldLabel htmlFor="booking-zone">Zone</FieldLabel>
                   <Input
                     id="booking-zone"
@@ -124,13 +144,15 @@ export function JobberBookingCard({
                   />
                 </Field>
                 {occupied ? (
-                <>
-                <CheckRow
-                  checked={form.benefitPackage}
-                  label="Tenant Benefit Package visit"
-                  onChange={(checked) => set('benefitPackage', checked)}
-                />
-                <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <CheckRow
+                    checked={form.benefitPackage}
+                    label="Tenant Benefit Package visit"
+                    onChange={(checked) => set('benefitPackage', checked)}
+                  />
+                ) : null}
+              </div>
+              {occupied ? (
+                <div className="grid content-start gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
                   <Field>
                     <FieldLabel htmlFor="booking-plan">Plan</FieldLabel>
                     <Input
@@ -146,9 +168,7 @@ export function JobberBookingCard({
                     onChange={(checked) => set('hvacOptedOut', checked)}
                   />
                 </div>
-                </>
-                ) : null}
-              </div>
+              ) : null}
             </div>
 
             <Rows
@@ -223,7 +243,7 @@ export function JobberBookingCard({
 
             {preview ? (
               <section aria-label="What Jobber receives" className="grid gap-2">
-                <h3 className="text-muted-foreground text-xs">What Jobber receives</h3>
+                <h3 className={SECTION_LABEL}>What Jobber receives</h3>
                 <div className="bg-muted/40 grid gap-2 rounded-lg border p-3">
                   <p className="text-sm font-medium">
                     {scheduledOn ? preview.visitTitle : 'Choose a date to see the visit title.'}

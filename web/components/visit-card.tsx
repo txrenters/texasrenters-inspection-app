@@ -15,8 +15,8 @@ import {
   type VisitFilterOutcome,
   type VisitServicesReport,
 } from '@texasrenters/shared';
-import { CalendarCheckIcon, TriangleAlertIcon } from 'lucide-react';
-import { useMemo, type ReactNode } from 'react';
+import { TriangleAlertIcon } from 'lucide-react';
+import { Fragment, useMemo, type ReactNode } from 'react';
 
 import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -85,28 +85,39 @@ export function VisitCard({
     read.tenants.length > 0 || read.accessNotes.length > 0 || read.contactTenantsBeforeArrival;
   const planning =
     services.length || read.services.filterChange || read.plan || tenantOrAccess || read.notes.length;
+  // Where the visit stands with Jobber, as words after the visit's state.
+  const sync = [
+    inJobber ? { key: 'jobber', text: 'Jobber' } : null,
+    booking?.status === 'SENT' ? { key: 'booked', text: 'Booked from this console' } : null,
+    booking?.status === 'PENDING' || booking?.status === 'FAILED'
+      ? { key: 'booking', text: 'Booking in Jobber' }
+      : null,
+    ...pushes
+      .filter((push) => push.status !== 'ABANDONED')
+      .map((push) => ({ key: push.kind, text: `Sending ${PUSH_LABEL[push.kind]} to Jobber` })),
+  ].filter((part): part is { key: string; text: string } => part !== null);
 
   return (
     <Card aria-labelledby="visit-title" className="mt-4">
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div className="grid gap-1.5">
-          <CardTitle className="flex flex-wrap items-center gap-2" id="visit-title">
-            <CalendarCheckIcon aria-hidden className="text-muted-foreground size-4" />
+          {/* "Visit" names the section, so a label (console-development). Its
+              state and where it stands with Jobber follow as one quiet line
+              rather than up to five badges in the title -- the page header
+              already carries the inspection's own status, and two status
+              words at the same weight read as a contradiction. */}
+          <CardTitle id="visit-title" variant="label">
             Visit
-            <Badge variant={state.variant}>{state.label}</Badge>
-            {inJobber ? <Badge variant="outline">Jobber</Badge> : null}
-            {booking?.status === 'SENT' ? <Badge variant="success">Booked from this console</Badge> : null}
-            {booking?.status === 'PENDING' || booking?.status === 'FAILED' ? (
-              <Badge variant="info">Booking in Jobber</Badge>
-            ) : null}
-            {pushes
-              .filter((push) => push.status !== 'ABANDONED')
-              .map((push) => (
-                <Badge key={push.kind} variant="info">
-                  Sending {PUSH_LABEL[push.kind]} to Jobber
-                </Badge>
-              ))}
           </CardTitle>
+          <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+            <Badge variant={state.variant}>{state.label}</Badge>
+            {sync.map((part) => (
+              <Fragment key={part.key}>
+                <span aria-hidden>·</span>
+                <span>{part.text}</span>
+              </Fragment>
+            ))}
+          </p>
           {!inJobber && read.raw ? (
             <CardDescription>
               Services chosen when this inspection was created. It isn&apos;t booked in Jobber from

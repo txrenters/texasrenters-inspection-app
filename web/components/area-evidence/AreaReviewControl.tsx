@@ -3,6 +3,7 @@
 import type { AreaEvidenceBundle } from '@texasrenters/shared';
 import { CheckIcon } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/format';
 import { useSetAreaReviewed } from '@/lib/queries';
@@ -50,10 +51,12 @@ export function AreaReviewControl({
           align === 'end' ? 'justify-end' : 'justify-start',
         )}
       >
-        <span className="text-success flex items-center gap-1 font-medium">
-          <CheckIcon aria-hidden className="size-3.5" />
+        {/* The tick carries the colour and the words stay muted: done is not
+            something to act on (console-development). */}
+        <Badge variant="success">
+          <CheckIcon aria-hidden />
           Reviewed{by}
-        </span>
+        </Badge>
         <span className="text-muted-foreground">{formatDateTime(review.at)}</span>
         {canReview ? (
           <Button

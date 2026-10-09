@@ -37,13 +37,15 @@ vi.mock('@/lib/queries', async (importOriginal) => {
   return { ...actual, ...queries };
 });
 
+const address = vi.hoisted(() => ({ search: 'type=OCCUPIED' }));
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   // `?type=OCCUPIED` is how the office reaches this form from the Occupied
   // section, and it is the only kind that offers a choice of areas at all --
   // a move-in or move-out always covers the whole layout, so the picker this
   // is about is not rendered for them.
-  useSearchParams: () => new URLSearchParams('type=OCCUPIED'),
+  useSearchParams: () => new URLSearchParams(address.search),
 }));
 
 const idle = { data: undefined, isLoading: false, isError: false };
@@ -68,6 +70,7 @@ const AREAS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  address.search = 'type=OCCUPIED';
   queries.useProperty.mockReturnValue(idle);
   queries.usePortfolios.mockReturnValue(paged([]));
   queries.usePropertyOptions.mockReturnValue(paged([]));
@@ -125,5 +128,50 @@ describe('the areas an occupied inspection offers', () => {
     render(<NewInspectionPage />);
 
     expect(screen.getByText('3 of 3 areas')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A property with no approved areas shows the area-setup alert, and the
+ * failure of either way past it -- the create itself, or "Inspect it as one
+ * single area" -- was the `else` of that alert, so it was never shown on the
+ * one property it could happen on.
+ */
+describe('a failure on a property with no approved areas', () => {
+  beforeEach(() => {
+    address.search = 'type=OCCUPIED&propertyId=property-1';
+    queries.usePropertyAreas.mockReturnValue(
+      list(AREAS.filter((area) => area.status !== 'APPROVED')),
+    );
+  });
+
+  it('shows the area-setup alert and the failed create together', () => {
+    queries.useAdminMutations.mockReturnValue({
+      createInspection: {
+        mutateAsync: vi.fn(),
+        isPending: false,
+        error: new Error('The inspection could not be created.'),
+      },
+      createFallbackPropertyArea: { mutateAsync: vi.fn(), isPending: false },
+    });
+    render(<NewInspectionPage />);
+
+    expect(screen.getByText('This property has no approved inspection areas')).toBeInTheDocument();
+    expect(screen.getByText('The inspection could not be created.')).toBeInTheDocument();
+  });
+
+  it('shows a failed "Inspect it as one single area"', () => {
+    queries.useAdminMutations.mockReturnValue({
+      createInspection: { mutateAsync: vi.fn(), isPending: false },
+      createFallbackPropertyArea: {
+        mutateAsync: vi.fn(),
+        isPending: false,
+        error: new Error('The single area could not be prepared.'),
+      },
+    });
+    render(<NewInspectionPage />);
+
+    expect(screen.getByText('This property has no approved inspection areas')).toBeInTheDocument();
+    expect(screen.getByText('The single area could not be prepared.')).toBeInTheDocument();
   });
 });

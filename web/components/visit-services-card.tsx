@@ -10,9 +10,11 @@ import { useMemo } from 'react';
 
 import { CopyButton } from '@/components/api-reference/copy-button';
 import { CheckRow, RemoveButton, Rows } from '@/components/booking-form-controls';
+import { SECTION_LABEL } from '@/components/panel';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Field, FieldDescription } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { servicesFromForm, type BookingFormState } from '@/lib/jobber-booking';
 
@@ -61,33 +63,40 @@ export function VisitServicesCard({
   return (
     <Card aria-labelledby="visit-services-title">
       <CardHeader>
-        <CardTitle id="visit-services-title">Services</CardTitle>
-        <CardDescription>
-          What the technician does on this visit besides the inspection. Each one is on the job&apos;s list on the
-          phone, and goes at the top of the visit&apos;s Details in Jobber the way the office writes them.
-        </CardDescription>
+        {/* A section name, as the form's other cards (console-development). */}
+        <CardTitle id="visit-services-title" variant="label">
+          Services
+        </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-5">
-        <div aria-label="Services" className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-4" role="group">
-          <CheckRow
-            checked={form.services.filterChange}
-            label={VISIT_SERVICE_LABEL.filterChange}
-            onChange={tick('filterChange')}
-          />
-          <CheckRow
-            checked={form.services.pestControl}
-            label={VISIT_SERVICE_LABEL.pestControl}
-            onChange={tick('pestControl')}
-          />
-          <CheckRow
-            checked={form.services.fleaTreatment}
-            label={VISIT_SERVICE_LABEL.fleaTreatment}
-            onChange={tick('fleaTreatment')}
-          />
-          <span className="flex min-h-9 items-center gap-2 text-sm">
-            <Badge variant="secondary">Always</Badge> {INSPECTION_LABEL[inspectionType]}
-          </span>
-        </div>
+        {/* The rule under the choices it is about rather than over the card
+            (console-development). */}
+        <Field>
+          <div aria-label="Services" className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-4" role="group">
+            <CheckRow
+              checked={form.services.filterChange}
+              label={VISIT_SERVICE_LABEL.filterChange}
+              onChange={tick('filterChange')}
+            />
+            <CheckRow
+              checked={form.services.pestControl}
+              label={VISIT_SERVICE_LABEL.pestControl}
+              onChange={tick('pestControl')}
+            />
+            <CheckRow
+              checked={form.services.fleaTreatment}
+              label={VISIT_SERVICE_LABEL.fleaTreatment}
+              onChange={tick('fleaTreatment')}
+            />
+            <span className="flex min-h-9 items-center gap-2 text-sm">
+              <Badge variant="secondary">Always</Badge> {INSPECTION_LABEL[inspectionType]}
+            </span>
+          </div>
+          <FieldDescription>
+            What the technician does on this visit besides the inspection. Each one is on the job&apos;s list on the
+            phone, and goes at the top of the visit&apos;s Details in Jobber the way the office writes them.
+          </FieldDescription>
+        </Field>
 
         {form.services.filterChange ? (
           <Rows
@@ -149,7 +158,7 @@ export function VisitServicesCard({
 
         {!booked && line ? (
           <section aria-label="For the visit in Jobber" className="grid gap-2">
-            <h3 className="text-muted-foreground text-xs">For the visit in Jobber</h3>
+            <h3 className={SECTION_LABEL}>For the visit in Jobber</h3>
             <p className="text-sm">
               This visit isn&apos;t booked in Jobber from here, so Jobber won&apos;t have these. The phone will. Put
               this line at the top of the visit&apos;s Details in Jobber:

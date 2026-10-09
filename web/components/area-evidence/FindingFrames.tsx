@@ -85,8 +85,9 @@ export function FindingFrames({
             </button>
             {capture ? (
               filed.includes(seconds) ? (
-                <span className="text-success flex items-center justify-center gap-1 text-xs">
-                  <CheckIcon aria-hidden className="size-3" />
+                // The tick in the success tone, the word muted (console-development).
+                <span className="text-muted-foreground flex items-center justify-center gap-1 text-xs">
+                  <CheckIcon aria-hidden className="text-success size-3" />
                   Added
                 </span>
               ) : (

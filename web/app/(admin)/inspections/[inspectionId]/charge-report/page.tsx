@@ -128,13 +128,15 @@ export default function ChargeReportPage() {
       {/* `print:hidden` throughout: this page is printed and handed over, and
           navigation chrome on a printed page is noise. */}
       <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-        <Button asChild variant="outline">
+        {/* The comparison report's toolbar, the same: small, Back quiet, Print
+            outlined (console-development). */}
+        <Button asChild size="sm" variant="ghost">
           <Link href={`/inspections/${id}`}>
             <ArrowLeftIcon />
             Back to inspection
           </Link>
         </Button>
-        <Button onClick={() => window.print()} type="button">
+        <Button onClick={() => window.print()} size="sm" type="button" variant="outline">
           <PrinterIcon />
           Print
         </Button>

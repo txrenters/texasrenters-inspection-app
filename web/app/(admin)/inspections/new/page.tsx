@@ -13,7 +13,7 @@ import {
   visitServicesProblems,
   type AdminProperty,
 } from '@texasrenters/shared';
-import { TriangleAlertIcon } from 'lucide-react';
+import { CircleCheckIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState } from 'react';
@@ -49,7 +49,9 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { VisitServicesCard } from '@/components/visit-services-card';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { ApiError } from '@/lib/api';
+import { humanize } from '@/lib/format';
 import {
   bookingForm,
   bookingFromForm,
@@ -91,18 +93,24 @@ const schema = z.object({
 });
 type Values = z.infer<typeof schema>;
 
+/**
+ * The types the navigation does not name, the only ones still spelled here: the
+ * rest take the navigation's own titles, so the form and the sidebar cannot
+ * call the same type two things (console-development).
+ */
+const OTHER_TYPE_LABEL: Partial<Record<InspectionType, string>> = {
+  [InspectionType.ROOF]: 'Roof',
+  [InspectionType.SUPRA_LOCKBOX_PLACEMENT]: 'Supra + lockbox placement',
+  [InspectionType.SUPRA_LOCKBOX_REMOVAL]: 'Supra + lockbox removal',
+  [InspectionType.AC_FILTER_DELIVERY]: 'AC filter delivery',
+};
+
 function inspectionTypeLabel(type: InspectionType) {
-  return {
-    [InspectionType.MOVE_IN]: 'Move-in',
-    [InspectionType.OCCUPIED]: 'Occupied',
-    [InspectionType.BACK_TO_MARKET]: 'Back-to-market',
-    [InspectionType.MOVE_OUT]: 'Move-out',
-    [InspectionType.HVAC]: 'HVAC',
-    [InspectionType.ROOF]: 'Roof',
-    [InspectionType.SUPRA_LOCKBOX_PLACEMENT]: 'Supra + lockbox placement',
-    [InspectionType.SUPRA_LOCKBOX_REMOVAL]: 'Supra + lockbox removal',
-    [InspectionType.AC_FILTER_DELIVERY]: 'AC filter delivery',
-  }[type];
+  return (
+    INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ??
+    OTHER_TYPE_LABEL[type] ??
+    humanize(type)
+  );
 }
 
 function inspectionTypeGuidance(type: InspectionType) {
@@ -359,6 +367,9 @@ function CreateInspectionForm() {
   // nobody asked for.
   const [technicianWillCapture, setTechnicianWillCapture] = useState(false);
   useEffect(() => setTechnicianWillCapture(false), [propertyId]);
+  // Settled either way: the technician will survey it, or the standard layout
+  // is what it gets.
+  const areaSetupResolved = technicianWillCapture || layoutWillBeSeeded;
 
   /**
    * Which areas this inspection covers, when the type allows a choice.
@@ -459,8 +470,10 @@ function CreateInspectionForm() {
 
   return (
     <>
+      {/* The page's rule one click away rather than above the form
+          (console-development): it is read once, not on every visit booked. */}
       <PageHeader
-        description="Schedule the property lifecycle in order. The approved floor plan is reused while every inspection keeps its own auditable evidence."
+        info="Schedule the property lifecycle in order. The approved floor plan is reused while every inspection keeps its own auditable evidence."
         title={`Create ${inspectionTypeLabel(inspectionType).toLowerCase()} inspection`}
       />
 
@@ -517,6 +530,23 @@ function CreateInspectionForm() {
                 />
               )}
               <FieldDescription>{inspectionTypeGuidance(inspectionType)}</FieldDescription>
+              {/* Which areas, for the types that choose none: said under the
+                  type that decides it, where a card holding only this sentence
+                  used to sit further down (console-development). "No picker"
+                  on its own would read as a missing control. */}
+              {hvacScope ? (
+                <FieldDescription>
+                  None to pick. An HVAC inspection is walked in the office&apos;s HVAC report&apos;s four
+                  sections &mdash; Attic, Filters, A/C unit and Thermostat &mdash; each photographed with
+                  every row answered, so it needs no floor plan and covers no rooms.
+                </FieldDescription>
+              ) : null}
+              {roofScope && hasApprovedAreas ? (
+                <FieldDescription>
+                  A roof inspection covers every area categorised as a roof, so it is not chosen here
+                  — the floor plan decides it.
+                </FieldDescription>
+              ) : null}
             </Field>
 
             <Field>
@@ -543,10 +573,6 @@ function CreateInspectionForm() {
         <Card>
           <CardHeader>
             <CardTitle variant="label">Which property</CardTitle>
-            <CardDescription>
-              The portfolio is only a filter for the property list - it is not part of the
-              inspection record, and it fills itself in once a property is chosen.
-            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <Field>
@@ -591,6 +617,12 @@ function CreateInspectionForm() {
                 }
                 value={portfolioId}
               />
+              {/* Under the control it is about rather than over the card
+                  (console-development). */}
+              <FieldDescription>
+                The portfolio is only a filter for the property list - it is not part of the
+                inspection record, and it fills itself in once a property is chosen.
+              </FieldDescription>
               <FieldError>
                 {errors.portfolioId?.message ??
                   (portfolios.isError ? portfolios.error.message : null)}
@@ -886,30 +918,13 @@ function CreateInspectionForm() {
           </Card>
         ) : null}
 
-        {/* An HVAC visit has nothing to pick and nothing to warn about, but
-            "no picker" on its own reads as a missing control. This says what
-            the visit covers so the absence is an answer rather than a gap. */}
-        {hvacScope ? (
-          <Card>
-            <CardHeader>
-              <CardTitle variant="label">Which areas</CardTitle>
-              <CardDescription>
-                None to pick. An HVAC inspection is walked in the office&apos;s HVAC report&apos;s four
-                sections &mdash; Attic, Filters, A/C unit and Thermostat &mdash; each photographed with
-                every row answered, so it needs no floor plan and covers no rooms.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        ) : null}
-
+        {/* An HVAC visit's "which areas" is a sentence under the inspection
+            type now, as is the roof's rule; the roof keeps this card for what
+            it will actually cover (console-development). */}
         {roofScope && hasApprovedAreas ? (
           <Card>
             <CardHeader>
               <CardTitle variant="label">Which areas</CardTitle>
-              <CardDescription>
-                A roof inspection covers every area categorised as a roof, so it is not chosen here
-                — the floor plan decides it.
-              </CardDescription>
             </CardHeader>
             <CardContent>
               {roofAreas.length ? (
@@ -939,13 +954,18 @@ function CreateInspectionForm() {
           </Card>
         ) : null}
 
+        {/* Every area covered is a fact needing nothing, so a quiet line rather
+            than a green-edged alert; a gap keeps the plain panel and its link
+            (console-development). */}
         {!needsAreaSetup && approvedAreas.length ? (
-          <Alert variant={areasWithChecklist === approvedAreas.length ? 'success' : 'default'}>
-            <AlertDescription>
-              {areasWithChecklist === approvedAreas.length ? (
-                <>All {approvedAreas.length} areas have a coverage checklist.</>
-              ) : (
-                <>
+          areasWithChecklist === approvedAreas.length ? (
+            <p className="text-muted-foreground text-sm">
+              All {approvedAreas.length} areas have a coverage checklist.
+            </p>
+          ) : (
+            <Alert>
+              <AlertDescription>
+                <p>
                   {areasWithChecklist} of {approvedAreas.length} areas have a coverage checklist.
                   The rest fall back to a generated list.{' '}
                   <Link
@@ -954,19 +974,21 @@ function CreateInspectionForm() {
                   >
                     Set checklists for this property
                   </Link>
-                </>
-              )}
-            </AlertDescription>
-          </Alert>
+                </p>
+              </AlertDescription>
+            </Alert>
+          )
         ) : null}
 
         {needsAreaSetup ? (
           /* Reads as a decision, not a warning. Three ways forward at three
              different visual weights left it unclear that they were alternatives
              to the same problem, and the amber kept insisting something was wrong
-             after it had been resolved. */
-          <Alert variant={technicianWillCapture || layoutWillBeSeeded ? 'success' : 'warning'}>
-            <TriangleAlertIcon />
+             after it had been resolved. Amber until it is, then a plain panel
+             with a tick: a green edge under a warning triangle said both at
+             once (console-development). */
+          <Alert variant={areaSetupResolved ? 'default' : 'warning'}>
+            {areaSetupResolved ? <CircleCheckIcon /> : <TriangleAlertIcon />}
             <AlertTitle>This property has no approved inspection areas</AlertTitle>
             <AlertDescription>
               {/* Not a warning when the visit can be created anyway: the
@@ -981,8 +1003,10 @@ function CreateInspectionForm() {
               {/* First because it keeps the per-area structure the whole review
                   is organised around, where the fallback flattens the property to
                   one area and loses it. */}
+              {/* A row under a hairline, like the "Or" row below it, rather than
+                  a bordered box inside the alert's own (console-development). */}
               <label
-                className="bg-background/60 mt-2 flex w-full cursor-pointer items-start gap-2.5 rounded-md border p-3"
+                className="mt-2 flex w-full cursor-pointer items-start gap-2.5 border-t pt-3"
                 htmlFor="technician-area-capture"
               >
                 <Checkbox
@@ -1029,7 +1053,12 @@ function CreateInspectionForm() {
               </div>
             </AlertDescription>
           </Alert>
-        ) : mutation.error || fallbackArea.error ? (
+        ) : null}
+
+        {/* Its own block, not the setup alert's `else`: a failed create, or a
+            failed "Inspect it as one single area", happens on exactly the
+            property the setup alert shows for, and was never shown there. */}
+        {mutation.error || fallbackArea.error ? (
           <Alert variant="destructive">
             <AlertDescription>{(mutation.error ?? fallbackArea.error)?.message}</AlertDescription>
           </Alert>

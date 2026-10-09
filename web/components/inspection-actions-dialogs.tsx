@@ -3,7 +3,6 @@
 import type { AdminInspection } from '@texasrenters/shared';
 import { useState, type FormEvent } from 'react';
 
-import { StatusBadge } from '@/components/status-badge';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -35,6 +34,8 @@ import {
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
+import { humanize } from '@/lib/format';
 import { useAdminMutations } from '@/lib/queries';
 
 const NOTES_LIMIT = 2000;
@@ -99,8 +100,11 @@ export function InspectionEditDialog({
             </div>
             <div className="min-w-0">
               <dt className="text-muted-foreground text-xs">Type</dt>
-              <dd className="mt-0.5">
-                <StatusBadge value={inspection.inspectionType} />
+              {/* The type is not a status: plain words, as the page header
+                  says it (console-development). */}
+              <dd className="truncate text-sm font-medium">
+                {INSPECTION_TYPE_CHILDREN.find((child) => child.type === inspection.inspectionType)
+                  ?.title ?? humanize(inspection.inspectionType)}
               </dd>
             </div>
           </dl>

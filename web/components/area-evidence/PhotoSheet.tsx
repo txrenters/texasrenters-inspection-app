@@ -51,12 +51,9 @@ export function PhotoSheet({
     queries: areas.map((area) => areaEvidenceQuery(inspectionId, area.id)),
   });
 
+  // A quiet line, not a dashed box inside the Areas card (console-development).
   if (!areas.length)
-    return (
-      <p className="text-muted-foreground rounded-lg border border-dashed p-4 text-center text-sm">
-        No areas match this filter.
-      </p>
-    );
+    return <p className="text-muted-foreground py-4 text-center text-sm">No areas match this filter.</p>;
 
   return (
     <ol aria-label="Photos and answers by area" className="divide-y rounded-lg border">

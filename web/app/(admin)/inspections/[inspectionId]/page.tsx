@@ -4,7 +4,7 @@ import { isFinishedStatus } from '@texasrenters/shared';
 import { MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Suspense, useState, type ReactNode } from 'react';
+import { Suspense, useState } from 'react';
 
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
 import { AssignmentDialog } from '@/components/assignment-dialog';
@@ -20,12 +20,13 @@ import { InspectionTabs } from '@/components/inspection-tabs';
 import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
+import { Panel } from '@/components/panel';
 import { ReportShareDialog } from '@/components/report-share-dialog';
-import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
+import { Stat, StatGroup } from '@/components/stat-card';
+import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -162,6 +163,11 @@ function InspectionDetail() {
     item.inspectionType === 'OCCUPIED' ||
     item.inspectionType === 'BACK_TO_MARKET';
   const pending = pendingFindings.data?.total ?? 0;
+  const showsFindings = permissions.has('findings:read');
+  // Whole rows only: a StatGroup draws its hairlines through the gaps, so a
+  // column with no figure in it shows as a block of border colour.
+  const figureColumns =
+    REVIEW_COLUMNS[1 + (showsFindings ? 1 : 0) + (comparesToMoveIn ? 1 : 0)] ?? REVIEW_COLUMNS[1];
   /**
    * Deletion is deliberately *not* gated on the visit being over, unlike
    * everything else in this menu: deleting removes the record outright, which
@@ -271,29 +277,45 @@ function InspectionDetail() {
         long are the visit's facts and moved into its card below.
       */}
       <section aria-label="Review" className="mt-3 space-y-3">
-        <dl className="grid gap-3 sm:grid-cols-3">
-          <SummaryFigure label="Areas reviewed">
-            {areaSummary.data
-              ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
-              : '—'}
-          </SummaryFigure>
-          {permissions.has('findings:read') ? (
-            <SummaryFigure label="Findings to review" tone={pending ? 'warning' : undefined}>
-              {pendingFindings.data ? (pending ? pending : 'None') : '—'}
-            </SummaryFigure>
+        {/* One instrument, as the dashboard's figures (console-development):
+            three separate bordered tiles left an empty third of the row on
+            every inspection not compared with a move-in. */}
+        <StatGroup columns={figureColumns}>
+          <Stat
+            label="Areas reviewed"
+            value={
+              areaSummary.data
+                ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
+                : '—'
+            }
+          />
+          {showsFindings ? (
+            <Stat
+              label="Findings to review"
+              tone={pending ? 'warning' : 'default'}
+              value={pendingFindings.data ? (pending ? pending : 'None') : '—'}
+            />
           ) : null}
           {comparesToMoveIn ? (
-            <SummaryFigure label="Compared with">
-              {baseline ? (
-                <Link className="hover:underline" href={`/inspections/${baseline.id}`}>
-                  Move-in · {formatScheduledDate(baseline.scheduledAt)}
-                </Link>
-              ) : (
-                <span className="text-muted-foreground">No move-in</span>
-              )}
-            </SummaryFigure>
+            <Stat
+              label="Compared with"
+              value={
+                // A record, not a figure: in the body size, so a date does not
+                // wrap in a narrow cell at the figures' size.
+                baseline ? (
+                  <Link
+                    className="font-sans text-base hover:underline"
+                    href={`/inspections/${baseline.id}`}
+                  >
+                    Move-in · {formatScheduledDate(baseline.scheduledAt)}
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground font-sans text-base">No move-in</span>
+                )
+              }
+            />
           ) : null}
-        </dl>
+        </StatGroup>
 
         {/*
           A move-out with nothing to compare against.
@@ -375,90 +397,104 @@ function InspectionDetail() {
             </span>
           </summary>
 
-          <div className="mt-4 grid gap-4 xl:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle variant="label">Assignment history</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {assignments.isLoading ? (
-                  <DataTableSkeleton
+          {/* Panels, each one surface: the Card around a table and an empty
+              state that each brought their own border drew two boxes, one
+              inside the other (console-development). */}
+          <div className="mt-4 grid items-start gap-4 xl:grid-cols-2">
+            <Panel title="Assignment history">
+              {assignments.isLoading ? (
+                <DataTableSkeleton
+                  className="rounded-none border-0"
+                  columns={ASSIGNMENT_COLUMNS}
+                  label="Loading assignment history"
+                  rows={3}
+                />
+              ) : assignments.isError ? (
+                <ErrorState
+                  className="rounded-none border-0"
+                  error={assignments.error}
+                  retry={() => void assignments.refetch()}
+                />
+              ) : assignments.data?.items.length ? (
+                <>
+                  <DataTable
+                    className="rounded-none border-0"
                     columns={ASSIGNMENT_COLUMNS}
-                    label="Loading assignment history"
-                    rows={3}
+                    label="Inspection assignment history"
+                    rowKey={(row) => row.id}
+                    rows={assignments.data.items}
                   />
-                ) : assignments.isError ? (
-                  <ErrorState error={assignments.error} retry={() => void assignments.refetch()} />
-                ) : assignments.data?.items.length ? (
-                  <>
-                    <DataTable
-                      columns={ASSIGNMENT_COLUMNS}
-                      label="Inspection assignment history"
-                      rowKey={(row) => row.id}
-                      rows={assignments.data.items}
-                    />
-                    <Pagination
-                      onPage={(assignmentPage) => setState({ assignmentPage })}
-                      page={state.assignmentPage}
-                      total={assignments.data.total}
-                      totalPages={assignments.data.totalPages}
-                    />
-                  </>
-                ) : (
-                  <EmptyState title="No assignment history has been recorded." />
-                )}
-              </CardContent>
-            </Card>
+                  {assignments.data.totalPages > 1 ? (
+                    <div className="border-t px-4 pb-3">
+                      <Pagination
+                        onPage={(assignmentPage) => setState({ assignmentPage })}
+                        page={state.assignmentPage}
+                        total={assignments.data.total}
+                        totalPages={assignments.data.totalPages}
+                      />
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className="text-muted-foreground px-4 py-6 text-center text-sm">
+                  No assignment history has been recorded.
+                </p>
+              )}
+            </Panel>
 
-            <Card>
-              <CardHeader>
-                <CardTitle variant="label">Recent activity</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {audit.isLoading ? (
+            <Panel title="Recent activity">
+              {audit.isLoading ? (
+                <div className="p-3">
                   <PageSkeleton cards={1} />
-                ) : audit.isError ? (
-                  <ErrorState error={audit.error} retry={() => void audit.refetch()} />
-                ) : audit.data?.items.length ? (
-                  <>
-                    <ol className="divide-y">
-                      {audit.data.items.map((event) => (
-                        <li
-                          className="flex items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0"
-                          key={event.id}
-                        >
-                          {/* What, to what, and who: "Finding approved · Leak
-                              under the sink -- Ernie". The time alone could not
-                              say who approved a finding or reviewed an area. */}
-                          <span className="grid min-w-0 gap-0.5">
-                            <span className="text-sm font-medium">{humanize(event.action)}</span>
-                            {event.detail ? (
-                              <span className="text-muted-foreground truncate text-xs">
-                                {event.detail}
-                              </span>
-                            ) : null}
-                          </span>
-                          <span className="text-muted-foreground shrink-0 text-right text-xs">
-                            {event.actorName ? (
-                              <span className="text-foreground block">{event.actorName}</span>
-                            ) : null}
-                            {formatDateTime(event.createdAt)}
-                          </span>
-                        </li>
-                      ))}
-                    </ol>
-                    <Pagination
-                      onPage={(auditPage) => setState({ auditPage })}
-                      page={state.auditPage}
-                      total={audit.data.total}
-                      totalPages={audit.data.totalPages}
-                    />
-                  </>
-                ) : (
-                  <EmptyState title="No audit activity has been recorded." />
-                )}
-              </CardContent>
-            </Card>
+                </div>
+              ) : audit.isError ? (
+                <ErrorState
+                  className="rounded-none border-0"
+                  error={audit.error}
+                  retry={() => void audit.refetch()}
+                />
+              ) : audit.data?.items.length ? (
+                <>
+                  <ol className="divide-y">
+                    {audit.data.items.map((event) => (
+                      <li className="flex items-start justify-between gap-3 px-4 py-2.5" key={event.id}>
+                        {/* What, to what, and who: "Finding approved · Leak
+                            under the sink -- Ernie". The time alone could not
+                            say who approved a finding or reviewed an area. */}
+                        <span className="grid min-w-0 gap-0.5">
+                          <span className="text-sm font-medium">{humanize(event.action)}</span>
+                          {event.detail ? (
+                            <span className="text-muted-foreground truncate text-xs">
+                              {event.detail}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-muted-foreground shrink-0 text-right text-xs">
+                          {event.actorName ? (
+                            <span className="text-foreground block">{event.actorName}</span>
+                          ) : null}
+                          {formatDateTime(event.createdAt)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                  {audit.data.totalPages > 1 ? (
+                    <div className="border-t px-4 pb-3">
+                      <Pagination
+                        onPage={(auditPage) => setState({ auditPage })}
+                        page={state.auditPage}
+                        total={audit.data.total}
+                        totalPages={audit.data.totalPages}
+                      />
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className="text-muted-foreground px-4 py-6 text-center text-sm">
+                  No audit activity has been recorded.
+                </p>
+              )}
+            </Panel>
           </div>
         </details>
       </div>
@@ -499,28 +535,12 @@ function InspectionDetail() {
   );
 }
 
-/** One figure in the review summary: a label over a value, on a quiet tile. */
-function SummaryFigure({
-  label,
-  tone,
-  children,
-}: {
-  label: string;
-  tone?: 'warning';
-  children: ReactNode;
-}) {
-  return (
-    <div className="bg-card rounded-xl border px-4 py-3">
-      {/* As the dashboard's figures: a small label, an amber dot when it asks
-          for a person, and the value itself never coloured. */}
-      <dt className="text-muted-foreground flex items-center gap-2 font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
-        {tone === 'warning' ? <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" /> : null}
-        {label}
-      </dt>
-      <dd className="mt-1.5 text-lg font-medium tabular-nums">{children}</dd>
-    </div>
-  );
-}
+/** The review figures' columns, by how many figures there are: whole rows only. */
+const REVIEW_COLUMNS: Record<number, string> = {
+  1: 'grid-cols-1',
+  2: 'grid-cols-1 sm:grid-cols-2',
+  3: 'grid-cols-1 sm:grid-cols-3',
+};
 
 export default function InspectionDetailPage() {
   // `useUrlState` and the evidence workspace both read `useSearchParams`, which

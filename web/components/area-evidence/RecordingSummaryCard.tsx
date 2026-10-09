@@ -6,8 +6,8 @@ import {
 } from '@texasrenters/shared';
 import { SparklesIcon } from 'lucide-react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { formatSeconds } from '@/lib/finding-review';
 import { formatDateTime } from '@/lib/format';
@@ -121,11 +121,15 @@ export function RecordingSummaryCard({
         ? 'Nothing was said in this room’s recordings, so there is nothing to summarize.'
         : null;
 
+  // A section under a hairline, not a card inside the Areas card
+  // (console-development).
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Summary for the report</CardTitle>
-        <CardDescription>
+    <section aria-labelledby={`report-summary-${areaId}`} className="space-y-4 border-t pt-4">
+      <header className="space-y-1">
+        <h4 className={SECTION_LABEL} id={`report-summary-${areaId}`}>
+          Summary for the report
+        </h4>
+        <p className="text-muted-foreground text-sm">
           {summary
             ? summary.current
               ? `Written by AI from the recordings ${formatDateTime(summary.generatedAt)}. The report prints each action in the Comments column, beside the item it is about.`
@@ -133,31 +137,29 @@ export function RecordingSummaryCard({
                 ? 'Written before actions were tied to checklist items. Summarize again: until then the report’s Comments come from the findings.'
                 : 'A recording arrived after this summary was written. Summarize again: until then the report’s Comments come from the findings.'
             : 'Not summarized yet. The report’s Comments come from the findings until it is.'}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {summary ? <RecordingSummaryBody onSeek={onSeek} summary={summary} /> : null}
+        </p>
+      </header>
+      {summary ? <RecordingSummaryBody onSeek={onSeek} summary={summary} /> : null}
 
-        {canManage ? (
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button disabled={busy} onClick={() => room.mutate()} size="sm" type="button" variant="outline">
-                {room.isPending ? <Spinner className="size-3" /> : <SparklesIcon />}
-                {summary ? 'Summarize this room again' : 'Summarize this room'}
-              </Button>
-              <Button disabled={busy} onClick={() => every.mutate()} size="sm" type="button" variant="ghost">
-                {every.isPending ? <Spinner className="size-3" /> : null}
-                Summarize every room
-              </Button>
-            </div>
-            {status ? (
-              <p className={cn('text-xs', error ? 'text-destructive' : 'text-muted-foreground')}>
-                {status}
-              </p>
-            ) : null}
+      {canManage ? (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button disabled={busy} onClick={() => room.mutate()} size="sm" type="button" variant="outline">
+              {room.isPending ? <Spinner className="size-3" /> : <SparklesIcon />}
+              {summary ? 'Summarize this room again' : 'Summarize this room'}
+            </Button>
+            <Button disabled={busy} onClick={() => every.mutate()} size="sm" type="button" variant="ghost">
+              {every.isPending ? <Spinner className="size-3" /> : null}
+              Summarize every room
+            </Button>
           </div>
-        ) : null}
-      </CardContent>
-    </Card>
+          {status ? (
+            <p className={cn('text-xs', error ? 'text-destructive' : 'text-muted-foreground')}>
+              {status}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
   );
 }

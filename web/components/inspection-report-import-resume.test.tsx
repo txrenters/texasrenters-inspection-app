@@ -93,6 +93,21 @@ describe('the button that opens the import', () => {
     render(<ImportReportDialog inspectionId="inspection-1" />);
     expect(screen.getByRole('button', { name: /import a report/i })).toBeTruthy();
   });
+
+  it('draws no button of its own when opened from elsewhere, and opens when told', () => {
+    // The inspection page opens it from its "Manage areas" menu, which says
+    // "Import in progress" itself; a second button beside the menu would
+    // offer the same thing twice.
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <ImportReportDialog inspectionId="inspection-1" onOpenChange={onOpenChange} open={false} />,
+    );
+    expect(screen.queryByRole('button', { name: /import a report|import in progress/i })).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    rerender(<ImportReportDialog inspectionId="inspection-1" onOpenChange={onOpenChange} open />);
+    expect(screen.getByRole('dialog', { name: 'Import an inspection report' })).toBeTruthy();
+  });
 });
 
 describe('resuming the import the inspection already has', () => {
