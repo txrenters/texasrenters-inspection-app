@@ -28,6 +28,7 @@ import { quarterOf, recentQuarters } from '@/lib/planning';
 import { useInspections, useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
+import { cn } from '@/lib/utils';
 
 type InspectionRow = NonNullable<ReturnType<typeof useInspections>['data']>['items'][number];
 
@@ -301,6 +302,8 @@ export default function InspectionsPage() {
     quarter: (programme && state.quarter) || undefined,
     // Sorted by the API, not here: these are twenty rows of thousands.
     scheduledOrder: state.asc ? 'asc' : undefined,
+    // How many of each type the same filters hold, for the tabs.
+    withTypeCounts: true,
   });
   const technicians = useTechnicians({ page: 1, pageSize: 100 });
 
@@ -311,6 +314,10 @@ export default function InspectionsPage() {
     state.q.trim() || state.status || technician || (programme && (state.tbp || state.quarter)),
   );
   const total = inspections.data?.total ?? 0;
+  const typeCounts = inspections.data?.typeCounts;
+  const everyTypeCount = typeCounts
+    ? Object.values(typeCounts).reduce<number>((sum, count) => sum + (count ?? 0), 0)
+    : undefined;
   const resultLabel = busy
     ? 'Searching inspections…'
     : `${total.toLocaleString()} ${total === 1 ? 'inspection' : 'inspections'}${day ? ` on ${dayName(day)}` : ''}`;
@@ -426,6 +433,42 @@ export default function InspectionsPage() {
         description={section?.description ?? 'Schedule, assign, and monitor the complete property inspection lifecycle.'}
         title={section?.title ?? 'Inspections'}
       />
+
+      {/* The types as tabs across the list, with how many of each the same
+          day and filters hold (console-development). The sidebar's sub-items
+          reach the same views; these say how the day divides up at a glance. */}
+      <nav aria-label="Inspection type" className="mb-4 flex flex-wrap gap-x-5 border-b">
+        {[{ title: 'All', type: '' }, ...INSPECTION_TYPE_CHILDREN].map((tab) => {
+          const active = state.type === tab.type;
+          const count = tab.type ? (typeCounts ? (typeCounts[tab.type] ?? 0) : undefined) : everyTypeCount;
+          return (
+            <button
+              aria-pressed={active}
+              className={cn(
+                '-mb-px inline-flex items-baseline gap-2 border-b-2 pt-1 pb-2.5 text-sm transition-colors',
+                active
+                  ? 'border-highlight text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground border-transparent',
+              )}
+              key={tab.type || 'all'}
+              onClick={() => setState({ type: tab.type, page: 1 })}
+              type="button"
+            >
+              {tab.title}
+              {count !== undefined ? (
+                <span
+                  className={cn(
+                    'font-mono text-xs tabular-nums',
+                    active ? 'text-highlight' : 'text-muted-foreground',
+                  )}
+                >
+                  {formatCount(count)}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </nav>
 
       <ListToolbar
         activeFilters={activeFilters}

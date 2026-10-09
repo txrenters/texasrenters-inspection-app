@@ -232,6 +232,8 @@ export function DataTable<Row>({
               <TableHead scope="col" className="w-0">
                 <span className="sr-only">Actions</span>
               </TableHead>
+            ) : rowHref ? (
+              <TableHead aria-hidden className="w-0" />
             ) : null}
           </TableRow>
         </TableHeader>
@@ -246,7 +248,7 @@ export function DataTable<Row>({
                 // The selected tint comes from TableRow's `data-[state=selected]`
                 // rather than a second class here, so selection looks identical
                 // in every table in the console.
-                className={cn('relative', href && 'focus-within:bg-accent')}
+                className={cn('group/row relative', href && 'focus-within:bg-accent')}
                 data-state={checked ? 'selected' : undefined}
               >
                 {selection ? (
@@ -280,6 +282,16 @@ export function DataTable<Row>({
                     <div className="relative z-10 flex items-center justify-end gap-1">
                       {actions(row)}
                     </div>
+                  </TableCell>
+                ) : href ? (
+                  // Says the row opens, only on the row being pointed at
+                  // (console-development). The row's real link is the stretched
+                  // one on the primary cell, so this is decoration to a screen
+                  // reader and stays hidden from it.
+                  <TableCell aria-hidden className="w-0 pr-4 text-right">
+                    <span className="text-muted-foreground text-xs whitespace-nowrap opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
+                      Open →
+                    </span>
                   </TableCell>
                 ) : null}
               </TableRow>

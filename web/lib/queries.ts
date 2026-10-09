@@ -348,7 +348,12 @@ export const useInspections = (query: Record<string, string | number | boolean |
   useQuery({
     queryKey: keys.inspections(query),
     queryFn: ({ signal }) =>
-      api<Page<AdminInspection>>(`/api/v1/admin/inspections${queryString(query)}`, { signal }),
+      // `typeCounts` only when the query asks `withTypeCounts`: how many of each
+      // type the same filters hold, for the list's type tabs.
+      api<Page<AdminInspection> & { typeCounts?: Partial<Record<string, number>> }>(
+        `/api/v1/admin/inspections${queryString(query)}`,
+        { signal },
+      ),
     placeholderData: keepPreviousData,
   });
 export const useInspection = (id: string) =>

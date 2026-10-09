@@ -1586,12 +1586,16 @@ export class AdminService {
         : []),
       ...inspectionSearchWhere(query.search),
     ];
-    const where: Prisma.InspectionWhereInput = {
+    /** Every filter except the type: what the type tabs count across. */
+    const whereEveryType: Prisma.InspectionWhereInput = {
       organizationId: user.organizationId,
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.portfolioId ? { propertywareBuilding: { portfolioId: query.portfolioId } } : {}),
-      ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
       ...(narrowing.length ? { AND: narrowing } : {}),
+    };
+    const where: Prisma.InspectionWhereInput = {
+      ...whereEveryType,
+      ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
     };
     const select = {
       id: true,
@@ -1650,7 +1654,7 @@ export class AdminService {
        */
       _count: { select: { areas: true, findings: true } },
     } satisfies Prisma.InspectionSelect;
-    const [items, total] = await Promise.all([
+    const [items, total, byType] = await Promise.all([
       this.prisma.inspection.findMany({
         relationLoadStrategy: 'join',
         where,
@@ -1664,7 +1668,17 @@ export class AdminService {
         take: query.pageSize,
       }),
       this.prisma.inspection.count({ where }),
+      query.withTypeCounts === 'true'
+        ? this.prisma.inspection.groupBy({
+            by: ['inspectionType'],
+            where: whereEveryType,
+            _count: { _all: true },
+          })
+        : Promise.resolve(null),
     ]);
+    const typeCounts = byType
+      ? Object.fromEntries(byType.map((group) => [group.inspectionType, group._count._all]))
+      : undefined;
 
     /**
      * How many photographs each row actually holds.
@@ -1749,7 +1763,7 @@ export class AdminService {
       if (!baseline) missingBaseline.add(item.id);
     }
 
-    return this.page(
+    const listed = this.page(
       items.map((item) => ({
         ...item,
         /** The quarter of the programme it belongs to, not the one its day falls in. */
@@ -1782,6 +1796,7 @@ export class AdminService {
       total,
       query,
     );
+    return typeCounts ? { ...listed, typeCounts } : listed;
   }
 
   async inspection(user: AuthenticatedUser, id: string) {

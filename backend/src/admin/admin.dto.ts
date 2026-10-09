@@ -165,6 +165,13 @@ export class InspectionListQueryDto extends PaginationDto {
    * function also in this column that if I click the sort will rotate").
    */
   @IsOptional() @IsIn(['asc', 'desc']) scheduledOrder?: string;
+  /**
+   * Also answer how many of each type the same filters hold, for the type tabs
+   * across the top of the list (console-development, 2026-10-09). Asked for
+   * rather than always sent: the list endpoint has other callers that would
+   * pay for a grouped count they never read.
+   */
+  @IsOptional() @IsIn(['true', 'false']) withTypeCounts?: string;
 }
 
 /** One filter a booking asks the technician to bring. */
