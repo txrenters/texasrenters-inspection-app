@@ -216,7 +216,24 @@ export default function LeaseSchedulePage() {
           </>
         ) : null
       }
-      description="Booked from Propertyware's leases: a move-out the day after every lease ends, booked 60 days ahead or as soon as the tenant gives notice, for whoever handles move-outs, and a move-in 22 days after a leaving tenant goes, booked up to 90 days ahead, for whoever handles move-ins. What the office books in Jobber comes first: one near the day is linked, never doubled, and one booked here gives way to it."
+      description="Booked from Propertyware's leases."
+      info={
+        <>
+          <p>
+            A <b>move-out</b> the day after every lease ends, booked 60 days ahead, or at once when the
+            tenant gives notice, for whoever handles move-outs.
+          </p>
+          <p>
+            A <b>move-in</b> 22 days after a leaving tenant goes, booked up to 90 days ahead, for whoever
+            handles move-ins. A missed move-in goes on the next working day.
+          </p>
+          <p>
+            What the office books in Jobber comes first: one near the day is linked, never doubled, and one
+            booked here gives way to it.
+          </p>
+        </>
+      }
+      infoLabel="How booking works"
       title="Move-ins & move-outs"
     />
   );
@@ -267,7 +284,7 @@ export default function LeaseSchedulePage() {
           />
         </StatGroup>
 
-        <StatStrip>
+        <StatStrip title="Booking">
           <StatStripItem
             label="Daily run"
             value={
@@ -282,7 +299,6 @@ export default function LeaseSchedulePage() {
               value={`${formatRelative(state.lastRun.at)}: ${countsSentence(state.lastRun.counts, false)}`}
             />
           ) : null}
-          <StatStripItem label="Booked" value="move-outs 60 days ahead (at once on notice), move-ins 90; a missed move-in goes on the next working day" />
         </StatStrip>
 
         <Tabs onValueChange={setTab} value={tab}>
