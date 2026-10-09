@@ -420,7 +420,10 @@ export function FloorPlanManager({
       <Card>
         <CardHeader className="flex-row items-start justify-between">
           <div className="space-y-1">
-            <CardTitle id="floor-plan-heading">{scopeLabel} floor plan</CardTitle>
+            {/* Section names are labels, not headings (console-development). */}
+            <CardTitle id="floor-plan-heading" variant="label">
+              {scopeLabel} floor plan
+            </CardTitle>
             <CardDescription>
               Maintain the visual reference used to verify and approve this scope&apos;s inspection
               areas.
@@ -471,8 +474,10 @@ export function FloorPlanManager({
             </div>
 
             <div className="space-y-4">
+              {/* A plain row under a rule, not a bordered box inside the card
+                  (console-development). */}
               {latest ? (
-                <div className="rounded-lg border p-3">
+                <div className="border-t pt-3 lg:border-t-0 lg:pt-0">
                   <div className="flex items-start gap-2.5">
                     <FileTextIcon aria-hidden className="text-muted-foreground mt-0.5 size-4 shrink-0" />
                     <div className="min-w-0">
@@ -591,9 +596,12 @@ export function FloorPlanManager({
                     </Badge>
                   </div>
 
+                  {/* An inline line of figures, not four tinted tiles: these are
+                      context for the buttons below, not the work itself
+                      (console-development). */}
                   <dl
                     aria-label="Floor plan review readiness"
-                    className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+                    className="flex flex-wrap gap-x-5 gap-y-1.5"
                   >
                     {[
                       { label: 'Extracted', value: `${scopedAreas.length}` },
@@ -601,9 +609,9 @@ export function FloorPlanManager({
                       { label: 'Markers', value: `${currentPlanMarkers.length}/${scopedAreas.length}` },
                       { label: 'Admin placed', value: `${adminMarkers.length}` },
                     ].map((item) => (
-                      <div className="bg-muted/50 rounded-md p-2" key={item.label}>
+                      <div className="flex items-baseline gap-1.5" key={item.label}>
                         <dt className="text-muted-foreground text-xs">{item.label}</dt>
-                        <dd className="text-sm font-semibold tabular-nums">{item.value}</dd>
+                        <dd className="font-mono text-sm font-medium tabular-nums">{item.value}</dd>
                       </div>
                     ))}
                   </dl>
@@ -674,7 +682,7 @@ export function FloorPlanManager({
       <Card>
         <CardHeader className="flex-row items-start justify-between">
           <div className="space-y-1">
-            <CardTitle>{scopeLabel} draft area review</CardTitle>
+            <CardTitle variant="label">{scopeLabel} draft area review</CardTitle>
             <CardDescription>Edit AI suggestions or add missing rooms before approval.</CardDescription>
           </div>
           {canManage ? (
@@ -716,7 +724,8 @@ export function FloorPlanManager({
             <div
               className={cn(
                 'flex flex-wrap items-center gap-3 rounded-lg border p-2.5 transition-colors',
-                selectedCount && 'border-primary bg-primary/5',
+                // The accent marks a selection; primary is ink (console-development).
+                selectedCount && 'border-highlight bg-highlight/10',
               )}
             >
               <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
@@ -842,7 +851,7 @@ export function FloorPlanManager({
       <Card>
         <CardHeader className="flex-row items-start justify-between">
           <div className="space-y-1">
-            <CardTitle>{scopeLabel} approved master areas</CardTitle>
+            <CardTitle variant="label">{scopeLabel} approved master areas</CardTitle>
             <CardDescription>
               Only these areas are copied into newly created inspections for this scope.
             </CardDescription>
@@ -1378,13 +1387,20 @@ function ScopeButton({
   selected: boolean;
   onSelect: () => void;
 }) {
+  // Outline for every scope, the chosen one marked in the accent rather than
+  // filled in ink (console-development): a filled button reads as the page's
+  // primary action. Buttons rather than a segmented track because a complex
+  // can have dozens of units, and these have to wrap.
   return (
     <Button
       aria-pressed={selected}
+      className={cn(
+        selected && 'border-highlight bg-highlight/10 text-highlight hover:bg-highlight/15 hover:text-highlight',
+      )}
       onClick={onSelect}
       size="sm"
       type="button"
-      variant={selected ? 'default' : 'outline'}
+      variant="outline"
     >
       {label}
     </Button>
@@ -1548,7 +1564,7 @@ function AreaReviewRow({
       aria-busy={Boolean(sync && sync.state !== 'SYNCED')}
       className={cn(
         'flex flex-wrap items-center gap-3 rounded-lg border p-3 transition-colors',
-        selected && 'border-primary bg-primary/5',
+        selected && 'border-highlight bg-highlight/10',
       )}
     >
       {onToggleSelected ? (

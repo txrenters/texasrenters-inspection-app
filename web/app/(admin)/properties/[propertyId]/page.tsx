@@ -13,17 +13,25 @@ import {
 } from '@/components/demo-property-delete-dialog';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { PageHeader } from '@/components/page-header';
+import { Panel, SECTION_LABEL } from '@/components/panel';
 import { PropertyDetailsPanel } from '@/components/property-details-panel';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
 import { PropertyServiceCard } from '@/components/property-service-card';
-import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
+import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
-import { EMPTY, formatAddress, formatCount, formatDate, formatRelative, formatScheduledDate } from '@/lib/format';
+import {
+  EMPTY,
+  formatAddress,
+  formatCount,
+  formatDate,
+  formatDateTime,
+  formatRelative,
+  formatScheduledDate,
+} from '@/lib/format';
 import { useProperty } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
@@ -172,6 +180,11 @@ export default function PropertyDetailPage() {
         No benefit package
       </Badge>
     ) : null,
+    // Beside the name, not in place of the Create inspection button: the
+    // button used to fall back to this badge for anyone without
+    // inspections:manage, so an ACTIVE property read "Inactive" to them
+    // (console-development).
+    !item.isActive ? <StatusBadge key="inactive" value="INACTIVE" /> : null,
   ].filter(Boolean);
 
   const areaSource =
@@ -210,9 +223,7 @@ export default function PropertyDetailPage() {
               <Button asChild>
                 <Link href={`/inspections/new?propertyId=${item.id}`}>Create inspection</Link>
               </Button>
-            ) : (
-              <StatusBadge value="INACTIVE" />
-            )}
+            ) : null}
           </>
         }
         /* Carried over from the list, because this is the screen the Create
@@ -223,26 +234,29 @@ export default function PropertyDetailPage() {
         title={item.name}
       />
 
-      <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <Card className="gap-0 p-4">
-          <dt className="text-muted-foreground text-xs font-medium">Portfolio</dt>
-          <dd className="mt-1 text-sm font-medium">{item.portfolio?.name ?? 'Unassigned'}</dd>
+      {/* One hairline panel, not six bordered cards (console-development): six
+          boxes of one fact each read as six things to look at. Six cells divide
+          evenly into two and three columns, so no seam is left empty. */}
+      <dl className="bg-border grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-3">
+        <div className="bg-card p-4">
+          <dt className={SECTION_LABEL}>Portfolio</dt>
+          <dd className="mt-1.5 text-sm font-medium">{item.portfolio?.name ?? 'Unassigned'}</dd>
           {!item.portfolio ? (
             <dd className="text-muted-foreground mt-0.5 text-xs">
               Propertyware holds no portfolio for this property
             </dd>
           ) : null}
-        </Card>
+        </div>
 
-        <Card className="gap-0 p-4">
-          <dt className="text-muted-foreground text-xs font-medium">Total area</dt>
-          <dd className="mt-1 text-sm font-medium">{item.totalArea?.label ?? EMPTY}</dd>
+        <div className="bg-card p-4">
+          <dt className={SECTION_LABEL}>Total area</dt>
+          <dd className="mt-1.5 text-sm font-medium">{item.totalArea?.label ?? EMPTY}</dd>
           <dd className="text-muted-foreground mt-0.5 text-xs">{areaSource}</dd>
-        </Card>
+        </div>
 
-        <Card className="gap-0 p-4">
-          <dt className="text-muted-foreground text-xs font-medium">Lease summary</dt>
-          <dd className="mt-1 text-sm font-medium">
+        <div className="bg-card p-4">
+          <dt className={SECTION_LABEL}>Lease summary</dt>
+          <dd className="mt-1.5 text-sm font-medium">
             {item.leaseSummary?.summary ?? 'Lease data not synchronized'}
           </dd>
           {item.leaseSummary?.leaseDataAvailable === false ? (
@@ -258,24 +272,27 @@ export default function PropertyDetailPage() {
           ) : (
             <dd className="text-muted-foreground mt-0.5 text-xs">No upcoming lease end date</dd>
           )}
-        </Card>
+        </div>
 
-        <Card className="gap-0 p-4">
-          <dt className="text-muted-foreground text-xs font-medium">Source status</dt>
-          <dd className="mt-1 text-sm font-medium">{item.sourceStatus ?? EMPTY}</dd>
-        </Card>
+        <div className="bg-card p-4">
+          <dt className={SECTION_LABEL}>Source status</dt>
+          <dd className="mt-1.5 text-sm font-medium">{item.sourceStatus ?? EMPTY}</dd>
+        </div>
 
-        <Card className="gap-0 p-4">
-          <dt className="text-muted-foreground text-xs font-medium">External reference</dt>
-          <dd className="mt-1 font-mono text-sm break-all">{item.externalId}</dd>
-        </Card>
+        <div className="bg-card p-4">
+          <dt className={SECTION_LABEL}>External reference</dt>
+          <dd className="mt-1.5 font-mono text-sm break-all">{item.externalId}</dd>
+        </div>
 
-        <Card className="gap-0 p-4">
-          <dt className="text-muted-foreground text-xs font-medium">Last synchronized</dt>
-          <dd className="mt-1 text-sm font-medium" title={item.lastSyncedAt ?? undefined}>
+        <div className="bg-card p-4">
+          <dt className={SECTION_LABEL}>Last synchronized</dt>
+          <dd
+            className="mt-1.5 text-sm font-medium"
+            title={item.lastSyncedAt ? formatDateTime(item.lastSyncedAt) : undefined}
+          >
             {formatRelative(item.lastSyncedAt)}
           </dd>
-        </Card>
+        </div>
       </dl>
 
       {/*
@@ -313,49 +330,40 @@ export default function PropertyDetailPage() {
             </div>
           ) : null}
 
-          <Card className="mt-4">
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle variant="label">Active units</CardTitle>
-              <Badge variant="secondary">{formatCount(item.units?.length ?? 0)}</Badge>
-            </CardHeader>
-            <CardContent>
-              {item.units?.length ? (
-                <DataTable
-                  columns={UNIT_COLUMNS}
-                  label="Active units"
-                  rowKey={(unit) => unit.id}
-                  rows={item.units}
-                />
-              ) : (
-                <EmptyState
-                  description="No active units have synchronized for this property."
-                  title="No units"
-                />
-              )}
-            </CardContent>
-          </Card>
+          {/* A Panel with a borderless table, not a card around a bordered
+              table (console-development): one box per topic. An empty list is a
+              quiet line in the panel, not a second bordered box inside it. */}
+          <Panel className="mt-4" count={formatCount(item.units?.length ?? 0)} title="Active units">
+            {item.units?.length ? (
+              <DataTable
+                className="rounded-none border-0"
+                columns={UNIT_COLUMNS}
+                label="Active units"
+                rowKey={(unit) => unit.id}
+                rows={item.units}
+              />
+            ) : (
+              <p className="text-muted-foreground px-4 py-3 text-sm">
+                No active units have synchronized for this property.
+              </p>
+            )}
+          </Panel>
 
-          <Card className="mt-4">
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle variant="label">Relevant leases</CardTitle>
-              <Badge variant="secondary">{formatCount(item.leases?.length ?? 0)}</Badge>
-            </CardHeader>
-            <CardContent>
-              {item.leases?.length ? (
-                <DataTable
-                  columns={LEASE_COLUMNS}
-                  label="Relevant leases"
-                  rowKey={(lease) => lease.id}
-                  rows={item.leases}
-                />
-              ) : (
-                <EmptyState
-                  description="No relevant active leases were returned by the last synchronization."
-                  title="No leases"
-                />
-              )}
-            </CardContent>
-          </Card>
+          <Panel className="mt-4" count={formatCount(item.leases?.length ?? 0)} title="Relevant leases">
+            {item.leases?.length ? (
+              <DataTable
+                className="rounded-none border-0"
+                columns={LEASE_COLUMNS}
+                label="Relevant leases"
+                rowKey={(lease) => lease.id}
+                rows={item.leases}
+              />
+            ) : (
+              <p className="text-muted-foreground px-4 py-3 text-sm">
+                No relevant active leases were returned by the last synchronization.
+              </p>
+            )}
+          </Panel>
 
         </TabsContent>
 

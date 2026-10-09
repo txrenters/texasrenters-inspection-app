@@ -6,13 +6,13 @@ import {
   type PropertyDetailsView,
   type PropertyOwnerView,
 } from '@texasrenters/shared';
-import { EyeIcon, EyeOffIcon, LockIcon } from 'lucide-react';
+import { EyeIcon, EyeOffIcon, LockIcon, RotateCcwIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
-import { EmptyState, ErrorState } from '@/components/states';
-import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ApiError } from '@/lib/api';
 import { EMPTY, formatCurrency, formatDate, formatRelative, formatScheduledDate } from '@/lib/format';
 import { usePropertyPrivateDetails } from '@/lib/queries';
 import { cn } from '@/lib/utils';
@@ -179,8 +179,9 @@ function PrivateCard({
   return (
     <Card className="gap-3">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <LockIcon className="text-muted-foreground size-4" />
+        {/* Section names are labels, not headings (console-development). */}
+        <CardTitle className="flex items-center gap-1.5" variant="label">
+          <LockIcon aria-hidden className="size-3.5" />
           Access & owner phones
         </CardTitle>
         {canSee && onFile ? (
@@ -206,7 +207,25 @@ function PrivateCard({
             {owner?.phonesOnFile ? ' and the owners’ phones' : ''} on file. Press Show to see them.
           </p>
         ) : secret.isError ? (
-          <ErrorState error={secret.error} retry={() => void secret.refetch()} />
+          // A line in the card, not a second bordered box inside it
+          // (console-development); still the server's words and request id.
+          <div className="grid gap-2 text-sm" role="alert">
+            <p className="text-destructive">
+              The codes could not be loaded.{' '}
+              {secret.error instanceof Error ? secret.error.message : null}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={() => void secret.refetch()} size="sm" variant="outline">
+                <RotateCcwIcon />
+                Try again
+              </Button>
+              {secret.error instanceof ApiError && secret.error.requestId ? (
+                <span className="text-muted-foreground font-mono text-xs">
+                  Request {secret.error.requestId}
+                </span>
+              ) : null}
+            </div>
+          </div>
         ) : !secret.data ? (
           <p className="text-muted-foreground text-sm">Loading…</p>
         ) : (
@@ -233,12 +252,16 @@ function DetailCard({ title, count, children }: { title: string; count?: string;
   return (
     <Card className="gap-3">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle variant="label">{title}</CardTitle>
+        {/* A figure beside the name, quiet (console-development). */}
         {count ? (
           <CardAction>
-            <Badge title="Fields filled in Propertyware" variant="secondary">
+            <span
+              className="text-muted-foreground font-mono text-xs tabular-nums"
+              title="Fields filled in Propertyware"
+            >
               {count}
-            </Badge>
+            </span>
           </CardAction>
         ) : null}
       </CardHeader>
