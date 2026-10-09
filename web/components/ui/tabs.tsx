@@ -20,7 +20,10 @@ function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.L
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        'bg-muted text-muted-foreground inline-flex h-9 w-fit items-center justify-center rounded-lg p-[3px]',
+        // `max-w-full overflow-x-auto` (console-development): five tabs with
+        // counts pushed the whole page sideways at 375px. `justify-start`, or an
+        // overflowing track would clip its first tab off the left edge.
+        'bg-muted text-muted-foreground inline-flex h-9 w-fit max-w-full items-center justify-start overflow-x-auto rounded-lg p-[3px]',
         className,
       )}
       {...props}

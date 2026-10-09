@@ -116,6 +116,16 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   COMPLETED_WITH_ERRORS: { label: 'Completed with errors', tone: 'warning', glyph: 'warning' },
   QUEUED: { label: 'Queued', tone: 'muted', glyph: 'pending' },
   NOT_CONFIGURED: { label: 'Not configured', tone: 'warning', glyph: 'warning' },
+  // Integrations and providers (console-development review, 2026-10-10). Until
+  // these were mapped, "Error" and "Reauthorization required" fell back to the
+  // calm informational tone and read as fine.
+  CONFIGURED: { label: 'Configured', tone: 'success', glyph: 'success' },
+  CONNECTED: { label: 'Connected', tone: 'success', glyph: 'success' },
+  DISCONNECTED: { label: 'Disconnected', tone: 'muted', glyph: 'idle' },
+  DEGRADED: { label: 'Degraded', tone: 'warning', glyph: 'warning' },
+  UNAVAILABLE: { label: 'Unavailable', tone: 'destructive', glyph: 'destructive' },
+  ERROR: { label: 'Error', tone: 'destructive', glyph: 'destructive' },
+  REAUTHORIZATION_REQUIRED: { label: 'Reauthorization required', tone: 'destructive', glyph: 'warning' },
 };
 
 /** Readable fallback for a status not yet mapped, rather than a raw enum. */

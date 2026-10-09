@@ -42,7 +42,8 @@ function AlertTitle({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       data-slot="alert-title"
-      className={cn('col-start-2 line-clamp-1 min-h-4 font-medium tracking-tight', className)}
+      // Wraps (console-development): `line-clamp-1` cut a title in half on a phone.
+      className={cn('col-start-2 min-h-4 font-medium tracking-tight', className)}
       {...props}
     />
   );

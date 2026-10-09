@@ -184,7 +184,7 @@ export function DataTable<Row>({
    * element inside a row must carry `relative z-10` to sit above the overlay —
    * `RowActions` does this for you.
    */
-  rowHref?: (row: Row) => string;
+  rowHref?: (row: Row) => string | undefined;
   label?: string;
   /** Trailing per-row controls, rendered in a final unlabelled column. */
   actions?: (row: Row) => ReactNode;

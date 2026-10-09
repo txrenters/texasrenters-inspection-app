@@ -3,6 +3,14 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
+ * The one style for a section's NAME (console-development): small, uppercase,
+ * tracked mono, muted. Panels, figure groups, card titles (`variant="label"`)
+ * and any hand-made section heading use this, so a name never competes with
+ * the values under it.
+ */
+export const SECTION_LABEL = 'text-muted-foreground font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase';
+
+/**
  * One bordered surface per topic, rows split by hairlines inside it.
  *
  * The console used Card + CardHeader + CardTitle for this, which renders the
@@ -32,9 +40,7 @@ export function Panel({
   return (
     <section className={cn('bg-card overflow-hidden rounded-xl border', className)}>
       <header className="flex min-h-11 items-center gap-3 border-b px-4 py-2">
-        <h2 className="text-muted-foreground font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
-          {title}
-        </h2>
+        <h2 className={SECTION_LABEL}>{title}</h2>
         {count !== undefined && count !== null ? (
           <span
             className={cn(
@@ -70,7 +76,7 @@ export function PanelRow({
   className?: string;
 }) {
   return (
-    <div className={cn('flex items-start gap-3 px-4 py-2.5', className)}>
+    <div className={cn('flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-2.5 sm:flex-nowrap', className)}>
       <span
         aria-hidden
         className={cn(
@@ -86,7 +92,9 @@ export function PanelRow({
         <div className="text-sm">{title}</div>
         {detail ? <div className="text-muted-foreground mt-0.5 text-xs break-words">{detail}</div> : null}
       </div>
-      {trailing ? <div className="shrink-0">{trailing}</div> : null}
+      {/* Under the words on a phone, beside them from `sm`: three action
+          buttons beside a sentence squeezed the sentence to nothing at 375px. */}
+      {trailing ? <div className="basis-full pl-[18px] sm:basis-auto sm:shrink-0 sm:pl-0">{trailing}</div> : null}
     </div>
   );
 }
