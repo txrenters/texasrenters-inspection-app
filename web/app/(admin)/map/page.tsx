@@ -144,9 +144,23 @@ function LineSwatch({ dashed = false }: { dashed?: boolean }) {
   );
 }
 
-function LegendKey({ children, swatch }: { children: React.ReactNode; swatch: React.ReactNode }) {
+/**
+ * One key of the legend: a short label on the line, the full sentence in its
+ * tooltip (console-development). Nine sentence-long keys wrapped to three
+ * lines under the map and read like a paragraph; the swatches carry the
+ * meaning, the words only name it.
+ */
+function LegendKey({
+  children,
+  swatch,
+  full,
+}: {
+  children: React.ReactNode;
+  swatch: React.ReactNode;
+  full: string;
+}) {
   return (
-    <span className="text-muted-foreground flex items-center gap-1.5">
+    <span className="text-muted-foreground flex items-center gap-1.5 whitespace-nowrap" title={full}>
       {swatch}
       {children}
     </span>
@@ -721,27 +735,41 @@ export default function TechnicianMapPage() {
               them all to dots. A legend whose keys look nothing like the thing
               they explain makes the reader do the translation twice. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <LegendKey swatch={<TechnicianSwatch />}>Technician, reported recently</LegendKey>
-            <LegendKey swatch={<DrivingSwatch />}>Driving, pointing the way they are going</LegendKey>
-            <LegendKey swatch={<TechnicianSwatch stale />}>
-              Technician, over 30 minutes ago
+            <LegendKey full="Technician, reported recently" swatch={<TechnicianSwatch />}>
+              Live
+            </LegendKey>
+            <LegendKey full="Driving, pointing the way they are going" swatch={<DrivingSwatch />}>
+              Driving
+            </LegendKey>
+            <LegendKey full="Technician, last reported over 30 minutes ago" swatch={<TechnicianSwatch stale />}>
+              30 min+
             </LegendKey>
             {discCounts ? (
               <>
-                <LegendKey swatch={<DiscSwatch kind="GROUP" />}>
-                  TBP property, in its group&rsquo;s colour ({discCounts.group})
+                <LegendKey full="TBP property, in its group's colour" swatch={<DiscSwatch kind="GROUP" />}>
+                  TBP group <span className="font-mono">{discCounts.group}</span>
                 </LegendKey>
-                <LegendKey swatch={<DiscSwatch kind="LOOSE" />}>TBP, in no group ({discCounts.loose})</LegendKey>
-                <LegendKey swatch={<DiscSwatch kind="OTHER" />}>Not on TBP ({discCounts.other})</LegendKey>
+                <LegendKey full="TBP property in no group" swatch={<DiscSwatch kind="LOOSE" />}>
+                  TBP, no group <span className="font-mono">{discCounts.loose}</span>
+                </LegendKey>
+                <LegendKey full="Property not on TBP" swatch={<DiscSwatch kind="OTHER" />}>
+                  Not TBP <span className="font-mono">{discCounts.other}</span>
+                </LegendKey>
               </>
             ) : (
-              <LegendKey swatch={<DiscSwatch kind="OTHER" />}>
-                Property {properties.data?.length ? `(${properties.data.length})` : null}
+              <LegendKey full="Property" swatch={<DiscSwatch kind="OTHER" />}>
+                Property {properties.data?.length ? <span className="font-mono">{properties.data.length}</span> : null}
               </LegendKey>
             )}
-            <LegendKey swatch={<DoneSwatch />}>Inspection submitted that day</LegendKey>
-            <LegendKey swatch={<LineSwatch />}>Where they drove, in their colour</LegendKey>
-            <LegendKey swatch={<LineSwatch dashed />}>Route on to the day&rsquo;s properties</LegendKey>
+            <LegendKey full="Inspection submitted that day" swatch={<DoneSwatch />}>
+              Submitted
+            </LegendKey>
+            <LegendKey full="Where they drove, in their colour" swatch={<LineSwatch />}>
+              Driven
+            </LegendKey>
+            <LegendKey full="Route on to the day's properties" swatch={<LineSwatch dashed />}>
+              Route ahead
+            </LegendKey>
           </div>
         </div>
       )}
