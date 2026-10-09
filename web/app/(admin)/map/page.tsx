@@ -191,7 +191,8 @@ function LegendPopover({ entries }: { entries: readonly LegendEntry[] }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button className="bg-background/95 shadow-sm" size="sm" variant="outline">
+        {/* The same button as Basemap beside it, so the row reads as one set. */}
+        <Button size="sm" variant="secondary">
           <InfoIcon aria-hidden />
           Legend
         </Button>
@@ -775,6 +776,10 @@ export default function TechnicianMapPage() {
             >
               <TechnicianMap
                 colors={colors}
+                // Beside Basemap, in the map's own row of controls: placed in
+                // the same corner on its own, the two were drawn on top of each
+                // other.
+                controls={<LegendPopover entries={legend} />}
                 crewRoutes={crewRoutes}
                 currentInspectionIds={
                   selectedId ? (timeline.data?.projection.current?.inspectionIds ?? null) : null
@@ -794,18 +799,14 @@ export default function TechnicianMapPage() {
                 visits={visits}
               />
 
-              {/* Top left, clear of the zoom and fullscreen controls (top right)
-                  and the re-center button and Mapbox's logo (along the bottom). */}
-              <div className="absolute top-3 left-3 z-[1000]">
-                <LegendPopover entries={legend} />
-              </div>
-
               {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
                 /* `pointer-events-none` on the wrapper and restored on the
                    notice: a banner that swallowed drags would make the map
                    behind it look broken. z-[1000] because Leaflet's own panes
-                   sit at 400-700. Below the Legend button, not across it. */
-                <div className="pointer-events-none absolute inset-x-0 top-14 z-[1000] flex justify-center px-3">
+                   sit at 400-700. Below the Legend button, not across it, and
+                   short of the zoom and compass buttons down the right edge,
+                   which it ran under on a phone. */
+                <div className="pointer-events-none absolute inset-x-0 top-14 z-[1000] flex justify-center px-12">
                   <div className="bg-background/95 pointer-events-auto rounded-md border px-3 py-2 text-sm shadow-sm">
                     {positions.isError ? (
                       <span className="flex items-center gap-2">

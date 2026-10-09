@@ -77,7 +77,10 @@ export function ListToolbar({
   return (
     <div className="space-y-3 pb-4">
       <div className="flex flex-wrap items-center gap-2">
-        <div className={cn('relative min-w-0 flex-1 sm:max-w-xs', inHeader && 'sm:hidden')}>
+        {/* A whole row on a phone, the filters wrapping under it: sharing the
+            row, the field shrank until a toggle beside it was drawn over it
+            (the Error log at 375px). */}
+        <div className={cn('relative min-w-0 flex-1 max-sm:basis-full sm:max-w-xs', inHeader && 'sm:hidden')}>
           <SearchIcon
             aria-hidden
             className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"

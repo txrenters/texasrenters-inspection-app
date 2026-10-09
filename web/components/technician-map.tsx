@@ -9,7 +9,7 @@ import type {
   TechnicianTrail,
 } from '@texasrenters/shared';
 import { splitRouteAtPosition, withLivePosition } from '@texasrenters/shared';
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Marker, Popup, Source, useMap, type LayerProps } from 'react-map-gl/mapbox';
 
 import { InspectionDetailsLink } from '@/components/inspection-details-link';
@@ -614,7 +614,10 @@ export function TechnicianMap({
   searchedPropertyIds = null,
   followRequest = 0,
   onFocusTechnician,
+  controls,
 }: {
+  /** Buttons for the map's top-left corner, beside its settings (see `ConsoleMap`). */
+  controls?: ReactNode;
   /**
    * Goes up each time the page asks for the selected technician again, from
    * wherever the map is ("See Moses's location"). The map focuses them,
@@ -804,6 +807,7 @@ export function TechnicianMap({
 
   return (
     <ConsoleMap
+      controls={controls}
       // The same portfolio and the same crew every other map in the console
       // draws: this page hands over its own lists, filtered by its roster, and
       // says who and what is picked.

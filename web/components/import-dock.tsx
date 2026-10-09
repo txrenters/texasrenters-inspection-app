@@ -402,7 +402,10 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
               : 'Show imports'
           }
           className={cn(
-            'bg-card border-border fixed top-1/2 right-0 z-50 -translate-y-1/2 rounded-l-lg border border-r-0 py-3 pr-1 pl-1.5 shadow-lg',
+            // 21px wide, inside the page's right margin (24px and up): wider,
+            // it sat over the last few pixels of every page -- a table's
+            // "Open" links, the Schedule's last day.
+            'bg-card border-border fixed top-1/2 right-0 z-50 -translate-y-1/2 rounded-l-lg border border-r-0 py-3 pr-0.5 pl-1 shadow-lg',
             'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
             'animate-in slide-in-from-right-2 duration-200',
           )}
@@ -410,7 +413,7 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
           type="button"
         >
           <span className="flex flex-col items-center gap-1">
-            <ChevronLeftIcon className="size-4" />
+            <ChevronLeftIcon className="size-3.5" />
             {/* The count, not a spinner: a closed drawer exists to stop pulling
                 the eye to the edge, and an animation there defeats that.
 

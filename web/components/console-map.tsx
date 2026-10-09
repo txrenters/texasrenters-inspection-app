@@ -106,9 +106,17 @@ export function ConsoleMap({
   portfolio,
   radiusPoints = [],
   settingsSlot = true,
+  controls,
   unavailable,
 }: {
   children?: ReactNode;
+  /**
+   * A page's own buttons for the map's top-left corner, such as a Legend. They
+   * sit in one row with the map settings, never in a corner of their own: the
+   * technician map's Legend was placed exactly over "Basemap" and the two
+   * labels printed on top of each other (v2.5.183).
+   */
+  controls?: ReactNode;
   /** Where the map opens, before anything has been framed. */
   initialView: { longitude: number; latitude: number; zoom: number };
   /**
@@ -239,9 +247,14 @@ export function ConsoleMap({
 
       {/* Outside the map on purpose: the settings still open, and still
           remember, when the map itself will not load. */}
-      {settingsSlot ? (
-        <div className="absolute top-3 left-3 z-10">
-          <MapSettings onChange={setPreferences} portfolio={Boolean(portfolioOptions)} preferences={preferences} />
+      {settingsSlot || controls ? (
+        // Short of the zoom and fullscreen buttons on the right, and wrapping
+        // rather than running under them on a narrow map.
+        <div className="absolute top-3 left-3 z-10 flex max-w-[calc(100%-4rem)] flex-wrap items-start gap-2">
+          {settingsSlot ? (
+            <MapSettings onChange={setPreferences} portfolio={Boolean(portfolioOptions)} preferences={preferences} />
+          ) : null}
+          {controls}
         </div>
       ) : null}
     </div>
