@@ -473,30 +473,38 @@ export default function ApiClientsPage() {
 
                 <h3 className={SECTION_LABEL}>Keys</h3>
                 {client.keys.length ? (
-                  <Table className="mt-1">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Key ID (public)</TableHead>
-                        <TableHead>Label</TableHead>
-                        <TableHead>Issued</TableHead>
-                        <TableHead>Last used</TableHead>
-                        <TableHead>Expires</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {client.keys.map((keyRecord) => (
-                        <KeyRow
-                          clientId={client.id}
-                          environment={client.environment}
-                          key={keyRecord.id}
-                          keyRecord={keyRecord}
-                          onRevoke={setRevokingKey}
-                        />
-                      ))}
-                    </TableBody>
-                  </Table>
+                  // Its own sideways scroll: from 1024px a table may overflow
+                  // so long lists keep a pinned header, but this one sits in a
+                  // card beside the sidebar and pushed the whole page sideways
+                  // (775px of keys in 671px at 1024). A short list needs no
+                  // pinned header, and pinned inside this box it slid down over
+                  // the first row, so it is not pinned.
+                  <div className="mt-1 overflow-x-auto">
+                    <Table>
+                      <TableHeader className="lg:static">
+                        <TableRow>
+                          <TableHead>Key ID (public)</TableHead>
+                          <TableHead>Label</TableHead>
+                          <TableHead>Issued</TableHead>
+                          <TableHead>Last used</TableHead>
+                          <TableHead>Expires</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead />
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {client.keys.map((keyRecord) => (
+                          <KeyRow
+                            clientId={client.id}
+                            environment={client.environment}
+                            key={keyRecord.id}
+                            keyRecord={keyRecord}
+                            onRevoke={setRevokingKey}
+                          />
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 ) : (
                   <p className="text-muted-foreground mt-1 text-sm">
                     No keys issued. This client cannot authenticate until one is.
