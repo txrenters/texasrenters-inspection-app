@@ -316,14 +316,17 @@ export function DataTableSkeleton<Row>({
   rows = 6,
   label = 'Loading records',
   hasActions,
+  className,
 }: {
   columns: Array<Column<Row>>;
   rows?: number;
   label?: string;
   hasActions?: boolean;
+  /** `rounded-none border-0` inside a Panel, as for DataTable itself. */
+  className?: string;
 }) {
   return (
-    <div className="bg-card overflow-clip rounded-xl border" aria-busy="true" aria-live="polite">
+    <div className={cn('bg-card overflow-clip rounded-xl border', className)} aria-busy="true" aria-live="polite">
       <Table aria-label={label}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">

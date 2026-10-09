@@ -77,6 +77,24 @@ export function formatScheduledDate(value?: string | Date | null) {
   return SCHEDULED_DAY.format(date);
 }
 
+const DAY_LONG = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+const DAY_SHORT = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/**
+ * A day a page is showing, with its weekday: "Tuesday, October 6" (`long`) or
+ * "Tue, Oct 6" (`short`). For a page read one day at a time -- the timesheet,
+ * the technician map -- where the weekday is what the office plans by.
+ * Pinned to UTC like `formatScheduledDate`, so `2026-10-06` stays the 6th for
+ * a reader in any zone. (console-development: the pages each had their own
+ * `toLocaleDateString` for this.)
+ */
+export function formatDay(day?: string | Date | null, style: 'long' | 'short' = 'short') {
+  if (!day) return EMPTY;
+  const date = typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00.000Z`) : new Date(day);
+  if (Number.isNaN(date.getTime())) return EMPTY;
+  return (style === 'long' ? DAY_LONG : DAY_SHORT).format(date);
+}
+
 export function formatCurrency(value?: number | string | null) {
   if (value === null || value === undefined || value === '') return EMPTY;
   const amount = typeof value === 'string' ? Number(value) : value;

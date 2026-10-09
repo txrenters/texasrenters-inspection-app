@@ -7,6 +7,12 @@ export interface SegmentedOption<Value extends string> {
   label: string;
   /** A count shown beside the label, in muted mono. */
   count?: number;
+  /**
+   * The background class of a 6px dot before the label, e.g. `bg-map-technician`
+   * when the filter matches a marker colour on the map. A literal class string,
+   * so Tailwind sees it where it is written.
+   */
+  dotClassName?: string;
 }
 
 /**
@@ -51,7 +57,13 @@ export function SegmentedControl<Value extends string>({
             onClick={() => onChange(option.value)}
             type="button"
           >
+            {option.dotClassName ? (
+              <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', option.dotClassName)} />
+            ) : null}
             {option.label}
+            {/* A space for the accessible name ("Unscheduled 1", not
+                "Unscheduled1"); a flex row draws no gap for it. */}
+            {option.count !== undefined ? ' ' : null}
             {option.count !== undefined ? (
               <span className="text-muted-foreground font-mono tabular-nums">{option.count.toLocaleString()}</span>
             ) : null}
