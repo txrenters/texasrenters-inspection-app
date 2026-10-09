@@ -236,7 +236,11 @@ export default function ProvidersPage() {
                   const problem = isProblem(provider.status);
                   return (
                     <Card className="p-4" key={provider.provider}>
-                      <div className="flex items-start gap-3">
+                      {/* Wraps: on a narrow tile (two across at 768px, beside
+                          the sidebar) a one-word name ran under the status. The
+                          name keeps at least 7rem; past that the status drops
+                          to its own line. */}
+                      <div className="flex flex-wrap items-start gap-3">
                         <span
                           aria-hidden
                           className={cn(
@@ -255,7 +259,7 @@ export default function ProvidersPage() {
                             </span>
                           )}
                         </span>
-                        <div className="min-w-0 flex-1 space-y-1">
+                        <div className="min-w-28 flex-1 space-y-1">
                           <p className="text-sm leading-none font-semibold">{provider.provider}</p>
                           <p className="text-muted-foreground text-xs leading-relaxed">
                             {meta?.description ?? 'External service provider.'}

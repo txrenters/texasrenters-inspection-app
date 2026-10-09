@@ -398,7 +398,9 @@ export default function PropertywarePage() {
                     role="radio"
                     type="button"
                   >
-                    <span className="flex w-full items-center gap-2">
+                    {/* Wraps, so on a narrow card "Recommended" drops under the
+                        title instead of running into the next card (768px). */}
+                    <span className="flex w-full flex-wrap items-center gap-x-2 gap-y-1">
                       <span
                         aria-hidden
                         className={cn(

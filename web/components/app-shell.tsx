@@ -35,7 +35,9 @@ export function AppShell({
               Padding is 16px, and 20px only once there is room for it. This is a
               queue-scanning console: the outer gutter is the cheapest place to
               buy back vertical space, and 24px of it bought nothing. */}
-          <main className="mx-auto w-full max-w-[1600px] min-w-0 flex-1 p-4 sm:p-5">
+          {/* The right margin a little wider than the left: the imports handle
+              lives against the right edge, and this keeps it off the content. */}
+          <main className="mx-auto w-full max-w-[1600px] min-w-0 flex-1 p-4 pr-6 sm:p-5 sm:pr-7">
             {children}
           </main>
         </SidebarInset>

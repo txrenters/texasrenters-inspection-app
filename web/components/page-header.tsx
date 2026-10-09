@@ -78,7 +78,10 @@ export function PageHeader({
           <div className="text-muted-foreground text-sm">{description}</div>
         ) : null}
       </div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {/* `max-w-full`: never wider than the header, so the buttons wrap. Without
+          it the group kept its one-line width on a phone and pushed the page
+          sideways (the plan's Publish button sat past the edge at 375px). */}
+      {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
   );
 }

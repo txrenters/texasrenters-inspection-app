@@ -390,8 +390,10 @@ function AiProviderPanel({
           {/* One figure panel, mono like every other (console-development):
               four tinted boxes with their own figures in a sans weight. The
               budget is the one that can want a person: a dot at 90%, never an
-              amber number. */}
-          <StatGroup columns="grid-cols-2 sm:grid-cols-4">
+              amber number. Two across at most: token counts run to eight
+              digits at figure size, and four across a provider card ran into
+              each other at 768px. */}
+          <StatGroup columns="grid-cols-1 sm:grid-cols-2">
             <Stat label="Total tokens" value={formatCount(provider.usage.totalTokens)} />
             <Stat label="Input tokens" value={formatCount(provider.usage.inputTokens)} />
             <Stat label="Output tokens" value={formatCount(provider.usage.outputTokens)} />

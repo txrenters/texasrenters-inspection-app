@@ -128,7 +128,10 @@ export function VisitCard({
         {action}
       </CardHeader>
 
-      <CardContent className="grid gap-5">
+      {/* `wrap-anywhere`: Jobber's visit text can carry a link (a report URL
+          is 80-odd characters with no space in it), and unbroken it set the
+          card's minimum width, so on a phone the whole page scrolled sideways. */}
+      <CardContent className="grid gap-5 wrap-anywhere">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
           <Fact label="Technician">
             {technicianName ?? 'Not assigned'}

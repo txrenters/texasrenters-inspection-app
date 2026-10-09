@@ -5,11 +5,17 @@ import type { ComponentProps } from 'react';
 
 import { cn } from '@/lib/utils';
 
+/**
+ * `min-w-0`: the tab row scrolls sideways when it does not fit, but only if
+ * this box may be narrower than the row. Without it, a page laid out in a grid
+ * or a flex column took the whole row's width as its minimum and was pushed
+ * sideways itself (Move-ins & move-outs scrolled 66px at 768px).
+ */
 function Tabs({ className, ...props }: ComponentProps<typeof TabsPrimitive.Root>) {
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
-      className={cn('flex flex-col gap-2', className)}
+      className={cn('flex min-w-0 flex-col gap-2', className)}
       {...props}
     />
   );
