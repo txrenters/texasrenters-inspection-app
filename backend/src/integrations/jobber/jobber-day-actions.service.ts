@@ -29,7 +29,9 @@ import { enqueueJobberCompletion, requestVisitPush, type VisitEditKind } from '.
  *
  * The queue is drained by the outbound worker on its own schedule, so every
  * push is gated on the same switch the rest of the console obeys, and every
- * action is audited with who asked.
+ * action is audited with who asked. The three that send to Jobber (push,
+ * cancel, complete) also need JOBBER_DAY_ACTIONS_ENABLED; the two that only
+ * read from Jobber do not.
  */
 @Injectable()
 export class JobberDayActionsService {
@@ -40,6 +42,7 @@ export class JobberDayActionsService {
 
   /** Our time, and our technician if asked, sent to the visit Jobber has. */
   async push(user: AuthenticatedUser, inspectionId: string, withTechnician = false) {
+    this.requireDayActions();
     this.requirePushes();
     if (withTechnician && !user.permissions.includes('inspections:assign'))
       throw new ApplicationError(403, 'PERMISSION_DENIED', 'Sending the technician to Jobber needs the Assign permission.');
@@ -154,6 +157,7 @@ export class JobberDayActionsService {
 
   /** Tell Jobber about a cancellation made here. The inspection must already be cancelled. */
   async cancelInJobber(user: AuthenticatedUser, inspectionId: string) {
+    this.requireDayActions();
     this.requirePushes();
     const inspection = await this.linkedInspection(user, inspectionId);
     if (inspection.status !== InspectionStatus.CANCELLED)
@@ -187,6 +191,7 @@ export class JobberDayActionsService {
    * the visit is then closed in Jobber by hand.
    */
   async completeInJobber(user: AuthenticatedUser, inspectionId: string) {
+    this.requireDayActions();
     const inspection = await this.linkedInspection(user, inspectionId);
     if (OPEN.has(inspection.status) || inspection.status === InspectionStatus.CANCELLED)
       throw new ApplicationError(409, 'INSPECTION_NOT_DONE', 'Only a visit finished here can be completed in Jobber.');
@@ -239,6 +244,20 @@ export class JobberDayActionsService {
     });
     if (connection?.status !== JobberConnectionStatus.CONNECTED)
       throw new ApplicationError(409, 'JOBBER_NOT_CONNECTED', 'Jobber is not connected, so the visit cannot be read again.');
+  }
+
+  /**
+   * The Schedule's own switch for the three actions that send to Jobber.
+   * Refused here as well as hidden in the console, so a stale page or a direct
+   * call cannot send what the office has not switched on.
+   */
+  private requireDayActions() {
+    if (!getJobberConfig().dayActionsEnabled)
+      throw new ApplicationError(
+        409,
+        'JOBBER_DAY_ACTIONS_OFF',
+        'Sending changes to Jobber from the Schedule is not switched on yet. Make the change in Jobber instead.',
+      );
   }
 
   private requirePushes() {

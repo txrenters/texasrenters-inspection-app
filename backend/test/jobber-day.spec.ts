@@ -81,6 +81,11 @@ function day(over: Partial<DayInput> = {}) {
 }
 
 describe('a day against Jobber', () => {
+  it("says whether the Schedule's buttons that send to Jobber are on: off unless asked", () => {
+    expect(day().actionsEnabled).toBe(false);
+    expect(day({ actionsEnabled: true }).actionsEnabled).toBe(true);
+  });
+
   it('matches when the day, the time and the person agree (email case aside)', () => {
     const result = day();
 

@@ -60,6 +60,8 @@ export interface DayInput {
     lastSyncCompletedAt: Date | null;
   } | null;
   pushesEnabled: boolean;
+  /** JOBBER_DAY_ACTIONS_ENABLED: whether the buttons that send to Jobber are offered. */
+  actionsEnabled?: boolean;
 }
 
 const OPEN = new Set(['SCHEDULED', 'IN_PROGRESS']);
@@ -302,6 +304,7 @@ export function compareJobberDay(input: DayInput): JobberDayComparison {
     date: input.date,
     syncedAt: input.connection?.lastSyncCompletedAt?.toISOString() ?? null,
     pushesEnabled: input.pushesEnabled,
+    actionsEnabled: input.actionsEnabled ?? false,
     connected: Boolean(input.connection?.connected),
     technicians,
     rows,

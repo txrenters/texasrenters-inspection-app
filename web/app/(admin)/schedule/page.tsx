@@ -111,6 +111,10 @@ export default function SchedulePage() {
   // Why a Jobber action is greyed out, said once where it can be read (console-development):
   // a `title` on a disabled button is never seen on a touch screen, nor by most who hover.
   const pushesOff = differences.some(({ date }) => byDate.get(date)?.pushesEnabled === false);
+  // The Schedule's own switch for its buttons that send to Jobber, off until
+  // one has been tried on a demo visit; the rows then offer only what reads
+  // from Jobber.
+  const actionsOff = differences.some(({ date }) => byDate.get(date)?.actionsEnabled === false);
   const otherWork = days.flatMap((date) => (byDate.get(date)?.otherWork ?? []).map((work) => ({ date, work })));
 
   const stepWeek = (direction: number) => setState({ date: shiftDay(anchor, direction * 7) });
@@ -256,7 +260,11 @@ export default function SchedulePage() {
           countTone="warning"
           title={week ? 'Differences this week' : 'Differences this day'}
         >
-          {pushesOff ? (
+          {actionsOff ? (
+            <p className="text-muted-foreground border-b px-4 py-2 text-xs">
+              Sending changes to Jobber from this page is not switched on yet — make the change in Jobber.
+            </p>
+          ) : pushesOff ? (
             <p className="text-muted-foreground border-b px-4 py-2 text-xs">
               Sending changes to Jobber is switched off — make the change in Jobber.
             </p>
@@ -286,7 +294,11 @@ export default function SchedulePage() {
                   tone={jobberDayTone(row.state) === 'destructive' ? 'destructive' : 'warning'}
                   trailing={
                     <div className="flex flex-wrap items-center justify-end gap-1.5">
-                      <JobberDayActions pushesEnabled={byDate.get(date)?.pushesEnabled ?? false} row={row} />
+                      <JobberDayActions
+                        actionsEnabled={byDate.get(date)?.actionsEnabled ?? false}
+                        pushesEnabled={byDate.get(date)?.pushesEnabled ?? false}
+                        row={row}
+                      />
                       {row.inspectionId ? (
                         <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
                           <Link href={`/inspections/${row.inspectionId}`}>Open</Link>

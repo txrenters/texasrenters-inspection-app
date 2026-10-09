@@ -34,12 +34,24 @@ interface Choice {
  * The buttons beside one difference on the day (console-development).
  *
  * Every one asks first, saying what will change and where, because the ones
- * that write to Jobber change the real schedule technicians work from. While
- * sending to Jobber is switched off those are shown disabled, with the reason,
- * rather than hidden: the office should know the option exists and why it is
- * not on.
+ * that write to Jobber change the real schedule technicians work from.
+ *
+ * Two switches govern those. Until the Schedule's own (`actionsEnabled`,
+ * JOBBER_DAY_ACTIONS_ENABLED) is on they are not shown at all: they have not
+ * been tried against the real Jobber yet, and the Differences panel says to
+ * make the change in Jobber. Once it is on, while sending to Jobber in general
+ * is switched off they are shown disabled, with the reason, so the office
+ * knows the option exists and why it is not available.
  */
-export function JobberDayActions({ row, pushesEnabled }: { row: JobberDayRow; pushesEnabled: boolean }) {
+export function JobberDayActions({
+  row,
+  pushesEnabled,
+  actionsEnabled,
+}: {
+  row: JobberDayRow;
+  pushesEnabled: boolean;
+  actionsEnabled: boolean;
+}) {
   const { has } = usePermissions();
   const mutation = useJobberDayAction();
   const [pending, setPending] = useState<Choice | null>(null);
@@ -47,7 +59,7 @@ export function JobberDayActions({ row, pushesEnabled }: { row: JobberDayRow; pu
     manage: has('inspections:manage'),
     assign: has('inspections:assign'),
     finalize: has('inspections:finalize'),
-  });
+  }).filter((choice) => actionsEnabled || !choice.writesJobber);
   if (!choices.length) return null;
 
   const run = (choice: Choice) =>

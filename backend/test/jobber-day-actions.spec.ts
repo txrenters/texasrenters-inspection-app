@@ -53,15 +53,76 @@ function setup({
   return { prisma, sync, service, audits };
 }
 
-const saved = { push: process.env.JOBBER_PUSH_EDITS_ENABLED, booking: process.env.JOBBER_BOOKING_ENABLED };
+const saved = {
+  push: process.env.JOBBER_PUSH_EDITS_ENABLED,
+  booking: process.env.JOBBER_BOOKING_ENABLED,
+  dayActions: process.env.JOBBER_DAY_ACTIONS_ENABLED,
+};
 const pushes = (on: boolean) => {
   process.env.JOBBER_PUSH_EDITS_ENABLED = on ? 'true' : 'false';
 };
+const dayActions = (on: boolean) => {
+  process.env.JOBBER_DAY_ACTIONS_ENABLED = on ? 'true' : 'false';
+};
+// The Schedule's own switch is on for every test below except the ones about
+// it, so each test is about the one rule it names.
+beforeEach(() => dayActions(true));
 afterEach(() => {
   process.env.JOBBER_PUSH_EDITS_ENABLED = saved.push;
   process.env.JOBBER_BOOKING_ENABLED = saved.booking;
+  process.env.JOBBER_DAY_ACTIONS_ENABLED = saved.dayActions;
   if (saved.push === undefined) delete process.env.JOBBER_PUSH_EDITS_ENABLED;
   if (saved.booking === undefined) delete process.env.JOBBER_BOOKING_ENABLED;
+  if (saved.dayActions === undefined) delete process.env.JOBBER_DAY_ACTIONS_ENABLED;
+});
+
+describe("the Schedule's switch for sending to Jobber (JOBBER_DAY_ACTIONS_ENABLED)", () => {
+  const done = { status: 'COMPLETED', source: 'JOBBER', jobberVisitId: 'v-1', jobberJobId: 'j-1' };
+  const cancelled = { status: 'CANCELLED', source: 'JOBBER', jobberVisitId: 'v-1', jobberJobId: 'j-1' };
+
+  it('is off unless set to exactly "true"', async () => {
+    delete process.env.JOBBER_DAY_ACTIONS_ENABLED;
+    pushes(true);
+    const { service, prisma } = setup();
+
+    await expect(service.push(user(), INSPECTION)).rejects.toMatchObject({ code: 'JOBBER_DAY_ACTIONS_OFF' });
+    expect(prisma.jobberOutboundTask.upsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses all three actions that send to Jobber while off, even with pushes on, and queues nothing', async () => {
+    dayActions(false);
+    pushes(true);
+    const office = user(['inspections:manage', 'inspections:assign', 'inspections:finalize']);
+
+    const first = setup();
+    await expect(first.service.push(office, INSPECTION, true)).rejects.toMatchObject({ code: 'JOBBER_DAY_ACTIONS_OFF' });
+    const second = setup({ inspection: cancelled });
+    await expect(second.service.cancelInJobber(office, INSPECTION)).rejects.toMatchObject({
+      code: 'JOBBER_DAY_ACTIONS_OFF',
+    });
+    const third = setup({ inspection: done });
+    await expect(third.service.completeInJobber(office, INSPECTION)).rejects.toMatchObject({
+      code: 'JOBBER_DAY_ACTIONS_OFF',
+    });
+
+    for (const { prisma, audits } of [first, second, third]) {
+      expect(prisma.jobberOutboundTask.upsert).not.toHaveBeenCalled();
+      expect(prisma.jobberOutboundTask.create).not.toHaveBeenCalled();
+      expect(prisma.jobberOutboundTask.update).not.toHaveBeenCalled();
+      expect(audits()).toEqual([]);
+    }
+  });
+
+  it("leaves the two that only read from Jobber working while off", async () => {
+    dayActions(false);
+    const take = setup();
+    await expect(take.service.takeJobber(user(), INSPECTION)).resolves.toMatchObject({ withdrawn: [] });
+    expect(take.sync.syncVisit).toHaveBeenCalledWith(ORG, 'v-1');
+
+    const create = setup({ importRow: { status: 'PENDING', inspectionId: null, failureCode: null, failureMessage: null } });
+    await create.service.createFromVisit(user(), 'v-9');
+    expect(create.sync.syncVisit).toHaveBeenCalledWith(ORG, 'v-9');
+  });
 });
 
 describe('push our time to Jobber', () => {

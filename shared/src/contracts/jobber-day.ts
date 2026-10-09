@@ -97,6 +97,13 @@ export interface JobberDayComparison {
   syncedAt: string | null;
   /** Whether the console may send its edits to Jobber at all. */
   pushesEnabled: boolean;
+  /**
+   * Whether this screen's buttons that send to Jobber (our time or
+   * technician, a cancellation, a completion) are switched on:
+   * JOBBER_DAY_ACTIONS_ENABLED, off until one has been tried on a demo visit.
+   * The buttons that only read from Jobber do not depend on it.
+   */
+  actionsEnabled: boolean;
   connected: boolean;
   technicians: JobberDayTechnician[];
   rows: JobberDayRow[];

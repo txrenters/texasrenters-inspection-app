@@ -146,6 +146,7 @@ export class JobberDayService {
           }
         : null,
       pushesEnabled: getJobberConfig().pushEditsEnabled,
+      actionsEnabled: getJobberConfig().dayActionsEnabled,
     });
   }
 }

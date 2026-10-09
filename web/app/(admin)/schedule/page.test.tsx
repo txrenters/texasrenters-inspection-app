@@ -47,6 +47,7 @@ function comparison(over: Partial<JobberDayComparison> = {}): Omit<JobberDayComp
   return {
     syncedAt: null,
     pushesEnabled: true,
+    actionsEnabled: true,
     connected: true,
     technicians: [{ technicianId: 't-1', name: 'Amy Wilson', here: 1, inJobber: 1, done: 0, differences: 1 }],
     rows: [row()],
@@ -90,6 +91,19 @@ describe('the Schedule', () => {
 
     await screen.findByRole('link', { name: /1 difference/ });
     expect(screen.queryByText(/Sending changes to Jobber is switched off/)).toBeNull();
+    expect(screen.queryByText(/not switched on yet/)).toBeNull();
+  });
+
+  /** JOBBER_DAY_ACTIONS_ENABLED (2026-10-10): off until one has been tried on a demo visit. */
+  it("hides the buttons that send to Jobber until the Schedule's switch is on, and says so once", async () => {
+    held.comparison = comparison({ actionsEnabled: false });
+    mount();
+
+    expect(
+      await screen.findByText('Sending changes to Jobber from this page is not switched on yet — make the change in Jobber.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Send ours to Jobber' })).toBeNull();
+    expect(screen.getByRole('button', { name: "Take Jobber's" })).toBeTruthy();
   });
 
   it('writes a difference’s day as every scheduled day is written, with its weekday', async () => {
