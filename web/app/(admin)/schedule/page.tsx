@@ -6,14 +6,16 @@ import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
+import { DayFilter } from '@/components/day-filter';
 import { JobberDayActions } from '@/components/jobber-day-actions';
 import { PageHeader } from '@/components/page-header';
 import { Panel, PanelRow } from '@/components/panel';
 import { ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { businessTimeOfDay, businessToday, shiftDay } from '@/lib/clock';
-import { formatRelative } from '@/lib/format';
+import { formatRelative, formatScheduledDate } from '@/lib/format';
 import { JOBBER_DAY_LABEL, TYPE_MARK, isOneSided, jobberDayTone } from '@/lib/jobber-day';
 import { jobberDayQuery } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
@@ -36,11 +38,22 @@ function mondayOf(date: string) {
   return shiftDay(date, -((weekday + 6) % 7));
 }
 
-const dayLabel = (date: string, options: Intl.DateTimeFormatOptions) =>
-  new Date(`${date}T12:00:00.000Z`).toLocaleDateString('en-US', { ...options, timeZone: 'UTC' });
-/** "Mon 5": weekday first, which `toLocaleDateString` will not do for weekday + day alone. */
-const columnLabel = (date: string) =>
-  `${dayLabel(date, { weekday: 'short' })} ${Number(date.slice(8, 10))}`;
+/** A `yyyy-MM-dd` is a date, so it is read in UTC: noon UTC is that date everywhere. */
+const WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' });
+const weekdayOf = (date: string) => WEEKDAY.format(new Date(`${date}T12:00:00.000Z`));
+/** "Mon 5": the grid's column heads, weekday first. */
+const columnLabel = (date: string) => `${weekdayOf(date)} ${Number(date.slice(8, 10))}`;
+/**
+ * "Mon, Oct 5, 2026": a day as `formatScheduledDate` writes every scheduled day
+ * in the console, with its weekday (console-development). The page had three
+ * hand-rolled formats and a chip title that printed the raw `yyyy-MM-dd`.
+ */
+const dayName = (date: string) => `${weekdayOf(date)}, ${formatScheduledDate(date)}`;
+
+const VIEWS = [
+  { value: 'day', label: 'Day' },
+  { value: 'week', label: 'Week' },
+] as const;
 
 /**
  * The words under a difference's name, only where they add to it: the two
@@ -95,13 +108,12 @@ export default function SchedulePage() {
   const differences = days.flatMap((date) =>
     (byDate.get(date)?.rows ?? []).filter((row) => row.state !== 'MATCHES').map((row) => ({ date, row })),
   );
+  // Why a Jobber action is greyed out, said once where it can be read (console-development):
+  // a `title` on a disabled button is never seen on a touch screen, nor by most who hover.
+  const pushesOff = differences.some(({ date }) => byDate.get(date)?.pushesEnabled === false);
   const otherWork = days.flatMap((date) => (byDate.get(date)?.otherWork ?? []).map((work) => ({ date, work })));
 
-  const step = (direction: number) =>
-    setState({ date: shiftDay(anchor, direction * (week ? 7 : 1)) });
-  const rangeLabel = week
-    ? `${dayLabel(days[0]!, { month: 'short', day: 'numeric' })} – ${dayLabel(days.at(-1)!, { month: 'short', day: 'numeric', year: 'numeric' })}`
-    : dayLabel(anchor, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const stepWeek = (direction: number) => setState({ date: shiftDay(anchor, direction * 7) });
 
   return (
     <>
@@ -110,38 +122,49 @@ export default function SchedulePage() {
           <span>
             Every visit beside Jobber, as of the last sync
             {syncedAt ? <span className="font-mono text-xs"> · synced {formatRelative(syncedAt)}</span> : null}.
+            {/* The differences are under the whole grid: a way down to them from the top (console-development). */}
+            {differences.length ? (
+              <>
+                {' '}
+                <a className="text-foreground font-medium underline-offset-4 hover:underline" href="#schedule-differences">
+                  {differences.length.toLocaleString()} {differences.length === 1 ? 'difference' : 'differences'}{' '}
+                  <span aria-hidden>↓</span>
+                </a>
+              </>
+            ) : null}
           </span>
         }
         title="Schedule"
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="bg-card flex items-center rounded-md border">
-          <Button aria-label={week ? 'Previous week' : 'Previous day'} onClick={() => step(-1)} size="icon-sm" variant="ghost">
-            <ChevronLeftIcon />
-          </Button>
-          <span className="px-2 font-mono text-xs whitespace-nowrap tabular-nums">{rangeLabel}</span>
-          <Button aria-label={week ? 'Next week' : 'Next day'} onClick={() => step(1)} size="icon-sm" variant="ghost">
-            <ChevronRightIcon />
-          </Button>
-        </div>
-        <Button onClick={() => setState({ date: '' })} size="sm" variant="outline">
-          Today
-        </Button>
-        <div aria-label="View" className="bg-card flex gap-0.5 rounded-md border p-0.5" role="group">
-          {(['day', 'week'] as const).map((view) => (
-            <Button
-              aria-pressed={(view === 'week') === week}
-              className={cn('h-7 px-3 text-xs', (view === 'week') === week && 'bg-accent')}
-              key={view}
-              onClick={() => setState({ view })}
-              size="sm"
-              variant="ghost"
-            >
-              {view === 'week' ? 'Week' : 'Day'}
+        {week ? (
+          // A week at a time, in DayFilter's buttons (console-development): DayFilter itself steps days.
+          <div aria-label="Week" className="flex flex-wrap items-center gap-1" role="group">
+            <Button aria-label="Previous week" onClick={() => stepWeek(-1)} size="icon" variant="outline">
+              <ChevronLeftIcon />
             </Button>
-          ))}
-        </div>
+            <span className="bg-card inline-flex h-9 items-center rounded-md border px-3 font-mono text-xs whitespace-nowrap tabular-nums">
+              {formatScheduledDate(days[0])} – {formatScheduledDate(days.at(-1))}
+            </span>
+            <Button aria-label="Next week" onClick={() => stepWeek(1)} size="icon" variant="outline">
+              <ChevronRightIcon />
+            </Button>
+            <Button onClick={() => setState({ date: '' })} size="sm" variant="secondary">
+              Today
+            </Button>
+          </div>
+        ) : (
+          // One day: the console's own day stepper, with its picker (console-development).
+          <DayFilter
+            allowAllDates={false}
+            label="Day"
+            onChange={(day) => setState({ date: day && day !== today ? day : '' })}
+            value={anchor}
+          />
+        )}
+        {/* The console's one toggle shape (console-development). */}
+        <SegmentedControl aria-label="View" onChange={(view) => setState({ view })} options={VIEWS} value={week ? 'week' : 'day'} />
         <div className="text-muted-foreground ml-auto flex flex-wrap items-center gap-4 text-xs">
           <span className="flex items-center gap-1.5">
             <span className="bg-card inline-block h-2.5 w-3.5 rounded-sm border" /> Matches Jobber
@@ -165,13 +188,23 @@ export default function SchedulePage() {
         </Panel>
       ) : (
         <div className="bg-card overflow-x-auto rounded-xl border">
-          <div className={cn(week && 'min-w-[1040px]')}>
+          {/* The names column is narrower on a phone, where it stays in view
+              while the days scroll and 200px of it left a day 140px. */}
+          <div className={cn('[--name-col:128px] sm:[--name-col:200px]', week && 'min-w-[1040px]')}>
             <div
               className="bg-muted/60 grid border-b"
-              style={{ gridTemplateColumns: `200px repeat(${days.length}, minmax(0, 1fr))` }}
+              style={{ gridTemplateColumns: `var(--name-col) repeat(${days.length}, minmax(0, 1fr))` }}
             >
-              <span className="text-muted-foreground px-4 py-2.5 font-mono text-[10.5px] font-medium tracking-[0.08em] uppercase">
-                Technician
+              {/*
+                The names stay put while the week scrolls sideways on a phone
+                (console-development). Opaque, with the row's tint laid over the
+                card, and a hairline on its right edge that sits on the next
+                cell's own border until the days slide under it.
+              */}
+              <span className="bg-card sticky left-0 z-10 shadow-[1px_0_0_0_var(--color-border)]">
+                <span className="bg-muted/60 text-muted-foreground block h-full px-3 py-2.5 font-mono sm:px-4 text-[10.5px] font-medium tracking-[0.08em] uppercase">
+                  Technician
+                </span>
               </span>
               {days.map((date) => {
                 const data = byDate.get(date);
@@ -195,9 +228,9 @@ export default function SchedulePage() {
               <div
                 className="grid border-b last:border-b-0"
                 key={person.id ?? 'nobody'}
-                style={{ gridTemplateColumns: `200px repeat(${days.length}, minmax(0, 1fr))` }}
+                style={{ gridTemplateColumns: `var(--name-col) repeat(${days.length}, minmax(0, 1fr))` }}
               >
-                <div className="px-4 py-3">
+                <div className="bg-card sticky left-0 z-10 px-3 py-3 shadow-[1px_0_0_0_var(--color-border)] sm:px-4">
                   <p className={cn('text-sm', person.id === null && 'text-warning')}>{person.name}</p>
                   <p className="text-muted-foreground font-mono text-[11px]">
                     {person.total} {person.total === 1 ? 'visit' : 'visits'}
@@ -217,61 +250,67 @@ export default function SchedulePage() {
         </div>
       )}
 
-      <Panel
-        className="mt-5"
-        count={differences.length || undefined}
-        countTone="warning"
-        title={week ? 'Differences this week' : 'Differences this day'}
-      >
-        {differences.length ? (
-          <div className="divide-y">
-            {differences.map(({ date, row }) => (
-              <PanelRow
-                detail={
-                  <>
-                    {row.property}
-                    {row.here?.technician || row.jobber?.technician
-                      ? ` · ${row.here?.technician ?? row.jobber?.technician}`
-                      : ''}
-                    {` · ${dayLabel(date, { weekday: 'short', month: 'short', day: 'numeric' })}`}
-                    {row.waitingToSend ? ' · our change is waiting to go to Jobber' : ''}
-                  </>
-                }
-                key={`${date}:${row.key}`}
-                title={
-                  <span>
-                    {JOBBER_DAY_LABEL[row.state]}
-                    {detailOf(row) ? <span className="text-muted-foreground"> · {detailOf(row)}</span> : null}
-                    {row.importNote ? <span className="text-muted-foreground"> · {row.importNote}</span> : null}
-                  </span>
-                }
-                tone={jobberDayTone(row.state) === 'destructive' ? 'destructive' : 'warning'}
-                trailing={
-                  <div className="flex flex-wrap items-center justify-end gap-1.5">
-                    <JobberDayActions pushesEnabled={byDate.get(date)?.pushesEnabled ?? false} row={row} />
-                    {row.inspectionId ? (
-                      <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
-                        <Link href={`/inspections/${row.inspectionId}`}>Open</Link>
-                      </Button>
-                    ) : null}
-                  </div>
-                }
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="text-muted-foreground px-4 py-6 text-sm">
-            {loading ? 'Comparing with Jobber…' : 'Everything here matches Jobber.'}
-          </p>
-        )}
-      </Panel>
+      <div className="mt-5 scroll-mt-20" id="schedule-differences">
+        <Panel
+          count={differences.length || undefined}
+          countTone="warning"
+          title={week ? 'Differences this week' : 'Differences this day'}
+        >
+          {pushesOff ? (
+            <p className="text-muted-foreground border-b px-4 py-2 text-xs">
+              Sending changes to Jobber is switched off — make the change in Jobber.
+            </p>
+          ) : null}
+          {differences.length ? (
+            <div className="divide-y">
+              {differences.map(({ date, row }) => (
+                <PanelRow
+                  detail={
+                    <>
+                      {row.property}
+                      {row.here?.technician || row.jobber?.technician
+                        ? ` · ${row.here?.technician ?? row.jobber?.technician}`
+                        : ''}
+                      {` · ${dayName(date)}`}
+                      {row.waitingToSend ? ' · our change is waiting to go to Jobber' : ''}
+                    </>
+                  }
+                  key={`${date}:${row.key}`}
+                  title={
+                    <span>
+                      {JOBBER_DAY_LABEL[row.state]}
+                      {detailOf(row) ? <span className="text-muted-foreground"> · {detailOf(row)}</span> : null}
+                      {row.importNote ? <span className="text-muted-foreground"> · {row.importNote}</span> : null}
+                    </span>
+                  }
+                  tone={jobberDayTone(row.state) === 'destructive' ? 'destructive' : 'warning'}
+                  trailing={
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      <JobberDayActions pushesEnabled={byDate.get(date)?.pushesEnabled ?? false} row={row} />
+                      {row.inspectionId ? (
+                        <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
+                          <Link href={`/inspections/${row.inspectionId}`}>Open</Link>
+                        </Button>
+                      ) : null}
+                    </div>
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground px-4 py-6 text-sm">
+              {loading ? 'Comparing with Jobber…' : 'Everything here matches Jobber.'}
+            </p>
+          )}
+        </Panel>
+      </div>
 
       {otherWork.length ? (
         <Panel className="mt-5" count={otherWork.length} title="Also in Jobber, not inspections">
           <div className="divide-y">
             {otherWork.map(({ date, work }) => (
               <PanelRow
-                detail={`${work.property}${work.technician ? ` · ${work.technician}` : ''} · ${columnLabel(date)} · ${work.reason}`}
+                detail={`${work.property}${work.technician ? ` · ${work.technician}` : ''} · ${dayName(date)} · ${work.reason}`}
                 key={`${date}:${work.jobberVisitId}`}
                 title={work.title ?? 'Untitled visit'}
                 tone="muted"
@@ -338,7 +377,7 @@ function Chip({ row, date }: { row: JobberDayRow; date: string }) {
     row.status && row.status !== 'SCHEDULED' && row.status !== 'IN_PROGRESS' && row.state === 'MATCHES' && 'opacity-60',
   );
   return row.inspectionId ? (
-    <Link className={className} href={`/inspections/${row.inspectionId}`} title={`${row.property} · ${date}`}>
+    <Link className={className} href={`/inspections/${row.inspectionId}`} title={`${row.property} · ${dayName(date)}`}>
       {body}
     </Link>
   ) : (

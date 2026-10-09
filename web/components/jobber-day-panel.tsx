@@ -101,19 +101,28 @@ export function JobberDayPanel({
                     </span>
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums">{person.here}</TableCell>
-                  <TableCell
-                    className={cn(
-                      'text-right font-mono tabular-nums',
-                      countsDiffer ? 'text-warning' : 'text-muted-foreground',
-                    )}
-                  >
-                    {person.inJobber}
+                  {/*
+                    A plain figure, with an amber dot when it is not the console's
+                    (console-development): figures are never coloured.
+                  */}
+                  <TableCell className="text-right font-mono tabular-nums">
+                    <span className="inline-flex items-center gap-1.5">
+                      {countsDiffer ? (
+                        <span
+                          aria-label="Not the same as here"
+                          className="bg-warning size-1.5 shrink-0 rounded-full"
+                          role="img"
+                        />
+                      ) : null}
+                      {person.inJobber}
+                    </span>
                   </TableCell>
                   <TableCell className="w-40">
                     {person.here ? (
                       <>
+                        {/* Progress in ink, not the accent: the accent marks today and what is live (console-development). */}
                         <span className="bg-muted block h-1 overflow-hidden rounded-full">
-                          <span className="bg-highlight block h-1" style={{ width: `${share}%` }} />
+                          <span className="bg-foreground/50 block h-1" style={{ width: `${share}%` }} />
                         </span>
                         <span className="text-muted-foreground font-mono text-[10.5px]">
                           {person.done} of {person.here} done

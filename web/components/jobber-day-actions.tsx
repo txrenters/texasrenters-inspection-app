@@ -14,7 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
 import { type JobberDayAction, useJobberDayAction } from '@/lib/queries';
 
@@ -24,6 +24,8 @@ interface Choice {
   confirm: string;
   /** True when it changes Jobber (once the outbox sends it). */
   writesJobber: boolean;
+  /** Takes something away -- a visit off Jobber's schedule -- so its confirm button is coral (console-development). */
+  destructive?: boolean;
   request: JobberDayAction;
   done: string;
 }
@@ -91,6 +93,7 @@ export function JobberDayActions({ row, pushesEnabled }: { row: JobberDayRow; pu
           <AlertDialogFooter>
             <AlertDialogCancel disabled={mutation.isPending}>Keep as is</AlertDialogCancel>
             <AlertDialogAction
+              className={pending?.destructive ? buttonVariants({ variant: 'destructive' }) : undefined}
               disabled={mutation.isPending}
               onClick={(event) => {
                 event.preventDefault();
@@ -171,6 +174,7 @@ function choicesFor(
               label: 'Cancel in Jobber',
               confirm: `The Jobber visit at ${where} will be removed, as it was cancelled here. If it is the job's only open visit, the job is closed too.`,
               writesJobber: true,
+              destructive: true,
               request: { action: 'cancel-in-jobber', inspectionId: id },
               done: `${where}: the cancellation is queued for Jobber`,
             },

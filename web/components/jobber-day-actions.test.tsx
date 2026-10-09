@@ -74,6 +74,19 @@ describe('actions on a difference with Jobber', () => {
     );
   });
 
+  /** Console-development (T32): taking a visit off Jobber's schedule is confirmed in coral, the rest in ink. */
+  it('confirms removing a visit from Jobber with a destructive button, and the others with an ordinary one', () => {
+    const { rerender } = render(<JobberDayActions pushesEnabled row={row({ state: 'CANCELLED_HERE', status: 'CANCELLED' })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel in Jobber' }));
+    expect(screen.getAllByRole('button', { name: 'Cancel in Jobber' }).at(-1)!.className).toContain('bg-destructive');
+    fireEvent.click(screen.getByRole('button', { name: 'Keep as is' }));
+
+    rerender(<JobberDayActions pushesEnabled row={row()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Send ours to Jobber' }));
+    expect(screen.getAllByRole('button', { name: 'Send ours to Jobber' }).at(-1)!.className).not.toContain('bg-destructive');
+  });
+
   it('keeps each action behind its permission', () => {
     held.permissions = new Set(['inspections:manage']);
     const { rerender } = render(
