@@ -4,6 +4,7 @@ import type { AiAnalysisPreview, AiGuidanceSample } from '@texasrenters/shared';
 import { MAX_AI_GUIDANCE_LENGTH } from '@texasrenters/shared';
 import { useEffect, useRef, useState } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { ErrorState } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +17,12 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
@@ -60,7 +67,7 @@ export function AiHouseRules({ canConfigure }: { canConfigure: boolean }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>House rules for the AI</CardTitle>
+        <CardTitle variant="label">House rules for the AI</CardTitle>
         <CardDescription>
           What counts as damage, normal wear and cleaning at TexasRenters, in the office&apos;s
           words. The AI reads them with every recording it analyses. They decide how it judges, never
@@ -123,33 +130,36 @@ export function AiHouseRules({ canConfigure }: { canConfigure: boolean }) {
                       Start from the example
                     </Button>
                   ) : null}
-                  <Button
-                    aria-expanded={trying}
-                    onClick={() => setTrying((open) => !open)}
-                    size="sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    {trying ? 'Hide the trial' : 'Try on a recording'}
-                  </Button>
-                  {/* The rules as typed, on every recent decided recording at once. */}
-                  <Button
-                    disabled={startTestRun.isPending}
-                    onClick={() => startTestRun.mutate(text)}
-                    size="sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    {startTestRun.isPending ? <Spinner /> : null}
-                    Test on recent recordings
-                  </Button>
+                  {/* The two ways to test the rules as typed, under one button
+                      (console-development): five buttons in a row read as five
+                      equal choices, and the save is the one that matters. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" type="button" variant="outline">
+                        {startTestRun.isPending ? <Spinner /> : null}
+                        Test…
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-60">
+                      <DropdownMenuItem onSelect={() => setTrying((open) => !open)}>
+                        {trying ? 'Hide the trial' : 'Try on a recording'}
+                      </DropdownMenuItem>
+                      {/* The rules as typed, on every recent decided recording at once. */}
+                      <DropdownMenuItem
+                        disabled={startTestRun.isPending}
+                        onSelect={() => startTestRun.mutate(text)}
+                      >
+                        Test on recent recordings
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
               ) : (
                 <p className="text-muted-foreground text-xs">
                   Only people who configure the AI can change these.
                 </p>
               )}
-              <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+              <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
                 {formatCount(text.length)} / {formatCount(MAX_AI_GUIDANCE_LENGTH)}
               </span>
             </div>
@@ -218,7 +228,8 @@ function RulesTrial({
 }) {
   const samples = useAiGuidanceSamples(true);
   return (
-    <section aria-label="Try the rules on a recording" className="grid gap-3 rounded-lg border p-3">
+    // A hairline above, not a bordered box inside the card (console-development).
+    <section aria-label="Try the rules on a recording" className="grid gap-3 border-t pt-3">
       <p className="text-muted-foreground text-xs">
         Runs the AI on a recording the office has already decided, with the rules as they are typed
         above, and sets what it would find beside what was decided. Nothing is saved; it costs one
@@ -299,14 +310,15 @@ function TrialResult({ result }: { result: AiAnalysisPreview }) {
       </p>
       <div className="grid gap-3 md:grid-cols-2">
         <div className="grid content-start gap-1">
-          <p className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
-            Found now · as the office decided
-          </p>
+          <p className={SECTION_LABEL}>Found now · as the office decided</p>
+          {/* Rows split by hairlines rather than a box per finding: three
+              levels of border inside one card (console-development). */}
+          <div className="divide-y">
           {[...comparison.matched.map((pair) => pair.current), ...comparison.dropped].map(
             (finding) => {
               const gone = droppedBadge(finding, comparison.dropped.includes(finding));
               return (
-                <div className="rounded-md border px-2 py-1" key={finding.id}>
+                <div className="py-1.5" key={finding.id}>
                   <p className="text-sm">
                     {finding.title}
                     {gone ? (
@@ -322,20 +334,20 @@ function TrialResult({ result }: { result: AiAnalysisPreview }) {
               );
             },
           )}
+          </div>
           {!result.current.length ? (
             <p className="text-muted-foreground text-xs">No findings now.</p>
           ) : null}
         </div>
         <div className="grid content-start gap-1">
-          <p className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
-            With these rules · draft
-          </p>
+          <p className={SECTION_LABEL}>With these rules · draft</p>
+          <div className="divide-y">
           {[...comparison.matched.map((pair) => pair.draft), ...comparison.added].map(
             (finding, index) => {
               const fresh = comparison.added.includes(finding);
               const at = moment(finding.videoTimestampStart, finding.videoTimestampEnd);
               return (
-                <div className="rounded-md border px-2 py-1" key={`${index}-${finding.title}`}>
+                <div className="py-1.5" key={`${index}-${finding.title}`}>
                   <p className="text-sm">
                     {finding.title}
                     {fresh ? (
@@ -352,6 +364,7 @@ function TrialResult({ result }: { result: AiAnalysisPreview }) {
               );
             },
           )}
+          </div>
           {!result.draft.length ? (
             <p className="text-muted-foreground text-xs">No findings under the draft.</p>
           ) : null}

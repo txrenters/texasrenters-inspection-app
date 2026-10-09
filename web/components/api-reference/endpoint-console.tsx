@@ -41,21 +41,25 @@ const HIGHLIGHTED_HEADERS = [
   'retry-after',
 ];
 
-function statusTone(status: number) {
-  if (status >= 500) return 'text-destructive';
-  if (status >= 400) return 'text-warning';
-  if (status >= 200 && status < 300) return 'text-success';
-  return 'text-muted-foreground';
+/**
+ * The status code's tone, as a dot beside neutral text (console-development):
+ * a green "200 OK" was a status written in the colour the console keeps for a
+ * finished job.
+ */
+function statusDot(status: number) {
+  if (status >= 500) return 'bg-destructive';
+  if (status >= 400) return 'bg-warning';
+  if (status >= 200 && status < 300) return 'bg-success';
+  return 'bg-muted-foreground/50';
 }
 
 /**
  * Run one endpoint and read what came back.
  *
- * The request goes out on the operator's **own session**, not on a credential
- * this page holds — so it can do exactly what they could already do through the
- * rest of the console, enforced by the same guards, and appears in the audit
- * trail under their name. That is the property that makes an executable
- * reference safe to ship at all, and it is why there is no key field here.
+ * The request carries only the API key pasted into the fields below — never
+ * the reader's session (`apiRawRequest` adds no token). It can therefore do
+ * exactly what that integration can do, enforced by the same guards, and the
+ * audit trail records it against that API client, not the person reading.
  *
  * What it does not remove is the ordinary danger of a live system: this is
  * production data, and a write is a real write. Hence the arming step below.
@@ -280,9 +284,13 @@ export function EndpointConsole({
             {isDelete ? 'This deletes live data' : 'This writes to live data'}
           </AlertTitle>
           <AlertDescription className="space-y-2">
+            {/* Only the pasted key is sent (`apiRawRequest` adds no session), so
+                "with your own permissions… under your name" described a request
+                this page does not make (console-development). */}
             <p>
-              The request runs against this environment with your own permissions and is recorded in
-              the audit trail under your name. There is no sandbox behind this button.
+              The request runs against this environment as the integration whose key you entered,
+              and is recorded against that client in the audit trail. There is no sandbox behind
+              this button.
             </p>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox checked={armed} onCheckedChange={(next) => setArmed(next === true)} />
@@ -336,7 +344,8 @@ export function EndpointConsole({
       {result ? (
         <div className="space-y-2">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className={cn('font-mono text-sm font-semibold', statusTone(result.status))}>
+            <span className="flex items-center gap-1.5 font-mono text-sm font-semibold">
+              <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', statusDot(result.status))} />
               {result.status} {result.statusText}
             </span>
             <span className="text-muted-foreground text-xs tabular-nums">

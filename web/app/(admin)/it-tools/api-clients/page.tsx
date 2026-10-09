@@ -12,10 +12,12 @@ import { useState } from 'react';
 
 import { ApiClientDialog } from '@/components/api-client-dialog';
 import { CopyButton } from '@/components/api-reference/copy-button';
-import { PageHeader, SectionHeader } from '@/components/page-header';
+import { PageHeader } from '@/components/page-header';
+import { SECTION_LABEL } from '@/components/panel';
 import { useProvidePageSearch } from '@/components/page-search';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
+import { StatusBadge } from '@/components/status-badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +30,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -95,7 +97,9 @@ function IssuedKeyDialog({ issued, onClose }: { issued: IssuedApiKey; onClose: (
             <dt className="text-muted-foreground text-xs font-medium">Key ID (public)</dt>
             <dd className="flex items-center gap-1">
               <code className="text-xs break-all">{keyIdPart}</code>
-              <CopyButton value={keyIdPart} />
+              {/* Each says which half it copies: two buttons named "Copy"
+                  beside each other could not be told apart by ear. */}
+              <CopyButton label="Copy key ID" value={keyIdPart} />
             </dd>
           </div>
           <div className="grid gap-1 p-3 sm:grid-cols-[10rem_1fr] sm:items-center">
@@ -105,7 +109,7 @@ function IssuedKeyDialog({ issued, onClose }: { issued: IssuedApiKey; onClose: (
             </dt>
             <dd className="flex items-center gap-1">
               <code className="text-xs break-all">{secretPart}</code>
-              <CopyButton value={secretPart} />
+              <CopyButton label="Copy secret" value={secretPart} />
             </dd>
           </div>
         </dl>
@@ -163,7 +167,8 @@ function KeyRow({
   clientId: string;
   environment: ApiClientSummary['environment'];
   keyRecord: ApiClientSummary['keys'][number];
-  onRevoke: (input: { id: string; keyId: string }) => void;
+  /** Opens the confirmation; nothing is revoked from the row itself. */
+  onRevoke: (input: { id: string; keyId: string; name: string }) => void;
 }) {
   const expired = keyRecord.expiresAt ? new Date(keyRecord.expiresAt) <= new Date() : false;
   const dead = Boolean(keyRecord.revokedAt) || expired;
@@ -173,7 +178,7 @@ function KeyRow({
       <TableCell className="align-top">
         <div className="flex items-center gap-1">
           <code className="text-xs">{keyId(environment, keyRecord.prefix)}</code>
-          <CopyButton label="Copy" value={keyId(environment, keyRecord.prefix)} />
+          <CopyButton label="Copy key ID" value={keyId(environment, keyRecord.prefix)} />
         </div>
       </TableCell>
       <TableCell className="align-top text-sm">{keyRecord.label ?? '—'}</TableCell>
@@ -193,13 +198,19 @@ function KeyRow({
         ) : expired ? (
           <Badge variant="secondary">Expired</Badge>
         ) : (
-          <Badge variant="secondary">Active</Badge>
+          <StatusBadge value="ACTIVE" />
         )}
       </TableCell>
       <TableCell className="align-top text-right">
         {dead ? null : (
           <Button
-            onClick={() => onRevoke({ id: clientId, keyId: keyRecord.id })}
+            onClick={() =>
+              onRevoke({
+                id: clientId,
+                keyId: keyRecord.id,
+                name: keyRecord.label ?? keyId(environment, keyRecord.prefix),
+              })
+            }
             size="sm"
             variant="ghost"
           >
@@ -247,6 +258,11 @@ export default function ApiClientsPage() {
   const [editing, setEditing] = useState<ApiClientSummary | null>(null);
   const [issued, setIssued] = useState<IssuedApiKey | null>(null);
   const [revoking, setRevoking] = useState<ApiClientSummary | null>(null);
+  // The key a "Revoke" click is asking about. It fired on one click before
+  // (console-development); a revoked key cannot be brought back.
+  const [revokingKey, setRevokingKey] = useState<{ id: string; keyId: string; name: string } | null>(
+    null,
+  );
 
   if (clients.isPending) return <PageSkeleton />;
   if (clients.isError)
@@ -269,26 +285,52 @@ export default function ApiClientsPage() {
           </Button>
         }
         description="Registered integrations, the permissions each one holds, and the keys they authenticate with."
+        // How a key is used, one click away rather than a panel above every
+        // client (console-development).
+        info={
+          <>
+            <p>
+              Send the key as <code className="text-xs">x-api-key</code>. A client with write scopes
+              must also send <code className="text-xs">x-timestamp</code> and{' '}
+              <code className="text-xs">x-signature</code> — an HMAC-SHA256 of{' '}
+              <code className="text-xs">METHOD\npath\ntimestamp\nsha256(body)</code> keyed with the
+              key&apos;s secret, within five minutes of now.
+            </p>
+            <p>
+              Keys reach only the routes marked “Open to integrations” in the API reference. Holding
+              a matching permission is not enough on its own.
+            </p>
+            <p>
+              The Key ID is the public half — paste it into the API reference. The secret is shown
+              only once, when the key is issued.
+            </p>
+          </>
+        }
+        infoLabel="How an integration authenticates"
         title="API clients"
       />
 
-      <Alert className="mb-4">
-        <KeyRoundIcon aria-hidden />
-        <AlertTitle>How an integration authenticates</AlertTitle>
-        <AlertDescription className="space-y-1">
-          <p>
-            Send the key as <code className="text-xs">x-api-key</code>. A client with write scopes
-            must also send <code className="text-xs">x-timestamp</code> and{' '}
-            <code className="text-xs">x-signature</code> — an HMAC-SHA256 of{' '}
-            <code className="text-xs">METHOD\npath\ntimestamp\nsha256(body)</code> keyed with the
-            key&apos;s secret, within five minutes of now.
-          </p>
-          <p className="text-muted-foreground">
-            Keys reach only the routes marked “Open to integrations” in the API reference. Holding a
-            matching permission is not enough on its own.
-          </p>
-        </AlertDescription>
-      </Alert>
+      {/* Said where it happened. A key that failed to issue, or a revoke the
+          server refused, used to change nothing on screen, so the reader
+          assumed it had worked (console-development). */}
+      {issueKey.error ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertTitle>The key could not be issued</AlertTitle>
+          <AlertDescription>{issueKey.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {revokeKey.error ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertTitle>The key could not be revoked</AlertTitle>
+          <AlertDescription>{revokeKey.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {revokeClient.error ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertTitle>The client could not be revoked</AlertTitle>
+          <AlertDescription>{revokeClient.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <Input
         aria-label="Search API clients"
@@ -300,11 +342,24 @@ export default function ApiClientsPage() {
       />
 
       {records.length === 0 ? (
-        <EmptyState
-          description="Register one to give a third-party system scoped, rate-limited access to this API."
-          icon={KeyRoundIcon}
-          title="No API clients yet"
-        />
+        // A search that matched nothing is not an empty registry.
+        state.search.trim() ? (
+          <EmptyState
+            description="No client's name matches this search."
+            icon={KeyRoundIcon}
+            title={`Nothing matches “${state.search.trim()}”`}
+          >
+            <Button onClick={() => setState({ search: '', page: 1 })} variant="outline">
+              Clear search
+            </Button>
+          </EmptyState>
+        ) : (
+          <EmptyState
+            description="Register one to give a third-party system scoped, rate-limited access to this API."
+            icon={KeyRoundIcon}
+            title="No API clients yet"
+          />
+        )
       ) : (
         <div className="space-y-3">
           {records.map((client) => (
@@ -341,6 +396,9 @@ export default function ApiClientsPage() {
                         )
                       }
                       size="sm"
+                      // Outline: an ink button on every client made each card
+                      // shout its own primary action (console-development).
+                      variant="outline"
                     >
                       <KeyRoundIcon aria-hidden />
                       Issue key
@@ -358,73 +416,62 @@ export default function ApiClientsPage() {
                     and ran the rate limit and the address rule together into one
                     sentence, so a reader could not tell which value was which. */}
                 <div>
-                  <SectionHeader title="Configuration" />
-                  <Table className="mt-1">
-                    <TableBody>
-                      <TableRow>
-                        <TableHead className="w-56 align-top">Environment</TableHead>
-                        <TableCell>
-                          <Badge variant={client.environment === 'LIVE' ? 'default' : 'secondary'}>
-                            {client.environment === 'LIVE' ? 'Live' : 'Test'}
-                          </Badge>
-                          <span className="text-muted-foreground ml-2 text-xs">
-                            Keys begin{' '}
-                            <code className="text-xs">trk_{client.environment.toLowerCase()}_</code>
+                  <h3 className={SECTION_LABEL}>Configuration</h3>
+                  {/* A list of pairs, stacked on a phone: a 14rem row header
+                      left the values a sliver at 375px (console-development). */}
+                  <dl className="mt-2 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[14rem_1fr]">
+                    <dt className="text-muted-foreground font-medium">Environment</dt>
+                    <dd className="flex flex-wrap items-center gap-x-2">
+                      {/* Live is the one that touches real data: the warning
+                          word, not an ink chip. */}
+                      <Badge variant={client.environment === 'LIVE' ? 'warning' : 'secondary'}>
+                        {client.environment === 'LIVE' ? 'Live' : 'Test'}
+                      </Badge>
+                      <span className="text-muted-foreground text-xs">
+                        Keys begin{' '}
+                        <code className="text-xs">trk_{client.environment.toLowerCase()}_</code>
+                      </span>
+                    </dd>
+                    <dt className="text-muted-foreground font-medium">Request signing</dt>
+                    <dd>
+                      {client.requireSignature ? (
+                        <>
+                          Required — must also send <code className="text-xs">x-timestamp</code>{' '}
+                          and <code className="text-xs">x-signature</code>
+                        </>
+                      ) : (
+                        'Not required — reads only'
+                      )}
+                    </dd>
+                    <dt className="text-muted-foreground font-medium">Permissions</dt>
+                    <dd>
+                      <div className="flex flex-wrap gap-1">
+                        {client.permissions.length ? (
+                          client.permissions.map((permission) => (
+                            <Badge key={permission} variant="outline">
+                              {formatPermission(permission)}
+                            </Badge>
+                          ))
+                        ) : (
+                          <span className="text-warning text-sm">
+                            None — this client can reach nothing
                           </span>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHead className="align-top">Request signing</TableHead>
-                        <TableCell className="text-sm">
-                          {client.requireSignature ? (
-                            <>
-                              Required — must also send{' '}
-                              <code className="text-xs">x-timestamp</code> and{' '}
-                              <code className="text-xs">x-signature</code>
-                            </>
-                          ) : (
-                            'Not required — reads only'
-                          )}
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHead className="align-top">Permissions</TableHead>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {client.permissions.length ? (
-                              client.permissions.map((permission) => (
-                                <Badge key={permission} variant="secondary">
-                                  {formatPermission(permission)}
-                                </Badge>
-                              ))
-                            ) : (
-                              <span className="text-warning text-sm">
-                                None — this client can reach nothing
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHead className="align-top">Rate limit</TableHead>
-                        <TableCell className="text-sm tabular-nums">
-                          {client.rateLimitPerMinute} requests/minute, across every key
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHead className="align-top">Allowed addresses</TableHead>
-                        <TableCell className="text-sm">
-                          {client.allowedIps.length ? client.allowedIps.join(', ') : 'Any address'}
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
+                        )}
+                      </div>
+                    </dd>
+                    <dt className="text-muted-foreground font-medium">Rate limit</dt>
+                    <dd className="tabular-nums">
+                      <span className="font-mono">{client.rateLimitPerMinute}</span> requests/minute,
+                      across every key
+                    </dd>
+                    <dt className="text-muted-foreground font-medium">Allowed addresses</dt>
+                    <dd className="break-words">
+                      {client.allowedIps.length ? client.allowedIps.join(', ') : 'Any address'}
+                    </dd>
+                  </dl>
                 </div>
 
-                <SectionHeader
-                  description="The Key ID is the public half — paste it into the API reference. The secret is shown only once, when the key is issued."
-                  title="Keys"
-                />
+                <h3 className={SECTION_LABEL}>Keys</h3>
                 {client.keys.length ? (
                   <Table className="mt-1">
                     <TableHeader>
@@ -445,7 +492,7 @@ export default function ApiClientsPage() {
                           environment={client.environment}
                           key={keyRecord.id}
                           keyRecord={keyRecord}
-                          onRevoke={(input) => revokeKey.mutate(input)}
+                          onRevoke={setRevokingKey}
                         />
                       ))}
                     </TableBody>
@@ -499,6 +546,34 @@ export default function ApiClientsPage() {
       ) : null}
 
       {issued ? <IssuedKeyDialog issued={issued} onClose={() => setIssued(null)} /> : null}
+
+      <AlertDialog
+        onOpenChange={(open) => (open ? undefined : setRevokingKey(null))}
+        open={!!revokingKey}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke {revokingKey?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The integration using this key is refused from its next request, and the key cannot
+              be restored — issue a new one to reconnect it. The client and its other keys are not
+              affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'destructive' })}
+              onClick={() => {
+                if (revokingKey) revokeKey.mutate({ id: revokingKey.id, keyId: revokingKey.keyId });
+                setRevokingKey(null);
+              }}
+            >
+              Revoke key
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog onOpenChange={(open) => (open ? undefined : setRevoking(null))} open={!!revoking}>
         <AlertDialogContent>

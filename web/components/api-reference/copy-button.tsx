@@ -44,7 +44,9 @@ export function CopyButton({
 
   return (
     <Button
-      aria-label={copied ? 'Copied' : `${label}: ${value}`}
+      // The label alone, never the value (console-development): this button
+      // copies API keys and secrets, and a screen reader read them aloud.
+      aria-label={copied ? 'Copied' : label}
       className={className}
       onClick={() => void copy()}
       size="sm"

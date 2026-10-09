@@ -29,6 +29,7 @@ function listing() {
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
       findFirst: jest.fn().mockResolvedValue(null),
+      groupBy: jest.fn().mockResolvedValue([]),
     },
     inspectionPhoto: { groupBy: jest.fn().mockResolvedValue([]) },
     propertywareTenant: { findMany: jest.fn().mockResolvedValue([]) },
@@ -149,5 +150,40 @@ describe('the status filter, in the office’s words', () => {
     const query = await list({});
 
     expect(query.select.completionBlockedReason).toBe(true);
+  });
+});
+
+describe('the type tabs (console-development)', () => {
+  it('counts every type under the same filters, but not the type itself', async () => {
+    const { prisma } = listing();
+    prisma.inspection.groupBy.mockResolvedValue([
+      { inspectionType: 'OCCUPIED', _count: { _all: 6 } },
+      { inspectionType: 'HVAC', _count: { _all: 3 } },
+    ]);
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    const page = (await service.inspections(user, {
+      page: 1,
+      pageSize: 20,
+      inspectionType: 'HVAC',
+      scheduledOn: '2026-10-09',
+      withTypeCounts: 'true',
+    } as never)) as { typeCounts?: Record<string, number> };
+
+    expect(page.typeCounts).toEqual({ OCCUPIED: 6, HVAC: 3 });
+    const counted = prisma.inspection.groupBy.mock.calls[0][0] as { where: Record<string, unknown> };
+    // The day still narrows the counts; the open tab does not.
+    expect(counted.where.inspectionType).toBeUndefined();
+    expect(JSON.stringify(counted.where)).toContain('2026-10-09');
+    const listed = prisma.inspection.findMany.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(listed.where.inspectionType).toBe('HVAC');
+  });
+
+  it('costs other callers nothing: no grouped count unless asked', async () => {
+    const { list, prisma } = listing();
+
+    await list({ scheduledOn: '2026-10-09' });
+
+    expect(prisma.inspection.groupBy).not.toHaveBeenCalled();
   });
 });

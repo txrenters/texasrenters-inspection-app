@@ -1,10 +1,13 @@
 'use client';
 
 import { GEOFENCE_RADIUS_BOUNDS, geofenceRadiusProblem, type AdminPropertyGeofence } from '@texasrenters/shared';
+import { InfoIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { usePermissions } from '@/lib/auth';
 import { useAdminMutations } from '@/lib/queries';
 
@@ -51,24 +54,59 @@ export function PropertyGeofenceCard({
     numbers.enter === geofence.enterRadiusMeters && numbers.exit === geofence.exitRadiusMeters;
   const busy = setPropertyGeofence.isPending || clearPropertyGeofence.isPending;
 
-  const field = 'h-9 w-24 rounded-md border border-border bg-card px-2 text-sm text-foreground';
-
+  // No margin of its own: the page spaces its sections, and a card that also
+  // pushed itself down left a double gap above it (console-development).
   return (
-    <Card className="mt-4">
+    <Card>
       <CardHeader>
-        <CardTitle>Time on site</CardTitle>
-        <CardDescription>
-          How close a technician has to be for this property to count as visited. The hours on the
-          Timesheet are read from these distances.
-        </CardDescription>
+        <CardTitle variant="label">Time on site</CardTitle>
+        {/*
+          The rules behind the two numbers, one click away rather than three
+          paragraphs under them (console-development). The gap between them is
+          the one thing somebody has to understand to set them sensibly, so it
+          stays a click from the fields rather than only in a rejection.
+        */}
+        <CardAction>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                aria-label="How the distances work"
+                className="text-muted-foreground"
+                size="icon-sm"
+                variant="ghost"
+              >
+                <InfoIcon />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)] space-y-2 text-sm leading-relaxed">
+              <p>
+                How close a technician has to be for this property to count as visited. The hours on
+                the Timesheet are read from these distances.
+              </p>
+              <p>
+                The second distance has to be the larger one. A technician is on site once they are
+                inside the first, and counted as gone only once they are past the second — the gap is
+                what stops the clock starting and stopping while somebody stands near the edge of a
+                driveway. Between {GEOFENCE_RADIUS_BOUNDS.minMeters} and{' '}
+                {GEOFENCE_RADIUS_BOUNDS.maxMeters} metres.
+              </p>
+              {geofence.centreMoved ? (
+                <p>
+                  The map, the routing and the drive-time estimates still use the geocoded pin; only
+                  the time is measured from the moved centre.
+                </p>
+              ) : null}
+            </PopoverContent>
+          </Popover>
+        </CardAction>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-end gap-4">
           <label className="text-muted-foreground flex flex-col gap-1 text-xs">
             Arrival within
             <span className="flex items-center gap-1">
-              <input
-                className={field}
+              <Input
+                className="w-24 font-mono tabular-nums"
                 disabled={!canChange || busy}
                 inputMode="numeric"
                 onChange={(event) => setEnter(event.target.value)}
@@ -80,8 +118,8 @@ export function PropertyGeofenceCard({
           <label className="text-muted-foreground flex flex-col gap-1 text-xs">
             Left after
             <span className="flex items-center gap-1">
-              <input
-                className={field}
+              <Input
+                className="w-24 font-mono tabular-nums"
                 disabled={!canChange || busy}
                 inputMode="numeric"
                 onChange={(event) => setExit(event.target.value)}
@@ -146,18 +184,6 @@ export function PropertyGeofenceCard({
           ) : null}
         </div>
 
-        {/*
-          The gap between the two numbers is the only thing somebody has to
-          understand to set them sensibly, so it is said here rather than left
-          to be discovered through a rejection.
-        */}
-        <p className="text-muted-foreground text-xs">
-          The second distance has to be the larger one. A technician is on site once they are inside
-          the first, and counted as gone only once they are past the second — the gap is what stops
-          the clock starting and stopping while somebody stands near the edge of a driveway. Between{' '}
-          {GEOFENCE_RADIUS_BOUNDS.minMeters} and {GEOFENCE_RADIUS_BOUNDS.maxMeters} metres.
-        </p>
-
         {problem && canChange ? <p className="text-warning text-xs">{problem}</p> : null}
         {failed ? <p className="text-destructive text-xs">{failed}</p> : null}
         {!problem && saved ? <p className="text-muted-foreground text-xs">{saved}</p> : null}
@@ -167,11 +193,10 @@ export function PropertyGeofenceCard({
             Nobody has set this property’s own distances, so it uses the standard ones.
           </p>
         ) : null}
+        {/* What this property's circle is, kept in view; the why is in the (i). */}
         {geofence.centreMoved ? (
           <p className="text-muted-foreground text-xs">
-            The centre of this property’s circle has been moved off the geocoded pin. The map, the
-            routing and the drive-time estimates still use the pin; only the time is measured from
-            the moved centre.
+            The centre of this property’s circle has been moved off the geocoded pin.
           </p>
         ) : null}
       </CardContent>

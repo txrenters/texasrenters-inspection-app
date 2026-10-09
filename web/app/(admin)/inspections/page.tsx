@@ -1,12 +1,14 @@
 'use client';
 
 import { isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
-import { CheckCircle2Icon, ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import type { JobberDayRow, JobberDayState } from '@texasrenters/shared';
+import { ClipboardCheckIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { DayFilter } from '@/components/day-filter';
+import { InspectionBulkBar } from '@/components/inspection-bulk-bar';
 import { InspectionBulkDeleteDialog } from '@/components/inspection-bulk-delete-dialog';
 import type { DeletableInspection } from '@/components/inspection-delete-dialog';
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
@@ -20,13 +22,15 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { usePermissions } from '@/lib/auth';
 import { businessToday } from '@/lib/clock';
 import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
 import { quarterOf, recentQuarters } from '@/lib/planning';
-import { useInspections, useTechnicians } from '@/lib/queries';
+import { useInspections, useJobberDay, useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
+import { cn } from '@/lib/utils';
 
 type InspectionRow = NonNullable<ReturnType<typeof useInspections>['data']>['items'][number];
 
@@ -107,13 +111,35 @@ const dayName = (day: string) =>
     timeZone: 'UTC',
   });
 
+/** "Move-in", "HVAC": the navigation's own names, so the list and the sidebar agree. */
+const typeLabel = (type: string) =>
+  INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ?? humanize(type);
+
 const currentTechnician = (row: InspectionRow) =>
   // `?? []`: a mutation response merged into this cache entry is a projection,
   // and can briefly leave the record without its assignments array.
   (row.assignments ?? []).find((assignment) => assignment.isCurrent)?.technician?.displayName ?? null;
 
-/** The columns, given which list this is. */
-function columnsFor(type: string): Array<Column<InspectionRow>> {
+/** A row's standing against Jobber, in the column's few words. */
+const JOBBER_WORDS: Record<JobberDayState, { words: string; tone: 'muted' | 'warning' | 'destructive' }> = {
+  MATCHES: { words: 'In Jobber', tone: 'muted' },
+  TIME_DIFFERS: { words: 'Time differs', tone: 'warning' },
+  DAY_DIFFERS: { words: 'Day differs', tone: 'warning' },
+  TECHNICIAN_DIFFERS: { words: 'Technician differs', tone: 'warning' },
+  NOT_IN_JOBBER: { words: 'Not booked', tone: 'warning' },
+  ONLY_IN_JOBBER: { words: 'Only in Jobber', tone: 'warning' },
+  DONE_HERE: { words: 'Still open in Jobber', tone: 'warning' },
+  DONE_IN_JOBBER: { words: 'Done in Jobber', tone: 'warning' },
+  CANCELLED_HERE: { words: 'Still open in Jobber', tone: 'destructive' },
+  UNSEEN: { words: 'Gone from Jobber?', tone: 'destructive' },
+};
+
+/**
+ * The columns, given which list this is. `jobber` is the day's comparison,
+ * keyed by inspection id; the Jobber column shows only when one day is listed,
+ * because the comparison is made a day at a time.
+ */
+function columnsFor(type: string, jobber?: Map<string, JobberDayRow>): Array<Column<InspectionRow>> {
   const columns: Array<Column<InspectionRow> | null> = [
     {
       key: 'property',
@@ -155,7 +181,9 @@ function columnsFor(type: string): Array<Column<InspectionRow>> {
           key: 'type',
           header: 'Type',
           hideBelow: 'md',
-          cell: (row) => <StatusBadge value={row.inspectionType} />,
+          // A type is not a status: plain words, no dot, no chip. A coloured
+          // chip here was one of the three in every row.
+          cell: (row) => <span className="text-muted-foreground">{typeLabel(row.inspectionType)}</span>,
         },
     {
       key: 'scheduled',
@@ -207,14 +235,39 @@ function columnsFor(type: string): Array<Column<InspectionRow>> {
        */
       cell: (row) =>
         row.evidence && row.evidence.photos > 0 ? (
-          <Badge className="gap-1" variant="secondary">
-            <CheckCircle2Icon className="size-3" />
+          <span className="font-mono text-xs tabular-nums">
             {formatCount(row.evidence.photos)}
-          </Badge>
+            <span className="text-muted-foreground font-sans"> photos</span>
+          </span>
         ) : (
           <span className="text-muted-foreground text-xs">Empty</span>
         ),
     },
+    jobber
+      ? {
+          key: 'jobber',
+          header: 'Jobber',
+          hideBelow: 'lg',
+          cell: (row) => {
+            const match = jobber.get(row.id);
+            if (!match) return <span className="text-muted-foreground text-xs">{EMPTY}</span>;
+            const { words, tone } = JOBBER_WORDS[match.state];
+            return (
+              <span
+                className={cn(
+                  'text-xs whitespace-nowrap',
+                  tone === 'muted' && 'text-muted-foreground',
+                  tone === 'warning' && 'text-warning',
+                  tone === 'destructive' && 'text-destructive',
+                )}
+                title={match.differences.join(' · ') || undefined}
+              >
+                {words}
+              </span>
+            );
+          },
+        }
+      : null,
     PROGRAMME_TYPES.has(type)
       ? {
           key: 'tbp',
@@ -241,6 +294,9 @@ export default function InspectionsPage() {
   const permissions = usePermissions();
   const canManage = permissions.has('inspections:manage');
   const canDelete = permissions.has('inspections:delete');
+  const canAssign = permissions.has('inspections:assign');
+  // Rows can be picked by anyone who can act on several at once.
+  const canSelect = canDelete || canManage || canAssign;
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [state, setState] = useUrlState({
@@ -294,6 +350,8 @@ export default function InspectionsPage() {
     quarter: (programme && state.quarter) || undefined,
     // Sorted by the API, not here: these are twenty rows of thousands.
     scheduledOrder: state.asc ? 'asc' : undefined,
+    // How many of each type the same filters hold, for the tabs.
+    withTypeCounts: true,
   });
   const technicians = useTechnicians({ page: 1, pageSize: 100 });
 
@@ -304,6 +362,10 @@ export default function InspectionsPage() {
     state.q.trim() || state.status || technician || (programme && (state.tbp || state.quarter)),
   );
   const total = inspections.data?.total ?? 0;
+  const typeCounts = inspections.data?.typeCounts;
+  const everyTypeCount = typeCounts
+    ? Object.values(typeCounts).reduce<number>((sum, count) => sum + (count ?? 0), 0)
+    : undefined;
   const resultLabel = busy
     ? 'Searching inspections…'
     : `${total.toLocaleString()} ${total === 1 ? 'inspection' : 'inspections'}${day ? ` on ${dayName(day)}` : ''}`;
@@ -322,7 +384,19 @@ export default function InspectionsPage() {
   const typeName = typeKind === typeKind.toUpperCase() ? typeKind : typeKind.toLowerCase();
   const createHref = section ? `/inspections/new?type=${encodeURIComponent(state.type)}` : '/inspections/new';
   const createLabel = section ? `Create ${typeName} inspection` : 'Create inspection';
-  const columns = useMemo(() => columnsFor(state.type), [state.type]);
+  const jobberDay = useJobberDay(day ?? today, Boolean(day));
+  const jobberRows = useMemo(
+    () =>
+      day && jobberDay.data
+        ? new Map(
+            jobberDay.data.rows
+              .filter((row): row is JobberDayRow & { inspectionId: string } => Boolean(row.inspectionId))
+              .map((row) => [row.inspectionId, row]),
+          )
+        : undefined,
+    [day, jobberDay.data],
+  );
+  const columns = useMemo(() => columnsFor(state.type, jobberRows), [state.type, jobberRows]);
 
   const rows = useMemo(() => inspections.data?.items ?? [], [inspections.data?.items]);
   const asDeletable = useCallback(
@@ -419,6 +493,42 @@ export default function InspectionsPage() {
         description={section?.description ?? 'Schedule, assign, and monitor the complete property inspection lifecycle.'}
         title={section?.title ?? 'Inspections'}
       />
+
+      {/* The types as tabs across the list, with how many of each the same
+          day and filters hold (console-development). The sidebar's sub-items
+          reach the same views; these say how the day divides up at a glance. */}
+      <nav aria-label="Inspection type" className="mb-4 flex flex-wrap gap-x-5 border-b">
+        {[{ title: 'All', type: '' }, ...INSPECTION_TYPE_CHILDREN].map((tab) => {
+          const active = state.type === tab.type;
+          const count = tab.type ? (typeCounts ? (typeCounts[tab.type] ?? 0) : undefined) : everyTypeCount;
+          return (
+            <button
+              aria-pressed={active}
+              className={cn(
+                '-mb-px inline-flex items-baseline gap-2 border-b-2 pt-1 pb-2.5 text-sm transition-colors',
+                active
+                  ? 'border-highlight text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground border-transparent',
+              )}
+              key={tab.type || 'all'}
+              onClick={() => setState({ type: tab.type, page: 1 })}
+              type="button"
+            >
+              {tab.title}
+              {count !== undefined ? (
+                <span
+                  className={cn(
+                    'font-mono text-xs tabular-nums',
+                    active ? 'text-highlight' : 'text-muted-foreground',
+                  )}
+                >
+                  {formatCount(count)}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </nav>
 
       <ListToolbar
         activeFilters={activeFilters}
@@ -524,20 +634,27 @@ export default function InspectionsPage() {
             </Alert>
           ) : null}
 
-          {/* Above the table and only when something is picked. Deleting is
-              here and only here: a bin on every row was a button nobody should
-              be one stray click from. */}
-          {canDelete && visibleSelection.size ? (
-            <div className="border-primary bg-primary/5 mb-3 flex flex-wrap items-center gap-3 rounded-lg border p-2.5">
-              <span className="text-sm font-medium">{visibleSelection.size} selected on this page</span>
-              <Button onClick={() => setSelectedIds(new Set())} size="sm" type="button" variant="ghost">
-                Clear
-              </Button>
-              <Button className="ml-auto" onClick={() => setBulkOpen(true)} size="sm" type="button" variant="destructive">
-                <Trash2Icon />
-                Delete {visibleSelection.size} permanently
-              </Button>
-            </div>
+          {/* A floating bar while something is picked (T09). Deleting stays a
+              bulk action only: a bin on every row was a button nobody should be
+              one stray click from. */}
+          {canSelect && visibleSelection.size ? (
+            <InspectionBulkBar
+              canAssign={canAssign}
+              canDelete={canDelete}
+              canManage={canManage}
+              onClear={() => setSelectedIds(new Set())}
+              onDelete={() => setBulkOpen(true)}
+              rows={rows
+                .filter((row) => visibleSelection.has(row.id))
+                .map((row) => ({
+                  id: row.id,
+                  name: row.propertywareBuilding?.name ?? 'Inspection',
+                  upcoming: isUpcomingVisit(visitStateOf(row)),
+                  technicianId:
+                    (row.assignments ?? []).find((assignment) => assignment.isCurrent)?.technician?.id ?? null,
+                }))}
+              technicians={technicianOptions.filter((option) => option.value !== UNASSIGNED)}
+            />
           ) : null}
 
           <DataTable
@@ -558,7 +675,7 @@ export default function InspectionsPage() {
                   }
             }
             selection={
-              canDelete
+              canSelect
                 ? {
                     noun: 'inspections',
                     onToggle: toggleOne,

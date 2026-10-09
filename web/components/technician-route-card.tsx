@@ -27,9 +27,18 @@ function Note({ children }: { children: React.ReactNode }) {
 export function TechnicianRouteCard({
   displayName,
   route,
+  enabled = true,
+  isError = false,
 }: {
   displayName: string;
   route?: TechnicianRoute;
+  /**
+   * False when the reader lacks `technicians:locate`: the query never runs,
+   * so "Working it out…" would have waited for ever (console-development).
+   */
+  enabled?: boolean;
+  /** The route request failed; said once, quietly, instead of spinning on. */
+  isError?: boolean;
 }) {
   // Legs, not stops. See `isPlanned` -- reading `stops` here printed "1 min
   // driving · 0.0 mi · 1 stops" over a route the planner had refused, because
@@ -39,10 +48,14 @@ export function TechnicianRouteCard({
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>Today&rsquo;s route</CardTitle>
+        <CardTitle variant="label">Today&rsquo;s route</CardTitle>
       </CardHeader>
       <CardContent>
-        {!route ? (
+        {!enabled ? (
+          <Note>Needs the location permission.</Note>
+        ) : isError && !route ? (
+          <Note>Route unavailable.</Note>
+        ) : !route ? (
           <Note>Working it out&hellip;</Note>
         ) : !route.origin ? (
           /* Not an error. The route is measured from where the technician is,
@@ -84,7 +97,7 @@ export function TechnicianRouteCard({
 
             {planned ? (
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="text-2xl font-semibold tabular-nums">
+                <span className="font-mono text-2xl font-semibold tabular-nums">
                   {formatDuration(route.totalDurationSeconds)}
                 </span>
                 <span className="text-muted-foreground text-sm">
@@ -124,7 +137,7 @@ export function TechnicianRouteCard({
                             chose, which is the claim this card must not make
                             when the route was refused. */}
                         {planned ? (
-                          <span className="text-muted-foreground w-5 text-sm tabular-nums">
+                          <span className="text-muted-foreground w-5 font-mono text-sm tabular-nums">
                             {index + 1}
                           </span>
                         ) : null}
@@ -137,7 +150,7 @@ export function TechnicianRouteCard({
                         {/* The drive to this stop, not from it. The first is
                             from the technician's current position, which is
                             why it reads as a journey rather than a schedule. */}
-                        <span className="text-muted-foreground text-sm tabular-nums">
+                        <span className="text-muted-foreground font-mono text-sm tabular-nums">
                           {leg ? `${formatDuration(leg.durationSeconds)} drive` : null}
                         </span>
                       </div>

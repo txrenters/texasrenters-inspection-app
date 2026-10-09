@@ -3,6 +3,7 @@
 import { CameraIcon } from 'lucide-react';
 import { useState } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -64,10 +65,12 @@ export function RecordingMarkers({
   if (!markers.length) return null;
 
   return (
-    <section aria-labelledby={`markers-${mediaId}`} className="space-y-2 rounded-lg border p-3">
+    // A section under a hairline, not a third nested box -- Areas card,
+    // recording, markers (console-development).
+    <section aria-labelledby={`markers-${mediaId}`} className="space-y-2 border-t pt-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h4 className="text-sm font-medium" id={`markers-${mediaId}`}>
+        <div className="space-y-1">
+          <h4 className={SECTION_LABEL} id={`markers-${mediaId}`}>
             Technician markers
           </h4>
           <p className="text-muted-foreground text-xs">

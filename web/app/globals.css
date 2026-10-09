@@ -76,6 +76,14 @@
      That is not hypothetical: the condition checklist rendered every "yes" as an
      empty box until it was moved to `text-brand`. */
   --color-brand-foreground: var(--brand-foreground);
+  /* The console's one accent, as TEXT or a 10% tint: the page you are on, a
+     live state, the one figure that needs a person. Never a fill behind words.
+     It is the brand green at roughly half its chroma, so the console stays
+     recognisably TexasRenters without the lime shouting over the work. Its own
+     token rather than `--brand` because `--brand` is a fill (paired with a
+     near-black foreground) and this has to be readable as text on a surface in
+     both modes, which the bright fill green is not on a light card. */
+  --color-highlight: var(--highlight);
 
   /* Categorical scale. Used for the provider tiles, where the point is that
      four cards in a row are told apart at a glance rather than read. */
@@ -117,14 +125,17 @@
      What this forbids is picking a radius by feel at the call site. If a new
      surface does not obviously belong to one of the three tiers, it is probably
      the wrong component. */
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  /* Tightened on 2026-10-09 (console-development), from 12/8/6 to 8/6/5: big
+     soft corners were part of what read as "app-like" rather than as a calm
+     tool. Still three tiers, still nested tighter than their parent. */
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 2px);
 }
 
 :root {
-  --radius: 0.5rem;
+  --radius: 0.375rem;
 
   /**
    * The app header's height, shared because two sticky layers depend on it.
@@ -159,21 +170,26 @@
   --border: oklch(0.905 0.008 252);
   --input: oklch(0.888 0.009 252);
 
-  /* Brand. #1d4492 and #85c43f, converted rather than re-picked, so the console
-     is recognisably the same product. */
-  --primary: oklch(0.407 0.136 262.1);
+  /* The primary action is neutral ink, as in dark mode (console-development):
+     a saturated brand-blue fill was the loudest thing on every light page. The
+     brand blue stays as the focus ring and the informational tone, softened.
+     #1d4492 and #85c43f remain the brand; they are no longer every button. */
+  --primary: oklch(0.24 0.012 258);
   --primary-foreground: oklch(0.985 0.002 250);
-  --ring: oklch(0.407 0.136 262.1);
+  --ring: oklch(0.45 0.08 262);
   --brand: oklch(0.751 0.175 131.4);
   /* Near-black on the green, never white: white on #85c43f measures 2.0:1 and
      fails WCAG outright, while this measures 8.1:1. */
   --brand-foreground: oklch(0.236 0.053 139);
+  /* Deep sage: the brand hue, dark enough to be read as text on a light card. */
+  --highlight: oklch(0.5 0.09 131);
 
-  --destructive: oklch(0.522 0.208 27);
+  /* Status tones at one low chroma, so none of them shouts (as in dark mode). */
+  --destructive: oklch(0.52 0.15 28);
   --destructive-foreground: oklch(0.985 0.002 250);
-  --success: oklch(0.478 0.132 150);
-  --warning: oklch(0.508 0.122 71);
-  --info: oklch(0.407 0.136 262.1);
+  --success: oklch(0.49 0.09 140);
+  --warning: oklch(0.52 0.1 70);
+  --info: oklch(0.45 0.08 262);
   /* A distance along the roads, from Mapbox, on the Groups map's lists: a
      purple-blue, so it is never read as a straight-line figure (the office,
      2026-09-30). About 6:1 on the card. */
@@ -238,73 +254,87 @@
      overlaps still read because the fill is what stacks, not the hue. */
   --map-grouping: oklch(0.45 0.14 155);
 
-  --chart-1: oklch(0.52 0.15 262);
-  --chart-2: oklch(0.52 0.13 190);
-  --chart-3: oklch(0.52 0.15 300);
-  --chart-4: oklch(0.55 0.14 45);
-  --chart-5: oklch(0.52 0.14 145);
+  --chart-1: oklch(0.52 0.09 262);
+  --chart-2: oklch(0.52 0.08 190);
+  --chart-3: oklch(0.52 0.09 300);
+  --chart-4: oklch(0.55 0.09 45);
+  --chart-5: oklch(0.52 0.09 145);
 
   /* The sidebar is the one persistently-darker plane in light mode, so the
      content area reads as the lit working surface. */
   --sidebar: oklch(0.958 0.005 250);
   --sidebar-foreground: oklch(0.185 0.025 258);
-  --sidebar-primary: oklch(0.407 0.136 262.1);
+  --sidebar-primary: oklch(0.5 0.09 131);
   --sidebar-primary-foreground: oklch(0.985 0.002 250);
   --sidebar-accent: oklch(0.918 0.008 252);
   --sidebar-accent-foreground: oklch(0.245 0.024 258);
   --sidebar-border: oklch(0.898 0.009 252);
-  --sidebar-ring: oklch(0.407 0.136 262.1);
+  --sidebar-ring: oklch(0.45 0.08 262);
 }
 
 .dark {
-  /* Same relationship inverted: the canvas is the darkest plane, surfaces lift
-     off it. Pure #000000 is avoided for the same reason as pure white. */
-  --background: oklch(0.168 0.019 258);
-  --card: oklch(0.212 0.021 258);
-  --card-foreground: oklch(0.968 0.004 250);
-  --popover: oklch(0.212 0.021 258);
-  --popover-foreground: oklch(0.968 0.004 250);
-  --foreground: oklch(0.968 0.004 250);
+  /* Ink, redrawn 2026-10-09 (console-development) after the office called the
+     console "noisy" and "not premium". The surfaces are near-neutral: chroma
+     0.006, down from 0.02, keeping only a trace of the brand-blue hue so the
+     greys still belong together. Five planes about 2% apart -- canvas, sidebar,
+     card, raised, hover -- so structure comes from hairlines, not from contrast
+     jumps or colour. Pure #000000 is still avoided. */
+  --background: oklch(0.163 0.006 258);
+  --card: oklch(0.205 0.006 258);
+  --card-foreground: oklch(0.94 0.004 258);
+  --popover: oklch(0.228 0.007 258);
+  --popover-foreground: oklch(0.94 0.004 258);
+  --foreground: oklch(0.94 0.004 258);
 
-  --muted: oklch(0.258 0.022 258);
-  --muted-foreground: oklch(0.735 0.028 256);
-  --secondary: oklch(0.258 0.022 258);
-  --secondary-foreground: oklch(0.968 0.004 250);
-  --accent: oklch(0.275 0.023 258);
-  --accent-foreground: oklch(0.968 0.004 250);
+  --muted: oklch(0.228 0.007 258);
+  --muted-foreground: oklch(0.72 0.012 258);
+  --secondary: oklch(0.25 0.008 258);
+  --secondary-foreground: oklch(0.94 0.004 258);
+  --accent: oklch(0.25 0.008 258);
+  --accent-foreground: oklch(0.94 0.004 258);
 
-  --border: oklch(1 0 0 / 11%);
-  --input: oklch(1 0 0 / 16%);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
 
-  /* The blue lightens; the green does not. #85c43f already carries enough
-     contrast against both surfaces, and the brand colour is the brand colour. */
-  --primary: oklch(0.735 0.117 264);
-  --primary-foreground: oklch(0.185 0.025 258);
-  --ring: oklch(0.735 0.117 264);
-  --brand: oklch(0.751 0.175 131.4);
+  /* The primary action is NEUTRAL: light on dark. A saturated blue fill was the
+     brightest thing on every page, so the eye went to the button rather than to
+     the work. The action is found by its place and its label. Colour is saved
+     for `--highlight` and for states that need a person. */
+  --primary: oklch(0.94 0.004 258);
+  --primary-foreground: oklch(0.163 0.006 258);
+  /* The focus ring keeps the brand blue, softened: a focus ring has to be found. */
+  --ring: oklch(0.75 0.065 262);
+  /* The brand green at about half its chroma -- sage rather than lime. */
+  --brand: oklch(0.76 0.095 131);
   --brand-foreground: oklch(0.236 0.053 139);
+  --highlight: oklch(0.79 0.095 131);
 
-  --destructive: oklch(0.752 0.163 24);
-  --destructive-foreground: oklch(0.185 0.025 258);
-  --success: oklch(0.771 0.155 148);
-  --warning: oklch(0.822 0.128 79);
-  --info: oklch(0.735 0.117 264);
-  --road-distance: oklch(0.74 0.14 282);
+  /* Status tones, all pulled to the same low chroma so no one of them shouts.
+     Amber = needs a person, coral = something is wrong, slate = scheduled /
+     informational, sage = done or live. Grey (muted-foreground) is "fine". */
+  --destructive: oklch(0.73 0.105 28);
+  --destructive-foreground: oklch(0.163 0.006 258);
+  --success: oklch(0.78 0.09 140);
+  --warning: oklch(0.82 0.085 80);
+  --info: oklch(0.76 0.065 262);
+  --road-distance: oklch(0.74 0.1 282);
 
-  --chart-1: oklch(0.72 0.13 262);
-  --chart-2: oklch(0.72 0.11 190);
-  --chart-3: oklch(0.72 0.13 300);
-  --chart-4: oklch(0.75 0.12 45);
-  --chart-5: oklch(0.74 0.13 145);
+  --chart-1: oklch(0.72 0.08 262);
+  --chart-2: oklch(0.72 0.07 190);
+  --chart-3: oklch(0.72 0.08 300);
+  --chart-4: oklch(0.75 0.08 45);
+  --chart-5: oklch(0.74 0.08 145);
 
-  --sidebar: oklch(0.192 0.02 258);
-  --sidebar-foreground: oklch(0.968 0.004 250);
-  --sidebar-primary: oklch(0.735 0.117 264);
-  --sidebar-primary-foreground: oklch(0.185 0.025 258);
-  --sidebar-accent: oklch(0.258 0.022 258);
-  --sidebar-accent-foreground: oklch(0.968 0.004 250);
-  --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.735 0.117 264);
+  --sidebar: oklch(0.185 0.006 258);
+  /* Resting items a step under the page's text, as the canvas draws them, so the
+     sage page-you-are-on and the amber counts are what the eye finds. */
+  --sidebar-foreground: oklch(0.8 0.008 258);
+  --sidebar-primary: oklch(0.79 0.095 131);
+  --sidebar-primary-foreground: oklch(0.236 0.053 139);
+  --sidebar-accent: oklch(0.235 0.007 258);
+  --sidebar-accent-foreground: oklch(0.94 0.004 258);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.75 0.065 262);
 }
 
 @layer base {

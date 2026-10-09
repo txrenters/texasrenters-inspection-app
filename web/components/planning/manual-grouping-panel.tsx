@@ -43,7 +43,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
-import { nearUngroupedGreen, type GroupFileRow } from './group-file';
+import { calmColor, calmGroupColorOf, nearUngroupedGreen, type GroupFileRow } from './group-file';
 import { RoadDistance } from './group-file-legend';
 import {
   COLOR_PRESETS,
@@ -94,7 +94,7 @@ function Swatch({
         usedBy && !chosen && 'opacity-30',
       )}
       onClick={() => onPick(value)}
-      style={{ backgroundColor: value }}
+      style={{ backgroundColor: calmColor(value) }}
       title={usedBy ? `${value} · used by ${usedBy}` : value}
       type="button"
     />
@@ -246,7 +246,7 @@ function GroupForm({
                 placeholder="#0067a5"
                 value={hex}
               />
-              <span aria-hidden className="size-6 rounded-full border" style={{ backgroundColor: HEX.test(color) ? color : 'transparent' }} />
+              <span aria-hidden className="size-6 rounded-full border" style={{ backgroundColor: HEX.test(color) ? calmColor(color) : 'transparent' }} />
             </div>
             {/* A warning, not a refusal: the colour is the reader's to choose. */}
             {HEX.test(color) && nearUngroupedGreen(color) ? (
@@ -521,6 +521,10 @@ export function ManualGroupingPanel({
         {state.groups.map((group, index) => {
           const rows = rowsOf(group);
           const isActive = group.id === activeId;
+          // The numeral in whichever of white or near-black reads on the painted
+          // colour (console-development, T35): white with a shadow was unreadable
+          // on the pale yellows and greens.
+          const painted = calmGroupColorOf(group.color);
           return (
             <li
               className={cn('group/row flex items-center gap-2 px-3 py-2', isActive ? 'bg-muted' : 'hover:bg-muted/50')}
@@ -535,15 +539,16 @@ export function ManualGroupingPanel({
               >
                 <span
                   aria-hidden
-                  className="flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-background text-[11px] font-semibold shadow-sm"
-                  style={{ backgroundColor: group.color, color: '#fff', textShadow: '0 0 2px rgba(0,0,0,0.6)' }}
+                  className="border-background flex size-6 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-semibold"
+                  style={{ backgroundColor: painted?.fill ?? calmColor(group.color), color: painted?.ink }}
                 >
                   {index + 1}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className={cn('block truncate text-sm', isActive && 'font-semibold')}>{group.name}</span>
                   {editingBy?.get(group.id)?.length ? (
-                    <span className="text-info block truncate text-xs font-medium" title="Building this group now">
+                    // Someone else live on it, in the accent (console-development).
+                    <span className="text-highlight block truncate text-xs font-medium" title="Building this group now">
                       {editingBy.get(group.id)!.join(', ')} {editingBy.get(group.id)!.length === 1 ? 'is' : 'are'} building it
                     </span>
                   ) : null}
@@ -555,28 +560,42 @@ export function ManualGroupingPanel({
                   />
                 </span>
               </button>
-              <Button
-                aria-label={`Optimize the route of ${group.name}`}
-                disabled={group.stops.length < 2 || ordering.has(group.id)}
-                onClick={() => onOptimize(group.id)}
-                size="icon-sm"
-                title="Optimize route: the best start, order and finish for the least driving"
-                variant="ghost"
+              {/*
+                The row's tools under the pointer or the keyboard (console-development):
+                three icons on every row read as a column of noise. Always shown on a
+                touch screen, which has no hover, and on the group being built or optimized.
+              */}
+              <div
+                className={cn(
+                  'flex shrink-0 items-center',
+                  !isActive &&
+                    !ordering.has(group.id) &&
+                    'md:pointer-fine:opacity-0 md:group-focus-within/row:opacity-100 md:group-hover/row:opacity-100',
+                )}
               >
-                {ordering.has(group.id) ? <Spinner /> : <RouteIcon />}
-              </Button>
-              <Button
-                aria-label={`Change ${group.name}`}
-                onClick={() => setForm({ mode: 'edit', group })}
-                size="icon-sm"
-                title="Rename, change colour or size"
-                variant="ghost"
-              >
-                <PencilIcon />
-              </Button>
-              <Button aria-label={`Delete ${group.name}`} onClick={() => setDeleting(group)} size="icon-sm" title="Delete" variant="ghost">
-                <Trash2Icon />
-              </Button>
+                <Button
+                  aria-label={`Optimize the route of ${group.name}`}
+                  disabled={group.stops.length < 2 || ordering.has(group.id)}
+                  onClick={() => onOptimize(group.id)}
+                  size="icon-sm"
+                  title="Optimize route: the best start, order and finish for the least driving"
+                  variant="ghost"
+                >
+                  {ordering.has(group.id) ? <Spinner /> : <RouteIcon />}
+                </Button>
+                <Button
+                  aria-label={`Change ${group.name}`}
+                  onClick={() => setForm({ mode: 'edit', group })}
+                  size="icon-sm"
+                  title="Rename, change colour or size"
+                  variant="ghost"
+                >
+                  <PencilIcon />
+                </Button>
+                <Button aria-label={`Delete ${group.name}`} onClick={() => setDeleting(group)} size="icon-sm" title="Delete" variant="ghost">
+                  <Trash2Icon />
+                </Button>
+              </div>
             </li>
           );
         })}
@@ -586,7 +605,7 @@ export function ManualGroupingPanel({
         <section aria-label={`Stops of ${active.name}`} className="flex max-h-[45%] min-h-0 flex-col border-t">
           <div className="flex items-center justify-between gap-2 px-3 py-2">
             <p className="flex min-w-0 items-center gap-2 text-sm font-medium">
-              <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: active.color }} />
+              <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: calmColor(active.color) }} />
               <span className="truncate">{active.name}</span>
               {active.stops.length >= active.target ? <Badge variant="warning">Group full</Badge> : null}
             </p>
@@ -601,12 +620,14 @@ export function ManualGroupingPanel({
           {/* Click the properties in any order, then this: the best start, the
               best order and the best finish, by real drive times. */}
           <div className="grid gap-1 px-3 pb-2">
+            {/* Outlined: New group is the panel's one filled button (console-development). */}
             <Button
               className="w-full"
               disabled={active.stops.length < 2 || ordering.has(active.id)}
               onClick={() => onOptimize(active.id)}
               size="sm"
               title="Work out the best stop to start at, the best order and the best stop to finish at, for the least driving, from Mapbox drive times."
+              variant="outline"
             >
               {ordering.has(active.id) ? <Spinner /> : <RouteIcon />}
               {ordering.has(active.id) ? 'Finding the best route…' : 'Optimize route'}
@@ -623,6 +644,9 @@ export function ManualGroupingPanel({
             ) : null}
             {active.stops.map((rowNumber, index) => {
               const row = byRow.get(rowNumber);
+              // Each stop's controls name the stop (console-development, T35): a list of
+              // "Earlier", "Later" buttons told a screen reader nothing about which.
+              const stopName = row ? `${row.address}${row.unit ? `, ${row.unit}` : ''}` : `row ${rowNumber}`;
               return (
                 <li
                   className={cn(
@@ -663,7 +687,7 @@ export function ManualGroupingPanel({
                   </span>
                   {/* The same moves without a mouse. */}
                   <Button
-                    aria-label="Earlier"
+                    aria-label={`Move ${stopName} earlier`}
                     className="size-6"
                     disabled={index === 0}
                     onClick={() => onReorder(active.id, index, index - 1)}
@@ -673,7 +697,7 @@ export function ManualGroupingPanel({
                     <ChevronUpIcon />
                   </Button>
                   <Button
-                    aria-label="Later"
+                    aria-label={`Move ${stopName} later`}
                     className="size-6"
                     disabled={index === active.stops.length - 1}
                     onClick={() => onReorder(active.id, index, index + 1)}
@@ -682,7 +706,13 @@ export function ManualGroupingPanel({
                   >
                     <ChevronDownIcon />
                   </Button>
-                  <Button aria-label="Take out of the group" className="size-6" onClick={() => onRemoveStop(rowNumber)} size="icon-sm" variant="ghost">
+                  <Button
+                    aria-label={`Take ${stopName} out of the group`}
+                    className="size-6"
+                    onClick={() => onRemoveStop(rowNumber)}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
                     <XIcon />
                   </Button>
                 </li>

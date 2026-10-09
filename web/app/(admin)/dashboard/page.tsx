@@ -1,15 +1,11 @@
 'use client';
 
-import {
-  ArrowRightIcon,
-  CheckCircle2Icon,
-  ClipboardCheckIcon,
-  PlayCircleIcon,
-  TriangleAlertIcon,
-} from 'lucide-react';
+import { ArrowRightIcon } from 'lucide-react';
 import Link from 'next/link';
 
-import { PageHeader, SectionHeader } from '@/components/page-header';
+import { JobberDayPanel } from '@/components/jobber-day-panel';
+import { PageHeader } from '@/components/page-header';
+import { Panel, PanelRow } from '@/components/panel';
 import {
   Stat,
   StatGroup,
@@ -19,20 +15,60 @@ import {
 } from '@/components/stat-card';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { businessToday } from '@/lib/clock';
 import { formatCount, formatDateTime, formatRelative, humanize } from '@/lib/format';
-import { useDashboard } from '@/lib/queries';
+import { usePermissions } from '@/lib/auth';
+import { useDashboard, useJobberDay } from '@/lib/queries';
+import { cn } from '@/lib/utils';
+
+/** Providers in these states need somebody; READY and CONFIGURED do not. */
+const PROVIDER_NEEDS_A_PERSON = new Set(['NOT_CONFIGURED', 'DEGRADED', 'UNAVAILABLE', 'ERROR']);
+
+/** "Friday, October 9", for the Texas business day (the office reads from Manila). */
+function texasDayLabel() {
+  return new Date(`${businessToday()}T00:00:00Z`).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function Header() {
+  return (
+    <PageHeader
+      actions={
+        <>
+          <Button asChild variant="outline">
+            <Link href="/inspections">Today&apos;s inspections</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/inspections/new">Create inspection</Link>
+          </Button>
+        </>
+      }
+      description={
+        <span className="font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
+          {texasDayLabel()} · Texas
+        </span>
+      }
+      title="Today's operations"
+    />
+  );
+}
 
 export default function DashboardPage() {
   const dashboard = useDashboard();
+  const { has } = usePermissions();
+  const canReadInspections = has('inspections:read');
+  const jobberDay = useJobberDay(businessToday(), canReadInspections);
 
   if (dashboard.isError)
     return (
       <>
-        <PageHeader title="Operations dashboard" />
+        <Header />
         <ErrorState error={dashboard.error} retry={() => void dashboard.refetch()} />
       </>
     );
@@ -40,12 +76,9 @@ export default function DashboardPage() {
   if (dashboard.isLoading || !dashboard.data)
     return (
       <>
-        <PageHeader
-          description="Live inspection, assignment, synchronization, and provider readiness."
-          title="Operations dashboard"
-        />
+        <Header />
         <StatGroupSkeleton columns="grid-cols-2 lg:grid-cols-4" count={4} />
-        <Skeleton className="mt-6 h-48 rounded-xl" />
+        <Skeleton className="mt-5 h-48 rounded-xl" />
       </>
     );
 
@@ -63,216 +96,203 @@ export default function DashboardPage() {
       }, new Map<string, (typeof data.recentErrors)[number] & { count: number }>())
       .values(),
   );
+  const providersNeedingAPerson = data.providerReadiness.filter((provider) =>
+    PROVIDER_NEEDS_A_PERSON.has(provider.status),
+  );
+  const jobberDifferences = jobberDay.data?.rows.filter((row) => row.state !== 'MATCHES').length ?? 0;
+  const needsAPerson =
+    (data.metrics.unassigned ? 1 : 0) +
+    (jobberDifferences ? 1 : 0) +
+    groupedErrors.length +
+    providersNeedingAPerson.length;
 
   return (
     <>
-      <PageHeader
-        actions={
-          <Button asChild>
-            <Link href="/inspections/new">Create inspection</Link>
-          </Button>
-        }
-        description="Live inspection, assignment, synchronization, and provider readiness."
-        title="Operations dashboard"
-      />
+      <Header />
 
-      {/* Workflow first. The old dashboard led with five catalog counts that
-          change once a night, and put the number needing action fourth. */}
-      <section aria-labelledby="operations-title" className="space-y-3">
-        <SectionHeader
-          actions={
-            <Button asChild size="sm" variant="ghost">
-              <Link href="/inspections">
-                View inspections
-                <ArrowRightIcon />
-              </Link>
-            </Button>
+      {/* Workflow first: the four figures somebody acts on. Only the queue
+          that needs a person carries a mark. */}
+      <StatGroup columns="grid-cols-2 lg:grid-cols-4">
+        <Stat
+          action={
+            data.metrics.unassigned ? (
+              <Button asChild size="sm" variant="outline">
+                {/* Every date: the count is every upcoming visit with
+                    nobody on it, not today's. */}
+                <Link href="/inspections?tech=unassigned&day=all">Assign now</Link>
+              </Button>
+            ) : undefined
           }
-          title="Current operations"
+          detail="Reach nobody until assigned"
+          label="Unassigned"
+          tone={data.metrics.unassigned ? 'warning' : 'default'}
+          value={formatCount(data.metrics.unassigned)}
         />
-        <StatGroup columns="grid-cols-2 lg:grid-cols-4">
-          <Stat
-            action={
-              data.metrics.unassigned ? (
-                <Button asChild size="sm" variant="outline">
-                  {/* Every date: the count is every upcoming visit with
-                      nobody on it, not today's. */}
-                  <Link href="/inspections?tech=unassigned&day=all">Assign now</Link>
-                </Button>
-              ) : undefined
-            }
-            detail="Reach nobody until assigned"
-            icon={TriangleAlertIcon}
-            label="Unassigned"
-            tone={data.metrics.unassigned ? 'warning' : 'default'}
-            value={formatCount(data.metrics.unassigned)}
-          />
-          <Stat
-            detail="Ready to begin"
-            icon={ClipboardCheckIcon}
-            label="Assigned"
-            value={formatCount(data.metrics.assigned)}
-          />
-          <Stat
-            detail="Active in the field"
-            icon={PlayCircleIcon}
-            label="In progress"
-            value={formatCount(data.metrics.inProgress)}
-          />
-          <Stat
-            detail="Finished inspections"
-            icon={CheckCircle2Icon}
-            label="Completed"
-            tone="success"
-            value={formatCount(data.metrics.completed)}
-          />
-        </StatGroup>
-      </section>
+        <Stat detail="Ready to begin" label="Assigned" value={formatCount(data.metrics.assigned)} />
+        <Stat
+          detail="In the field now"
+          label="In progress"
+          value={formatCount(data.metrics.inProgress)}
+        />
+        <Stat detail="All time" label="Completed" value={formatCount(data.metrics.completed)} />
+      </StatGroup>
 
-      <section aria-labelledby="catalog-title" className="mt-6 space-y-3">
-        <SectionHeader
+      <div className="mt-5 grid items-start gap-5 lg:grid-cols-3">
+        {canReadInspections ? (
+          <JobberDayPanel
+            className="lg:col-span-2"
+            day={jobberDay.data}
+            loading={jobberDay.isLoading}
+          />
+        ) : null}
+
+        <div className={cn('grid gap-5', !canReadInspections && 'lg:col-span-3 lg:grid-cols-3')}>
+        {/* What needs somebody, in one list, in the order it should be done.
+            Replaces the "Warnings and errors" card, which listed sync noise
+            under its own heading and said nothing about the queue. */}
+        <Panel
+          className={cn(!canReadInspections && 'lg:col-span-2')}
+          count={needsAPerson || undefined}
+          countTone="warning"
+          title="Needs a person"
+        >
+          {needsAPerson ? (
+            <div className="divide-y">
+              {data.metrics.unassigned ? (
+                <PanelRow
+                  title={
+                    <Link className="hover:underline" href="/inspections?tech=unassigned&day=all">
+                      {data.metrics.unassigned === 1
+                        ? '1 inspection has no technician'
+                        : `${formatCount(data.metrics.unassigned)} inspections have no technician`}
+                    </Link>
+                  }
+                  detail="Upcoming, any date"
+                  tone="warning"
+                />
+              ) : null}
+              {jobberDifferences ? (
+                <PanelRow
+                  detail="Today, as of the last Jobber sync"
+                  title={
+                    <Link className="hover:underline" href={`/schedule?date=${jobberDay.data!.date}`}>
+                      {jobberDifferences === 1
+                        ? '1 visit differs from Jobber'
+                        : `${jobberDifferences} visits differ from Jobber`}
+                    </Link>
+                  }
+                  tone="warning"
+                />
+              ) : null}
+              {groupedErrors.map((error) => (
+                <PanelRow
+                  detail={
+                    <>
+                      {error.sanitizedMessage}
+                      <span className="block">
+                        {error.entityType} · {formatDateTime(error.createdAt)}
+                      </span>
+                    </>
+                  }
+                  key={`${error.errorCode}:${error.entityType}:${error.id}`}
+                  title={humanize(error.errorCode)}
+                  tone="destructive"
+                  trailing={
+                    error.count > 1 ? (
+                      <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                        ×{error.count}
+                      </span>
+                    ) : null
+                  }
+                />
+              ))}
+              {providersNeedingAPerson.map((provider) => (
+                <PanelRow
+                  detail={provider.detail ?? 'Operational configuration check'}
+                  key={provider.provider}
+                  title={
+                    <Link className="hover:underline" href="/integrations/providers">
+                      {provider.provider}: {humanize(provider.status).toLowerCase()}
+                    </Link>
+                  }
+                  tone="warning"
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground px-4 py-6 text-sm">
+              Nothing needs a person right now.
+            </p>
+          )}
+        </Panel>
+
+        {/* Reference, not work: quiet, one line each. */}
+        <Panel
           actions={
-            <Button asChild size="sm" variant="ghost">
-              <Link href="/properties">
-                Browse properties
-                <ArrowRightIcon />
-              </Link>
-            </Button>
-          }
-          description="Synchronized from Propertyware."
-          title="Portfolio coverage"
-        />
-        {/* A strip, not a second panel of five boxes. These are synchronized
-            overnight and nobody acts on them from here; giving them the same
-            treatment as the queue above is what made the old dashboard read as
-            nine equally-urgent figures. */}
-        <StatStrip>
-          <StatStripItem label="Portfolios" value={formatCount(data.metrics.portfolios)} />
-          <StatStripItem label="Properties" value={formatCount(data.metrics.properties)} />
-          <StatStripItem label="Units" value={formatCount(data.metrics.units)} />
-          <StatStripItem label="Leases" value={formatCount(data.metrics.leases)} />
-          <StatStripItem label="Technicians" value={formatCount(data.metrics.technicians)} />
-        </StatStrip>
-      </section>
-
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <CardTitle>Propertyware synchronization</CardTitle>
-            <Button asChild size="sm" variant="ghost">
-              <Link href="/integrations/propertyware">
-                View
-                <ArrowRightIcon />
-              </Link>
-            </Button>
-          </CardHeader>
-          <CardContent>
-            {data.lastSync ? (
-              <dl className="grid gap-4 sm:grid-cols-3">
-                <div className="space-y-1.5">
-                  <dt className="text-muted-foreground text-xs font-medium">Status</dt>
-                  <dd>
-                    <StatusBadge value={data.lastSync.status} />
-                  </dd>
-                </div>
-                <div className="space-y-1.5">
-                  <dt className="text-muted-foreground text-xs font-medium">Type</dt>
-                  <dd className="text-sm font-medium">{humanize(data.lastSync.syncType)}</dd>
-                </div>
-                <div className="space-y-1.5">
-                  <dt className="text-muted-foreground text-xs font-medium">Completed</dt>
-                  <dd className="text-sm font-medium" title={data.lastSync.completedAt ?? undefined}>
-                    {formatRelative(data.lastSync.completedAt)}
-                  </dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="text-muted-foreground text-sm">
-                No successful synchronization has been recorded.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <CardTitle>Provider readiness</CardTitle>
-            <Button asChild size="sm" variant="ghost">
+            <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
               <Link href="/integrations/providers">
-                View all
+                All
                 <ArrowRightIcon />
               </Link>
             </Button>
-          </CardHeader>
-          <CardContent>
-            <ul className="divide-y">
-              {data.providerReadiness.map((provider) => (
-                <li className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0" key={provider.provider}>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{provider.provider}</p>
-                    <p className="text-muted-foreground truncate text-xs">
-                      {provider.detail ?? 'Operational configuration check'}
-                    </p>
-                  </div>
+          }
+          title="Systems"
+        >
+          <ul className="divide-y">
+            <li className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <div className="min-w-0">
+                <Link className="block truncate text-sm hover:underline" href="/integrations/propertyware">
+                  Propertyware
+                </Link>
+                <p
+                  className="text-muted-foreground truncate text-xs"
+                  title={data.lastSync?.completedAt ?? undefined}
+                >
+                  {data.lastSync
+                    ? `${humanize(data.lastSync.syncType)} · ${formatRelative(data.lastSync.completedAt)}`
+                    : 'No sync recorded'}
+                </p>
+              </div>
+              {data.lastSync ? <StatusBadge value={data.lastSync.status} /> : null}
+            </li>
+            {data.providerReadiness
+              .filter((provider) => provider.provider !== 'Propertyware')
+              .map((provider) => (
+                <li
+                  className="flex items-center justify-between gap-3 px-4 py-2.5"
+                  key={provider.provider}
+                >
+                  <span className="min-w-0 truncate text-sm" title={provider.detail}>
+                    {provider.provider}
+                  </span>
                   <StatusBadge value={provider.status} />
                 </li>
               ))}
-            </ul>
-          </CardContent>
-        </Card>
+          </ul>
+        </Panel>
+        </div>
       </div>
 
-      <Card className="mt-4">
-        <CardHeader className="flex-row items-start justify-between">
-          <div className="space-y-1">
-            <CardTitle>Warnings and errors</CardTitle>
-            <p className="text-muted-foreground text-sm">
-              Grouped by source and message to reduce repetition.
-            </p>
-          </div>
-          {groupedErrors.length ? (
-            <Badge variant="warning">
-              {groupedErrors.length === 1 ? '1 issue' : `${groupedErrors.length} issues`}
-            </Badge>
-          ) : null}
-        </CardHeader>
-        <CardContent>
-          {groupedErrors.length ? (
-            <ul className="divide-y">
-              {groupedErrors.map((error) => (
-                <li
-                  className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"
-                  key={`${error.errorCode}:${error.entityType}:${error.id}`}
-                >
-                  <TriangleAlertIcon
-                    aria-hidden
-                    className="text-warning mt-0.5 size-4 shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{humanize(error.errorCode)}</p>
-                    <p className="text-muted-foreground text-sm break-words">
-                      {error.sanitizedMessage}
-                    </p>
-                    <p className="text-muted-foreground mt-0.5 text-xs">
-                      {error.entityType} · {formatDateTime(error.createdAt)}
-                    </p>
-                  </div>
-                  {error.count > 1 ? (
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                      ×{error.count}
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-success flex items-center gap-2 text-sm">
-              <CheckCircle2Icon aria-hidden className="size-4" />
-              No unresolved synchronization errors.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      {/* Synchronized overnight and nobody acts on them from here: a strip, not
+          a panel of boxes. */}
+      <StatStrip
+        action={
+          <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
+            <Link href="/properties">
+              Browse properties
+              <ArrowRightIcon />
+            </Link>
+          </Button>
+        }
+        className="mt-5"
+        title="Portfolio · Propertyware"
+      >
+        <StatStripItem label="Portfolios" value={formatCount(data.metrics.portfolios)} />
+        <StatStripItem label="Properties" value={formatCount(data.metrics.properties)} />
+        <StatStripItem label="Units" value={formatCount(data.metrics.units)} />
+        <StatStripItem label="Leases" value={formatCount(data.metrics.leases)} />
+        <StatStripItem label="Technicians" value={formatCount(data.metrics.technicians)} />
+      </StatStrip>
     </>
   );
 }

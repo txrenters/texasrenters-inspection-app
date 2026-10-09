@@ -7,39 +7,37 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatPermission } from '@/lib/access';
 import { useAuth } from '@/lib/auth';
-import { initials } from '@/lib/format';
+import { humanize, initials } from '@/lib/format';
 
 export default function ProfilePage() {
   const { profile } = useAuth();
 
   return (
     <>
-      <PageHeader
-        description="Your authenticated administrator identity and organization memberships."
-        title="Profile"
-      />
+      {/* Who you are is the page's title (console-development): a "Profile"
+          heading over a card that said the name again was the same fact
+          twice. The avatar stays beside the name, in the calm muted tile
+          rather than an ink block. */}
+      <div className="flex items-start gap-3">
+        <Avatar className="mt-0.5 size-9 rounded-lg">
+          <AvatarFallback className="bg-muted text-foreground rounded-lg text-sm font-semibold">
+            {initials(profile?.displayName ?? '')}
+          </AvatarFallback>
+        </Avatar>
+        <PageHeader
+          badges={profile ? <StatusBadge value={profile.isActive ? 'ACTIVE' : 'INACTIVE'} /> : undefined}
+          className="min-w-0 flex-1"
+          description={profile?.email ?? ''}
+          info="Your signed-in administrator identity, the organizations you belong to, and the permissions your roles add up to."
+          infoLabel="About your profile"
+          title={profile?.displayName || 'Profile'}
+        />
+      </div>
 
-      <Card>
-        <CardContent className="flex flex-wrap items-center gap-4">
-          <Avatar className="size-14 rounded-lg">
-            <AvatarFallback className="bg-primary text-primary-foreground rounded-lg text-lg font-semibold">
-              {initials(profile?.displayName ?? '')}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 space-y-1">
-            <p className="text-lg font-semibold tracking-tight">{profile?.displayName}</p>
-            <p className="text-muted-foreground text-sm break-all">{profile?.email}</p>
-          </div>
-          <div className="ml-auto">
-            <StatusBadge value={profile?.isActive ? 'ACTIVE' : 'INACTIVE'} />
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-1 grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Memberships</CardTitle>
+            <CardTitle variant="label">Memberships</CardTitle>
           </CardHeader>
           <CardContent>
             <ul className="divide-y">
@@ -54,7 +52,8 @@ export default function ProfilePage() {
                       {membership.organization.id}
                     </p>
                   </div>
-                  <StatusBadge value={membership.role} />
+                  {/* A role is a name, not a status: no dot (console-development). */}
+                  <span className="text-muted-foreground shrink-0 text-sm">{humanize(membership.role)}</span>
                 </li>
               ))}
             </ul>
@@ -66,13 +65,13 @@ export default function ProfilePage() {
             answer anywhere in the app. */}
         <Card>
           <CardHeader>
-            <CardTitle>Effective permissions</CardTitle>
+            <CardTitle variant="label">Effective permissions</CardTitle>
           </CardHeader>
           <CardContent>
             {profile?.permissions.length ? (
               <div className="flex flex-wrap gap-1.5">
                 {profile.permissions.map((permission) => (
-                  <Badge key={permission} variant="secondary">
+                  <Badge key={permission} variant="outline">
                     {formatPermission(permission)}
                   </Badge>
                 ))}

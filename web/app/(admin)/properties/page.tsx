@@ -16,13 +16,12 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { SearchableSelect } from '@/components/searchable-select';
 import { EmptyState, ErrorState } from '@/components/states';
-import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePermissions } from '@/lib/auth';
-import { EMPTY, formatAddress, formatRelative } from '@/lib/format';
+import { EMPTY, formatAddress, formatDateTime, formatRelative } from '@/lib/format';
 import { useAdminMutations, usePortfolios, useProperties } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
@@ -99,11 +98,14 @@ const COLUMNS: Array<Column<PropertyRow>> = [
      */
     key: 'occupancy',
     header: 'Occupancy',
+    // Plain words (console-development): "Occupied" plain and every other word
+    // in an outlined box made the exceptions the loudest thing in the column.
+    // The usual answer reads in the text colour, the rest quieter.
     cell: (row) =>
       row.sourceStatus ? (
-        <Badge variant={/^occupied$/i.test(row.sourceStatus) ? 'default' : 'outline'}>
+        <span className={/^occupied$/i.test(row.sourceStatus) ? undefined : 'text-muted-foreground'}>
           {row.sourceStatus}
-        </Badge>
+        </span>
       ) : (
         EMPTY
       ),
@@ -112,14 +114,28 @@ const COLUMNS: Array<Column<PropertyRow>> = [
     key: 'status',
     header: 'Status',
     hideBelow: 'lg',
-    cell: (row) => <StatusBadge value={row.isActive ? 'ACTIVE' : 'INACTIVE'} />,
+    // The list is active-only, so a green dot on every row said nothing
+    // (console-development). Active is a quiet word; Inactive, the exception,
+    // keeps a dot so it still stands out if one ever appears.
+    cell: (row) =>
+      row.isActive ? (
+        <span className="text-muted-foreground">Active</span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden className="bg-muted-foreground/60 size-1.5 shrink-0 rounded-full" />
+          Inactive
+        </span>
+      ),
   },
   {
     key: 'synced',
     header: 'Last synced',
     hideBelow: 'xl',
     cell: (row) => (
-      <span className="text-muted-foreground" title={row.lastSyncedAt ?? undefined}>
+      <span
+        className="text-muted-foreground"
+        title={row.lastSyncedAt ? formatDateTime(row.lastSyncedAt) : undefined}
+      >
         {formatRelative(row.lastSyncedAt)}
       </span>
     ),
@@ -237,7 +253,7 @@ export default function PropertiesPage() {
             </Button>
           ) : null
         }
-        description="Active normalized Propertyware properties available for inspections."
+        description="Every active property from Propertyware, ready for inspections."
         title="Properties"
       />
 
@@ -252,7 +268,12 @@ export default function PropertiesPage() {
           {tabs.map((tab) => (
             <TabsTrigger key={tab.value || 'all'} value={tab.value}>
               {tab.label}
-              {tab.total === undefined ? '' : ` (${tab.total.toLocaleString()})`}
+              {/* A figure, not part of the name (console-development). */}
+              {tab.total === undefined ? null : (
+                <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                  {tab.total.toLocaleString()}
+                </span>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>

@@ -80,6 +80,7 @@ import type {
   ProviderReadiness,
   JobberBookingContext,
   JobberConnection,
+  JobberDayComparison,
   JobberAssignee,
   JobberPropertyLink,
   JobberSyncResult,
@@ -120,6 +121,7 @@ import {
 export const keys = {
   all: ['admin'] as const,
   dashboard: ['admin', 'dashboard'] as const,
+  jobberDay: (date: string) => ['admin', 'jobber', 'day', date] as const,
   tenants: (query: Record<string, string | number | boolean | undefined>) =>
     ['admin', 'tenants', query] as const,
   clientErrors: (query: Record<string, string | number | boolean | undefined>) =>
@@ -348,8 +350,32 @@ export const useInspections = (query: Record<string, string | number | boolean |
   useQuery({
     queryKey: keys.inspections(query),
     queryFn: ({ signal }) =>
-      api<Page<AdminInspection>>(`/api/v1/admin/inspections${queryString(query)}`, { signal }),
+      // `typeCounts` only when the query asks `withTypeCounts`: how many of each
+      // type the same filters hold, for the list's type tabs.
+      api<Page<AdminInspection> & { typeCounts?: Partial<Record<string, number>> }>(
+        `/api/v1/admin/inspections${queryString(query)}`,
+        { signal },
+      ),
     placeholderData: keepPreviousData,
+  });
+/**
+ * How many upcoming inspections have nobody on them: the dashboard's
+ * "Unassigned", asked as a one-row page of the same list "Assign now" opens, so
+ * the two can never disagree. For the count beside Inspections in the sidebar
+ * (console-development). Light on purpose -- one counted row -- because the
+ * sidebar is on every page.
+ */
+export const useUnassignedCount = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.inspections({ unassignedOnly: true, page: 1, pageSize: 1, count: true }),
+    queryFn: ({ signal }) =>
+      api<Page<AdminInspection>>(
+        `/api/v1/admin/inspections${queryString({ unassignedOnly: true, page: 1, pageSize: 1 })}`,
+        { signal },
+      ).then((page) => page.total),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
   });
 export const useInspection = (id: string) =>
   useQuery({
@@ -1289,6 +1315,44 @@ const JOBBER = '/api/v1/admin/integrations/jobber';
  * notice that a scheduled run happened, and the schedule itself is a countdown
  * the client can tick on its own without asking the server.
  */
+/**
+ * One Texas day, the console's inspections beside the Jobber visits the sync
+ * last stored. Read-only and cheap on the server (stored rows, no Jobber call),
+ * so it follows the sync's own five-minute rhythm rather than polling harder.
+ */
+export const jobberDayQuery = (date: string) => ({
+  queryKey: keys.jobberDay(date),
+  queryFn: ({ signal }: { signal: AbortSignal }) =>
+    api<JobberDayComparison>(`${JOBBER}/day${queryString({ date })}`, { signal }),
+  refetchInterval: 60_000,
+});
+export const useJobberDay = (date: string, enabled = true) =>
+  useQuery({ ...jobberDayQuery(date), enabled });
+
+/**
+ * The actions on a difference with Jobber. Each queues through the
+ * integration's own outbox or re-reads one visit; the server refuses what does
+ * not make sense (pushes off, wrong state, missing permission) and says why.
+ */
+export type JobberDayAction =
+  | { action: 'push'; inspectionId: string; technician?: boolean }
+  | { action: 'take-jobber'; inspectionId: string }
+  | { action: 'create-inspection'; jobberVisitId: string }
+  | { action: 'cancel-in-jobber'; inspectionId: string }
+  | { action: 'complete-in-jobber'; inspectionId: string };
+
+export const useJobberDayAction = () => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, ...body }: JobberDayAction) =>
+      api<Record<string, unknown>>(`${JOBBER}/day/${action}`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'jobber'] });
+      void client.invalidateQueries({ queryKey: ['admin', 'inspections'] });
+    },
+  });
+};
+
 export const useJobberConnection = () =>
   useQuery({
     queryKey: keys.jobber,

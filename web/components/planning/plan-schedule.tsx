@@ -8,7 +8,6 @@ import {
   ChevronDownIcon,
   MapIcon,
   RouteIcon,
-  SlidersHorizontalIcon,
   XIcon,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -26,11 +25,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PROPERTY_ZOOM } from '@/components/map-camera';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
@@ -40,7 +38,6 @@ import {
   dayClock,
   formatClock,
   formatMinutes,
-  formatShortDay,
   leaveHomeAt,
   legOverLimit,
   limitState,
@@ -58,10 +55,11 @@ import {
 import { cn } from '@/lib/utils';
 
 import { FilterPill, type FilterOption } from './filter-pill';
-import type { GroupFileRow } from './group-file';
-import { DEFAULT_MAP_DISPLAY, MapDisplaySwitches, type MapDisplay } from './group-file-view';
+import { calmColor, type GroupFileRow } from './group-file';
+import { DEFAULT_MAP_DISPLAY, MapDisplayOptions, type MapDisplay } from './group-file-view';
 import type { MapFrame } from './group-file-map';
 import {
+  bookedProblem,
   calendarDates,
   calendarTitle,
   clampToCalendar,
@@ -88,18 +86,18 @@ const PlanDaysMap = dynamic(() => import('./plan-days-map').then((module) => mod
 const DAY = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 const LONG_DAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
 
-const LIMIT_TEXT: Record<LimitState, string> = {
-  within: 'text-muted-foreground',
-  near: 'text-warning',
-  over: 'text-destructive',
+/**
+ * A figure near or over its limit: a 6px dot before its label, and the figure
+ * itself left plain (console-development) -- figures are never coloured.
+ */
+const LIMIT_DOT: Record<Exclude<LimitState, 'within'>, { dot: string; words: string }> = {
+  near: { dot: 'bg-warning', words: 'near the limit' },
+  over: { dot: 'bg-destructive', words: 'over the limit' },
 };
-
-/** Limit colour on a figure that is otherwise ordinary text: only near and over say anything. */
-const toneOf = (state: LimitState) => (state === 'within' ? '' : LIMIT_TEXT[state]);
 
 const BOOKING_LABEL: Record<PlanDayAnchor['kind'], string> = { MOVE_OUT: 'Move-out', MOVE_IN: 'Move-in' };
 
-const VIEWS: { value: CalendarView; label: string }[] = [
+const VIEWS: readonly { value: CalendarView; label: string }[] = [
   { value: 'month', label: 'Month' },
   { value: 'week', label: 'Week' },
   { value: 'day', label: 'Day' },
@@ -116,20 +114,6 @@ const STATUS_OPTIONS: FilterOption[] = [
   { value: 'PLANNED', label: 'Not booked yet' },
   { value: 'PUBLISHED', label: 'Booked in Jobber' },
 ];
-
-/** What the office needs to do about a move-out or move-in a day is built around, if anything. */
-export function bookedProblem(
-  day: PlanDay,
-  anchor: Pick<PlanDayAnchor, 'cancelled' | 'scheduledOn' | 'assignedTechnician'>,
-): string | null {
-  if (anchor.cancelled) return 'Cancelled since the plan was laid out · rebuild';
-  if (anchor.scheduledOn !== day.date.slice(0, 10)) return `Moved to ${formatShortDay(anchor.scheduledOn)} · rebuild`;
-  // A move-out or move-in is on the day of whoever it was assigned to (2026-10-01);
-  // assigned to someone else since, the day no longer holds it.
-  if (anchor.assignedTechnician?.id !== day.technician.id)
-    return `${anchor.assignedTechnician ? `Now ${anchor.assignedTechnician.displayName}’s` : 'Not assigned now'} · rebuild`;
-  return null;
-}
 
 /** Minutes driving between a day's properties, or null when nothing measured it. */
 const driveMinutes = (day: PlanDay) => (day.totalDriveSeconds === null ? null : Math.round(day.totalDriveSeconds / 60));
@@ -168,7 +152,7 @@ export function TemplateGroupTag({
       <span
         aria-hidden
         className="inline-block size-2.5 shrink-0 rounded-full border border-white shadow-sm"
-        style={{ backgroundColor: group.color }}
+        style={{ backgroundColor: calmColor(group.color) }}
       />
       <span className="truncate">{name && name !== number ? `${number} · ${name}` : number}</span>
     </span>
@@ -253,6 +237,18 @@ export function PlanSchedule({
   const selected = days.find((day) => day.id === selectedDayId) ?? firstDayToShow(days);
   const mutations = usePlanningMutations();
   const [cursor, setCursor] = useState(() => clampToCalendar(selected ? dateOf(selected) : businessToday(), months));
+  /**
+   * A day picked from outside the calendar -- the page summary's "days outside
+   * the rules" (console-development) -- brings the calendar to it. Adjusted
+   * while rendering, as React has a prop followed, rather than in an effect
+   * that would paint the old month first.
+   */
+  const [followedDayId, setFollowedDayId] = useState(selectedDayId);
+  if (followedDayId !== selectedDayId) {
+    setFollowedDayId(selectedDayId);
+    const picked = days.find((day) => day.id === selectedDayId);
+    if (picked) setCursor(clampToCalendar(dateOf(picked), months));
+  }
   const [hiddenTeam, setHiddenTeam] = useState<ReadonlySet<string>>(() => new Set());
   const [hiddenTypes, setHiddenTypes] = useState<ReadonlySet<string>>(() => new Set());
   const [hiddenStatuses, setHiddenStatuses] = useState<ReadonlySet<string>>(() => new Set());
@@ -523,40 +519,26 @@ export function PlanSchedule({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div aria-label="Calendar view" className="inline-flex rounded-md border p-0.5" role="group">
-            {VIEWS.map((entry) => (
-              <button
-                aria-pressed={view === entry.value}
-                className={cn(
-                  'rounded px-3 py-1 text-sm font-medium transition-colors',
-                  view === entry.value ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-                key={entry.value}
-                onClick={() => goTo(cursor, entry.value)}
-                type="button"
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
+          {/* The console's one toggle shape (console-development). */}
+          <SegmentedControl aria-label="Calendar view" onChange={(next) => goTo(cursor, next)} options={VIEWS} value={view} />
           {onShowUnscheduled ? (
-            <Button
-              aria-label={`${unscheduledCount.toLocaleString()} ${unscheduledCount === 1 ? 'visit' : 'visits'} with no day yet`}
-              onClick={onShowUnscheduled}
-              size="sm"
-              title="Visits with no day yet"
-              variant="outline"
-            >
+            // A word beside the figure (console-development): an icon and a number alone said nothing.
+            <Button onClick={onShowUnscheduled} size="sm" title="Visits with no day yet" variant="outline">
               <CalendarOffIcon />
-              <span className="font-mono tabular-nums">{unscheduledCount.toLocaleString()}</span>
+              <span>
+                <span className="font-mono tabular-nums">{unscheduledCount.toLocaleString()}</span>
+                <span className="sr-only"> {unscheduledCount === 1 ? 'visit' : 'visits'} with</span> no day
+              </span>
             </Button>
           ) : null}
+          {/* Outlined either way, raised when on (console-development): a filled ink button read as the page's primary action. */}
           <Button
             aria-label={showMap ? 'Hide the map' : 'Show the map'}
             aria-pressed={showMap}
+            className={cn(showMap && 'bg-accent')}
             onClick={() => setShowMap(!showMap)}
             size="icon-sm"
-            variant={showMap ? 'default' : 'outline'}
+            variant="outline"
           >
             <MapIcon />
           </Button>
@@ -607,16 +589,7 @@ export function PlanSchedule({
                     <span className="hidden 2xl:inline">{mutations.optimizeDays.isPending ? 'Optimizing…' : 'Optimize every day'}</span>
                   </Button>
                 ) : null}
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button aria-label="Map options" size="icon-sm" variant="ghost">
-                      <SlidersHorizontalIcon />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="end" className="grid w-60 gap-3">
-                    <MapDisplaySwitches display={display} onChange={setDisplay} />
-                  </PopoverContent>
-                </Popover>
+                <MapDisplayOptions display={display} onChange={setDisplay} />
                 <Button aria-label="Close the map" onClick={() => setShowMap(false)} size="icon-sm" variant="ghost">
                   <XIcon />
                 </Button>
@@ -769,8 +742,12 @@ function DayDetail({
         {day.templateGroup ? <TemplateGroupTag className="text-sm" group={day.templateGroup} /> : null}
         <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 xl:grid-cols-4">
           <div className="flex items-baseline gap-2">
-            <dt className="text-muted-foreground">Inspecting</dt>
-            <dd className={cn('font-mono tabular-nums', toneOf(onSite))}>
+            <dt className="text-muted-foreground flex items-center gap-1.5 self-center">
+              {onSite !== 'within' ? <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', LIMIT_DOT[onSite].dot)} /> : null}
+              Inspecting
+              {onSite !== 'within' ? <span className="sr-only">, {LIMIT_DOT[onSite].words}</span> : null}
+            </dt>
+            <dd className="font-mono tabular-nums">
               {formatMinutes(day.onSiteMinutes)} of {formatMinutes(settings.maxOnSiteMinutes)}
             </dd>
           </div>
@@ -821,11 +798,15 @@ function DayDetail({
             ) : null}
             {stop.kind === 'booked' ? (
               <div className="-mx-2 flex items-start gap-3 rounded-md px-2 py-1">
+                {/* The diamond keeps its shape and goes neutral; amber only when it needs a rebuild (console-development). */}
                 <span
                   aria-hidden
-                  className="bg-warning mt-0.5 flex size-6 shrink-0 rotate-45 items-center justify-center rounded-sm"
+                  className={cn(
+                    'mt-0.5 flex size-6 shrink-0 rotate-45 items-center justify-center rounded-sm',
+                    bookedProblem(day, stop) ? 'bg-warning' : 'bg-muted-foreground',
+                  )}
                 >
-                  <span className="-rotate-45 text-[11px] font-bold text-white">{stop.positionInDay ?? index + 1}</span>
+                  <span className="text-background -rotate-45 text-[11px] font-bold">{stop.positionInDay ?? index + 1}</span>
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-3">
@@ -838,10 +819,11 @@ function DayDetail({
                   </div>
                   <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
                     {stop.city ? <span>{stop.city}</span> : null}
-                    <Badge variant="warning">{BOOKING_LABEL[stop.booking]}</Badge>
+                    {/* What it is, as a plain word: a move-out is not a warning (console-development). */}
+                    <span>{BOOKING_LABEL[stop.booking]}</span>
                     <span>{formatMinutes(stop.onSiteMinutes)}</span>
                     {bookedProblem(day, stop) ? (
-                      <span className="text-destructive">{bookedProblem(day, stop)}</span>
+                      <span className="text-warning font-medium">{bookedProblem(day, stop)}</span>
                     ) : null}
                   </div>
                 </div>
@@ -872,9 +854,8 @@ function DayDetail({
                 </div>
                 <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
                   <span>{[stop.city, zoneNumberOf(stop.zone) ? `Zone ${zoneNumberOf(stop.zone)}` : null].filter(Boolean).join(' · ')}</span>
-                  <Badge variant={stop.inspectionType === 'HVAC' ? 'info' : 'secondary'}>
-                    {stop.inspectionType === 'HVAC' ? 'HVAC inspection' : 'Occupied inspection'}
-                  </Badge>
+                  {/* The kind of visit is a fact, not a status: plain words (console-development). */}
+                  <span>{stop.inspectionType === 'HVAC' ? 'HVAC inspection' : 'Occupied inspection'}</span>
                   <span>{formatMinutes(stop.onSiteMinutes ?? 0)}</span>
                 </div>
               </div>

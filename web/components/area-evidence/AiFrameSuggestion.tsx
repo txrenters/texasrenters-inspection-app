@@ -117,8 +117,10 @@ export function AiFrameSuggestion({
             <div className="flex flex-wrap gap-1.5">
               {accepted ? (
                 <>
-                  <span className="text-success flex items-center gap-1 text-xs">
-                    <CheckIcon aria-hidden className="size-3.5" />
+                  {/* The tick in the success tone, the words muted
+                      (console-development). */}
+                  <span className="text-muted-foreground flex items-center gap-1 text-xs">
+                    <CheckIcon aria-hidden className="text-success size-3.5" />
                     Filed under the finding
                   </span>
                   {filedByAi && canDecide ? dismissButton : null}

@@ -1,8 +1,9 @@
 'use client';
 
-import { CheckIcon, CopyIcon, FileTextIcon } from 'lucide-react';
+import { CheckIcon, CopyIcon } from 'lucide-react';
 import { useState } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatSeconds } from '@/lib/finding-review';
@@ -84,15 +85,11 @@ export function RecordingTranscript({
   };
 
   return (
-    <section
-      aria-label="Transcript"
-      className={cn('bg-card flex min-h-0 flex-col rounded-lg border', className)}
-    >
-      <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <p className="flex items-center gap-1.5 text-sm font-medium">
-          <FileTextIcon aria-hidden className="text-muted-foreground size-4" />
-          Transcript
-        </p>
+    // A section under a hairline rather than another bordered box inside the
+    // Areas card (console-development).
+    <section aria-label="Transcript" className={cn('flex min-h-0 flex-col border-t', className)}>
+      <header className="flex min-h-10 items-center justify-between gap-2 py-1.5 pr-1 pl-3.5">
+        <h4 className={SECTION_LABEL}>Transcript</h4>
         {lines.length ? (
           <Button className="h-7 text-xs" onClick={() => void copy()} size="sm" type="button" variant="ghost">
             {copied ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />}

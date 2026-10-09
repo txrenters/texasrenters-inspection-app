@@ -3,8 +3,8 @@
 import type { AreaChecklistEntry } from '@texasrenters/shared';
 import { CheckIcon, SparklesIcon, XIcon } from 'lucide-react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -148,7 +148,7 @@ function FillFromNarration({ areaId, inspectionId }: { areaId: string; inspectio
             : 'Every room is already being filled from the narration.'
           : null;
   return (
-    <div className="space-y-2 border-t px-4 py-3">
+    <div className="space-y-2 border-t px-2 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button disabled={busy} onClick={() => room.mutate()} size="sm" type="button" variant="outline">
           {room.isPending ? <Spinner className="size-3" /> : <SparklesIcon />}
@@ -207,153 +207,155 @@ export function AreaConditionChecklist({
   // single centred answer is what put "Clean" under "Undamaged".
   const answersOnly = checklist.length > 0 && checklist.every(isAnswerItem);
 
+  // A section under a hairline, not a card inside the Areas card: the name a
+  // label, the table's own rows the only lines in it (console-development).
   if (!checklist.length)
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Condition checklist</CardTitle>
-          <CardDescription>
-            This area has no checklist items yet. Add them from the property&apos;s area list.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <section aria-labelledby={`checklist-${areaId}`} className="space-y-1 border-t pt-3">
+        <h4 className={SECTION_LABEL} id={`checklist-${areaId}`}>
+          Condition checklist
+        </h4>
+        <p className="text-muted-foreground text-sm">
+          This area has no checklist items yet. Add them from the property&apos;s area list.
+        </p>
+      </section>
     );
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Condition checklist</CardTitle>
-        <CardDescription>
+    <section aria-labelledby={`checklist-${areaId}`} className="border-t pt-3">
+      <header className="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 px-2">
+        <h4 className={SECTION_LABEL} id={`checklist-${areaId}`}>
+          Condition checklist
+        </h4>
+        <p className="text-muted-foreground text-xs">
           {assessed} of {checklist.length} assessed
           {readOnlyReason ? ` · ${readOnlyReason}` : ''}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <Table>
-            {/* `lg:static`, overriding the sticky default.
-                `TableHeader` pins itself below the app header, which is right
-                for a full-page list and wrong for a table sitting inside a card
-                partway down a page: the header detaches from its own table and
-                rides over the rows as the card scrolls past. This one is short
-                and always fully visible, so there is nothing for stickiness to
-                buy here either. */}
-            <TableHeader className="lg:static">
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Item</TableHead>
-                {answersOnly ? (
-                  <TableHead className="text-center" colSpan={AXES.length} scope="col">
-                    Answer
+        </p>
+      </header>
+      <div className="overflow-x-auto">
+        <Table>
+          {/* `lg:static`, overriding the sticky default.
+              `TableHeader` pins itself below the app header, which is right
+              for a full-page list and wrong for a table sitting inside a card
+              partway down a page: the header detaches from its own table and
+              rides over the rows as the card scrolls past. This one is short
+              and always fully visible, so there is nothing for stickiness to
+              buy here either. */}
+          <TableHeader className="lg:static">
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Item</TableHead>
+              {answersOnly ? (
+                <TableHead className="text-center" colSpan={AXES.length} scope="col">
+                  Answer
+                </TableHead>
+              ) : (
+                AXES.map((axis) => (
+                  <TableHead className="w-24 text-center" key={axis.key} scope="col">
+                    {axis.label}
                   </TableHead>
-                ) : (
-                  AXES.map((axis) => (
-                    <TableHead className="w-24 text-center" key={axis.key} scope="col">
-                      {axis.label}
-                    </TableHead>
-                  ))
-                )}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {checklist.map((item) => (
-                <TableRow key={item.itemId}>
-                  <TableCell className="font-normal" scope="row">
-                    {item.label}
-                    {item.comment ? (
-                      <span className="text-muted-foreground block text-xs">{item.comment}</span>
-                    ) : null}
-                    {/* Read from the narration, not ticked by a person. Any tap
-                        on a verdict makes the row the reviewer's. */}
-                    {item.source === 'AI' ? (
-                      <span className="text-muted-foreground mt-0.5 flex items-center gap-1 text-xs">
-                        <SparklesIcon aria-hidden className="size-3" />
-                        Filled by AI from the narration
+                ))
+              )}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {checklist.map((item) => (
+              <TableRow key={item.itemId}>
+                <TableCell className="font-normal" scope="row">
+                  {item.label}
+                  {item.comment ? (
+                    <span className="text-muted-foreground block text-xs">{item.comment}</span>
+                  ) : null}
+                  {/* Read from the narration, not ticked by a person. Any tap
+                      on a verdict makes the row the reviewer's. */}
+                  {item.source === 'AI' ? (
+                    <span className="text-muted-foreground mt-0.5 flex items-center gap-1 text-xs">
+                      <SparklesIcon aria-hidden className="size-3" />
+                      Filled by AI from the narration
+                    </span>
+                  ) : null}
+                  {/* The moment in the walkthrough when the technician
+                      answered. This is the point of capturing it: it turns an
+                      hour of video into a list of places worth looking. */}
+                  {item.videoTimestampSeconds === null ? null : onSeek ? (
+                    <button
+                      className="text-muted-foreground hover:text-foreground mt-0.5 block text-xs tabular-nums underline underline-offset-2"
+                      onClick={() => onSeek(item.videoTimestampSeconds!)}
+                      type="button"
+                    >
+                      {timecode(item.videoTimestampSeconds)} in the walkthrough
+                    </button>
+                  ) : (
+                    // No walkthrough to seek — the moment is still worth
+                    // showing, but as text rather than a control that would
+                    // do nothing when pressed.
+                    <span className="text-muted-foreground mt-0.5 block text-xs tabular-nums">
+                      {timecode(item.videoTimestampSeconds)} in the walkthrough
+                    </span>
+                  )}
+                </TableCell>
+                {item.responseType && item.responseType !== 'STATUS' ? (
+                  /* A measurement or a chosen option is one answer, not three
+                     judgements, so it spans the columns the axes would have
+                     filled. Read-only here on purpose: these are recorded on
+                     site by the person holding the instrument, and the office
+                     reviewing a photograph is not in a position to correct a
+                     temperature. */
+                  <TableCell className="text-center" colSpan={AXES.length}>
+                    {item.numericValue != null ? (
+                      <span className="font-medium tabular-nums">
+                        {item.numericValue}
+                        {item.unit ? ` ${item.unit}` : ''}
                       </span>
-                    ) : null}
-                    {/* The moment in the walkthrough when the technician
-                        answered. This is the point of capturing it: it turns an
-                        hour of video into a list of places worth looking. */}
-                    {item.videoTimestampSeconds === null ? null : onSeek ? (
-                      <button
-                        className="text-muted-foreground hover:text-foreground mt-0.5 block text-xs tabular-nums underline underline-offset-2"
-                        onClick={() => onSeek(item.videoTimestampSeconds!)}
-                        type="button"
-                      >
-                        {timecode(item.videoTimestampSeconds)} in the walkthrough
-                      </button>
+                    ) : item.textValue ? (
+                      <span className="font-medium">{item.textValue}</span>
                     ) : (
-                      // No walkthrough to seek — the moment is still worth
-                      // showing, but as text rather than a control that would
-                      // do nothing when pressed.
-                      <span className="text-muted-foreground mt-0.5 block text-xs tabular-nums">
-                        {timecode(item.videoTimestampSeconds)} in the walkthrough
-                      </span>
+                      <span className="text-muted-foreground text-xs">Not recorded</span>
                     )}
                   </TableCell>
-                  {item.responseType && item.responseType !== 'STATUS' ? (
-                    /* A measurement or a chosen option is one answer, not three
-                       judgements, so it spans the columns the axes would have
-                       filled. Read-only here on purpose: these are recorded on
-                       site by the person holding the instrument, and the office
-                       reviewing a photograph is not in a position to correct a
-                       temperature. */
-                    <TableCell className="text-center" colSpan={AXES.length}>
-                      {item.numericValue != null ? (
-                        <span className="font-medium tabular-nums">
-                          {item.numericValue}
-                          {item.unit ? ` ${item.unit}` : ''}
-                        </span>
-                      ) : item.textValue ? (
-                        <span className="font-medium">{item.textValue}</span>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">Not recorded</span>
-                      )}
-                    </TableCell>
-                  ) : (
-                  AXES.map((axis) => (
-                    <TableCell key={axis.key}>
-                      <div className="flex justify-center">
-                        <AxisControl
-                          disabled={!canReview || Boolean(readOnlyReason) || record.isPending}
-                          label={`${item.label} ${axis.label}`}
-                          onChange={(next) =>
-                            record.mutate({
-                              itemId: item.itemId,
-                              // The whole assessment every time: this is a PUT,
-                              // so sending one axis would clear the other two.
-                              isClean: axis.key === 'isClean' ? next : item.isClean,
-                              isUndamaged: axis.key === 'isUndamaged' ? next : item.isUndamaged,
-                              isWorking: axis.key === 'isWorking' ? next : item.isWorking,
-                              comment: item.comment,
-                            })
-                          }
-                          value={item[axis.key as AxisKey]}
-                        />
-                      </div>
-                    </TableCell>
-                  ))
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-        {pendingItemId ? (
-          <p className="text-muted-foreground flex items-center gap-2 px-4 py-2 text-xs">
-            <Spinner className="size-3" />
-            Saving…
-          </p>
-        ) : null}
-        {record.error ? (
-          <p className="text-destructive px-4 py-2 text-xs">{record.error.message}</p>
-        ) : null}
-        {/* Room checklists only. An occupied visit's answers and an HVAC
-            form (the one checklist with section headings) are recorded on site
-            by the person looking at the thing; the server refuses them too. */}
-        {canReview && !readOnlyReason && !answersOnly && checklist.every((item) => !item.section) ? (
-          <FillFromNarration areaId={areaId} inspectionId={inspectionId} />
-        ) : null}
-      </CardContent>
-    </Card>
+                ) : (
+                AXES.map((axis) => (
+                  <TableCell key={axis.key}>
+                    <div className="flex justify-center">
+                      <AxisControl
+                        disabled={!canReview || Boolean(readOnlyReason) || record.isPending}
+                        label={`${item.label} ${axis.label}`}
+                        onChange={(next) =>
+                          record.mutate({
+                            itemId: item.itemId,
+                            // The whole assessment every time: this is a PUT,
+                            // so sending one axis would clear the other two.
+                            isClean: axis.key === 'isClean' ? next : item.isClean,
+                            isUndamaged: axis.key === 'isUndamaged' ? next : item.isUndamaged,
+                            isWorking: axis.key === 'isWorking' ? next : item.isWorking,
+                            comment: item.comment,
+                          })
+                        }
+                        value={item[axis.key as AxisKey]}
+                      />
+                    </div>
+                  </TableCell>
+                ))
+                )}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {pendingItemId ? (
+        <p className="text-muted-foreground flex items-center gap-2 px-2 py-2 text-xs">
+          <Spinner className="size-3" />
+          Saving…
+        </p>
+      ) : null}
+      {record.error ? (
+        <p className="text-destructive px-2 py-2 text-xs">{record.error.message}</p>
+      ) : null}
+      {/* Room checklists only. An occupied visit's answers and an HVAC
+          form (the one checklist with section headings) are recorded on site
+          by the person looking at the thing; the server refuses them too. */}
+      {canReview && !readOnlyReason && !answersOnly && checklist.every((item) => !item.section) ? (
+        <FillFromNarration areaId={areaId} inspectionId={inspectionId} />
+      ) : null}
+    </section>
   );
 }

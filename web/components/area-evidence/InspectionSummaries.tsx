@@ -119,7 +119,9 @@ function PropertyNeeds({ areas }: { areas: SummaryArea[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Everything the property needs</CardTitle>
+        {/* The section's name is the label and each room's name the heading,
+            not the other way round (console-development). */}
+        <CardTitle variant="label">Everything the property needs</CardTitle>
         <CardDescription>Gathered from every summarized room.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
@@ -128,9 +130,7 @@ function PropertyNeeds({ areas }: { areas: SummaryArea[] }) {
             <p className="font-semibold">{RECORDING_ACTION_HEADING[entry.group]}</p>
             {entry.rooms.map((room) => (
               <div key={room.name}>
-                <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-                  {room.name}
-                </p>
+                <p className="font-medium">{room.name}</p>
                 <ul className="list-disc space-y-0.5 pl-5">
                   {room.items.map((item, index) => (
                     <li key={index}>
@@ -169,7 +169,8 @@ function AreaSummary({
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
         <div>
-          <CardTitle className="text-base tracking-wide uppercase">{area.name}</CardTitle>
+          {/* A room's name is a value: a heading, not an uppercase label. */}
+          <CardTitle className="text-base">{area.name}</CardTitle>
           {area.floorName ? <CardDescription>{area.floorName}</CardDescription> : null}
         </div>
         <Badge variant={state === 'Summarized' ? 'success' : 'secondary'}>{state}</Badge>

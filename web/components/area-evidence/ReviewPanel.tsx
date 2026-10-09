@@ -4,6 +4,7 @@ import type { AreaEvidenceBundle, AreaFinding } from '@texasrenters/shared';
 import { ChevronRightIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,12 +16,9 @@ import { AreaReviewControl } from './AreaReviewControl';
 import { FindingReviewControls } from './FindingReviewControls';
 import { ConditionLines } from './PhotoSheet';
 
+/** A section's name, in the console's one label style (console-development). */
 function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h3 className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
-      {children}
-    </h3>
-  );
+  return <h3 className={SECTION_LABEL}>{children}</h3>;
 }
 
 /**

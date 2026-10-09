@@ -5,17 +5,8 @@ import { BellIcon, BellOffIcon, CheckCheckIcon, XIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { formatDateTime, formatRelative } from '@/lib/format';
 import { useNotifications } from '@/lib/notifications';
-
-/** "3m ago" — precise enough for something that just happened. */
-function relativeTime(iso: string) {
-  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (!Number.isFinite(seconds)) return '';
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86_400)}d ago`;
-}
 
 /**
  * The office's one place to notice that something happened in the field.
@@ -38,9 +29,11 @@ export function NotificationBell() {
   return (
     <Popover
       onOpenChange={(open) => {
-        // Marked read on open, not on close: the badge should stop nagging as
-        // soon as they have been looked at.
-        if (open && unreadCount) markAllRead();
+        // Marked read when the popover CLOSES (console-development). Marking on
+        // open cleared every unread dot in the list the instant it appeared,
+        // so nobody could see which ones were new, and "Mark all read" never
+        // showed. Closing it is the moment they have been looked at.
+        if (!open && unreadCount) markAllRead();
       }}
     >
       <PopoverTrigger asChild>
@@ -54,22 +47,28 @@ export function NotificationBell() {
         >
           <BellIcon className="size-4" />
           {unreadCount ? (
-            // Count, not a dot: "one inspection came in" and "eleven did" are
-            // different mornings. Capped so a long absence cannot stretch the
-            // header.
+            // A dot, since console-development: a filled 9+ badge was the
+            // loudest thing in the header all day. How many is still one look
+            // away, in the button's name and beside the popover's title, where
+            // "one came in" and "eleven did" can still be told apart.
             <span
               aria-hidden
-              className="bg-destructive text-destructive-foreground absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold"
-            >
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
+              className="bg-warning ring-background absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2"
+            />
           ) : null}
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent align="end" className="w-88 p-0">
+      <PopoverContent align="end" className="w-88 max-w-[calc(100vw-1rem)] p-0">
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-sm font-semibold">Notifications</span>
+          <span className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold">Notifications</span>
+            {notifications.length ? (
+              <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                {notifications.length}
+              </span>
+            ) : null}
+          </span>
           {notifications.length ? (
             <Button className="h-7 text-xs" onClick={clear} size="sm" variant="ghost">
               Clear all
@@ -111,20 +110,27 @@ export function NotificationBell() {
                     >
                       <span className="flex items-center gap-2">
                         {!notification.read ? (
-                          <span aria-hidden className="bg-primary size-1.5 shrink-0 rounded-full" />
+                          <span aria-hidden className="bg-highlight size-1.5 shrink-0 rounded-full" />
                         ) : null}
                         <span className="truncate text-sm font-medium">{notification.title}</span>
                       </span>
                       <span className="text-muted-foreground mt-0.5 block text-xs">
                         {notification.body}
                       </span>
-                      <span className="text-muted-foreground/70 mt-0.5 block text-[11px]">
-                        {relativeTime(notification.occurredAt)}
+                      {/* The console's relative time, with the Texas moment on
+                          hover (console-development). */}
+                      <span
+                        className="text-muted-foreground/70 mt-0.5 block text-[11px]"
+                        title={formatDateTime(notification.occurredAt)}
+                      >
+                        {formatRelative(notification.occurredAt)}
                       </span>
                     </Link>
                     <Button
                       aria-label={`Dismiss: ${notification.title}`}
-                      className="size-6 shrink-0"
+                      // 32px: a 24px target beside a link was easy to miss
+                      // and open the inspection instead (console-development).
+                      className="size-8 shrink-0"
                       onClick={() => remove(notification.id)}
                       size="icon"
                       variant="ghost"

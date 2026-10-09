@@ -82,6 +82,16 @@ const DAYS = [
 
 const CREW = quarterCrew(DAYS, ROTATION);
 
+/** A move-out a day is built around, booked on `scheduledOn` for `assignedTo`. */
+const moveOut = (id: string, scheduledOn: string, assignedTo: string) => ({
+  id,
+  inspectionId: `move-out-${id}`,
+  kind: 'MOVE_OUT',
+  scheduledOn,
+  cancelled: false,
+  assignedTechnician: { id: assignedTo, displayName: assignedTo },
+});
+
 const calendar = (props: Partial<Parameters<typeof PlanCalendar>[0]> & { view?: CalendarView } = {}) =>
   render(<PlanCalendar crew={CREW} days={DAYS} onSelect={vi.fn()} quarter={Q4} settings={SETTINGS} {...props} />);
 
@@ -221,21 +231,35 @@ describe('the month', () => {
   it('marks a day built around a move-out', () => {
     const anchored = {
       ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 10, '3'),
-      anchors: [{ id: 'anchor-1', inspectionId: 'move-out-1', kind: 'MOVE_OUT' }],
+      anchors: [moveOut('anchor-1', '2026-10-14', 'moses')],
     } as unknown as PlanDay;
     calendar({ days: [anchored], cursor: '2026-10-14' });
 
     expect(screen.getByRole('button', { name: /^Wednesday, October 14: Moses Rodriguez, 10 visits.*, built around a move-out, / })).toBeTruthy();
   });
 
+  /** Console-development: a move-out is what a day is built around, not a warning -- amber only once it needs a rebuild. */
+  it('draws a move-out’s diamond neutral, and amber only once its day needs a rebuild', () => {
+    const kept = {
+      ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 6, '3'),
+      anchors: [moveOut('anchor-1', '2026-10-14', 'moses')],
+    } as unknown as PlanDay;
+    const reassigned = {
+      ...day('moses-oct-15', '2026-10-15', 'moses', 'Moses Rodriguez', 6, '3'),
+      anchors: [moveOut('anchor-2', '2026-10-15', 'kevin')],
+    } as unknown as PlanDay;
+    calendar({ days: [kept, reassigned], cursor: '2026-10-14' });
+
+    const diamondOf = (name: RegExp) => screen.getByRole('button', { name }).querySelector('.rotate-45')!;
+    expect(diamondOf(/^Wednesday, October 14:/).className).toContain('bg-muted-foreground');
+    expect(diamondOf(/^Thursday, October 15:/).className).toContain('bg-warning');
+  });
+
   /** The office (2026-09-18): three visits fewer for each move-out or move-in on the day. */
   it('names the move-outs and move-ins a day is built around, and holds it to three visits fewer for each', () => {
     const anchored = {
       ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 4, '3'),
-      anchors: [
-        { id: 'anchor-1', inspectionId: 'move-out-1', kind: 'MOVE_OUT' },
-        { id: 'anchor-2', inspectionId: 'move-out-2', kind: 'MOVE_OUT' },
-      ],
+      anchors: [moveOut('anchor-1', '2026-10-14', 'moses'), moveOut('anchor-2', '2026-10-14', 'moses')],
     } as unknown as PlanDay;
     calendar({ days: [anchored], cursor: '2026-10-14' });
 

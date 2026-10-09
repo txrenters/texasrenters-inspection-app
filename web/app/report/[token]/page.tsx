@@ -97,7 +97,7 @@ function Room({ room }: { room: ReportRoomView }) {
             <p className="text-muted-foreground text-[0.8em]">{room.floorName}</p>
           ) : null}
         </div>
-        <Badge variant={room.inspected ? 'success' : 'secondary'}>{room.statusLabel}</Badge>
+        <Badge appearance="pill" variant={room.inspected ? 'success' : 'secondary'}>{room.statusLabel}</Badge>
       </header>
 
       {/* The condition table, first in the room and before the photographs — the
@@ -464,7 +464,7 @@ export default function PublicReportPage() {
                     {room.floorName ? ` · ${room.floorName}` : ''}
                     {room.skipReason ? ` — ${room.skipReason}` : ''}
                   </span>
-                  <Badge variant="secondary">{room.statusLabel}</Badge>
+                  <Badge appearance="pill" variant="secondary">{room.statusLabel}</Badge>
                 </li>
               ))}
             </ul>

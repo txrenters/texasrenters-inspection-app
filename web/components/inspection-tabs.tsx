@@ -63,7 +63,9 @@ export function InspectionTabs({
 
   return (
     <nav aria-label="Inspection sections" className="border-border border-b">
-      <ul className="-mb-px flex gap-1">
+      {/* Scrolls sideways on a phone rather than pushing the page wider: three
+          tabs of plain links overflowed 375px (console-development). */}
+      <ul className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none]">
         {tabs.map((tab) => {
           /**
            * Driven by `active` alone, which each page states for itself.
@@ -75,13 +77,15 @@ export function InspectionTabs({
            */
           const isActive = tab.key === active;
           return (
-            <li key={tab.key}>
+            <li className="shrink-0" key={tab.key}>
               <Link
                 aria-current={isActive ? 'page' : undefined}
                 className={cn(
-                  'inline-block border-b-2 px-4 py-2.5 text-sm font-medium transition-colors',
+                  'inline-block border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors',
+                  // The accent for "you are here"; primary is ink now
+                  // (console-development).
                   isActive
-                    ? 'border-primary text-foreground'
+                    ? 'border-highlight text-foreground'
                     : 'text-muted-foreground hover:text-foreground border-transparent',
                 )}
                 href={tab.href}

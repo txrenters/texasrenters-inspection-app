@@ -1,6 +1,7 @@
 'use client';
 
 import { UsersIcon } from 'lucide-react';
+import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { ListToolbar } from '@/components/list-toolbar';
@@ -8,6 +9,7 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EMPTY } from '@/lib/format';
 import { useTenants, type AdminTenant } from '@/lib/queries';
@@ -29,7 +31,18 @@ const COLUMNS: Array<Column<AdminTenant>> = [
     header: 'Property',
     cell: (row) => (
       <div className="min-w-0">
-        <div className="truncate">{row.addressLine1 ?? EMPTY}</div>
+        {/* A matched tenancy opens its property (console-development): the
+            building is the property record, so its id is the property's. */}
+        {row.building ? (
+          <Link
+            className="block truncate underline-offset-4 hover:underline"
+            href={`/properties/${row.building.id}`}
+          >
+            {row.addressLine1 ?? row.building.addressLine1 ?? row.building.name}
+          </Link>
+        ) : (
+          <div className="truncate">{row.addressLine1 ?? EMPTY}</div>
+        )}
         <div className="text-muted-foreground truncate text-xs">
           {[row.city, row.state, row.postalCode].filter(Boolean).join(', ')}
           {/* Said plainly rather than left blank: a tenancy whose address
@@ -43,19 +56,16 @@ const COLUMNS: Array<Column<AdminTenant>> = [
   {
     key: 'tbp',
     header: 'Benefit package',
+    // Enrolled is the one answer worth a dot; "No" and anything else the
+    // report writes are quiet words. The old boxed "No" was the loudest thing
+    // in the column (console-development).
     cell: (row) =>
       row.tbpEnrollment ? (
-        <Badge
-          variant={
-            /^yes$/i.test(row.tbpEnrollment)
-              ? 'default'
-              : /^no$/i.test(row.tbpEnrollment)
-                ? 'outline'
-                : 'secondary'
-          }
-        >
-          {row.tbpEnrollment}
-        </Badge>
+        /^yes$/i.test(row.tbpEnrollment) ? (
+          <Badge variant="success">{row.tbpEnrollment}</Badge>
+        ) : (
+          <span className="text-muted-foreground">{row.tbpEnrollment}</span>
+        )
       ) : (
         EMPTY
       ),
@@ -132,8 +142,14 @@ export default function TenantsPage() {
   return (
     <>
       <PageHeader
+        info={
+          <p>
+            Active tenancies from the office&apos;s Propertyware report, and which are enrolled in the
+            Tenant Benefit Package. A tenancy whose address matched a property links to it.
+          </p>
+        }
+        infoLabel="Where tenants come from"
         title="Tenants"
-        description="Active tenancies from Propertyware, and which are enrolled in the Tenant Benefit Package."
       />
 
       <Tabs
@@ -144,7 +160,12 @@ export default function TenantsPage() {
           {tabs.map((tab) => (
             <TabsTrigger key={tab.value || 'all'} value={tab.value}>
               {tab.label}
-              {tab.total === undefined ? '' : ` (${tab.total.toLocaleString()})`}
+              {/* A figure, not part of the name (console-development). */}
+              {tab.total === undefined ? null : (
+                <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                  {tab.total.toLocaleString()}
+                </span>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -173,10 +194,22 @@ export default function TenantsPage() {
           }
           icon={UsersIcon}
           title="No tenants to show"
-        />
+        >
+          {/* The way back from a filter, as on Properties. */}
+          {state.q.trim() || state.enrollment ? (
+            <Button onClick={reset} variant="outline">
+              Clear filters
+            </Button>
+          ) : null}
+        </EmptyState>
       ) : (
         <>
-          <DataTable columns={COLUMNS} rowKey={(row) => row.id} rows={tenants.data.items} />
+          <DataTable
+            columns={COLUMNS}
+            label="Active tenancies"
+            rowKey={(row) => row.id}
+            rows={tenants.data.items}
+          />
           <Pagination
             onPage={(page) => setState({ page })}
             page={tenants.data.page}

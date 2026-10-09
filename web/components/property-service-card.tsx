@@ -85,7 +85,7 @@ export function PropertyServiceCard({ propertyId, propertyName }: { propertyId: 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Scheduling</CardTitle>
+        <CardTitle variant="label">Scheduling</CardTitle>
         <CardDescription>
           For what Propertyware has not been told yet. Everything that books visits here follows these.
         </CardDescription>

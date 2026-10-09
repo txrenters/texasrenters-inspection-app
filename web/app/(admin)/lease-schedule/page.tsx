@@ -50,13 +50,19 @@ import { useLeaseSchedule, useLeaseScheduleRun } from '@/lib/lease-schedule-quer
 
 const KIND: Record<LeaseInspectionKind, string> = { MOVE_OUT: 'Move-out', MOVE_IN: 'Move-in' };
 
-const OUTCOME: Record<LeaseScheduleOutcome, { label: string; variant: 'secondary' | 'info' | 'success' | 'warning' | 'outline' | 'destructive' }> = {
+/**
+ * One tone per meaning (console-development): both booked states are booked,
+ * so both read as done -- "Booked" and "Booked by the office" in two colours
+ * looked like two different outcomes. Called off and cancelled are quiet words,
+ * not outlined boxes louder than the work still coming up.
+ */
+const OUTCOME: Record<LeaseScheduleOutcome, { label: string; variant: 'secondary' | 'success' | 'warning' | 'destructive' }> = {
   SCHEDULED: { label: 'Booked', variant: 'success' },
-  ALREADY_BOOKED: { label: 'Booked by the office', variant: 'info' },
+  ALREADY_BOOKED: { label: 'Booked by the office', variant: 'success' },
   NEEDS_UNIT: { label: 'Needs a unit', variant: 'warning' },
   NOT_BOOKABLE: { label: 'Could not book', variant: 'destructive' },
-  CALLED_OFF: { label: 'Called off', variant: 'outline' },
-  CANCELLED: { label: 'Cancelled by the office', variant: 'outline' },
+  CALLED_OFF: { label: 'Called off', variant: 'secondary' },
+  CANCELLED: { label: 'Cancelled by the office', variant: 'secondary' },
 };
 
 const ACTION: Record<LeaseScheduleAction, string> = {
@@ -93,13 +99,15 @@ const itemColumns: Array<Column<LeaseScheduleItem>> = [
       </div>
     ),
   },
-  { key: 'kind', header: 'Kind', cell: (item) => KIND[item.kind] },
+  // "Type", the word the rest of the console uses for move-in / move-out.
+  { key: 'kind', header: 'Type', cell: (item) => KIND[item.kind] },
   {
     key: 'property',
     header: 'Property',
     cell: (item) => (
       <div className="grid min-w-0">
-        <Link className="truncate hover:underline" href={`/properties/${item.property.id}`}>
+        {/* Above the row's own link (to the inspection), so it still opens the property. */}
+        <Link className="relative z-10 truncate hover:underline" href={`/properties/${item.property.id}`}>
           {item.property.address ?? item.property.name}
         </Link>
         {item.property.city ? <span className="text-muted-foreground text-xs">{item.property.city}</span> : null}
@@ -135,12 +143,14 @@ const itemColumns: Array<Column<LeaseScheduleItem>> = [
     ),
   },
   {
+    // Kept on wider screens; on a phone the whole row is the way to the
+    // inspection (`rowHref`), since this column is hidden there.
     key: 'inspection',
     header: 'Inspection',
     hideBelow: 'sm',
     cell: (item) =>
       item.inspection ? (
-        <Link className="text-primary text-sm hover:underline" href={`/inspections/${item.inspection.id}`}>
+        <Link className="text-primary relative z-10 text-sm hover:underline" href={`/inspections/${item.inspection.id}`}>
           Open
         </Link>
       ) : (
@@ -151,7 +161,7 @@ const itemColumns: Array<Column<LeaseScheduleItem>> = [
 
 const changeColumns: Array<Column<LeaseScheduleChange>> = [
   { key: 'day', header: 'Day', primary: true, cell: (change) => formatScheduledDate(change.scheduledOn) },
-  { key: 'kind', header: 'Kind', cell: (change) => KIND[change.kind] },
+  { key: 'kind', header: 'Type', cell: (change) => KIND[change.kind] },
   {
     key: 'property',
     header: 'Property',
@@ -169,6 +179,10 @@ const changeColumns: Array<Column<LeaseScheduleChange>> = [
     ),
   },
 ];
+
+function TabCount({ value }: { value: number }) {
+  return <span className="text-muted-foreground font-mono text-xs tabular-nums">{value.toLocaleString()}</span>;
+}
 
 export default function LeaseSchedulePage() {
   const { has } = usePermissions();
@@ -205,18 +219,38 @@ export default function LeaseSchedulePage() {
       actions={
         canRun ? (
           <>
-            <Button disabled={run.isPending} onClick={previewRun} size="sm" variant="outline">
+            {/* The safe action carries the weight; the one that writes onto
+                technicians' phones is the quieter one, behind its confirmation
+                (console-development). */}
+            <Button disabled={run.isPending} onClick={previewRun} size="sm">
               {run.isPending && run.variables === true ? <Spinner /> : <EyeIcon />}
               Preview
             </Button>
-            <Button disabled={run.isPending} onClick={() => setConfirming(true)} size="sm">
+            <Button disabled={run.isPending} onClick={() => setConfirming(true)} size="sm" variant="outline">
               <SendIcon />
               Book now
             </Button>
           </>
         ) : null
       }
-      description="Booked from Propertyware's leases: a move-out the day after every lease ends, booked 60 days ahead or as soon as the tenant gives notice, for whoever handles move-outs, and a move-in 22 days after a leaving tenant goes, booked up to 90 days ahead, for whoever handles move-ins. What the office books in Jobber comes first: one near the day is linked, never doubled, and one booked here gives way to it."
+      description="Booked from Propertyware's leases."
+      info={
+        <>
+          <p>
+            A <b>move-out</b> the day after every lease ends, booked 60 days ahead, or at once when the
+            tenant gives notice, for whoever handles move-outs.
+          </p>
+          <p>
+            A <b>move-in</b> 22 days after a leaving tenant goes, booked up to 90 days ahead, for whoever
+            handles move-ins. A missed move-in goes on the next working day.
+          </p>
+          <p>
+            What the office books in Jobber comes first: one near the day is linked, never doubled, and one
+            booked here gives way to it.
+          </p>
+        </>
+      }
+      infoLabel="How booking works"
       title="Move-ins & move-outs"
     />
   );
@@ -238,7 +272,15 @@ export default function LeaseSchedulePage() {
 
   const table = (rows: LeaseScheduleItem[], label: string) =>
     rows.length ? (
-      <DataTable columns={itemColumns} label={label} rowKey={(item) => item.id} rows={rows} />
+      <DataTable
+        columns={itemColumns}
+        label={label}
+        // The row opens its inspection where there is one (console-development):
+        // the Inspection column is hidden on a phone, and was the only way there.
+        rowHref={(item) => (item.inspection ? `/inspections/${item.inspection.id}` : undefined)}
+        rowKey={(item) => item.id}
+        rows={rows}
+      />
     ) : (
       <EmptyState description="Nothing here from the last week onward." icon={CalendarClockIcon} title={`No ${label.toLowerCase()}`} />
     );
@@ -247,17 +289,17 @@ export default function LeaseSchedulePage() {
     <>
       {header}
       <div className="grid gap-4">
+        {/* No detail lines that repeat the (i) beside the title
+            (console-development): the rules are said once, there. */}
         <StatGroup columns="grid-cols-2 lg:grid-cols-4">
-          <Stat label="Coming up" value={comingUp.length.toLocaleString()} detail="booked from the leases, or by the office" />
+          <Stat label="Coming up" value={comingUp.length.toLocaleString()} />
           <Stat
             label="Move-outs"
             value={comingUp.filter((item) => item.kind === 'MOVE_OUT').length.toLocaleString()}
-            detail="the day after the lease ends"
           />
           <Stat
             label="Move-ins"
             value={comingUp.filter((item) => item.kind === 'MOVE_IN').length.toLocaleString()}
-            detail="22 days after the tenant leaves"
           />
           <Stat
             detail="a unit to choose, or a reason it could not be booked"
@@ -267,29 +309,52 @@ export default function LeaseSchedulePage() {
           />
         </StatGroup>
 
-        <StatStrip>
+        <StatStrip title="Booking">
+          {/* Both times read the same way, relative with the exact moment on
+              hover (console-development); one was a date and one "2 hours ago". */}
           <StatStripItem
             label="Daily run"
             value={
-              state?.enabled
-                ? `on${state.nextRunAt ? `, next ${formatDateTime(state.nextRunAt)}` : ''}`
-                : 'off until it is switched on on the server'
+              state?.enabled ? (
+                <>
+                  on
+                  {state.nextRunAt ? (
+                    <>
+                      , next{' '}
+                      <span title={formatDateTime(state.nextRunAt)}>{formatRelative(state.nextRunAt)}</span>
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                'off until it is switched on on the server'
+              )
             }
           />
           {state?.lastRun ? (
             <StatStripItem
               label="Last run"
-              value={`${formatRelative(state.lastRun.at)}: ${countsSentence(state.lastRun.counts, false)}`}
+              value={
+                <>
+                  <span title={formatDateTime(state.lastRun.at)}>{formatRelative(state.lastRun.at)}</span>:{' '}
+                  {countsSentence(state.lastRun.counts, false)}
+                </>
+              }
             />
           ) : null}
-          <StatStripItem label="Booked" value="move-outs 60 days ahead (at once on notice), move-ins 90; a missed move-in goes on the next working day" />
         </StatStrip>
 
         <Tabs onValueChange={setTab} value={tab}>
+          {/* The counts as quiet figures beside the names (console-development). */}
           <TabsList>
-            <TabsTrigger value="coming">Coming up ({comingUp.length.toLocaleString()})</TabsTrigger>
-            <TabsTrigger value="attention">Needs attention ({attention.length.toLocaleString()})</TabsTrigger>
-            <TabsTrigger value="off">Called off ({calledOff.length.toLocaleString()})</TabsTrigger>
+            <TabsTrigger value="coming">
+              Coming up <TabCount value={comingUp.length} />
+            </TabsTrigger>
+            <TabsTrigger value="attention">
+              Needs attention <TabCount value={attention.length} />
+            </TabsTrigger>
+            <TabsTrigger value="off">
+              Called off <TabCount value={calledOff.length} />
+            </TabsTrigger>
           </TabsList>
           <TabsContent className="mt-3" value="coming">
             {table(comingUp, 'Move-ins and move-outs coming up')}

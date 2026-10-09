@@ -1,7 +1,7 @@
-import Image from 'next/image';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
+import { BrandLockup } from '@/components/auth-layout';
 import { ThemeToggleInline } from '@/components/theme-toggle';
 
 /**
@@ -45,18 +45,13 @@ export function PublicDocument({
       </div>
 
       <div className="mx-auto w-full max-w-2xl space-y-6">
-        <Link className="flex flex-col items-center gap-1" href="/support">
-          <Image
-            alt="TexasRenters"
-            className="h-8 w-auto dark:brightness-0 dark:invert"
-            height={167}
-            priority
-            src="/texasrenterslogo-transparent.png"
-            width={600}
-          />
-          <span className="text-primary text-4xl leading-none font-extrabold tracking-tight uppercase">
-            Inspection
-          </span>
+        {/* The same calm mark as the sign-in screen (console-development). */}
+        <Link
+          aria-label="TexasRenters Inspection support"
+          className="focus-visible:ring-ring/50 mx-auto flex w-fit rounded-md outline-none focus-visible:ring-[3px]"
+          href="/support"
+        >
+          <BrandLockup />
         </Link>
 
         <article className="bg-card rounded-xl border p-6 sm:p-8">

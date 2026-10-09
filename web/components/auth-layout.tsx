@@ -1,7 +1,31 @@
-import Image from 'next/image';
 import type { ReactNode } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { ThemeToggleInline } from '@/components/theme-toggle';
+
+/**
+ * The console's calm mark, as the sidebar draws it (console-development): the
+ * navy tile with the green house, the name in plain semibold beside it, and
+ * "Inspection" as a section label. It replaced a 36px extrabold uppercase
+ * "INSPECTION" in the primary colour under a raster logo that had to be
+ * inverted for dark mode -- the loudest thing on a screen whose job is a
+ * two-field form. The tile carries its own background, so it reads the same
+ * in light and dark. Shared with the public privacy and support pages.
+ */
+export function BrandLockup() {
+  return (
+    <span className="flex items-center justify-center gap-2.5">
+      {/* Decorative: the name is the text beside it. `next/image` would need
+          `dangerouslyAllowSVG` for no gain on a small vector. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img alt="" className="size-7 shrink-0 rounded-md" src="/brand/logo-mark-tile.svg" />
+      <span className="flex flex-col text-left leading-tight">
+        <span className="text-foreground text-xl font-semibold tracking-tight">TexasRenters</span>
+        <span className={SECTION_LABEL}>Inspection</span>
+      </span>
+    </span>
+  );
+}
 
 /**
  * The frame every signed-out screen sits in.
@@ -29,29 +53,7 @@ export function AuthLayout({
       </div>
 
       <div className="w-full max-w-sm space-y-6">
-        {/* The product name is the wordmark, not a caption.
-
-            It was 12px, muted and letter-spaced under the logo — the smallest
-            text on a screen whose whole job is to say which TexasRenters
-            application you have arrived at. The maintenance app sets its own
-            name at wordmark scale directly beneath the same logo, and this now
-            matches: one lock-up, read as a unit.
-
-            `leading-none` and a tight gap so the two lines sit as one mark
-            rather than as a heading with a subtitle under it. */}
-        <div className="flex flex-col items-center gap-1">
-          <Image
-            alt="TexasRenters"
-            className="h-8 w-auto dark:brightness-0 dark:invert"
-            height={167}
-            priority
-            src="/texasrenterslogo-transparent.png"
-            width={600}
-          />
-          <span className="text-primary text-4xl leading-none font-extrabold tracking-tight uppercase">
-            Inspection
-          </span>
-        </div>
+        <BrandLockup />
 
         <div className="bg-card rounded-xl border p-6">
           <div className="mb-5 space-y-1.5">

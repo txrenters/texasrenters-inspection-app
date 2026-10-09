@@ -11,10 +11,11 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
+import { SECTION_LABEL } from '@/components/panel';
+import { StatStripItem } from '@/components/stat-card';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -36,14 +37,17 @@ import { RecordingTranscript } from './RecordingTranscript';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface, recordingFrame } from './RecordingSurface';
 
-/** A section heading with an optional count. */
+/**
+ * A section's name with an optional count: the console's one label style, the
+ * count beside it as a panel's is (console-development).
+ */
 function SectionHeading({ children, count }: { children: string; count?: number }) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <h4 className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
-        {children}
-      </h4>
-      {count ? <Badge variant="secondary">{count}</Badge> : null}
+      <h4 className={SECTION_LABEL}>{children}</h4>
+      {count ? (
+        <span className="text-muted-foreground font-mono text-xs tabular-nums">{count}</span>
+      ) : null}
     </div>
   );
 }
@@ -57,8 +61,10 @@ function SectionHeading({ children, count }: { children: string; count?: number 
  * expected, and stays compact instead of leaving a tab looking broken.
  */
 function EmptyTab({ title, body }: { title: string; body: string }) {
+  // Quiet, without a dashed box: it already sits inside the Areas card
+  // (console-development).
   return (
-    <div className="rounded-lg border border-dashed p-6 text-center">
+    <div className="px-4 py-6 text-center">
       <p className="text-sm font-medium">{title}</p>
       <p className="text-muted-foreground mt-1 text-sm">{body}</p>
     </div>
@@ -552,18 +558,12 @@ export function AreaDetailPanel({
           )}
 
           {/* The counts a reviewer would otherwise have to open each tab to
-              learn. */}
-          <dl className="grid grid-cols-3 gap-2">
-            {[
-              { label: 'Recordings', value: recordings.length },
-              { label: 'Photos', value: photoCount },
-              { label: 'Findings', value: findings.length },
-            ].map((item) => (
-              <div className="bg-muted/50 rounded-lg p-3" key={item.label}>
-                <dt className="text-muted-foreground text-xs">{item.label}</dt>
-                <dd className="text-lg font-semibold tabular-nums">{item.value}</dd>
-              </div>
-            ))}
+              learn. One line rather than three tiles (console-development):
+              they are reference, and the tabs above carry them too. */}
+          <dl className="flex flex-wrap items-center gap-x-8 gap-y-2 border-t pt-3">
+            <StatStripItem label="Recordings" value={recordings.length} />
+            <StatStripItem label="Photos" value={photoCount} />
+            <StatStripItem label="Findings" value={findings.length} />
           </dl>
         </TabsContent>
 

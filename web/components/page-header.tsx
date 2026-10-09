@@ -1,5 +1,8 @@
+import { InfoIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 /**
@@ -19,9 +22,18 @@ export function PageHeader({
   description,
   badges,
   actions,
+  info,
+  infoLabel = 'How this works',
   className,
 }: {
   title: string;
+  /**
+   * The rules behind the page, one click away rather than above the work
+   * (console-development): a paragraph of booking rules over every visit to a
+   * list is read once and scrolled past for ever after.
+   */
+  info?: ReactNode;
+  infoLabel?: string;
   /** A sentence, or a line of figures with controls in it (the benefit package plan's summary). */
   description?: ReactNode;
   /**
@@ -43,6 +55,21 @@ export function PageHeader({
       <div className="min-w-0 space-y-0.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
+          {info ? (
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button aria-label={infoLabel} className="text-muted-foreground -ml-1.5" size="icon-sm" variant="ghost">
+                  <InfoIcon />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-96 max-w-[calc(100vw-2rem)] text-sm">
+                <p className="text-muted-foreground mb-2 font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
+                  {infoLabel}
+                </p>
+                <div className="space-y-2 leading-relaxed">{info}</div>
+              </PopoverContent>
+            </Popover>
+          ) : null}
           {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}
         </div>
         {typeof description === 'string' ? (

@@ -3,6 +3,7 @@
 import { PlusIcon, XIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -44,7 +45,9 @@ export function Rows({
 }) {
   return (
     <fieldset className="grid gap-2">
-      <legend className="text-sm font-medium">{label}</legend>
+      {/* The one section-name style, as the cards' other sub-sections
+          (console-development). */}
+      <legend className={SECTION_LABEL}>{label}</legend>
       <p className="text-muted-foreground text-xs">{description}</p>
       {children}
       <Button className="w-fit" onClick={onAdd} size="sm" type="button" variant="outline">

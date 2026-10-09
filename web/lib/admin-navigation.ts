@@ -1,6 +1,7 @@
 import {
   Building2,
   CalendarClock,
+  CalendarDays,
   CalendarRange,
   ClipboardCheck,
   Clock,
@@ -15,7 +16,6 @@ import {
   UserRound,
   Users,
   UsersRound,
-  Workflow,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
@@ -78,6 +78,9 @@ export const INSPECTION_TYPE_CHILDREN: readonly AdminNavigationChild[] = [
 ];
 
 export const adminNavigation: AdminNavigationGroup[] = [
+  // Grouped as the console-development canvas draws it (2026-10-09): the day's
+  // work, then planning ahead, then the catalogue, then administration. Same
+  // pages, same links, same permissions.
   {
     title: 'Overview',
     items: [
@@ -90,26 +93,7 @@ export const adminNavigation: AdminNavigationGroup[] = [
     ],
   },
   {
-    title: 'Property management',
-    items: [
-      {
-        title: 'Properties',
-        href: '/properties',
-        icon: Building2,
-        permission: 'properties:read',
-      },
-      {
-        title: 'Tenants',
-        href: '/tenants',
-        icon: Users,
-        // Same permission as Properties: a tenancy is a fact about a property,
-        // and anyone who may see the property may see who is in it.
-        permission: 'properties:read',
-      },
-    ],
-  },
-  {
-    title: 'Inspection operations',
+    title: 'Inspections',
     items: [
       {
         title: 'Inspections',
@@ -121,33 +105,17 @@ export const adminNavigation: AdminNavigationGroup[] = [
         // including the ones that are not sections of their own.
         children: [{ title: 'All inspections', type: '' }, ...INSPECTION_TYPE_CHILDREN],
       },
+      // Assignments was removed (console-development, 2026-10-10): everything it
+      // did day to day is on Inspections -- who is on each visit, filtering by
+      // technician and type, assigning and reassigning (one or many). Each
+      // inspection keeps its own assignment history. /assignments forwards here.
       {
-        title: 'Assignments',
-        href: '/assignments',
-        icon: Workflow,
-        permission: 'inspections:assign',
-        // "All assignments" first, and it is not decoration. An item with
-        // children becomes a toggle rather than a destination, so without this
-        // the combined list — the view this page exists to serve — would have
-        // no route into it at all.
-        children: [{ title: 'All assignments', type: '' }, ...INSPECTION_TYPE_CHILDREN],
-      },
-      {
-        // Beside assignments: a published plan *is* a quarter of assignments,
-        // and this is where they are laid out before they exist.
-        title: 'Benefit package plan',
-        href: '/planning',
-        icon: CalendarRange,
-        permission: 'planning:read',
-      },
-      {
-        // The office's own grouping of the properties into days (2026-09-30),
-        // which a quarter is then built from. Its own route rather than under
-        // /planning, which would light up the plan's item as well.
-        title: 'TBP group maker',
-        href: '/group-maker',
-        icon: Shapes,
-        permission: 'planning:read',
+        // The week by technician, every visit marked against Jobber
+        // (console-development). Read-only: it never changes Jobber.
+        title: 'Schedule',
+        href: '/schedule',
+        icon: CalendarDays,
+        permission: 'inspections:read',
       },
       {
         // The other work booked rather than typed in: the move-outs and move-ins
@@ -182,7 +150,48 @@ export const adminNavigation: AdminNavigationGroup[] = [
     ],
   },
   {
-    title: 'People',
+    title: 'Planning',
+    items: [
+      {
+        // A published plan *is* a quarter of assignments, and this is where
+        // they are laid out before they exist.
+        title: 'Benefit package plan',
+        href: '/planning',
+        icon: CalendarRange,
+        permission: 'planning:read',
+      },
+      {
+        // The office's own grouping of the properties into days (2026-09-30),
+        // which a quarter is then built from. Its own route rather than under
+        // /planning, which would light up the plan's item as well.
+        title: 'TBP group maker',
+        href: '/group-maker',
+        icon: Shapes,
+        permission: 'planning:read',
+      },
+    ],
+  },
+  {
+    title: 'Properties',
+    items: [
+      {
+        title: 'Properties',
+        href: '/properties',
+        icon: Building2,
+        permission: 'properties:read',
+      },
+      {
+        title: 'Tenants',
+        href: '/tenants',
+        icon: Users,
+        // Same permission as Properties: a tenancy is a fact about a property,
+        // and anyone who may see the property may see who is in it.
+        permission: 'properties:read',
+      },
+    ],
+  },
+  {
+    title: 'Admin',
     items: [
       {
         title: 'Technicians',
@@ -190,11 +199,6 @@ export const adminNavigation: AdminNavigationGroup[] = [
         icon: UsersRound,
         permission: 'technicians:read',
       },
-    ],
-  },
-  {
-    title: 'Access control',
-    items: [
       { title: 'Users', href: '/users', icon: UserRound, permission: 'users:read' },
       { title: 'Roles', href: '/roles', icon: KeyRound, permission: 'roles:read' },
     ],
@@ -204,7 +208,7 @@ export const adminNavigation: AdminNavigationGroup[] = [
     // mechanism exists for filtered views of one route, which is what the
     // inspection types are; these are two separate pages, and modelling them as
     // children would mean generalising `?type=` children into route children to
-    // produce a menu that reads worse than Access control's does beside it.
+    // produce a menu that reads worse than Admin's does beside it.
     title: 'IT tools',
     items: [
       {

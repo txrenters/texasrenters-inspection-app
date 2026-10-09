@@ -60,6 +60,7 @@ export interface ApiErrorContract {
 }
 
 export * from './admin.js';
+export * from './jobber-day.js';
 export * from './ai-guidance.js';
 export * from './finding-match.js';
 export * from './api-gateway.js';

@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/empty';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 /**
  * The wait on a detail screen.
@@ -47,14 +48,17 @@ export function EmptyState({
   description,
   icon: Icon = InboxIcon,
   children,
+  className,
 }: {
   title: string;
   description?: string;
   icon?: ComponentType<{ className?: string }>;
   children?: ReactNode;
+  /** `rounded-none border-0` inside a Panel, which already draws the box. */
+  className?: string;
 }) {
   return (
-    <Empty className="bg-card rounded-xl border">
+    <Empty className={cn('bg-card rounded-xl border', className)}>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <Icon />
@@ -74,13 +78,21 @@ export function EmptyState({
  * report of "it said the request could not be completed" carried nothing that
  * could be found in a log.
  */
-export function ErrorState({ error, retry }: { error: unknown; retry?: () => void }) {
+export function ErrorState({
+  error,
+  retry,
+  className,
+}: {
+  error: unknown;
+  retry?: () => void;
+  className?: string;
+}) {
   const message =
     error instanceof Error ? error.message : 'An unexpected error occurred loading this data.';
   const requestId = error instanceof ApiError ? error.requestId : undefined;
 
   return (
-    <Empty className="bg-card rounded-xl border" role="alert">
+    <Empty className={cn('bg-card rounded-xl border', className)} role="alert">
       <EmptyHeader>
         <EmptyMedia variant="icon" className="bg-destructive/10 text-destructive">
           <AlertTriangleIcon />

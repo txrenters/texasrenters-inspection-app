@@ -81,7 +81,7 @@ export function InspectionChargesPanel({
     return (
       <Card className="scroll-mt-20" id="charges">
         <CardHeader>
-          <CardTitle>Charges &amp; pet review</CardTitle>
+          <CardTitle variant="label">Charges &amp; pet review</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground text-sm">

@@ -157,7 +157,9 @@ export function FindingsReview({
           const seen = visualLabel(finding);
           return (
             <li
-              className={cn('rounded-lg border', selected && 'border-primary/60 ring-primary/30 ring-1')}
+              // The accent for "you are here"; primary is ink now
+              // (console-development).
+              className={cn('rounded-lg border', selected && 'border-highlight')}
               key={finding.id}
             >
               <button
@@ -187,10 +189,19 @@ export function FindingsReview({
                         · {finding.photoCount} photo{finding.photoCount === 1 ? '' : 's'}
                       </span>
                     ) : null}
+                    {/* A third dot on the row only when it asks for a look
+                        ("Not seen in video"); otherwise the words, in the
+                        line's own muted text (console-development). */}
                     {seen ? (
-                      <Badge className="ml-1 shrink-0" variant={VISUAL_VARIANT[seen]}>
-                        {seen}
-                      </Badge>
+                      VISUAL_VARIANT[seen] === 'warning' ? (
+                        <Badge className="ml-1 shrink-0" variant="warning">
+                          {seen}
+                        </Badge>
+                      ) : (
+                        <span className="shrink-0">
+                          · <span>{seen}</span>
+                        </span>
+                      )
                     ) : null}
                   </span>
                 </span>

@@ -2,6 +2,8 @@ import type { PropertyPosition } from '@texasrenters/shared';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { OTHER_PROPERTY_YELLOW } from '@/components/map-discs';
+import { calmColor } from '@/components/planning/group-file';
 import type { PropertyVisit } from '@/lib/day-visits';
 
 /**
@@ -87,7 +89,8 @@ describe('a property on the map', () => {
   it('is drawn in its group’s colour, as in the Group maker', () => {
     render(<PortfolioLayers properties={[GROUPED, LOOSE, OTHER]} />);
 
-    expect(fills().get('grouped')).toBe('#7f77dd');
+    // Painted calmed (console-development): the group's own colour, softened.
+    expect(fills().get('grouped')).toBe(calmColor('#7f77dd'));
   });
 
   it('is the Group maker’s green when it is on the package in no group, and yellow when it is off it', () => {
@@ -95,7 +98,7 @@ describe('a property on the map', () => {
 
     expect(fills().get('loose-one')).toBe('#16a34a');
     // The office, 2026-10-02: grey was hard to find on the map.
-    expect(fills().get('other-property')).toBe('#facc15');
+    expect(fills().get('other-property')).toBe(OTHER_PROPERTY_YELLOW);
   });
 
   it('gives the yellow disc a dark edge, which a white one would lose on the light map', () => {

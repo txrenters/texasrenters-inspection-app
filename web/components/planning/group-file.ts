@@ -477,6 +477,52 @@ const colorDistance = (one: Lab, other: Lab) =>
   Math.hypot(one.l - other.l, one.a - other.a, one.b - other.b);
 
 /**
+ * A group colour as the maps draw it (console-development, 2026-10-09).
+ *
+ * The presets and the generated palette are chosen to be as far apart as
+ * possible, which is right for telling forty groups apart and is also why a
+ * map of them read as a rainbow: navy and dark brown beside neon magenta,
+ * lightness from 0.31 to 0.85. Each colour keeps its own HUE -- the thing that
+ * tells groups apart -- while its lightness is drawn into 0.50-0.76 and its
+ * chroma scaled to 0.8, capped at 0.14. The twenty presets then stand at
+ * least 0.039 apart in OKLab (0.051 before) and read as one family.
+ *
+ * The stored colour never changes: this is how it is PAINTED, everywhere a
+ * group colour is shown, so the swatch picked is the disc on the map. A colour
+ * that calming would bring within reach of the ungrouped green is painted as
+ * stored, so "left to group" can never be mistaken for a group.
+ */
+const CALM_LIGHTNESS: readonly [number, number] = [0.5, 0.76];
+const CALM_CHROMA_SCALE = 0.8;
+const CALM_CHROMA_MAX = 0.14;
+const calmed = new Map<string, string>();
+
+export function calmColor(value: string): string {
+  const key = value.trim().toLowerCase();
+  const known = calmed.get(key);
+  if (known) return known;
+  const lab = oklabOf(key);
+  if (!lab) return value;
+  const chroma = Math.min(Math.hypot(lab.a, lab.b) * CALM_CHROMA_SCALE, CALM_CHROMA_MAX);
+  const hue = Math.atan2(lab.b, lab.a);
+  const along = Math.min(1, Math.max(0, (lab.l - 0.3) / 0.6));
+  const soft = {
+    l: CALM_LIGHTNESS[0] + along * (CALM_LIGHTNESS[1] - CALM_LIGHTNESS[0]),
+    a: chroma * Math.cos(hue),
+    b: chroma * Math.sin(hue),
+  };
+  const shown = hex(soft);
+  const result = colorDistance(oklabOf(shown)!, UNGROUPED_LAB) < NEAR_UNGROUPED ? key : shown;
+  calmed.set(key, result);
+  return result;
+}
+
+/** `groupColorOf`, for the colour as painted: the calmed fill and the numeral that reads on it. */
+export function calmGroupColorOf(value: string): GroupColor | null {
+  return groupColorOf(calmColor(value));
+}
+
+/**
  * Lightness bands the colours are drawn from.
  *
  * Nothing paler than 0.74: a pale yellow pin with a white rim disappears into

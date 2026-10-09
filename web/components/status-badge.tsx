@@ -116,6 +116,16 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   COMPLETED_WITH_ERRORS: { label: 'Completed with errors', tone: 'warning', glyph: 'warning' },
   QUEUED: { label: 'Queued', tone: 'muted', glyph: 'pending' },
   NOT_CONFIGURED: { label: 'Not configured', tone: 'warning', glyph: 'warning' },
+  // Integrations and providers (console-development review, 2026-10-10). Until
+  // these were mapped, "Error" and "Reauthorization required" fell back to the
+  // calm informational tone and read as fine.
+  CONFIGURED: { label: 'Configured', tone: 'success', glyph: 'success' },
+  CONNECTED: { label: 'Connected', tone: 'success', glyph: 'success' },
+  DISCONNECTED: { label: 'Disconnected', tone: 'muted', glyph: 'idle' },
+  DEGRADED: { label: 'Degraded', tone: 'warning', glyph: 'warning' },
+  UNAVAILABLE: { label: 'Unavailable', tone: 'destructive', glyph: 'destructive' },
+  ERROR: { label: 'Error', tone: 'destructive', glyph: 'destructive' },
+  REAUTHORIZATION_REQUIRED: { label: 'Reauthorization required', tone: 'destructive', glyph: 'warning' },
 };
 
 /** Readable fallback for a status not yet mapped, rather than a raw enum. */
@@ -130,17 +140,25 @@ function fallback(value: string) {
   };
 }
 
+/**
+ * The badge draws a tone-coloured dot before the label, so by default only work
+ * that is actually MOVING (uploading, analysing, running) gets a glyph: a
+ * spinner in place of the dot. A tick, a clock or a cross beside every row
+ * repeated what the dot and the word already said. Pass `showIcon` to force the
+ * glyph on (or off) where a screen needs it.
+ */
 export function StatusBadge({
   value,
-  showIcon = true,
+  showIcon,
   className,
   ...props
 }: { value: string; showIcon?: boolean } & Omit<ComponentProps<typeof Badge>, 'variant'>) {
   const meta = STATUS[value] ?? fallback(value);
   const Icon = ICONS[meta.glyph];
+  const withIcon = showIcon ?? meta.glyph === 'processing';
   return (
     <Badge variant={TONE_VARIANT[meta.tone]} className={className} {...props}>
-      {showIcon ? (
+      {withIcon ? (
         <Icon
           aria-hidden
           className={meta.glyph === 'processing' ? 'motion-safe:animate-spin' : undefined}

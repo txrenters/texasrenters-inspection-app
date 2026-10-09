@@ -20,10 +20,16 @@ export function DayFilter({
   value,
   onChange,
   label = 'Scheduled on',
+  max,
+  allowAllDates = true,
 }: {
   value: string | null;
   onChange: (day: string | null) => void;
   label?: string;
+  /** The latest day that can be chosen (`yyyy-MM-dd`), e.g. today for the timesheet. */
+  max?: string;
+  /** False where "every date" means nothing, e.g. the timesheet. */
+  allowAllDates?: boolean;
 }) {
   const today = businessToday();
   // The arrows step from the day shown; from All dates, they step from today.
@@ -41,13 +47,15 @@ export function DayFilter({
       <DatePicker
         aria-label={label}
         className="w-auto min-w-48"
+        max={max}
         // Clearing the picker is All dates, not a day.
-        onChange={(next) => onChange(next || null)}
-        placeholder="All dates"
+        onChange={(next) => onChange(next || (allowAllDates ? null : today))}
+        placeholder={allowAllDates ? 'All dates' : 'Pick a day'}
         value={value ?? ''}
       />
       <Button
         aria-label="The day after"
+        disabled={Boolean(max) && from >= max!}
         onClick={() => onChange(shiftDay(from, 1))}
         size="icon"
         variant="outline"
@@ -59,7 +67,7 @@ export function DayFilter({
           Today
         </Button>
       ) : null}
-      {value !== null ? (
+      {allowAllDates && value !== null ? (
         <Button onClick={() => onChange(null)} size="sm" variant="ghost">
           All dates
         </Button>

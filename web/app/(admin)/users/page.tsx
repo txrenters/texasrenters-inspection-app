@@ -38,18 +38,20 @@ const COLUMNS: Array<Column<UserRow>> = [
     header: 'Assigned roles',
     cell: (row) => (
       <div className="flex flex-wrap gap-1">
+        {/* A role is a name, not a status: plain words, each in a thin
+            outline so three of them do not run together (console-development). */}
         {row.isSystemAdmin ? (
-          <Badge variant="info">System administrator</Badge>
+          <span className="text-sm">System administrator</span>
         ) : row.customRoles.length ? (
           row.customRoles.map((role) => (
-            <Badge key={role.id} variant="secondary">
+            <Badge key={role.id} variant="outline">
               {role.name}
             </Badge>
           ))
         ) : (
           // Said in words rather than left blank: an account with no role can
           // sign in and reach nothing, which looks like a broken app.
-          <span className="text-warning text-sm">No access</span>
+          <Badge variant="warning">No access</Badge>
         )}
       </div>
     ),
@@ -91,7 +93,14 @@ export default function UsersPage() {
     <>
       <PageHeader
         actions={canManage ? <Button onClick={() => setCreating(true)}>Create user</Button> : undefined}
-        description="Provision web accounts and assign fully customizable roles. New users have no access until a role is assigned."
+        description="Console accounts and the roles they hold."
+        info={
+          <>
+            <p>Provision web accounts and assign fully customizable roles.</p>
+            <p>A new user has no access until a role is assigned.</p>
+          </>
+        }
+        infoLabel="About users"
         title="Users"
       />
 

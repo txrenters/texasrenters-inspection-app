@@ -38,6 +38,8 @@ export function DeleteAccountDialog({
   onDelete,
   isPending,
   error,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   scope: 'CONSOLE' | 'TECHNICIAN';
   id: string;
@@ -45,8 +47,21 @@ export function DeleteAccountDialog({
   onDelete: () => Promise<void>;
   isPending: boolean;
   error?: Error | null;
+  /**
+   * Opened from somewhere else -- the page's "More actions" menu
+   * (console-development) -- rather than from its own red button. When given,
+   * the dialog renders no trigger of its own.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = controlledOpen !== undefined;
+  const open = controlled ? controlledOpen : ownOpen;
+  const setOpen = (next: boolean) => {
+    if (!controlled) setOwnOpen(next);
+    onOpenChange?.(next);
+  };
   const preflight = useAccountDeletionPreflight(scope, id, open);
   const noun = scope === 'TECHNICIAN' ? 'technician' : 'user';
 
@@ -56,11 +71,13 @@ export function DeleteAccountDialog({
 
   return (
     <AlertDialog onOpenChange={setOpen} open={open}>
-      <AlertDialogTrigger asChild>
-        <Button disabled={isPending} variant="destructive">
-          Delete
-        </Button>
-      </AlertDialogTrigger>
+      {controlled ? null : (
+        <AlertDialogTrigger asChild>
+          <Button disabled={isPending} variant="destructive">
+            Delete
+          </Button>
+        </AlertDialogTrigger>
+      )}
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {displayName}?</AlertDialogTitle>

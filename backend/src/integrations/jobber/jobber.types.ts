@@ -25,6 +25,12 @@ export interface JobberConfig {
   tbpBookingEnabled: boolean;
   /** Whether console edits to a Jobber visit -- day, technician, Details, cancellation -- are pushed to Jobber. */
   pushEditsEnabled: boolean;
+  /**
+   * Whether the Schedule's buttons that send to Jobber -- our time or
+   * technician, a cancellation, a completion -- are on. Separate from
+   * `pushEditsEnabled`, which the rest of the console already relies on.
+   */
+  dayActionsEnabled: boolean;
 }
 
 export interface JobberTokenResponse {

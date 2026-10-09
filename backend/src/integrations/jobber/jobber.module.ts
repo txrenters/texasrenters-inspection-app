@@ -6,6 +6,8 @@ import { JobberOutboundWorker } from '../../workers/jobber-sync/jobber-outbound.
 import { JobberSyncScheduler } from '../../workers/jobber-sync/jobber-sync.scheduler';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
 import { JobberClient } from './jobber.client';
+import { JobberDayActionsService } from './jobber-day-actions.service';
+import { JobberDayService } from './jobber-day.service';
 import { JOBBER_CONFIG, getJobberConfig } from './jobber.config';
 import { JobberIntegrationController, JobberOAuthCallbackController } from './jobber.controller';
 import { JobberWebhookController } from './jobber.webhook.controller';
@@ -27,6 +29,8 @@ import { JobberTokenService } from './jobber.tokens.service';
     JobberClient,
     JobberMappingService,
     JobberService,
+    JobberDayService,
+    JobberDayActionsService,
     JobberSyncWorker,
     JobberOutboundWorker,
     JobberWebhookService,

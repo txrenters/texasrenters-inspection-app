@@ -10,10 +10,14 @@ import type {
 import { isFinishedStatus, isLocationPaused } from '@texasrenters/shared';
 import { CheckIcon, LocateFixedIcon, MapPinIcon, PlusIcon } from 'lucide-react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { RemoveStopButton } from '@/components/remove-stop-button';
+import { STATUS_MAP } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { businessTimeOfDay } from '@/lib/clock';
 import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import {
   arrivalTime,
   describeOrigin,
@@ -45,6 +49,15 @@ import {
 
 /** Past this, a position is history rather than an answer to "where are they". */
 const STALE_AFTER_MS = 30 * 60_000;
+
+/**
+ * A stop's type and status in the words the rest of the console uses
+ * (console-development): "Move-in" as the navigation says it, "Submitted" as
+ * the status badges say it -- not "Move in" and "Technician submitted".
+ */
+const typeTitle = (type: string) =>
+  INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ?? humanize(type);
+const statusLabel = (status: string) => STATUS_MAP[status]?.label ?? humanize(status);
 
 export interface RosterEntry {
   technicianId: string;
@@ -157,11 +170,11 @@ function DayActions({
 }) {
   if (!onAddVisit && !onFocusTechnician) return null;
   const name = firstName(entry.displayName);
+  // The standard small button, not a hand-shrunk one (console-development).
   return (
     <div className="mb-2 flex flex-wrap gap-1.5">
       {onFocusTechnician ? (
         <Button
-          className="h-7 gap-1 px-2 text-xs"
           disabled={!entry.position}
           onClick={() => onFocusTechnician(entry.technicianId)}
           size="sm"
@@ -169,19 +182,18 @@ function DayActions({
           type="button"
           variant="outline"
         >
-          <LocateFixedIcon aria-hidden className="size-3.5" />
+          <LocateFixedIcon aria-hidden />
           See {name}&rsquo;s location
         </Button>
       ) : null}
       {onAddVisit ? (
         <Button
-          className="h-7 gap-1 px-2 text-xs"
           onClick={() => onAddVisit(entry)}
           size="sm"
           type="button"
           variant="outline"
         >
-          <PlusIcon aria-hidden className="size-3.5" />
+          <PlusIcon aria-hidden />
           Add visit
         </Button>
       ) : null}
@@ -191,6 +203,7 @@ function DayActions({
 
 export function TechnicianRoster({
   colors = null,
+  dayPhrase = 'today',
   entries,
   onAddVisit,
   onFocusTechnician,
@@ -217,6 +230,12 @@ export function TechnicianRoster({
   onFocusTechnician?: (technicianId: string) => void;
   /** Each person's colour on the map, beside their name, so a line on the map leads back to a row here. */
   colors?: ReadonlyMap<string, string> | null;
+  /**
+   * The day being looked at, as a sentence says it: "today", or "on Oct 5,
+   * 2026". The empty roster said "today" whatever day was picked
+   * (console-development).
+   */
+  dayPhrase?: string;
   entries: RosterEntry[];
   /**
    * Take a visit off the selected technician's day -- the "x" on each visit
@@ -264,7 +283,7 @@ export function TechnicianRoster({
   if (!entries.length)
     return (
       <p className="text-muted-foreground p-4 text-sm">
-        Nobody has work scheduled today and no handset has reported a position.
+        Nobody has work scheduled {dayPhrase} and no handset has reported a position.
       </p>
     );
 
@@ -287,9 +306,12 @@ export function TechnicianRoster({
           <li key={entry.technicianId}>
             <button
               aria-pressed={selected}
-              className={`hover:bg-muted/60 focus-visible:ring-ring flex w-full items-center gap-3 px-4 py-3 text-left outline-none focus-visible:ring-2 ${
-                selected ? 'bg-muted' : ''
-              }`}
+              // The accent marks the open row (console-development); a grey
+              // fill read the same as the hover.
+              className={cn(
+                'hover:bg-muted/60 focus-visible:ring-ring flex w-full items-center gap-3 px-4 py-3 text-left outline-none focus-visible:ring-2',
+                selected && 'bg-highlight/10 hover:bg-highlight/10',
+              )}
               // Clicking the selected row clears it, so the way out is the same
               // control as the way in rather than a separate "show all".
               onClick={() => onSelect(selected ? null : entry.technicianId)}
@@ -418,7 +440,7 @@ export function TechnicianRoster({
                       </p>
                     ) : null}
 
-                    <ol className="space-y-1.5">
+                    <ol className="space-y-0.5">
                       {listings.map(({ stop, role, routeIndex }) => {
                         const finished = role === 'FINISHED';
                         const leg =
@@ -442,7 +464,7 @@ export function TechnicianRoster({
                         const Row = mappable ? 'button' : 'span';
                         return (
                           <li
-                            className={`flex gap-2 text-xs leading-snug ${finished ? 'opacity-60' : ''}`}
+                            className={`flex gap-2 py-1 text-xs leading-snug ${finished ? 'opacity-60' : ''}`}
                             key={stop.inspectionId}
                           >
                             {/* A tick for what is done, the route's number for
@@ -474,26 +496,21 @@ export function TechnicianRoster({
                                   : ''
                               }`}
                             >
-                              {/* Green is the next stop, on the list and on the
-                                  map. The stop the map is showing is underlined
-                                  rather than coloured, so the two never read as
-                                  the same thing. */}
+                              {/* Green is the next stop on the map's pin; here
+                                  the word "Next" says it, in the console's label
+                                  style, so the list has no coloured words
+                                  (console-development). The stop the map is
+                                  showing is underlined. */}
                               <span
                                 className={`flex items-center gap-1 font-medium ${
-                                  role === 'NEXT' ? 'text-map-technician' : ''
-                                } ${finished ? 'text-muted-foreground' : ''} ${
-                                  focused ? 'underline underline-offset-2' : ''
-                                }`}
+                                  finished ? 'text-muted-foreground' : ''
+                                } ${focused ? 'underline underline-offset-2' : ''}`}
                               >
                                 {role === 'CURRENT' ? (
                                   <MapPinIcon aria-label="Here now" className="size-3 shrink-0" />
                                 ) : null}
                                 <span className="min-w-0 truncate">{stop.propertyName}</span>
-                                {role === 'NEXT' ? (
-                                  <span className="text-[10px] font-semibold tracking-wide uppercase">
-                                    Next
-                                  </span>
-                                ) : null}
+                                {role === 'NEXT' ? <span className={SECTION_LABEL}>Next</span> : null}
                               </span>
                               <span className="text-muted-foreground block">
                                 {/* The type carries more weight than the status
@@ -501,9 +518,9 @@ export function TechnicianRoster({
                                     visits to the same address, and at the same
                                     colour the pair read as one grey blob. */}
                                 <span className={finished ? '' : 'text-foreground'}>
-                                  {humanize(stop.inspectionType)}
+                                  {typeTitle(stop.inspectionType)}
                                 </span>{' '}
-                                · {humanize(stop.status)}
+                                · {statusLabel(stop.status)}
                                 {/* Said rather than left as a pin that never
                                     highlights: the technician still has to go,
                                     the address simply is not on the map. */}

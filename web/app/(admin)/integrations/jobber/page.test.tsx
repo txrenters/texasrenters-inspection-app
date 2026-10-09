@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import JobberIntegrationPage from './page';
@@ -97,6 +97,43 @@ describe('Jobber integration page', () => {
     connected();
     render(<JobberIntegrationPage />);
     expect(screen.getByText('212')).toBeTruthy();
+  });
+
+  it('asks before disconnecting, and says what disconnecting does', () => {
+    // One ghost click used to remove the app from the Jobber account
+    // (console-development); getting it back needs a Jobber administrator.
+    connected();
+    const disconnect = { ...idle, mutate: vi.fn() };
+    hooks.useJobberMutations.mockReturnValue({
+      authorize: idle,
+      disconnect,
+      sync: idle,
+      link: idle,
+      ignore: idle,
+    });
+    render(<JobberIntegrationPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    expect(disconnect.mutate).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Disconnect Jobber?' });
+    expect(within(dialog).getByText(/until a Jobber administrator connects it again/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
+    expect(disconnect.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('says a tab could not be loaded instead of drawing an empty table', () => {
+    connected();
+    hooks.useJobberQueue.mockReturnValue({
+      isLoading: false,
+      isError: true,
+      error: new Error('The queue could not be read.'),
+      data: undefined,
+      refetch: vi.fn(),
+    });
+    render(<JobberIntegrationPage />);
+    expect(screen.getByText('This data could not be loaded')).toBeTruthy();
+    expect(screen.getByText('The queue could not be read.')).toBeTruthy();
   });
 
   it('shows Connect and no Reconnect while disconnected', () => {

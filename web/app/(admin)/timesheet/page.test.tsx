@@ -97,7 +97,7 @@ describe('one day at a time', () => {
     mount();
 
     expect(askedFor()).toBe(TODAY);
-    expect(screen.getByText(/Tuesday, October 6/)).toBeInTheDocument();
+    expect(screen.getByText('Tuesday, October 6')).toBeInTheDocument();
   });
 
   it('has one calendar, not a range', () => {
@@ -212,12 +212,13 @@ describe('one row per property', () => {
 });
 
 describe('correcting the time at a property', () => {
-  it('will not save a correction without a reason', () => {
+  it('will not save a correction without a reason, and says how long one has to be', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Correct the time at 1902 Mockup Dr' }));
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('button', { name: 'Save the correction' })).toBeDisabled();
+    expect(within(dialog).getByLabelText('Why')).toHaveAccessibleDescription(/At least 4 characters/);
   });
 
   /** The whole visit, in Texas time, and every stretch behind the row. */
@@ -255,6 +256,27 @@ describe('correcting the time at a property', () => {
 });
 
 /**
+ * Which technician the page is showing is said in the toolbar, not only
+ * implied by a name somebody clicked in the table.
+ */
+describe('one technician at a time', () => {
+  it('filters to a technician from their name in the table, and says so in the toolbar', () => {
+    mount();
+
+    fireEvent.click(within(table('Hours by technician')).getByRole('button', { name: 'Moses Rodriguez' }));
+
+    expect(hooks.useTimesheet.mock.calls.at(-1)).toEqual([TODAY, 'tech-1']);
+    expect(screen.getByRole('combobox', { name: 'Technician' })).toHaveTextContent('Moses Rodriguez');
+  });
+
+  it('starts on every technician', () => {
+    mount();
+
+    expect(screen.getByRole('combobox', { name: 'Technician' })).toHaveTextContent('All technicians');
+  });
+});
+
+/**
  * Today and yesterday are read without anybody asking. This is how a change
  * of rule, or a corrected pin, reaches the days behind them.
  */
@@ -280,6 +302,20 @@ describe('recalculating', () => {
     await choose('The last 30 days');
 
     expect(recalculate.mutate).toHaveBeenCalledWith({ from: '2026-09-07', to: TODAY }, expect.anything());
+  });
+
+  /** A result belongs to the day it was asked on, and is announced when it arrives. */
+  it('lets go of the result once the day changes', async () => {
+    mount();
+    await choose('This day');
+    const onSuccess = recalculate.mutate.mock.calls[0]![1].onSuccess as (result: unknown) => void;
+    act(() => onSuccess({ days: 1, technicians: 1, changed: 0 }));
+
+    const said = screen.getByText(/This day already says what the trail says/);
+    expect(said).toHaveAttribute('aria-live', 'polite');
+
+    fireEvent.click(screen.getByRole('button', { name: 'The day before' }));
+    expect(screen.queryByText(/This day already says what the trail says/)).not.toBeInTheDocument();
   });
 
   it('says what changed, and that corrections were left alone', async () => {

@@ -78,6 +78,20 @@ beforeEach(() => {
   state.testRun.mockReset();
 });
 
+
+/**
+ * The two ways to test the rules sit under one "Test…" menu
+ * (console-development), so a test opens it and picks one.
+ */
+function chooseTest(name: string) {
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Test…' }), {
+    button: 0,
+    pointerId: 1,
+    pointerType: 'mouse',
+  });
+  fireEvent.click(screen.getByRole('menuitem', { name }));
+}
+
 describe('the house rules card', () => {
   it('starts from the rules in use and saves a change as the next version', () => {
     render(<AiHouseRules canConfigure />);
@@ -127,7 +141,8 @@ describe('the house rules card', () => {
 
     expect(screen.getByRole('textbox', { name: 'House rules' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /Save as version/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Try on a recording' })).not.toBeInTheDocument();
+    // Neither test action is offered: the "Test…" menu that holds them is gone.
+    expect(screen.queryByRole('button', { name: 'Test…' })).not.toBeInTheDocument();
   });
 });
 
@@ -138,7 +153,7 @@ describe('testing the rules on the recent recordings', () => {
       target: { value: 'Scuffs are normal wear.' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test on recent recordings' }));
+    chooseTest('Test on recent recordings');
 
     expect(state.testRun).toHaveBeenCalledWith('Scuffs are normal wear.');
     expect(state.save).not.toHaveBeenCalled();
@@ -152,7 +167,7 @@ describe('trying the rules on a recording', () => {
       target: { value: 'Scuffs are normal wear.' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Try on a recording' }));
+    chooseTest('Try on a recording');
     fireEvent.click(
       screen.getByRole('button', {
         name: 'Try the rules on Entrance · 100 Example Ln · Move out',
@@ -218,7 +233,7 @@ describe('trying the rules on a recording', () => {
       ],
     };
     render(<AiHouseRules canConfigure />);
-    fireEvent.click(screen.getByRole('button', { name: 'Try on a recording' }));
+    chooseTest('Try on a recording');
 
     const result = screen.getByRole('region', { name: 'Trial result' });
     expect(

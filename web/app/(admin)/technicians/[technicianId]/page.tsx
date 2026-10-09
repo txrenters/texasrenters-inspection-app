@@ -1,7 +1,9 @@
 'use client';
 
+import { MoreHorizontalIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { DeleteAccountDialog } from '@/components/delete-account-dialog';
@@ -24,8 +26,15 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { TechnicianRouteCard } from '@/components/technician-route-card';
-import { EMPTY, formatDateTime } from '@/lib/format';
+import { EMPTY, formatDateTime, formatScheduledDate } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,
@@ -75,9 +84,10 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
    * reconciled, and three of those four were work nothing on this screen
    * accounted for.
    *
-   * The date is rendered from its own `yyyy-MM-dd`, never through a `Date`:
-   * `scheduledAt` is a Postgres `date` serialised at midnight UTC, and
-   * localising it moves it to the previous day anywhere west of Greenwich.
+   * Written as a day ("Oct 9, 2026"), never localised: `scheduledAt` is a
+   * Postgres `date` serialised at midnight UTC, and `formatScheduledDate` reads
+   * it in UTC so it keeps its day. The raw `yyyy-MM-dd` was the only date on
+   * the page printed that way (console-development).
    */
   {
     key: 'scheduled',
@@ -95,7 +105,7 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
 
       return (
         <span className="flex flex-wrap items-center gap-1.5">
-          <span className="tabular-nums">{day}</span>
+          <span className="tabular-nums">{formatScheduledDate(row.inspection?.scheduledAt)}</span>
           {/* Words, not just a colour: this is the one cell on the page that
               reports a problem, and it has to survive greyscale and a screen
               reader. */}
@@ -138,7 +148,8 @@ export default function TechnicianDetailPage() {
   // The route is built from the technician's live position, so it needs the
   // location grant rather than the directory one — the rest of this page does
   // not.
-  const route = useTechnicianRoute(id, today, permissions.has('technicians:locate'));
+  const canLocate = permissions.has('technicians:locate');
+  const route = useTechnicianRoute(id, today, canLocate);
   // Granting console access creates a console user, so it is gated on the
   // permission that governs console users -- not on `technicians:provision`,
   // which only covers issuing handset credentials. The button lives here; the
@@ -150,6 +161,10 @@ export default function TechnicianDetailPage() {
     sendTechnicianPasswordReset: sendReset,
     grantTechnicianConsoleAccess: grantConsole,
   } = useAdminMutations();
+  // Which confirmation the "More actions" menu opened. Held here because a
+  // menu item closes its menu, and a dialog rendered inside the menu would go
+  // with it.
+  const [dialog, setDialog] = useState<'console' | 'reset' | 'delete' | null>(null);
 
   // isError first: a failed fetch has no data either.
   if (technician.isError)
@@ -198,108 +213,153 @@ export default function TechnicianDetailPage() {
         actions={
           canManage || canProvision || canManageUsers ? (
             <>
-              {canManageUsers ? (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button disabled={grantConsole.isPending} variant="outline">
-                      {grantConsole.isPending ? 'Granting…' : 'Grant console access'}
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Give {item.displayName} console access?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        They keep this one account and the password they already sign into the app
-                        with — {item.email} cannot hold two. This adds console membership only, and
-                        that carries no permissions, so they still cannot sign in until you assign
-                        them a role under Users afterwards.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => void grantConsoleAccess()}>
-                        Grant access
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              ) : null}
-              {canProvision ? (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button disabled={sendReset.isPending} variant="outline">
-                      {sendReset.isPending ? 'Sending…' : 'Send password reset'}
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Send {item.displayName} a reset link?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        A link goes to {item.email} and expires in an hour. It sets a new password
-                        and nothing else — it is not a way to sign in as them. Any reset link sent
-                        earlier stops working.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => void sendPasswordReset()}>
-                        Send link
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              ) : null}
+              {/* One visible button, the rest one menu away (console-development):
+                  four buttons, two of them solid red, wrapped onto two lines at
+                  375px. Every confirmation below is unchanged; the menu only
+                  opens it. */}
               {canManage ? (
                 <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    disabled={mutation.isPending}
-                    variant={item.isActive ? 'destructive' : 'default'}
-                  >
-                    {item.isActive ? 'Deactivate' : 'Activate'}
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>
-                      {item.isActive ? 'Deactivate' : 'Activate'} {item.displayName}?
-                    </AlertDialogTitle>
-                    <AlertDialogDescription>
-                      {item.isActive
-                        ? 'They lose access to the mobile app immediately. Inspections already assigned to them stay assigned and must be reassigned separately.'
-                        : 'They regain access to the mobile app and can be assigned inspections again.'}
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      className={
-                        item.isActive ? buttonVariants({ variant: 'destructive' }) : undefined
-                      }
-                      onClick={() => void toggle()}
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      disabled={mutation.isPending}
+                      variant={item.isActive ? 'outline' : 'default'}
                     >
                       {item.isActive ? 'Deactivate' : 'Activate'}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        {item.isActive ? 'Deactivate' : 'Activate'} {item.displayName}?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {item.isActive
+                          ? 'They lose access to the mobile app immediately. Inspections already assigned to them stay assigned and must be reassigned separately.'
+                          : 'They regain access to the mobile app and can be assigned inspections again.'}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        className={
+                          item.isActive ? buttonVariants({ variant: 'destructive' }) : undefined
+                        }
+                        onClick={() => void toggle()}
+                      >
+                        {item.isActive ? 'Deactivate' : 'Activate'}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               ) : null}
-              {canManage ? (
-                <DeleteAccountDialog
-                  displayName={item.displayName}
-                  error={remove.error}
-                  id={id}
-                  isPending={remove.isPending}
-                  onDelete={deleteTechnician}
-                  scope="TECHNICIAN"
-                />
+              {canManageUsers || canProvision || canManage ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button aria-label="More actions" size="icon" variant="outline">
+                      <MoreHorizontalIcon />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    {canManageUsers ? (
+                      <DropdownMenuItem
+                        disabled={grantConsole.isPending}
+                        onSelect={() => setDialog('console')}
+                      >
+                        {grantConsole.isPending ? 'Granting…' : 'Grant console access…'}
+                      </DropdownMenuItem>
+                    ) : null}
+                    {canProvision ? (
+                      <DropdownMenuItem
+                        disabled={sendReset.isPending}
+                        onSelect={() => setDialog('reset')}
+                      >
+                        {sendReset.isPending ? 'Sending…' : 'Send password reset…'}
+                      </DropdownMenuItem>
+                    ) : null}
+                    {canManage ? (
+                      <>
+                        {canManageUsers || canProvision ? <DropdownMenuSeparator /> : null}
+                        <DropdownMenuItem
+                          disabled={remove.isPending}
+                          onSelect={() => setDialog('delete')}
+                          variant="destructive"
+                        >
+                          Delete…
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               ) : null}
             </>
           ) : undefined
         }
-        description={item.email}
+        badges={<StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />}
+        // When the account was made, beside who it is -- as the user page has
+        // it. It sat under "Completed" as if it dated the completed work.
+        description={`${item.email} · created ${formatDateTime(item.createdAt)}`}
         title={item.displayName}
       />
+
+      {canManageUsers ? (
+        <AlertDialog
+          onOpenChange={(open) => setDialog(open ? 'console' : null)}
+          open={dialog === 'console'}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Give {item.displayName} console access?</AlertDialogTitle>
+              <AlertDialogDescription>
+                They keep this one account and the password they already sign into the app
+                with — {item.email} cannot hold two. This adds console membership only, and
+                that carries no permissions, so they still cannot sign in until you assign
+                them a role under Users afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void grantConsoleAccess()}>
+                Grant access
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
+      {canProvision ? (
+        <AlertDialog
+          onOpenChange={(open) => setDialog(open ? 'reset' : null)}
+          open={dialog === 'reset'}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Send {item.displayName} a reset link?</AlertDialogTitle>
+              <AlertDialogDescription>
+                A link goes to {item.email} and expires in an hour. It sets a new password
+                and nothing else — it is not a way to sign in as them. Any reset link sent
+                earlier stops working.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void sendPasswordReset()}>
+                Send link
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
+      {canManage ? (
+        <DeleteAccountDialog
+          displayName={item.displayName}
+          error={remove.error}
+          id={id}
+          isPending={remove.isPending}
+          onDelete={deleteTechnician}
+          onOpenChange={(open) => setDialog(open ? 'delete' : null)}
+          open={dialog === 'delete'}
+          scope="TECHNICIAN"
+        />
+      ) : null}
 
       {mutation.error ? (
         <Alert className="mb-4" variant="destructive">
@@ -355,22 +415,24 @@ export default function TechnicianDetailPage() {
         </Alert>
       ) : null}
 
-      <StatGroup columns="grid-cols-2 lg:grid-cols-4">
-        <Stat label="Status" value={<StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />} />
+      {/* Figures only; the status is a word and sits by the name
+          (console-development). */}
+      <StatGroup columns="grid-cols-1 sm:grid-cols-3">
         <Stat label="Current assignments" value={item.workload?.current ?? 0} />
         <Stat label="In progress" value={item.workload?.inProgress ?? 0} />
-        <Stat
-          detail={formatDateTime(item.createdAt)}
-          label="Completed"
-          value={item.workload?.completed ?? 0}
-        />
+        <Stat label="Completed" value={item.workload?.completed ?? 0} />
       </StatGroup>
 
-      <TechnicianRouteCard displayName={item.displayName} route={route.data} />
+      <TechnicianRouteCard
+        displayName={item.displayName}
+        enabled={canLocate}
+        isError={route.isError}
+        route={route.data}
+      />
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>Assignment history</CardTitle>
+          <CardTitle variant="label">Assignment history</CardTitle>
         </CardHeader>
         <CardContent>
           {assignments.isLoading ? (

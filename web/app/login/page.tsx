@@ -73,6 +73,10 @@ export default function LoginPage() {
             aria-invalid={form.formState.errors.email ? true : undefined}
             autoComplete="email"
             id="email"
+            // The email keyboard on a phone, and announced as an email field
+            // (console-development). `noValidate` on the form keeps the zod
+            // message as the only one.
+            type="email"
             {...form.register('email')}
           />
           <FieldError>{form.formState.errors.email?.message}</FieldError>

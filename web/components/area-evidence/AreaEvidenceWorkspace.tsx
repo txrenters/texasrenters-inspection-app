@@ -5,25 +5,27 @@ import {
   inspectionRequiresAreaRecording,
   type AreaEvidenceSummaryItem,
 } from '@texasrenters/shared';
-import { CheckIcon, SearchIcon } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon, SearchIcon } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { ImportReportDialog } from '@/components/inspection-report-import';
+import { ImportReportDialog, useImportInProgress } from '@/components/inspection-report-import';
 import { AddAreasDialog, MergeAreasDialog } from '@/components/inspection-workflow';
+import { SelectFilter } from '@/components/list-toolbar';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { SegmentedControl } from '@/components/ui/segmented';
+import { Spinner } from '@/components/ui/spinner';
 import { usePermissions } from '@/lib/auth';
 import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib/queries';
 import { cn } from '@/lib/utils';
@@ -50,7 +52,6 @@ import { PhotoSheet } from './PhotoSheet';
 const ALL_STATUSES = 'ALL';
 
 const STATUS_FILTERS = [
-  { value: ALL_STATUSES, label: 'All areas' },
   { value: 'FINDINGS_NEED_REVIEW', label: 'Needs review' },
   { value: 'EVIDENCE_INCOMPLETE', label: 'Incomplete' },
   { value: 'SKIPPED', label: 'Skipped' },
@@ -123,6 +124,10 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
   // of the same query rather than a second request.
   const inspection = useInspection(inspectionId).data;
   const [addingAreas, setAddingAreas] = useState(false);
+  // Opened from the "Manage areas" menu, so held here rather than in the
+  // dialog's own button (console-development).
+  const [importing, setImporting] = useState(false);
+  const importRunning = useImportInProgress(canMerge ? inspectionId : null);
   const router = useRouter();
   const searchParams = useSearchParams();
   // The open area lives in the URL so refresh restores it, Back steps through
@@ -253,87 +258,106 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           value={search}
         />
       </div>
-      <Select onValueChange={setStatusFilter} value={statusFilter}>
-        <SelectTrigger aria-label="Filter by review status" className="w-[140px]">
-          <SelectValue placeholder="All areas" />
-        </SelectTrigger>
-        <SelectContent>
-          {STATUS_FILTERS.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/* The lists' own filter control (console-development). */}
+      <SelectFilter
+        allLabel="All areas"
+        className="w-[140px]"
+        label="Filter by review status"
+        onChange={(next) => setStatusFilter(next || ALL_STATUSES)}
+        options={[...STATUS_FILTERS]}
+        value={statusFilter === ALL_STATUSES ? '' : statusFilter}
+      />
     </div>
   );
+  // What the menu offers. Adding an area is only possible while the inspection
+  // can still change: finalization freezes the evidence, and a completed or
+  // cancelled one is a record rather than work in hand. The server refuses
+  // these too -- this just does not offer what it would.
+  const canAddArea = Boolean(
+    canMerge &&
+      inspection?.propertywareBuilding?.id &&
+      !inspection.finalizedAt &&
+      inspection.status !== 'COMPLETED' &&
+      inspection.status !== 'CANCELLED',
+  );
+  const canMergeAreas = canMerge && manageableAreas.length >= 2;
+  const canImport = Boolean(canMerge && inspection);
 
   return (
     <Card aria-labelledby="area-evidence-heading" className="scroll-mt-20" id="evidence">
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <CardTitle id="area-evidence-heading" tabIndex={-1}>
-            Areas
-          </CardTitle>
+        <div className="space-y-1.5">
+          {/* A section name, not a heading (console-development); the reviewed
+              count sits beside it as a panel's count does, rather than as a
+              badge restating the page's "Areas reviewed" figure. */}
+          <div className="flex items-center gap-3">
+            <CardTitle id="area-evidence-heading" tabIndex={-1} variant="label">
+              Areas
+            </CardTitle>
+            <span className="text-muted-foreground font-mono text-xs tabular-nums">
+              {totals.areasReviewed} of {totals.areas} reviewed
+            </span>
+          </div>
           <CardDescription>
             {countLabel(totals.areas, 'area')} · {countLabel(totals.recordings, 'recording')} ·{' '}
             {countLabel(totals.photos, 'photo')} · {countLabel(totals.findings, 'finding')}
           </CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={totals.areasReviewed >= totals.areas ? 'success' : 'secondary'}>
-            {totals.areasReviewed} of {totals.areas} reviewed
-          </Badge>
-          <div aria-label="Show areas as" className="flex rounded-md border p-0.5" role="group">
-            {(
-              [
-                ['areas', 'Areas'],
-                ['sheet', 'Photo sheet'],
-              ] as const
-            ).map(([value, label]) => (
-              <Button
-                aria-pressed={view === value}
-                key={value}
-                onClick={() => showView(value)}
-                size="sm"
-                type="button"
-                variant={view === value ? 'secondary' : 'ghost'}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
+          <SegmentedControl
+            aria-label="Show areas as"
+            onChange={(next) => showView(next)}
+            options={[
+              { value: 'areas', label: 'Areas' },
+              { value: 'sheet', label: 'Photo sheet' },
+            ]}
+            value={view}
+          />
           {/* Area management belongs beside the area list a reviewer is looking
               at. This used to sit in a second "Inspection areas" card further
               down whose only unique capability was this button — the rest of it
               repeated the navigator below, so the page offered two lists and no
-              way to tell which one to use. */}
-          {/* Adding an area is only possible while the inspection can still
-              change: finalization freezes the evidence, and a completed or
-              cancelled one is a record rather than work in hand. The server
-              refuses these too — this just does not offer what it would. */}
-          {canMerge &&
-          inspection?.propertywareBuilding?.id &&
-          !inspection.finalizedAt &&
-          inspection.status !== 'COMPLETED' &&
-          inspection.status !== 'CANCELLED' ? (
-            <Button onClick={() => setAddingAreas(true)} size="sm" type="button" variant="outline">
-              Add area
-            </Button>
-          ) : null}
-          {canMerge && manageableAreas.length >= 2 ? (
-            <Button onClick={() => setMerging(true)} size="sm" type="button" variant="outline">
-              Merge duplicates
-            </Button>
+              way to tell which one to use.
+
+              One menu rather than three outline buttons (console-development):
+              each is taken rarely, and three of them out-weighed the area list
+              they manage. The import still says when one is running, on the
+              menu's own button. */}
+          {canAddArea || canMergeAreas || canImport ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" type="button" variant="outline">
+                  {importRunning ? <Spinner /> : null}
+                  Manage areas
+                  <ChevronDownIcon aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                {canAddArea ? (
+                  <DropdownMenuItem onSelect={() => setAddingAreas(true)}>Add area</DropdownMenuItem>
+                ) : null}
+                {canMergeAreas ? (
+                  <DropdownMenuItem onSelect={() => setMerging(true)}>
+                    Merge duplicates
+                  </DropdownMenuItem>
+                ) : null}
+                {canImport ? (
+                  <DropdownMenuItem onSelect={() => setImporting(true)}>
+                    {importRunning ? 'Import in progress' : 'Import a report'}
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
           {/* Offered on every inspection, of every type, in every state: an
               import is what the office reaches for when the record here is
               wrong, so it replaces what it finds -- or, chosen once the report
-              has been read, adds the rooms it covers. Here beside Add area
-              rather than in an amber paragraph above the areas on every
+              has been read, adds the rooms it covers. Opened from the menu
+              rather than an amber paragraph above the areas on every
               inspection: the dialog says what an import will do to what is
-              here before anything happens, in real numbers. */}
-          {canMerge && inspection ? (
+              here before anything happens, in real numbers. Always mounted,
+              so `?import=` still opens it from a link. */}
+          {canImport && inspection ? (
             <ImportReportDialog
               evidence={
                 inspection.evidence
@@ -342,8 +366,9 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               }
               inspectionId={inspectionId}
               inspectionType={inspection.inspectionType}
+              onOpenChange={setImporting}
+              open={importing}
               replacing={hasEvidence(inspection)}
-              triggerSize="sm"
             />
           ) : null}
         </div>
@@ -420,7 +445,9 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                         className={cn(
                           'grid w-full gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors',
                           'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
-                          active ? 'border-primary bg-primary/5' : 'hover:bg-accent/50',
+                          // The accent for "you are here"; primary is ink now
+                          // (console-development).
+                          active ? 'border-highlight bg-highlight/10' : 'hover:bg-accent/50',
                         )}
                         onClick={() => select(area.id)}
                         role="tab"
@@ -467,7 +494,8 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                 })}
               </ul>
             ) : (
-              <p className="text-muted-foreground rounded-lg border border-dashed p-4 text-center text-sm">
+              // A quiet line, not a dashed box inside the card (console-development).
+              <p className="text-muted-foreground py-4 text-center text-sm">
                 No areas match this filter.
               </p>
             )}
@@ -490,7 +518,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                 tab={activeTab}
               />
             ) : (
-              <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">
+              <p className="text-muted-foreground py-6 text-center text-sm">
                 Select an area to review its evidence.
               </p>
             )}

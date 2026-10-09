@@ -54,7 +54,10 @@ export default function ResetPasswordPage() {
       return;
     }
     if (password !== confirmation) {
-      setError('Passwords do not match.');
+      // Said once (console-development): the line under the confirmation field
+      // already says "Passwords do not match" whenever one has been typed, and
+      // the alert repeated it word for word.
+      setError(confirmation ? undefined : 'Confirm the new password.');
       return;
     }
     setError(undefined);
@@ -136,9 +139,9 @@ export default function ResetPasswordPage() {
     );
   }
 
-  // Said before the form rather than after a failed submit: a spent or
-  // foreign-browser link cannot be fixed by anything typed here, and the only
-  // useful action is to ask for a new one.
+  // Said before the form rather than after a failed submit: a spent link
+  // cannot be fixed by anything typed here, and the only useful action is to
+  // ask for a new one.
   if (!required && linkState !== 'ready') {
     return (
       <AuthLayout title={title}>
@@ -152,8 +155,9 @@ export default function ResetPasswordPage() {
             <Alert variant="destructive">
               <AlertTitle>This reset link is no longer usable</AlertTitle>
               <AlertDescription>
-                It may have already been used, expired, or been opened in a different browser from
-                the one that requested it.
+                {/* Not "opened in a different browser": links are not tied to the
+                    browser that asked for one (console-development). */}
+                It may have already been used, or it expired.
               </AlertDescription>
             </Alert>
             <Button asChild className="w-full">

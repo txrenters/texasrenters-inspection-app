@@ -16,7 +16,8 @@ import { CopyButton } from '@/components/api-reference/copy-button';
 import { EndpointConsole } from '@/components/api-reference/endpoint-console';
 import { JsonView } from '@/components/api-reference/json-view';
 import { SchemaTable, resolveSchema } from '@/components/api-reference/schema-view';
-import { PageHeader, SectionHeader } from '@/components/page-header';
+import { PageHeader } from '@/components/page-header';
+import { SECTION_LABEL } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -44,14 +45,16 @@ interface Endpoint {
   operation: ApiOperation;
 }
 
-/** Colour per verb, so the list is scannable without reading the words. */
-const METHOD_TONE: Record<string, string> = {
-  get: 'text-info',
-  post: 'text-success',
-  put: 'text-warning',
-  patch: 'text-warning',
-  delete: 'text-destructive',
-};
+/**
+ * The verb in muted mono, and red only for DELETE (console-development).
+ *
+ * A colour per verb made two hundred rows a rainbow in which green meant
+ * "POST" rather than "fine" -- the same greens and ambers the console uses for
+ * status. The one verb worth a second look is the one that destroys data.
+ */
+function methodTone(method: string) {
+  return method === 'delete' ? 'text-destructive' : 'text-muted-foreground';
+}
 
 function flatten(document: ApiDocument | undefined): Endpoint[] {
   if (!document) return [];
@@ -169,7 +172,7 @@ function EndpointGroup({
         {holdsSelection && !expanded ? (
           <span
             aria-label="contains the open endpoint"
-            className="bg-primary size-1.5 rounded-full"
+            className="bg-highlight size-1.5 rounded-full"
           />
         ) : null}
         <span className="text-muted-foreground text-xs tabular-nums">{endpoints.length}</span>
@@ -189,7 +192,7 @@ function EndpointGroup({
                 <span
                   className={cn(
                     'w-12 shrink-0 font-mono text-[10px] font-semibold uppercase',
-                    METHOD_TONE[endpoint.method],
+                    methodTone(endpoint.method),
                   )}
                 >
                   {endpoint.method}
@@ -225,9 +228,7 @@ function EndpointDetail({
     <div className="space-y-4">
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={cn('font-mono text-sm font-semibold uppercase', METHOD_TONE[method])}
-          >
+          <span className={cn('font-mono text-sm font-semibold uppercase', methodTone(method))}>
             {method}
           </span>
           <span className="font-mono text-sm break-all">{path}</span>
@@ -244,7 +245,9 @@ function EndpointDetail({
         <div className="flex flex-wrap gap-1.5">
           <AuthenticationBadges operation={operation} />
           {permissions.map((permission) => (
-            <Badge key={permission}>{formatPermission(permission)}</Badge>
+            <Badge key={permission} variant="outline">
+              {formatPermission(permission)}
+            </Badge>
           ))}
           {permissions.length === 0 && (operation['x-authentication']?.length ?? 0) > 0 ? (
             <Badge variant="secondary">Any authenticated caller</Badge>
@@ -259,8 +262,10 @@ function EndpointDetail({
         </TabsList>
 
         <TabsContent className="space-y-5 pt-4" value="reference">
+          {/* Section names as labels, so they do not compete with the
+              endpoint's own name above them (console-development). */}
           <section className="space-y-2">
-            <SectionHeader title="Parameters" />
+            <h3 className={SECTION_LABEL}>Parameters</h3>
             {operation.parameters?.length ? (
               <Table>
                 <TableHeader>
@@ -301,7 +306,7 @@ function EndpointDetail({
           </section>
 
           <section className="space-y-2">
-            <SectionHeader title="Request body" />
+            <h3 className={SECTION_LABEL}>Request body</h3>
             {bodySchema ? (
               <SchemaTable document={document} schema={bodySchema} />
             ) : (
@@ -310,7 +315,7 @@ function EndpointDetail({
           </section>
 
           <section className="space-y-2">
-            <SectionHeader title="Responses" />
+            <h3 className={SECTION_LABEL}>Responses</h3>
             {responses.length ? (
               <ul className="space-y-1.5">
                 {responses.map(([status, response]) => (
@@ -328,15 +333,35 @@ function EndpointDetail({
           </section>
 
           <section className="space-y-2">
-            <SectionHeader
-              description="The operation exactly as the API describes itself, including the authorization annotations."
-              title="Raw definition"
-            />
+            <div className="space-y-0.5">
+              <h3 className={SECTION_LABEL}>Raw definition</h3>
+              <p className="text-muted-foreground text-sm">
+                The operation exactly as the API describes itself, including the authorization
+                annotations.
+              </p>
+            </div>
             <JsonView value={operation} />
           </section>
         </TabsContent>
 
-        <TabsContent className="pt-4" value="console">
+        <TabsContent className="space-y-4 pt-4" value="console">
+          {/* Where it applies: in the tab that sends requests, not above the
+              whole reference, where it was the first thing read by someone who
+              only came to look a route up (console-development).
+
+              The old wording said requests ran on the reader's own session.
+              They no longer do — Try it authenticates as the integration whose
+              key you paste, which is the whole point: you see what that
+              integration sees, including the 403 on a route no key may reach. */}
+          <Alert variant="warning">
+            <AlertTitle>Try it sends real requests, as the integration you name</AlertTitle>
+            <AlertDescription>
+              Requests carry the API key you supply, not your session — so they do exactly what
+              that integration can do, against live data. Keys reach only the endpoints marked
+              “Open to integrations”; everywhere else the API answers{' '}
+              <code className="text-xs">API_ROUTE_NOT_OPEN_TO_KEYS</code>.
+            </AlertDescription>
+          </Alert>
           <EndpointConsole
             document={document}
             method={method}
@@ -425,22 +450,8 @@ export default function ApiReferencePage() {
         title="API reference"
       />
 
-      {/* The old wording said requests ran on the reader's own session. They no
-          longer do — Try it authenticates as the integration whose key you
-          paste, which is the whole point: you see what that integration sees,
-          including the 403 on a route no key may reach. */}
-      <Alert variant="warning">
-        <AlertTitle>Try it sends real requests, as the integration you name</AlertTitle>
-        <AlertDescription>
-          Requests carry the API key you supply, not your session — so they do exactly what that
-          integration can do, against live data. Keys reach only the endpoints marked “Open to
-          integrations”; everywhere else the API answers{' '}
-          <code className="text-xs">API_ROUTE_NOT_OPEN_TO_KEYS</code>.
-        </AlertDescription>
-      </Alert>
-
       {unannotated.length > 0 ? (
-        <Alert className="mt-3" variant="destructive">
+        <Alert variant="destructive">
           <AlertTitle>
             {unannotated.length} operation{unannotated.length === 1 ? '' : 's'} could not be read
           </AlertTitle>
@@ -457,7 +468,7 @@ export default function ApiReferencePage() {
       <div className="mt-4 grid gap-4 lg:grid-cols-[22rem_1fr]">
         <Card className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-8rem)] lg:self-start">
           <CardHeader className="gap-2">
-            <CardTitle className="text-sm">Endpoints</CardTitle>
+            <CardTitle variant="label">Endpoints</CardTitle>
             <div className="relative">
               <SearchIcon
                 aria-hidden

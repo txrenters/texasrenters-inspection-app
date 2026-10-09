@@ -124,6 +124,26 @@ describe.each([
     },
   );
 
+  /**
+   * The one accent is TEXT: the live figure on a card, and the page you are on
+   * in the sidebar, where it sits on a tint of itself (the same alphas as a
+   * status badge, for the same reason).
+   */
+  it.each(['card', 'background', 'sidebar'] as const)(
+    'highlight is readable as text on %s',
+    (surface) => {
+      expect(contrast(colour(scope, 'highlight'), colour(scope, surface))).toBeGreaterThanOrEqual(
+        AA_BODY,
+      );
+    },
+  );
+
+  it('highlight is readable on its own tint over the sidebar (the active nav item)', () => {
+    const text = colour(scope, 'highlight');
+    const tint = composite(text, colour(scope, 'sidebar'), TINT_ALPHA[scope]);
+    expect(contrast(text, tint)).toBeGreaterThanOrEqual(AA_BODY);
+  });
+
   it('primary button text is readable on the primary fill', () => {
     expect(
       contrast(colour(scope, 'primary-foreground'), colour(scope, 'primary')),

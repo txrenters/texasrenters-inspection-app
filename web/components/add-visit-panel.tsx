@@ -4,12 +4,18 @@ import { isFinishedStatus, type PropertyPosition } from '@texasrenters/shared';
 import { ArrowLeftIcon, ExternalLinkIcon, SearchIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { StatusBadge } from '@/components/status-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { humanize } from '@/lib/format';
 import { useUnassignedOnDay } from '@/lib/queries';
 import { cn } from '@/lib/utils';
+
+/** The type in the words the console's navigation uses ("Move-in"), not the enum humanized. */
+const typeTitle = (type: string) =>
+  INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ?? humanize(type);
 
 /** How many properties a search lists; the map shows every match. */
 const LISTED_PROPERTIES = 20;
@@ -198,8 +204,12 @@ export function AddVisitPanel({
 
         {canAssign ? (
           <div className="grid min-w-0 gap-1">
-            <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-              Unassigned that day{unassigned.data ? ` (${visits.length})` : ''}
+            {/* The console's one section-name style (console-development). */}
+            <p className={cn(SECTION_LABEL, 'flex items-baseline gap-2')}>
+              Unassigned that day
+              {unassigned.data ? (
+                <span className="font-mono text-xs tracking-normal normal-case tabular-nums">{visits.length}</span>
+              ) : null}
             </p>
             {unassigned.isLoading ? (
               <p className="text-muted-foreground text-xs">Loading…</p>
@@ -227,7 +237,7 @@ export function AddVisitPanel({
                           {visit.propertywareUnit?.name ? ` · ${visit.propertywareUnit.name}` : ''}
                         </span>
                         <span className="text-muted-foreground flex flex-wrap items-center gap-1">
-                          {humanize(visit.inspectionType)}
+                          {typeTitle(visit.inspectionType)}
                           <StatusBadge className="h-4 px-1 text-[10px]" showIcon={false} value={visit.status} />
                         </span>
                       </button>
@@ -251,8 +261,13 @@ export function AddVisitPanel({
 
         {canCreate ? (
           <div className="grid min-w-0 gap-1">
-            <p className="text-muted-foreground text-[11px] font-medium tracking-wide uppercase">
-              New visit{searching ? ` (${matches.length} ${matches.length === 1 ? 'property' : 'properties'})` : ''}
+            <p className={cn(SECTION_LABEL, 'flex items-baseline gap-2')}>
+              New visit
+              {searching ? (
+                <span className="font-mono text-xs tracking-normal normal-case tabular-nums">
+                  {matches.length} {matches.length === 1 ? 'property' : 'properties'}
+                </span>
+              ) : null}
             </p>
             {!searching ? (
               <p className="text-muted-foreground text-xs">

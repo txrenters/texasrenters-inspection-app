@@ -153,3 +153,20 @@ describe('stops that could not be routed', () => {
     expect(text).toMatch(/Gulf Of Mexico Dr is not near a road/);
   });
 });
+
+describe('a route that will not arrive', () => {
+  // "Working it out…" waited for ever when the reader could not locate
+  // technicians (the query never runs) or the request failed
+  // (console-development).
+  it('says the location permission is needed rather than spinning', () => {
+    render(<TechnicianRouteCard displayName="Ernie" enabled={false} />);
+    expect(screen.getByText('Needs the location permission.')).toBeInTheDocument();
+    expect(screen.queryByText(/Working it out/)).toBeNull();
+  });
+
+  it('says the route is unavailable when the request failed', () => {
+    render(<TechnicianRouteCard displayName="Ernie" isError />);
+    expect(screen.getByText('Route unavailable.')).toBeInTheDocument();
+    expect(screen.queryByText(/Working it out/)).toBeNull();
+  });
+});

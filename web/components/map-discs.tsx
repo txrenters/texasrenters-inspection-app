@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 
-import { UNGROUPED_GREEN } from '@/components/planning/group-file';
+import { calmGroupColorOf, UNGROUPED_GREEN } from '@/components/planning/group-file';
 
 /**
  * The property markers every map in this console draws: the Group maker's.
@@ -39,6 +39,13 @@ export const GroupDisc = memo(function GroupDisc({
   approximate?: boolean;
 }) {
   const twoDigits = typeof label === 'number' && label >= 10;
+  // Painted calmed (console-development): the group's hue, at the console's
+  // softer lightness and chroma, with the numeral re-chosen for that fill.
+  const shown = calmGroupColorOf(fill);
+  if (shown) {
+    fill = shown.fill;
+    ink = shown.ink;
+  }
   return (
     <svg
       aria-hidden
@@ -125,8 +132,12 @@ export const LooseDisc = memo(function LooseDisc({
  * Yellow (the office, 2026-10-02). It was grey, to read as the rest of the
  * portfolio rather than as work to plan, and grey turned out to be hard to find
  * on the map at all. Still not green, which stays the package's.
+ *
+ * Softened 2026-10-09 (console-development) from #facc15: two hundred neon
+ * discs were most of what made the map read as noise. Still yellow, still
+ * found by its dark rim on either roadmap and on satellite.
  */
-export const OTHER_PROPERTY_YELLOW = '#facc15';
+export const OTHER_PROPERTY_YELLOW = '#e4c973';
 
 /**
  * A dark edge for the yellow disc. A pale disc with a white rim disappears into

@@ -807,6 +807,8 @@ describe('the benefit package plan page', () => {
 
     expect(screen.queryByText(/Building asks who goes out/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'How days are built' }));
+    // What the summary's "outside the rules" means, said with the rules.
+    expect(screen.getByText(/A day outside the rules has more than 10 visits/)).toBeTruthy();
 
     // The quarter's US holidays, found by the planner rather than typed in.
     expect(screen.getByText('Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
@@ -1027,6 +1029,7 @@ describe('the benefit package plan page', () => {
     });
     mount({ plans: [{ ...PLAN, status: 'PUBLISHED' }], stops: [stop('s1'), waiting] });
 
+    // The segmented control sets its count beside the label rather than after a space.
     expect(screen.getByRole('button', { name: 'Unscheduled 1' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByText(/a published one is also in Jobber’s Unscheduled list/)).toBeTruthy();
     expect(within(screen.getByTestId('plan-attention-map')).getByText('s2: NO_DAY')).toBeTruthy();
@@ -1149,6 +1152,26 @@ describe('the benefit package plan page', () => {
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('25 min drive · over the 20 min between properties')).toBeTruthy();
     expect(screen.getByText('1 day outside the rules').className).toContain('text-destructive');
+  });
+
+  /** Console-development: the red words take the calendar to the day, rather than only explaining themselves on hover. */
+  it('goes to a day outside the rules from the summary, and the calendar follows it', () => {
+    const november = {
+      ...DAY,
+      id: 'day-2',
+      date: '2026-11-05T00:00:00.000Z',
+      stops: DAY.stops.map((entry) => (entry.id === 's3' ? { ...entry, driveSecondsForecast: 25 * 60 } : entry)),
+    };
+    const { rerender } = mount({ otherDays: [november] });
+    expect(screen.getByRole('button', { name: 'October 2026: choose a month' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '1 day outside the rules' }));
+    expect(url.set).toHaveBeenCalledWith({ tab: 'schedule', show: 'all', day: 'day-2' });
+
+    // The page puts the day in the address; the calendar goes to its month.
+    url.state = { ...url.state, day: 'day-2' };
+    rerender(<PlanningPage />);
+    expect(screen.getByRole('button', { name: 'November 2026: choose a month' })).toBeTruthy();
   });
 
   /** A plan built before days started from home, or for a technician with no home on file. */

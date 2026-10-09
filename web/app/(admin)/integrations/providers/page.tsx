@@ -1,22 +1,20 @@
 'use client';
 
 import {
-  ActivityIcon,
   AudioLinesIcon,
   BotIcon,
-  BoxesIcon,
   BugIcon,
   Building2Icon,
   HardDriveIcon,
   MailIcon,
   RefreshCwIcon,
-  ShieldCheckIcon,
   SparklesIcon,
   ZapIcon,
 } from 'lucide-react';
 import { useState, type ComponentType, type FormEvent } from 'react';
 
 import { PageHeader } from '@/components/page-header';
+import { SECTION_LABEL } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -45,55 +43,54 @@ type Icon = ComponentType<{ className?: string }>;
  * function icon is unambiguous at this size, needs no network, and survives a
  * provider being swapped for a competitor.
  */
-const PROVIDER_META: Record<string, { description: string; metric: string; icon: Icon; tint: string }> =
+/**
+ * One quiet tile for every provider (console-development). Each had its own
+ * chart tint -- and Sentry the destructive red -- so the page read as eight
+ * statuses before any badge was looked at, and a healthy Sentry looked broken.
+ */
+const TILE = 'bg-muted text-muted-foreground';
+
+const PROVIDER_META: Record<string, { description: string; metric: string; icon: Icon }> =
   {
     Propertyware: {
       description: 'Portfolio, property, unit, and lease source synchronization.',
       metric: 'Source sync',
       icon: Building2Icon,
-      tint: 'bg-chart-1/10 text-chart-1',
     },
     Deepgram: {
       description: 'Video transcription provider.',
       metric: 'Transcription',
       icon: AudioLinesIcon,
-      tint: 'bg-chart-2/10 text-chart-2',
     },
     Anthropic: {
       description: 'AI-assisted inspection analysis. Human review remains mandatory.',
       metric: 'Model access',
       icon: SparklesIcon,
-      tint: 'bg-chart-4/10 text-chart-4',
     },
     OpenAI: {
       description: 'Alternative AI extraction and analysis provider. Human review remains mandatory.',
       metric: 'Model access',
       icon: BotIcon,
-      tint: 'bg-chart-3/10 text-chart-3',
     },
     'Cloudflare R2': {
       description: 'Object storage for inspection video and photo evidence.',
       metric: 'Inspection media bucket',
       icon: HardDriveIcon,
-      tint: 'bg-chart-4/10 text-chart-4',
     },
     Sentry: {
       description: 'Application error monitoring and diagnostics.',
       metric: 'Monitoring',
       icon: BugIcon,
-      tint: 'bg-destructive/10 text-destructive',
     },
     Redis: {
       description: 'Shared backend response cache and cache-health diagnostics.',
       metric: 'Connection',
       icon: ZapIcon,
-      tint: 'bg-chart-2/10 text-chart-2',
     },
     Mailer: {
       description: 'Microsoft Graph delivery for account invitations and inspection report links.',
       metric: 'Sender identity',
       icon: MailIcon,
-      tint: 'bg-chart-1/10 text-chart-1',
     },
   };
 
@@ -106,21 +103,19 @@ const PROVIDER_META: Record<string, { description: string; metric: string; icon:
  * disappearing — a provider missing from this page is worse than one filed
  * loosely.
  */
-const GROUPS: Array<{ key: string; label: string; icon: Icon; members: string[] }> = [
+const GROUPS: Array<{ key: string; label: string; members: string[] }> = [
   {
     key: 'core',
     label: 'Core data',
-    icon: BoxesIcon,
     // Supabase is gone from here with the migration off it. The database is
     // now Postgres the deployment runs itself, and a self-hosted dependency is
     // not a third-party integration to show an administrator.
     members: ['Propertyware', 'Deepgram'],
   },
-  { key: 'ai', label: 'AI providers', icon: SparklesIcon, members: ['Anthropic', 'OpenAI'] },
+  { key: 'ai', label: 'AI providers', members: ['Anthropic', 'OpenAI'] },
   {
     key: 'infra',
     label: 'Infrastructure & delivery',
-    icon: ActivityIcon,
     // Mailer leads: it is the only card carrying a form, so anywhere else it
     // lands alone on a second row and stretches it to twice the height.
     members: ['Mailer', 'Cloudflare R2', 'Sentry', 'Redis'],
@@ -174,7 +169,6 @@ export default function ProvidersPage() {
   const grouped = GROUPS.map((group) => ({
     key: group.key,
     label: group.label,
-    icon: group.icon,
     // Sorted by the order declared above, not the order the API happens to
     // return: `members` is where the layout decides which card leads a row.
     items: all
@@ -187,7 +181,7 @@ export default function ProvidersPage() {
     (provider) => !GROUPS.some((group) => group.members.includes(provider.provider)),
   );
   const sections = ungrouped.length
-    ? [...grouped, { key: 'other', label: 'Other', icon: BoxesIcon, items: ungrouped }]
+    ? [...grouped, { key: 'other', label: 'Other', items: ungrouped }]
     : grouped;
 
   return (
@@ -215,6 +209,14 @@ export default function ProvidersPage() {
           </div>
         }
         description="Configuration presence and operational availability without exposing credentials."
+        // Was a note at the foot of the page (console-development).
+        info={
+          <p>
+            All providers are checked on a regular schedule. Status reflects availability and
+            configuration only - no credentials are stored or displayed.
+          </p>
+        }
+        infoLabel="How readiness is checked"
         title="Provider readiness"
       />
 
@@ -226,10 +228,8 @@ export default function ProvidersPage() {
         <div className="space-y-6">
           {sections.map((section) => (
             <section className="space-y-3" key={section.key}>
-              <h2 className="flex items-center gap-2 text-sm font-semibold">
-                <section.icon className="text-muted-foreground size-4" />
-                {section.label}
-              </h2>
+              {/* A group's name is a label, not a headline (console-development). */}
+              <h2 className={SECTION_LABEL}>{section.label}</h2>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {section.items.map((provider) => {
                   const meta = PROVIDER_META[provider.provider];
@@ -241,7 +241,7 @@ export default function ProvidersPage() {
                           aria-hidden
                           className={cn(
                             'flex size-10 shrink-0 items-center justify-center rounded-lg',
-                            meta?.tint ?? 'bg-muted text-muted-foreground',
+                            TILE,
                           )}
                         >
                           {/* Initials only for a provider this page has never
@@ -319,14 +319,6 @@ export default function ProvidersPage() {
               </div>
             </section>
           ))}
-
-          <Alert>
-            <ShieldCheckIcon />
-            <AlertDescription>
-              All providers are checked on a regular schedule. Status reflects availability and
-              configuration only - no credentials are stored or displayed.
-            </AlertDescription>
-          </Alert>
         </div>
       )}
     </>

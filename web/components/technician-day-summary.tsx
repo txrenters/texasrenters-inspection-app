@@ -2,6 +2,7 @@
 
 import type { AssignedStop, TechnicianDayTimeline } from '@texasrenters/shared';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { businessTimeOfDay } from '@/lib/clock';
 import { formatDuration } from '@/lib/format';
 import { actualDayTotals, actualVisits } from '@/lib/route-plan';
@@ -16,16 +17,19 @@ import { actualDayTotals, actualVisits } from '@/lib/route-plan';
  * perfectly good timestamps describing a visit that did not happen that way.
  */
 
-/** A number and what it is, which is the whole layout. */
+/**
+ * A number and what it is, which is the whole layout. The name in the
+ * console's one label style (console-development).
+ */
 function Figure({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
     <div>
       <div
-        className={`text-sm tabular-nums ${muted ? 'text-muted-foreground' : 'text-foreground'}`}
+        className={`font-mono text-sm tabular-nums ${muted ? 'text-muted-foreground' : 'text-foreground'}`}
       >
         {value}
       </div>
-      <div className="text-muted-foreground text-[11px] tracking-wide uppercase">{label}</div>
+      <div className={`${SECTION_LABEL} mt-0.5`}>{label}</div>
     </div>
   );
 }
@@ -33,8 +37,14 @@ function Figure({ label, value, muted }: { label: string; value: string; muted?:
 export function TechnicianDaySummary({
   timeline,
   stops = [],
+  dayPhrase = 'today',
 }: {
   timeline: TechnicianDayTimeline;
+  /**
+   * The day being looked at, as a sentence says it: "today", or "on Oct 5,
+   * 2026" -- it said "today" whatever day was picked (console-development).
+   */
+  dayPhrase?: string;
   /** The day's inspections, whose start and submit times are the actual day. */
   stops?: readonly AssignedStop[];
 }) {
@@ -49,7 +59,7 @@ export function TechnicianDaySummary({
   if (!totals.shiftSeconds && !actual)
     return (
       <p className="text-muted-foreground px-3 py-2 text-xs">
-        No position reported today, so there is nothing to measure.
+        No position reported {dayPhrase}, so there is nothing to measure.
       </p>
     );
 
@@ -117,7 +127,7 @@ export function TechnicianDaySummary({
                 finished has nothing to measure, and a placeholder presented as
                 derived is exactly the problem this feature exists to remove. */}
             {projection.basis === 'MEASURED'
-              ? ` · ${formatDuration(projection.perVisitSeconds)} a visit, measured today`
+              ? ` · ${formatDuration(projection.perVisitSeconds)} a visit, measured ${dayPhrase}`
               : ` · assuming ${formatDuration(projection.perVisitSeconds)} a visit`}
           </span>
         </p>

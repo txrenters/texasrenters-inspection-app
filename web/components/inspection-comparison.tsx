@@ -8,10 +8,11 @@ import { useState } from 'react';
 import { ComparisonItemsTable } from '@/components/comparison-items-table';
 import { ReportShareDialog } from '@/components/report-share-dialog';
 import { Stat, StatGroup } from '@/components/stat-card';
-import { ErrorState, PageSkeleton } from '@/components/states';
+import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { usePermissions } from '@/lib/auth';
 import { CLASSIFICATION_VARIANT, classLabel } from '@/lib/comparison-classification';
 import {
@@ -88,12 +89,12 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
       ) : comparison.isError ? (
         <ErrorState error={comparison.error} retry={() => void comparison.refetch()} />
       ) : !data || !totals ? (
-        <div className="rounded-lg border border-dashed p-6 text-center">
-          <p className="text-muted-foreground text-sm">
-            No comparison yet. It is made by itself once the move-out is submitted and its move-in
-            is on record.
-          </p>
-        </div>
+        // The console's one empty state rather than a dashed box
+        // (console-development).
+        <EmptyState
+          description="It is made by itself once the move-out is submitted and its move-in is on record."
+          title="No comparison yet"
+        />
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -153,23 +154,15 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
           </StatGroup>
 
           <div className="bg-card rounded-xl border">
-            <div aria-label="Show rooms" className="flex flex-wrap gap-1.5 border-b p-3" role="group">
-              {FILTERS.map((option) => (
-                <Button
-                  aria-pressed={active === option.value}
-                  className="rounded-full"
-                  key={option.value}
-                  onClick={() => setFilter(option.value)}
-                  size="sm"
-                  type="button"
-                  variant={active === option.value ? 'secondary' : 'ghost'}
-                >
-                  {option.label}
-                  <span className="text-muted-foreground font-mono text-xs tabular-nums">
-                    {count(option.value)}
-                  </span>
-                </Button>
-              ))}
+            {/* The console's one toggle, not rounded pills that looked like the
+                lists' dropdown filters (console-development). */}
+            <div className="border-b p-3">
+              <SegmentedControl
+                aria-label="Show rooms"
+                onChange={setFilter}
+                options={FILTERS.map((option) => ({ ...option, count: count(option.value) }))}
+                value={active}
+              />
             </div>
             {rooms.length ? (
               <ul className="divide-y">
@@ -268,8 +261,12 @@ function AreaComparisonRow({
         </span>
         {/* One width on every row, so the columns before it line up down the list. */}
         <span className="flex shrink-0 items-center justify-end gap-2 sm:w-52">
+          {/* Muted words with a warning dot: it asks for a person, but the
+              coloured word was a second status beside the verdict
+              (console-development). */}
           {waiting ? (
-            <span className="text-info text-xs whitespace-nowrap tabular-nums">
+            <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs whitespace-nowrap tabular-nums">
+              <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" />
               {waiting} to confirm
             </span>
           ) : null}

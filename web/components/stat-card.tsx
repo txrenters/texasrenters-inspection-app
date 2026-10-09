@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
@@ -54,47 +54,58 @@ export function StatGroup({
   );
 }
 
-/** One cell of a StatGroup. Carries no border of its own; the group draws them. */
+/**
+ * One cell of a StatGroup. Carries no border of its own; the group draws them.
+ *
+ * Since 2026-10-09 (console-development) the figure itself is never coloured.
+ * An orange 5 and a green 1,209 side by side read as decoration, not as "act on
+ * the 5". The tone is a 6px dot before the label instead, and only for the two
+ * tones that ask for a person (warning, destructive); success is the absence of
+ * a problem and gets nothing. Icons are gone from the cells for the same reason:
+ * four glyphs in a row restated four labels.
+ */
 export function Stat({
   label,
   value,
   detail,
-  icon: Icon,
   tone = 'default',
   action,
 }: {
   label: string;
   value: ReactNode;
   detail?: string;
-  icon?: ComponentType<{ className?: string }>;
   /**
    * Reserved for the two cases where a figure is genuinely actionable: a queue
-   * that needs attention, a failure count. Expressed on the value itself, never
-   * as a decorative stripe.
+   * that needs attention, a failure count. Shown as a dot by the label.
    */
   tone?: 'default' | 'warning' | 'destructive' | 'success';
   action?: ReactNode;
 }) {
   return (
     <div className="bg-card flex flex-col p-4">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-muted-foreground text-sm font-medium">{label}</p>
-        {Icon ? <Icon className="text-muted-foreground size-4 shrink-0" /> : null}
-      </div>
+      <p className="text-muted-foreground flex items-center gap-2 font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
+        {tone === 'warning' || tone === 'destructive' ? (
+          <span
+            aria-hidden
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              tone === 'warning' ? 'bg-warning' : 'bg-destructive',
+            )}
+          />
+        ) : null}
+        {label}
+      </p>
       <p
         className={cn(
           // `font-mono` for the same reason the numeric table columns use it:
           // these sit in a row and get compared across, so the digits need one
           // width and one left edge.
-          'mt-2 font-mono text-2xl font-semibold tracking-tight tabular-nums',
-          tone === 'warning' && 'text-warning',
-          tone === 'destructive' && 'text-destructive',
-          tone === 'success' && 'text-success',
+          'mt-2.5 font-mono text-[1.75rem] leading-none font-medium tracking-tight tabular-nums',
         )}
       >
         {value}
       </p>
-      {detail ? <p className="text-muted-foreground mt-1 text-xs">{detail}</p> : null}
+      {detail ? <p className="text-muted-foreground mt-2 text-xs">{detail}</p> : null}
       {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
@@ -122,16 +133,34 @@ export function StatGroupSkeleton({ columns, count }: { columns: string; count: 
  * the operational queue is what made the old dashboard read as nine equal
  * things. Wraps to as many lines as it needs on a narrow window.
  */
-export function StatStrip({ children, className }: { children: ReactNode; className?: string }) {
+export function StatStrip({
+  children,
+  className,
+  title,
+  action,
+}: {
+  children: ReactNode;
+  className?: string;
+  /** A small label naming the strip, before the figures. */
+  title?: string;
+  /** A link at the far end, e.g. "Browse properties". */
+  action?: ReactNode;
+}) {
   return (
-    <dl
+    <div
       className={cn(
         'bg-card flex flex-wrap items-center gap-x-8 gap-y-3 rounded-xl border px-4 py-3',
         className,
       )}
     >
-      {children}
-    </dl>
+      {title ? (
+        <span className="text-muted-foreground font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
+          {title}
+        </span>
+      ) : null}
+      <dl className="flex flex-wrap items-center gap-x-8 gap-y-3">{children}</dl>
+      {action ? <div className="ml-auto">{action}</div> : null}
+    </div>
   );
 }
 

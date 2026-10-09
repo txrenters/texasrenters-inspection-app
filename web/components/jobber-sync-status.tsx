@@ -57,10 +57,12 @@ export function JobberSyncStatus({
   return (
     <Row className={className}>
       {/* Two elements, not one: the halo animates and the dot stays put, so the
-          indicator reads as a heartbeat rather than a control that grew. */}
+          indicator reads as a heartbeat rather than a control that grew.
+          The highlight, the console's one colour for "live" -- ink is for
+          primary buttons (console-development). */}
       <span aria-hidden className="relative flex size-2">
-        <span className="bg-primary/60 absolute inline-flex size-full animate-ping rounded-full motion-reduce:hidden" />
-        <span className="bg-primary relative inline-flex size-2 rounded-full" />
+        <span className="bg-highlight/60 absolute inline-flex size-full animate-ping rounded-full motion-reduce:hidden" />
+        <span className="bg-highlight relative inline-flex size-2 rounded-full" />
       </span>
       <span>
         Background sync is running{describeCadence(cron)}.{' '}

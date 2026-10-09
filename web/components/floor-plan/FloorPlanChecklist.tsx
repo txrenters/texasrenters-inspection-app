@@ -261,7 +261,8 @@ export function FloorPlanChecklist({
                         className={cn(
                           'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg border p-2 text-left transition-colors',
                           'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
-                          selected ? 'border-primary bg-primary/5' : 'hover:bg-accent/50',
+                          // The accent marks "this one", never ink (console-development).
+                          selected ? 'border-highlight bg-highlight/10' : 'hover:bg-accent/50',
                         )}
                         id={`fp-row-${area.id}`}
                         onClick={() => onSelectArea(area.id)}
@@ -324,7 +325,7 @@ export function FloorPlanChecklist({
       {editingAreaId && selectedArea?.id === editingAreaId ? (
         <div
           aria-label="Marker adjustment controls"
-          className="bg-primary/5 border-primary space-y-2 rounded-lg border p-3"
+          className="bg-highlight/10 border-highlight space-y-2 rounded-lg border p-3"
           role="region"
         >
           <div>
@@ -356,7 +357,8 @@ export function FloorPlanChecklist({
       ) : null}
 
       {saveMessage ? (
-        <p className="text-success text-sm" role="status">
+        // Muted: a save that worked is not news (console-development).
+        <p className="text-muted-foreground text-sm" role="status">
           {saveMessage}
         </p>
       ) : null}

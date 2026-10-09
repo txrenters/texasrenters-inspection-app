@@ -18,7 +18,7 @@ import {
 } from '@/components/map-discs';
 import { circleFeature, featureCollection } from '@/components/map-geometry';
 import { ZoneLayers } from '@/components/map-zones';
-import { groupColorOf, UNGROUPED_GREEN } from '@/components/planning/group-file';
+import { calmColor, groupColorOf, UNGROUPED_GREEN } from '@/components/planning/group-file';
 import { zoneTerritories } from '@/components/planning/zone-territories';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -423,7 +423,7 @@ function PropertyDetails({
           <span
             aria-hidden
             className="inline-block size-3 shrink-0 rounded-full border border-white"
-            style={{ backgroundColor: property.tbpGroup.color }}
+            style={{ backgroundColor: calmColor(property.tbpGroup.color) }}
           />
           {groupLabel(property.tbpGroup)}
         </p>
