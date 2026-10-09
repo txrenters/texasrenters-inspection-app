@@ -111,7 +111,10 @@ export function NavigationSection({
       <SidebarMenuButton
         aria-controls={listId}
         aria-expanded={expanded}
-        isActive={isActive}
+        // The accent marks ONE place. When the active child is on screen it
+        // carries the mark, and the section header stays plain; collapsed (or
+        // on the icon rail) the header is all there is, so it carries it.
+        isActive={isActive && !(expanded && activeChild)}
         onClick={toggle}
         tooltip={item.title}
       >
@@ -332,7 +335,7 @@ export function AppSidebar() {
                   tooltip="Account menu"
                 >
                   <Avatar className="size-8 rounded-md">
-                    <AvatarFallback className="bg-primary text-primary-foreground rounded-md text-xs font-semibold">
+                    <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground rounded-md text-xs font-semibold">
                       {initials(displayName)}
                     </AvatarFallback>
                   </Avatar>

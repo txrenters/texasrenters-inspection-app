@@ -51,7 +51,7 @@ export function HeaderClocks() {
             title={reading?.description}
           >
             <span className="text-muted-foreground font-medium">{zone.label}</span>
-            <span className="font-medium tabular-nums">
+            <span className="font-mono font-medium tabular-nums">
               {/* Non-breaking space holds the line's height before the first
                   tick, so nothing jumps when the clock appears. */}
               {reading?.time ?? ' '}

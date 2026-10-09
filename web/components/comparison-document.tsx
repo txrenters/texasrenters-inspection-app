@@ -215,7 +215,7 @@ function Notes({ heading, findings }: { heading: string; findings: ComparisonFin
                 <p className="text-muted-foreground text-xs leading-relaxed">{finding.description}</p>
               ) : null}
             </div>
-            <Badge variant={TONE_BADGE[finding.toneName]}>{finding.severityLabel}</Badge>
+            <Badge appearance="pill" variant={TONE_BADGE[finding.toneName]}>{finding.severityLabel}</Badge>
           </li>
         ))}
       </ul>
@@ -268,7 +268,7 @@ function Room({ room, renderPhoto }: { room: ComparisonRoomView; renderPhoto: Co
             </h3>
             {room.floorName ? <p className="text-muted-foreground text-xs">{room.floorName}</p> : null}
           </div>
-          <Badge className="gap-1" variant={TONE_BADGE[room.toneName]}>
+          <Badge appearance="pill" className="gap-1" variant={TONE_BADGE[room.toneName]}>
             <MarkIcon className="text-current" kind={room.mark} />
             {room.verdict}
           </Badge>
@@ -312,11 +312,11 @@ function Room({ room, renderPhoto }: { room: ComparisonRoomView; renderPhoto: Co
                     >
                       <span className="block text-sm font-medium">{item.label}</span>
                       {item.result ? (
-                        <Badge className="mt-1" variant={TONE_BADGE[item.result.toneName]}>
+                        <Badge appearance="pill" className="mt-1" variant={TONE_BADGE[item.result.toneName]}>
                           {item.result.label}
                         </Badge>
                       ) : item.needsCleaning ? (
-                        <Badge className="mt-1" variant="warning">
+                        <Badge appearance="pill" className="mt-1" variant="warning">
                           Needs cleaning
                         </Badge>
                       ) : null}

@@ -130,17 +130,25 @@ function fallback(value: string) {
   };
 }
 
+/**
+ * The badge draws a tone-coloured dot before the label, so by default only work
+ * that is actually MOVING (uploading, analysing, running) gets a glyph: a
+ * spinner in place of the dot. A tick, a clock or a cross beside every row
+ * repeated what the dot and the word already said. Pass `showIcon` to force the
+ * glyph on (or off) where a screen needs it.
+ */
 export function StatusBadge({
   value,
-  showIcon = true,
+  showIcon,
   className,
   ...props
 }: { value: string; showIcon?: boolean } & Omit<ComponentProps<typeof Badge>, 'variant'>) {
   const meta = STATUS[value] ?? fallback(value);
   const Icon = ICONS[meta.glyph];
+  const withIcon = showIcon ?? meta.glyph === 'processing';
   return (
     <Badge variant={TONE_VARIANT[meta.tone]} className={className} {...props}>
-      {showIcon ? (
+      {withIcon ? (
         <Icon
           aria-hidden
           className={meta.glyph === 'processing' ? 'motion-safe:animate-spin' : undefined}

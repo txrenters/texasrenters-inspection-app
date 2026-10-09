@@ -59,7 +59,7 @@ export function NotificationBell() {
             // header.
             <span
               aria-hidden
-              className="bg-destructive text-destructive-foreground absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold"
+              className="bg-warning text-background absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold"
             >
               {unreadCount > 9 ? '9+' : unreadCount}
             </span>
@@ -111,7 +111,7 @@ export function NotificationBell() {
                     >
                       <span className="flex items-center gap-2">
                         {!notification.read ? (
-                          <span aria-hidden className="bg-primary size-1.5 shrink-0 rounded-full" />
+                          <span aria-hidden className="bg-highlight size-1.5 shrink-0 rounded-full" />
                         ) : null}
                         <span className="truncate text-sm font-medium">{notification.title}</span>
                       </span>
