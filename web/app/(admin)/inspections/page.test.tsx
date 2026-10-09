@@ -13,6 +13,8 @@ import InspectionsPage from './page';
 const hooks = vi.hoisted(() => ({
   useInspections: vi.fn(),
   useTechnicians: vi.fn(),
+  // The day against Jobber, for the Jobber column; nothing to compare here.
+  useJobberDay: vi.fn(() => ({ data: undefined })),
 }));
 vi.mock('@/lib/queries', () => hooks);
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => false }) }));
