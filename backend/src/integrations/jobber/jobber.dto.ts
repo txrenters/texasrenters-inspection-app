@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -11,6 +11,21 @@ import { Type } from 'class-transformer';
  * jobber, it has the +15 days also cause we want to be able to see the q3
  * visits also". Both days or neither; the page cap bounds the run either way.
  */
+/** An action on the day's comparison that names one inspection. */
+export class JobberDayInspectionActionDto {
+  @IsUUID() inspectionId!: string;
+}
+
+/** Send our time to Jobber; with `technician`, our technician too (needs Assign). */
+export class JobberDayPushDto extends JobberDayInspectionActionDto {
+  @IsOptional() @IsBoolean() technician?: boolean;
+}
+
+/** An action on a Jobber visit that has no inspection here. */
+export class JobberDayVisitActionDto {
+  @IsString() @MaxLength(200) jobberVisitId!: string;
+}
+
 export class JobberSyncWindowDto {
   /** `YYYY-MM-DD`, the first day to pull. */
   @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) startAfter?: string;

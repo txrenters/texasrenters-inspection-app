@@ -22,8 +22,12 @@ import {
   type AuthenticatedRequest,
 } from '../../common/auth';
 import { JobberClient } from './jobber.client';
+import { JobberDayActionsService } from './jobber-day-actions.service';
 import { JobberDayService } from './jobber-day.service';
 import {
+  JobberDayInspectionActionDto,
+  JobberDayPushDto,
+  JobberDayVisitActionDto,
   JobberIgnoreLinkDto,
   JobberLinkPropertyDto,
   JobberLinkQueueQueryDto,
@@ -51,6 +55,7 @@ export class JobberIntegrationController {
     private readonly sync: JobberSyncWorker,
     private readonly outbound: JobberOutboundWorker,
     private readonly days: JobberDayService,
+    private readonly dayActions: JobberDayActionsService,
   ) {}
 
   /**
@@ -65,6 +70,52 @@ export class JobberIntegrationController {
   @RequirePermissions('inspections:read')
   day(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
     return this.days.day(request.user.organizationId, date);
+  }
+
+  /*
+   * What the office can do about a difference on the day. Each reuses the
+   * integration's own queue or sync, is refused unless the inspection is in a
+   * state where it makes sense, and is audited. See JobberDayActionsService.
+   */
+
+  /** Our time (and technician, if asked) to Jobber. Refused while pushes are off. */
+  @Post('day/push')
+  @HttpCode(200)
+  @RequirePermissions('inspections:manage')
+  dayPush(@Req() request: AuthenticatedRequest, @Body() body: JobberDayPushDto) {
+    return this.dayActions.push(request.user, body.inspectionId, body.technician === true);
+  }
+
+  /** Jobber's version wins: our queued edit withdrawn, the visit read again. */
+  @Post('day/take-jobber')
+  @HttpCode(200)
+  @RequirePermissions('inspections:manage')
+  dayTakeJobber(@Req() request: AuthenticatedRequest, @Body() body: JobberDayInspectionActionDto) {
+    return this.dayActions.takeJobber(request.user, body.inspectionId);
+  }
+
+  /** A Jobber-only visit read again through the sync's own rules. */
+  @Post('day/create-inspection')
+  @HttpCode(200)
+  @RequirePermissions('inspections:manage')
+  dayCreateInspection(@Req() request: AuthenticatedRequest, @Body() body: JobberDayVisitActionDto) {
+    return this.dayActions.createFromVisit(request.user, body.jobberVisitId);
+  }
+
+  /** A cancellation made here, sent to Jobber. Refused while pushes are off. */
+  @Post('day/cancel-in-jobber')
+  @HttpCode(200)
+  @RequirePermissions('inspections:manage')
+  dayCancelInJobber(@Req() request: AuthenticatedRequest, @Body() body: JobberDayInspectionActionDto) {
+    return this.dayActions.cancelInJobber(request.user, body.inspectionId);
+  }
+
+  /** A visit finished here, completed in Jobber: queued, or retried if it gave up. */
+  @Post('day/complete-in-jobber')
+  @HttpCode(200)
+  @RequirePermissions('inspections:finalize')
+  dayCompleteInJobber(@Req() request: AuthenticatedRequest, @Body() body: JobberDayInspectionActionDto) {
+    return this.dayActions.completeInJobber(request.user, body.inspectionId);
   }
 
   /** What the console shows on the integrations page. Never returns tokens. */
