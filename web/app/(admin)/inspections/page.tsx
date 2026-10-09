@@ -1,6 +1,7 @@
 'use client';
 
 import { isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
+import type { JobberDayRow, JobberDayState } from '@texasrenters/shared';
 import { ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
@@ -25,7 +26,7 @@ import { usePermissions } from '@/lib/auth';
 import { businessToday } from '@/lib/clock';
 import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
 import { quarterOf, recentQuarters } from '@/lib/planning';
-import { useInspections, useTechnicians } from '@/lib/queries';
+import { useInspections, useJobberDay, useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
@@ -118,8 +119,26 @@ const currentTechnician = (row: InspectionRow) =>
   // and can briefly leave the record without its assignments array.
   (row.assignments ?? []).find((assignment) => assignment.isCurrent)?.technician?.displayName ?? null;
 
-/** The columns, given which list this is. */
-function columnsFor(type: string): Array<Column<InspectionRow>> {
+/** A row's standing against Jobber, in the column's few words. */
+const JOBBER_WORDS: Record<JobberDayState, { words: string; tone: 'muted' | 'warning' | 'destructive' }> = {
+  MATCHES: { words: 'In Jobber', tone: 'muted' },
+  TIME_DIFFERS: { words: 'Time differs', tone: 'warning' },
+  DAY_DIFFERS: { words: 'Day differs', tone: 'warning' },
+  TECHNICIAN_DIFFERS: { words: 'Technician differs', tone: 'warning' },
+  NOT_IN_JOBBER: { words: 'Not booked', tone: 'warning' },
+  ONLY_IN_JOBBER: { words: 'Only in Jobber', tone: 'warning' },
+  DONE_HERE: { words: 'Still open in Jobber', tone: 'warning' },
+  DONE_IN_JOBBER: { words: 'Done in Jobber', tone: 'warning' },
+  CANCELLED_HERE: { words: 'Still open in Jobber', tone: 'destructive' },
+  UNSEEN: { words: 'Gone from Jobber?', tone: 'destructive' },
+};
+
+/**
+ * The columns, given which list this is. `jobber` is the day's comparison,
+ * keyed by inspection id; the Jobber column shows only when one day is listed,
+ * because the comparison is made a day at a time.
+ */
+function columnsFor(type: string, jobber?: Map<string, JobberDayRow>): Array<Column<InspectionRow>> {
   const columns: Array<Column<InspectionRow> | null> = [
     {
       key: 'property',
@@ -223,6 +242,31 @@ function columnsFor(type: string): Array<Column<InspectionRow>> {
           <span className="text-muted-foreground text-xs">Empty</span>
         ),
     },
+    jobber
+      ? {
+          key: 'jobber',
+          header: 'Jobber',
+          hideBelow: 'lg',
+          cell: (row) => {
+            const match = jobber.get(row.id);
+            if (!match) return <span className="text-muted-foreground text-xs">{EMPTY}</span>;
+            const { words, tone } = JOBBER_WORDS[match.state];
+            return (
+              <span
+                className={cn(
+                  'text-xs whitespace-nowrap',
+                  tone === 'muted' && 'text-muted-foreground',
+                  tone === 'warning' && 'text-warning',
+                  tone === 'destructive' && 'text-destructive',
+                )}
+                title={match.differences.join(' · ') || undefined}
+              >
+                {words}
+              </span>
+            );
+          },
+        }
+      : null,
     PROGRAMME_TYPES.has(type)
       ? {
           key: 'tbp',
@@ -336,7 +380,19 @@ export default function InspectionsPage() {
   const typeName = typeKind === typeKind.toUpperCase() ? typeKind : typeKind.toLowerCase();
   const createHref = section ? `/inspections/new?type=${encodeURIComponent(state.type)}` : '/inspections/new';
   const createLabel = section ? `Create ${typeName} inspection` : 'Create inspection';
-  const columns = useMemo(() => columnsFor(state.type), [state.type]);
+  const jobberDay = useJobberDay(day ?? today, Boolean(day));
+  const jobberRows = useMemo(
+    () =>
+      day && jobberDay.data
+        ? new Map(
+            jobberDay.data.rows
+              .filter((row): row is JobberDayRow & { inspectionId: string } => Boolean(row.inspectionId))
+              .map((row) => [row.inspectionId, row]),
+          )
+        : undefined,
+    [day, jobberDay.data],
+  );
+  const columns = useMemo(() => columnsFor(state.type, jobberRows), [state.type, jobberRows]);
 
   const rows = useMemo(() => inspections.data?.items ?? [], [inspections.data?.items]);
   const asDeletable = useCallback(
