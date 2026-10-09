@@ -23,6 +23,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatPermission } from '@/lib/access';
 import { usePermissions } from '@/lib/auth';
@@ -60,28 +61,40 @@ export default function RolesPage() {
       cell: (role) => (
         <div className="flex flex-wrap gap-1">
           {role.permissions.length ? (
+            // Outlined so six names in a row stay six names (console-development).
             role.permissions.slice(0, VISIBLE_PERMISSIONS).map((permission) => (
-              <Badge key={permission} variant="secondary">
+              <Badge key={permission} variant="outline">
                 {formatPermission(permission)}
               </Badge>
             ))
           ) : (
-            <span className="text-warning text-sm">No permissions</span>
+            <Badge variant="warning">No permissions</Badge>
           )}
+          {/* A button that opens a popover, not a tooltip on a span: the span
+              could not be reached by keyboard, so the rest of the list was
+              mouse-only (console-development). */}
           {role.permissions.length > VISIBLE_PERMISSIONS ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="outline">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  aria-label={`${role.permissions.length - VISIBLE_PERMISSIONS} more permissions in ${role.name}`}
+                  className="h-6 px-1.5 text-xs"
+                  size="sm"
+                  variant="ghost"
+                >
                   +{role.permissions.length - VISIBLE_PERMISSIONS} more
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                {role.permissions
-                  .slice(VISIBLE_PERMISSIONS)
-                  .map((permission) => formatPermission(permission))
-                  .join(', ')}
-              </TooltipContent>
-            </Tooltip>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)]">
+                <div className="flex flex-wrap gap-1">
+                  {role.permissions.slice(VISIBLE_PERMISSIONS).map((permission) => (
+                    <Badge key={permission} variant="outline">
+                      {formatPermission(permission)}
+                    </Badge>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           ) : null}
         </div>
       ),
@@ -98,7 +111,14 @@ export default function RolesPage() {
     <>
       <PageHeader
         actions={canManage ? <Button onClick={() => setCreating(true)}>Create role</Button> : undefined}
-        description="Fully customizable permission sets. Compose roles from the permission catalog, then assign them to users."
+        description="Permission sets assigned to users."
+        info={
+          <>
+            <p>Fully customizable permission sets. Compose roles from the permission catalog, then assign them to users.</p>
+            <p>A user has no access until a role is assigned.</p>
+          </>
+        }
+        infoLabel="About roles"
         title="Roles"
       />
 

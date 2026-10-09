@@ -7,7 +7,7 @@ import { DataTable, DataTableSkeleton, type Column } from '@/components/data-tab
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
-import { Stat, StatGroup } from '@/components/stat-card';
+import { StatStrip, StatStripItem } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
 import { PresenceIndicator } from '@/components/presence-indicator';
 import { StatusBadge } from '@/components/status-badge';
@@ -104,20 +104,15 @@ export default function TechniciansPage() {
 
       {creating ? <TechnicianCreateDialog onClose={() => setCreating(false)} /> : null}
 
+      {/* A strip named for what it adds up: the twenty rows in hand, not every
+          technician. As three big figures it read as the whole team's workload
+          (console-development). */}
       {workload && !busy ? (
-        <StatGroup
-          aria-label="Visible technician workload"
-          className="mb-4"
-          columns="grid-cols-1 sm:grid-cols-3"
-        >
-          <Stat
-            detail="Across the accounts on this page"
-            label="Current assignments"
-            value={workload.current}
-          />
-          <Stat detail="Active in the field" label="In progress" value={workload.inProgress} />
-          <Stat detail="Finished inspections" label="Completed" value={workload.completed} />
-        </StatGroup>
+        <StatStrip className="mb-4" title="This page">
+          <StatStripItem label="Current assignments" value={workload.current.toLocaleString()} />
+          <StatStripItem label="In progress" value={workload.inProgress.toLocaleString()} />
+          <StatStripItem label="Completed" value={workload.completed.toLocaleString()} />
+        </StatStrip>
       ) : null}
 
       <ListToolbar

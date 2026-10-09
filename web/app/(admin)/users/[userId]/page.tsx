@@ -1,5 +1,6 @@
 'use client';
 
+import { MoreHorizontalIcon } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -25,11 +26,17 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { formatPermission } from '@/lib/access';
@@ -52,6 +59,9 @@ export default function UserDetailPage() {
     useAccessMutations();
 
   const [roleIds, setRoleIds] = useState<Set<string>>(new Set());
+  // Which confirmation the "More actions" menu opened. Held here because a
+  // menu item closes its menu, and a dialog rendered inside it would go too.
+  const [dialog, setDialog] = useState<'mobile' | 'delete' | null>(null);
 
   // Seed the editable selection once the account loads.
   useEffect(() => {
@@ -121,84 +131,130 @@ export default function UserDetailPage() {
         actions={
           (canManage || canProvisionTechnician) && !item.isSystemAdmin ? (
             <>
-              {canProvisionTechnician ? (
+              {/* One visible button, the rest one menu away, as on a
+                  technician (console-development): Deactivate and Delete were
+                  two solid red buttons side by side. Every confirmation below
+                  is unchanged; the menu only opens it. */}
+              {canManage ? (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button disabled={grantTechnicianAccess.isPending} variant="outline">
-                      {grantTechnicianAccess.isPending ? 'Granting…' : 'Grant mobile access'}
+                    <Button
+                      disabled={updateUserStatus.isPending}
+                      variant={item.isActive ? 'outline' : 'default'}
+                    >
+                      {item.isActive ? 'Deactivate account' : 'Activate account'}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
                       <AlertDialogTitle>
-                        Let {item.displayName} use the inspection app?
+                        {item.isActive ? 'Deactivate' : 'Activate'} {item.displayName}?
                       </AlertDialogTitle>
                       <AlertDialogDescription>
-                        They keep this one account and their current password — no temporary
-                        password is issued, and nothing about their console access changes. They
-                        will appear on the Technicians page and can be assigned inspections.
+                        {item.isActive
+                          ? 'They are signed out and lose access to every admin screen. Their roles are kept, so activating later restores the same permissions.'
+                          : 'They regain access with the roles already assigned to this account.'}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => void grantHandsetAccess()}>
-                        Grant access
+                      <AlertDialogAction
+                        className={
+                          item.isActive ? buttonVariants({ variant: 'destructive' }) : undefined
+                        }
+                        onClick={() => void toggleStatus()}
+                      >
+                        {item.isActive ? 'Deactivate' : 'Activate'}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
               ) : null}
-              {canManage ? (
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    disabled={updateUserStatus.isPending}
-                    variant={item.isActive ? 'destructive' : 'default'}
-                  >
-                    {item.isActive ? 'Deactivate account' : 'Activate account'}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button aria-label="More actions" size="icon" variant="outline">
+                    <MoreHorizontalIcon />
                   </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>
-                      {item.isActive ? 'Deactivate' : 'Activate'} {item.displayName}?
-                    </AlertDialogTitle>
-                    <AlertDialogDescription>
-                      {item.isActive
-                        ? 'They are signed out and lose access to every admin screen. Their roles are kept, so activating later restores the same permissions.'
-                        : 'They regain access with the roles already assigned to this account.'}
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      className={
-                        item.isActive ? buttonVariants({ variant: 'destructive' }) : undefined
-                      }
-                      onClick={() => void toggleStatus()}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  {canProvisionTechnician ? (
+                    <DropdownMenuItem
+                      disabled={grantTechnicianAccess.isPending}
+                      onSelect={() => setDialog('mobile')}
                     >
-                      {item.isActive ? 'Deactivate' : 'Activate'}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-              ) : null}
-              {canManage ? (
-                <DeleteAccountDialog
-                  displayName={item.displayName}
-                  error={deleteUser.error}
-                  id={id}
-                  isPending={deleteUser.isPending}
-                  onDelete={remove}
-                  scope="CONSOLE"
-                />
-              ) : null}
+                      {grantTechnicianAccess.isPending ? 'Granting…' : 'Grant mobile access…'}
+                    </DropdownMenuItem>
+                  ) : null}
+                  {canManage ? (
+                    <>
+                      {canProvisionTechnician ? <DropdownMenuSeparator /> : null}
+                      <DropdownMenuItem
+                        disabled={deleteUser.isPending}
+                        onSelect={() => setDialog('delete')}
+                        variant="destructive"
+                      >
+                        Delete…
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           ) : undefined
         }
+        badges={<StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />}
         description={`${item.email} · created ${formatDateTime(item.createdAt)}`}
+        info={
+          <>
+            <p>
+              Access is defined entirely by the roles assigned here. Changes take effect on the
+              user&apos;s next request.
+            </p>
+            <p>
+              Effective permissions are the union of everything the assigned roles grant: what
+              the account can actually do.
+            </p>
+          </>
+        }
+        infoLabel="How access works"
         title={item.displayName}
       />
+
+      {canProvisionTechnician && !item.isSystemAdmin ? (
+        <AlertDialog
+          onOpenChange={(open) => setDialog(open ? 'mobile' : null)}
+          open={dialog === 'mobile'}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Let {item.displayName} use the inspection app?</AlertDialogTitle>
+              <AlertDialogDescription>
+                They keep this one account and their current password — no temporary
+                password is issued, and nothing about their console access changes. They
+                will appear on the Technicians page and can be assigned inspections.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void grantHandsetAccess()}>
+                Grant access
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
+      {canManage && !item.isSystemAdmin ? (
+        <DeleteAccountDialog
+          displayName={item.displayName}
+          error={deleteUser.error}
+          id={id}
+          isPending={deleteUser.isPending}
+          onDelete={remove}
+          onOpenChange={(open) => setDialog(open ? 'delete' : null)}
+          open={dialog === 'delete'}
+          scope="CONSOLE"
+        />
+      ) : null}
 
       {grantTechnicianAccess.error ? (
         <Alert className="mb-4" variant="destructive">
@@ -220,60 +276,30 @@ export default function UserDetailPage() {
         </Alert>
       ) : null}
 
+      {/* What you change first, then what it adds up to (console-development):
+          the assignment was below a wall of permission names. */}
       <div className="grid gap-4">
-        <Card>
-          <CardHeader className="flex-row items-start justify-between">
-            <div className="space-y-1">
-              <CardTitle variant="label">Effective permissions</CardTitle>
-              <CardDescription>
-                The union of everything the assigned roles grant. This is what the account can
-                actually do.
-              </CardDescription>
-            </div>
-            <StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
-          </CardHeader>
-          <CardContent>
-            {item.permissions.length ? (
-              <div className="flex flex-wrap gap-1.5">
-                {item.permissions.map((permission) => (
-                  <Badge key={permission} variant="secondary">
-                    {formatPermission(permission)}
-                  </Badge>
-                ))}
-              </div>
-            ) : (
-              <Alert variant="warning">
-                <AlertDescription>
-                  No permissions. This account can sign in and reach nothing until a role is
-                  assigned below.
-                </AlertDescription>
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
-
         <Card>
           <CardHeader>
             <CardTitle variant="label">Role assignment</CardTitle>
-            <CardDescription>
-              Access is defined entirely by what you assign here. Changes take effect on the
-              user&apos;s next request.
-            </CardDescription>
           </CardHeader>
           <CardContent>
             {item.isSystemAdmin ? (
-              <Alert variant="warning">
-                <AlertDescription>
-                  This is the protected bootstrap administrator. It has every permission and cannot
-                  be changed through custom role assignment.
-                </AlertDescription>
-              </Alert>
+              <p className="text-muted-foreground text-sm">
+                This is the protected bootstrap administrator. It has every permission and cannot
+                be changed through custom role assignment.
+              </p>
             ) : roles.isLoading ? (
               <div className="grid gap-2 sm:grid-cols-2">
                 {Array.from({ length: 4 }, (_, index) => (
                   <Skeleton className="h-14 rounded-lg" key={index} />
                 ))}
               </div>
+            ) : roles.isError ? (
+              // A failed list is not an empty one: "No custom roles exist yet"
+              // over a failed request sent people off to create roles that
+              // already existed (console-development).
+              <ErrorState error={roles.error} retry={() => void roles.refetch()} />
             ) : roles.data?.items.length ? (
               <fieldset className="grid gap-2 sm:grid-cols-2" disabled={!canManage}>
                 <legend className="sr-only">Assigned roles</legend>
@@ -320,6 +346,28 @@ export default function UserDetailPage() {
               </Button>
             </CardFooter>
           ) : null}
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle variant="label">Effective permissions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {item.permissions.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {item.permissions.map((permission) => (
+                  <Badge key={permission} variant="outline">
+                    {formatPermission(permission)}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                No permissions. This account can sign in and reach nothing until a role is
+                assigned above.
+              </p>
+            )}
+          </CardContent>
         </Card>
       </div>
     </>
