@@ -70,7 +70,7 @@ describe('admin navigation', () => {
     // Giving it a permission of its own would mean every existing
     // property-reader silently losing a page they should have.
     expect(titles).toEqual(['Dashboard', 'Properties', 'Tenants']);
-    expect(visible.map((group) => group.title)).toEqual(['Overview', 'Property management']);
+    expect(visible.map((group) => group.title)).toEqual(['Overview', 'Properties']);
   });
 
   it('builds useful breadcrumbs for create, detail, and deeper workflow routes', () => {
