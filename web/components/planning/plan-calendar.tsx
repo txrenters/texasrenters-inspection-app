@@ -418,7 +418,10 @@ function DayChip({ day, shared }: { day: PlanDay; shared: Shared }) {
       className={cn(
         'hover:bg-accent focus-visible:ring-ring/50 flex w-full min-w-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-left text-xs outline-none focus-visible:ring-[3px]',
         day.id === shared.selectedDayId && 'bg-accent border-ring',
-        outside && 'border-destructive/60',
+        // A coral left edge, as the Schedule marks a visit that needs a look
+        // (console-development): the whole chip outlined in red read as an
+        // error across a month of chips.
+        outside && 'border-l-destructive border-l-2',
       )}
       onClick={() => shared.onSelect(day.id)}
       title={label}
