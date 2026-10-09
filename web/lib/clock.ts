@@ -19,21 +19,23 @@ export type ClockZone = {
   timeZone: string;
 };
 
+// Texas first: every schedule in the console is Texas time, so it is the
+// clock the rest of the screen agrees with. Manila is where it is read from.
 export const CLOCK_ZONES: readonly ClockZone[] = [
   {
-    id: 'manila',
-    label: 'Manila',
-    spokenLabel: 'Manila, Philippines',
-    timeZone: 'Asia/Manila',
-  },
-  {
     id: 'texas',
-    label: 'Texas',
+    label: 'TX',
     spokenLabel: 'Texas, United States',
     // Central Time. Note that far-west Texas (El Paso, Hudspeth County) is
     // Mountain Time — this is deliberately the zone the business runs on, not
     // a claim that the whole state shares it.
     timeZone: 'America/Chicago',
+  },
+  {
+    id: 'manila',
+    label: 'MNL',
+    spokenLabel: 'Manila, Philippines',
+    timeZone: 'Asia/Manila',
   },
 ];
 

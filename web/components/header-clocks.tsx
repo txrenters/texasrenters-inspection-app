@@ -39,8 +39,10 @@ export function HeaderClocks() {
   }, []);
 
   return (
-    <div aria-hidden={now === null} className="hidden items-center gap-3 lg:flex">
-      {CLOCK_ZONES.map((zone) => {
+    // One line, "TX 8:33 AM · MNL 9:33 PM": two clocks reading as one
+    // instrument rather than two labelled blocks (console-development).
+    <div aria-hidden={now === null} className="hidden items-center gap-2 lg:flex">
+      {CLOCK_ZONES.map((zone, index) => {
         const reading = now ? readClock(now, zone) : null;
         return (
           <div
@@ -50,7 +52,14 @@ export function HeaderClocks() {
             role="group"
             title={reading?.description}
           >
-            <span className="text-muted-foreground font-medium">{zone.label}</span>
+            {index > 0 ? (
+              <span aria-hidden className="text-muted-foreground/60 pr-0.5">
+                ·
+              </span>
+            ) : null}
+            <span className="text-muted-foreground font-mono text-[10.5px] font-medium tracking-[0.08em]">
+              {zone.label}
+            </span>
             <span className="font-mono font-medium tabular-nums">
               {/* Non-breaking space holds the line's height before the first
                   tick, so nothing jumps when the clock appears. */}

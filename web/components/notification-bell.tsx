@@ -54,22 +54,28 @@ export function NotificationBell() {
         >
           <BellIcon className="size-4" />
           {unreadCount ? (
-            // Count, not a dot: "one inspection came in" and "eleven did" are
-            // different mornings. Capped so a long absence cannot stretch the
-            // header.
+            // A dot, since console-development: a filled 9+ badge was the
+            // loudest thing in the header all day. How many is still one look
+            // away, in the button's name and beside the popover's title, where
+            // "one came in" and "eleven did" can still be told apart.
             <span
               aria-hidden
-              className="bg-warning text-background absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold"
-            >
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
+              className="bg-warning ring-background absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2"
+            />
           ) : null}
         </Button>
       </PopoverTrigger>
 
       <PopoverContent align="end" className="w-88 p-0">
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-sm font-semibold">Notifications</span>
+          <span className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold">Notifications</span>
+            {notifications.length ? (
+              <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                {notifications.length}
+              </span>
+            ) : null}
+          </span>
           {notifications.length ? (
             <Button className="h-7 text-xs" onClick={clear} size="sm" variant="ghost">
               Clear all

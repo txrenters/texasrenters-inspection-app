@@ -18,8 +18,10 @@ describe('HeaderClocks', () => {
     vi.useFakeTimers({ now: ACROSS_MIDNIGHT });
     render(<HeaderClocks />);
 
-    expect(screen.getByText('Manila')).toBeInTheDocument();
-    expect(screen.getByText('Texas')).toBeInTheDocument();
+    // Short labels on screen (TX, MNL); the full names are in the
+    // accessible name, asserted below.
+    expect(screen.getByText('MNL')).toBeInTheDocument();
+    expect(screen.getByText('TX')).toBeInTheDocument();
     expect(screen.getByText('1:40 AM')).toBeInTheDocument();
     expect(screen.getByText('12:40 PM')).toBeInTheDocument();
   });
