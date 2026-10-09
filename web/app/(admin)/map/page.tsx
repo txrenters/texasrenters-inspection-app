@@ -1,7 +1,8 @@
 'use client';
 
+import { InfoIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { OFF_ROUTE_M, projectOntoPath } from '@texasrenters/shared';
 
@@ -24,17 +25,20 @@ import {
   OTHER_PROPERTY_YELLOW,
 } from '@/components/map-discs';
 import { PageHeader } from '@/components/page-header';
+import { SECTION_LABEL } from '@/components/panel';
 import { UNGROUPED_GREEN } from '@/components/planning/group-file';
 import { useFillHeight } from '@/components/planning/use-fill-height';
 import { EmptyState } from '@/components/states';
 import { toast } from 'sonner';
 
 import { AddVisitPanel } from '@/components/add-visit-panel';
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
-import { fromDateValue } from '@/lib/date-range';
 import { visitsByProperty } from '@/lib/day-visits';
-import { formatRelative } from '@/lib/format';
+import { formatDay, formatRelative } from '@/lib/format';
 import {
   useAdminMutations,
   useMapAssignments,
@@ -155,8 +159,8 @@ function LegendKey({
   swatch,
   full,
 }: {
-  children: React.ReactNode;
-  swatch: React.ReactNode;
+  children: ReactNode;
+  swatch: ReactNode;
   full: string;
 }) {
   return (
@@ -164,6 +168,53 @@ function LegendKey({
       {swatch}
       {children}
     </span>
+  );
+}
+
+/** One entry of the legend, read by the short row under the map and by the Legend popover alike. */
+interface LegendEntry {
+  key: string;
+  swatch: ReactNode;
+  /** The word on the short row. */
+  short: string;
+  /** What it means, in full: the row's tooltip and the popover's line. */
+  full: string;
+  count?: number;
+}
+
+/**
+ * The legend's meanings, a click away from the map itself (console-development).
+ * They were only in hover tooltips on a row under a map 70% of the window tall
+ * -- below the fold, and out of reach of a touch screen, which has no hover.
+ */
+function LegendPopover({ entries }: { entries: readonly LegendEntry[] }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button className="bg-background/95 shadow-sm" size="sm" variant="outline">
+          <InfoIcon aria-hidden />
+          Legend
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] text-sm">
+        <p className={`${SECTION_LABEL} mb-2`}>What the map shows</p>
+        <ul className="grid gap-2">
+          {entries.map((entry) => (
+            <li className="flex items-start gap-2" key={entry.key}>
+              <span className="mt-0.5 flex w-5 shrink-0 justify-center">{entry.swatch}</span>
+              <span className="min-w-0">
+                {entry.full}
+                {entry.count !== undefined ? (
+                  <span className="text-muted-foreground ml-1.5 font-mono text-xs tabular-nums">
+                    {entry.count.toLocaleString()}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -448,15 +499,11 @@ export default function TechnicianMapPage() {
   /** What the "+ Add visit" panel is showing, for the map to light up. */
   const [searchMatches, setSearchMatches] = useState<string[] | null>(null);
   const searched = useMemo(() => (searchMatches ? new Set(searchMatches) : null), [searchMatches]);
-  const dateLabel = useMemo(
-    () =>
-      fromDateValue(date)?.toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-      }) ?? date,
-    [date],
-  );
+  // The day as it is stored, a Texas day, through the console's own formatter
+  // rather than the reader's calendar (console-development).
+  const dateLabel = formatDay(date);
+  /** How a sentence names the day: the roster's empty line said "today" for any date. */
+  const dayPhrase = date === today ? 'today' : `on ${dateLabel}`;
 
   const removeStop = useCallback(
     async (stop: AssignedStop, technician: RosterEntry, reason: string) => {
@@ -488,6 +535,66 @@ export default function TechnicianMapPage() {
     null,
   );
 
+  // The swatches repeat the markers' own shapes rather than reducing them all
+  // to dots. A legend whose keys look nothing like the thing they explain makes
+  // the reader do the translation twice.
+  const legend: LegendEntry[] = [
+    { key: 'live', swatch: <TechnicianSwatch />, short: 'Live', full: 'Technician, reported recently' },
+    {
+      key: 'driving',
+      swatch: <DrivingSwatch />,
+      short: 'Driving',
+      full: 'Driving, pointing the way they are going',
+    },
+    {
+      key: 'stale',
+      swatch: <TechnicianSwatch stale />,
+      short: '30 min+',
+      full: 'Technician, last reported over 30 minutes ago',
+    },
+    ...(discCounts
+      ? [
+          {
+            key: 'group',
+            swatch: <DiscSwatch kind="GROUP" />,
+            short: 'TBP group',
+            full: "TBP property, in its group's colour",
+            count: discCounts.group,
+          },
+          {
+            key: 'loose',
+            swatch: <DiscSwatch kind="LOOSE" />,
+            short: 'TBP, no group',
+            full: 'TBP property in no group',
+            count: discCounts.loose,
+          },
+          {
+            key: 'other',
+            swatch: <DiscSwatch kind="OTHER" />,
+            short: 'Not TBP',
+            full: 'Property not on TBP',
+            count: discCounts.other,
+          },
+        ]
+      : [
+          {
+            key: 'property',
+            swatch: <DiscSwatch kind="OTHER" />,
+            short: 'Property',
+            full: 'Property',
+            count: properties.data?.length || undefined,
+          },
+        ]),
+    { key: 'done', swatch: <DoneSwatch />, short: 'Submitted', full: 'Inspection submitted that day' },
+    { key: 'driven', swatch: <LineSwatch />, short: 'Driven', full: 'Where they drove, in their colour' },
+    {
+      key: 'ahead',
+      swatch: <LineSwatch dashed />,
+      short: 'Route ahead',
+      full: "Route on to the day's properties",
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -511,49 +618,6 @@ export default function TechnicianMapPage() {
            the most ordinary state of all, nobody on shift, showed nothing at
            all. Anything worth saying is said over the top of it instead. */
         <div className="space-y-2">
-          {/* Who the page is about, above everything it governs.
-              
-              Counts on the labels because "how many are out right now" is the
-              question this page is usually opened for, and reading it should
-              not require clicking a filter to discover it is empty. They count
-              the whole roster, not the filtered view, or the number would
-              change to match whatever was already selected. */}
-          <Tabs
-            onValueChange={(value) => setPresence(value as TechnicianPresence | 'ALL')}
-            value={presence}
-          >
-            <TabsList aria-label="Filter technicians by whether they are reporting now">
-              <TabsTrigger value="ALL">
-                All
-                <span className="text-muted-foreground ml-1.5 tabular-nums">
-                  {presenceCounts.all}
-                </span>
-              </TabsTrigger>
-              <TabsTrigger value="ONLINE">
-                {/* A dot, not a colour on the word: the same signal the marker
-                    uses, so the filter and the map read alike. */}
-                <span
-                  aria-hidden
-                  className="bg-map-technician mr-1.5 inline-block size-1.5 rounded-full"
-                />
-                Online
-                <span className="text-muted-foreground ml-1.5 tabular-nums">
-                  {presenceCounts.online}
-                </span>
-              </TabsTrigger>
-              <TabsTrigger value="OFFLINE">
-                <span
-                  aria-hidden
-                  className="bg-map-technician-stale mr-1.5 inline-block size-1.5 rounded-full"
-                />
-                Offline
-                <span className="text-muted-foreground ml-1.5 tabular-nums">
-                  {presenceCounts.offline}
-                </span>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-
           {/* The roster sits beside the map on a wide screen and above it on a
               narrow one. Above rather than below: on a phone the list is the
               faster answer to "who is out", and a map you have to scroll past
@@ -563,6 +627,36 @@ export default function TechnicianMapPage() {
               className="bg-card flex h-[70vh] flex-col overflow-hidden rounded-lg border"
               style={fill.height ? { height: fill.height } : undefined}
             >
+              {/*
+                Who the page is about, at the head of the panel and above both
+                of its tabs, because it moves the markers on the map as well as
+                the rows in the list (console-development: it was a second row
+                of tabs that looked exactly like the Technicians / Properties
+                switch below, doing a different job).
+
+                Counts on the options because "how many are out right now" is
+                the question this page is usually opened for. They count the
+                whole roster, not the filtered view, or the number would change
+                to match whatever was already selected.
+              */}
+              <div className="shrink-0 border-b px-2 py-2">
+                <SegmentedControl
+                  aria-label="Filter technicians by whether they are reporting now"
+                  onChange={setPresence}
+                  options={[
+                    { value: 'ALL', label: 'All', count: presenceCounts.all },
+                    // The marker's own colours, so the filter and the map read alike.
+                    { value: 'ONLINE', label: 'Online', count: presenceCounts.online, dotClassName: 'bg-map-technician' },
+                    {
+                      value: 'OFFLINE',
+                      label: 'Offline',
+                      count: presenceCounts.offline,
+                      dotClassName: 'bg-map-technician-stale',
+                    },
+                  ]}
+                  value={presence}
+                />
+              </div>
               <Tabs className="flex min-h-0 flex-1 flex-col" defaultValue="technicians">
                 <TabsList className="m-2 grid shrink-0 grid-cols-2">
                   <TabsTrigger value="technicians">Technicians</TabsTrigger>
@@ -585,10 +679,7 @@ export default function TechnicianMapPage() {
                   only the assignments below answer to it. Putting it over the
                   map would suggest it moved the pins through time. */}
               <div className="space-y-2 border-b px-3 py-3">
-                <label
-                  className="text-muted-foreground block text-xs font-medium tracking-wide uppercase"
-                  htmlFor="roster-date"
-                >
+                <label className={`${SECTION_LABEL} block`} htmlFor="roster-date">
                   Assignments for
                 </label>
                 <DatePicker
@@ -633,6 +724,7 @@ export default function TechnicianMapPage() {
                     is selected: there is no such thing as the roster's day. */}
                 {selectedId && timeline.data ? (
                   <TechnicianDaySummary
+                    dayPhrase={dayPhrase}
                     stops={assignments.data?.find((entry) => entry.technicianId === selectedId)?.stops}
                     timeline={timeline.data}
                   />
@@ -640,6 +732,7 @@ export default function TechnicianMapPage() {
 
                 <TechnicianRoster
                   colors={colors}
+                  dayPhrase={dayPhrase}
                   entries={visibleRoster}
                   onAddVisit={canAssign || canCreate ? setAddingFor : undefined}
                   onFocusTechnician={focusTechnician}
@@ -701,23 +794,25 @@ export default function TechnicianMapPage() {
                 visits={visits}
               />
 
+              {/* Top left, clear of the zoom and fullscreen controls (top right)
+                  and the re-center button and Mapbox's logo (along the bottom). */}
+              <div className="absolute top-3 left-3 z-[1000]">
+                <LegendPopover entries={legend} />
+              </div>
+
               {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
                 /* `pointer-events-none` on the wrapper and restored on the
                    notice: a banner that swallowed drags would make the map
                    behind it look broken. z-[1000] because Leaflet's own panes
-                   sit at 400-700. */
-                <div className="pointer-events-none absolute inset-x-0 top-3 z-[1000] flex justify-center px-3">
+                   sit at 400-700. Below the Legend button, not across it. */
+                <div className="pointer-events-none absolute inset-x-0 top-14 z-[1000] flex justify-center px-3">
                   <div className="bg-background/95 pointer-events-auto rounded-md border px-3 py-2 text-sm shadow-sm">
                     {positions.isError ? (
                       <span className="flex items-center gap-2">
                         <span className="text-destructive">Could not load positions.</span>
-                        <button
-                          className="underline underline-offset-4"
-                          onClick={() => void positions.refetch()}
-                          type="button"
-                        >
+                        <Button onClick={() => void positions.refetch()} size="sm" type="button" variant="outline">
                           Try again
-                        </button>
+                        </Button>
                       </span>
                     ) : (
                       <span className="text-muted-foreground">
@@ -731,45 +826,15 @@ export default function TechnicianMapPage() {
             </div>
           </div>
 
-          {/* The swatches repeat the markers' own shapes rather than reducing
-              them all to dots. A legend whose keys look nothing like the thing
-              they explain makes the reader do the translation twice. */}
+          {/* The short row stays, for a glance; the sentences are in the
+              Legend popover on the map and in each key's tooltip. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <LegendKey full="Technician, reported recently" swatch={<TechnicianSwatch />}>
-              Live
-            </LegendKey>
-            <LegendKey full="Driving, pointing the way they are going" swatch={<DrivingSwatch />}>
-              Driving
-            </LegendKey>
-            <LegendKey full="Technician, last reported over 30 minutes ago" swatch={<TechnicianSwatch stale />}>
-              30 min+
-            </LegendKey>
-            {discCounts ? (
-              <>
-                <LegendKey full="TBP property, in its group's colour" swatch={<DiscSwatch kind="GROUP" />}>
-                  TBP group <span className="font-mono">{discCounts.group}</span>
-                </LegendKey>
-                <LegendKey full="TBP property in no group" swatch={<DiscSwatch kind="LOOSE" />}>
-                  TBP, no group <span className="font-mono">{discCounts.loose}</span>
-                </LegendKey>
-                <LegendKey full="Property not on TBP" swatch={<DiscSwatch kind="OTHER" />}>
-                  Not TBP <span className="font-mono">{discCounts.other}</span>
-                </LegendKey>
-              </>
-            ) : (
-              <LegendKey full="Property" swatch={<DiscSwatch kind="OTHER" />}>
-                Property {properties.data?.length ? <span className="font-mono">{properties.data.length}</span> : null}
+            {legend.map((entry) => (
+              <LegendKey full={entry.full} key={entry.key} swatch={entry.swatch}>
+                {entry.short}
+                {entry.count !== undefined ? <span className="font-mono">{entry.count}</span> : null}
               </LegendKey>
-            )}
-            <LegendKey full="Inspection submitted that day" swatch={<DoneSwatch />}>
-              Submitted
-            </LegendKey>
-            <LegendKey full="Where they drove, in their colour" swatch={<LineSwatch />}>
-              Driven
-            </LegendKey>
-            <LegendKey full="Route on to the day's properties" swatch={<LineSwatch dashed />}>
-              Route ahead
-            </LegendKey>
+            ))}
           </div>
         </div>
       )}

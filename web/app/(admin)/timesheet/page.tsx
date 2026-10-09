@@ -1,16 +1,17 @@
 'use client';
 
-import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, PencilIcon } from 'lucide-react';
-import { useState } from 'react';
+import { ChevronDownIcon, PencilIcon } from 'lucide-react';
+import { Fragment, useId, useState } from 'react';
 import { toast } from 'sonner';
 
 import { DataTable, type Column } from '@/components/data-table';
+import { DayFilter } from '@/components/day-filter';
+import { SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
+import { Panel } from '@/components/panel';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { DatePicker } from '@/components/ui/date-picker';
 import {
   Dialog,
   DialogContent,
@@ -25,9 +26,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
 import { businessDateTimeValue, businessToday, fromBusinessDateTimeValue, shiftDay } from '@/lib/clock';
-import { formatTime } from '@/lib/format';
+import { formatDay, formatTime } from '@/lib/format';
 import {
   asHours,
   useTimesheet,
@@ -63,19 +67,27 @@ import {
  */
 const TRAIL_DAYS = 30;
 
-/** Below this a silence is not worth a badge. */
+/** Below this a silence is not worth a mention. */
 const QUIET_WORTH_SAYING_SECONDS = 60;
 
-const dateField = 'h-9 rounded-lg border border-border bg-card px-2 text-sm text-foreground';
+/** The shortest reason the Save button accepts. */
+const REASON_MIN_LENGTH = 4;
 
-/** "Tuesday, October 6", for a day held as `yyyy-MM-dd`. Noon UTC is the same date everywhere. */
-const dayLabel = (date: string) =>
-  new Date(`${date}T12:00:00.000Z`).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
+/**
+ * What a person or a silence did to a visit's hours, in words. Every one of
+ * them, at every width (console-development): they used to be four boxed chips
+ * in a blank-headed column that a phone hid, and somebody paid from this is
+ * entitled to know which hours a person decided rather than the trail, and
+ * which the trail could only answer by carrying the clock through a silence.
+ */
+function payFlags(row: TimesheetVisit): string[] {
+  return [
+    row.adjusted ? 'Corrected' : null,
+    row.addedByHand ? 'Added by hand' : null,
+    row.stays > 1 ? `Stepped out ${row.stays - 1} ${row.stays === 2 ? 'time' : 'times'}` : null,
+    row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? `Phone quiet ${asHours(row.quietSeconds)}` : null,
+  ].filter((flag): flag is string => Boolean(flag));
+}
 
 export default function TimesheetPage() {
   const { has } = usePermissions();
@@ -83,12 +95,34 @@ export default function TimesheetPage() {
   const today = businessToday();
   const [date, setDate] = useState(today);
   const [technicianId, setTechnicianId] = useState<string | undefined>(undefined);
+  // The whole day, for the technician picker: the filtered sheet holds only the
+  // one technician chosen, and the picker has to offer the rest. The same query
+  // as the sheet itself when nobody is picked, so it costs nothing then.
+  const everyone = useTimesheet(date);
   const sheet = useTimesheet(date, technicianId);
   const actions = useTimesheetActions();
 
   const [correcting, setCorrecting] = useState<TimesheetVisit | null>(null);
   /** What the last recalculation did, in the office's words rather than counts. */
   const [recalculated, setRecalculated] = useState<string | null>(null);
+
+  // A result describes the day it was asked on; it goes when the day does
+  // (console-development), rather than sitting under a different date.
+  const changeDate = (next: string | null) => {
+    setDate(next ?? today);
+    setRecalculated(null);
+  };
+
+  const technicianOptions = (everyone.data?.totals ?? []).map((row) => ({
+    value: row.technicianId,
+    label: row.technician,
+  }));
+  // A technician picked on another day may have no hours on this one; still
+  // name them, so the filter never reads as "all" while it is narrowing.
+  if (technicianId && !technicianOptions.some((option) => option.value === technicianId)) {
+    const name = sheet.data?.totals.find((row) => row.technicianId === technicianId)?.technician;
+    technicianOptions.push({ value: technicianId, label: name ?? 'Selected technician' });
+  }
 
   const recalculate = (from: string, to: string) =>
     actions.recalculate.mutate(
@@ -107,76 +141,65 @@ export default function TimesheetPage() {
     );
 
   const toolbar = (
-    <div className="flex flex-wrap items-center gap-2 pb-4">
-      <Button
-        aria-label="The day before"
-        onClick={() => setDate((current) => shiftDay(current, -1))}
-        size="icon"
-        variant="outline"
-      >
-        <ChevronLeftIcon />
-      </Button>
-      <DatePicker
-        aria-label="The day to show"
-        className="w-auto min-w-56"
-        max={today}
-        // Clearing the picker is not a day; it falls back to today rather than
-        // asking for the hours of no date at all.
-        onChange={(next) => setDate(next || today)}
-        value={date}
-      />
-      <Button
-        aria-label="The day after"
-        disabled={date >= today}
-        onClick={() => setDate((current) => shiftDay(current, 1))}
-        size="icon"
-        variant="outline"
-      >
-        <ChevronRightIcon />
-      </Button>
-      {date !== today ? (
-        <Button onClick={() => setDate(today)} size="sm" variant="secondary">
-          Today
-        </Button>
-      ) : null}
-      {technicianId ? (
-        <Button onClick={() => setTechnicianId(undefined)} size="sm" variant="secondary">
-          All technicians
-        </Button>
-      ) : null}
-      {/*
-        Today and yesterday are read without anybody asking. This is for the
-        days behind them: after a property's pin or its distances are
-        corrected, and once after the rule itself changes -- which is the
-        thirty days, read in one go on the server rather than drawn here.
+    <>
+      <div className="flex flex-wrap items-center gap-2 pb-4">
+        {/* The same day stepper as the lists (console-development). Never past
+            today -- tomorrow has no hours yet -- and never "all dates", which a
+            timesheet read one day at a time has no use for. */}
+        <DayFilter allowAllDates={false} label="The day to show" max={today} onChange={changeDate} value={date} />
+        {/* Clicking a name in the table still filters too; this says that it
+            has, and is the way back (console-development). */}
+        <SelectFilter
+          allLabel="All technicians"
+          label="Technician"
+          onChange={(next) => setTechnicianId(next || undefined)}
+          options={technicianOptions}
+          value={technicianId ?? ''}
+        />
+        {/*
+          Today and yesterday are read without anybody asking. This is for the
+          days behind them: after a property's pin or its distances are
+          corrected, and once after the rule itself changes -- which is the
+          thirty days, read in one go on the server rather than drawn here.
 
-        It leaves alone every hour somebody corrected by hand, and pressing it
-        twice gives the same answer, which is what makes it safe to leave in
-        the toolbar rather than behind a warning.
-      */}
-      {canChange ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button className="ml-auto" disabled={actions.recalculate.isPending} size="sm" variant="secondary">
-              {actions.recalculate.isPending ? 'Reading the trail…' : 'Recalculate'}
-              <ChevronDownIcon />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => recalculate(date, date)}>This day</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => recalculate(shiftDay(today, -(TRAIL_DAYS - 1)), today)}>
-              The last {TRAIL_DAYS} days
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
-    </div>
+          It leaves alone every hour somebody corrected by hand, and pressing it
+          twice gives the same answer, which is what makes it safe to leave in
+          the toolbar rather than behind a warning.
+        */}
+        {canChange ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button className="ml-auto" disabled={actions.recalculate.isPending} size="sm" variant="outline">
+                {actions.recalculate.isPending ? 'Reading the trail…' : 'Recalculate'}
+                <ChevronDownIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => recalculate(date, date)}>This day</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => recalculate(shiftDay(today, -(TRAIL_DAYS - 1)), today)}>
+                The last {TRAIL_DAYS} days
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </div>
+      {/* Always mounted, so a screen reader hears the result when it arrives. */}
+      <p aria-live="polite" className={recalculated ? 'text-muted-foreground -mt-2 pb-4 text-xs' : 'sr-only'}>
+        {recalculated}
+      </p>
+    </>
   );
 
   const header = (
     <PageHeader
+      info={
+        <p>
+          The clock runs while a technician is inside a property’s circle. Everything between
+          properties is general time.
+        </p>
+      }
+      infoLabel="How the hours are counted"
       title="Timesheet"
-      description="The clock runs while a technician is inside a property’s circle. Everything between properties is general time."
     />
   );
 
@@ -210,6 +233,7 @@ export default function TimesheetPage() {
         <button
           className="font-medium underline-offset-2 hover:underline"
           onClick={() => setTechnicianId(row.technicianId)}
+          title={`Show only ${row.technician}`}
           type="button"
         >
           {row.technician}
@@ -241,30 +265,37 @@ export default function TimesheetPage() {
 
   const visitColumns: Column<TimesheetVisit>[] = [
     { key: 'technician', header: 'Technician', primary: true, cell: (row) => row.technician },
-    { key: 'property', header: 'Property', cell: (row) => row.address ?? '—' },
-    { key: 'arrived', header: 'Arrived', cell: (row) => formatTime(row.arrivedAt) },
-    { key: 'left', header: 'Left', cell: (row) => formatTime(row.leftAt) },
     {
-      key: 'notes',
-      header: '',
-      hideBelow: 'md',
-      cell: (row) => (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* Said plainly. Somebody paid from this is entitled to know which
-              hours a person decided rather than the trail, and which the
-              trail could only answer by carrying the clock through a silence. */}
-          {row.adjusted ? <Badge variant="outline">Corrected</Badge> : null}
-          {row.addedByHand ? <Badge variant="outline">Added by hand</Badge> : null}
-          {row.stays > 1 ? (
-            <Badge variant="outline">
-              Stepped out {row.stays - 1} {row.stays === 2 ? 'time' : 'times'}
-            </Badge>
-          ) : null}
-          {row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? (
-            <Badge variant="outline">Phone quiet {asHours(row.quietSeconds)}</Badge>
-          ) : null}
-        </div>
-      ),
+      key: 'property',
+      header: 'Property',
+      cell: (row) => {
+        const flags = payFlags(row);
+        return (
+          <div className="min-w-0">
+            <div>{row.address ?? '—'}</div>
+            {flags.length ? (
+              <div className="text-muted-foreground mt-0.5 flex flex-wrap gap-x-1.5 text-xs">
+                {flags.map((flag, index) => (
+                  <Fragment key={flag}>
+                    {index ? <span aria-hidden>·</span> : null}
+                    <span>{flag}</span>
+                  </Fragment>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'arrived',
+      header: 'Arrived',
+      cell: (row) => <span className="font-mono tabular-nums">{formatTime(row.arrivedAt)}</span>,
+    },
+    {
+      key: 'left',
+      header: 'Left',
+      cell: (row) => <span className="font-mono tabular-nums">{formatTime(row.leftAt)}</span>,
     },
     {
       key: 'onsite',
@@ -282,7 +313,7 @@ export default function TimesheetPage() {
                 aria-label={`Correct the time at ${row.address ?? 'this property'}`}
                 className="relative z-10"
                 onClick={() => setCorrecting(row)}
-                size="sm"
+                size="icon-sm"
                 variant="ghost"
               >
                 <PencilIcon />
@@ -298,41 +329,43 @@ export default function TimesheetPage() {
       {header}
       {toolbar}
 
-      {recalculated ? <p className="text-muted-foreground -mt-2 pb-4 text-xs">{recalculated}</p> : null}
-
       <StatGroup columns="grid-cols-1 sm:grid-cols-3">
         <Stat label="On site" value={asHours(onsiteTotal)} />
         <Stat label="General time" value={asHours(generalTotal)} />
         <Stat label="Total" value={asHours(onsiteTotal + generalTotal)} />
       </StatGroup>
 
-      <section className="mt-6">
-        <h2 className="text-foreground mb-2 text-sm font-semibold">Hours by technician · {dayLabel(date)}</h2>
-        {data.totals.length ? (
+      {/* Panels with a quiet name, not h2 headings over floating tables
+          (console-development). */}
+      {data.totals.length ? (
+        <Panel className="mt-6" count={formatDay(date, 'long')} title="Hours by technician">
           <DataTable
+            className="rounded-none border-0"
             columns={totalColumns}
             label="Hours by technician"
             rowKey={(row) => row.technicianId}
             rows={data.totals}
           />
-        ) : (
+        </Panel>
+      ) : (
+        <div className="mt-6">
           <EmptyState
             description="Nobody was inside the circle of a property they had a visit at. If somebody was working, check the property’s pin and its distances, then recalculate this day."
             title="Nothing recorded on this day"
           />
-        )}
-      </section>
+        </div>
+      )}
 
       {data.visits.length ? (
-        <section className="mt-6">
-          <h2 className="text-foreground mb-2 text-sm font-semibold">Time at each property</h2>
+        <Panel className="mt-6" title="Time at each property">
           <DataTable
+            className="rounded-none border-0"
             columns={visitColumns}
             label="Time at each property"
             rowKey={(row) => row.key}
             rows={data.visits}
           />
-        </section>
+        </Panel>
       ) : null}
 
       <CorrectDialog
@@ -376,6 +409,7 @@ function CorrectDialog({
   onClose: () => void;
   onSave: (startedAt: string, endedAt: string, reason: string) => void;
 }) {
+  const id = useId();
   const [reason, setReason] = useState('');
   const [startedAt, setStartedAt] = useState('');
   const [endedAt, setEndedAt] = useState('');
@@ -408,33 +442,42 @@ function CorrectDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
-          <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            Arrived (Texas time)
-            <input
-              className={dateField}
+          <Field>
+            <FieldLabel htmlFor={`${id}-arrived`}>Arrived (Texas time)</FieldLabel>
+            <Input
+              className="font-mono tabular-nums"
+              id={`${id}-arrived`}
               onChange={(event) => setStartedAt(event.target.value)}
               type="datetime-local"
               value={startedAt}
             />
-          </label>
-          <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            Left (Texas time)
-            <input
-              className={dateField}
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${id}-left`}>Left (Texas time)</FieldLabel>
+            <Input
+              className="font-mono tabular-nums"
+              id={`${id}-left`}
               onChange={(event) => setEndedAt(event.target.value)}
               type="datetime-local"
               value={endedAt}
             />
-          </label>
-          <label className="text-muted-foreground flex flex-col gap-1 text-xs">
-            Why
-            <textarea
-              className="border-border bg-card text-foreground min-h-20 rounded-lg border px-2 py-1.5 text-sm"
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${id}-reason`}>Why</FieldLabel>
+            <Textarea
+              aria-describedby={`${id}-reason-help`}
+              className="min-h-20"
+              id={`${id}-reason`}
               onChange={(event) => setReason(event.target.value)}
               placeholder="Technician was on site; the phone was in the van."
               value={reason}
             />
-          </label>
+            {/* Says why Save is greyed out before anybody wonders. */}
+            <FieldDescription id={`${id}-reason-help`}>
+              At least {REASON_MIN_LENGTH} characters. The technician is shown this if they ask why
+              their hours changed.
+            </FieldDescription>
+          </Field>
         </div>
         <DialogFooter>
           <Button onClick={close} variant="secondary">
@@ -442,7 +485,9 @@ function CorrectDialog({
           </Button>
           <Button
             disabled={
-              reason.trim().length < 4 || !fromBusinessDateTimeValue(startedAt) || !fromBusinessDateTimeValue(endedAt)
+              reason.trim().length < REASON_MIN_LENGTH ||
+              !fromBusinessDateTimeValue(startedAt) ||
+              !fromBusinessDateTimeValue(endedAt)
             }
             onClick={() =>
               onSave(fromBusinessDateTimeValue(startedAt)!, fromBusinessDateTimeValue(endedAt)!, reason.trim())

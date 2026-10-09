@@ -341,7 +341,9 @@ describe('a route the planner produced', () => {
     // At the first stop in the route, so the second is next.
     expect(screen.getByText(/At 10276 Sample Green Ct/)).toBeInTheDocument();
     expect(screen.getByText('Next')).toBeInTheDocument();
-    expect(screen.getByText('10458 Example Ln').parentElement?.className).toMatch(/text-map-technician/);
+    // The word says "next"; the green stays on the map's pin, so the list has
+    // no coloured words (console-development).
+    expect(screen.getByText('10458 Example Ln').parentElement?.className).not.toMatch(/text-map-technician/);
   });
 
   it('says the times include traffic when Google drew the route', () => {
@@ -508,7 +510,14 @@ describe('choosing a stop', () => {
 
   it('shows the inspection type for each stop', () => {
     render(<TechnicianRoster entries={entries([STOP])} onSelect={() => {}} selectedId="tech-1" />);
-    expect(screen.getByText(/Move in/)).toBeTruthy();
+    // In the navigation's words, and the status badges' (console-development).
+    expect(screen.getByText('Move-in')).toBeTruthy();
+    expect(screen.getByText(/· Scheduled/)).toBeTruthy();
+  });
+
+  it('says which day is empty, not "today" for every date', () => {
+    render(<TechnicianRoster dayPhrase="on Oct 5, 2026" entries={[]} onSelect={() => {}} selectedId={null} />);
+    expect(screen.getByText(/Nobody has work scheduled on Oct 5, 2026/)).toBeTruthy();
   });
 });
 

@@ -85,6 +85,19 @@ describe('a technician day summary', () => {
     expect(screen.getByText(/no position reported today/i)).toBeInTheDocument();
   });
 
+  it('names the day being looked at, not "today" for every date', () => {
+    render(
+      <TechnicianDaySummary
+        dayPhrase="on Oct 5, 2026"
+        timeline={timeline({
+          totals: { onSiteSeconds: 0, travellingSeconds: 0, shiftSeconds: 0, visits: 0 },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/no position reported on Oct 5, 2026/i)).toBeInTheDocument();
+  });
+
   it('says when the projection measured this technician', () => {
     render(<TechnicianDaySummary timeline={timeline()} />);
     expect(screen.getByText(/measured today/i)).toBeInTheDocument();

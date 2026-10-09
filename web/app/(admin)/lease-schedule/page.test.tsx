@@ -60,9 +60,10 @@ describe('the move-ins and move-outs page', () => {
   it('lists what is coming up, with who takes each, apart from what needs attention', () => {
     mount();
 
-    expect(screen.getByRole('tab', { name: 'Coming up (2)' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Needs attention (1)' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Called off (1)' })).toBeTruthy();
+    // The count is a quiet figure beside the name, no longer in brackets.
+    expect(screen.getByRole('tab', { name: /^Coming up\s*2$/ })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /^Needs attention\s*1$/ })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /^Called off\s*1$/ })).toBeTruthy();
     const table = screen.getByRole('table', { name: 'Move-ins and move-outs coming up' });
     expect(within(table).getByText('Moses Rodriguez')).toBeTruthy();
     expect(within(table).getByText('Amy Wilson')).toBeTruthy();
@@ -97,6 +98,37 @@ describe('the move-ins and move-outs page', () => {
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Book now' }));
 
     expect(run.mutate.mock.calls[0]![0]).toBe(false);
+  });
+
+  /**
+   * On a phone the Inspection column is hidden, and it was the only way to the
+   * booked inspection; the whole row opens it now. A row with nothing booked
+   * has nowhere to go and is not a link.
+   */
+  it('opens the booked inspection from its row, and only where there is one', () => {
+    mount();
+
+    const coming = screen.getByRole('table', { name: 'Move-ins and move-outs coming up' });
+    const hrefs = within(coming)
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('/inspections/inspection-1');
+    expect(hrefs).toContain('/inspections/inspection-2');
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /^Needs attention/ }));
+    const attention = screen.getByRole('table', { name: 'Move-ins and move-outs needing attention' });
+    const attentionHrefs = within(attention)
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'));
+    // Only the property link: the row itself is not one.
+    expect(attentionHrefs).toEqual(['/properties/building-3']);
+  });
+
+  it('puts the safe Preview first in weight, and Book now behind its confirmation', () => {
+    mount();
+
+    expect(screen.getByRole('button', { name: 'Preview' }).className).toMatch(/bg-primary/);
+    expect(screen.getByRole('button', { name: 'Book now' }).className).not.toMatch(/bg-primary/);
   });
 
   it('offers no run to someone who may only read inspections', () => {
