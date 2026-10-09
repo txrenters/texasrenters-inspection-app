@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 import { usePageSearch, type PageSearch } from '@/components/page-search';
 import { Button } from '@/components/ui/button';
@@ -95,11 +95,41 @@ function matchesWords(text: string, query: string) {
     .every((word) => haystack.includes(word));
 }
 
+/** True on a Mac, iPhone or iPad: the keyboards with a Command key. */
+function isApplePlatform() {
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  return /mac|iphone|ipad|ipod/i.test(nav.userAgentData?.platform || nav.platform || '');
+}
+
+const NEVER_CHANGES = () => () => {};
+
+/**
+ * The shortcut as this keyboard spells it (console-development): "⌘K" was
+ * printed on Windows, where the office presses Ctrl K. The server and the
+ * first paint say "Ctrl K" -- most of the office is on Windows -- and a Mac
+ * corrects it once hydrated, without a mismatch warning.
+ */
+function useShortcutLabel() {
+  return useSyncExternalStore(
+    NEVER_CHANGES,
+    () => (isApplePlatform() ? '⌘K' : 'Ctrl K'),
+    () => 'Ctrl K',
+  );
+}
+
 /**
  * A list page's search, in the header (`page-search`). Typing narrows the list
- * underneath; ⌘K beside it still searches everything.
+ * underneath; the shortcut beside it still searches everything.
  */
-function HeaderListSearch({ search, onSearchEverything }: { search: PageSearch; onSearchEverything: () => void }) {
+function HeaderListSearch({
+  search,
+  onSearchEverything,
+  shortcut,
+}: {
+  search: PageSearch;
+  onSearchEverything: () => void;
+  shortcut: string;
+}) {
   const [text, setText] = useSearchText(search.value, search.onChange);
   return (
     <div className="relative w-full sm:w-72">
@@ -109,14 +139,14 @@ function HeaderListSearch({ search, onSearchEverything }: { search: PageSearch; 
       />
       <Input
         aria-label={search.label}
-        className="h-8 pr-16 pl-8"
+        className="h-8 pr-20 pl-8"
         onChange={(event) => setText(event.target.value)}
         placeholder={search.placeholder}
         type="search"
         value={text}
       />
       {search.pending ? (
-        <Spinner className="text-muted-foreground absolute top-1/2 right-11 size-3.5 -translate-y-1/2" />
+        <Spinner className="text-muted-foreground absolute top-1/2 right-15 size-3.5 -translate-y-1/2" />
       ) : null}
       <button
         aria-label="Search everything"
@@ -125,7 +155,7 @@ function HeaderListSearch({ search, onSearchEverything }: { search: PageSearch; 
         title="Search inspections, properties, technicians and pages"
         type="button"
       >
-        ⌘K
+        {shortcut}
       </button>
     </div>
   );
@@ -134,7 +164,7 @@ function HeaderListSearch({ search, onSearchEverything }: { search: PageSearch; 
 /**
  * The header's search.
  *
- * On a list page it is that list's search. Everywhere, ⌘K finds inspections,
+ * On a list page it is that list's search. Everywhere, Ctrl K (⌘K) finds inspections,
  * properties and technicians by what was typed, and every page the account can
  * open -- the same permission-filtered navigation the sidebar draws.
  */
@@ -149,6 +179,7 @@ export function CommandPalette() {
   const pageSearch = usePageSearch();
   const groups = getVisibleAdminNavigation(has);
   const records = useRecordSearch(term, open);
+  const shortcut = useShortcutLabel();
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -185,10 +216,38 @@ export function CommandPalette() {
     }))
     .filter((group) => group.items.length);
 
+  // Matched like the pages (console-development): these vanished the moment
+  // anything was typed, so "sign out" or "dark" found nothing.
+  const account = [
+    {
+      value: 'profile account',
+      words: 'Account profile',
+      label: 'Profile',
+      icon: UserRoundIcon,
+      action: () => router.push('/profile'),
+    },
+    {
+      value: 'sign out log out',
+      words: 'Account sign out log out',
+      label: 'Sign out',
+      icon: LogOutIcon,
+      action: () => void auth.signOut().then(() => router.replace('/login')),
+    },
+  ].filter((command) => matchesWords(command.words, query));
+  const themes = [
+    { value: 'light theme', label: 'Light', icon: SunIcon, theme: 'light' },
+    { value: 'dark theme', label: 'Dark', icon: MoonIcon, theme: 'dark' },
+    { value: 'system theme', label: 'System', icon: MonitorIcon, theme: 'system' },
+  ].filter((command) => matchesWords(`Theme ${command.value}`, query));
+
   return (
     <>
       {pageSearch ? (
-        <HeaderListSearch onSearchEverything={() => setOpen(true)} search={pageSearch} />
+        <HeaderListSearch
+          onSearchEverything={() => setOpen(true)}
+          search={pageSearch}
+          shortcut={shortcut}
+        />
       ) : (
         <Button
           className="text-muted-foreground w-full justify-start gap-2 sm:w-56"
@@ -198,7 +257,7 @@ export function CommandPalette() {
         >
           <SearchIcon />
           <span className="truncate">Search…</span>
-          <CommandShortcut className="hidden sm:inline">⌘K</CommandShortcut>
+          <CommandShortcut className="hidden sm:inline">{shortcut}</CommandShortcut>
         </Button>
       )}
 
@@ -310,38 +369,37 @@ export function CommandPalette() {
             </CommandGroup>
           ))}
 
-          {!query.trim() ? (
-            <>
-              <CommandSeparator />
-              <CommandGroup heading="Account">
-                <CommandItem onSelect={() => run(() => router.push('/profile'))} value="profile account">
-                  <UserRoundIcon />
-                  Profile
-                </CommandItem>
-                <CommandItem
-                  onSelect={() => run(() => void auth.signOut().then(() => router.replace('/login')))}
-                  value="sign out log out"
-                >
-                  <LogOutIcon />
-                  Sign out
-                </CommandItem>
-              </CommandGroup>
+          {account.length || themes.length ? <CommandSeparator /> : null}
+          {account.length ? (
+            <CommandGroup heading="Account">
+              {account.map((command) => {
+                const Icon = command.icon;
+                return (
+                  <CommandItem key={command.value} onSelect={() => run(command.action)} value={command.value}>
+                    <Icon />
+                    {command.label}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          ) : null}
 
-              <CommandGroup heading="Theme">
-                <CommandItem onSelect={() => run(() => setTheme('light'))} value="light theme">
-                  <SunIcon />
-                  Light
-                </CommandItem>
-                <CommandItem onSelect={() => run(() => setTheme('dark'))} value="dark theme">
-                  <MoonIcon />
-                  Dark
-                </CommandItem>
-                <CommandItem onSelect={() => run(() => setTheme('system'))} value="system theme">
-                  <MonitorIcon />
-                  System
-                </CommandItem>
-              </CommandGroup>
-            </>
+          {themes.length ? (
+            <CommandGroup heading="Theme">
+              {themes.map((command) => {
+                const Icon = command.icon;
+                return (
+                  <CommandItem
+                    key={command.value}
+                    onSelect={() => run(() => setTheme(command.theme))}
+                    value={command.value}
+                  >
+                    <Icon />
+                    {command.label}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
           ) : null}
         </CommandList>
       </CommandDialog>

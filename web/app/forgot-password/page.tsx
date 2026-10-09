@@ -45,7 +45,7 @@ export default function ForgotPasswordPage() {
   return (
     <AuthLayout
       title="Reset your password"
-      description="Enter your administrator email and we'll send a secure reset link."
+      description="Enter your account email and we'll send a secure reset link."
     >
       {sent ? (
         <div className="grid gap-4">

@@ -134,6 +134,39 @@ describe('the search for records', () => {
   });
 });
 
+describe('the account and theme commands', () => {
+  // They vanished the moment anything was typed (console-development), so
+  // "dark" or "sign out" found nothing.
+  it('are found by what was typed, like the pages', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
+    const field = screen.getByPlaceholderText(/Search inspections, properties/);
+
+    fireEvent.change(field, { target: { value: 'dark' } });
+    expect(await screen.findByRole('option', { name: 'Dark' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Light' })).toBeNull();
+
+    fireEvent.change(field, { target: { value: 'sign out' } });
+    expect(await screen.findByRole('option', { name: 'Sign out' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Dark' })).toBeNull();
+  });
+
+  it('are all there before anything is typed', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Search…/ }));
+    for (const name of ['Profile', 'Sign out', 'Light', 'Dark', 'System'])
+      expect(screen.getByRole('option', { name })).toBeInTheDocument();
+  });
+});
+
+describe('the shortcut it shows', () => {
+  it('is Ctrl K away from a Mac, where the office presses Ctrl', () => {
+    mount();
+    expect(screen.getByRole('button', { name: /Search…/ })).toHaveTextContent('Ctrl K');
+    expect(screen.getByRole('button', { name: /Search…/ })).not.toHaveTextContent('⌘K');
+  });
+});
+
 describe('a list page’s search, in the header', () => {
   it('becomes the header’s field while the list is open, and gives it back after', async () => {
     const onChange = vi.fn();
