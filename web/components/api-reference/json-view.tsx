@@ -24,12 +24,17 @@ function isRecord(value: Json): value is Record<string, Json> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Values in the ordinary text colour, keys muted (console-development). Green
+ * strings and amber booleans borrowed the console's status colours, so a
+ * `"FAILED"` read as fine and every `false` as a warning.
+ */
 function Scalar({ value }: { value: Json }) {
   if (value === null) return <span className="text-muted-foreground italic">null</span>;
   if (typeof value === 'string')
-    return <span className="text-success break-all">&quot;{value}&quot;</span>;
-  if (typeof value === 'number') return <span className="text-primary tabular-nums">{value}</span>;
-  if (typeof value === 'boolean') return <span className="text-warning">{String(value)}</span>;
+    return <span className="text-foreground break-all">&quot;{value}&quot;</span>;
+  if (typeof value === 'number') return <span className="text-foreground tabular-nums">{value}</span>;
+  if (typeof value === 'boolean') return <span className="text-foreground">{String(value)}</span>;
   return <span className="text-muted-foreground">{String(value)}</span>;
 }
 

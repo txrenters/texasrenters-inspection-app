@@ -5,15 +5,27 @@ import { useState } from 'react';
 import { isDemoProperty, type JobberAssignee } from '@texasrenters/shared';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import { DetailList } from '@/components/detail-list';
 import { JobberSyncStatus } from '@/components/jobber-sync-status';
 import { PageHeader } from '@/components/page-header';
+import { Panel } from '@/components/panel';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Dialog,
@@ -270,52 +282,99 @@ export default function JobberIntegrationPage() {
       <PageHeader
         title="Jobber"
         description="Scheduling comes from Jobber. Inspections are created from its visits."
+        info={
+          <>
+            <p>
+              Scheduling comes from Jobber. Inspections are created from its visits, and a Jobber
+              property has to be mapped to one of ours before its visits can become inspections.
+            </p>
+            {/* Was a paragraph over the People to add list; the reason it is a
+                list and not an automatic provisioner (console-development). */}
+            <p>
+              Adding somebody Jobber assigns work to is deliberately a decision, not a sync. Create
+              them on the Technicians page and their Jobber visits are assigned from the next sync
+              onwards.
+            </p>
+          </>
+        }
+        infoLabel="How Jobber feeds the console"
+        // Status by the name, not in the row of buttons where it read as one
+        // more control (console-development).
+        badges={jobber ? <StatusBadge value={jobber.status} /> : undefined}
         actions={
-          <div className="flex items-center gap-3">
-            <StatusBadge value={jobber?.status ?? 'DISCONNECTED'} />
-            {canManage ? (
-              connected ? (
-                <>
-                  {/* Disabled while *any* run is in flight, not just one this
-                      tab started. A second sync launched over a running one
-                      races it for the same visits and wins nothing. */}
-                  <Button
-                    variant="outline"
-                    disabled={syncing}
-                    onClick={() => mutations.sync.mutate()}
-                  >
-                    {syncing ? <Spinner className="size-4" /> : null}
-                    {syncing ? 'Syncing…' : 'Sync now'}
-                  </Button>
-                  {/* Re-authorizing is a normal thing to need: Jobber
-                      invalidates the refresh token whenever the app's scopes
-                      change, and the only route was previously Disconnect then
-                      Connect — unobvious, and it revokes a working connection
-                      to fix one that merely needs widening. */}
-                  <Button
-                    variant="outline"
-                    disabled={mutations.authorize.isPending}
-                    onClick={() => void connect()}
-                  >
-                    Reconnect
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    disabled={mutations.disconnect.isPending}
-                    onClick={() => mutations.disconnect.mutate()}
-                  >
-                    Disconnect
-                  </Button>
-                </>
-              ) : (
-                <Button disabled={mutations.authorize.isPending} onClick={() => void connect()}>
-                  Connect Jobber
+          canManage ? (
+            connected ? (
+              <>
+                {/* Disabled while *any* run is in flight, not just one this
+                    tab started. A second sync launched over a running one
+                    races it for the same visits and wins nothing. */}
+                <Button
+                  variant="outline"
+                  disabled={syncing}
+                  onClick={() => mutations.sync.mutate()}
+                >
+                  {syncing ? <Spinner className="size-4" /> : null}
+                  {syncing ? 'Syncing…' : 'Sync now'}
                 </Button>
-              )
-            ) : null}
-          </div>
+                {/* Re-authorizing is a normal thing to need: Jobber
+                    invalidates the refresh token whenever the app's scopes
+                    change, and the only route was previously Disconnect then
+                    Connect — unobvious, and it revokes a working connection
+                    to fix one that merely needs widening. */}
+                <Button
+                  variant="outline"
+                  disabled={mutations.authorize.isPending}
+                  onClick={() => void connect()}
+                >
+                  Reconnect
+                </Button>
+                {/* Confirmed (console-development): one ghost click used to
+                    remove the app from the Jobber account, and getting it back
+                    needs a Jobber administrator. */}
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="ghost" disabled={mutations.disconnect.isPending}>
+                      Disconnect
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Disconnect Jobber?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The app is removed from the Jobber account and the stored credentials are
+                        cleared. Nothing moves between Jobber and this console — no visits are
+                        imported or updated — until a Jobber administrator connects it again.
+                        Inspections already created stay as they are.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        className={buttonVariants({ variant: 'destructive' })}
+                        onClick={() => mutations.disconnect.mutate()}
+                      >
+                        Disconnect
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </>
+            ) : (
+              <Button disabled={mutations.authorize.isPending} onClick={() => void connect()}>
+                Connect Jobber
+              </Button>
+            )
+          ) : undefined
         }
       />
+
+      {mutations.disconnect.error ? (
+        <Alert variant="destructive">
+          <AlertDescription>
+            Jobber could not be disconnected: {mutations.disconnect.error.message}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {/* Re-authorization is not a transient error: nothing syncs until a Jobber
           admin consents again, so it is stated rather than left to a badge. */}
@@ -355,16 +414,45 @@ export default function JobberIntegrationPage() {
         </Alert>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle variant="label">Connection</CardTitle>
-          <CardDescription>
-            {connected
-              ? `Reading the calendar for ${jobber?.jobberAccountName ?? 'this Jobber account'}.`
-              : 'Not connected. Nothing is being imported.'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      {/* One panel (console-development). It was a card holding five figures
+          at three columns, which left two empty cells showing through as a
+          block of border colour, and set "2025-01-20" and an account name at
+          28px as though they were counts. The two numbers somebody reads stay
+          figures; the rest are facts. The account name is said once, in the
+          sentence, not again as a figure. */}
+      <Panel title="Connection">
+        <StatGroup className="rounded-none border-0 border-b" columns="grid-cols-2">
+          <Stat
+            detail={jobber?.lastSyncCompletedAt ? formatDateTime(jobber.lastSyncCompletedAt) : undefined}
+            label="Last sync"
+            value={formatRelative(jobber?.lastSyncCompletedAt)}
+          />
+          {/* `?? EMPTY`, not `?? 0`. A connection that has never synced read
+              "0 visits", which is a claim about a run that never happened —
+              and it was the symptom that hid the missing select behind it. */}
+          <Stat
+            label="Visits last read"
+            value={
+              jobber?.lastSyncVisitCount === null || jobber?.lastSyncVisitCount === undefined
+                ? EMPTY
+                : formatCount(jobber.lastSyncVisitCount)
+            }
+          />
+        </StatGroup>
+        <div className="space-y-4 p-4">
+          <p className="text-muted-foreground text-sm">
+            {connected ? (
+              <>
+                Reading the calendar for{' '}
+                <span className="text-foreground font-medium">
+                  {jobber?.jobberAccountName ?? 'this Jobber account'}
+                </span>
+                .
+              </>
+            ) : (
+              'Not connected. Nothing is being imported.'
+            )}
+          </p>
           {reconnectHint ? (
             <p className="text-muted-foreground text-xs">{reconnectHint}</p>
           ) : null}
@@ -379,25 +467,17 @@ export default function JobberIntegrationPage() {
               syncing={syncing}
             />
           ) : null}
-          <StatGroup columns="grid-cols-1 sm:grid-cols-3 lg:grid-cols-5">
-            <Stat label="Account" value={jobber?.jobberAccountName ?? EMPTY} />
-            <Stat label="Schema version" value={jobber?.apiVersion ?? EMPTY} />
-            <Stat label="Last sync" value={formatRelative(jobber?.lastSyncCompletedAt)} />
-            {/* `?? EMPTY`, not `?? 0`. A connection that has never synced read
-                "0 visits", which is a claim about a run that never happened —
-                and it was the symptom that hid the missing select behind it. */}
-            <Stat
-              label="Visits last read"
-              value={
-                jobber?.lastSyncVisitCount === null || jobber?.lastSyncVisitCount === undefined
-                  ? EMPTY
-                  : formatCount(jobber.lastSyncVisitCount)
-              }
-            />
-            <Stat label="Connected" value={formatDateTime(jobber?.connectedAt)} />
-          </StatGroup>
-        </CardContent>
-      </Card>
+          <DetailList
+            items={[
+              {
+                label: 'Schema version',
+                value: <span className="font-mono">{jobber?.apiVersion ?? EMPTY}</span>,
+              },
+              { label: 'Connected', value: formatDateTime(jobber?.connectedAt) },
+            ]}
+          />
+        </div>
+      </Panel>
 
       <Tabs value={state.tab} onValueChange={(tab) => setState({ tab })}>
         <TabsList>
@@ -419,8 +499,12 @@ export default function JobberIntegrationPage() {
         </TabsList>
 
         <TabsContent value="queue" className="mt-4">
+          {/* A failed list is said, not drawn as a table with only its header
+              (console-development). */}
           {queue.isLoading ? (
             <DataTableSkeleton columns={queueColumns} />
+          ) : queue.isError ? (
+            <ErrorState error={queue.error} retry={() => void queue.refetch()} />
           ) : queue.data?.length === 0 ? (
             <EmptyState
               title="Every Jobber property is mapped"
@@ -439,32 +523,28 @@ export default function JobberIntegrationPage() {
         <TabsContent value="assignees" className="mt-4">
           {assignees.isLoading ? (
             <DataTableSkeleton columns={ASSIGNEE_COLUMNS} />
+          ) : assignees.isError ? (
+            <ErrorState error={assignees.error} retry={() => void assignees.refetch()} />
           ) : assignees.data?.length === 0 ? (
             <EmptyState
               title="Everybody Jobber assigns work to is a technician here"
               description="Somebody appears here the first time Jobber assigns them a visit and this console cannot match them to an active technician."
             />
           ) : (
-            <>
-              {/* Said here rather than in a tooltip, because it is the whole
-                  reason this is a list and not an automatic provisioner. */}
-              <p className="text-muted-foreground mb-3 text-sm">
-                Adding somebody is deliberately a decision, not a sync. Create them on the
-                Technicians page and their Jobber visits are assigned from the next sync onwards.
-              </p>
-              <DataTable
-                rows={assignees.data ?? []}
-                columns={ASSIGNEE_COLUMNS}
-                rowKey={(row) => row.email ?? (row.name ?? 'unknown')}
-                label="Jobber assignees who are not technicians here"
-              />
-            </>
+            <DataTable
+              rows={assignees.data ?? []}
+              columns={ASSIGNEE_COLUMNS}
+              rowKey={(row) => row.email ?? (row.name ?? 'unknown')}
+              label="Jobber assignees who are not technicians here"
+            />
           )}
         </TabsContent>
 
         <TabsContent value="visits" className="mt-4">
           {visits.isLoading ? (
             <DataTableSkeleton columns={VISIT_COLUMNS} />
+          ) : visits.isError ? (
+            <ErrorState error={visits.error} retry={() => void visits.refetch()} />
           ) : visits.data?.length === 0 ? (
             <EmptyState
               title="No visits are held"
@@ -526,6 +606,10 @@ function LinkDialog({
   const [unitId, setUnitId] = useState('');
   const [leaseId, setLeaseId] = useState('');
   const [busy, setBusy] = useState(false);
+  // What the server said when a link or an ignore failed. Both were awaited
+  // with no catch, so a refusal left the dialog sitting there as if nothing
+  // had been pressed (console-development).
+  const [failure, setFailure] = useState<string | null>(null);
 
   // Seeded from the partial match the backend already found, so a coordinator
   // confirms an answer instead of searching for one we have.
@@ -541,6 +625,7 @@ function LinkDialog({
     setBuildingId('');
     setUnitId('');
     setLeaseId('');
+    setFailure(null);
   };
 
   if (!row) return null;
@@ -582,13 +667,16 @@ function LinkDialog({
                   <button
                     key={property.id}
                     type="button"
+                    // Says which one is chosen, not only by its border
+                    // (console-development).
+                    aria-pressed={selectedBuilding === property.id}
                     onClick={() => {
                       setBuildingId(property.id);
                       setUnitId('');
                       setLeaseId('');
                     }}
                     className={`w-full rounded-md border px-3 py-2 text-left text-sm ${
-                      selectedBuilding === property.id ? 'border-primary bg-accent' : 'border-border'
+                      selectedBuilding === property.id ? 'border-highlight bg-highlight/10' : 'border-border'
                     }`}
                   >
                     <div className="flex items-center gap-1.5 font-medium">
@@ -615,9 +703,11 @@ function LinkDialog({
 
           {selectedBuilding && needsUnit ? (
             <div className="space-y-2">
-              <label className="text-sm font-medium">Unit</label>
+              <label className="text-sm font-medium" htmlFor="jobber-link-unit">
+                Unit
+              </label>
               <Select value={unitId} onValueChange={setUnitId}>
-                <SelectTrigger>
+                <SelectTrigger id="jobber-link-unit">
                   <SelectValue placeholder="Choose the unit Jobber means" />
                 </SelectTrigger>
                 <SelectContent>
@@ -637,9 +727,11 @@ function LinkDialog({
 
           {unitId && leases.data?.items.length ? (
             <div className="space-y-2">
-              <label className="text-sm font-medium">Lease (optional)</label>
+              <label className="text-sm font-medium" htmlFor="jobber-link-lease">
+                Lease (optional)
+              </label>
               <Select value={leaseId} onValueChange={setLeaseId}>
-                <SelectTrigger>
+                <SelectTrigger id="jobber-link-lease">
                   <SelectValue placeholder="No lease" />
                 </SelectTrigger>
                 <SelectContent>
@@ -652,6 +744,12 @@ function LinkDialog({
               </Select>
             </div>
           ) : null}
+
+          {failure ? (
+            <Alert variant="destructive">
+              <AlertDescription>{failure}</AlertDescription>
+            </Alert>
+          ) : null}
         </div>
 
         <DialogFooter className="gap-2 sm:justify-between">
@@ -660,9 +758,12 @@ function LinkDialog({
             disabled={busy}
             onClick={async () => {
               setBusy(true);
+              setFailure(null);
               try {
                 await onIgnore(row.id);
                 reset();
+              } catch (error) {
+                setFailure(error instanceof Error ? error.message : 'The property could not be set aside.');
               } finally {
                 setBusy(false);
               }
@@ -674,6 +775,7 @@ function LinkDialog({
             disabled={busy || !selectedBuilding || (needsUnit && !unitId)}
             onClick={async () => {
               setBusy(true);
+              setFailure(null);
               try {
                 await onLink({
                   linkId: row.id,
@@ -682,6 +784,8 @@ function LinkDialog({
                   leaseId: leaseId || undefined,
                 });
                 reset();
+              } catch (error) {
+                setFailure(error instanceof Error ? error.message : 'The property could not be linked.');
               } finally {
                 setBusy(false);
               }

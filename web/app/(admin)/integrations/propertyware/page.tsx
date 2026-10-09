@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
+import { Panel } from '@/components/panel';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
@@ -22,7 +23,6 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EMPTY, formatCount, formatDateTime, formatRelative, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
@@ -179,8 +179,13 @@ const RUN_COLUMNS: Array<Column<SyncRun>> = [
     key: 'failed',
     header: 'Failed',
     numeric: true,
+    // A neutral figure with a red dot when any failed (console-development): a
+    // red number in a column of black ones read as decoration.
     cell: (run) => (
-      <span className={cn(run.recordsFailed ? 'text-destructive font-medium' : undefined)}>
+      <span className="inline-flex items-center gap-1.5">
+        {run.recordsFailed ? (
+          <span aria-hidden className="bg-destructive size-1.5 shrink-0 rounded-full" />
+        ) : null}
         {formatCount(run.recordsFailed)}
       </span>
     ),
@@ -263,15 +268,36 @@ export default function PropertywarePage() {
   return (
     <>
       <PageHeader
-        actions={
-          <div className="flex items-center gap-3">
-            <StatusBadge value={isRunning ? 'RUNNING' : status.isError ? 'FAILED' : 'CONNECTED'} />
-            <Badge variant="outline">
-              {integration?.provider === 'mock' ? 'Mock source' : 'Live API'}
-            </Badge>
-          </div>
+        // By the name, and only once it is known (console-development): it
+        // sat in the action row and said "Connected" while the status was
+        // still loading.
+        badges={
+          isRunning || !status.isLoading ? (
+            <>
+              <StatusBadge value={isRunning ? 'RUNNING' : status.isError ? 'FAILED' : 'CONNECTED'} />
+              {integration ? (
+                <Badge variant="outline">
+                  {integration.provider === 'mock' ? 'Mock source' : 'Live API'}
+                </Badge>
+              ) : null}
+            </>
+          ) : undefined
         }
-        description="Read-only catalog synchronization and operational health. Credentials are never displayed in the browser."
+        description="Catalog synchronization from Propertyware, and how healthy it is."
+        info={
+          <>
+            <p>
+              Read-only catalog synchronization and operational health. Nothing is written back to
+              Propertyware.
+            </p>
+            <p>Credentials are never displayed in the browser.</p>
+            <p>
+              Syncs run on their own daily. Each manual run asks you to confirm first, and only one
+              sync runs at a time.
+            </p>
+          </>
+        }
+        infoLabel="About this integration"
         title="Propertyware"
       />
 
@@ -321,8 +347,11 @@ export default function PropertywarePage() {
           label="Records updated"
           value={formatCount(latestRun?.recordsUpdated)}
         />
+        {/* Every run's unresolved errors, not the latest run's -- which is what
+            the Errors tab lists. Said, so the two counts are not read as one
+            (console-development). */}
         <Stat
-          detail={`${formatCount(latestRun?.recordsFailed)} failed in latest run`}
+          detail={`Across all runs · ${formatCount(latestRun?.recordsFailed)} failed in the latest`}
           label="Unresolved errors"
           tone={unresolvedErrors ? 'destructive' : 'default'}
           value={formatCount(unresolvedErrors)}
@@ -334,327 +363,321 @@ export default function PropertywarePage() {
           <TabsTrigger value="sync">Run a sync</TabsTrigger>
           <TabsTrigger value="schedule">Automatic schedule</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
-          <TabsTrigger value="errors">Errors</TabsTrigger>
+          <TabsTrigger value="errors">Latest run errors</TabsTrigger>
         </TabsList>
 
         <TabsContent className="mt-4" value="sync">
-          <Card>
-            <CardHeader>
-              <CardTitle variant="label">Synchronization</CardTitle>
-              <CardDescription>
-                Import active portfolios and properties, retrieve recent changes, or verify that
-                local records still match Propertyware.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Options, not actions — which is what these always looked like.
-                  Choosing one and pressing a single button also removes the
-                  question the three-button version asked: which of these am I
-                  allowed to press. */}
-              <div aria-label="Synchronization mode" className="grid gap-3 md:grid-cols-3" role="radiogroup">
-                {SYNC_MODE_OPTIONS.map((option) => {
-                  const active = selectedMode === option.mode;
-                  return (
-                    <button
-                      aria-checked={active}
-                      className={cn(
-                        'flex flex-col items-start gap-1.5 rounded-lg border p-4 text-left transition-colors',
-                        'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
-                        active ? 'border-primary bg-primary/5' : 'hover:bg-accent/50',
-                        'disabled:pointer-events-none disabled:opacity-50',
-                      )}
-                      disabled={!canManage || isRunning}
-                      key={option.mode}
-                      onClick={() => setSelectedMode(option.mode)}
-                      role="radio"
-                      type="button"
-                    >
-                      <span className="flex w-full items-center gap-2">
-                        <span
-                          aria-hidden
-                          className={cn(
-                            'size-4 shrink-0 rounded-full border-2',
-                            active ? 'border-primary bg-primary' : 'border-muted-foreground/40',
-                          )}
-                        />
-                        <span className="text-sm font-medium">{option.title}</span>
-                        {option.recommended ? (
-                          <Badge className="ml-auto" variant="info">
-                            Recommended
-                          </Badge>
-                        ) : null}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-relaxed">
-                        {option.description}
-                      </span>
-                    </button>
-                  );
-                })}
+          {/* Panels with borderless tables inside, not a card holding a card
+              holding a table (console-development). */}
+          <Panel bodyClassName="space-y-4 p-4" title="Synchronization">
+            <p className="text-muted-foreground text-sm">
+              Import active portfolios and properties, retrieve recent changes, or verify that
+              local records still match Propertyware.
+            </p>
+            {/* Options, not actions — which is what these always looked like.
+                Choosing one and pressing a single button also removes the
+                question the three-button version asked: which of these am I
+                allowed to press. */}
+            <div aria-label="Synchronization mode" className="grid gap-3 md:grid-cols-3" role="radiogroup">
+              {SYNC_MODE_OPTIONS.map((option) => {
+                const active = selectedMode === option.mode;
+                return (
+                  <button
+                    aria-checked={active}
+                    className={cn(
+                      'flex flex-col items-start gap-1.5 rounded-lg border p-4 text-left transition-colors',
+                      'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
+                      // The highlight marks the choice; ink is for the
+                      // button that acts on it (console-development).
+                      active ? 'border-highlight bg-highlight/10' : 'hover:bg-accent/50',
+                      'disabled:pointer-events-none disabled:opacity-50',
+                    )}
+                    disabled={!canManage || isRunning}
+                    key={option.mode}
+                    onClick={() => setSelectedMode(option.mode)}
+                    role="radio"
+                    type="button"
+                  >
+                    <span className="flex w-full items-center gap-2">
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'size-4 shrink-0 rounded-full border-2',
+                          active ? 'border-highlight bg-highlight' : 'border-muted-foreground/40',
+                        )}
+                      />
+                      <span className="text-sm font-medium">{option.title}</span>
+                      {option.recommended ? (
+                        <span className="text-muted-foreground ml-auto text-xs">Recommended</span>
+                      ) : null}
+                    </span>
+                    <span className="text-muted-foreground text-xs leading-relaxed">
+                      {option.description}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* When it last ran, beside the one control that runs it — so the
+                answer to "does this need pressing" is in the same place as the
+                button. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+              <div className="text-muted-foreground text-sm">
+                {latestRun?.completedAt
+                  ? `Last synchronized ${formatRelative(latestRun.completedAt)}`
+                  : 'No synchronization has completed yet'}
               </div>
+              <Button
+                disabled={!canManage || isRunning}
+                onClick={() => setPendingMode(selectedMode)}
+                type="button"
+              >
+                {isRunning ? 'Synchronizing…' : 'Start synchronization'}
+              </Button>
+            </div>
 
-              {/* When it last ran, beside the one control that runs it — so the
-                  answer to "does this need pressing" is in the same place as the
-                  button. */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-                <div className="text-muted-foreground text-sm">
-                  {latestRun?.completedAt
-                    ? `Last synchronized ${formatRelative(latestRun.completedAt)}`
-                    : 'No synchronization has completed yet'}
-                  <span className="block text-xs">
-                    Runs on its own daily. Each manual run asks you to confirm first, and only one
-                    sync runs at a time.
-                  </span>
-                </div>
-                <Button
-                  disabled={!canManage || isRunning}
-                  onClick={() => setPendingMode(selectedMode)}
-                  type="button"
-                >
-                  {isRunning ? 'Synchronizing…' : 'Start synchronization'}
-                </Button>
-              </div>
+            {!canManage ? (
+              <p className="text-muted-foreground text-sm">
+                You have read-only integration access.
+              </p>
+            ) : null}
+            {mutation.error ? (
+              <Alert variant="destructive">
+                <AlertDescription>{mutation.error.message}</AlertDescription>
+              </Alert>
+            ) : null}
+            {mutation.isSuccess ? (
+              <Alert variant="success">
+                <CheckCircle2Icon />
+                <AlertDescription>
+                  Synchronization was queued. Status updates automatically.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </Panel>
 
-              {!canManage ? (
-                <p className="text-muted-foreground text-sm">
-                  You have read-only integration access.
-                </p>
-              ) : null}
-              {mutation.error ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{mutation.error.message}</AlertDescription>
-                </Alert>
-              ) : null}
-              {mutation.isSuccess ? (
-                <Alert variant="success">
-                  <CheckCircle2Icon />
-                  <AlertDescription>
-                    Synchronization was queued. Status updates automatically.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="mt-4">
-            <CardHeader>
-              <CardTitle variant="label">Entity freshness</CardTitle>
-              <CardDescription>
-                Last successful source activity by synchronized record type.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {status.isLoading ? (
+          <Panel className="mt-4" title="Entity freshness">
+            <p className="text-muted-foreground border-b px-4 py-2.5 text-xs">
+              Last successful source activity by synchronized record type.
+            </p>
+            {status.isLoading ? (
+              <div className="p-4">
                 <PageSkeleton cards={1} />
-              ) : status.isError ? (
-                <ErrorState error={status.error} retry={() => void status.refetch()} />
-              ) : cursors.length ? (
-                <DataTable
-                  columns={[
-                    {
-                      key: 'entity',
-                      header: 'Entity',
-                      primary: true,
-                      cell: (cursor: SyncCursor) => cursor.entityType ?? 'Unknown entity',
-                    },
-                    {
-                      key: 'sync',
-                      header: 'Last successful sync',
-                      cell: (cursor: SyncCursor) =>
-                        formatDateTime(cursor.lastSuccessfulSyncAt ?? cursor.cursor),
-                    },
-                    {
-                      key: 'reconcile',
-                      header: 'Last reconciliation',
-                      hideBelow: 'md',
-                      cell: (cursor: SyncCursor) => formatDateTime(cursor.lastFullReconciliationAt),
-                    },
-                    {
-                      key: 'cursor',
-                      header: 'Cursor',
-                      hideBelow: 'lg',
-                      cell: (cursor: SyncCursor) => (
-                        <code className="text-muted-foreground text-xs break-all">
-                          {cursor.lastSuccessfulCursor ?? cursor.cursor ?? EMPTY}
-                        </code>
-                      ),
-                    },
-                  ]}
-                  label="Propertyware synchronization cursors"
-                  rowKey={(cursor) => cursor.entityType ?? String(cursors.indexOf(cursor))}
-                  rows={cursors}
-                />
-              ) : (
-                <EmptyState title="No entity cursors have been recorded yet." />
-              )}
-            </CardContent>
-          </Card>
+              </div>
+            ) : status.isError ? (
+              <ErrorState className="rounded-none border-0" error={status.error} retry={() => void status.refetch()} />
+            ) : cursors.length ? (
+              <DataTable
+                className="rounded-none border-0"
+                columns={[
+                  {
+                    key: 'entity',
+                    header: 'Entity',
+                    primary: true,
+                    cell: (cursor: SyncCursor) => cursor.entityType ?? 'Unknown entity',
+                  },
+                  {
+                    key: 'sync',
+                    header: 'Last successful sync',
+                    cell: (cursor: SyncCursor) =>
+                      formatDateTime(cursor.lastSuccessfulSyncAt ?? cursor.cursor),
+                  },
+                  {
+                    key: 'reconcile',
+                    header: 'Last reconciliation',
+                    hideBelow: 'md',
+                    cell: (cursor: SyncCursor) => formatDateTime(cursor.lastFullReconciliationAt),
+                  },
+                  {
+                    key: 'cursor',
+                    header: 'Cursor',
+                    hideBelow: 'lg',
+                    cell: (cursor: SyncCursor) => (
+                      <code className="text-muted-foreground text-xs break-all">
+                        {cursor.lastSuccessfulCursor ?? cursor.cursor ?? EMPTY}
+                      </code>
+                    ),
+                  },
+                ]}
+                label="Propertyware synchronization cursors"
+                rowKey={(cursor) => cursor.entityType ?? String(cursors.indexOf(cursor))}
+                rows={cursors}
+              />
+            ) : (
+              <EmptyState className="rounded-none border-0" title="No entity cursors have been recorded yet." />
+            )}
+          </Panel>
         </TabsContent>
 
         <TabsContent className="mt-4" value="schedule">
-          <Card>
-            <CardHeader className="flex-row items-start justify-between">
-              <div className="space-y-1">
-                <CardTitle variant="label">Automatic schedule</CardTitle>
-                <CardDescription>
-                  When enabled, these syncs run on their own - no manual trigger needed.
-                </CardDescription>
-              </div>
-              {schedule.data ? (
+          <Panel
+            actions={
+              schedule.data ? (
                 <Badge variant={schedule.data.enabled ? 'success' : 'secondary'}>
                   {schedule.data.enabled ? 'Automatic on' : 'Automatic off'}
                 </Badge>
-              ) : null}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {schedule.isLoading ? (
+              ) : null
+            }
+            title="Automatic schedule"
+          >
+            <p className="text-muted-foreground border-b px-4 py-2.5 text-xs">
+              When enabled, these syncs run on their own - no manual trigger needed.
+            </p>
+            {schedule.isLoading ? (
+              <div className="p-4">
                 <PageSkeleton cards={1} />
-              ) : schedule.isError ? (
-                <ErrorState error={schedule.error} retry={() => void schedule.refetch()} />
-              ) : schedule.data ? (
-                <>
-                  {schedule.data.enabled && !schedule.data.organizationConfigured ? (
-                    <Alert variant="warning">
-                      <AlertDescription>
-                        Automatic sync is enabled but no organization is configured
-                        (PROPERTYWARE_LOCAL_ORGANIZATION_ID), so nothing will run yet.
-                      </AlertDescription>
-                    </Alert>
-                  ) : null}
-                  {!schedule.data.enabled ? (
-                    <Alert variant="warning">
-                      <AlertDescription>
-                        Automatic sync is turned off (PROPERTYWARE_SYNC_ENABLED). The cadence below
-                        applies once it is enabled.
-                      </AlertDescription>
-                    </Alert>
-                  ) : null}
-                  <DataTable
-                    columns={[
-                      {
-                        key: 'sync',
-                        header: 'Sync',
-                        primary: true,
-                        cell: (job) => MODE_LABELS[job.mode] ?? job.mode,
-                      },
-                      {
-                        key: 'cadence',
-                        header: 'Cadence',
-                        cell: (job) => (
-                          <span className="grid gap-0.5">
-                            {describeCron(job.cron)}
-                            {job.cron ? (
-                              <code className="text-muted-foreground text-xs">{job.cron}</code>
-                            ) : null}
-                          </span>
+              </div>
+            ) : schedule.isError ? (
+              <ErrorState className="rounded-none border-0" error={schedule.error} retry={() => void schedule.refetch()} />
+            ) : schedule.data ? (
+              <>
+                {schedule.data.enabled && !schedule.data.organizationConfigured ? (
+                  <Alert className="m-4 w-auto" variant="warning">
+                    <AlertDescription>
+                      Automatic sync is enabled but no organization is configured
+                      (PROPERTYWARE_LOCAL_ORGANIZATION_ID), so nothing will run yet.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                {!schedule.data.enabled ? (
+                  <Alert className="m-4 w-auto" variant="warning">
+                    <AlertDescription>
+                      Automatic sync is turned off (PROPERTYWARE_SYNC_ENABLED). The cadence below
+                      applies once it is enabled.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <DataTable
+                  className="rounded-none border-0"
+                  columns={[
+                    {
+                      key: 'sync',
+                      header: 'Sync',
+                      primary: true,
+                      cell: (job) => MODE_LABELS[job.mode] ?? job.mode,
+                    },
+                    {
+                      key: 'cadence',
+                      header: 'Cadence',
+                      cell: (job) => (
+                        <span className="grid gap-0.5">
+                          {describeCron(job.cron)}
+                          {job.cron ? (
+                            <code className="text-muted-foreground text-xs">{job.cron}</code>
+                          ) : null}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'next',
+                      header: 'Next run',
+                      hideBelow: 'md',
+                      cell: (job) =>
+                        job.scheduled && job.nextRunAt ? (
+                          formatDateTime(job.nextRunAt)
+                        ) : (
+                          <span className="text-muted-foreground">Not scheduled</span>
                         ),
-                      },
-                      {
-                        key: 'next',
-                        header: 'Next run',
-                        hideBelow: 'md',
-                        cell: (job) =>
-                          job.scheduled && job.nextRunAt ? (
-                            formatDateTime(job.nextRunAt)
-                          ) : (
-                            <span className="text-muted-foreground">Not scheduled</span>
-                          ),
-                      },
-                      {
-                        key: 'last',
-                        header: 'Last run',
-                        cell: (job) => {
-                          const last = lastRunForMode(job.mode);
-                          return last ? (
-                            <span className="grid gap-1">
-                              <StatusBadge value={last.status} />
-                              <span className="text-muted-foreground text-xs">
-                                {formatRelative(last.completedAt ?? last.startedAt)}
-                              </span>
+                    },
+                    {
+                      key: 'last',
+                      header: 'Last run',
+                      cell: (job) => {
+                        const last = lastRunForMode(job.mode);
+                        return last ? (
+                          <span className="grid gap-1">
+                            <StatusBadge value={last.status} />
+                            <span className="text-muted-foreground text-xs">
+                              {formatRelative(last.completedAt ?? last.startedAt)}
                             </span>
-                          ) : (
-                            <span className="text-muted-foreground">No runs yet</span>
-                          );
-                        },
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">No runs yet</span>
+                        );
                       },
-                    ]}
-                    label="Automatic Propertyware sync schedule"
-                    rowKey={(job) => job.mode}
-                    rows={schedule.data.jobs}
-                  />
-                </>
-              ) : null}
-            </CardContent>
-          </Card>
+                    },
+                  ]}
+                  label="Automatic Propertyware sync schedule"
+                  rowKey={(job) => job.mode}
+                  rows={schedule.data.jobs}
+                />
+              </>
+            ) : null}
+          </Panel>
         </TabsContent>
 
         <TabsContent className="mt-4" value="history">
-          <Card>
-            <CardHeader>
-              <CardTitle variant="label">Recent sync runs</CardTitle>
-              <CardDescription>Audit history and record-level outcomes for recent jobs.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {runs.isLoading ? (
+          <Panel title="Recent sync runs">
+            <p className="text-muted-foreground border-b px-4 py-2.5 text-xs">
+              Audit history and record-level outcomes for recent jobs.
+            </p>
+            {runs.isLoading ? (
+              <div className="p-4">
                 <DataTableSkeleton columns={RUN_COLUMNS} label="Loading sync history" rows={5} />
-              ) : runs.isError ? (
-                <ErrorState error={runs.error} retry={() => void runs.refetch()} />
-              ) : runs.data?.length ? (
-                <DataTable
-                  columns={RUN_COLUMNS}
-                  label="Recent Propertyware synchronization runs"
-                  rowKey={(run) => run.id}
-                  rows={runs.data}
-                />
-              ) : (
-                <EmptyState title="No synchronization runs have been recorded." />
-              )}
-            </CardContent>
-          </Card>
+              </div>
+            ) : runs.isError ? (
+              <ErrorState className="rounded-none border-0" error={runs.error} retry={() => void runs.refetch()} />
+            ) : runs.data?.length ? (
+              <DataTable
+                className="rounded-none border-0"
+                columns={RUN_COLUMNS}
+                label="Recent Propertyware synchronization runs"
+                rowKey={(run) => run.id}
+                rows={runs.data}
+              />
+            ) : (
+              <EmptyState className="rounded-none border-0" title="No synchronization runs have been recorded." />
+            )}
+          </Panel>
         </TabsContent>
 
         <TabsContent className="mt-4" value="errors">
-          <Card>
-            <CardHeader>
-              <CardTitle variant="label">Latest run errors</CardTitle>
-              <CardDescription>
-                Sanitized integration failures that may require attention.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!latestRunId || (runs.isLoading && !runs.data) ? (
-                <EmptyState title="No synchronization run is available." />
-              ) : errors.isLoading ? (
+          <Panel title="Latest run errors">
+            <p className="text-muted-foreground border-b px-4 py-2.5 text-xs">
+              Sanitized integration failures from the latest run that may require attention.
+            </p>
+            {!latestRunId || (runs.isLoading && !runs.data) ? (
+              <EmptyState className="rounded-none border-0" title="No synchronization run is available." />
+            ) : errors.isLoading ? (
+              <div className="p-4">
                 <DataTableSkeleton
                   columns={ERROR_COLUMNS}
                   label="Loading synchronization errors"
                   rows={5}
                 />
-              ) : errors.isError ? (
-                <ErrorState error={errors.error} retry={() => void errors.refetch()} />
-              ) : errors.data?.items.length ? (
-                <>
-                  <DataTable
-                    columns={ERROR_COLUMNS}
-                    label="Latest Propertyware synchronization errors"
-                    rowKey={(error) => error.id}
-                    rows={errors.data.items}
-                  />
-                  <Pagination
-                    onPage={(errorPage) => setState({ errorPage })}
-                    page={state.errorPage}
-                    total={errors.data.total}
-                    totalPages={errors.data.totalPages}
-                  />
-                </>
-              ) : (
-                <EmptyState
-                  description="The latest synchronization run completed without recorded errors."
-                  icon={CheckCircle2Icon}
-                  title="No errors"
+              </div>
+            ) : errors.isError ? (
+              <ErrorState className="rounded-none border-0" error={errors.error} retry={() => void errors.refetch()} />
+            ) : errors.data?.items.length ? (
+              <>
+                <DataTable
+                  className="rounded-none border-0"
+                  columns={ERROR_COLUMNS}
+                  label="Latest Propertyware synchronization errors"
+                  rowKey={(error) => error.id}
+                  rows={errors.data.items}
                 />
-              )}
-            </CardContent>
-          </Card>
+                {errors.data.totalPages > 1 ? (
+                  <div className="border-t px-4 pb-3">
+                    <Pagination
+                      onPage={(errorPage) => setState({ errorPage })}
+                      page={state.errorPage}
+                      total={errors.data.total}
+                      totalPages={errors.data.totalPages}
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <EmptyState
+                className="rounded-none border-0"
+                description="The latest synchronization run completed without recorded errors."
+                icon={CheckCircle2Icon}
+                title="No errors"
+              />
+            )}
+          </Panel>
         </TabsContent>
       </Tabs>
     </>

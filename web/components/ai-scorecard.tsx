@@ -3,8 +3,8 @@
 import type { AiScorecard as Scorecard, AiScoreTally } from '@texasrenters/shared';
 import { useState } from 'react';
 
+import { SECTION_LABEL } from '@/components/panel';
 import { ErrorState } from '@/components/states';
-import { Button } from '@/components/ui/button';
 import {
   Card,
   CardAction,
@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -26,31 +27,32 @@ import {
 import { decidedShares, rejectReasonRow } from '@/lib/ai-guidance';
 import { formatCount } from '@/lib/format';
 import { useAiScorecard } from '@/lib/queries';
-import { cn } from '@/lib/utils';
 
 const WINDOWS = [30, 90, 180] as const;
+const PERIODS = WINDOWS.map((window) => ({ value: String(window), label: `${window} days` }));
 
 function percent(part: number, whole: number) {
   return whole ? `${Math.round((part / whole) * 100)}%` : '–';
 }
 
-/** One number with what it counts, in the scorecard's top row. */
+/**
+ * One number with what it counts, in the scorecard's top row. Mono, as every
+ * figure in the console is (console-development), so the five line up when
+ * compared across.
+ */
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
     <div className="min-w-0 space-y-0.5">
       <dt className="text-muted-foreground text-xs font-medium">{label}</dt>
-      <dd className="text-lg font-semibold tabular-nums">{value}</dd>
+      <dd className="font-mono text-lg font-medium tabular-nums">{value}</dd>
       {note ? <dd className="text-muted-foreground text-xs">{note}</dd> : null}
     </div>
   );
 }
 
+/** The console's one section-name style, not a third look of its own. */
 function SectionTitle({ children }: { children: string }) {
-  return (
-    <h3 className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">
-      {children}
-    </h3>
-  );
+  return <h3 className={SECTION_LABEL}>{children}</h3>;
 }
 
 function TallyLine({ label, tally }: { label: string; tally: AiScoreTally }) {
@@ -86,21 +88,14 @@ export function AiScorecard() {
           rejected and why. Room summaries are left out.
         </CardDescription>
         <CardAction>
-          <div aria-label="Scorecard period" className="bg-muted flex gap-1 rounded-lg p-1" role="group">
-            {WINDOWS.map((window) => (
-              <Button
-                aria-pressed={days === window}
-                className={cn('h-7 px-2 text-xs', days !== window && 'text-muted-foreground')}
-                key={window}
-                onClick={() => setDays(window)}
-                size="sm"
-                type="button"
-                variant={days === window ? 'default' : 'ghost'}
-              >
-                {window} days
-              </Button>
-            ))}
-          </div>
+          {/* The console's one toggle, not ink buttons on a grey track
+              (console-development). */}
+          <SegmentedControl
+            aria-label="Scorecard period"
+            onChange={(value) => setDays(Number(value) as (typeof WINDOWS)[number])}
+            options={PERIODS}
+            value={String(days)}
+          />
         </CardAction>
       </CardHeader>
       <CardContent>
@@ -161,7 +156,7 @@ function ScorecardBody({ data }: { data: Scorecard }) {
                     aria-label={`${rejectReasonRow(code)}: ${count}`}
                     value={(count / mostReasons) * 100}
                   />
-                  <span className="text-right text-sm tabular-nums">{formatCount(count)}</span>
+                  <span className="text-right font-mono text-sm tabular-nums">{formatCount(count)}</span>
                 </li>
               ))}
             </ul>

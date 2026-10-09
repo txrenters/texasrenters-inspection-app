@@ -28,12 +28,15 @@ import { outOf, rejectReasonRow, runRulesLabel } from '@/lib/ai-guidance';
 import { formatCount, formatDateTime, humanize } from '@/lib/format';
 import { useAiEvaluation, useAiEvaluations } from '@/lib/queries';
 
-/** One measure of a run: what it counts, the number, and which way is better. */
+/**
+ * One measure of a run: what it counts, the number, and which way is better.
+ * The figure in mono, as every figure in the console is (console-development).
+ */
 function Measure({ label, value, hint }: { label: string; value: string; hint: string }) {
   return (
     <div className="min-w-0 space-y-0.5">
       <dt className="text-muted-foreground text-xs font-medium">{label}</dt>
-      <dd className="text-sm font-semibold tabular-nums">{value}</dd>
+      <dd className="font-mono text-sm font-medium tabular-nums">{value}</dd>
       <dd className="text-muted-foreground text-xs">{hint}</dd>
     </div>
   );
@@ -66,7 +69,9 @@ export function AiTestRuns() {
         ) : runs.isError ? (
           <ErrorState error={runs.error} retry={() => void runs.refetch()} />
         ) : runs.data?.length ? (
-          <ul className="divide-y rounded-lg border">
+          // Hairline rows under the header, not a bordered box inside the
+          // card (console-development).
+          <ul className="-mx-4 divide-y border-y">
             {runs.data.map((run) => (
               <RunRow
                 isOpen={open === run.id}
@@ -98,7 +103,7 @@ function RunRow({
 }) {
   const totals = run.totals;
   return (
-    <li aria-label={`Test run of ${formatDateTime(run.startedAt)}`} className="grid gap-3 p-3">
+    <li aria-label={`Test run of ${formatDateTime(run.startedAt)}`} className="grid gap-3 px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 space-y-0.5">
           <p className="text-sm font-medium">{runRulesLabel(run)}</p>
