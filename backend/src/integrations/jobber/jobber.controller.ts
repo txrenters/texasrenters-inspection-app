@@ -22,6 +22,7 @@ import {
   type AuthenticatedRequest,
 } from '../../common/auth';
 import { JobberClient } from './jobber.client';
+import { JobberDayService } from './jobber-day.service';
 import {
   JobberIgnoreLinkDto,
   JobberLinkPropertyDto,
@@ -49,7 +50,22 @@ export class JobberIntegrationController {
     private readonly mapping: JobberMappingService,
     private readonly sync: JobberSyncWorker,
     private readonly outbound: JobberOutboundWorker,
+    private readonly days: JobberDayService,
   ) {}
+
+  /**
+   * One Texas day, the console's inspections beside the Jobber visits the sync
+   * last saved: what matches and what does not (console-development).
+   *
+   * `inspections:read`, not `integrations:read`: it is the office's view of
+   * the day's work, and it reads only what the sync already stored -- no call
+   * to Jobber, so nobody can spend the account's rate limit or a token here.
+   */
+  @Get('day')
+  @RequirePermissions('inspections:read')
+  day(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
+    return this.days.day(request.user.organizationId, date);
+  }
 
   /** What the console shows on the integrations page. Never returns tokens. */
   @Get('connection')
