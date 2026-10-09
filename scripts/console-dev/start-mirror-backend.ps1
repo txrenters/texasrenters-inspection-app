@@ -53,6 +53,10 @@ $settings = [ordered]@{
   DATABASE_URL = "postgresql://texasrenters_app:$($config.MIRROR_APP_PASSWORD)@127.0.0.1:$DatabasePort/texasrenters_mirror?schema=public"
   DIRECT_URL = "postgresql://postgres:$($config.MIRROR_OWNER_PASSWORD)@127.0.0.1:$DatabasePort/texasrenters_mirror?schema=public"
   AUTH_JWT_SECRET = $config.MIRROR_JWT_SECRET
+  # Signing needs an issuer as well as a key, or every sign-in is refused with
+  # "Authentication is not configured". The copy's own, so its tokens can never
+  # pass for production's.
+  AUTH_JWT_ISSUER = "http://127.0.0.1:$Port/console-mirror"
   CORS_ALLOWED_ORIGINS = "http://127.0.0.1:$ConsolePort,http://localhost:$ConsolePort"
   JOBBER_SYNC_ENABLED = 'false'
   JOBBER_BOOKING_ENABLED = 'false'
