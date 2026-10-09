@@ -43,7 +43,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
-import { nearUngroupedGreen, type GroupFileRow } from './group-file';
+import { calmColor, nearUngroupedGreen, type GroupFileRow } from './group-file';
 import { RoadDistance } from './group-file-legend';
 import {
   COLOR_PRESETS,
@@ -94,7 +94,7 @@ function Swatch({
         usedBy && !chosen && 'opacity-30',
       )}
       onClick={() => onPick(value)}
-      style={{ backgroundColor: value }}
+      style={{ backgroundColor: calmColor(value) }}
       title={usedBy ? `${value} · used by ${usedBy}` : value}
       type="button"
     />
@@ -246,7 +246,7 @@ function GroupForm({
                 placeholder="#0067a5"
                 value={hex}
               />
-              <span aria-hidden className="size-6 rounded-full border" style={{ backgroundColor: HEX.test(color) ? color : 'transparent' }} />
+              <span aria-hidden className="size-6 rounded-full border" style={{ backgroundColor: HEX.test(color) ? calmColor(color) : 'transparent' }} />
             </div>
             {/* A warning, not a refusal: the colour is the reader's to choose. */}
             {HEX.test(color) && nearUngroupedGreen(color) ? (
@@ -536,7 +536,7 @@ export function ManualGroupingPanel({
                 <span
                   aria-hidden
                   className="flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-background text-[11px] font-semibold shadow-sm"
-                  style={{ backgroundColor: group.color, color: '#fff', textShadow: '0 0 2px rgba(0,0,0,0.6)' }}
+                  style={{ backgroundColor: calmColor(group.color), color: '#fff', textShadow: '0 0 2px rgba(0,0,0,0.6)' }}
                 >
                   {index + 1}
                 </span>
@@ -586,7 +586,7 @@ export function ManualGroupingPanel({
         <section aria-label={`Stops of ${active.name}`} className="flex max-h-[45%] min-h-0 flex-col border-t">
           <div className="flex items-center justify-between gap-2 px-3 py-2">
             <p className="flex min-w-0 items-center gap-2 text-sm font-medium">
-              <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: active.color }} />
+              <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ backgroundColor: calmColor(active.color) }} />
               <span className="truncate">{active.name}</span>
               {active.stops.length >= active.target ? <Badge variant="warning">Group full</Badge> : null}
             </p>

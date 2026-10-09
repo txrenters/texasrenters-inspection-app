@@ -14,7 +14,7 @@ import { useSettledView } from '@/components/map-portfolio';
 import { ZoneLayers } from '@/components/map-zones';
 import { Badge } from '@/components/ui/badge';
 
-import { fanOffsets, legEnds, type FileGroup, type GroupFileRow } from './group-file';
+import { calmColor, fanOffsets, legEnds, type FileGroup, type GroupFileRow } from './group-file';
 import { GroupBadge } from './group-file-legend';
 import {
   formatDrive,
@@ -343,7 +343,7 @@ function GroupFileLayers({
             to: toStop,
             leg,
             home: fromStop === 'Home',
-            color: group.color.fill,
+            color: calmColor(group.color.fill),
             faded: Boolean(manual?.dimOthers && group.key !== manual.activeKey),
           },
         ];
@@ -379,7 +379,7 @@ function GroupFileLayers({
         groups.flatMap((group): OutlineFeature[] => {
           const ring = group.outline;
           const properties = {
-            color: group.color.fill,
+            color: calmColor(group.color.fill),
             dim: dimOthers && group.key !== activeKey ? 1 : 0,
             active: group.key === activeKey ? 1 : 0,
           };
@@ -411,7 +411,7 @@ function GroupFileLayers({
       groups.flatMap((group) => {
         const before = originLegs(group);
         if (group.rows.length + before < 2) return [];
-        const properties = { color: group.color.fill, dim: dimOthers && group.key !== activeKey ? 1 : 0 };
+        const properties = { color: calmColor(group.color.fill), dim: dimOthers && group.key !== activeKey ? 1 : 0 };
         const view = routeViews?.get(group.key);
         const route = view?.status === 'ok' && view.route.legs.length === legCount(group) ? view.route : null;
         const drawRoad = road && route !== null;
@@ -700,7 +700,7 @@ function GroupFileLayers({
               <span
                 aria-hidden
                 className="mr-1 inline-block size-2 rounded-full align-[-0.5px]"
-                style={{ backgroundColor: label.color }}
+                style={{ backgroundColor: calmColor(label.color) }}
               />
               {label.from}→{label.to} · {formatDrive(label.leg.durationS)} · {formatKm(label.leg.distanceM)}
             </span>

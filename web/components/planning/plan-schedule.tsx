@@ -58,7 +58,7 @@ import {
 import { cn } from '@/lib/utils';
 
 import { FilterPill, type FilterOption } from './filter-pill';
-import type { GroupFileRow } from './group-file';
+import { calmColor, type GroupFileRow } from './group-file';
 import { DEFAULT_MAP_DISPLAY, MapDisplaySwitches, type MapDisplay } from './group-file-view';
 import type { MapFrame } from './group-file-map';
 import {
@@ -168,7 +168,7 @@ export function TemplateGroupTag({
       <span
         aria-hidden
         className="inline-block size-2.5 shrink-0 rounded-full border border-white shadow-sm"
-        style={{ backgroundColor: group.color }}
+        style={{ backgroundColor: calmColor(group.color) }}
       />
       <span className="truncate">{name && name !== number ? `${number} · ${name}` : number}</span>
     </span>

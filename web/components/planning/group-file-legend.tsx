@@ -8,7 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
-import { LONG_HOP_MINUTES, sortGroups, UNGROUPED_GREEN, type FileGroup, type GroupFile, type GroupOrder } from './group-file';
+import { calmColor, LONG_HOP_MINUTES, sortGroups, UNGROUPED_GREEN, type FileGroup, type GroupFile, type GroupOrder } from './group-file';
 import { formatDrive, formatKm, milesToMetres, type RouteView } from './road-routes';
 
 /**
@@ -26,7 +26,7 @@ export function GroupBadge({ group, className }: { group: Pick<FileGroup, 'label
         'bg-card text-foreground flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border-2 px-1 text-xs font-semibold shadow-sm',
         className,
       )}
-      style={{ borderColor: group.color.fill }}
+      style={{ borderColor: calmColor(group.color.fill) }}
     >
       {group.label}
     </span>
