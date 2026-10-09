@@ -2,12 +2,13 @@
 
 import { isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
 import type { JobberDayRow, JobberDayState } from '@texasrenters/shared';
-import { ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import { ClipboardCheckIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { DayFilter } from '@/components/day-filter';
+import { InspectionBulkBar } from '@/components/inspection-bulk-bar';
 import { InspectionBulkDeleteDialog } from '@/components/inspection-bulk-delete-dialog';
 import type { DeletableInspection } from '@/components/inspection-delete-dialog';
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
@@ -293,6 +294,9 @@ export default function InspectionsPage() {
   const permissions = usePermissions();
   const canManage = permissions.has('inspections:manage');
   const canDelete = permissions.has('inspections:delete');
+  const canAssign = permissions.has('inspections:assign');
+  // Rows can be picked by anyone who can act on several at once.
+  const canSelect = canDelete || canManage || canAssign;
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [state, setState] = useUrlState({
@@ -630,20 +634,27 @@ export default function InspectionsPage() {
             </Alert>
           ) : null}
 
-          {/* Above the table and only when something is picked. Deleting is
-              here and only here: a bin on every row was a button nobody should
-              be one stray click from. */}
-          {canDelete && visibleSelection.size ? (
-            <div className="border-primary bg-primary/5 mb-3 flex flex-wrap items-center gap-3 rounded-lg border p-2.5">
-              <span className="text-sm font-medium">{visibleSelection.size} selected on this page</span>
-              <Button onClick={() => setSelectedIds(new Set())} size="sm" type="button" variant="ghost">
-                Clear
-              </Button>
-              <Button className="ml-auto" onClick={() => setBulkOpen(true)} size="sm" type="button" variant="destructive">
-                <Trash2Icon />
-                Delete {visibleSelection.size} permanently
-              </Button>
-            </div>
+          {/* A floating bar while something is picked (T09). Deleting stays a
+              bulk action only: a bin on every row was a button nobody should be
+              one stray click from. */}
+          {canSelect && visibleSelection.size ? (
+            <InspectionBulkBar
+              canAssign={canAssign}
+              canDelete={canDelete}
+              canManage={canManage}
+              onClear={() => setSelectedIds(new Set())}
+              onDelete={() => setBulkOpen(true)}
+              rows={rows
+                .filter((row) => visibleSelection.has(row.id))
+                .map((row) => ({
+                  id: row.id,
+                  name: row.propertywareBuilding?.name ?? 'Inspection',
+                  upcoming: isUpcomingVisit(visitStateOf(row)),
+                  technicianId:
+                    (row.assignments ?? []).find((assignment) => assignment.isCurrent)?.technician?.id ?? null,
+                }))}
+              technicians={technicianOptions.filter((option) => option.value !== UNASSIGNED)}
+            />
           ) : null}
 
           <DataTable
@@ -664,7 +675,7 @@ export default function InspectionsPage() {
                   }
             }
             selection={
-              canDelete
+              canSelect
                 ? {
                     noun: 'inspections',
                     onToggle: toggleOne,
