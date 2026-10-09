@@ -183,3 +183,6 @@ hostingermcp.json
 # it next to eas.json because that is where it gets used.
 *.p8
 AuthKey_*.p8
+
+# Backend build for the local production copy (scripts/console-dev).
+backend/dist-mirror/
