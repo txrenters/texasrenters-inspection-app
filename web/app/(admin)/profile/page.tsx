@@ -39,7 +39,7 @@ export default function ProfilePage() {
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Memberships</CardTitle>
+            <CardTitle variant="label">Memberships</CardTitle>
           </CardHeader>
           <CardContent>
             <ul className="divide-y">
@@ -66,7 +66,7 @@ export default function ProfilePage() {
             answer anywhere in the app. */}
         <Card>
           <CardHeader>
-            <CardTitle>Effective permissions</CardTitle>
+            <CardTitle variant="label">Effective permissions</CardTitle>
           </CardHeader>
           <CardContent>
             {profile?.permissions.length ? (

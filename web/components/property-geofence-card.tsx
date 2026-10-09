@@ -56,7 +56,7 @@ export function PropertyGeofenceCard({
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>Time on site</CardTitle>
+        <CardTitle variant="label">Time on site</CardTitle>
         <CardDescription>
           How close a technician has to be for this property to count as visited. The hours on the
           Timesheet are read from these distances.

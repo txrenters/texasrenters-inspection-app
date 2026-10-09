@@ -80,7 +80,7 @@ export function AiScorecard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>How the AI is doing</CardTitle>
+        <CardTitle variant="label">How the AI is doing</CardTitle>
         <CardDescription>
           The AI&apos;s findings against what reviewers decided: kept as written, corrected, or
           rejected and why. Room summaries are left out.

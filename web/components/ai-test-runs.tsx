@@ -53,7 +53,7 @@ export function AiTestRuns() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Test runs</CardTitle>
+        <CardTitle variant="label">Test runs</CardTitle>
         <CardDescription>
           Each run analyses the most recent recordings the office has decided, under the rules
           tried, and scores the answer against those decisions. Nothing it finds is saved. Compare

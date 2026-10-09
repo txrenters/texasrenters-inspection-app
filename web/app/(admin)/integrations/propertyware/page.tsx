@@ -340,7 +340,7 @@ export default function PropertywarePage() {
         <TabsContent className="mt-4" value="sync">
           <Card>
             <CardHeader>
-              <CardTitle>Synchronization</CardTitle>
+              <CardTitle variant="label">Synchronization</CardTitle>
               <CardDescription>
                 Import active portfolios and properties, retrieve recent changes, or verify that
                 local records still match Propertyware.
@@ -437,7 +437,7 @@ export default function PropertywarePage() {
 
           <Card className="mt-4">
             <CardHeader>
-              <CardTitle>Entity freshness</CardTitle>
+              <CardTitle variant="label">Entity freshness</CardTitle>
               <CardDescription>
                 Last successful source activity by synchronized record type.
               </CardDescription>
@@ -494,7 +494,7 @@ export default function PropertywarePage() {
           <Card>
             <CardHeader className="flex-row items-start justify-between">
               <div className="space-y-1">
-                <CardTitle>Automatic schedule</CardTitle>
+                <CardTitle variant="label">Automatic schedule</CardTitle>
                 <CardDescription>
                   When enabled, these syncs run on their own - no manual trigger needed.
                 </CardDescription>
@@ -590,7 +590,7 @@ export default function PropertywarePage() {
         <TabsContent className="mt-4" value="history">
           <Card>
             <CardHeader>
-              <CardTitle>Recent sync runs</CardTitle>
+              <CardTitle variant="label">Recent sync runs</CardTitle>
               <CardDescription>Audit history and record-level outcomes for recent jobs.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -615,7 +615,7 @@ export default function PropertywarePage() {
         <TabsContent className="mt-4" value="errors">
           <Card>
             <CardHeader>
-              <CardTitle>Latest run errors</CardTitle>
+              <CardTitle variant="label">Latest run errors</CardTitle>
               <CardDescription>
                 Sanitized integration failures that may require attention.
               </CardDescription>

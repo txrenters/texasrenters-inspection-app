@@ -226,7 +226,7 @@ export default function SettingsPage() {
 
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Human review safeguards</CardTitle>
+          <CardTitle variant="label">Human review safeguards</CardTitle>
         </CardHeader>
         <CardContent>
           <ul className="grid gap-2">

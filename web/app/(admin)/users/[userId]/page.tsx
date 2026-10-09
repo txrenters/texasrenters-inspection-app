@@ -224,7 +224,7 @@ export default function UserDetailPage() {
         <Card>
           <CardHeader className="flex-row items-start justify-between">
             <div className="space-y-1">
-              <CardTitle>Effective permissions</CardTitle>
+              <CardTitle variant="label">Effective permissions</CardTitle>
               <CardDescription>
                 The union of everything the assigned roles grant. This is what the account can
                 actually do.
@@ -254,7 +254,7 @@ export default function UserDetailPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Role assignment</CardTitle>
+            <CardTitle variant="label">Role assignment</CardTitle>
             <CardDescription>
               Access is defined entirely by what you assign here. Changes take effect on the
               user&apos;s next request.

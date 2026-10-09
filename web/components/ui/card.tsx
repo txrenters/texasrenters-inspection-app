@@ -49,11 +49,28 @@ function CardHeader({ className, ...props }: ComponentProps<'div'>) {
   );
 }
 
-function CardTitle({ className, ...props }: ComponentProps<'div'>) {
+/**
+ * `heading` (the default) for a title that is a value -- a person's, an
+ * area's, an organisation's name. `label` for a title that names the SECTION
+ * ("Assignment history", "Recent activity"): small, uppercase, tracked and
+ * muted, so it says what the box is without competing with the page's own
+ * heading (console-development).
+ */
+function CardTitle({
+  className,
+  variant = 'heading',
+  ...props
+}: ComponentProps<'div'> & { variant?: 'heading' | 'label' }) {
   return (
     <div
       data-slot="card-title"
-      className={cn('leading-none font-semibold', className)}
+      data-variant={variant}
+      className={cn(
+        variant === 'label'
+          ? 'text-muted-foreground font-mono text-[10.5px] leading-none font-medium tracking-[0.12em] uppercase'
+          : 'leading-none font-semibold',
+        className,
+      )}
       {...props}
     />
   );

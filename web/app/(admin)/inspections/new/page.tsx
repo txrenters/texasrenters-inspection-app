@@ -475,7 +475,7 @@ function CreateInspectionForm() {
       >
         <Card>
           <CardHeader>
-            <CardTitle>What kind of inspection</CardTitle>
+            <CardTitle variant="label">What kind of inspection</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <Field>
@@ -542,7 +542,7 @@ function CreateInspectionForm() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Which property</CardTitle>
+            <CardTitle variant="label">Which property</CardTitle>
             <CardDescription>
               The portfolio is only a filter for the property list - it is not part of the
               inspection record, and it fills itself in once a property is chosen.
@@ -748,7 +748,7 @@ function CreateInspectionForm() {
 
         <Card>
           <CardHeader>
-            <CardTitle>When and who</CardTitle>
+            <CardTitle variant="label">When and who</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <Field>
@@ -840,7 +840,7 @@ function CreateInspectionForm() {
         {scopeIsChoosable ? (
           <Card>
             <CardHeader>
-              <CardTitle>Which areas</CardTitle>
+              <CardTitle variant="label">Which areas</CardTitle>
               <CardDescription>
                 {inspectionTypeLabel(inspectionType)} inspections cover the areas you choose.
                 Everything is included unless you clear it.
@@ -892,7 +892,7 @@ function CreateInspectionForm() {
         {hvacScope ? (
           <Card>
             <CardHeader>
-              <CardTitle>Which areas</CardTitle>
+              <CardTitle variant="label">Which areas</CardTitle>
               <CardDescription>
                 None to pick. An HVAC inspection is walked in the office&apos;s HVAC report&apos;s four
                 sections &mdash; Attic, Filters, A/C unit and Thermostat &mdash; each photographed with
@@ -905,7 +905,7 @@ function CreateInspectionForm() {
         {roofScope && hasApprovedAreas ? (
           <Card>
             <CardHeader>
-              <CardTitle>Which areas</CardTitle>
+              <CardTitle variant="label">Which areas</CardTitle>
               <CardDescription>
                 A roof inspection covers every area categorised as a roof, so it is not chosen here
                 — the floor plan decides it.

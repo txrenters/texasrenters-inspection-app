@@ -60,7 +60,7 @@ export function AiHouseRules({ canConfigure }: { canConfigure: boolean }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>House rules for the AI</CardTitle>
+        <CardTitle variant="label">House rules for the AI</CardTitle>
         <CardDescription>
           What counts as damage, normal wear and cleaning at TexasRenters, in the office&apos;s
           words. The AI reads them with every recording it analyses. They decide how it judges, never

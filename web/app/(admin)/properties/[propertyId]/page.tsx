@@ -315,7 +315,7 @@ export default function PropertyDetailPage() {
 
           <Card className="mt-4">
             <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>Active units</CardTitle>
+              <CardTitle variant="label">Active units</CardTitle>
               <Badge variant="secondary">{formatCount(item.units?.length ?? 0)}</Badge>
             </CardHeader>
             <CardContent>
@@ -337,7 +337,7 @@ export default function PropertyDetailPage() {
 
           <Card className="mt-4">
             <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>Relevant leases</CardTitle>
+              <CardTitle variant="label">Relevant leases</CardTitle>
               <Badge variant="secondary">{formatCount(item.leases?.length ?? 0)}</Badge>
             </CardHeader>
             <CardContent>

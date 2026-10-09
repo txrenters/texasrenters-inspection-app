@@ -357,7 +357,7 @@ export default function JobberIntegrationPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Connection</CardTitle>
+          <CardTitle variant="label">Connection</CardTitle>
           <CardDescription>
             {connected
               ? `Reading the calendar for ${jobber?.jobberAccountName ?? 'this Jobber account'}.`

@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { VisitCard } from '@/components/visit-card';
 import { usePermissions } from '@/lib/auth';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
 import {
   useAreaEvidenceSummary,
@@ -44,7 +45,6 @@ import {
   useInspectionFindings,
 } from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
-import { cn } from '@/lib/utils';
 
 type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
 
@@ -243,8 +243,13 @@ function InspectionDetail() {
         badges={
           <>
             <StatusBadge value={item.status} />
-            <StatusBadge value={item.inspectionType} />
-            <StatusBadge value={item.priority} />
+            {/* The type is not a status: plain words. Priority only when it is
+                an exception, as on the list (console-development). */}
+            <span className="text-muted-foreground text-sm">
+              {INSPECTION_TYPE_CHILDREN.find((child) => child.type === item.inspectionType)?.title ??
+                humanize(item.inspectionType)}
+            </span>
+            {item.priority && item.priority !== 'STANDARD' ? <StatusBadge value={item.priority} /> : null}
           </>
         }
         description={`${item.propertywareUnit?.name ?? 'Entire property'} · ${formatScheduledDate(item.scheduledAt)}`}
@@ -373,7 +378,7 @@ function InspectionDetail() {
           <div className="mt-4 grid gap-4 xl:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Assignment history</CardTitle>
+                <CardTitle variant="label">Assignment history</CardTitle>
               </CardHeader>
               <CardContent>
                 {assignments.isLoading ? (
@@ -407,7 +412,7 @@ function InspectionDetail() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Recent activity</CardTitle>
+                <CardTitle variant="label">Recent activity</CardTitle>
               </CardHeader>
               <CardContent>
                 {audit.isLoading ? (
@@ -506,10 +511,13 @@ function SummaryFigure({
 }) {
   return (
     <div className="bg-card rounded-xl border px-4 py-3">
-      <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className={cn('mt-1 text-lg font-semibold tabular-nums', tone === 'warning' && 'text-warning')}>
-        {children}
-      </dd>
+      {/* As the dashboard's figures: a small label, an amber dot when it asks
+          for a person, and the value itself never coloured. */}
+      <dt className="text-muted-foreground flex items-center gap-2 font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
+        {tone === 'warning' ? <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" /> : null}
+        {label}
+      </dt>
+      <dd className="mt-1.5 text-lg font-medium tabular-nums">{children}</dd>
     </div>
   );
 }

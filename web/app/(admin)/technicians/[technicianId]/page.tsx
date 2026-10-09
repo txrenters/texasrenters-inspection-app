@@ -370,7 +370,7 @@ export default function TechnicianDetailPage() {
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>Assignment history</CardTitle>
+          <CardTitle variant="label">Assignment history</CardTitle>
         </CardHeader>
         <CardContent>
           {assignments.isLoading ? (

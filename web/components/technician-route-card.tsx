@@ -39,7 +39,7 @@ export function TechnicianRouteCard({
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>Today&rsquo;s route</CardTitle>
+        <CardTitle variant="label">Today&rsquo;s route</CardTitle>
       </CardHeader>
       <CardContent>
         {!route ? (
