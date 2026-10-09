@@ -1301,14 +1301,14 @@ const JOBBER = '/api/v1/admin/integrations/jobber';
  * last stored. Read-only and cheap on the server (stored rows, no Jobber call),
  * so it follows the sync's own five-minute rhythm rather than polling harder.
  */
+export const jobberDayQuery = (date: string) => ({
+  queryKey: keys.jobberDay(date),
+  queryFn: ({ signal }: { signal: AbortSignal }) =>
+    api<JobberDayComparison>(`${JOBBER}/day${queryString({ date })}`, { signal }),
+  refetchInterval: 60_000,
+});
 export const useJobberDay = (date: string, enabled = true) =>
-  useQuery({
-    queryKey: keys.jobberDay(date),
-    queryFn: ({ signal }) =>
-      api<JobberDayComparison>(`${JOBBER}/day${queryString({ date })}`, { signal }),
-    enabled,
-    refetchInterval: 60_000,
-  });
+  useQuery({ ...jobberDayQuery(date), enabled });
 
 export const useJobberConnection = () =>
   useQuery({

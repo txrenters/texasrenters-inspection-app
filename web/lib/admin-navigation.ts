@@ -1,6 +1,7 @@
 import {
   Building2,
   CalendarClock,
+  CalendarDays,
   CalendarRange,
   ClipboardCheck,
   Clock,
@@ -115,6 +116,14 @@ export const adminNavigation: AdminNavigationGroup[] = [
         // the combined list — the view this page exists to serve — would have
         // no route into it at all.
         children: [{ title: 'All assignments', type: '' }, ...INSPECTION_TYPE_CHILDREN],
+      },
+      {
+        // The week by technician, every visit marked against Jobber
+        // (console-development). Read-only: it never changes Jobber.
+        title: 'Schedule',
+        href: '/schedule',
+        icon: CalendarDays,
+        permission: 'inspections:read',
       },
       {
         // The other work booked rather than typed in: the move-outs and move-ins
