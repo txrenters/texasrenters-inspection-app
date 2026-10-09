@@ -254,7 +254,8 @@ export function PlanStopDialog({
       >
         <DialogHeader className="gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant={stop.inspectionType === 'HVAC' ? 'info' : 'secondary'}>{kind}</Badge>
+            {/* The kind of visit in plain words; the badges beside it are its status (console-development). */}
+            <span className="text-xs font-medium">{kind}</span>
             <Badge variant={STOP_STATUS[stop.status].variant}>{STOP_STATUS[stop.status].label}</Badge>
             {stop.inspectionTypeNeedsReview ? <Badge variant="warning">Check the kind of visit</Badge> : null}
           </div>

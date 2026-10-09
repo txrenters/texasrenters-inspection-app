@@ -1,7 +1,9 @@
 'use client';
 
+import { TriangleAlertIcon } from 'lucide-react';
 import { useState } from 'react';
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,55 +50,58 @@ export function LateMoveOutsPanel({
   if (!data.conflicts.length) return null;
 
   return (
-    <section
-      aria-label="Move-outs booked since the plan"
-      className="border-warning/50 bg-warning/5 grid gap-2 rounded-lg border px-4 py-3"
-    >
-      <h2 className="text-sm font-medium">
+    // The console's warning panel, a coloured edge and an icon (console-development),
+    // in place of a hand-made amber box. A region, not a live alert: it is a list to
+    // work through, and reading it all out whenever the page loads helps nobody.
+    <Alert aria-label="Move-outs booked since the plan" role="region" variant="warning">
+      <TriangleAlertIcon />
+      <AlertTitle>
         {data.conflicts.length === 1
           ? 'A move-out was booked onto a benefit-package day since the plan'
           : `${data.conflicts.length} days had a move-out booked onto them since the plan`}
-      </h2>
-      <ul className="grid gap-2">
-        {data.conflicts.map((conflict) => {
-          const count = conflict.suggested.length;
-          const reason = !conflict.monday
-            ? 'No Monday is left in the quarter after this day: move them by hand.'
-            : !data.jobberEditsPushed
-              ? 'Edits are not sent to Jobber from here: move them in Jobber.'
-              : !canMove
-                ? 'Moving visits needs the planning and inspections permissions.'
-                : null;
-          return (
-            <li
-              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm"
-              key={`${conflict.date}|${conflict.technician.id}`}
-            >
-              <span className="min-w-0">
-                <span className="font-medium">
-                  {dayName(conflict.date)} · {conflict.technician.displayName}
-                </span>
-                <span className="text-muted-foreground">
-                  {' — '}
-                  {conflict.bookings
-                    .map((booking) => `${kindName(booking.kind)} at ${booking.address ?? 'an address not on file'}`)
-                    .join(', ')}
-                  {` · ${conflict.visits} benefit-package ${conflict.visits === 1 ? 'visit' : 'visits'} that day`}
-                </span>
-                {reason ? <span className="text-muted-foreground block text-xs">{reason}</span> : null}
-              </span>
-              <Button
-                disabled={Boolean(reason) || pending || count === 0}
-                onClick={() => setConfirming(conflict)}
-                size="sm"
-                variant="outline"
+      </AlertTitle>
+      <AlertDescription className="mt-1.5 justify-items-stretch opacity-100">
+        <ul className="grid gap-2">
+          {data.conflicts.map((conflict) => {
+            const count = conflict.suggested.length;
+            const reason = !conflict.monday
+              ? 'No Monday is left in the quarter after this day: move them by hand.'
+              : !data.jobberEditsPushed
+                ? 'Edits are not sent to Jobber from here: move them in Jobber.'
+                : !canMove
+                  ? 'Moving visits needs the planning and inspections permissions.'
+                  : null;
+            return (
+              <li
+                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm"
+                key={`${conflict.date}|${conflict.technician.id}`}
               >
-                {conflict.monday ? `Move ${count} to ${dayName(conflict.monday)}…` : `Move ${count}…`}
-              </Button>
-            </li>
-          );
-        })}
-      </ul>
+                <span className="min-w-0">
+                  <span className="font-medium">
+                    {dayName(conflict.date)} · {conflict.technician.displayName}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {' — '}
+                    {conflict.bookings
+                      .map((booking) => `${kindName(booking.kind)} at ${booking.address ?? 'an address not on file'}`)
+                      .join(', ')}
+                    {` · ${conflict.visits} benefit-package ${conflict.visits === 1 ? 'visit' : 'visits'} that day`}
+                  </span>
+                  {reason ? <span className="text-muted-foreground block text-xs">{reason}</span> : null}
+                </span>
+                <Button
+                  disabled={Boolean(reason) || pending || count === 0}
+                  onClick={() => setConfirming(conflict)}
+                  size="sm"
+                  variant="outline"
+                >
+                  {conflict.monday ? `Move ${count} to ${dayName(conflict.monday)}…` : `Move ${count}…`}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      </AlertDescription>
 
       <AlertDialog onOpenChange={(open) => !open && setConfirming(null)} open={confirming !== null}>
         {confirming && confirming.monday ? (
@@ -143,6 +148,6 @@ export function LateMoveOutsPanel({
           </AlertDialogContent>
         ) : null}
       </AlertDialog>
-    </section>
+    </Alert>
   );
 }

@@ -109,12 +109,12 @@ const TEMPLATE = {
 const mutation = () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false });
 let mutations: Record<string, ReturnType<typeof mutation>>;
 
-function mount({ templates = [{ ...TEMPLATE, groupCount: 1, propertyCount: 2 }] as unknown[] } = {}) {
+function mount({ templates = [{ ...TEMPLATE, groupCount: 1, propertyCount: 2 }] as unknown[], loading = false } = {}) {
   hooks.useGroupMakerProperties.mockReturnValue({
     isLoading: false,
     data: { properties: [property('b1'), property('b2'), property('b3')], withoutPosition: 0 },
   });
-  hooks.useGroupTemplates.mockReturnValue({ isLoading: false, data: templates });
+  hooks.useGroupTemplates.mockReturnValue({ isLoading: loading, data: loading ? undefined : templates });
   hooks.useGroupTemplate.mockReturnValue({
     data: { ...TEMPLATE, groups: [{ id: GROUP_ID, position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2'] }] },
   });
@@ -204,8 +204,27 @@ describe('the Group maker', () => {
   it('makes a template the one new quarters are built from', () => {
     mount();
 
-    fireEvent.click(screen.getByRole('button', { name: /Use for new quarters/ }));
+    // In More since console-development, with Archive: done once, not a toolbar's worth of buttons.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Use for new quarters/ }));
 
     expect(mutations.setActive!.mutate.mock.calls[0][0]).toEqual({ id: TEMPLATE_ID, active: true });
+  });
+
+  it('still asks before archiving, from More', () => {
+    mount();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /Archive/ }));
+
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(mutations.archive!.mutate).not.toHaveBeenCalled();
+  });
+
+  /** Console-development: the page's name stays while its data loads, rather than a blank skeleton. */
+  it('keeps the title while the templates load', () => {
+    mount({ loading: true });
+
+    expect(screen.getByRole('heading', { name: 'TBP group maker' })).toBeTruthy();
   });
 });

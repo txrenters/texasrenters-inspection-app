@@ -1,6 +1,6 @@
 'use client';
 
-import { FileSpreadsheetIcon, XIcon } from 'lucide-react';
+import { FileSpreadsheetIcon, SlidersHorizontalIcon, XIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'sonner';
@@ -14,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { formatRelative } from '@/lib/format';
@@ -94,25 +96,58 @@ export function MapDisplaySwitches({ display, onChange }: { display: MapDisplay;
         <Switch aria-label="Leg times" checked={display.legTimes} onCheckedChange={(legTimes) => set({ legTimes })} />
         Leg times
       </label>
-      <div aria-label="How the routes are drawn" className="bg-muted inline-flex rounded-md p-0.5" role="group">
-        {([true, false] as const).map((alongRoads) => (
-          <button
-            aria-pressed={display.road === alongRoads}
-            className={cn(
-              'rounded px-2 py-1 text-xs font-medium transition-colors disabled:opacity-50',
-              display.road === alongRoads ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-            )}
-            disabled={!display.lines}
-            key={String(alongRoads)}
-            onClick={() => set({ road: alongRoads })}
-            title={alongRoads ? 'The drive along the roads, from Mapbox' : 'Straight from stop to stop, as the crow flies'}
-            type="button"
-          >
-            {alongRoads ? 'Road routes' : 'Straight lines'}
-          </button>
-        ))}
-      </div>
+      {/*
+        The console's one toggle shape (console-development). A disabled
+        fieldset switches both options off while the route lines are, as the
+        buttons' own `disabled` did.
+      */}
+      <fieldset
+        className={cn('min-w-0', !display.lines && 'opacity-50')}
+        disabled={!display.lines}
+        title="Road routes: the drive along the roads, from Mapbox. Straight lines: from stop to stop, as the crow flies."
+      >
+        <SegmentedControl
+          aria-label="How the routes are drawn"
+          onChange={(drawn) => set({ road: drawn === 'road' })}
+          options={ROUTE_DRAWING}
+          value={display.road ? 'road' : 'straight'}
+        />
+      </fieldset>
     </>
+  );
+}
+
+const ROUTE_DRAWING = [
+  { value: 'road', label: 'Road routes' },
+  { value: 'straight', label: 'Straight lines' },
+] as const;
+
+/**
+ * What the map draws, behind one button (console-development): five switches
+ * and a toggle in the toolbar crowded out the work, and they are set once and
+ * left. The quarter's schedule, the Group maker and a groups file share it.
+ */
+export function MapDisplayOptions({
+  display,
+  onChange,
+  variant = 'ghost',
+}: {
+  display: MapDisplay;
+  onChange: (next: MapDisplay) => void;
+  /** Ghost in a map's own header bar; outline in a page's toolbar, among other outlined buttons. */
+  variant?: 'ghost' | 'outline';
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button aria-label="Map options" size="icon-sm" title="Map options" variant={variant}>
+          <SlidersHorizontalIcon />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="grid w-60 gap-3">
+        <MapDisplaySwitches display={display} onChange={onChange} />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -438,7 +473,7 @@ export function GroupFileView({
             />
             Manual grouping
           </label>
-          <MapDisplaySwitches display={display} onChange={setDisplay} />
+          <MapDisplayOptions display={display} onChange={setDisplay} variant="outline" />
           <GroupFilePicker label="Choose another file" onLoad={onLoad} />
           <Button onClick={onClose} size="sm" variant="ghost">
             <XIcon />

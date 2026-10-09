@@ -8,7 +8,7 @@ import {
   type GroupTemplateOp,
 } from '@texasrenters/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArchiveIcon, PlusIcon, ShapesIcon, StarIcon } from 'lucide-react';
+import { ArchiveIcon, EllipsisIcon, PlusIcon, ShapesIcon, StarIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -34,6 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -56,7 +57,7 @@ import { cn } from '@/lib/utils';
 import {
   DEFAULT_MAP_DISPLAY,
   GroupFilePicker,
-  MapDisplaySwitches,
+  MapDisplayOptions,
   type LoadedGroupFile,
   type MapDisplay,
 } from './group-file-view';
@@ -419,10 +420,8 @@ export function GroupMakerView() {
     );
   };
 
-  if (properties.isLoading || templates.isLoading) return <PageSkeleton />;
-  if (properties.error) return <ErrorState error={properties.error} retry={() => void properties.refetch()} />;
-  if (templates.error) return <ErrorState error={templates.error} retry={() => void templates.refetch()} />;
-
+  // The title before anything loads (console-development): a page that lost its
+  // name while it loaded or failed left nothing saying where you were.
   const header = (
     <PageHeader
       actions={
@@ -450,10 +449,39 @@ export function GroupMakerView() {
           ) : null}
         </>
       }
-      description="Group the benefit-package properties into days by clicking them on the map. Every change is saved as you make it, and anyone else with the template open sees it at once."
+      // How it works, one click away rather than above the work (console-development).
+      info={
+        <p>
+          Group the benefit-package properties into days by clicking them on the map. Every change is saved as you make
+          it, and anyone else with the template open sees it at once.
+        </p>
+      }
+      infoLabel="How the group maker works"
       title="TBP group maker"
     />
   );
+
+  if (properties.isLoading || templates.isLoading)
+    return (
+      <>
+        {header}
+        <PageSkeleton />
+      </>
+    );
+  if (properties.error)
+    return (
+      <>
+        {header}
+        <ErrorState error={properties.error} retry={() => void properties.refetch()} />
+      </>
+    );
+  if (templates.error)
+    return (
+      <>
+        {header}
+        <ErrorState error={templates.error} retry={() => void templates.refetch()} />
+      </>
+    );
 
   const newDialog = (
     <NewTemplateDialog
@@ -531,11 +559,12 @@ export function GroupMakerView() {
                 View only &mdash; your changes are not saved
               </Badge>
             )}
+            {/* Live in the accent, as the console marks today and what is selected (console-development). */}
             <span
-              className={cn('flex items-center gap-1 text-xs', live.connected ? 'text-success' : 'text-muted-foreground')}
+              className={cn('flex items-center gap-1.5 text-xs', live.connected ? 'text-highlight' : 'text-muted-foreground')}
               title={live.connected ? 'Changes by others appear as they are made' : 'Connecting to live editing'}
             >
-              <span aria-hidden className={cn('size-2 rounded-full', live.connected ? 'bg-success' : 'bg-muted-foreground/50')} />
+              <span aria-hidden className={cn('size-1.5 rounded-full', live.connected ? 'bg-highlight' : 'bg-muted-foreground/50')} />
               {live.connected ? 'Live' : 'Connecting…'}
             </span>
             {others.length ? (
@@ -543,7 +572,7 @@ export function GroupMakerView() {
                 <span className="text-muted-foreground text-xs">Also here:</span>
                 {others.map((entry) => (
                   <span
-                    className="bg-info/15 text-info flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium"
+                    className="bg-highlight/10 text-highlight flex h-6 items-center gap-1 rounded-md px-2 text-xs font-medium"
                     key={entry.userId}
                   >
                     <span aria-hidden>{initialsOf(entry.name)}</span>
@@ -554,26 +583,37 @@ export function GroupMakerView() {
             ) : null}
           </div>
         ) : null}
-        {canChange && editor ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              disabled={mutations.setActive.isPending}
-              onClick={() => setActive(!open?.isActive)}
-              size="sm"
-              title="The daily planner builds each new quarter from the active template. A quarter already built keeps its own grouping."
-              variant="outline"
-            >
-              <StarIcon />
-              {open?.isActive ? 'Stop using for new quarters' : 'Use for new quarters'}
-            </Button>
-            <Button onClick={() => whenSaved(() => setArchiving(true))} size="sm" variant="ghost">
-              <ArchiveIcon />
-              Archive
-            </Button>
-          </div>
-        ) : null}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <MapDisplaySwitches display={display} onChange={setDisplay} />
+          {/* The map's switches behind one button, as on the plan's schedule (console-development). */}
+          <MapDisplayOptions display={display} onChange={setDisplay} variant="outline" />
+          {/*
+            What is done to the template once, in a menu rather than two more
+            buttons in the toolbar (console-development). Archive still asks first.
+          */}
+          {canChange && editor ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline">
+                  {mutations.setActive.isPending ? <Spinner /> : <EllipsisIcon />}
+                  More
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  disabled={mutations.setActive.isPending}
+                  onSelect={() => setActive(!open?.isActive)}
+                  title="The daily planner builds each new quarter from the active template. A quarter already built keeps its own grouping."
+                >
+                  <StarIcon />
+                  {open?.isActive ? 'Stop using for new quarters' : 'Use for new quarters'}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => whenSaved(() => setArchiving(true))}>
+                  <ArchiveIcon />
+                  Archive…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
       </div>
 

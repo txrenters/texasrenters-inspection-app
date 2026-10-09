@@ -79,9 +79,8 @@ const COLUMNS: Array<Column<PlanStop>> = [
     cell: (stop) => (
       <div className="grid gap-1">
         <div className="flex items-center gap-1.5">
-          <Badge variant={stop.inspectionType === 'HVAC' ? 'info' : 'secondary'}>
-            {stop.inspectionType === 'HVAC' ? 'HVAC' : 'Occupied'}
-          </Badge>
+          {/* The kind of visit is a fact, not a status: plain words (console-development). */}
+          <span>{stop.inspectionType === 'HVAC' ? 'HVAC' : 'Occupied'}</span>
           {stop.inspectionTypeNeedsReview ? (
             <AlertTriangleIcon aria-label="Worth checking" className="text-warning size-3.5" />
           ) : null}

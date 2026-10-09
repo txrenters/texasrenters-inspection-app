@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { calmGroupColorOf, type GroupFileRow } from './group-file';
 import type { ManualState } from './manual-grouping';
 import { ManualGroupingPanel } from './manual-grouping-panel';
 
@@ -18,7 +20,11 @@ const state: ManualState = {
   ],
 };
 
-const panel = (onCreate = vi.fn(), editingBy?: ReadonlyMap<string, readonly string[]>) =>
+const panel = (
+  onCreate = vi.fn(),
+  editingBy?: ReadonlyMap<string, readonly string[]>,
+  overrides: Partial<ComponentProps<typeof ManualGroupingPanel>> = {},
+) =>
   render(
     <ManualGroupingPanel
       activeId={null}
@@ -47,6 +53,7 @@ const panel = (onCreate = vi.fn(), editingBy?: ReadonlyMap<string, readonly stri
       state={state}
       total={10}
       {...(editingBy ? { editingBy } : {})}
+      {...overrides}
     />,
   );
 
@@ -80,5 +87,57 @@ describe('a live template', () => {
     panel(vi.fn(), new Map([['g2', ['Maria']]]));
 
     expect(screen.getByText('Maria is building it')).toBeTruthy();
+  });
+});
+
+/** T35 (console-development): a white numeral with a shadow was unreadable on the pale group colours. */
+describe('the group numbers', () => {
+  const discOf = (name: string) =>
+    screen.getByText(name).closest('button')!.querySelector<HTMLElement>('span[aria-hidden]')!;
+  /** A colour as the browser writes it back, so a hex and an rgb() compare. */
+  const asStyled = (color: string) => {
+    const probe = document.createElement('span');
+    probe.style.color = color;
+    return probe.style.color;
+  };
+
+  it('writes each in whichever of white or near-black reads on its painted colour', () => {
+    panel();
+
+    const yellow = calmGroupColorOf('#f3c300')!;
+    const purple = calmGroupColorOf('#875692')!;
+    expect(discOf('Group 1').style.backgroundColor).toBe(asStyled(yellow.fill));
+    expect(discOf('Group 1').style.color).toBe(asStyled(yellow.ink));
+    expect(discOf('Group 2').style.color).toBe(asStyled(purple.ink));
+    // A pale yellow takes the dark numeral; no shadow propping up a white one.
+    expect(yellow.ink).not.toBe('#ffffff');
+    expect(discOf('Group 1').style.textShadow).toBe('');
+  });
+});
+
+describe('the stops of the group being built', () => {
+  const row = (rowNumber: number, address: string, unit: string | null) =>
+    ({ rowNumber, address, unit, city: 'Katy', latitude: 29.7 + rowNumber / 100, longitude: -95.7 }) as unknown as GroupFileRow;
+
+  it('names the stop each move and removal is for', () => {
+    const onReorder = vi.fn();
+    const onRemoveStop = vi.fn();
+    panel(vi.fn(), undefined, {
+      activeId: 'g1',
+      byRow: new Map([
+        [1, row(1, '1 Any St', null)],
+        [2, row(2, '2 Any St', 'B')],
+      ]),
+      onRemoveStop,
+      onReorder,
+      state: { groups: [{ ...state.groups[0]!, stops: [1, 2] }, ...state.groups.slice(1)] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move 2 Any St, B earlier' }));
+    expect(onReorder).toHaveBeenCalledWith('g1', 1, 0);
+    fireEvent.click(screen.getByRole('button', { name: 'Move 1 Any St later' }));
+    expect(onReorder).toHaveBeenCalledWith('g1', 0, 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Take 1 Any St out of the group' }));
+    expect(onRemoveStop).toHaveBeenCalledWith(1);
   });
 });

@@ -13,7 +13,7 @@ import { useMemo, type ReactNode } from 'react';
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { businessToday } from '@/lib/clock';
-import { bookedInWords, dayClock, dayOutsideRules, formatClock, formatMinutes } from '@/lib/planning';
+import { bookedInWords, dayClock, dayOutsideRules, formatClock, formatMinutes, formatShortDay } from '@/lib/planning';
 import type { PlanDay, PlanDayAnchor, PlanDayStop, PlanRotation, PlanSettings } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
@@ -150,6 +150,23 @@ export function initialsOf(name: string) {
   if (group) return `G${group}`.slice(0, 3);
   const words = name.trim().split(/\s+/).filter(Boolean);
   return `${words[0]?.[0] ?? ''}${words.length > 1 ? (words.at(-1)?.[0] ?? '') : ''}`.toUpperCase() || '?';
+}
+
+/**
+ * What the office needs to do about a move-out or move-in a day is built around, if anything.
+ * Here rather than beside the schedule, so the calendar can mark it too (console-development).
+ */
+export function bookedProblem(
+  day: PlanDay,
+  anchor: Pick<PlanDayAnchor, 'cancelled' | 'scheduledOn' | 'assignedTechnician'>,
+): string | null {
+  if (anchor.cancelled) return 'Cancelled since the plan was laid out · rebuild';
+  if (anchor.scheduledOn !== day.date.slice(0, 10)) return `Moved to ${formatShortDay(anchor.scheduledOn)} · rebuild`;
+  // A move-out or move-in is on the day of whoever it was assigned to (2026-10-01);
+  // assigned to someone else since, the day no longer holds it.
+  if (anchor.assignedTechnician?.id !== day.technician.id)
+    return `${anchor.assignedTechnician ? `Now ${anchor.assignedTechnician.displayName}’s` : 'Not assigned now'} · rebuild`;
+  return null;
 }
 
 export type TimelineEntry =
@@ -337,12 +354,16 @@ export function PlanCalendar({
   return <MonthView month={month} shared={shared} />;
 }
 
-/** A date's number, which opens that day; today's stands out, as in Jobber. */
+/**
+ * A date's number, which opens that day; today's stands out, as in Jobber --
+ * in the accent, as the Schedule marks today (console-development): a solid
+ * ink block was the heaviest thing on a month of chips.
+ */
 function DateButton({ date, shared, children, className }: { date: string; shared: Shared; children: ReactNode; className?: string }) {
   const today = date === shared.today;
   const look = cn(
     'inline-flex items-baseline gap-1 rounded-md px-1.5 py-0.5 font-mono tabular-nums',
-    today ? 'bg-primary text-primary-foreground' : shared.onOpenDate && 'hover:bg-accent',
+    today ? 'text-highlight bg-highlight/10 font-medium' : shared.onOpenDate && 'hover:bg-accent',
     className,
   );
   if (!shared.onOpenDate) return <span className={look}>{children}</span>;
@@ -406,6 +427,14 @@ function MonthView({ month, shared }: { month: CalendarMonth; shared: Shared }) 
   );
 }
 
+/**
+ * The diamond that marks a move-out or move-in. Neutral (console-development):
+ * a booking is what a day is built around, not a warning -- amber is kept for
+ * one that needs a rebuild (`bookedProblem`), which the page lists apart.
+ */
+const bookedDiamond = (needsRebuild: boolean) =>
+  cn('size-2 shrink-0 rotate-45 rounded-[1px]', needsRebuild ? 'bg-warning' : 'bg-muted-foreground');
+
 /** A technician-day on the month: who, the zone, the move-out diamond, and how many visits. */
 function DayChip({ day, shared }: { day: PlanDay; shared: Shared }) {
   const outside = dayOutsideRules(day, shared.settings);
@@ -430,11 +459,12 @@ function DayChip({ day, shared }: { day: PlanDay; shared: Shared }) {
       <span aria-hidden className={cn('size-2 shrink-0 rounded-full', shared.colourOf(day.technicianId))} />
       <span className="truncate font-medium">{shortName(day.technician.displayName)}</span>
       {zones.length ? <span className="text-muted-foreground shrink-0 font-mono">Z{zones.join(',')}</span> : null}
-      {/* The diamond of a move-out or move-in, as on the day's map. */}
-      {day.anchors?.length ? <span aria-hidden className="bg-warning size-2 shrink-0 rotate-45 rounded-[1px]" /> : null}
-      <span className={cn('ml-auto shrink-0 font-mono tabular-nums', outside && 'text-destructive')}>
-        {day.stops.filter(shared.filter.visit).length}
-      </span>
+      {/* The diamond of a move-out or move-in, as the day's list marks one. */}
+      {day.anchors?.length ? (
+        <span aria-hidden className={bookedDiamond(day.anchors.some((anchor) => bookedProblem(day, anchor) !== null))} />
+      ) : null}
+      {/* A plain figure: the coral edge already says the day breaks a rule (console-development). */}
+      <span className="ml-auto shrink-0 font-mono tabular-nums">{day.stops.filter(shared.filter.visit).length}</span>
     </button>
   );
 }
@@ -467,7 +497,8 @@ function VisitChip({
       aria-label={`${entry.address ?? 'Unknown address'}, ${what.toLowerCase()}, on ${day.technician.displayName}’s day`}
       className={cn(
         'hover:bg-accent focus-visible:ring-ring/50 grid w-full min-w-0 gap-0.5 rounded-md border px-1.5 py-1 text-left text-xs outline-none focus-visible:ring-[3px]',
-        entry.kind === 'booked' ? 'border-warning/50 bg-warning/10' : 'bg-muted/40',
+        // A booking reads as its word and a neutral diamond, not an amber box (console-development).
+        'bg-muted/40',
         focused && 'border-ring bg-accent ring-ring ring-1',
       )}
       onClick={() => (shared.onFocusStop ? shared.onFocusStop(day.id, entry.id) : shared.onSelect(day.id))}
@@ -478,7 +509,10 @@ function VisitChip({
         {time ? <span className="text-muted-foreground font-mono tabular-nums">{time} </span> : null}
         {entry.address ?? 'Unknown address'}
       </span>
-      <span className="text-muted-foreground truncate text-[11px]">{[zone ? `Zone ${zone}` : null, what].filter(Boolean).join(' · ')}</span>
+      <span className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[11px]">
+        {entry.kind === 'booked' ? <span aria-hidden className={cn(bookedDiamond(bookedProblem(day, entry) !== null), 'size-1.5')} /> : null}
+        <span className="truncate">{[zone ? `Zone ${zone}` : null, what].filter(Boolean).join(' · ')}</span>
+      </span>
     </button>
   );
 }
@@ -511,18 +545,17 @@ function WeekView({ dates, shared }: { dates: string[]; shared: Shared }) {
                     <button
                       aria-current={selected || undefined}
                       aria-label={dayLabel(day, shared.settings)}
-                      className="hover:bg-accent flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs"
+                      className={cn(
+                        'hover:bg-accent flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs',
+                        dayOutsideRules(day, shared.settings) && 'border-l-destructive border-l-2',
+                      )}
                       onClick={() => shared.onSelect(day.id)}
                       type="button"
                     >
                       <Avatar colour={shared.colourOf(day.technicianId)} name={day.technician.displayName} />
                       <span className="truncate font-medium">{shortName(day.technician.displayName)}</span>
-                      <span
-                        className={cn(
-                          'text-muted-foreground ml-auto shrink-0 font-mono tabular-nums',
-                          dayOutsideRules(day, shared.settings) && 'text-destructive',
-                        )}
-                      >
+                      {/* Plain, as on the month (console-development): the coral edge says the day breaks a rule. */}
+                      <span className="text-muted-foreground ml-auto shrink-0 font-mono tabular-nums">
                         {day.stops.filter(shared.filter.visit).length}
                       </span>
                     </button>
@@ -571,7 +604,13 @@ function DayColumn({ day, shared }: { day: PlanDay; shared: Shared }) {
   const clock = dayClock(dayTimeline(day));
   const drive = day.totalDriveSeconds;
   return (
-    <div className={cn('grid gap-1.5 rounded-lg border p-1.5', selected ? 'border-ring bg-accent/40' : 'hover:bg-muted/40')}>
+    <div
+      className={cn(
+        'grid gap-1.5 rounded-lg border p-1.5',
+        selected ? 'border-ring bg-accent/40' : 'hover:bg-muted/40',
+        dayOutsideRules(day, shared.settings) && 'border-l-destructive border-l-2',
+      )}
+    >
       <button
         aria-current={selected || undefined}
         aria-label={dayLabel(day, shared.settings)}
@@ -587,10 +626,8 @@ function DayColumn({ day, shared }: { day: PlanDay; shared: Shared }) {
             {formatDrive(day.onSiteMinutes * 60 + (drive ?? 0))}
           </span>
         </span>
-        <CountPill
-          className={cn(dayOutsideRules(day, shared.settings) && 'border-destructive/60 text-destructive')}
-          count={day.stops.filter(shared.filter.visit).length}
-        />
+        {/* A coral left edge on the column says the day breaks a rule; the count stays plain (console-development). */}
+        <CountPill count={day.stops.filter(shared.filter.visit).length} />
       </button>
       {clock
         .filter((entry) => (entry.kind === 'visit' ? shared.filter.visit(entry) : shared.filter.bookings))

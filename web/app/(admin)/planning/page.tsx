@@ -1,7 +1,17 @@
 'use client';
 
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
-import { CalendarRangeIcon, EllipsisIcon, FileSpreadsheetIcon, MapIcon, RefreshCwIcon, RouteIcon, SendIcon, WindIcon } from 'lucide-react';
+import {
+  CalendarRangeIcon,
+  EllipsisIcon,
+  FileSpreadsheetIcon,
+  MapIcon,
+  RefreshCwIcon,
+  RouteIcon,
+  SendIcon,
+  TriangleAlertIcon,
+  WindIcon,
+} from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
@@ -11,10 +21,10 @@ import { GroupFileView, useGroupFileChoice, useGroupFilePicker, type LoadedGroup
 import { useOfficeSheetImport } from '@/components/planning/office-sheet-import';
 import type { AttentionMapStop } from '@/components/planning/plan-attention-map';
 import { PlanBuildDialog, type PlanBuildChoice } from '@/components/planning/plan-build-dialog';
-import type { CalendarView } from '@/components/planning/plan-calendar';
+import { bookedProblem, type CalendarView } from '@/components/planning/plan-calendar';
 import { LateMoveOutsPanel } from '@/components/planning/late-move-outs';
 import { PlanRules } from '@/components/planning/plan-rules';
-import { bookedProblem, PlanSchedule } from '@/components/planning/plan-schedule';
+import { PlanSchedule } from '@/components/planning/plan-schedule';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
@@ -39,6 +49,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { SegmentedControl } from '@/components/ui/segmented';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
@@ -67,7 +78,6 @@ import {
   type PlanStatus,
 } from '@/lib/planning-queries';
 import { useUrlState } from '@/lib/url-state';
-import { cn } from '@/lib/utils';
 
 /**
  * A quarter of Tenant Benefit Package visits, before and after it is booked.
@@ -229,7 +239,21 @@ export default function PlanningPage() {
       return problem ? [{ day, anchor, problem }] : [];
     }),
   );
-  const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
+  const daysOutsideRules = plan
+    ? (days.data ?? [])
+        .filter((day) => dayOutsideRules(day, plan))
+        .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
+    : [];
+  /**
+   * "N days outside the rules" takes the calendar to one (console-development):
+   * the first, then on each click the next after the day picked. Red words
+   * explained only by a hover title gave the office nothing to do with them.
+   */
+  const showNextOutsideRules = () => {
+    const at = daysOutsideRules.findIndex((day) => day.id === state.day);
+    const next = daysOutsideRules[(at + 1) % daysOutsideRules.length];
+    if (next) setState({ tab: 'schedule', show: 'all', day: next.id });
+  };
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   // On a day, whether or not it has been created yet: what the crew is going
   // out to. The office wants the two counts side by side (2026-09-20).
@@ -492,25 +516,23 @@ export default function PlanningPage() {
             : []),
           ...(daysOutsideRules.length
             ? [
-                <span
-                  className="text-destructive font-medium"
+                <button
+                  className="text-destructive font-medium underline-offset-4 hover:underline"
                   key="outside"
-                  title={`Over ${plan.maxStopsPerDay} visits, the inspecting limit, or ${plan.maxLegMinutes} min between properties`}
+                  onClick={showNextOutsideRules}
+                  title={`Over ${plan.maxStopsPerDay} visits, the inspecting limit, or ${plan.maxLegMinutes} min between properties. Click to go to ${
+                    daysOutsideRules.length === 1 ? 'it' : 'the next one'
+                  } on the calendar.`}
+                  type="button"
                 >
                   {daysOutsideRules.length.toLocaleString()} {daysOutsideRules.length === 1 ? 'day' : 'days'} outside the rules
-                </span>,
+                </button>,
               ]
             : []),
         ];
         return (
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
             {parts.flatMap((part, index) => (index ? [<span aria-hidden key={`dot-${index}`}>·</span>, part] : [part]))}
-            <PlanRules
-              facts={facts}
-              maxLegMinutes={plan.maxLegMinutes}
-              maxStopsPerDay={plan.maxStopsPerDay}
-              minStopsPerDay={plan.minStopsPerDay}
-            />
           </span>
         );
       })()
@@ -601,6 +623,19 @@ export default function PlanningPage() {
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
       description={summary}
+      // The rules and the quarter's facts behind the header's own ⓘ, as on every page (console-development).
+      info={
+        plan ? (
+          <PlanRules
+            facts={facts}
+            maxLegMinutes={plan.maxLegMinutes}
+            maxOnSiteMinutes={plan.maxOnSiteMinutes}
+            maxStopsPerDay={plan.maxStopsPerDay}
+            minStopsPerDay={plan.minStopsPerDay}
+          />
+        ) : undefined
+      }
+      infoLabel="How days are built"
       title="Benefit package plan"
     />
   );
@@ -684,7 +719,9 @@ export default function PlanningPage() {
           {bookedToCheck.length ? (
             // Days are built around move-outs and move-ins (the office, 2026-09-17 and -18), so one that
             // moved, was cancelled or is not with the day's technician makes that day wrong until fixed.
-            <Alert>
+            // The console's warning panel (console-development): a plain box read as a note, not a job.
+            <Alert variant="warning">
+              <TriangleAlertIcon />
               <AlertTitle>{bookedInWords(bookedToCheck.map(({ anchor }) => anchor), 'count')} to check</AlertTitle>
               <AlertDescription>
                 <ul className="grid gap-0.5">
@@ -777,23 +814,8 @@ export default function PlanningPage() {
                 <ErrorState error={stops.error} retry={() => void stops.refetch()} />
               ) : (
                 <div className="grid gap-3">
-                  <div aria-label="Show" className="flex flex-wrap gap-1.5" role="group">
-                    {visitFilters.map((filter) => (
-                      <button
-                        aria-pressed={show === filter.value}
-                        className={cn(
-                          'inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-sm transition-colors',
-                          show === filter.value ? 'bg-accent text-foreground border-ring/40 font-medium' : 'text-muted-foreground hover:text-foreground',
-                        )}
-                        key={filter.value}
-                        onClick={() => showVisits(filter.value)}
-                        type="button"
-                      >
-                        {filter.label}{' '}
-                        <span className="font-mono text-xs tabular-nums">{filter.count.toLocaleString()}</span>
-                      </button>
-                    ))}
-                  </div>
+                  {/* The console's one toggle shape (console-development): rounded pills read as dropdown filters. */}
+                  <SegmentedControl aria-label="Show" className="justify-self-start" onChange={showVisits} options={visitFilters} value={show} />
 
                   {(show === 'unscheduled' || show === 'attention') && listed.length ? (
                     <>
