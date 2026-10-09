@@ -6,6 +6,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
+import { JobberDayActions } from '@/components/jobber-day-actions';
 import { PageHeader } from '@/components/page-header';
 import { Panel, PanelRow } from '@/components/panel';
 import { ErrorState } from '@/components/states';
@@ -22,8 +23,9 @@ import { cn } from '@/lib/utils';
  * The week by technician, every visit marked against Jobber
  * (console-development, 2026-10-09).
  *
- * Read-only: built from the day comparison, which reads what the Jobber sync
- * last stored. Nothing on this page changes Jobber.
+ * Built from the day comparison, which reads what the Jobber sync last stored.
+ * The only things here that change Jobber are the actions beside a difference,
+ * each confirmed first and sent through the integration's own outbox.
  */
 
 const CHIPS_SHOWN = 4;
@@ -245,11 +247,14 @@ export default function SchedulePage() {
                 }
                 tone={jobberDayTone(row.state) === 'destructive' ? 'destructive' : 'warning'}
                 trailing={
-                  row.inspectionId ? (
-                    <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
-                      <Link href={`/inspections/${row.inspectionId}`}>Open</Link>
-                    </Button>
-                  ) : null
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <JobberDayActions pushesEnabled={byDate.get(date)?.pushesEnabled ?? false} row={row} />
+                    {row.inspectionId ? (
+                      <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
+                        <Link href={`/inspections/${row.inspectionId}`}>Open</Link>
+                      </Button>
+                    ) : null}
+                  </div>
                 }
               />
             ))}

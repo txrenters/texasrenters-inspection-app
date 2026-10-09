@@ -1310,6 +1310,30 @@ export const jobberDayQuery = (date: string) => ({
 export const useJobberDay = (date: string, enabled = true) =>
   useQuery({ ...jobberDayQuery(date), enabled });
 
+/**
+ * The actions on a difference with Jobber. Each queues through the
+ * integration's own outbox or re-reads one visit; the server refuses what does
+ * not make sense (pushes off, wrong state, missing permission) and says why.
+ */
+export type JobberDayAction =
+  | { action: 'push'; inspectionId: string; technician?: boolean }
+  | { action: 'take-jobber'; inspectionId: string }
+  | { action: 'create-inspection'; jobberVisitId: string }
+  | { action: 'cancel-in-jobber'; inspectionId: string }
+  | { action: 'complete-in-jobber'; inspectionId: string };
+
+export const useJobberDayAction = () => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, ...body }: JobberDayAction) =>
+      api<Record<string, unknown>>(`${JOBBER}/day/${action}`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'jobber'] });
+      void client.invalidateQueries({ queryKey: ['admin', 'inspections'] });
+    },
+  });
+};
+
 export const useJobberConnection = () =>
   useQuery({
     queryKey: keys.jobber,
