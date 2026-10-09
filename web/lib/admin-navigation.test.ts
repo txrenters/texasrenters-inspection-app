@@ -95,12 +95,12 @@ describe('admin navigation', () => {
       // not sections of their own (the office, 2026-09-17). The whole list is
       // where they are, which is why it comes first.
       //
-      // Over every section rather than only Inspections: Assignments carries
-      // the same list, and asserting one of them is how the two drift.
+      // Over every section, so a new sectioned item is held to the same list.
+      // (Assignments carried it too until it was removed, 2026-10-10.)
       const sectioned = adminNavigation
         .flatMap((group) => group.items)
         .filter((item) => item.children?.length);
-      expect(sectioned.map((item) => item.title)).toEqual(['Inspections', 'Assignments']);
+      expect(sectioned.map((item) => item.title)).toEqual(['Inspections']);
 
       for (const item of sectioned) {
         expect(item.children).toEqual([
@@ -117,10 +117,7 @@ describe('admin navigation', () => {
       }
     });
 
-    it.each([
-      ['/inspections', 'All inspections'],
-      ['/assignments', 'All assignments'],
-    ])('sends the whole-list sub-item of %s to the plain list, not to an empty filter', (href, title) => {
+    it.each([['/inspections', 'All inspections']])('sends the whole-list sub-item of %s to the plain list, not to an empty filter', (href, title) => {
       // `?type=` is not "no filter" — the page would forward the blank to an
       // API that rejects anything outside the enum.
       const item = adminNavigation.flatMap((group) => group.items).find((entry) => entry.href === href)!;

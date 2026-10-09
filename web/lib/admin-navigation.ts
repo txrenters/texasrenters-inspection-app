@@ -16,7 +16,6 @@ import {
   UserRound,
   Users,
   UsersRound,
-  Workflow,
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
@@ -106,17 +105,10 @@ export const adminNavigation: AdminNavigationGroup[] = [
         // including the ones that are not sections of their own.
         children: [{ title: 'All inspections', type: '' }, ...INSPECTION_TYPE_CHILDREN],
       },
-      {
-        title: 'Assignments',
-        href: '/assignments',
-        icon: Workflow,
-        permission: 'inspections:assign',
-        // "All assignments" first, and it is not decoration. An item with
-        // children becomes a toggle rather than a destination, so without this
-        // the combined list — the view this page exists to serve — would have
-        // no route into it at all.
-        children: [{ title: 'All assignments', type: '' }, ...INSPECTION_TYPE_CHILDREN],
-      },
+      // Assignments was removed (console-development, 2026-10-10): everything it
+      // did day to day is on Inspections -- who is on each visit, filtering by
+      // technician and type, assigning and reassigning (one or many). Each
+      // inspection keeps its own assignment history. /assignments forwards here.
       {
         // The week by technician, every visit marked against Jobber
         // (console-development). Read-only: it never changes Jobber.

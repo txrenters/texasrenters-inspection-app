@@ -1,273 +1,30 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { UserRoundIcon, WorkflowIcon } from 'lucide-react';
-import Link from 'next/link';
-import { useState } from 'react';
-
-import { AssignmentCreateDialog } from '@/components/assignment-create-dialog';
-import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
-import { ListToolbar, SelectFilter, enumOptions } from '@/components/list-toolbar';
-import { PageHeader } from '@/components/page-header';
-import { Pagination } from '@/components/pagination';
-import { EmptyState, ErrorState } from '@/components/states';
-import { StatusBadge } from '@/components/status-badge';
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
-import { EMPTY, formatDateTime, humanize } from '@/lib/format';
-import { usePermissions } from '@/lib/auth';
-import { useAssignments, useTechnicians } from '@/lib/queries';
-import { useDebouncedValue } from '@/lib/use-debounced-value';
-import { useUrlState } from '@/lib/url-state';
-
-type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
-
-const ASSIGNMENT_STATUSES = ['ASSIGNED', 'REASSIGNED', 'UNASSIGNED'] as const;
-
-const COLUMNS: Array<Column<AssignmentRow>> = [
-  {
-    key: 'property',
-    header: 'Property',
-    primary: true,
-    cell: (row) => row.inspection?.propertywareBuilding?.name ?? 'Property unavailable',
-  },
-  {
-    key: 'unit',
-    header: 'Unit',
-    hideBelow: 'lg',
-    cell: (row) => row.inspection?.propertywareUnit?.name ?? 'Entire property',
-  },
-  {
-    // Which kind of visit this is. The row already reaches through
-    // `row.inspection` for the property and the unit, and the type has always
-    // been on the wire — it was simply never shown, so two assignments to the
-    // same property were indistinguishable.
-    key: 'type',
-    header: 'Type',
-    hideBelow: 'lg',
-    cell: (row) => <StatusBadge value={row.inspection?.inspectionType ?? EMPTY} />,
-  },
-  {
-    key: 'technician',
-    header: 'Technician',
-    cell: (row) => row.technician?.displayName ?? row.technicianId ?? 'Unassigned',
-  },
-  {
-    key: 'assignedBy',
-    header: 'Assigned by',
-    hideBelow: 'xl',
-    cell: (row) => row.assignedBy?.displayName ?? row.assignedById ?? EMPTY,
-  },
-  {
-    key: 'assignedAt',
-    header: 'Assigned',
-    hideBelow: 'md',
-    cell: (row) => formatDateTime(row.assignedAt),
-  },
-  { key: 'endedAt', header: 'Ended', hideBelow: 'xl', cell: (row) => formatDateTime(row.endedAt) },
-  {
-    key: 'status',
-    header: 'Status',
-    cell: (row) => (
-      <StatusBadge
-        value={
-          row.recordType === 'UNASSIGNED_INSPECTION'
-            ? 'UNASSIGNED'
-            : row.isCurrent
-              ? 'CURRENT'
-              : row.status
-        }
-      />
-    ),
-  },
-];
-
-export default function AssignmentsPage() {
-  const canAssign = usePermissions().has('inspections:assign');
-  const [creating, setCreating] = useState(false);
-  const [state, setState, reset] = useUrlState({
-    page: 1,
-    q: '',
-    technician: '',
-    status: '',
-    type: '',
-  });
-
-  // Debounced, like every other list in the console: the field owns its text so
-  // typing stays smooth, and the request waits for the typing to stop.
-  const debouncedSearch = useDebouncedValue(state.q);
-  const isSearchPending = state.q.trim() !== debouncedSearch.trim();
-
-  const assignments = useAssignments({
-    page: state.page,
-    pageSize: 20,
-    search: debouncedSearch,
-    technicianId: state.technician,
-    assignmentStatus: state.status,
-    inspectionType: state.type,
-  });
-  const technicians = useTechnicians({ page: 1, pageSize: 100 });
-
-  const busy = assignments.isLoading || isSearchPending || assignments.isPlaceholderData;
-  // `type` is not counted. It is the section rather than a filter, so an empty
-  // one must not offer "Clear filters" — that would eject somebody out of the
-  // section they had just opened.
-  const hasActiveFilters = Boolean(state.q.trim() || state.technician || state.status);
-  // The heading comes from the sidebar's own label, so the two cannot drift and
-  // there is no second nine-entry table of copy to keep in step.
-  const section = state.type
-    ? INSPECTION_TYPE_CHILDREN.find((child) => child.type === state.type)
-    : undefined;
-  const resultLabel = busy
-    ? 'Searching assignments…'
-    : `${(assignments.data?.total ?? 0).toLocaleString()} assignment records`;
-
-  const technicianName = technicians.data?.items.find(
-    (item) => item.id === state.technician,
-  )?.displayName;
-
-  const activeFilters = [
-    technicianName
-      ? {
-          label: 'Technician',
-          value: technicianName,
-          onRemove: () => setState({ technician: '', page: 1 }),
-        }
-      : null,
-    state.status
-      ? {
-          label: 'Status',
-          value: humanize(state.status),
-          onRemove: () => setState({ status: '', page: 1 }),
-        }
-      : null,
-  ].filter((filter) => filter !== null);
-
-  return (
-    <>
-      <PageHeader
-        actions={
-          canAssign ? (
-            <Button onClick={() => setCreating(true)}>Create assignment</Button>
-          ) : undefined
-        }
-        description={
-          section
-            ? `Technician assignments for ${section.title.toLowerCase()} visits. Reassignment never overwrites prior records.`
-            : 'Current and historical technician assignments. Reassignment never overwrites prior records.'
-        }
-        title={section ? `${section.title} assignments` : 'Assignments'}
-      />
-
-      <ListToolbar
-        activeFilters={activeFilters}
-        filters={
-          <>
-            <SelectFilter
-              allLabel="All technicians"
-              className="w-[220px]"
-              label="Technician"
-              onChange={(technician) => setState({ technician, page: 1 })}
-              options={(technicians.data?.items ?? []).map((item) => ({
-                value: item.id,
-                label: item.displayName,
-              }))}
-              value={state.technician}
-            />
-            <SelectFilter
-              allLabel="All statuses"
-              label="Assignment status"
-              onChange={(status) =>
-                // Unassigned rows have no technician, so the technician filter is
-                // cleared rather than left stale behind a control that no longer
-                // narrows anything.
-                setState({
-                  status,
-                  page: 1,
-                  ...(status === 'UNASSIGNED' ? { technician: '' } : {}),
-                })
-              }
-              options={enumOptions(ASSIGNMENT_STATUSES)}
-              value={state.status}
-            />
-          </>
-        }
-        onClear={reset}
-        onSearch={(q) => setState({ q, page: 1 })}
-        pending={isSearchPending}
-        resultLabel={resultLabel}
-        search={state.q}
-        searchLabel="Search property or unit"
-        searchPlaceholder="Search assignments…"
-      />
-
-      {busy ? (
-        <DataTableSkeleton columns={COLUMNS} hasActions label="Loading assignments" rows={8} />
-      ) : assignments.isError ? (
-        <ErrorState error={assignments.error} retry={() => void assignments.refetch()} />
-      ) : !assignments.data?.items.length ? (
-        <EmptyState
-          description={
-            state.status === 'UNASSIGNED'
-              ? 'Every inspection currently has a technician assignment.'
-              : state.q.trim()
-                ? `No assignment is at a property matching “${state.q.trim()}”.`
-                : hasActiveFilters
-                  ? 'Adjust the filters to see matching assignment history.'
-                  : 'Assignment history will appear after an inspection is assigned.'
-          }
-          icon={WorkflowIcon}
-          title={
-            state.status === 'UNASSIGNED' ? 'No unassigned inspections' : 'No assignments found'
-          }
-        >
-          {hasActiveFilters ? (
-            <Button onClick={reset} variant="outline">
-              Clear filters
-            </Button>
-          ) : canAssign ? (
-            <Button onClick={() => setCreating(true)}>Create assignment</Button>
-          ) : null}
-        </EmptyState>
-      ) : (
-        <>
-          <DataTable
-            // The row opens the inspection; the technician is the other end of
-            // the record, and this table is the one place both are shown
-            // together, so it keeps its own control.
-            actions={(row) =>
-              row.technician ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button asChild size="icon-sm" variant="ghost">
-                      <Link
-                        aria-label={`Open technician ${row.technician.displayName}`}
-                        href={`/technicians/${row.technician.id}`}
-                      >
-                        <UserRoundIcon />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Open technician</TooltipContent>
-                </Tooltip>
-              ) : null
-            }
-            columns={COLUMNS}
-            label="Technician assignment history"
-            rowHref={(row) => `/inspections/${row.inspectionId}`}
-            rowKey={(row) => row.id}
-            rows={assignments.data.items}
-          />
-          <Pagination
-            onPage={(page) => setState({ page })}
-            page={state.page}
-            total={assignments.data.total}
-            totalPages={assignments.data.totalPages}
-          />
-        </>
-      )}
-
-      {creating ? <AssignmentCreateDialog onClose={() => setCreating(false)} /> : null}
-    </>
-  );
+/**
+ * The Assignments page was removed (console-development, 2026-10-10): every
+ * day-to-day thing it did is on Inspections -- who is on each visit, filtering
+ * by technician and type, assigning and reassigning one or many -- and each
+ * inspection keeps its own assignment history on its page.
+ *
+ * Old links and bookmarks forward to the same view there, every date, rather
+ * than to a 404: `technician` becomes the list's `tech`, the type stays, and
+ * "Unassigned" becomes the list's unassigned filter.
+ */
+export default async function AssignmentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const asked = await searchParams;
+  const one = (key: string) => {
+    const value = asked[key];
+    return typeof value === 'string' ? value : undefined;
+  };
+  const query = new URLSearchParams({ day: 'all' });
+  const type = one('type');
+  if (type) query.set('type', type);
+  const technician = one('technician');
+  if (one('status') === 'UNASSIGNED') query.set('tech', 'unassigned');
+  else if (technician) query.set('tech', technician);
+  redirect(`/inspections?${query.toString()}`);
 }
