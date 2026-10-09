@@ -47,9 +47,17 @@ import {
   type AdminNavigationItem,
 } from '@/lib/admin-navigation';
 import { useAuth, usePermissions } from '@/lib/auth';
+import { useUnassignedCount } from '@/lib/queries';
 import { initials } from '@/lib/format';
 import { APP_VERSION_LABEL } from '@/lib/app-version';
 import { cn } from '@/lib/utils';
+
+/**
+ * Navigation is words, not words with an icon each (console-development, as
+ * the canvas draws it): fifteen glyphs down the sidebar restated fifteen labels.
+ * The icons come back on the collapsed rail, where they are all there is.
+ */
+const NAV_ICON = 'hidden group-data-[collapsible=icon]:block';
 
 /**
  * A nav item that groups filtered views of one route, rather than being a
@@ -61,11 +69,14 @@ import { cn } from '@/lib/utils';
  */
 export function NavigationSection({
   activeChild,
+  count,
   isActive,
   item,
   onNavigate,
 }: {
   activeChild: AdminNavigationChild | undefined;
+  /** Work waiting in this section, shown in amber beside its name. */
+  count?: number;
   isActive: boolean;
   item: AdminNavigationItem;
   onNavigate: () => void;
@@ -118,12 +129,19 @@ export function NavigationSection({
         onClick={toggle}
         tooltip={item.title}
       >
-        <Icon aria-hidden />
+        <Icon aria-hidden className={NAV_ICON} />
         <span>{item.title}</span>
+        {count ? (
+          <span className="text-warning ml-auto font-mono text-[11px] tabular-nums group-data-[collapsible=icon]:hidden">
+            {count > 99 ? '99+' : count}
+            <span className="sr-only"> waiting for a technician</span>
+          </span>
+        ) : null}
         <ChevronRightIcon
           aria-hidden
           className={cn(
-            'ml-auto transition-transform duration-200 group-data-[collapsible=icon]:hidden',
+            'transition-transform duration-200 group-data-[collapsible=icon]:hidden',
+            !count && 'ml-auto',
             expanded && 'rotate-90',
           )}
         />
@@ -178,10 +196,13 @@ export function NavigationSection({
  */
 function NavigationTree({
   activeType,
+  counts,
   groups,
   onNavigate,
 }: {
   activeType: string | null;
+  /** Work waiting, by route: shown beside the item. */
+  counts: Record<string, number | undefined>;
   groups: AdminNavigationGroup[];
   onNavigate: () => void;
 }) {
@@ -203,6 +224,7 @@ function NavigationTree({
                     {item.children ? (
                       <NavigationSection
                         activeChild={activeChild}
+                        count={counts[item.href]}
                         isActive={active}
                         item={item}
                         onNavigate={onNavigate}
@@ -214,7 +236,7 @@ function NavigationTree({
                           href={item.href}
                           onClick={onNavigate}
                         >
-                          <Icon aria-hidden />
+                          <Icon aria-hidden className={NAV_ICON} />
                           <span>{item.title}</span>
                         </Link>
                       </SidebarMenuButton>
@@ -231,6 +253,7 @@ function NavigationTree({
 }
 
 function NavigationTreeWithActiveType(props: {
+  counts: Record<string, number | undefined>;
   groups: AdminNavigationGroup[];
   onNavigate: () => void;
 }) {
@@ -244,6 +267,8 @@ export function AppSidebar() {
   const { has } = usePermissions();
   const { isMobile, setOpenMobile } = useSidebar();
   const groups = getVisibleAdminNavigation(has);
+  const unassigned = useUnassignedCount(has('inspections:read'));
+  const counts: Record<string, number | undefined> = { '/inspections': unassigned.data };
   const displayName = auth.profile?.displayName ?? 'Administrator';
   const accessLabel = auth.profile?.memberships.some(({ role }) => role === 'SYSTEM_ADMIN')
     ? 'System admin'
@@ -260,66 +285,42 @@ export function AppSidebar() {
 
   return (
     <Sidebar aria-label="Application navigation" collapsible="icon">
-      <SidebarHeader className="h-14 justify-center border-b px-3">
+      <SidebarHeader className="h-12 justify-center border-b px-3">
         <Link
           aria-label="TexasRenters Inspection Admin - go to dashboard"
           className="focus-visible:ring-sidebar-ring flex items-center gap-2.5 rounded-md outline-none focus-visible:ring-2"
           href="/dashboard"
           onClick={closeMobileNavigation}
         >
-          {/* Expanded: the horizontal lockup, plus the product name.
-              Everything here hides together when the rail collapses — the mark
-              below replaces it rather than the wordmark being squeezed into a
-              48px slot, which is what turned it into colour noise.
-
-              Vector rather than the old PNG so it stays sharp at 20px, and two
-              files rather than one filtered with `brightness-0 invert`. That
-              filter made a white silhouette: it flattened the green out of the
-              mark entirely, so dark mode showed half a brand. */}
-          <span className="flex items-center gap-2.5 group-data-[collapsible=icon]:hidden">
-            {/* Decorative: the Link already carries the accessible name, so a
-                second announcement of "TexasRenters" would just be repetition. */}
-            {/* `next/image` would need `dangerouslyAllowSVG`, which opens the
-                optimizer to every SVG for no gain — these are vector already,
-                and 12KB. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt=""
-              className="h-5 w-auto shrink-0 dark:hidden"
-              src="/brand/logo-horizontal.svg"
-            />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt=""
-              className="hidden h-5 w-auto shrink-0 dark:block"
-              src="/brand/logo-horizontal-dark.svg"
-            />
-            <span className="border-sidebar-border text-muted-foreground truncate border-l pl-2.5 text-xs font-medium tracking-wide uppercase">
-              Inspection
-            </span>
-          </span>
-
-          {/* Collapsed: the mark alone, on its own navy tile.
-              The tile rather than the bare mark because it carries its own
-              background, so it reads on a light sidebar and a dark one without
-              a second asset — and it matches the app icon and the avatar at the
-              foot of the sidebar, which bookends the rail. */}
+          {/* The brand mark alone, small, with the name in plain text beside it
+              (console-development). The full-colour horizontal lockup was the
+              loudest thing on every page; the mark keeps the brand -- navy tile,
+              green house -- at a size that sits quietly in the corner. Collapsed
+              to the rail, the mark is all that shows. Decorative: the Link
+              carries the accessible name. `next/image` would need
+              `dangerouslyAllowSVG` for no gain on a 12KB vector. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             alt=""
-            className="hidden size-7 shrink-0 group-data-[collapsible=icon]:block"
+            className="size-6 shrink-0 rounded-md group-data-[collapsible=icon]:size-7"
             src="/brand/logo-mark-tile.svg"
           />
+          <span className="flex min-w-0 flex-col leading-tight group-data-[collapsible=icon]:hidden">
+            <span className="truncate text-[13px] font-semibold tracking-tight">TexasRenters</span>
+            <span className="text-muted-foreground font-mono text-[9.5px] font-medium tracking-[0.12em] uppercase">
+              Inspection
+            </span>
+          </span>
         </Link>
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-3">
         <Suspense
           fallback={
-            <NavigationTree activeType={null} groups={groups} onNavigate={closeMobileNavigation} />
+            <NavigationTree activeType={null} counts={counts} groups={groups} onNavigate={closeMobileNavigation} />
           }
         >
-          <NavigationTreeWithActiveType groups={groups} onNavigate={closeMobileNavigation} />
+          <NavigationTreeWithActiveType counts={counts} groups={groups} onNavigate={closeMobileNavigation} />
         </Suspense>
       </SidebarContent>
 
@@ -334,8 +335,8 @@ export function AppSidebar() {
                   size="lg"
                   tooltip="Account menu"
                 >
-                  <Avatar className="size-8 rounded-md">
-                    <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground rounded-md text-xs font-semibold">
+                  <Avatar className="size-8 rounded-full">
+                    <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground rounded-full text-xs font-semibold">
                       {initials(displayName)}
                     </AvatarFallback>
                   </Avatar>
@@ -395,7 +396,7 @@ export function AppSidebar() {
             
             Hidden when collapsed to icons — the rail has no room for it, and it
             is reference information rather than navigation. */}
-        <p className="text-muted-foreground px-2 pb-1 text-[11px] tabular-nums group-data-[collapsible=icon]:hidden">
+        <p className="text-muted-foreground px-2 pb-1 font-mono text-[10.5px] tabular-nums group-data-[collapsible=icon]:hidden">
           {APP_VERSION_LABEL}
         </p>
       </SidebarFooter>

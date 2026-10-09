@@ -42,7 +42,8 @@ function Breadcrumbs({ type }: { type?: string | null }) {
     <BreadcrumbList className="flex-nowrap overflow-hidden">
       {breadcrumbs.map((breadcrumb, index) => (
         <Fragment key={`${breadcrumb.title}-${index}`}>
-          {index > 0 ? <BreadcrumbSeparator /> : null}
+          {/* A quiet slash, as the canvas draws it, rather than a chevron. */}
+          {index > 0 ? <BreadcrumbSeparator className="text-muted-foreground/50">/</BreadcrumbSeparator> : null}
           <BreadcrumbItem className="min-w-0">
             {breadcrumb.href ? (
               <BreadcrumbLink asChild>

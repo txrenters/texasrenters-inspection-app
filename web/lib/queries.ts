@@ -358,6 +358,25 @@ export const useInspections = (query: Record<string, string | number | boolean |
       ),
     placeholderData: keepPreviousData,
   });
+/**
+ * How many upcoming inspections have nobody on them: the dashboard's
+ * "Unassigned", asked as a one-row page of the same list "Assign now" opens, so
+ * the two can never disagree. For the count beside Inspections in the sidebar
+ * (console-development). Light on purpose -- one counted row -- because the
+ * sidebar is on every page.
+ */
+export const useUnassignedCount = (enabled: boolean) =>
+  useQuery({
+    queryKey: keys.inspections({ unassignedOnly: true, page: 1, pageSize: 1, count: true }),
+    queryFn: ({ signal }) =>
+      api<Page<AdminInspection>>(
+        `/api/v1/admin/inspections${queryString({ unassignedOnly: true, page: 1, pageSize: 1 })}`,
+        { signal },
+      ).then((page) => page.total),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
 export const useInspection = (id: string) =>
   useQuery({
     queryKey: keys.inspection(id),

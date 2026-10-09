@@ -326,7 +326,9 @@
   --chart-5: oklch(0.74 0.08 145);
 
   --sidebar: oklch(0.185 0.006 258);
-  --sidebar-foreground: oklch(0.88 0.005 258);
+  /* Resting items a step under the page's text, as the canvas draws them, so the
+     sage page-you-are-on and the amber counts are what the eye finds. */
+  --sidebar-foreground: oklch(0.8 0.008 258);
   --sidebar-primary: oklch(0.79 0.095 131);
   --sidebar-primary-foreground: oklch(0.236 0.053 139);
   --sidebar-accent: oklch(0.235 0.007 258);
