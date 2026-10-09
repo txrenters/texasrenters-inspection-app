@@ -1,7 +1,7 @@
 'use client';
 
 import { isUpcomingVisit, VISIT_STATES, visitStateOf } from '@texasrenters/shared';
-import { CheckCircle2Icon, ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import { ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { usePermissions } from '@/lib/auth';
 import { businessToday } from '@/lib/clock';
 import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
@@ -107,6 +108,10 @@ const dayName = (day: string) =>
     timeZone: 'UTC',
   });
 
+/** "Move-in", "HVAC": the navigation's own names, so the list and the sidebar agree. */
+const typeLabel = (type: string) =>
+  INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ?? humanize(type);
+
 const currentTechnician = (row: InspectionRow) =>
   // `?? []`: a mutation response merged into this cache entry is a projection,
   // and can briefly leave the record without its assignments array.
@@ -155,7 +160,9 @@ function columnsFor(type: string): Array<Column<InspectionRow>> {
           key: 'type',
           header: 'Type',
           hideBelow: 'md',
-          cell: (row) => <StatusBadge value={row.inspectionType} />,
+          // A type is not a status: plain words, no dot, no chip. A coloured
+          // chip here was one of the three in every row.
+          cell: (row) => <span className="text-muted-foreground">{typeLabel(row.inspectionType)}</span>,
         },
     {
       key: 'scheduled',
@@ -207,10 +214,10 @@ function columnsFor(type: string): Array<Column<InspectionRow>> {
        */
       cell: (row) =>
         row.evidence && row.evidence.photos > 0 ? (
-          <Badge className="gap-1" variant="secondary">
-            <CheckCircle2Icon className="size-3" />
+          <span className="font-mono text-xs tabular-nums">
             {formatCount(row.evidence.photos)}
-          </Badge>
+            <span className="text-muted-foreground font-sans"> photos</span>
+          </span>
         ) : (
           <span className="text-muted-foreground text-xs">Empty</span>
         ),
