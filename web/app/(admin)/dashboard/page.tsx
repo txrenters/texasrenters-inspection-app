@@ -3,6 +3,7 @@
 import { ArrowRightIcon } from 'lucide-react';
 import Link from 'next/link';
 
+import { JobberDayPanel } from '@/components/jobber-day-panel';
 import { PageHeader } from '@/components/page-header';
 import { Panel, PanelRow } from '@/components/panel';
 import {
@@ -18,7 +19,9 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { businessToday } from '@/lib/clock';
 import { formatCount, formatDateTime, formatRelative, humanize } from '@/lib/format';
-import { useDashboard } from '@/lib/queries';
+import { usePermissions } from '@/lib/auth';
+import { useDashboard, useJobberDay } from '@/lib/queries';
+import { cn } from '@/lib/utils';
 
 /** Providers in these states need somebody; READY and CONFIGURED do not. */
 const PROVIDER_NEEDS_A_PERSON = new Set(['NOT_CONFIGURED', 'DEGRADED', 'UNAVAILABLE', 'ERROR']);
@@ -58,6 +61,9 @@ function Header() {
 
 export default function DashboardPage() {
   const dashboard = useDashboard();
+  const { has } = usePermissions();
+  const canReadInspections = has('inspections:read');
+  const jobberDay = useJobberDay(businessToday(), canReadInspections);
 
   if (dashboard.isError)
     return (
@@ -93,8 +99,12 @@ export default function DashboardPage() {
   const providersNeedingAPerson = data.providerReadiness.filter((provider) =>
     PROVIDER_NEEDS_A_PERSON.has(provider.status),
   );
+  const jobberDifferences = jobberDay.data?.rows.filter((row) => row.state !== 'MATCHES').length ?? 0;
   const needsAPerson =
-    (data.metrics.unassigned ? 1 : 0) + groupedErrors.length + providersNeedingAPerson.length;
+    (data.metrics.unassigned ? 1 : 0) +
+    (jobberDifferences ? 1 : 0) +
+    groupedErrors.length +
+    providersNeedingAPerson.length;
 
   return (
     <>
@@ -128,11 +138,20 @@ export default function DashboardPage() {
       </StatGroup>
 
       <div className="mt-5 grid items-start gap-5 lg:grid-cols-3">
+        {canReadInspections ? (
+          <JobberDayPanel
+            className="lg:col-span-2"
+            day={jobberDay.data}
+            loading={jobberDay.isLoading}
+          />
+        ) : null}
+
+        <div className={cn('grid gap-5', !canReadInspections && 'lg:col-span-3 lg:grid-cols-3')}>
         {/* What needs somebody, in one list, in the order it should be done.
             Replaces the "Warnings and errors" card, which listed sync noise
             under its own heading and said nothing about the queue. */}
         <Panel
-          className="lg:col-span-2"
+          className={cn(!canReadInspections && 'lg:col-span-2')}
           count={needsAPerson || undefined}
           countTone="warning"
           title="Needs a person"
@@ -149,6 +168,19 @@ export default function DashboardPage() {
                     </Link>
                   }
                   detail="Upcoming, any date"
+                  tone="warning"
+                />
+              ) : null}
+              {jobberDifferences ? (
+                <PanelRow
+                  detail="Today, as of the last Jobber sync"
+                  title={
+                    <Link className="hover:underline" href={`/schedule?date=${jobberDay.data!.date}`}>
+                      {jobberDifferences === 1
+                        ? '1 visit differs from Jobber'
+                        : `${jobberDifferences} visits differ from Jobber`}
+                    </Link>
+                  }
                   tone="warning"
                 />
               ) : null}
@@ -238,6 +270,7 @@ export default function DashboardPage() {
               ))}
           </ul>
         </Panel>
+        </div>
       </div>
 
       {/* Synchronized overnight and nobody acts on them from here: a strip, not

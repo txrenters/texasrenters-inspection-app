@@ -80,6 +80,7 @@ import type {
   ProviderReadiness,
   JobberBookingContext,
   JobberConnection,
+  JobberDayComparison,
   JobberAssignee,
   JobberPropertyLink,
   JobberSyncResult,
@@ -120,6 +121,7 @@ import {
 export const keys = {
   all: ['admin'] as const,
   dashboard: ['admin', 'dashboard'] as const,
+  jobberDay: (date: string) => ['admin', 'jobber', 'day', date] as const,
   tenants: (query: Record<string, string | number | boolean | undefined>) =>
     ['admin', 'tenants', query] as const,
   clientErrors: (query: Record<string, string | number | boolean | undefined>) =>
@@ -1294,6 +1296,20 @@ const JOBBER = '/api/v1/admin/integrations/jobber';
  * notice that a scheduled run happened, and the schedule itself is a countdown
  * the client can tick on its own without asking the server.
  */
+/**
+ * One Texas day, the console's inspections beside the Jobber visits the sync
+ * last stored. Read-only and cheap on the server (stored rows, no Jobber call),
+ * so it follows the sync's own five-minute rhythm rather than polling harder.
+ */
+export const useJobberDay = (date: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.jobberDay(date),
+    queryFn: ({ signal }) =>
+      api<JobberDayComparison>(`${JOBBER}/day${queryString({ date })}`, { signal }),
+    enabled,
+    refetchInterval: 60_000,
+  });
+
 export const useJobberConnection = () =>
   useQuery({
     queryKey: keys.jobber,
