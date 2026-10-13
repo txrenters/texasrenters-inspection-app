@@ -51,6 +51,8 @@ function harness(
   });
   const prisma = {
     inspection: {
+      // The visit's second jobs (2026-10-13); none unless a test adds them.
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(
         inspection && {
           id: 'inspection-1',
@@ -80,6 +82,64 @@ const remove = (prisma: unknown, why: 'DELETED' | 'MISSING' | 'UNSCHEDULED' = 'D
     jobberVisitId: 'visit-1',
     why,
   });
+
+/**
+ * A visit that booked two jobs (2026-10-13): an HVAC inspection holding the
+ * visit and an occupied inspection beside it (`jobberCompanionOfId`).
+ */
+describe('a visit deleted in Jobber that booked two jobs', () => {
+  it('removes the second job with the first, and names its technician too', async () => {
+    const { prisma, models } = harness({});
+    prisma.inspection.findMany.mockResolvedValueOnce([{ id: 'companion-1' }]);
+
+    const removal = await remove(prisma);
+
+    expect(prisma.inspection.findMany).toHaveBeenCalledWith({
+      where: { organizationId: ORG, jobberCompanionOfId: 'inspection-1' },
+      select: { id: true },
+    });
+    expect(removal).toEqual({
+      outcome: 'REMOVED',
+      notify: { technicianId: 'tech-moses', detail: '605 Sorrento Dr · Nov 27' },
+      companions: [
+        { inspectionId: 'companion-1', notify: { technicianId: 'tech-moses', detail: '605 Sorrento Dr · Nov 27' } },
+      ],
+    });
+    expect(models.inspection.delete).toHaveBeenCalledWith({ where: { id: 'inspection-1' } });
+    expect(models.inspection.delete).toHaveBeenCalledWith({ where: { id: 'companion-1' } });
+    // The visit's row is put right once, for the inspection it is linked to.
+    expect(models.jobberVisitImport.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a second job by itself without touching the visit’s row, which is the first job’s', async () => {
+    // A companion has no visit of its own to match against.
+    const { prisma, models } = harness({ id: 'companion-1', jobberVisitId: null });
+
+    const removal = await removeWithdrawnInspection(prisma as never, {
+      organizationId: ORG,
+      inspectionId: 'companion-1',
+      jobberVisitId: 'visit-1',
+      why: 'UNSCHEDULED',
+      companion: true,
+    });
+
+    expect(removal.outcome).toBe('REMOVED');
+    expect(models.inspection.delete).toHaveBeenCalledWith({ where: { id: 'companion-1' } });
+    // Never touched: the transaction's models appear only when used.
+    expect(models.jobberVisitImport).toBeUndefined();
+    // A companion has none of its own to look for.
+    expect(prisma.inspection.findMany).not.toHaveBeenCalled();
+  });
+
+  it('leaves the second job alone when the first has work on it and stays', async () => {
+    const { prisma, models } = harness({}, { recordings: 1 });
+    prisma.inspection.findMany.mockResolvedValueOnce([{ id: 'companion-1' }]);
+
+    await expect(remove(prisma)).resolves.toEqual({ outcome: 'IN_USE' });
+    // Nothing was deleted: the removal never reached its transaction.
+    expect(models.inspection).toBeUndefined();
+  });
+});
 
 describe('a visit deleted in Jobber', () => {
   it('deletes its inspection, and names the technician to tell and the job', async () => {

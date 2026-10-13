@@ -130,6 +130,35 @@ const EMPTY: Omit<VisitDetails, 'raw'> = {
   completionInstructions: [],
 };
 
+/**
+ * A visit's Details without its services line, for the second inspection a
+ * visit books (2026-10-13: "Q4 Filter Drop + HVAC Inspection + Occupied
+ * inspection" is an HVAC job and an occupied job). The filter change and pest
+ * control are answered once, on the first; the second keeps everything else --
+ * tenants, access, notes, the completion steps.
+ *
+ * The line is found the way `parseVisitDetails` finds it, and only the part it
+ * would read as services goes: a note in front of it stays. So what the phone
+ * and the server read from the result is the same visit with no services.
+ */
+export function withoutVisitServices(text: string | null | undefined): string | null {
+  if (text == null) return null;
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const headingAt = lines.findIndex((line) => COMPLETION_HEADING.test(line));
+  const end = headingAt >= 0 ? headingAt : lines.length;
+  for (let index = 0; index < end; index += 1) {
+    const line = lines[index]!;
+    if (!(/filter\s*change/i.test(line) || (line.includes('+') && SERVICES_START.test(line)))) continue;
+    const filterAt = line.search(/filter\s*change/i);
+    const start = filterAt >= 0 ? filterAt : line.search(SERVICES_START);
+    const before = clean(line.slice(0, start));
+    if (before) lines[index] = before;
+    else lines.splice(index, 1);
+    break;
+  }
+  return lines.join('\n').trim() || null;
+}
+
 /** Reads a visit's Details into its parts. Never throws; unreadable text becomes notes. */
 export function parseVisitDetails(text: string | null | undefined): VisitDetails {
   const raw = (text ?? '').replace(/\r\n?/g, '\n').trim();

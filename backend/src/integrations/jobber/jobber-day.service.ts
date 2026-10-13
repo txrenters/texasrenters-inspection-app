@@ -24,8 +24,11 @@ export class JobberDayService {
 
     const [inspections, connection, technicians] = await Promise.all([
       this.prisma.inspection.findMany({
-        // `scheduledAt` is the day itself, held as its UTC midnight.
-        where: { organizationId, scheduledAt: new Date(`${date}T00:00:00.000Z`) },
+        // `scheduledAt` is the day itself, held as its UTC midnight. Not a
+        // visit's second job (`jobberCompanionOfId`): it has no visit of its
+        // own and follows the first, so the visit is compared -- and counted --
+        // once, against the inspection that holds it.
+        where: { organizationId, scheduledAt: new Date(`${date}T00:00:00.000Z`), jobberCompanionOfId: null },
         select: {
           id: true,
           status: true,

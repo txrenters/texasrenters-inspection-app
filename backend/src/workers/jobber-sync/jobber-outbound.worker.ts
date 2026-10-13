@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 
 import { businessClockTime, businessDate } from '../../common/business-day';
+import { DONE_INSPECTION_STATUSES } from '../../common/inspection-done';
 import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../../integrations/jobber/jobber.booking';
@@ -45,6 +46,17 @@ const BATCH_SIZE = 25;
 
 /** Failures a retry cannot fix, abandoned at once rather than after six tries. */
 const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED', 'JOBBER_EDIT_INSPECTION_MISSING']);
+
+/**
+ * A completion whose visit booked a second job that is not in yet
+ * (2026-10-13: an HVAC and an occupied inspection on one visit). Not a
+ * failure: completing the visit would close it in Jobber with half the work
+ * still to do, so the task waits -- uncounted -- and is tried again later.
+ */
+class CompanionStillOpenError extends Error {}
+
+/** How long a completion waits before asking again whether its companion is in. */
+const COMPANION_WAIT_MS = 15 * 60_000;
 
 /**
  * The timezone a booked visit's day is expressed in.
@@ -122,6 +134,15 @@ export class JobberOutboundWorker {
         });
         result.sent += 1;
       } catch (error) {
+        if (error instanceof CompanionStillOpenError) {
+          await this.mark(task, {
+            status: JobberOutboundStatus.PENDING,
+            attempts: task.attempts,
+            lastError: error.message,
+            nextAttemptAt: new Date(Date.now() + COMPANION_WAIT_MS),
+          });
+          continue;
+        }
         const attempts = task.attempts + 1;
         const message =
           error instanceof JobberError ? error.message : 'The Jobber update could not be sent.';
@@ -229,6 +250,19 @@ export class JobberOutboundWorker {
         500,
       );
     const jobberVisitId = task.jobberVisitId;
+    // Not while the visit's other job is still to do: Jobber hears once, when
+    // both are in. Checked before the services note, which goes with it.
+    const companionsOpen = await this.prisma.inspection.count({
+      where: {
+        organizationId,
+        jobberCompanionOfId: inspectionId,
+        status: { notIn: [...DONE_INSPECTION_STATUSES, InspectionStatus.CANCELLED] },
+      },
+    });
+    if (companionsOpen)
+      throw new CompanionStillOpenError(
+        'Waiting for the other inspection this visit booked to be submitted, then Jobber is told.',
+      );
     // Before the completion, the order a technician would have done it in, and
     // so that a completion which then fails does not leave a finished visit
     // with no word on what was done.

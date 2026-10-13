@@ -1308,6 +1308,12 @@ model Inspection {
   /// to. Null for anything booked here.
   jobberVisitId              String?
   jobberJobId                String?
+  /// The inspection whose Jobber visit also booked this one (2026-10-13): a
+  /// visit naming an HVAC and an occupied inspection is two jobs. That one
+  /// holds the visit (`jobberVisitId`, unique); this one has none of its own
+  /// and follows it -- day, technician, Details, removal -- and Jobber is told
+  /// the visit is complete only once both are in.
+  jobberCompanionOfId        String?                 @db.Uuid
   /// UNUSED, and never written. Kept only because dropping a column is a
   /// migration production also has to run.
   ///
@@ -1417,6 +1423,8 @@ model Inspection {
   comparisonInspections      Inspection[]            @relation("InspectionLifecycleBaseline")
   parentInspection           Inspection?             @relation("InspectionFollowUp", fields: [parentInspectionId], references: [id], onDelete: Restrict)
   followUpInspections        Inspection[]            @relation("InspectionFollowUp")
+  jobberCompanionOf          Inspection?             @relation("JobberCompanion", fields: [jobberCompanionOfId], references: [id], onDelete: SetNull)
+  jobberCompanions           Inspection[]            @relation("JobberCompanion")
   finalizedBy                UserProfile?            @relation("InspectionFinalizedBy", fields: [finalizedById], references: [id])
   assignments                InspectionAssignment[]
   areas                      InspectionArea[]
@@ -1431,6 +1439,7 @@ model Inspection {
   /// index, so every manually booked inspection is unaffected — but a visit
   /// that syncs twice cannot become two inspections.
   @@unique([organizationId, jobberVisitId])
+  @@index([jobberCompanionOfId])
   /// NOT DECLARED HERE: `Inspection_scheduled_booking_key`, a partial unique
   /// index on (organization, building, unit, type, scheduledAt) WHERE status =
   /// 'SCHEDULED', with NULLS NOT DISTINCT. Prisma cannot express either a

@@ -277,6 +277,58 @@ export function benefitPackageInspectionInDetails(
   return null;
 }
 
+/** The two inspections one visit can book, and which of them holds the visit. */
+export interface PairedVisitTypes {
+  /** Holds the Jobber visit (`Inspection.jobberVisitId`) and answers its services. */
+  primary: typeof InspectionType.HVAC;
+  /** Follows it: no visit of its own, Details without the services line. */
+  companion: typeof InspectionType.OCCUPIED;
+}
+
+const HVAC_AND_OCCUPIED: PairedVisitTypes = {
+  primary: InspectionType.HVAC,
+  companion: InspectionType.OCCUPIED,
+};
+
+/**
+ * A visit that books an HVAC inspection and an occupied inspection: two jobs.
+ *
+ * "6018 <street> - Zone 1 - Q4 Filter Drop+ HVAC Inspection + Occupied
+ * inspection" (2026-10-13) matched both types and was refused as ambiguous, so
+ * neither inspection reached the technician who was at the door. Refusing is
+ * right for a pair nobody can read -- a move-out and a lockbox removal -- but
+ * this pair is the office booking both, deliberately, on a tenancy on the HVAC
+ * plan, and the office asked for both to be done (the user's decision).
+ *
+ * HVAC holds the visit because the visit's services go with it: the AC filters
+ * are scored on the filter change (Moses, 2026-10-01), and Jobber's completion
+ * note is written from the services answered. The occupied inspection follows.
+ *
+ * Only this exact pair, with or without the delivery word beside it (the
+ * benefit package is the wrapper, as `resolveVisitType` already reads it). From
+ * the Details only for a benefit-package title, and only when one services line
+ * names both -- the completion steps on nearly every visit read "HVAC /
+ * Occupied Inspection", which books neither.
+ */
+export function pairedVisitTypes(
+  resolution: VisitTypeResolution,
+  details: string | null | undefined,
+): PairedVisitTypes | null {
+  if (resolution.outcome === 'AMBIGUOUS') {
+    const work = new Set(resolution.matches.filter((type) => type !== InspectionType.AC_FILTER_DELIVERY));
+    return work.size === 2 && work.has(InspectionType.HVAC) && work.has(InspectionType.OCCUPIED)
+      ? HVAC_AND_OCCUPIED
+      : null;
+  }
+  if (resolution.outcome === 'RESOLVED' && resolution.inspectionType === InspectionType.AC_FILTER_DELIVERY && details)
+    return details
+      .split(/\r?\n/)
+      .some((line) => line.includes('+') && /\bhvac\s+insp/i.test(line) && /\boc{1,2}u\w{0,3}ied\s+insp/i.test(line))
+      ? HVAC_AND_OCCUPIED
+      : null;
+  return null;
+}
+
 /**
  * Words in a title that mean the office booked an inspection.
  *

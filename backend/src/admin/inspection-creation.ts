@@ -102,6 +102,8 @@ export interface InspectionRecordDetails {
   /** The visit's title and Details, for an inspection made from a Jobber visit. */
   jobberVisitTitle?: string | null;
   jobberVisitDetails?: string | null;
+  /** The inspection whose Jobber visit also booked this one; see `Inspection.jobberCompanionOfId`. */
+  jobberCompanionOfId?: string | null;
 
   /**
    * For work that was already finished before this record existed.
@@ -1123,6 +1125,7 @@ export async function insertInspection(
         jobberUpdatedAt: details.jobberUpdatedAt,
         jobberVisitTitle: details.jobberVisitTitle,
         jobberVisitDetails: details.jobberVisitDetails,
+        jobberCompanionOfId: details.jobberCompanionOfId,
         // Spread rather than assigned, so omitting them leaves the column
         // defaults exactly as they were for every existing caller.
         ...(details.status ? { status: details.status } : {}),
