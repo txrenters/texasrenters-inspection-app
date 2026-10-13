@@ -9,7 +9,7 @@ import { CheckIcon, ChevronDownIcon, SearchIcon } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { ImportReportDialog, useImportInProgress } from '@/components/inspection-report-import';
+import { ImportReportDialog } from '@/components/inspection-report-import';
 import { AddAreasDialog, MergeAreasDialog } from '@/components/inspection-workflow';
 import { SelectFilter } from '@/components/list-toolbar';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented';
-import { Spinner } from '@/components/ui/spinner';
 import { usePermissions } from '@/lib/auth';
 import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib/queries';
 import { cn } from '@/lib/utils';
@@ -124,10 +123,6 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
   // of the same query rather than a second request.
   const inspection = useInspection(inspectionId).data;
   const [addingAreas, setAddingAreas] = useState(false);
-  // Opened from the "Manage areas" menu, so held here rather than in the
-  // dialog's own button (console-development).
-  const [importing, setImporting] = useState(false);
-  const importRunning = useImportInProgress(canMerge ? inspectionId : null);
   const router = useRouter();
   const searchParams = useSearchParams();
   // The open area lives in the URL so refresh restores it, Back steps through
@@ -269,7 +264,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
       />
     </div>
   );
-  // What the menu offers. Adding an area is only possible while the inspection
+  // What the header offers. Adding an area is only possible while the inspection
   // can still change: finalization freezes the evidence, and a completed or
   // cancelled one is a record rather than work in hand. The server refuses
   // these too -- this just does not offer what it would.
@@ -319,15 +314,13 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               repeated the navigator below, so the page offered two lists and no
               way to tell which one to use.
 
-              One menu rather than three outline buttons (console-development):
-              each is taken rarely, and three of them out-weighed the area list
-              they manage. The import still says when one is running, on the
-              menu's own button. */}
-          {canAddArea || canMergeAreas || canImport ? (
+              One menu rather than two outline buttons (console-development):
+              each is taken rarely, and both out-weighed the area list they
+              manage. */}
+          {canAddArea || canMergeAreas ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" type="button" variant="outline">
-                  {importRunning ? <Spinner /> : null}
                   Manage areas
                   <ChevronDownIcon aria-hidden />
                 </Button>
@@ -341,22 +334,22 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                     Merge duplicates
                   </DropdownMenuItem>
                 ) : null}
-                {canImport ? (
-                  <DropdownMenuItem onSelect={() => setImporting(true)}>
-                    {importRunning ? 'Import in progress' : 'Import a report'}
-                  </DropdownMenuItem>
-                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
           {/* Offered on every inspection, of every type, in every state: an
               import is what the office reaches for when the record here is
               wrong, so it replaces what it finds -- or, chosen once the report
-              has been read, adds the rooms it covers. Opened from the menu
-              rather than an amber paragraph above the areas on every
-              inspection: the dialog says what an import will do to what is
-              here before anything happens, in real numbers. Always mounted,
-              so `?import=` still opens it from a link. */}
+              has been read, adds the rooms it covers. Here rather than in an
+              amber paragraph above the areas on every inspection: the dialog
+              says what an import will do to what is here before anything
+              happens, in real numbers.
+
+              A button of its own, not an item in "Manage areas". Filed in that
+              menu (#443) it read as gone: on a move-in Jobber closed with
+              nothing recorded -- the one that most needs its report -- the
+              menu is about areas and the import was its last line. Its own
+              button also says "Import in progress" while one runs. */}
           {canImport && inspection ? (
             <ImportReportDialog
               evidence={
@@ -366,9 +359,8 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               }
               inspectionId={inspectionId}
               inspectionType={inspection.inspectionType}
-              onOpenChange={setImporting}
-              open={importing}
               replacing={hasEvidence(inspection)}
+              triggerSize="sm"
             />
           ) : null}
         </div>

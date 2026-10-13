@@ -61,17 +61,8 @@ export function ImportReportDialog({
   replacing = false,
   evidence,
   triggerSize = 'default',
-  open: openFromOutside,
-  onOpenChange,
 }: {
   inspectionId: string;
-  /**
-   * Opened from somewhere else: the inspection page's "Manage areas" menu
-   * (console-development). Given, the dialog draws no button of its own, and
-   * the caller holds whether it is open.
-   */
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
   /** The opening button's size: `sm` beside the other buttons in a card header. */
   triggerSize?: 'default' | 'sm';
   /** What the inspection already holds; absent means nothing is at stake. */
@@ -90,16 +81,7 @@ export function ImportReportDialog({
    */
   replacing?: boolean;
 }) {
-  const [ownOpen, setOwnOpen] = useState(false);
-  const controlled = openFromOutside !== undefined;
-  const open = controlled ? openFromOutside : ownOpen;
-  const setOpen = useCallback(
-    (next: boolean) => {
-      if (!controlled) setOwnOpen(next);
-      onOpenChange?.(next);
-    },
-    [controlled, onOpenChange],
-  );
+  const [open, setOpen] = useState(false);
   const kind = inspectionType ? humanize(inspectionType).toLowerCase() : 'inspection';
 
   /**
@@ -119,7 +101,7 @@ export function ImportReportDialog({
     if (!requestedImport || openedFromLink.current) return;
     openedFromLink.current = true;
     setOpen(true);
-  }, [requestedImport, setOpen]);
+  }, [requestedImport]);
   /**
    * Asked of the inspection, not remembered from this dialog.
    *
@@ -153,19 +135,17 @@ export function ImportReportDialog({
       if (from) dock?.fly(from);
       setOpen(false);
     },
-    [dock, inspectionId, propertyLabel, setOpen],
+    [dock, inspectionId, propertyLabel],
   );
 
   return (
     <Dialog onOpenChange={setOpen} open={open}>
-      {controlled ? null : (
-        <DialogTrigger asChild>
-          <Button size={triggerSize} variant="outline">
-            {running ? <Spinner /> : <UploadIcon />}
-            {running ? 'Import in progress' : 'Import a report'}
-          </Button>
-        </DialogTrigger>
-      )}
+      <DialogTrigger asChild>
+        <Button size={triggerSize} variant="outline">
+          {running ? <Spinner /> : <UploadIcon />}
+          {running ? 'Import in progress' : 'Import a report'}
+        </Button>
+      </DialogTrigger>
       <DialogContent className="sm:max-w-3xl" ref={content}>
         <DialogHeader>
           <DialogTitle>
@@ -214,15 +194,6 @@ export function ImportReportDialog({
 function isRunning(job: ImportJob | null | undefined) {
   if (!job || job.committedAt || job.errorCode) return false;
   return job.status === 'RUNNING' || job.status === 'PENDING';
-}
-
-/**
- * Whether an import is under way here, for a caller that opens the dialog from
- * its own control and so has to say "Import in progress" itself. The same
- * cached read the dialog makes; null asks nothing.
- */
-export function useImportInProgress(inspectionId: string | null) {
-  return isRunning(useActiveInspectionImport(inspectionId).data);
 }
 
 /**
