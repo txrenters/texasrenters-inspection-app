@@ -941,6 +941,50 @@ export class JobberSyncWorker {
       result.unmatched += 1;
       return;
     }
+    /**
+     * Booked by hand already: the office does not wait for a release.
+     *
+     * The first visit to book both jobs (2026-10-13) was refused for days, so
+     * the office made its occupied inspection by hand and closed the visit in
+     * Jobber -- and the next such visit may well be handled the same way while
+     * still open there. Making the pair as well would put the same work on the
+     * technician's phone twice. The booking rule only refuses an exact match --
+     * same type, same day, still scheduled -- so a hand-made job a day off, or
+     * already started, would not have stopped it.
+     *
+     * So the pair is made only where nothing of either type is booked here, by
+     * hand or otherwise without a visit, within a week of the visit's day.
+     * Refused with the reason, which re-reads on every sync: cancel the
+     * hand-made one and the visit comes in.
+     */
+    if (paired) {
+      const day = dayOf(visit.startAt!);
+      const week = 7 * 24 * 60 * 60 * 1000;
+      const byHand = await this.prisma.inspection.findFirst({
+        where: {
+          organizationId,
+          propertywareBuildingId: link.propertywareBuildingId,
+          inspectionType: { in: [paired.primary, paired.companion] },
+          jobberVisitId: null,
+          jobberCompanionOfId: null,
+          status: { not: InspectionStatus.CANCELLED },
+          scheduledAt: { gte: new Date(day.getTime() - week), lte: new Date(day.getTime() + week) },
+        },
+        select: { inspectionType: true, scheduledAt: true },
+      });
+      if (byHand) {
+        await this.reject(
+          record.id,
+          'JOBBER_VISIT_BOOKED_BY_HAND',
+          `An ${byHand.inspectionType === InspectionType.HVAC ? 'HVAC' : 'occupied'} inspection is already booked here for ${byHand.scheduledAt
+            .toISOString()
+            .slice(0, 10)}, so this visit's two jobs were not made beside it. Cancel that one to have the visit make them.`,
+          result,
+          link.id,
+        );
+        return;
+      }
+    }
     try {
       const created = await this.prisma.$transaction(async (tx) => {
         const plan = await resolveInspectionPlan(tx, {
