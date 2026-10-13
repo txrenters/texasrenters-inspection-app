@@ -48,6 +48,49 @@ describe('what End job settles first', () => {
     ]);
   });
 
+  /**
+   * Moses, 2026-10-12: every room of a move-out submitted, the last three
+   * videos still on the phone, and End job refused by the server with "Complete
+   * or provide an authorized skip reason" -- the phone had said 15 of 15.
+   */
+  it('says a submitted area whose video is still sending is sending, not unfinished', () => {
+    const inspection = task({ key: 'inspection', kind: 'INSPECTION', state: 'PART', title: 'Move-out inspection' });
+    const sending = (id: string, name: string, uploadStatus: string) => ({
+      id,
+      name,
+      isRequired: true,
+      completionStatus: 'RECORDING_SAVED',
+      uploadStatus,
+    });
+
+    const onlySending = planEndJob([inspection], {
+      canSubmit: false,
+      incompleteRequiredRooms: [sending('a', 'Bedroom 1', 'UPLOADING'), sending('b', 'Bathroom 1', 'PENDING')],
+    });
+    expect(onlySending.blockers).toEqual([
+      {
+        opens: 'INSPECTION',
+        title: 'Videos are still sending',
+        message:
+          'Bedroom 1, Bathroom 1 are still sending from this phone. Keep the app open with signal; End job works once they have arrived.',
+      },
+    ]);
+
+    // A video that failed is work for the technician again, not a wait.
+    const mixed = planEndJob([inspection], {
+      canSubmit: false,
+      incompleteRequiredRooms: [
+        sending('a', 'Bedroom 1', 'UPLOADING'),
+        { id: 'c', name: 'Kitchen', isRequired: true, completionStatus: 'RECORDING_SAVED', uploadStatus: 'FAILED' },
+      ],
+    });
+    expect(mixed.blockers[0]).toEqual({
+      opens: 'INSPECTION',
+      title: 'Finish the move-out inspection first',
+      message: '1 required area is not finished: Kitchen. Still sending their video: Bedroom 1.',
+    });
+  });
+
   it('sends the technician back to filters not yet photographed or answered', () => {
     const plan = planEndJob([task({ key: 'filterChange', kind: 'FILTERS', state: 'PART', detail: '1 of 2 answered' })], ready);
 

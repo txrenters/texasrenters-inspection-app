@@ -70,6 +70,27 @@ describe('an area reopened by Change Evidence', () => {
     expect(withRoomStatesSaved([room('kitchen', 'COMPLETED')], states)).toEqual([room('kitchen', 'NOT_STARTED')]);
   });
 
+  /**
+   * A submission held for the area's own video (2026-10-12): the server
+   * completes the area only once the video arrives, so the area must not read
+   * as completed meanwhile -- it read as one, and End job was pressed on a
+   * move-out with three videos still on the phone.
+   */
+  it('does not read a submission waiting on its own video as completed', async () => {
+    await enqueueMutation({ id: 'complete:kitchen', kind: 'room-complete', payload: { roomId: 'kitchen' } });
+    await enqueueMutation({ id: 'complete:bath', kind: 'room-complete', payload: { roomId: 'bath' } });
+    const states = await savedRoomStates();
+    const stillSending = (roomId: string) => roomId === 'kitchen';
+
+    expect(
+      withRoomStatesSaved([room('kitchen', 'RECORDED'), room('bath', 'PENDING')], states, stillSending),
+    ).toEqual([room('kitchen', 'RECORDED'), room('bath', 'COMPLETED')]);
+    // Once the server has completed it, its answer stands either way.
+    expect(withRoomStatesSaved([room('kitchen', 'COMPLETED')], states, stillSending)).toEqual([
+      room('kitchen', 'COMPLETED'),
+    ]);
+  });
+
   it('follows the order the technician acted in: submitted, reopened, submitted again', async () => {
     await enqueueMutation({ id: 'complete:kitchen', kind: 'room-complete', payload: { roomId: 'kitchen' } });
     await enqueueMutation({ id: 'reopen:kitchen', kind: 'room-reopen', payload: { roomId: 'kitchen' } });

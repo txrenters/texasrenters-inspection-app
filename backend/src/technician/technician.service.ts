@@ -1224,28 +1224,39 @@ export class TechnicianService {
         'INSPECTION_NOT_COMPLETABLE',
         'Only an inspection in progress can be completed.',
       );
-    const incomplete = await this.prisma.inspectionArea.count({
-      where: {
-        inspectionId: id,
-        // Same rule as the summary: the type can override the per-area flag.
-        ...(inspectionRequiresEveryArea(inspection.inspectionType)
-          ? {}
-          : { propertyArea: { isRequired: true } }),
-        // Not the inspection's areas (`isInspectedArea`): a service's photo
-        // area, which nobody walks, used to refuse every move-in and move-out
-        // with a filter change.
-        ...inspectedAreaWhere(inspection.inspectionType),
-        completionStatus: {
-          notIn: [InspectionAreaCompletionStatus.COMPLETED, InspectionAreaCompletionStatus.SKIPPED],
-        },
+    const unfinished: Prisma.InspectionAreaWhereInput = {
+      inspectionId: id,
+      // Same rule as the summary: the type can override the per-area flag.
+      ...(inspectionRequiresEveryArea(inspection.inspectionType)
+        ? {}
+        : { propertyArea: { isRequired: true } }),
+      // Not the inspection's areas (`isInspectedArea`): a service's photo
+      // area, which nobody walks, used to refuse every move-in and move-out
+      // with a filter change.
+      ...inspectedAreaWhere(inspection.inspectionType),
+      completionStatus: {
+        notIn: [InspectionAreaCompletionStatus.COMPLETED, InspectionAreaCompletionStatus.SKIPPED],
       },
-    });
-    if (incomplete > 0)
+    };
+    const incomplete = await this.prisma.inspectionArea.count({ where: unfinished });
+    if (incomplete > 0) {
+      // Named, and with the likeliest reason: on 2026-10-12 Moses pressed End
+      // job on a move-out whose last three videos were still sending from his
+      // phone, which showed every room done, and was told only "Complete or
+      // provide an authorized skip reason for every required room".
+      const rooms = await this.prisma.inspectionArea.findMany({
+        where: unfinished,
+        orderBy: { createdAt: 'asc' },
+        take: 20,
+        select: { id: true, propertyArea: { select: { name: true } } },
+      });
       throw new ApplicationError(
         409,
         'REQUIRED_ROOMS_INCOMPLETE',
-        'Complete or provide an authorized skip reason for every required room.',
+        unfinishedRoomsMessage(rooms.map((room) => room.propertyArea.name), incomplete),
+        rooms.map((room) => ({ areaId: room.id, name: room.propertyArea.name })),
       );
+    }
     // Submitted is done (the office, 2026-10-05; `DONE_INSPECTION_STATUSES`):
     // nobody finalizes any more, so the submission records the completion as
     // well. The status still goes through the AI pipeline to REVIEW_REQUIRED,
@@ -4014,4 +4025,32 @@ export class TechnicianService {
     if (status === MediaProcessingStatus.FAILED) return 'FAILED';
     return 'NOT_STARTED';
   }
+}
+
+/**
+ * What End job says when rooms are not finished on the server: which ones, and
+ * the likeliest reason.
+ *
+ * A move-out or move-in room is completed when its video reaches the server,
+ * so a technician who has walked every room is refused while the last videos
+ * are still sending -- and the phone, which marks a room submitted on the tap,
+ * showed them all done (2026-10-12). Saying the videos may still be sending is
+ * what tells them to wait rather than walk the house again.
+ */
+export function unfinishedRoomsMessage(names: readonly string[], total = names.length): string {
+  const shown = names.slice(0, 4);
+  const more = total - shown.length;
+  const list =
+    more > 0
+      ? `${shown.join(', ')} and ${more} more`
+      : shown.length > 1
+        ? `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`
+        : (shown[0] ?? 'A room');
+  const one = total === 1;
+  return (
+    `${list} ${one ? 'is' : 'are'} not finished on the server yet. ` +
+    `If you have recorded ${one ? 'it, its video is' : 'them, their videos are'} still sending from your phone: ` +
+    `keep the app open with signal and end the job again in a few minutes. ` +
+    `Otherwise record or skip ${one ? 'it' : 'them'}.`
+  );
 }

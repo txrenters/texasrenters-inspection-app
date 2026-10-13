@@ -169,12 +169,18 @@ export default function JobScreen() {
     const { status } = deriveAreaStatus(room);
     return status === 'COMPLETED' || status === 'SKIPPED';
   }).length;
+  // Submitted, video still on its way from this phone: not completed until the
+  // server has it, and End job waits for it, so the row says so.
+  const sendingRooms = roomList.filter((room) => {
+    const { status } = deriveAreaStatus(room);
+    return status === 'UPLOADING' || status === 'PENDING_UPLOAD';
+  }).length;
   /** The job's list, as the office numbers it, from the visit's Details and its areas. */
   const tasks = jobTasks({
     visitDetails: item.visitDetails,
     inspectionType: item.type,
     report: item.servicesReport,
-    areas: { completed: completedRooms, total: roomList.length },
+    areas: { completed: completedRooms, total: roomList.length, sending: sendingRooms },
   });
   const elapsed = jobElapsed(item, now);
   const status = inspectionStatusPresentation(item.status);
@@ -278,7 +284,7 @@ export default function JobScreen() {
         visitDetails: item.visitDetails,
         inspectionType: item.type,
         report: ending.report,
-        areas: { completed: completedRooms, total: roomList.length },
+        areas: { completed: completedRooms, total: roomList.length, sending: sendingRooms },
       })
     : tasks;
 

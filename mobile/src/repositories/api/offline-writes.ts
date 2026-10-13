@@ -290,15 +290,28 @@ export async function savedRoomStates(): Promise<Map<string, SavedRoomState>> {
  * as completed, and one reopened by Change Evidence reads as not submitted.
  * Only a state the server has not reached yet is changed -- a skipped area, or
  * one the server already agrees about, keeps the server's answer.
+ *
+ * Except a submission waiting on the area's own video (`stillSending`): that
+ * one keeps the server's answer too, so the area reads "Uploading" rather than
+ * "Completed". The server completes such an area only once the video arrives,
+ * and End job is refused until it has. Reading it as completed showed Moses
+ * "15 of 15 areas" on a move-out whose last three videos had not left his phone
+ * (2026-10-12), and End job failed with no hint that they were still sending.
  */
 export function withRoomStatesSaved<Room extends { id: string; completionStatus: string }>(
   rooms: readonly Room[],
   states: ReadonlyMap<string, SavedRoomState>,
+  stillSending: (roomId: string) => boolean = () => false,
 ): Room[] {
   if (!states.size) return [...rooms];
   return rooms.map((room) => {
     const state = states.get(room.id);
-    if (state === 'COMPLETED' && room.completionStatus !== 'COMPLETED' && room.completionStatus !== 'SKIPPED')
+    if (
+      state === 'COMPLETED' &&
+      room.completionStatus !== 'COMPLETED' &&
+      room.completionStatus !== 'SKIPPED' &&
+      !stillSending(room.id)
+    )
       return { ...room, completionStatus: 'COMPLETED' } as Room;
     if (state === 'REOPENED' && room.completionStatus === 'COMPLETED')
       return { ...room, completionStatus: 'NOT_STARTED' } as Room;

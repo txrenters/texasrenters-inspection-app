@@ -235,8 +235,11 @@ export interface JobTasksInput {
   visitDetails?: string | null;
   inspectionType: string;
   report?: VisitServicesReport | null;
-  /** The areas, from the job's own progress. */
-  areas: { completed: number; total: number };
+  /**
+   * The areas, from the job's own progress. `sending`: submitted here, video
+   * still on its way -- not completed yet, and said so on the row.
+   */
+  areas: { completed: number; total: number; sending?: number };
 }
 
 export function jobTasks(input: JobTasksInput): JobTask[] {
@@ -296,14 +299,17 @@ export function jobTasks(input: JobTasksInput): JobTask[] {
    * is not needed still appears as the type of the job.
    */
   if (input.areas.total > 0 || details.services.occupiedInspection) {
-    const { completed, total } = input.areas;
+    const { completed, total, sending = 0 } = input.areas;
     tasks.push({
       key: 'inspection',
       number: OFFICE_NUMBER.inspection ?? null,
       title: INSPECTION_TITLE[input.inspectionType] ?? 'Inspection',
       kind: 'INSPECTION',
-      state: total > 0 && completed >= total ? 'DONE' : completed > 0 ? 'PART' : 'TODO',
-      detail: total > 0 ? `${completed} of ${total} areas` : 'No areas yet',
+      state: total > 0 && completed >= total ? 'DONE' : completed > 0 || sending > 0 ? 'PART' : 'TODO',
+      detail:
+        total > 0
+          ? `${completed} of ${total} areas${sending > 0 ? ` · ${sending} sending` : ''}`
+          : 'No areas yet',
     });
   }
 

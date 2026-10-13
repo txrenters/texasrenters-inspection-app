@@ -57,6 +57,16 @@ describe('the tasks a job has', () => {
     ]);
   });
 
+  it('says how many submitted areas are still sending their video, and is not done until they arrive', () => {
+    const [inspection] = tasksFor({ areas: { completed: 12, total: 15, sending: 3 } }).slice(-1);
+
+    expect(inspection).toMatchObject({ state: 'PART', detail: '12 of 15 areas · 3 sending' });
+    expect(tasksFor({ areas: { completed: 15, total: 15 } }).slice(-1)[0]).toMatchObject({
+      state: 'DONE',
+      detail: '15 of 15 areas',
+    });
+  });
+
   it('names the inspection by the job, so an HVAC visit does not say occupied', () => {
     const [last] = tasksFor({ inspectionType: 'HVAC' }).slice(-1);
 

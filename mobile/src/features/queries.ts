@@ -14,6 +14,7 @@ import type {
   UploadItem,
 } from '../domain/models';
 import { isDemoMode } from '../config/environment';
+import { roomRecordingStillUploading } from '../media/room-recording-upload';
 import { repositories } from '../repositories';
 import { QueuedOfflineError } from '../repositories/api/offline-writes';
 import { checklistAnswerOptions, withPendingAnswers } from './checklist-answers';
@@ -955,7 +956,10 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
       onMutate: async () => {
         await cancelQueries(client, [queryKeys.room(roomId), queryKeys.rooms(inspectionId)]);
         const name = client.getQueryData<InspectionRoom>(queryKeys.room(roomId))?.name ?? 'This area';
-        const patch = { completionStatus: 'COMPLETED' };
+        // Drawn as sending, not completed, while the area's own video is still
+        // on this phone: the server completes it only once the video arrives,
+        // and End job waits for that (2026-10-12).
+        const patch = { completionStatus: roomRecordingStillUploading(roomId) ? 'RECORDING_SAVED' : 'COMPLETED' };
         const operation = beginIntent(roomId, 'UPDATING', patch);
         patchEntity(client, queryKeys.all, roomId, patch, { state: 'UPDATING', operationId: operation });
         return { operation, name };
