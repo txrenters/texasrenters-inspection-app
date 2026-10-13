@@ -145,6 +145,41 @@ describe('importing a visit that books two jobs', () => {
     expect(result.imported).toBe(2);
   });
 
+  /**
+   * The office made the first such visit's occupied inspection by hand while
+   * the importer refused it (2026-10-13). A pair made beside a hand-made job
+   * would put the same work on the technician's phone twice.
+   */
+  it('makes nothing beside a job already booked here by hand within the week, and says why', async () => {
+    const { worker, prisma, result } = importer();
+    prisma.inspection.findFirst
+      .mockResolvedValueOnce(null) // no inspection carries this visit
+      .mockResolvedValueOnce({ inspectionType: InspectionType.OCCUPIED, scheduledAt: new Date('2026-10-14T00:00:00Z') });
+
+    await worker.processVisit(ORG, visit(), {}, resolveRules(), result);
+
+    const guard = prisma.inspection.findFirst.mock.calls[1][0].where;
+    expect(guard).toMatchObject({
+      organizationId: ORG,
+      propertywareBuildingId: 'building-1',
+      inspectionType: { in: [InspectionType.HVAC, InspectionType.OCCUPIED] },
+      jobberVisitId: null,
+      jobberCompanionOfId: null,
+      status: { not: InspectionStatus.CANCELLED },
+    });
+    expect(guard.scheduledAt.gte.toISOString()).toBe('2026-10-06T00:00:00.000Z');
+    expect(guard.scheduledAt.lte.toISOString()).toBe('2026-10-20T00:00:00.000Z');
+    expect(insertInspection).not.toHaveBeenCalled();
+    expect(prisma.jobberVisitImport.update).toHaveBeenLastCalledWith({
+      where: { id: 'row-1' },
+      data: expect.objectContaining({
+        status: JobberVisitImportStatus.REJECTED,
+        failureCode: 'JOBBER_VISIT_BOOKED_BY_HAND',
+        failureMessage: expect.stringContaining('An occupied inspection is already booked here for 2026-10-14'),
+      }),
+    });
+  });
+
   it('creates neither when the second cannot be made, and says why against the visit', async () => {
     const { worker, prisma, result } = importer();
     const { ApplicationError } = jest.requireActual('../src/common/errors');
