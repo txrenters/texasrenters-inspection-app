@@ -1473,7 +1473,11 @@ export class ApiInspectionRepository implements InspectionRepository {
        * indistinguishable from the app having lost it. The server's own row
        * replaces this the moment the queue drains.
        */
-      if (error instanceof QueuedOfflineError)
+      // Not when it waits only for the area's own video: that area is not
+      // completed until the server has the video, and reading it as completed
+      // let End job be pressed while it was still sending (2026-10-12). It
+      // reads as uploading meanwhile (`withLocalRoomState`).
+      if (error instanceof QueuedOfflineError && error.reason !== 'upload')
         await this.patchCachedRoom(roomId, { completionStatus: 'COMPLETED' });
       throw error;
     }
@@ -2146,11 +2150,15 @@ async function withSavedStarts<Job extends { id: string; status: string; started
   });
 }
 
-/** Areas as the technician left them -- submitted, or reopened: see `withRoomStatesSaved`. */
+/**
+ * Areas as the technician left them -- submitted, or reopened: see
+ * `withRoomStatesSaved`. A submission still waiting for its own video reads as
+ * uploading, not completed, until the server has the video.
+ */
 async function withSavedCompletions<Room extends { id: string; completionStatus: string }>(
   rooms: readonly Room[],
 ): Promise<Room[]> {
-  return withRoomStatesSaved(rooms, await savedRoomStates().catch(() => new Map()));
+  return withRoomStatesSaved(rooms, await savedRoomStates().catch(() => new Map()), roomRecordingStillUploading);
 }
 
 function withLocalRoomState(room: z.infer<typeof roomSchema>) {

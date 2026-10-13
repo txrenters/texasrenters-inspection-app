@@ -17,6 +17,8 @@ export type SubmittableRoom = {
   name: string;
   isRequired: boolean;
   completionStatus: string;
+  /** Where this phone's upload of the area's video is; End job says "still sending" for one on its way. */
+  uploadStatus?: string | null;
   /** The AI's narrative for this area; null when analysis produced none. */
   summary?: string | null;
   /** When the technician attested the summary matches; undefined if not yet. */

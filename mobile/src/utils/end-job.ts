@@ -36,6 +36,17 @@ export interface EndJobPlan {
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
+/**
+ * An area submitted here whose video is still on its way. It is not completed
+ * until the server has the video, so End job waits for it -- but it is not
+ * work left to do, and "not finished" told a technician who had finished every
+ * room to go and finish one (Moses, 2026-10-12).
+ */
+const STILL_SENDING = new Set(['PENDING', 'UPLOADING', 'PAUSED']);
+const isSending = (room: { completionStatus: string; uploadStatus?: string | null }) =>
+  room.completionStatus === 'RECORDING_SAVED' && STILL_SENDING.has(room.uploadStatus ?? 'PENDING');
+const names = (rooms: readonly { name: string }[]) => rooms.map((room) => room.name).join(', ');
+
 export function planEndJob(
   tasks: readonly JobTask[],
   gate: Pick<SubmissionGate, 'canSubmit' | 'incompleteRequiredRooms'>,
@@ -46,14 +57,24 @@ export function planEndJob(
 
   const inspection = tasks.find((task) => task.kind === 'INSPECTION');
   if (!gate.canSubmit && gate.incompleteRequiredRooms.length) {
-    const left = gate.incompleteRequiredRooms;
-    blockers.push({
-      opens: 'INSPECTION',
-      title: `Finish the ${inspection?.title.toLowerCase() ?? 'inspection'} first`,
-      message: `${plural(left.length, 'required area is', 'required areas are')} not finished: ${left
-        .map((room) => room.name)
-        .join(', ')}.`,
-    });
+    const sending = gate.incompleteRequiredRooms.filter(isSending);
+    const left = gate.incompleteRequiredRooms.filter((room) => !isSending(room));
+    const wait = `Keep the app open with signal; End job works once ${sending.length === 1 ? 'it has' : 'they have'} arrived.`;
+    blockers.push(
+      left.length
+        ? {
+            opens: 'INSPECTION',
+            title: `Finish the ${inspection?.title.toLowerCase() ?? 'inspection'} first`,
+            message: `${plural(left.length, 'required area is', 'required areas are')} not finished: ${names(left)}.${
+              sending.length ? ` Still sending their video: ${names(sending)}.` : ''
+            }`,
+          }
+        : {
+            opens: 'INSPECTION',
+            title: sending.length === 1 ? 'A video is still sending' : 'Videos are still sending',
+            message: `${names(sending)} ${sending.length === 1 ? 'is' : 'are'} still sending from this phone. ${wait}`,
+          },
+    );
   }
 
   const filters = tasks.find((task) => task.kind === 'FILTERS');
