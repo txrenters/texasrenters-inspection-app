@@ -47,8 +47,15 @@ export function legacyRemovalReason(reason: string | null | undefined): JobberRe
 }
 
 export type JobberRemovalOutcome =
-  /** Deleted from the console. `notify` names the technician to tell, if any. */
-  | { outcome: 'REMOVED'; notify: { technicianId: string; detail: string } | null }
+  /**
+   * Deleted from the console. `notify` names the technician to tell, if any;
+   * `companions`, the visit's second jobs removed with it, each with its own.
+   */
+  | {
+      outcome: 'REMOVED';
+      notify: { technicianId: string; detail: string } | null;
+      companions?: { inspectionId: string; notify: { technicianId: string; detail: string } | null }[];
+    }
   /** Work was recorded on it: a person has to decide. Nothing was removed. */
   | { outcome: 'IN_USE' }
   /** Cancelled by a person, with their reason: the office's record, kept. */
@@ -105,12 +112,24 @@ const IMPORT_ROW: Record<JobberRemovalReason, { status: JobberVisitImportStatus;
  *
  * The technician's assignment goes with the inspection. Who to tell is handed
  * back rather than told from here: the caller publishes after the commit.
+ *
+ * A visit that booked two jobs (2026-10-13): removing the one it is linked to
+ * removes its companions too, by the same rule -- untouched ones go, one with
+ * work on it stays for a person, and loses its link when this one goes.
+ * `companion` removes such a second job by itself: it has no visit of its own
+ * to match, and the visit's import row is the other job's to keep.
  */
 export async function removeWithdrawnInspection(
   prisma: PrismaService,
-  input: { organizationId: string; inspectionId: string; jobberVisitId: string; why: JobberRemovalReason },
+  input: {
+    organizationId: string;
+    inspectionId: string;
+    jobberVisitId: string;
+    why: JobberRemovalReason;
+    companion?: boolean;
+  },
 ): Promise<JobberRemovalOutcome> {
-  const { organizationId, inspectionId, jobberVisitId, why } = input;
+  const { organizationId, inspectionId, jobberVisitId, why, companion = false } = input;
   const inspection = await prisma.inspection.findFirst({
     where: { id: inspectionId, organizationId },
     select: {
@@ -124,7 +143,14 @@ export async function removeWithdrawnInspection(
       assignments: { where: { isCurrent: true }, select: { technicianId: true }, take: 1 },
     },
   });
-  if (!inspection || inspection.jobberVisitId !== jobberVisitId) return { outcome: 'GONE' };
+  if (!inspection || (!companion && inspection.jobberVisitId !== jobberVisitId)) return { outcome: 'GONE' };
+  // Read before this one goes: its removal clears their link to it.
+  const companions = companion
+    ? []
+    : await prisma.inspection.findMany({
+        where: { organizationId, jobberCompanionOfId: inspectionId },
+        select: { id: true },
+      });
   if (inspection.status === InspectionStatus.CANCELLED && !cancelledByJobberSync(inspection.cancellationReason))
     return { outcome: 'KEPT_BY_OFFICE' };
 
@@ -196,11 +222,14 @@ export async function removeWithdrawnInspection(
 
     const erased = await eraseInspectionRows(tx, inspectionId);
 
-    const row = IMPORT_ROW[why];
-    await tx.jobberVisitImport.updateMany({
-      where: { organizationId, jobberVisitId },
-      data: { status: row.status, inspectionId: null, failureCode: row.code, failureMessage: row.message },
-    });
+    // The visit's row is the inspection's it is linked to, not a companion's.
+    if (!companion) {
+      const row = IMPORT_ROW[why];
+      await tx.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId },
+        data: { status: row.status, inspectionId: null, failureCode: row.code, failureMessage: row.message },
+      });
+    }
     await tx.auditLog.create({
       data: {
         organizationId,
@@ -232,5 +261,17 @@ export async function removeWithdrawnInspection(
     technicianId && ahead && inspection.status === InspectionStatus.SCHEDULED
       ? { technicianId, detail: jobInWords(property, inspection.scheduledAt) }
       : null;
-  return { outcome: 'REMOVED', notify };
+
+  const removedCompanions: { inspectionId: string; notify: { technicianId: string; detail: string } | null }[] = [];
+  for (const { id } of companions) {
+    const outcome = await removeWithdrawnInspection(prisma, {
+      organizationId,
+      inspectionId: id,
+      jobberVisitId,
+      why,
+      companion: true,
+    });
+    if (outcome.outcome === 'REMOVED') removedCompanions.push({ inspectionId: id, notify: outcome.notify });
+  }
+  return { outcome: 'REMOVED', notify, ...(removedCompanions.length ? { companions: removedCompanions } : {}) };
 }

@@ -67,6 +67,8 @@ function changesFor(inspection: Record<string, unknown>) {
         ...inspection,
       }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      // No second job on the visit (2026-10-13).
+      findMany: jest.fn().mockResolvedValue([]),
     },
     $transaction: jest.fn((work: (client: typeof tx) => Promise<unknown>) => work(tx)),
   };
@@ -93,7 +95,8 @@ describe('a visit moved to Unscheduled in Jobber', () => {
 
     await worker.applyChanges(ORG, visit(), 'inspection-1', outcome);
 
-    expect(remove).toHaveBeenCalledWith(ORG, 'visit-1', 'inspection-1', 'UNSCHEDULED');
+    // `{}`: the inspection the visit is linked to, not a second job of it.
+    expect(remove).toHaveBeenCalledWith(ORG, 'visit-1', 'inspection-1', 'UNSCHEDULED', {});
     expect(outcome.withdrawn).toBe(1);
   });
 
@@ -161,7 +164,11 @@ describe('a visit an inspection carries, whose row says it was never imported', 
         upsert: jest.fn().mockResolvedValue({ id: 'row-1' }),
         update: jest.fn().mockResolvedValue({}),
       },
-      inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1' }) },
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
+        // No second job on the visit (2026-10-13).
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
     const worker = new JobberSyncWorker(prisma as never, {} as never, {} as never) as unknown as {
       applyChanges: jest.Mock;

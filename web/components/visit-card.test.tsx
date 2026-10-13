@@ -53,6 +53,37 @@ function inspection(overrides: Partial<AdminInspection> = {}): AdminInspection {
 const show = (overrides: Partial<AdminInspection> = {}, technicianName: string | null = 'Sam Tech') =>
   render(<VisitCard inspection={inspection(overrides)} technicianName={technicianName} />);
 
+/**
+ * One Jobber visit that booked two jobs (2026-10-13): an HVAC inspection
+ * holding the visit and an occupied inspection that follows it.
+ */
+describe('a visit booked as two jobs', () => {
+  it('names the other job on the second one, which follows the visit and reads as in Jobber', () => {
+    show({
+      id: 'insp-occupied',
+      scheduledInJobber: false,
+      jobberCompanionOf: { id: 'insp-hvac', inspectionType: 'HVAC', status: 'SCHEDULED' },
+    });
+
+    const link = screen.getByRole('link', { name: 'HVAC inspection' });
+    expect(link).toHaveAttribute('href', '/inspections/insp-hvac');
+    expect(screen.getByText(/Its day, technician and Details follow that visit/)).toBeInTheDocument();
+    // Not "isn't booked in Jobber from here": it is, through the first job.
+    expect(screen.getByText('Jobber')).toBeInTheDocument();
+    expect(screen.queryByText(/isn.t booked in Jobber/)).toBeNull();
+  });
+
+  it('names the second job on the first', () => {
+    show({
+      inspectionType: 'HVAC',
+      jobberCompanions: [{ id: 'insp-occupied', inspectionType: 'OCCUPIED', status: 'SCHEDULED' }],
+    });
+
+    expect(screen.getByRole('link', { name: 'occupied inspection' })).toHaveAttribute('href', '/inspections/insp-occupied');
+    expect(screen.getByText(/Jobber is told the visit is done once both are in/)).toBeInTheDocument();
+  });
+});
+
 describe('the visit’s facts', () => {
   it('says who, when, how long, and the zone the title names', () => {
     show({

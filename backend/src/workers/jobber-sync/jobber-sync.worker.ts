@@ -13,6 +13,7 @@ import {
   TbpStopStatus,
 } from '@prisma/client';
 import { InspectionType } from '@prisma/client';
+import { withoutVisitServices } from '@texasrenters/shared';
 
 import {
   insertInspection,
@@ -44,6 +45,7 @@ import {
   notSyncedReason,
   namesAnInspection,
   NOT_AN_INSPECTION_REASON,
+  pairedVisitTypes,
   resolveVisitType,
   visitTypeRules,
   type VisitTypeResolution,
@@ -648,7 +650,7 @@ export class JobberSyncWorker {
           where: { id: record.id },
           data: { failureCode: null, failureMessage: null },
         });
-      await this.applyChanges(organizationId, visit, existing.inspectionId, result, {
+      await this.applyChangesWithCompanions(organizationId, visit, existing.inspectionId, result, {
         payload: existing.payload,
         failureCode: existing.failureCode === JOBBER_VISIT_MISSING ? null : existing.failureCode,
       });
@@ -692,7 +694,7 @@ export class JobberSyncWorker {
         wasInspectionId: existing?.inspectionId ?? null,
         wasFailureCode: existing?.failureCode ?? null,
       });
-      await this.applyChanges(organizationId, visit, linked.id, result, { payload: existing?.payload ?? null });
+      await this.applyChangesWithCompanions(organizationId, visit, linked.id, result, { payload: existing?.payload ?? null });
       return;
     }
 
@@ -731,9 +733,19 @@ export class JobberSyncWorker {
       titled.outcome === 'RESOLVED' && titled.inspectionType === InspectionType.AC_FILTER_DELIVERY
         ? benefitPackageInspectionInDetails(visit.instructions)
         : null;
-    const type: VisitTypeResolution = packaged ? { outcome: 'RESOLVED', inspectionType: packaged } : titled;
+    /**
+     * An HVAC and an occupied inspection booked on one visit (2026-10-13): two
+     * jobs. The visit becomes the HVAC inspection, and the occupied one is
+     * created beside it as its companion -- see `pairedVisitTypes`.
+     */
+    const paired = pairedVisitTypes(titled, visit.instructions);
+    const type: VisitTypeResolution = paired
+      ? { outcome: 'RESOLVED', inspectionType: paired.primary }
+      : packaged
+        ? { outcome: 'RESOLVED', inspectionType: packaged }
+        : titled;
     /** Named as an inspection by its title or its details, or a benefit-package visit carrying one. */
-    const namedAnInspection = namesAnInspection(visit.title, visit.instructions) || packaged !== null;
+    const namedAnInspection = namesAnInspection(visit.title, visit.instructions) || packaged !== null || paired !== null;
 
     const isComplete = Boolean(visit.completedAt || visit.visitStatus === 'COMPLETED');
 
@@ -930,7 +942,7 @@ export class JobberSyncWorker {
       return;
     }
     try {
-      const inspectionId = await this.prisma.$transaction(async (tx) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         const plan = await resolveInspectionPlan(tx, {
           organizationId,
           buildingId: link.propertywareBuildingId!,
@@ -992,8 +1004,63 @@ export class JobberSyncWorker {
             },
           },
         });
-        return inspection.id;
+
+        /**
+         * The second job the visit books, beside the first and in the same
+         * transaction: both, or -- with the refusal said against the visit --
+         * neither. No visit of its own (`jobberVisitId` is the first one's),
+         * and the visit's Details without the services line, which the first
+         * answers.
+         */
+        let companionId: string | null = null;
+        if (paired) {
+          const companionPlan = await resolveInspectionPlan(tx, {
+            organizationId,
+            buildingId: link.propertywareBuildingId!,
+            unitId: link.propertywareUnitId,
+            leaseId: link.propertywareLeaseId,
+            inspectionType: paired.companion,
+            allowTechnicianAreaCapture: allowsTechnicianCapture(paired.companion),
+            scheduledAt: dayOf(visit.startAt!),
+            scheduledStartAt: visitWindow(visit).start,
+            scheduledEndAt: visitWindow(visit).end,
+          });
+          const companion = await insertInspection(tx, companionPlan, {
+            priority: 'STANDARD',
+            createdById: null,
+            source: InspectionSource.JOBBER,
+            jobberVisitId: null,
+            jobberJobId: visit.job?.id ?? null,
+            jobberVisitTitle: visit.title ?? null,
+            jobberVisitDetails: withoutVisitServices(visitDetailsText(visit.instructions)),
+            jobberCompanionOfId: inspection.id,
+            ...(isComplete
+              ? {
+                  status: InspectionStatus.COMPLETED,
+                  completedAt: visit.completedAt ? new Date(visit.completedAt) : new Date(),
+                }
+              : {}),
+          });
+          await tx.auditLog.create({
+            data: {
+              organizationId,
+              action: 'INSPECTION_CREATED_FROM_JOBBER',
+              entityType: 'Inspection',
+              entityId: companion.id,
+              metadata: {
+                jobberVisitId: visit.id,
+                jobberJobId: visit.job?.id ?? null,
+                inspectionType: paired.companion,
+                companionOf: inspection.id,
+                areasInspected: companionPlan.scopedAreas.length,
+              },
+            },
+          });
+          companionId = companion.id;
+        }
+        return { inspectionId: inspection.id, companionId };
       });
+      const { inspectionId, companionId } = created;
       await this.prisma.jobberVisitImport.update({
         where: { id: record.id },
         data: {
@@ -1004,8 +1071,9 @@ export class JobberSyncWorker {
           failureMessage: null,
         },
       });
-      result.imported += 1;
+      result.imported += companionId ? 2 : 1;
       await this.applyAssignment(organizationId, visit, inspectionId, result);
+      if (companionId) await this.applyAssignment(organizationId, visit, companionId, result);
     } catch (error) {
       // A scheduling rule refusing this visit is information, not a crash: the
       // office needs to see "no approved areas" against the visit that hit it.
@@ -1028,12 +1096,15 @@ export class JobberSyncWorker {
     organizationId: string,
     visit: JobberVisit,
     inspection: { id: string; jobberVisitTitle: string | null; jobberVisitDetails: string | null },
+    /** A visit's second job: its services are answered on the first (`withoutVisitServices`). */
+    options: { withoutServices?: boolean } = {},
   ) {
     const data: { jobberVisitTitle?: string | null; jobberVisitDetails?: string | null } = {};
     if (visit.title !== undefined && (visit.title ?? null) !== inspection.jobberVisitTitle)
       data.jobberVisitTitle = visit.title ?? null;
     if (visit.instructions !== undefined) {
-      const details = visitDetailsText(visit.instructions);
+      const text = visitDetailsText(visit.instructions);
+      const details = options.withoutServices ? withoutVisitServices(text) : text;
       if (details !== inspection.jobberVisitDetails) data.jobberVisitDetails = details;
     }
     if (!Object.keys(data).length) return;
@@ -1105,12 +1176,42 @@ export class JobberSyncWorker {
   }
 
   /**
+   * `applyChanges` for the inspection a visit is linked to, then for the
+   * companions it booked with it (`Inspection.jobberCompanionOfId`): the same
+   * day, technician, Details and removal, so the two jobs of one visit never
+   * drift apart (2026-10-13).
+   *
+   * The companions are read first. Jobber deleting the visit removes the
+   * inspection, which takes untouched companions with it and clears the link
+   * of any it has to leave (`removeWithdrawnInspection`).
+   */
+  private async applyChangesWithCompanions(
+    organizationId: string,
+    visit: JobberVisit,
+    inspectionId: string,
+    result: JobberSyncResult,
+    stored: StoredVisit = {},
+  ) {
+    const companions = await this.prisma.inspection.findMany({
+      where: { organizationId, jobberCompanionOfId: inspectionId },
+      select: { id: true },
+    });
+    await this.applyChanges(organizationId, visit, inspectionId, result, stored);
+    for (const companion of companions)
+      await this.applyChanges(organizationId, visit, companion.id, result, stored, { companion: true });
+  }
+
+  /**
    * Applies a Jobber-side change to an inspection we already created.
    *
    * The ownership split is enforced here: Jobber owns the schedule, and only
    * until a technician arrives. Once `startedAt` is set, a reschedule becomes a
    * note for the office instead of a silent move — evidence is already being
    * collected against the original visit, and `finalizedAt` freezes it for good.
+   *
+   * `companion`: the second job of the visit, which has no visit of its own.
+   * Its Details leave out the services line, and one the office cancelled
+   * stays cancelled.
    */
   private async applyChanges(
     organizationId: string,
@@ -1118,6 +1219,7 @@ export class JobberSyncWorker {
     inspectionId: string,
     result: JobberSyncResult,
     stored: StoredVisit = {},
+    options: { companion?: boolean } = {},
   ) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId },
@@ -1158,7 +1260,8 @@ export class JobberSyncWorker {
     const held = await this.heldConsoleEdits(organizationId, inspectionId, visit, stored);
     if (!held.has(JobberOutboundKind.VISIT_ASSIGN))
       await this.applyAssignment(organizationId, visit, inspectionId, result);
-    if (!held.has(JobberOutboundKind.VISIT_EDIT)) await this.applyVisitText(organizationId, visit, inspection);
+    if (!held.has(JobberOutboundKind.VISIT_EDIT))
+      await this.applyVisitText(organizationId, visit, inspection, { withoutServices: options.companion });
 
     /**
      * Jobber says the visit is finished.
@@ -1177,6 +1280,12 @@ export class JobberSyncWorker {
       return;
     }
 
+    // A companion the office cancelled: its own decision, not the visit's.
+    if (options.companion && inspection.status === InspectionStatus.CANCELLED) {
+      result.skipped += 1;
+      return;
+    }
+
     // Taken off its day because Jobber had it on none. Back on one now?
     if (inspection.status === InspectionStatus.CANCELLED && stored.failureCode === JOBBER_VISIT_UNSCHEDULED) {
       if (visit.startAt) await this.restoreWithdrawn(organizationId, visit, inspectionId, result);
@@ -1185,7 +1294,7 @@ export class JobberSyncWorker {
     }
 
     if (!visit.startAt) {
-      await this.withdrawFromDay(organizationId, visit.id, inspection, 'UNSCHEDULED', result);
+      await this.withdrawFromDay(organizationId, visit.id, inspection, 'UNSCHEDULED', result, options);
       return;
     }
     /**
@@ -1290,8 +1399,9 @@ export class JobberSyncWorker {
     inspection: { id: string; status: InspectionStatus; startedAt: Date | null },
     why: 'UNSCHEDULED' | 'MISSING',
     result: JobberSyncResult,
+    options: { companion?: boolean } = {},
   ) {
-    const outcome = await this.removeFromConsole(organizationId, jobberVisitId, inspection.id, why);
+    const outcome = await this.removeFromConsole(organizationId, jobberVisitId, inspection.id, why, options);
     if (outcome === 'REMOVED') result.withdrawn += 1;
     else result.skipped += 1;
   }
@@ -1306,11 +1416,27 @@ export class JobberSyncWorker {
     jobberVisitId: string,
     inspectionId: string,
     why: JobberRemovalReason,
+    options: { companion?: boolean } = {},
   ) {
-    const removal = await removeWithdrawnInspection(this.prisma, { organizationId, inspectionId, jobberVisitId, why });
+    const removal = await removeWithdrawnInspection(this.prisma, {
+      organizationId,
+      inspectionId,
+      jobberVisitId,
+      why,
+      companion: options.companion,
+    });
     if (removal.outcome === 'REMOVED') {
       if (removal.notify)
         this.technicianEvents?.publish(removal.notify.technicianId, inspectionId, 'CANCELLED', removal.notify.detail);
+      // The visit's second job, removed with it: its technician is told too.
+      for (const companion of removal.companions ?? [])
+        if (companion.notify)
+          this.technicianEvents?.publish(
+            companion.notify.technicianId,
+            companion.inspectionId,
+            'CANCELLED',
+            companion.notify.detail,
+          );
       await this.cacheInvalidation?.publish({ type: 'inspection.changed', organizationId });
       this.logger.log(`Removed inspection ${inspectionId}: its Jobber visit was ${why.toLowerCase()}.`);
     } else if (removal.outcome === 'IN_USE') {
@@ -1324,7 +1450,9 @@ export class JobberSyncWorker {
               : 'Jobber no longer has this visit on a day, and the inspection is already under way. Someone has to decide what happens to the work already recorded.',
         },
       });
-    } else if (removal.outcome === 'KEPT_BY_OFFICE' && why !== 'UNSCHEDULED') {
+    } else if (removal.outcome === 'KEPT_BY_OFFICE' && why !== 'UNSCHEDULED' && !options.companion) {
+      // Not for a companion the office cancelled: the visit is still the other
+      // job's, which must keep syncing.
       // Cancelled here first -- the console's cancel deletes the visit in Jobber,
       // and this is that deletion coming back. The office's record stays.
       await this.prisma.jobberVisitImport.updateMany({

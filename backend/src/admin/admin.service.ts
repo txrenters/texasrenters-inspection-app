@@ -1808,6 +1808,10 @@ export class AdminService {
         status: true,
         // Read only to answer whether the date is Jobber's; see the return.
         jobberVisitId: true,
+        // The other job the same Jobber visit booked, either way round
+        // (2026-10-13): the office sees the two belong together.
+        jobberCompanionOf: { select: { id: true, inspectionType: true, status: true } },
+        jobberCompanions: { select: { id: true, inspectionType: true, status: true } },
         // The visit as the coordinator wrote it, for the office. This select
         // sits behind inspections:read; the public report builds its own.
         jobberVisitTitle: true,

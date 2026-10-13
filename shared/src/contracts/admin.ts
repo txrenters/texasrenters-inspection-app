@@ -525,6 +525,13 @@ export type AdminInspectionStatus =
   | 'COMPLETED'
   | 'CANCELLED';
 
+/** Another inspection the same Jobber visit booked; see `AdminInspection.jobberCompanionOf`. */
+export interface BookedWithInspection {
+  id: string;
+  inspectionType: string;
+  status: string;
+}
+
 export interface AdminInspection {
   id: string;
   status: AdminInspectionStatus;
@@ -585,6 +592,14 @@ export interface AdminInspection {
   }[];
   /** Whether changes made in the console to a Jobber visit are sent to Jobber. */
   jobberEditsPushed?: boolean;
+  /**
+   * The other job the same Jobber visit booked (2026-10-13: an HVAC and an
+   * occupied inspection on one visit). `jobberCompanionOf` on the second job
+   * names the first, which holds the visit; `jobberCompanions` on the first
+   * names the second. Its day, technician and Details follow the visit.
+   */
+  jobberCompanionOf?: BookedWithInspection | null;
+  jobberCompanions?: BookedWithInspection[];
   /**
    * The report's closing block, written at sign-off. Distinct from
    * `internalNotes`, which is never published — these three are printed on the

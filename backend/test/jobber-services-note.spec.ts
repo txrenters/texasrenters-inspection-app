@@ -232,6 +232,8 @@ describe('sending the note with the completion', () => {
               }
             : { finalizedAt: null },
         ),
+        // No second job on the visit waiting to be submitted (2026-10-13).
+        count: jest.fn().mockResolvedValue(0),
       },
       jobberOutboundTask: {
         findMany: jest.fn().mockResolvedValue([

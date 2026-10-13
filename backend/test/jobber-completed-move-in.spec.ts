@@ -70,9 +70,10 @@ describe('which finished visits are recovered', () => {
     );
     expect(guard).toContain('namedAnInspection');
     // The one name both checks read, so they cannot drift apart: the title or
-    // details naming an inspection, or a benefit-package visit carrying one.
+    // details naming an inspection, a benefit-package visit carrying one, or a
+    // visit booking an HVAC and an occupied inspection (2026-10-13).
     expect(WORKER).toContain(
-      'const namedAnInspection = namesAnInspection(visit.title, visit.instructions) || packaged !== null;',
+      'const namedAnInspection = namesAnInspection(visit.title, visit.instructions) || packaged !== null || paired !== null;',
     );
     expect(WORKER).toContain('if (!namedAnInspection) {');
   });

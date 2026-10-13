@@ -109,7 +109,11 @@ describe('Jobber outbound worker', () => {
     request: jest.Mock,
   ) => {
     const prisma = {
-      inspection: { findUnique: jest.fn().mockResolvedValue({ finalizedAt: new Date('2026-09-01T10:00:00Z') }) },
+      inspection: {
+        findUnique: jest.fn().mockResolvedValue({ finalizedAt: new Date('2026-09-01T10:00:00Z') }),
+        // No second job on the visit waiting to be submitted (2026-10-13).
+        count: jest.fn().mockResolvedValue(0),
+      },
       jobberOutboundTask: {
         findMany: jest.fn().mockResolvedValue(rows),
         update: jest.fn().mockResolvedValue({}),
@@ -213,7 +217,7 @@ describe('what the completion tells Jobber', () => {
     const finalizedAt = new Date('2026-09-01T10:00:00Z');
     const request = jest.fn().mockResolvedValue({ visitComplete: { userErrors: [] } });
     const prisma = {
-      inspection: { findUnique: jest.fn().mockResolvedValue({ finalizedAt }) },
+      inspection: { findUnique: jest.fn().mockResolvedValue({ finalizedAt }), count: jest.fn().mockResolvedValue(0) },
       jobberOutboundTask: {
         findMany: jest.fn().mockResolvedValue([task()]),
         update: jest.fn().mockResolvedValue({}),

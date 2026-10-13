@@ -16,13 +16,15 @@ import {
   type VisitServicesReport,
 } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
+import Link from 'next/link';
 import { Fragment, useMemo, type ReactNode } from 'react';
 
 import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatDateTime, formatScheduledDate } from '@/lib/format';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
+import { formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
 import { inspectionTime, jobWorked } from '@/lib/job-time';
 
 /**
@@ -56,7 +58,13 @@ export function VisitCard({
     () => parseVisitDetails(inspection.jobberVisitDetails),
     [inspection.jobberVisitDetails],
   );
-  const inJobber = Boolean(inspection.scheduledInJobber || inspection.jobberBooking);
+  /**
+   * The other job the same Jobber visit booked (2026-10-13: an HVAC and an
+   * occupied inspection on one visit). The second has no visit of its own and
+   * follows the first, so it reads as in Jobber too.
+   */
+  const bookedWith = inspection.jobberCompanionOf ?? inspection.jobberCompanions?.[0] ?? null;
+  const inJobber = Boolean(inspection.scheduledInJobber || inspection.jobberBooking || inspection.jobberCompanionOf);
   const done = isFinishedStatus(inspection.status);
   const cancelled = inspection.status === 'CANCELLED';
   // Planning detail -- what to bring, who to call -- matters before the visit.
@@ -118,6 +126,20 @@ export function VisitCard({
               </Fragment>
             ))}
           </p>
+          {bookedWith ? (
+            <p className="text-muted-foreground text-xs">
+              Booked on one Jobber visit with the{' '}
+              <Link
+                className="text-foreground font-medium underline-offset-4 hover:underline"
+                href={`/inspections/${bookedWith.id}`}
+              >
+                {typeTitle(bookedWith.inspectionType)} inspection
+              </Link>
+              {inspection.jobberCompanionOf
+                ? '. Its day, technician and Details follow that visit, and Jobber is told it is done once both are in.'
+                : '. Jobber is told the visit is done once both are in.'}
+            </p>
+          ) : null}
           {!inJobber && read.raw ? (
             <CardDescription>
               Services chosen when this inspection was created. It isn&apos;t booked in Jobber from
@@ -304,6 +326,12 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
  * that is when the visit ended, Jobber was told and the clock stopped -- the
  * office's review of the findings comes after, and is not the visit's.
  */
+/** "HVAC", "occupied": a type as the navigation names it, for inside a sentence. */
+function typeTitle(type: string) {
+  const title = INSPECTION_TYPE_CHILDREN.find((child) => child.type === type)?.title ?? humanize(type);
+  return title === 'HVAC' ? title : title.toLowerCase();
+}
+
 function visitState(inspection: AdminInspection): {
   label: string;
   variant: 'secondary' | 'info' | 'success' | 'warning';
