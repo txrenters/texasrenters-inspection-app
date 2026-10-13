@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
-import { CalendarDaysIcon } from 'lucide-react-native';
-import { ActivityIndicator, Pressable, RefreshControl, SectionList, Text, View } from 'react-native';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { CalendarDaysIcon, SearchIcon } from 'lucide-react-native';
+import { ActivityIndicator, Platform, Pressable, RefreshControl, SectionList, Text, TextInput, View } from 'react-native';
 
 import { DayStrip } from '@/src/components/DayStrip';
 import { JobRow } from '@/src/components/JobRow';
@@ -14,6 +14,7 @@ import {
   useJobDays,
   usePrefetchInspectionPages,
 } from '@/src/features/queries';
+import { useDebounced } from '@/src/features/useDebounced';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
@@ -21,9 +22,9 @@ import { useThemeColors } from '@/src/lib/theme-colors';
 import type { InspectionListFilters, InspectionPage } from '@/src/repositories/contracts';
 import { FIELD_ACTIVE_STATUSES, SUBMITTED_STATUSES } from '@/src/utils/inspection-status';
 import { addDays, dayHeading, dayRange, texasToday, type JobDay } from '@/src/utils/job-day';
-import { historySections, scheduleSections, type JobSection } from '@/src/utils/job-sections';
+import { historySections, scheduleSections, searchSections, type JobSection } from '@/src/utils/job-sections';
 
-registerIcons(CalendarDaysIcon);
+registerIcons(CalendarDaysIcon, SearchIcon);
 
 /**
  * The Jobs tab: a day at a time, and a History of finished work.
@@ -33,8 +34,21 @@ registerIcons(CalendarDaysIcon);
  * morning's round. The office asked for a calendar (2026-10-07): the schedule
  * shows one day, today unless another is picked, with anything still open from
  * earlier days at the top of today; History shows submitted and completed work,
- * newest first, on the same calendar. Searching every job is the Search tab's.
+ * newest first, on the same calendar.
+ *
+ * And a search of its own, in the bar above the list (Moses, 2026-10-13: "I
+ * need it to reflect my addresses for today at the very top rather than having
+ * to keep scrolling down the list looking for it"). Today's still-open jobs from
+ * earlier days come first by the office's choice, so on a busy morning the day's
+ * own round sat below eleven of them. Typing an address shows every match,
+ * today's first -- the same search as the Search tab, which he had not found
+ * in its button beside the tab bar.
  */
+
+/** Typing pause before the search reaches the server; the Search tab's. */
+const SEARCH_DEBOUNCE_MS = 300;
+/** A search is short and wanted whole. */
+const SEARCH_PAGE = 50;
 
 type JobsView = 'schedule' | 'history';
 
@@ -68,6 +82,11 @@ export default function JobsScreen() {
   const [historyDay, setHistoryDay] = useState<JobDay | null>(null);
   const [historyEnd, setHistoryEnd] = useState<JobDay>(today);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const query = useDebounced(search.trim(), SEARCH_DEBOUNCE_MS);
+  /** Typing at all: the list is the search's from the first key, not the day's. */
+  const searching = search.trim().length > 0;
+  const searchPending = search.trim() !== query;
 
   // Home's "See all" opens today's schedule, wherever the list was left.
   useEffect(() => {
@@ -127,6 +146,14 @@ export default function JobsScreen() {
     { enabled: stillOpenWanted },
   );
 
+  // Every job he was ever assigned, matched on every word -- street, unit,
+  // city, ZIP, Jobber title, kind, status -- as the Search tab asks. Kept while
+  // typing so results do not blank between keys.
+  const results = useInspectionPages(
+    { search: query, order: 'recent', pageSize: SEARCH_PAGE },
+    { keepPrevious: true, enabled: query.length > 0 },
+  );
+
   const prefetch = usePrefetchInspectionPages();
   useEffect(() => {
     if (view !== 'schedule') return;
@@ -151,13 +178,21 @@ export default function JobsScreen() {
     () => (stillOpenWanted ? rowsOf(stillOpen.data) : []),
     [stillOpenWanted, stillOpen.data],
   );
+  const found = useMemo(() => rowsOf(results.data), [results.data]);
   const sections: JobSection[] = useMemo(
     () =>
-      view === 'history'
-        ? historySections(rows, today)
-        : scheduleSections({ day, today, rows, stillOpen: stillOpenRows }),
-    [view, rows, today, day, stillOpenRows],
+      searching
+        ? query
+          ? searchSections(found, today)
+          : []
+        : view === 'history'
+          ? historySections(rows, today)
+          : scheduleSections({ day, today, rows, stillOpen: stillOpenRows }),
+    [searching, query, found, view, rows, today, day, stillOpenRows],
   );
+  const foundTotal = results.data?.pages[0]?.total ?? 0;
+  /** Whichever list is on screen, for paging. */
+  const paged = searching ? results : main;
 
   const total = main.data?.pages[0]?.total ?? 0;
   const chosenDay = view === 'schedule' ? day : historyDay;
@@ -186,6 +221,19 @@ export default function JobsScreen() {
 
   return (
     <>
+      <Stack.Screen
+        options={{
+          // The bar's own field, as the Search tab's: on iOS it sits under the
+          // large title, always shown, so it is the first thing on the screen.
+          headerSearchBarOptions: {
+            placeholder: 'Search address or job',
+            autoCapitalize: 'none',
+            hideWhenScrolling: false,
+            onChangeText: (event) => setSearch(event.nativeEvent.text),
+            onCancelButtonPress: () => setSearch(''),
+          },
+        }}
+      />
       <SectionList
         className="flex-1 bg-background"
         // The list is the screen, so the large title collapses into the bar as
@@ -196,16 +244,18 @@ export default function JobsScreen() {
         stickySectionHeadersEnabled={false}
         contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
         // Half a screen of runway, so the next page is usually in hand before
         // the technician reaches the bottom.
         onEndReachedThreshold={0.5}
         onEndReached={() => {
           // Guarded: this fires repeatedly near the end, and an unguarded call
           // would queue duplicate requests for the same page.
-          if (main.hasNextPage && !main.isFetchingNextPage) void main.fetchNextPage();
+          if (paged.hasNextPage && !paged.isFetchingNextPage) void paged.fetchNextPage();
         }}
         ListFooterComponent={
-          main.isFetchingNextPage ? (
+          paged.isFetchingNextPage ? (
             <View className="py-6">
               <ActivityIndicator color={theme.primary} />
             </View>
@@ -215,88 +265,100 @@ export default function JobsScreen() {
           <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={theme.primary} />
         }
         ListHeaderComponent={
-          <View>
-            <View className="mt-2">
-              <SegmentedControl
-                accessibilityLabel="Which jobs to show"
-                options={VIEWS}
-                value={view}
-                onChange={setView}
-              />
-            </View>
-            <View className="mt-4">
-              <DayStrip
-                // Remounted per view and anchor, so it opens on the chosen day
-                // rather than wherever the last strip was scrolled.
-                key={`${view}:${view === 'schedule' ? scheduleAnchor : historyEnd}`}
-                counts={counts}
-                days={stripDays}
-                selected={chosenDay}
-                today={today}
-                onSelect={(picked) =>
-                  view === 'schedule'
-                    ? setDay(picked)
-                    : // Tapping the chosen day again goes back to every date.
-                      setHistoryDay((current) => (current === picked ? null : picked))
-                }
-              />
-            </View>
-
-            <View className="mt-4 flex-row items-center justify-between gap-2 px-5 pb-2">
-              <Text
-                accessibilityRole="header"
-                className="min-w-0 flex-1 text-lg font-semibold text-foreground"
-                numberOfLines={1}
-              >
-                {heading}
-              </Text>
-              <View className="flex-row items-center gap-1">
-                {view === 'schedule' && day !== today ? (
-                  <Pressable
-                    accessibilityLabel="Go to today"
-                    accessibilityRole="button"
-                    className="min-h-11 justify-center px-2 active:opacity-60"
-                    onPress={goToday}
-                  >
-                    <Text className="text-sm font-semibold text-primary">Today</Text>
-                  </Pressable>
-                ) : null}
-                {view === 'history' && historyDay ? (
-                  <Pressable
-                    accessibilityLabel="Show every date"
-                    accessibilityRole="button"
-                    className="min-h-11 justify-center px-2 active:opacity-60"
-                    onPress={() => setHistoryDay(null)}
-                  >
-                    <Text className="text-sm font-semibold text-primary">All dates</Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  accessibilityLabel="Pick a day from the calendar"
-                  accessibilityRole="button"
-                  className="h-11 w-11 items-center justify-center rounded-xl active:opacity-60"
-                  onPress={() => setCalendarOpen(true)}
-                >
-                  <CalendarDaysIcon size={22} className="text-primary" />
-                </Pressable>
-              </View>
-            </View>
-
-            {main.isError ? (
-              <View className="mx-5 mb-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3">
-                <Text className="text-sm text-destructive">
-                  {main.error instanceof Error ? main.error.message : 'Could not load jobs.'}
+          searching ? (
+            <View>
+              <JobSearchField search={search} onChange={setSearch} />
+              {query && results.data ? (
+                <Text accessibilityRole="header" className="mt-3 px-5 text-lg font-semibold text-foreground">
+                  {foundTotal} found
                 </Text>
+              ) : null}
+            </View>
+          ) : (
+            <View>
+              <JobSearchField search={search} onChange={setSearch} />
+              <View className="mt-2">
+                <SegmentedControl
+                  accessibilityLabel="Which jobs to show"
+                  options={VIEWS}
+                  value={view}
+                  onChange={setView}
+                />
               </View>
-            ) : null}
-          </View>
+              <View className="mt-4">
+                <DayStrip
+                  // Remounted per view and anchor, so it opens on the chosen day
+                  // rather than wherever the last strip was scrolled.
+                  key={`${view}:${view === 'schedule' ? scheduleAnchor : historyEnd}`}
+                  counts={counts}
+                  days={stripDays}
+                  selected={chosenDay}
+                  today={today}
+                  onSelect={(picked) =>
+                    view === 'schedule'
+                      ? setDay(picked)
+                      : // Tapping the chosen day again goes back to every date.
+                        setHistoryDay((current) => (current === picked ? null : picked))
+                  }
+                />
+              </View>
+
+              <View className="mt-4 flex-row items-center justify-between gap-2 px-5 pb-2">
+                <Text
+                  accessibilityRole="header"
+                  className="min-w-0 flex-1 text-lg font-semibold text-foreground"
+                  numberOfLines={1}
+                >
+                  {heading}
+                </Text>
+                <View className="flex-row items-center gap-1">
+                  {view === 'schedule' && day !== today ? (
+                    <Pressable
+                      accessibilityLabel="Go to today"
+                      accessibilityRole="button"
+                      className="min-h-11 justify-center px-2 active:opacity-60"
+                      onPress={goToday}
+                    >
+                      <Text className="text-sm font-semibold text-primary">Today</Text>
+                    </Pressable>
+                  ) : null}
+                  {view === 'history' && historyDay ? (
+                    <Pressable
+                      accessibilityLabel="Show every date"
+                      accessibilityRole="button"
+                      className="min-h-11 justify-center px-2 active:opacity-60"
+                      onPress={() => setHistoryDay(null)}
+                    >
+                      <Text className="text-sm font-semibold text-primary">All dates</Text>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    accessibilityLabel="Pick a day from the calendar"
+                    accessibilityRole="button"
+                    className="h-11 w-11 items-center justify-center rounded-xl active:opacity-60"
+                    onPress={() => setCalendarOpen(true)}
+                  >
+                    <CalendarDaysIcon size={22} className="text-primary" />
+                  </Pressable>
+                </View>
+              </View>
+
+              {main.isError ? (
+                <View className="mx-5 mb-3 rounded-xl border border-destructive/20 bg-destructive/10 p-3">
+                  <Text className="text-sm text-destructive">
+                    {main.error instanceof Error ? main.error.message : 'Could not load jobs.'}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          )
         }
         renderSectionHeader={({ section }) =>
           // The day's own jobs go without a heading in the schedule: the row of
           // controls above already names the day. Every other group keeps its
           // title -- above all the still-open one, which without it reads as
           // today's work.
-          view === 'history' || section.key !== day ? (
+          searching || view === 'history' || section.key !== day ? (
             <Text
               accessibilityRole="header"
               className={`mb-2 mt-3 px-5 text-sm font-semibold ${
@@ -309,7 +371,18 @@ export default function JobsScreen() {
         }
         renderItem={({ item, section }) => <JobRow item={item} showDay={section.showDay} />}
         ListEmptyComponent={
-          main.isLoading ? (
+          searching ? (
+            results.isLoading || searchPending ? (
+              <InspectionListSkeleton rows={3} />
+            ) : (
+              <View className="items-center gap-1 px-8 py-16">
+                <Text className="text-center text-base font-semibold text-foreground">No jobs match “{query}”</Text>
+                <Text className="text-center text-sm text-muted-foreground">
+                  Check the spelling, or try fewer words: a street name is enough.
+                </Text>
+              </View>
+            )
+          ) : main.isLoading ? (
             <InspectionListSkeleton rows={3} />
           ) : (
             <EmptyJobs
@@ -329,6 +402,28 @@ export default function JobsScreen() {
         onClose={() => setCalendarOpen(false)}
       />
     </>
+  );
+}
+
+/**
+ * The field for the web build, which has no native bar to hold one; on a
+ * phone the search is the bar's own (`headerSearchBarOptions`).
+ */
+function JobSearchField({ search, onChange }: { search: string; onChange: (text: string) => void }) {
+  const theme = useThemeColors();
+  if (Platform.OS !== 'web') return null;
+  return (
+    <View className="mx-5 mt-3 flex-row items-center gap-3 rounded-xl bg-card px-4 py-2.5">
+      <SearchIcon size={18} className="text-muted-foreground" />
+      <TextInput
+        accessibilityLabel="Search address or job"
+        className="flex-1 text-base text-foreground"
+        placeholder="Search address or job"
+        placeholderTextColor={theme.mutedForeground}
+        value={search}
+        onChangeText={onChange}
+      />
+    </View>
   );
 }
 

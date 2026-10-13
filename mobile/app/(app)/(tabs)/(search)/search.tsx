@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Stack } from 'expo-router';
 import { SearchIcon } from 'lucide-react-native';
 import { ActivityIndicator, Platform, SectionList, Text, TextInput, View } from 'react-native';
@@ -6,6 +6,7 @@ import { ActivityIndicator, Platform, SectionList, Text, TextInput, View } from 
 import { JobRow } from '@/src/components/JobRow';
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { useInspectionPages } from '@/src/features/queries';
+import { useDebounced } from '@/src/features/useDebounced';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -29,15 +30,6 @@ registerIcons(SearchIcon);
 const SEARCH_DEBOUNCE_MS = 300;
 /** A search is short and wanted whole. */
 const RESULTS_PAGE = 50;
-
-function useDebounced<T>(value: T, delayMs: number) {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(value), delayMs);
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-  return settled;
-}
 
 export default function SearchScreen() {
   const theme = useThemeColors();
