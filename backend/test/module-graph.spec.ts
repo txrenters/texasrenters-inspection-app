@@ -7,7 +7,7 @@ import { ReportShareService } from '../src/admin/report-share.service';
 import { AdminController } from '../src/admin/admin.controller';
 import { AiProviderSettingsService } from '../src/admin/ai-provider-settings.service';
 import { ChecklistPrefillService } from '../src/technician/checklist-prefill.service';
-import { MediaProcessingService } from '../src/technician/media-processing.service';
+import { MediaProcessingService } from '../src/technician/media-processing.service';
 import { RecordingSummaryService } from '../src/technician/recording-summary.service';
 import { CacheInvalidationService } from '../src/cache/cache-invalidation.service';
 import { CacheModule } from '../src/cache/cache.module';
@@ -16,7 +16,9 @@ import { DatabaseModule } from '../src/database/database.module';
 import { JobberModule } from '../src/integrations/jobber/jobber.module';
 import { InspectionVideoService } from '../src/media/inspection-video.service';
 import { MediaModule } from '../src/media/media.module';
+import { GroupTemplateChangesService } from '../src/planning/group-template-changes.service';
 import { LeaseInspectionService } from '../src/planning/lease-inspections.service';
+import { MapboxDirectionsClient } from '../src/routing/mapbox-directions.client';
 import { PlanningModule } from '../src/planning/planning.module';
 import { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService } from '../src/planning/tbp-stop-edit.service';
@@ -49,6 +51,9 @@ describe('the planning module', () => {
     // A lease call-off tells the technician whose job it was (2026-10-07).
     const lease = moduleRef.get(LeaseInspectionService) as unknown as { technicianEvents?: unknown };
     expect(lease.technicianEvents).toBeInstanceOf(TechnicianEventsGateway);
+    // Who left the package and who joined, timed on the road (2026-10-15).
+    const changes = moduleRef.get(GroupTemplateChangesService) as unknown as { mapbox?: unknown };
+    expect(changes.mapbox).toBeInstanceOf(MapboxDirectionsClient);
   });
 });
 
