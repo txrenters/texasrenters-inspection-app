@@ -41,7 +41,18 @@ const statusRow = (switches: Switches | null) =>
       }
     : null;
 
-function build(options: { before?: Switches | null; after?: Switches | null; scheduleOn?: boolean; stillBooked?: unknown[] } = {}) {
+/** A tenancy the tenant report enrols in the benefit package, at the property. */
+const enrolled = { propertywareBuildingId: 'building-1', isActive: true, tbpEnrollment: 'Yes', zone: 'Zone 1', deactivatedAt: null };
+
+function build(
+  options: {
+    before?: Switches | null;
+    after?: Switches | null;
+    scheduleOn?: boolean;
+    stillBooked?: unknown[];
+    tenancies?: (typeof enrolled)[];
+  } = {},
+) {
   const tx = {
     propertyServiceStatus: { upsert: jest.fn().mockResolvedValue({}) },
     tbpQuarterPlanStop: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
@@ -55,6 +66,20 @@ function build(options: { before?: Switches | null; after?: Switches | null; sch
         .mockResolvedValue({ id: 'building-1', serviceStatus: statusRow(options.after ?? options.before ?? null) }),
     },
     inspection: { findMany: jest.fn().mockResolvedValue(options.stillBooked ?? []) },
+    // The benefit package read either side of the switch, for its history.
+    propertywareTenant: { findMany: jest.fn().mockResolvedValue(options.tenancies ?? []) },
+    propertyServiceStatus: {
+      findMany: jest
+        .fn()
+        .mockResolvedValueOnce(options.before ? [{ buildingId: 'building-1', ...statusRow(options.before) }] : [])
+        // An `after` of null is the switches turned off, not "as before".
+        .mockResolvedValue(
+          [statusRow('after' in options ? (options.after ?? null) : (options.before ?? null))]
+            .filter((row) => row !== null)
+            .map((row) => ({ buildingId: 'building-1', ...row })),
+        ),
+    },
+    tbpPackageChange: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
     $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
   };
   const leases = {
@@ -207,6 +232,57 @@ describe('the property opted out of the benefit package', () => {
 
     expect(tx.tbpQuarterPlanStop.updateMany).not.toHaveBeenCalled();
     expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'PROPERTY_TBP_OPTED_OUT_CLEARED' }) });
+  });
+});
+
+describe('the benefit package’s history', () => {
+  it('records a property the switch took out of the package, with who and why', async () => {
+    const { service, prisma } = build({ after: { tbpOptedOutAt: NOW }, tenancies: [enrolled] });
+
+    await service.set(office, 'building-1', { tbpOptedOut: true }, NOW);
+
+    expect(prisma.propertywareTenant.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-1', propertywareBuildingId: { in: ['building-1'] } } }),
+    );
+    expect(prisma.tbpPackageChange.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          organizationId: 'org-1',
+          buildingId: 'building-1',
+          kind: 'LEFT',
+          source: 'OFFICE',
+          reason: 'OPTED_OUT',
+          actorUserId: 'user-1',
+          actorName: 'Pat Office',
+        }),
+      ],
+    });
+  });
+
+  it('records it joining again when the switch is turned off', async () => {
+    const { service, prisma } = build({ before: { tbpOptedOutAt: date('2026-10-01') }, after: null, tenancies: [enrolled] });
+
+    await service.set(office, 'building-1', { tbpOptedOut: false }, NOW);
+
+    expect(prisma.tbpPackageChange.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ kind: 'JOINED', source: 'OFFICE', reason: null, actorName: 'Pat Office' })],
+    });
+  });
+
+  it('records nothing for a property that was never in the package', async () => {
+    const { service, prisma } = build({ after: { tbpOptedOutAt: NOW } });
+
+    await service.set(office, 'building-1', { tbpOptedOut: true }, NOW);
+
+    expect(prisma.tbpPackageChange.createMany).not.toHaveBeenCalled();
+  });
+
+  it('still turns the switch when the history cannot be written', async () => {
+    const { service, prisma, tx } = build({ after: { tbpOptedOutAt: NOW }, tenancies: [enrolled] });
+    prisma.tbpPackageChange.createMany.mockRejectedValue(new Error('pool exhausted'));
+
+    await expect(service.set(office, 'building-1', { tbpOptedOut: true }, NOW)).resolves.toMatchObject({ calledOff: 0 });
+    expect(tx.propertyServiceStatus.upsert).toHaveBeenCalled();
   });
 });
 

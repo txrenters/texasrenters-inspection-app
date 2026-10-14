@@ -1,6 +1,6 @@
 import type { PrismaService } from '../src/common/prisma.service';
 import type { MapboxDirectionsClient } from '../src/routing/mapbox-directions.client';
-import { GroupTemplateChangesService, packageStanding } from '../src/planning/group-template-changes.service';
+import { GroupTemplateChangesService } from '../src/planning/group-template-changes.service';
 import type { GroupMakerProperty, GroupTemplateService } from '../src/planning/group-template.service';
 
 /**
@@ -22,55 +22,6 @@ const tenancy = (extra: Partial<{ isActive: boolean; tbpEnrollment: string | nul
   ...extra,
 });
 
-describe('why a property is no longer in the package', () => {
-  it('names the office’s own switch first, with when and who', () => {
-    const at = new Date('2026-10-14T15:00:00Z');
-    const standing = packageStanding(
-      { managementEndedAt: null, tbpOptedOutAt: at, managementEndedBy: null, tbpOptedOutBy: { displayName: 'Erika' } },
-      [tenancy()],
-    );
-    expect(standing.inPackage).toBe(false);
-    expect(standing.reasons).toEqual([{ code: 'OPTED_OUT', since: at.toISOString(), by: 'Erika', detail: null }]);
-  });
-
-  it('puts a management that ended before an opt-out', () => {
-    const at = new Date('2026-10-13T15:00:00Z');
-    const standing = packageStanding(
-      { managementEndedAt: at, tbpOptedOutAt: at, managementEndedBy: { displayName: 'Ann' }, tbpOptedOutBy: { displayName: 'Ann' } },
-      [tenancy()],
-    );
-    expect(standing.reasons.map((reason) => reason.code)).toEqual(['MANAGEMENT_ENDED', 'OPTED_OUT']);
-  });
-
-  it('says what the tenant report says instead of Yes', () => {
-    const standing = packageStanding(null, [tenancy({ tbpEnrollment: 'No' }), tenancy({ tbpEnrollment: 'Not Verified' })]);
-    expect(standing).toEqual({
-      inPackage: false,
-      reasons: [{ code: 'NOT_ENROLLED', since: null, by: null, detail: 'No, Not Verified' }],
-    });
-  });
-
-  it('says when its tenancies are in a zone the package does not cover', () => {
-    expect(packageStanding(null, [tenancy({ zone: 'Zone 5' })]).reasons).toEqual([
-      { code: 'ZONE_EXCLUDED', since: null, by: null, detail: 'Zone 5' },
-    ]);
-  });
-
-  it('dates a property whose last lease left the report by the last one to go', () => {
-    const standing = packageStanding(null, [
-      tenancy({ isActive: false, deactivatedAt: new Date('2026-09-01T08:00:00Z') }),
-      tenancy({ isActive: false, deactivatedAt: new Date('2026-10-02T08:00:00Z') }),
-    ]);
-    expect(standing.reasons).toEqual([
-      { code: 'NO_ACTIVE_LEASE', since: '2026-10-02T08:00:00.000Z', by: null, detail: null },
-    ]);
-  });
-
-  it('is in the package with one enrolled tenancy in a covered zone, whatever its others say', () => {
-    expect(packageStanding(null, [tenancy({ tbpEnrollment: 'No' }), tenancy()])).toEqual({ inPackage: true, reasons: [] });
-  });
-});
-
 /** A property the Group maker draws, at a point along one east-west street. */
 const property = (buildingId: string, longitude: number): GroupMakerProperty => ({
   buildingId,
@@ -88,7 +39,18 @@ const property = (buildingId: string, longitude: number): GroupMakerProperty => 
 
 const member = (buildingId: string) => ({ buildingId, building: { addressLine1: `${buildingId} Main St`, name: buildingId } });
 
-const build = (options: { matrix?: (points: { latitude: number; longitude: number }[]) => number[][] | null; template?: unknown } = {}) => {
+/** A row of the benefit package's history. */
+type Change = { buildingId: string; kind: 'JOINED' | 'LEFT'; reason: string | null; occurredAt: Date };
+
+const build = (
+  options: {
+    matrix?: (points: { latitude: number; longitude: number }[]) => number[][] | null;
+    template?: unknown;
+    /** L left because the report stopped saying Yes, rather than by the office's switch. */
+    leftByReport?: boolean;
+    history?: Change[];
+  } = {},
+) => {
   const template =
     options.template === undefined
       ? {
@@ -106,12 +68,14 @@ const build = (options: { matrix?: (points: { latitude: number; longitude: numbe
   const findBuildings = jest.fn().mockResolvedValue([
     {
       id: 'L',
-      serviceStatus: {
-        managementEndedAt: null,
-        tbpOptedOutAt: new Date('2026-10-14T15:00:00Z'),
-        managementEndedBy: null,
-        tbpOptedOutBy: { displayName: 'Erika' },
-      },
+      serviceStatus: options.leftByReport
+        ? null
+        : {
+            managementEndedAt: null,
+            tbpOptedOutAt: new Date('2026-10-14T15:00:00Z'),
+            managementEndedBy: null,
+            tbpOptedOutBy: { displayName: 'Erika' },
+          },
     },
     { id: 'U', serviceStatus: null },
   ]);
@@ -124,7 +88,7 @@ const build = (options: { matrix?: (points: { latitude: number; longitude: numbe
             { propertywareBuildingId: 'N', tbpEnrollment: 'Yes', zone: 'Zone 1', firstSyncedAt: new Date('2026-10-13T08:00:00Z') },
           ]
         : [
-            { propertywareBuildingId: 'L', ...tenancy() },
+            { propertywareBuildingId: 'L', ...tenancy(options.leftByReport ? { tbpEnrollment: 'No' } : {}) },
             { propertywareBuildingId: 'U', ...tenancy() },
           ],
     ),
@@ -133,6 +97,15 @@ const build = (options: { matrix?: (points: { latitude: number; longitude: numbe
     tbpGroupTemplate: { findFirst: findTemplate },
     propertywareBuilding: { findMany: findBuildings },
     propertywareTenant: { findMany: findTenancies },
+    tbpPackageChange: {
+      findMany: jest.fn().mockImplementation(({ where }: { where: { kind: string; buildingId: { in: string[] } } }) =>
+        Promise.resolve(
+          (options.history ?? [])
+            .filter((change) => change.kind === where.kind && where.buildingId.in.includes(change.buildingId))
+            .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime()),
+        ),
+      ),
+    },
   } as unknown as PrismaService;
   const templates = {
     properties: jest.fn().mockResolvedValue({
@@ -175,7 +148,14 @@ describe('what changed under a template', () => {
     const { service } = build();
     const [newcomer, ...others] = (await service.changes(ORG, TEMPLATE)).newcomers;
     expect(others).toEqual([]);
-    expect(newcomer).toMatchObject({ buildingId: 'N', address: 'N Main St', zone: '1', firstOnReport: '2026-10-12T08:00:00.000Z' });
+    expect(newcomer).toMatchObject({
+      buildingId: 'N',
+      address: 'N Main St',
+      zone: '1',
+      firstOnReport: '2026-10-12T08:00:00.000Z',
+      // Nothing in the history: it joined before the history was kept.
+      joinedAt: null,
+    });
     expect(newcomer!.suggestions.map((suggestion) => suggestion.group.name)).toEqual(['Group 1', 'Group 2']);
     expect(newcomer!.suggestions[0]).toMatchObject({ members: 2, target: 10, hasRoom: true, timing: 'ESTIMATE' });
     expect(newcomer!.suggestions[0]!.nearest?.address).toBe('B Main St');
@@ -196,6 +176,30 @@ describe('what changed under a template', () => {
       expect(suggestion.addedMinutes).toBe(10);
       expect(suggestion.nearest?.minutes).toBe(10);
     }
+  });
+
+  it('dates a leave the report made by the history, which saw it go', async () => {
+    const { service } = build({
+      leftByReport: true,
+      history: [
+        { buildingId: 'L', kind: 'LEFT', reason: 'NOT_ENROLLED', occurredAt: new Date('2026-10-13T08:00:00Z') },
+        { buildingId: 'L', kind: 'JOINED', reason: null, occurredAt: new Date('2026-07-01T08:00:00Z') },
+      ],
+    });
+    const [leaver] = (await service.changes(ORG, TEMPLATE)).leavers;
+    expect(leaver!.reasons).toEqual([{ code: 'NOT_ENROLLED', since: '2026-10-13T08:00:00.000Z', by: null, detail: 'No' }]);
+  });
+
+  it('says when a newcomer joined the package, the latest time it did', async () => {
+    const { service } = build({
+      history: [
+        { buildingId: 'N', kind: 'JOINED', reason: null, occurredAt: new Date('2026-08-01T08:00:00Z') },
+        { buildingId: 'N', kind: 'LEFT', reason: 'OPTED_OUT', occurredAt: new Date('2026-09-01T08:00:00Z') },
+        { buildingId: 'N', kind: 'JOINED', reason: null, occurredAt: new Date('2026-10-14T08:00:00Z') },
+      ],
+    });
+    const [newcomer] = (await service.changes(ORG, TEMPLATE)).newcomers;
+    expect(newcomer!.joinedAt).toBe('2026-10-14T08:00:00.000Z');
   });
 
   it('reads the template in the asker’s organization only, and says when there is none', async () => {

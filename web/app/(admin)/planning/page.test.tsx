@@ -13,6 +13,7 @@ const hooks = vi.hoisted(() => ({
   usePlanDayRoute: vi.fn(),
   usePlanRotation: vi.fn(),
   usePlanLateMoveOuts: vi.fn(),
+  usePlanPackageChanges: vi.fn(),
   usePlanTechnicians: vi.fn(),
   usePlanningMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
@@ -205,6 +206,7 @@ function mount({
   groupFile = null as unknown,
   templates = [] as unknown[],
   lateMoveOuts = { conflicts: [], jobberEditsPushed: true } as unknown,
+  packageChanges = null as unknown,
   moveToMonday = idle as unknown,
   optimizeDay = idle as unknown,
   optimizeDays = idle as unknown,
@@ -214,6 +216,7 @@ function mount({
 } = {}) {
   hooks.usePlanUnschedulePreview.mockReturnValue(unschedulePreview);
   hooks.usePlanLateMoveOuts.mockReturnValue({ data: lateMoveOuts });
+  hooks.usePlanPackageChanges.mockReturnValue({ isLoading: false, isError: false, data: packageChanges });
   hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile, isSuccess: true, isFetching: false, isError: false });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
@@ -1504,5 +1507,82 @@ describe('move-outs booked onto a published day since the plan', () => {
     mount({ plans: [PUBLISHED] });
 
     expect(screen.queryByRole('region', { name: 'Move-outs booked since the plan' })).toBeNull();
+  });
+});
+
+describe('the benefit package’s changes since last quarter', () => {
+  const PLACE = { status: 'PUBLISHED', scheduledOn: '2026-08-05', technician: 'Moses Rivera', group: { position: 3, name: 'North', color: '#4363d8' } };
+  const CHANGES = {
+    planId: 'plan-1',
+    previous: { planId: 'plan-q3', quarterYear: 2026, quarterNumber: 3 },
+    left: [
+      {
+        buildingId: 'building-l',
+        address: '12 Left Ln',
+        reasons: [{ code: 'OPTED_OUT', since: '2026-10-14T15:00:00.000Z', by: 'Erika', detail: null }],
+        lastQuarter: PLACE,
+        thisQuarter: { status: 'PUBLISHED', scheduledOn: '2026-11-03', technician: 'Kevin Grant', group: null },
+      },
+    ],
+    joined: [
+      { buildingId: 'building-m', address: '4 New St', joinedAt: '2026-10-13T08:00:00.000Z', firstOnReport: null, thisQuarter: null },
+    ],
+    history: [
+      {
+        id: 'change-1',
+        buildingId: 'building-l',
+        address: '12 Left Ln',
+        kind: 'LEFT',
+        source: 'OFFICE',
+        reason: 'OPTED_OUT',
+        detail: null,
+        by: 'Erika',
+        occurredAt: '2026-10-14T15:00:00.000Z',
+      },
+    ],
+    historyMore: 0,
+  };
+
+  it('is read only once its tab is open', () => {
+    mount();
+
+    expect(hooks.usePlanPackageChanges).toHaveBeenLastCalledWith('plan-1', false);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Package changes' }));
+    expect(url.set).toHaveBeenCalledWith({ tab: 'package', show: 'all' });
+  });
+
+  it('names who left with the group they were visited in, and who is new with nowhere to go yet', () => {
+    url.state = { quarter: '2026-4', tab: 'package', day: '', view: 'month', show: 'all' };
+    mount({ packageChanges: CHANGES });
+
+    expect(hooks.usePlanPackageChanges).toHaveBeenLastCalledWith('plan-1', true);
+    expect(screen.getByText('1 left the package · 1 new since Q3 2026')).toBeTruthy();
+    const left = screen.getByRole('region', { name: 'Left the package (1)' });
+    expect(within(left).getByRole('link', { name: '12 Left Ln' }).getAttribute('href')).toBe('/properties/building-l');
+    expect(within(left).getByText('Opted out of the benefit package on Oct 14, 2026 by Erika')).toBeTruthy();
+    expect(within(left).getByText('Q3 2026: Aug 5 · Moses Rivera')).toBeTruthy();
+    expect(within(left).getByText('North')).toBeTruthy();
+    // Published this quarter: no switch cancels it by itself.
+    expect(within(left).getByText('— still booked: cancel it or keep it')).toBeTruthy();
+
+    const joined = screen.getByRole('region', { name: 'New since Q3 2026 (1)' });
+    expect(within(joined).getByText('joined the package on Oct 13, 2026')).toBeTruthy();
+    expect(within(joined).getByRole('link', { name: 'Find it a group' }).getAttribute('href')).toBe('/group-maker');
+
+    const history = screen.getByRole('region', { name: 'Benefit package history' });
+    expect(within(history).getByText('Left: opted out of the benefit package')).toBeTruthy();
+    expect(within(history).getByText('Office, Erika')).toBeTruthy();
+  });
+
+  it('calls nothing new without a plan for last quarter to compare with', () => {
+    url.state = { quarter: '2026-4', tab: 'package', day: '', view: 'month', show: 'all' };
+    mount({ packageChanges: { ...CHANGES, previous: null, left: [], joined: [], history: [] } });
+
+    expect(
+      screen.getByText(
+        'No property this quarter has left the benefit package. There is no plan for last quarter to compare with, so nothing is called new.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('No history yet')).toBeTruthy();
   });
 });

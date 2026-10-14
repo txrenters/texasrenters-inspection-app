@@ -82,6 +82,7 @@ export * from './inspection-scope.js';
 export * from './property-location.js';
 export * from './group-template-ops.js';
 export * from './group-template-changes.js';
+export * from './quarter-package-changes.js';
 export * from './quarter-assignment.js';
 export * from './quarter-plan.js';
 export * from './tbp-visit-plan.js';

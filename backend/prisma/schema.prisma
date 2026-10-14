@@ -399,6 +399,7 @@ enum ChargeSource {
 model Organization {
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
+  tbpPackageChanges TbpPackageChange[]
   timeSegments      TimeSegment[]
   timeAdjustments   TimeAdjustment[]
   trackingGaps      TrackingGap[]
@@ -1530,6 +1531,7 @@ model PropertywarePortfolioOwner {
 model PropertywareBuilding {
   geofence PropertyGeofence?
   serviceStatus PropertyServiceStatus?
+  tbpPackageChanges TbpPackageChange[]
   timeSegments TimeSegment[]
   tbpPlanStops TbpQuarterPlanStop[]
   id                  String                 @id @default(uuid()) @db.Uuid
@@ -3919,6 +3921,48 @@ model PropertyServiceStatus {
   tbpOptedOutBy     UserProfile?         @relation("TbpOptedOutBy", fields: [tbpOptedOutById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
+}
+
+enum TbpPackageChangeKind {
+  JOINED
+  LEFT
+}
+
+enum TbpPackageChangeSource {
+  /// The nightly Propertyware tenant report: a tenancy enrolled, a Yes became a No, a lease ended.
+  TENANT_REPORT
+  /// The office's switches on the property's page.
+  OFFICE
+}
+
+/// When a property joined or left the tenant benefit package, and why (the
+/// office, 2026-10-15: "we should have a way to know if a property has opted
+/// out or left the TBP"). The tenant sync overwrites a tenancy's enrolment in
+/// place, so a Yes that became a No left no trace; this keeps one row per
+/// change of a building's membership, written by the sync and by the office's
+/// switches. Only changes are written: a building in the package all along has
+/// no row.
+model TbpPackageChange {
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @db.Uuid
+  buildingId     String                 @db.Uuid
+  kind           TbpPackageChangeKind
+  source         TbpPackageChangeSource
+  /// Why it left, as `PackageLeftReasonCode` (shared); null for a join.
+  reason         String?
+  /// What the tenant report said, for NOT_ENROLLED ("No", "Not Verified").
+  detail         String?
+  /// Who turned the switch, for an office change; kept by name too, so the row
+  /// still reads after the account is gone.
+  actorUserId    String?                @db.Uuid
+  actorName      String?
+  occurredAt     DateTime               @default(now())
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  building     PropertywareBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, occurredAt])
+  @@index([buildingId, occurredAt])
 }
 
 /// A stretch of a technician's day, as the trail accounts for it.
