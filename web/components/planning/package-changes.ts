@@ -1,4 +1,4 @@
-import type { GroupSuggestion, GroupTemplateChanges, PackageLeftReason } from '@texasrenters/shared';
+import type { GroupSuggestion, GroupTemplateChanges, PackageLeftReason, PackageNewcomer } from '@texasrenters/shared';
 
 import { formatDate } from '@/lib/format';
 
@@ -16,10 +16,13 @@ export function leftReasonText(reason: PackageLeftReason): string {
       return `Owner ended the management${when}${who}`;
     case 'OPTED_OUT':
       return `Opted out of the benefit package${when}${who}`;
-    case 'NOT_ENROLLED':
+    case 'NOT_ENROLLED': {
+      // The report's own change carries no date; the package's history does, since 2026-10-15.
+      const since = reason.since ? ` since ${formatDate(reason.since)}` : '';
       return reason.detail
-        ? `Not enrolled on the tenant report: it says ${reason.detail}`
-        : 'Not enrolled on the tenant report';
+        ? `Not enrolled on the tenant report${since}: it says ${reason.detail}`
+        : `Not enrolled on the tenant report${since}`;
+    }
     case 'ZONE_EXCLUDED':
       return `${reason.detail ?? 'Its zone'} is not part of the benefit package`;
     case 'NO_ACTIVE_LEASE':
@@ -27,6 +30,15 @@ export function leftReasonText(reason: PackageLeftReason): string {
         ? `No lease on the tenant report since ${formatDate(reason.since)}`
         : 'No lease on the tenant report';
   }
+}
+
+/**
+ * When a newcomer came into the package: the day it joined, where the history
+ * saw it, or else how long it has been on the tenant report.
+ */
+export function newcomerSince(newcomer: Pick<PackageNewcomer, 'joinedAt' | 'firstOnReport'>): string | null {
+  if (newcomer.joinedAt) return `joined the package on ${formatDate(newcomer.joinedAt)}`;
+  return newcomer.firstOnReport ? `on the tenant report since ${formatDate(newcomer.firstOnReport)}` : null;
 }
 
 /** "3 left the package · 5 new, not in a group", or null when nothing changed. */

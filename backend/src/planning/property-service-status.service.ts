@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { InspectionStatus, InspectionType, TbpStopStatus } from '@prisma/client';
+import { InspectionStatus, InspectionType, TbpPackageChangeSource, TbpStopStatus } from '@prisma/client';
 import type {
   PropertyServiceChange,
   PropertyServiceStillBooked,
@@ -10,6 +10,7 @@ import type {
 import { leftBenefitPackage, SERVICE_STATUS_VIEW_SELECT, serviceStatusView } from '../admin/property-service-status';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { auditActor, type AuthenticatedUser } from '../common/auth';
+import { packageMembership, recordPackageChanges, type PackageStanding } from '../common/benefit-package';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
@@ -47,6 +48,8 @@ const PACKAGE_VISIT_TYPES: InspectionType[] = [InspectionType.OCCUPIED, Inspecti
 const OPEN_STATUSES: InspectionStatus[] = [InspectionStatus.SCHEDULED, InspectionStatus.IN_PROGRESS];
 
 const dateOf = (value: string) => new Date(`${value}T00:00:00.000Z`);
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 @Injectable()
 export class PropertyServiceStatusService {
@@ -110,6 +113,9 @@ export class PropertyServiceStatusService {
     const leftBefore = leftBenefitPackage(before);
     const leftAfter = leftBenefitPackage(after);
     const today = businessDate(now);
+    // Its place in the benefit package before the switch, so a turn that moves
+    // it in or out is recorded with who turned it (2026-10-15).
+    const membershipBefore = await this.packageOf(organizationId, buildingId);
 
     const stops = await this.prisma.$transaction(async (tx) => {
       await tx.propertyServiceStatus.upsert({
@@ -167,6 +173,10 @@ export class PropertyServiceStatusService {
       return stopsMoved;
     });
     this.cacheInvalidation?.bump('propertyDetails', organizationId);
+    if (membershipBefore) {
+      const actor = by ? { id: by, name: user.displayName } : null;
+      await this.recordPackage(organizationId, buildingId, membershipBefore, actor);
+    }
 
     // The lease schedule, for this property and now rather than overnight. Only
     // while it runs at all: switched off, it books nothing, and the switch must
@@ -200,6 +210,31 @@ export class PropertyServiceStatusService {
       booked,
     });
     return { ...(await this.view(user, buildingId, now)), calledOff, booked };
+  }
+
+  /** Its standing in the benefit package, or null when it could not be read: the switch goes on without its history. */
+  private async packageOf(organizationId: string, buildingId: string) {
+    try {
+      return await packageMembership(this.prisma, organizationId, [buildingId]);
+    } catch (error) {
+      this.logger.warn({ event: 'tbp_package_membership_unread', organizationId, buildingId, reason: errorText(error) });
+      return null;
+    }
+  }
+
+  /** A switch that moved it into or out of the benefit package, written as its history. Never fails the switch. */
+  private async recordPackage(
+    organizationId: string,
+    buildingId: string,
+    before: Map<string, PackageStanding>,
+    actor: { id: string; name: string } | null,
+  ) {
+    try {
+      const after = await packageMembership(this.prisma, organizationId, [buildingId]);
+      await recordPackageChanges(this.prisma, organizationId, before, after, { source: TbpPackageChangeSource.OFFICE, actor });
+    } catch (error) {
+      this.logger.warn({ event: 'tbp_package_changes_unrecorded', organizationId, buildingId, reason: errorText(error) });
+    }
   }
 
   private async building(user: AuthenticatedUser, buildingId: string) {

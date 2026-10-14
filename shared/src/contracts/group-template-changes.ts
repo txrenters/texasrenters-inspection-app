@@ -90,6 +90,11 @@ export interface PackageNewcomer {
   zone: string | null;
   /** The first time any of its enrolled tenancies was on the tenant report. ISO timestamp. */
   firstOnReport: string | null;
+  /**
+   * When it last joined the package, from the package's history: recorded
+   * since 2026-10-15, so null for one that joined before then. ISO timestamp.
+   */
+  joinedAt: string | null;
   /** Nearest first, by the driving each would add. */
   suggestions: GroupSuggestion[];
 }

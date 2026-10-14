@@ -5,10 +5,9 @@ import { ChevronDownIcon, MapPinOffIcon, UserMinusIcon, UserPlusIcon } from 'luc
 import { useState, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
-import { addedText, changesSummary, leftReasonText, roomText, suggestionTitle } from './package-changes';
+import { addedText, changesSummary, leftReasonText, newcomerSince, roomText, suggestionTitle } from './package-changes';
 
 /**
  * What changed in the benefit package under the open template (the office,
@@ -74,7 +73,7 @@ export function PackageChangesPanel({
                       {[
                         newcomer.city,
                         newcomer.zone ? `Zone ${newcomer.zone}` : null,
-                        newcomer.firstOnReport ? `on the tenant report since ${formatDate(newcomer.firstOnReport)}` : null,
+                        newcomerSince(newcomer),
                       ]
                         .filter(Boolean)
                         .join(' · ')}

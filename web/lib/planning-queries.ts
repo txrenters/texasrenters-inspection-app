@@ -1,6 +1,6 @@
 'use client';
 
-import type { GroupTemplateChanges, GroupTemplateOp } from '@texasrenters/shared';
+import type { GroupTemplateChanges, GroupTemplateOp, QuarterPackageChanges } from '@texasrenters/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
@@ -389,6 +389,7 @@ export const planningKeys = {
   groupTemplateChanges: (id: string) => ['admin', 'planning', 'group-templates', id, 'changes'] as const,
   groupMakerProperties: ['admin', 'planning', 'group-maker', 'properties'] as const,
   lateMoveOuts: (planId: string) => ['admin', 'planning', planId, 'late-move-outs'] as const,
+  packageChanges: (planId: string) => ['admin', 'planning', planId, 'package-changes'] as const,
 };
 
 /**
@@ -421,6 +422,19 @@ export const usePlanLateMoveOuts = (planId: string | undefined, enabled = true) 
     queryKey: planningKeys.lateMoveOuts(planId ?? ''),
     queryFn: ({ signal }) => api<LateMoveOuts>(`${PLANNING}/quarters/${planId}/late-move-outs`, { signal }),
     enabled: Boolean(planId) && enabled,
+  });
+
+/**
+ * The benefit package's changes as the quarter sees them (the office,
+ * 2026-10-15): who left since last quarter and the group they were visited in,
+ * who is new and where this quarter put them, and the dated history.
+ */
+export const usePlanPackageChanges = (planId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: planningKeys.packageChanges(planId ?? ''),
+    queryFn: ({ signal }) => api<QuarterPackageChanges>(`${PLANNING}/quarters/${planId}/package-changes`, { signal }),
+    enabled: Boolean(planId) && enabled,
+    refetchOnWindowFocus: false,
   });
 
 /** A property the Group maker can put in a group: an enrolled building, its tenancies together. */

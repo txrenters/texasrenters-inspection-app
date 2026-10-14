@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { TbpPackageChangeSource } from '@prisma/client';
 
 import {
   buildAddressIndex,
@@ -10,6 +11,7 @@ import {
 import { FILTER_SIZE_IN_TEXT } from '@texasrenters/shared';
 
 import { PORTFOLIO_VISIBLE } from '../../admin/inspection-creation';
+import { packageMembership, recordPackageChanges, type PackageStanding } from '../../common/benefit-package';
 import { PrismaService } from '../../common/prisma.service';
 import { getPropertywareConfig } from './propertyware.config';
 import { PropertywareError } from './propertyware.errors';
@@ -77,6 +79,10 @@ export class PropertywareTenantSyncService {
    * from anywhere. Nothing here talks to Propertyware.
    */
   async apply(organizationId: string, rows: TenantReportRow[]): Promise<TenantSyncResult> {
+    // The benefit package before this run, so what it moves in or out is
+    // recorded: the upsert below overwrites a tenancy's enrolment in place, and
+    // a Yes that became a No used to leave no trace (2026-10-15).
+    const before = await this.packageMembership(organizationId);
     const buildings = await this.prisma.propertywareBuilding.findMany({
       where: { organizationId, isActive: true, ...PORTFOLIO_VISIBLE },
       select: { id: true, externalId: true, addressLine1: true, postalCode: true },
@@ -180,9 +186,38 @@ export class PropertywareTenantSyncService {
         data: { isActive: false, deactivatedAt: seenAt, lastSyncedAt: seenAt },
       });
       result.deactivated = count;
+      // Only after a report with rows in it, for the same reason: an empty one
+      // would read as every property leaving at once.
+      if (before) await this.recordPackageChanges(organizationId, before);
     }
 
     this.logger.log({ event: 'propertyware_tenant_sync_completed', organizationId, ...result });
     return result;
   }
+
+  /** The package's membership, or null when it could not be read: the sync goes on without its history. */
+  private async packageMembership(organizationId: string) {
+    try {
+      return await packageMembership(this.prisma, organizationId);
+    } catch (error) {
+      this.logger.warn({ event: 'tbp_package_membership_unread', organizationId, reason: errorText(error) });
+      return null;
+    }
+  }
+
+  /** Who this run moved into or out of the benefit package, written as its history. Never fails the sync. */
+  private async recordPackageChanges(organizationId: string, before: Map<string, PackageStanding>) {
+    try {
+      const after = await packageMembership(this.prisma, organizationId);
+      const recorded = await recordPackageChanges(this.prisma, organizationId, before, after, {
+        source: TbpPackageChangeSource.TENANT_REPORT,
+      });
+      if (recorded.joined || recorded.left)
+        this.logger.log({ event: 'tbp_package_changes_recorded', organizationId, ...recorded });
+    } catch (error) {
+      this.logger.warn({ event: 'tbp_package_changes_unrecorded', organizationId, reason: errorText(error) });
+    }
+  }
 }
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));

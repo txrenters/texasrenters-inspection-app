@@ -1,24 +1,22 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { TbpPackageChangeKind } from '@prisma/client';
 import {
   type GroupInsertion,
   type GroupSuggestion,
   type GroupTemplateChanges,
   type PackageChangeGroup,
   type PackageLeaver,
-  type PackageLeftReason,
   type PackageNewcomer,
   type PackageUnplaced,
   insertionNeighbours,
-  isTbpZone,
   MAX_STOPS_PER_DAY,
   nearestGroups,
-  zoneNumberOf,
 } from '@texasrenters/shared';
 
 import { SERVICE_STATUS_VIEW_SELECT } from '../admin/property-service-status';
+import { firstOnReport, packageHistory, packageStanding, type PackageTenancy } from '../common/benefit-package';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-report';
 import { MapboxDirectionsClient } from '../routing/mapbox-directions.client';
 import type { GeoPoint } from '../routing/osrm.client';
 import { GroupTemplateService } from './group-template.service';
@@ -44,76 +42,6 @@ const ROAD_CONCURRENCY = 4;
 /** How long a road matrix is kept: the roads do not move, but a member can. */
 const ROAD_CACHE_MS = 30 * 60 * 1000;
 const ROAD_CACHE_SIZE = 1000;
-
-/** The office's switches on a property, as `SERVICE_STATUS_VIEW_SELECT` reads them. */
-interface SwitchRow {
-  managementEndedAt: Date | null;
-  tbpOptedOutAt: Date | null;
-  managementEndedBy: { displayName: string } | null;
-  tbpOptedOutBy: { displayName: string } | null;
-}
-
-interface TenancyRow {
-  isActive: boolean;
-  tbpEnrollment: string | null;
-  zone: string | null;
-  deactivatedAt: Date | null;
-}
-
-/**
- * Whether a building is in the benefit package, and if not, why.
- *
- * The same rule the Group maker and a quarter use (`GroupTemplateService
- * .properties`, `TbpPlanService.enrolledTenancies`): an active tenancy the
- * tenant report enrols (Yes), in a zone the package covers, at a property the
- * office has not switched out. Reasons come most telling first -- the
- * office's own switches, which say when and who, then what Propertyware says.
- */
-export function packageStanding(
-  switches: SwitchRow | null | undefined,
-  tenancies: readonly TenancyRow[],
-): { inPackage: boolean; reasons: PackageLeftReason[] } {
-  const reasons: PackageLeftReason[] = [];
-  if (switches?.managementEndedAt)
-    reasons.push({
-      code: 'MANAGEMENT_ENDED',
-      since: switches.managementEndedAt.toISOString(),
-      by: switches.managementEndedBy?.displayName ?? null,
-      detail: null,
-    });
-  if (switches?.tbpOptedOutAt)
-    reasons.push({
-      code: 'OPTED_OUT',
-      since: switches.tbpOptedOutAt.toISOString(),
-      by: switches.tbpOptedOutBy?.displayName ?? null,
-      detail: null,
-    });
-
-  const active = tenancies.filter((tenancy) => tenancy.isActive);
-  const covered = active.filter((tenancy) => isTbpZone(tenancy.zone));
-  const enrolled = covered.some((tenancy) => isTbpEnrolled(tenancy.tbpEnrollment));
-  if (!active.length) {
-    // Off the tenant report: the latest lease to drop off says when.
-    const ended = tenancies
-      .map((tenancy) => tenancy.deactivatedAt?.getTime() ?? null)
-      .filter((at): at is number => at !== null);
-    reasons.push({
-      code: 'NO_ACTIVE_LEASE',
-      since: ended.length ? new Date(Math.max(...ended)).toISOString() : null,
-      by: null,
-      detail: null,
-    });
-  } else if (!covered.length) {
-    const zones = [...new Set(active.map((tenancy) => zoneNumberOf(tenancy.zone) ?? tenancy.zone?.trim() ?? ''))].filter(Boolean);
-    reasons.push({ code: 'ZONE_EXCLUDED', since: null, by: null, detail: zones.map((zone) => `Zone ${zone}`).join(', ') || null });
-  } else if (!enrolled) {
-    // "Not Verified" is not a no, but it is not the Yes a visit needs either.
-    const said = [...new Set(covered.map((tenancy) => tenancy.tbpEnrollment?.trim() || 'blank'))];
-    reasons.push({ code: 'NOT_ENROLLED', since: null, by: null, detail: said.join(', ') });
-  }
-  const switchedOut = Boolean(switches?.managementEndedAt || switches?.tbpOptedOutAt);
-  return { inPackage: enrolled && !switchedOut, reasons };
-}
 
 /** A position, rounded to the metre, as a cache key. */
 const keyOf = (point: GeoPoint) => `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`;
@@ -179,7 +107,7 @@ export class GroupTemplateChangesService {
   ): Promise<{ leavers: PackageLeaver[]; unplaced: PackageUnplaced[] }> {
     const ids = [...groupOf.keys()].filter((buildingId) => !drawn.has(buildingId));
     if (!ids.length) return { leavers: [], unplaced: [] };
-    const [buildings, tenancies] = await Promise.all([
+    const [buildings, tenancies, history] = await Promise.all([
       this.prisma.propertywareBuilding.findMany({
         where: { organizationId, id: { in: ids } },
         select: { id: true, serviceStatus: { select: SERVICE_STATUS_VIEW_SELECT } },
@@ -188,9 +116,10 @@ export class GroupTemplateChangesService {
         where: { organizationId, propertywareBuildingId: { in: ids } },
         select: { propertywareBuildingId: true, isActive: true, tbpEnrollment: true, zone: true, deactivatedAt: true },
       }),
+      packageHistory(this.prisma, organizationId, ids, TbpPackageChangeKind.LEFT),
     ]);
     const switchesOf = new Map(buildings.map((building) => [building.id, building.serviceStatus]));
-    const tenanciesOf = new Map<string, TenancyRow[]>();
+    const tenanciesOf = new Map<string, PackageTenancy[]>();
     for (const tenancy of tenancies) {
       const buildingId = tenancy.propertywareBuildingId!;
       tenanciesOf.set(buildingId, [...(tenanciesOf.get(buildingId) ?? []), tenancy]);
@@ -202,7 +131,19 @@ export class GroupTemplateChangesService {
       const { group, address } = groupOf.get(buildingId)!;
       const standing = packageStanding(switchesOf.get(buildingId), tenanciesOf.get(buildingId) ?? []);
       if (standing.inPackage) unplaced.push({ buildingId, address, group });
-      else leavers.push({ buildingId, address, group, reasons: standing.reasons });
+      else
+        leavers.push({
+          buildingId,
+          address,
+          group,
+          // What Propertyware said carries no date of its own; the package's
+          // history, kept since 2026-10-15, says when the sync saw it.
+          reasons: standing.reasons.map((reason) => {
+            if (reason.since) return reason;
+            const seen = history.get(buildingId)?.find((change) => change.reason === reason.code);
+            return seen ? { ...reason, since: seen.occurredAt.toISOString() } : reason;
+          }),
+        });
     }
     const byGroup = <T extends { group: PackageChangeGroup; address: string }>(left: T, right: T) =>
       left.group.position - right.group.position || left.address.localeCompare(right.address);
@@ -247,10 +188,11 @@ export class GroupTemplateChangesService {
     });
     const pathOf = new Map(paths.map((path) => [path.id, path]));
 
-    const firstOnReport = await this.firstOnReport(
-      organizationId,
-      fresh.map((property) => property.buildingId),
-    );
+    const freshIds = fresh.map((property) => property.buildingId);
+    const [onReport, joins] = await Promise.all([
+      firstOnReport(this.prisma, organizationId, freshIds),
+      packageHistory(this.prisma, organizationId, freshIds, TbpPackageChangeKind.JOINED),
+    ]);
 
     const results: PackageNewcomer[] = new Array<PackageNewcomer>(fresh.length);
     let next = 0;
@@ -266,29 +208,14 @@ export class GroupTemplateChangesService {
           address: property.address,
           city: property.city,
           zone: property.zone,
-          firstOnReport: firstOnReport.get(property.buildingId) ?? null,
+          firstOnReport: onReport.get(property.buildingId) ?? null,
+          joinedAt: joins.get(property.buildingId)?.[0]?.occurredAt.toISOString() ?? null,
           suggestions: await this.timed(point, ranked, pathOf),
         };
       }
     };
     await Promise.all(Array.from({ length: Math.min(ROAD_CONCURRENCY, fresh.length) }, work));
     return results.sort((left, right) => left.address.localeCompare(right.address));
-  }
-
-  /** When each building's enrolled tenancies first appeared on the tenant report: the earliest of them. */
-  private async firstOnReport(organizationId: string, buildingIds: readonly string[]): Promise<Map<string, string>> {
-    const tenancies = await this.prisma.propertywareTenant.findMany({
-      where: { organizationId, isActive: true, propertywareBuildingId: { in: [...buildingIds] } },
-      select: { propertywareBuildingId: true, tbpEnrollment: true, zone: true, firstSyncedAt: true },
-    });
-    const first = new Map<string, Date>();
-    for (const tenancy of tenancies) {
-      if (!isTbpEnrolled(tenancy.tbpEnrollment) || !isTbpZone(tenancy.zone)) continue;
-      const buildingId = tenancy.propertywareBuildingId!;
-      const was = first.get(buildingId);
-      if (!was || tenancy.firstSyncedAt < was) first.set(buildingId, tenancy.firstSyncedAt);
-    }
-    return new Map([...first].map(([buildingId, at]) => [buildingId, at.toISOString()]));
   }
 
   /**

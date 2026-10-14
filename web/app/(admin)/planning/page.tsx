@@ -27,6 +27,7 @@ import { PlanRules } from '@/components/planning/plan-rules';
 import { PlanSchedule } from '@/components/planning/plan-schedule';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
+import { QuarterPackageChangesView } from '@/components/planning/quarter-package-changes-view';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import {
@@ -71,6 +72,7 @@ import {
 import {
   usePlanDays,
   usePlanLateMoveOuts,
+  usePlanPackageChanges,
   usePlanQuarters,
   usePlanRotation,
   usePlanStops,
@@ -142,7 +144,8 @@ export default function PlanningPage() {
   const { has } = usePermissions();
   const canChange = has('planning:publish');
   const [state, setState] = useUrlState({ quarter: '', tab: 'schedule', day: '', view: 'month', show: 'all' });
-  const tab = state.tab === 'visits' ? 'visits' : (OLD_TABS[state.tab]?.tab ?? 'schedule');
+  const tab =
+    state.tab === 'visits' || state.tab === 'package' ? state.tab : (OLD_TABS[state.tab]?.tab ?? 'schedule');
   const show: VisitFilter =
     OLD_TABS[state.tab]?.show ?? (VISIT_FILTERS.includes(state.show as VisitFilter) ? (state.show as VisitFilter) : 'all');
   const view: CalendarView = CALENDAR_VIEWS.includes(state.view as CalendarView) ? (state.view as CalendarView) : 'month';
@@ -154,6 +157,8 @@ export default function PlanningPage() {
   const stops = usePlanStops(plan?.id);
   const days = usePlanDays(plan?.id);
   const rotation = usePlanRotation(plan?.id);
+  // Read when its tab is open: it weighs the whole package against last quarter.
+  const packageChanges = usePlanPackageChanges(plan?.id, tab === 'package');
   const mutations = usePlanningMutations();
   const officeSheet = useOfficeSheetImport(plan?.id);
   /**
@@ -748,6 +753,7 @@ export default function PlanningPage() {
             <TabsList>
               <TabsTrigger value="schedule">Schedule</TabsTrigger>
               <TabsTrigger value="visits">Visits ({(stops.data?.length ?? 0).toLocaleString()})</TabsTrigger>
+              <TabsTrigger value="package">Package changes</TabsTrigger>
             </TabsList>
 
             {/*
@@ -862,6 +868,17 @@ export default function PlanningPage() {
                   )}
                 </div>
               )}
+            </TabsContent>
+
+            {/* Who left the benefit package since last quarter and who is new (the office, 2026-10-15). */}
+            <TabsContent className="mt-3" value="package">
+              {packageChanges.isLoading ? (
+                <PageSkeleton cards={1} />
+              ) : packageChanges.isError ? (
+                <ErrorState error={packageChanges.error} retry={() => void packageChanges.refetch()} />
+              ) : packageChanges.data ? (
+                <QuarterPackageChangesView changes={packageChanges.data} />
+              ) : null}
             </TabsContent>
           </Tabs>
         </div>

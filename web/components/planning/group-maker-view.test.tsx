@@ -133,6 +133,7 @@ const CHANGES = {
       city: 'Houston',
       zone: '1',
       firstOnReport: '2026-10-12T15:00:00.000Z',
+      joinedAt: null,
       suggestions: [
         { group: NORTH, members: 2, target: 9, hasRoom: true, addedMinutes: 4, timing: 'ROAD', nearest: { address: 'b2 Main St', minutes: 3 } },
       ],

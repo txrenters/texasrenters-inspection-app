@@ -1,7 +1,7 @@
 import type { GroupSuggestion } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
-import { addedText, changesSummary, leftReasonText, roomText, suggestionTitle } from './package-changes';
+import { addedText, changesSummary, leftReasonText, newcomerSince, roomText, suggestionTitle } from './package-changes';
 
 /** The words for what changed in the benefit package under a template (2026-10-15). */
 
@@ -19,6 +19,12 @@ describe('why a property left, in words', () => {
     );
   });
 
+  it('dates a report that stopped saying Yes by the history, which saw it', () => {
+    expect(leftReasonText({ code: 'NOT_ENROLLED', since: '2026-10-13T08:00:00.000Z', by: null, detail: 'No' })).toBe(
+      'Not enrolled on the tenant report since Oct 13, 2026: it says No',
+    );
+  });
+
   it('names the zone the package does not cover', () => {
     expect(leftReasonText({ code: 'ZONE_EXCLUDED', since: null, by: null, detail: 'Zone 5' })).toBe(
       'Zone 5 is not part of the benefit package',
@@ -30,6 +36,19 @@ describe('why a property left, in words', () => {
     expect(leftReasonText({ code: 'NO_ACTIVE_LEASE', since: '2026-10-02T15:00:00.000Z', by: null, detail: null })).toBe(
       'No lease on the tenant report since Oct 2, 2026',
     );
+  });
+});
+
+describe('when a newcomer came into the package', () => {
+  it('says the day it joined, where the history saw it', () => {
+    expect(newcomerSince({ joinedAt: '2026-10-14T15:00:00.000Z', firstOnReport: '2026-07-01T15:00:00.000Z' })).toBe(
+      'joined the package on Oct 14, 2026',
+    );
+  });
+
+  it('falls back to how long it has been on the tenant report, and to nothing', () => {
+    expect(newcomerSince({ joinedAt: null, firstOnReport: '2026-07-01T15:00:00.000Z' })).toBe('on the tenant report since Jul 1, 2026');
+    expect(newcomerSince({ joinedAt: null, firstOnReport: null })).toBeNull();
   });
 });
 
