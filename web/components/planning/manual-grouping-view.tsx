@@ -111,6 +111,7 @@ export function ManualGroupingView({
   persist = true,
   onChange,
   live,
+  only,
 }: {
   file: GroupFile;
   fileName: string;
@@ -136,6 +137,12 @@ export function ManualGroupingView({
   onChange?: (snapshot: { state: ManualState; minutesPerProperty: number }) => void;
   /** Live editing of a saved template: others' changes in, and who is building what. */
   live?: ManualLive;
+  /**
+   * The only properties offered to group, by row number: the rest are left off
+   * the map unless already in a group. For a template of what is left of a
+   * quarter (the office, 2026-10-15). Nothing is taken out of a group by it.
+   */
+  only?: ReadonlySet<number> | null;
 }) {
   const [history, dispatch] = useReducer(historyReducer, undefined, () => ({
     past: [],
@@ -157,7 +164,18 @@ export function ManualGroupingView({
   const [autoOrder, setAutoOrder] = useState(initial.autoOrder ?? false);
   /** Groups whose order is being worked out. */
   const [ordering, setOrdering] = useState<ReadonlySet<string>>(() => new Set());
-  const [frame, setFrame] = useState<MapFrame>(() => ({ key: 'manual:all', points: properties }));
+  const offered = useMemo(
+    () => (only ? properties.filter((row) => only.has(row.rowNumber)) : properties),
+    [only, properties],
+  );
+  const [frame, setFrame] = useState<MapFrame>(() => ({ key: 'manual:all', points: offered }));
+  // A different choice of properties is a different map: framed again on what it offers.
+  const framedFor = useRef(only);
+  useEffect(() => {
+    if (framedFor.current === only) return;
+    framedFor.current = only;
+    if (offered.length) setFrame({ key: `manual:offered:${Date.now()}`, points: offered });
+  }, [only, offered]);
 
   // An undo can take away the group being built; then nothing is.
   const activeId = chosenId && state.groups.some((group) => group.id === chosenId) ? chosenId : null;
@@ -166,8 +184,10 @@ export function ManualGroupingView({
   const groups = useMemo(() => drawnGroups(state, byRow), [state, byRow]);
   const ungrouped = useMemo(() => {
     const placed = new Set(state.groups.flatMap((group) => group.stops));
-    return properties.filter((row) => !placed.has(row.rowNumber));
-  }, [properties, state]);
+    return offered.filter((row) => !placed.has(row.rowNumber));
+  }, [offered, state]);
+  // What the map shows: every grouped property, and the ungrouped ones offered.
+  const shown = state.groups.reduce((sum, group) => sum + group.stops.length, 0) + ungrouped.length;
 
   const edit = useCallback((change: ManualEdit) => dispatch({ type: 'edit', edit: change }), []);
 
@@ -484,7 +504,7 @@ export function ManualGroupingView({
         onUpdate={(id, fields) => edit({ type: 'update', id, changes: fields })}
         routeViews={routeViews}
         state={state}
-        total={properties.length}
+        total={shown}
         {...(live?.editingBy ? { editingBy: live.editingBy } : {})}
       />
 

@@ -51,6 +51,8 @@ import {
   useGroupTemplateChanges,
   useGroupTemplateMutations,
   useGroupTemplates,
+  usePlanNotBooked,
+  usePlanQuarters,
   type GroupTemplateInput,
 } from '@/lib/planning-queries';
 import { useUrlState } from '@/lib/url-state';
@@ -132,12 +134,38 @@ export function GroupMakerView() {
   const { profile } = useAuth();
   const canChange = has('planning:publish');
   const client = useQueryClient();
-  const [url, setUrl] = useUrlState({ template: '' });
+  const [url, setUrl] = useUrlState({ template: '', notBooked: '' });
   const properties = useGroupMakerProperties();
+  /**
+   * Which properties are offered: every enrolled one, or only a quarter's whose
+   * visit is not booked yet -- what a Rebuild lays out -- to draw a template for
+   * the rest of a quarter (the office, 2026-10-15: "unschedule all tbp ... so we
+   * can regroup them using the tbp group maker").
+   */
+  const plans = usePlanQuarters();
+  const quarters = useMemo(
+    () =>
+      (plans.data ?? [])
+        .filter((plan) => plan.status !== 'CANCELLED')
+        .sort((left, right) => right.quarterYear - left.quarterYear || right.quarterNumber - left.quarterNumber)
+        .slice(0, 3)
+        .map((plan) => ({ id: plan.id, label: `Q${plan.quarterNumber} ${plan.quarterYear}` })),
+    [plans.data],
+  );
+  const notBooked = usePlanNotBooked(url.notBooked || null);
   const templates = useGroupTemplates();
   const mutations = useGroupTemplateMutations();
 
   const made = useMemo(() => (properties.data ? makerProperties(properties.data.properties) : null), [properties.data]);
+  /** The rows offered when a quarter is chosen: its properties not booked yet that the maker can place. */
+  const offered = useMemo(() => {
+    if (!url.notBooked || !notBooked.data || !made) return null;
+    const rows = notBooked.data.buildingIds.flatMap((buildingId) => {
+      const row = made.rowOf.get(buildingId);
+      return row === undefined ? [] : [row];
+    });
+    return { rows: new Set(rows), unplaceable: notBooked.data.buildingIds.length - rows.length };
+  }, [made, notBooked.data, url.notBooked]);
   const listed = templates.data;
   const usable = useMemo(() => (listed ?? []).filter((template) => !template.archivedAt), [listed]);
   /** The one in the address, else the active one, else the newest. */
@@ -637,6 +665,21 @@ export function GroupMakerView() {
           </div>
         ) : null}
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          {quarters.length ? (
+            <Select onValueChange={(value) => setUrl({ notBooked: value === 'all' ? '' : value })} value={url.notBooked || 'all'}>
+              <SelectTrigger aria-label="Properties shown" className="w-60" size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Every enrolled property</SelectItem>
+                {quarters.map((quarter) => (
+                  <SelectItem key={quarter.id} value={quarter.id}>
+                    {quarter.label} &middot; not booked yet
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
           {/* The map's switches behind one button, as on the plan's schedule (console-development). */}
           <MapDisplayOptions display={display} onChange={setDisplay} variant="outline" />
           {/*
@@ -678,6 +721,19 @@ export function GroupMakerView() {
         </p>
       ) : null}
 
+      {url.notBooked && notBooked.data && offered ? (
+        <p className="text-muted-foreground text-xs" role="status">
+          Showing the {offered.rows.size.toLocaleString()} properties of {notBooked.data.quarter} not booked yet (
+          {notBooked.data.visits.toLocaleString()} {notBooked.data.visits === 1 ? 'visit' : 'visits'}) &mdash; what a
+          Rebuild of {notBooked.data.quarter} groups. Properties already in a group stay on the map.
+          {offered.unplaceable
+            ? ` ${offered.unplaceable.toLocaleString()} more have no position, or left the package, and cannot be placed here.`
+            : ''}
+        </p>
+      ) : url.notBooked && notBooked.isError ? (
+        <p className="text-warning text-xs">That quarter&rsquo;s visits could not be read: every property is shown.</p>
+      ) : null}
+
       {editor && changes.data?.templateId === editor.templateId ? (
         <PackageChangesPanel
           busy={busy}
@@ -697,6 +753,7 @@ export function GroupMakerView() {
           lines={display.lines}
           live={liveView}
           onChange={onViewChange}
+          only={offered?.rows ?? null}
           persist={false}
           prints={EMPTY_PRINTS}
           properties={made.rows}
