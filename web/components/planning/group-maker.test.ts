@@ -15,6 +15,7 @@ import {
   stateFromTemplate,
   templateInput,
   visibleGroups,
+  templateFromGroups,
 } from './group-maker';
 
 /**
@@ -183,5 +184,21 @@ describe('a template live', () => {
   it('leaves out of what it draws a building this browser has no row for', () => {
     const groups = { groups: [{ id: 'g-1', name: 'North', color: '#e6194b', target: 9, stops: ['b1', 'gone', 'b2'] }] };
     expect(visibleGroups(groups, made.rowOf).groups[0]!.stops).toEqual(['b1', 'b2']);
+  });
+});
+
+/** A quarter's unscheduled visits, grouped on the server, made a template (the office, 2026-10-15). */
+describe('a template from a quarter’s unscheduled visits', () => {
+  it('names the groups in order, gives each its own colour, and holds what it was given', () => {
+    const template = templateFromGroups(' Q4 2026 regroup ', [{ buildingIds: ['b1', 'b2', 'b3'] }, { buildingIds: [] }, { buildingIds: ['b4'] }], 20);
+
+    expect(template.name).toBe('Q4 2026 regroup');
+    expect(template.minutesPerProperty).toBe(20);
+    // An empty group is no day at all.
+    expect(template.groups.map((group) => [group.name, group.target, group.buildingIds])).toEqual([
+      ['Group 1', 3, ['b1', 'b2', 'b3']],
+      ['Group 2', 1, ['b4']],
+    ]);
+    expect(template.groups[0]!.color).not.toBe(template.groups[1]!.color);
   });
 });

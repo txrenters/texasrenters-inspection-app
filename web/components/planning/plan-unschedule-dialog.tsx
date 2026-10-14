@@ -110,19 +110,19 @@ export function PlanUnscheduleDialog({
     <Dialog onOpenChange={close} open={open}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Unschedule {label} visits</DialogTitle>
+          <DialogTitle>Unschedule pending {label} visits</DialogTitle>
           <DialogDescription>
-            Every visit from the day you choose leaves its day. A booked one&rsquo;s inspection is deleted here and its
-            Jobber visit moves to the Unscheduled list on the same job. Then Rebuild groups them again &mdash; from a
-            Group maker template if you choose one &mdash; and &ldquo;Publish the rest&rdquo; books them on their new
-            days, on those same Jobber visits.
+            A pending visit is booked on a day and nobody has started it. Each one from the day you choose leaves its
+            day: its inspection is deleted here, and its Jobber visit moves to Jobber&rsquo;s Unscheduled list on the
+            same job. Visits started, submitted or completed are never touched. Then regroup them in the Group maker,
+            Rebuild, and &ldquo;Publish the rest&rdquo; books them on their new days, on those same Jobber visits.
           </DialogDescription>
         </DialogHeader>
 
         <fieldset className="grid min-w-0 gap-2">
-          <legend className="mb-2 text-sm font-medium">From</legend>
+          <legend className="mb-2 text-sm font-medium">Pending visits from</legend>
           <DatePicker aria-label="First day to unschedule" min={today} onChange={setFrom} value={day} />
-          <FieldDescription>Visits started, recorded on or done stay where they are.</FieldDescription>
+          <FieldDescription>Started, submitted and completed visits stay exactly as they are.</FieldDescription>
         </fieldset>
 
         {preview.isLoading ? (
@@ -134,12 +134,12 @@ export function PlanUnscheduleDialog({
         ) : facts ? (
           <div className="grid gap-2 text-sm">
             {total === 0 ? (
-              <p className="text-muted-foreground">Nothing has a day from {formatShortDay(day)} on.</p>
+              <p className="text-muted-foreground">No pending visit has a day from {formatShortDay(day)} on.</p>
             ) : (
               <ul className="grid gap-1">
                 {facts.booked ? (
                   <li>
-                    <span className="font-medium">{facts.booked.toLocaleString()}</span> booked{' '}
+                    <span className="font-medium">{facts.booked.toLocaleString()}</span> pending{' '}
                     {facts.booked === 1 ? 'visit goes' : 'visits go'} to Jobber&rsquo;s Unscheduled list
                     {facts.firstDay && facts.lastDay
                       ? ` (${formatShortDay(facts.firstDay)}${
@@ -150,8 +150,8 @@ export function PlanUnscheduleDialog({
                 ) : null}
                 {facts.notBooked ? (
                   <li>
-                    <span className="font-medium">{facts.notBooked.toLocaleString()}</span> not booked yet{' '}
-                    {facts.notBooked === 1 ? 'loses its day' : 'lose their days'}
+                    <span className="font-medium">{facts.notBooked.toLocaleString()}</span> planned but never sent to
+                    Jobber {facts.notBooked === 1 ? 'loses its day' : 'lose their days'}
                   </li>
                 ) : null}
               </ul>
@@ -198,7 +198,7 @@ export function PlanUnscheduleDialog({
             variant="destructive"
           >
             {pending ? <Spinner /> : null}
-            Unschedule {total ? total.toLocaleString() : ''} {total === 1 ? 'visit' : 'visits'}
+            Unschedule {total ? total.toLocaleString() : ''} pending {total === 1 ? 'visit' : 'visits'}
           </Button>
         </DialogFooter>
       </DialogContent>

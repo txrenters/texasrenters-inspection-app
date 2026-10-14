@@ -1383,13 +1383,15 @@ describe('unscheduling a published quarter’s visits', () => {
     });
 
     openMenu('More');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Unschedule visits…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unschedule pending visits…' }));
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/booked visits go to Jobber’s Unscheduled list/)).toBeTruthy();
-    expect(within(dialog).getByText(/not booked yet/)).toBeTruthy();
+    expect(within(dialog).getByText(/pending visits go to Jobber’s Unscheduled list/)).toBeTruthy();
+    expect(within(dialog).getByText(/planned but never sent to/)).toBeTruthy();
     expect(within(dialog).getByText(/9 Any St — started, recorded on or done/)).toBeTruthy();
+    // The office (2026-10-15): only pending visits go; completed ones stay the same.
+    expect(within(dialog).getByText(/Started, submitted and completed visits stay exactly as they are/)).toBeTruthy();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Unschedule 14 visits' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unschedule 14 pending visits' }));
     // Tomorrow, in Texas, unless another day is chosen.
     expect(unschedule.mutate).toHaveBeenCalledWith({ planId: PLAN.id, from: '2026-09-20' }, expect.anything());
   });
@@ -1404,17 +1406,17 @@ describe('unscheduling a published quarter’s visits', () => {
     });
 
     openMenu('More');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Unschedule visits…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unschedule pending visits…' }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText(/does not send changes to Jobber/)).toBeTruthy();
-    expect((within(dialog).getByRole('button', { name: 'Unschedule 3 visits' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole('button', { name: 'Unschedule 3 pending visits' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('is not offered on a draft, which has nothing booked', () => {
     mount();
 
     openMenu('More');
-    expect(screen.queryByRole('menuitem', { name: 'Unschedule visits…' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Unschedule pending visits…' })).toBeNull();
   });
 
   it('unschedules one booked visit from its window', async () => {

@@ -1049,6 +1049,46 @@ function groupsOf(pool: readonly PlannableStop[], rules: GroupRules): Group[] {
 }
 
 /**
+ * Visits grouped into days as a quarter build groups them, with no calendar:
+ * a template's groups for the Group maker to start from (the office,
+ * 2026-10-15: regroup a quarter's unscheduled visits "using the tbp group maker
+ * ... so we can have a more compact grouping").
+ *
+ * The same rules as a build -- nine, a tenth where it is close, six hours on
+ * site, never a drive longer than allowed between two properties -- and the
+ * same search for the fewest days, then the least driving. Zones are not kept
+ * apart: a template's group crossing a zone line counts as its main zone.
+ * Each group in driving order; the groups furthest from downtown first, as a
+ * build takes them.
+ */
+export function compactGroups(
+  stops: readonly PlannableStop[],
+  options: { limits?: DayLimits; driveMinutes?: DriveEstimate } = {},
+): PlannableStop[][] {
+  const limits = options.limits ?? DEFAULT_DAY_LIMITS;
+  const drive = remembered(options.driveMinutes ?? estimatedDriveMinutes);
+  const range = dayVisitRange(limits, 0);
+  const rules: GroupRules = {
+    size: range.min,
+    most: range.max,
+    close: limits.closeMinutes ?? NEIGHBOUR_MINUTES,
+    limits,
+    cost: pricedLegs(drive, limits.maxLegMinutes ?? MAX_LEG_MINUTES),
+    drive,
+    neighbourMinutes: NEIGHBOUR_MINUTES,
+    zoned: false,
+  };
+  // A visit longer than a day is a day of its own, as a build makes it.
+  const [fits, alone] = [
+    stops.filter((stop) => stop.onSiteMinutes <= limits.maxOnSiteMinutes),
+    stops.filter((stop) => stop.onSiteMinutes > limits.maxOnSiteMinutes),
+  ];
+  return [...groupsOf(fits, rules).map((group) => group.path), ...alone.map((stop) => [stop])].sort(
+    (left, right) => metresFromDowntown(right) - metresFromDowntown(left),
+  );
+}
+
+/**
  * The zone a crew member's day is in: the first round the circle from `start`
  * that still has a group they can take, one nobody else has today before one
  * somebody does. A zone with nothing left is passed, so once zone 3 runs out

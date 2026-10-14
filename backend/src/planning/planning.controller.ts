@@ -16,7 +16,14 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InspectionStatus, InspectionType, PlanOriginKind, type Prisma, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
-import { haversineMeters, type Quarter, quarterLabel, withoutInspectionLink } from '@texasrenters/shared';
+import {
+  compactGroups,
+  haversineMeters,
+  type PlannableStop,
+  type Quarter,
+  quarterLabel,
+  withoutInspectionLink,
+} from '@texasrenters/shared';
 
 import {
   ApiAuthGuard,
@@ -56,6 +63,9 @@ const LIVE_STOP = {
 } satisfies Prisma.TbpQuarterPlanStopWhereInput;
 
 export const PLANNING_TAG = 'Quarterly planning';
+
+/** A visit's time on site when the stop has none recorded: the office's twenty minutes. */
+const DEFAULT_VISIT_MINUTES = 20;
 
 /**
  * Road lines drawn for planned days, kept while the stops are the same.
@@ -560,7 +570,76 @@ export class PlanningController {
   @Get('quarters/:planId/not-booked')
   @RequirePermissions('planning:read')
   async notBooked(@Req() request: AuthenticatedRequest, @Param('planId', ParseUUIDPipe) planId: string) {
-    const { organizationId } = request.user;
+    const { quarter, stops } = await this.notBookedOf(request.user.organizationId, planId, { propertywareBuildingId: true });
+    return {
+      planId,
+      quarter,
+      visits: stops.length,
+      buildingIds: [...new Set(stops.map((stop) => stop.propertywareBuildingId!))],
+    };
+  }
+
+  /**
+   * Those same properties grouped into days by the build's own rules, for the
+   * Group maker to make a template from in one step (the office, 2026-10-15:
+   * "we should have a way on the tbp group maker too to regroup those
+   * unscheduled visits for the Q4"). Nothing is saved: the console creates the
+   * template, which the office can then change like any other.
+   *
+   * A building's tenancies ride together, as they do in a template: one stop,
+   * their time on site added up. One with no position cannot be placed on a
+   * map, and is counted rather than guessed at.
+   */
+  @Get('quarters/:planId/not-booked/groups')
+  @RequirePermissions('planning:read')
+  async notBookedGroups(@Req() request: AuthenticatedRequest, @Param('planId', ParseUUIDPipe) planId: string) {
+    const { quarter, stops } = await this.notBookedOf(request.user.organizationId, planId, {
+      propertywareBuildingId: true,
+      sequence: true,
+      onSiteMinutes: true,
+      inspectionType: true,
+      zone: true,
+      propertywareBuilding: { select: BUILDING_POSITION_SELECT },
+    });
+    const buildings = new Map<string, PlannableStop & { visits: number }>();
+    let withoutPosition = 0;
+    for (const stop of stops) {
+      const buildingId = stop.propertywareBuildingId!;
+      const minutes = stop.onSiteMinutes ?? DEFAULT_VISIT_MINUTES;
+      const known = buildings.get(buildingId);
+      if (known) {
+        known.onSiteMinutes += minutes;
+        known.visits += 1;
+        continue;
+      }
+      const position = propertyPosition(stop.propertywareBuilding);
+      if (!position) {
+        withoutPosition += 1;
+        continue;
+      }
+      buildings.set(buildingId, {
+        stopId: buildingId,
+        sequence: stop.sequence,
+        ...position,
+        onSiteMinutes: minutes,
+        inspectionType: stop.inspectionType,
+        zone: stop.zone,
+        visits: 1,
+      });
+    }
+    const groups = compactGroups([...buildings.values()]).map((group) => ({
+      buildingIds: group.map((building) => building.stopId),
+      visits: group.reduce((total, building) => total + buildings.get(building.stopId)!.visits, 0),
+    }));
+    return { planId, quarter, visits: stops.length, withoutPosition, groups };
+  }
+
+  /**
+   * A plan's visits with no inspection, whatever their day -- unscheduled,
+   * never placed, or planned and not published -- and not one left out of the
+   * quarter, by a coordinator or because its zone is: what a Rebuild lays out.
+   */
+  private async notBookedOf<S extends Prisma.TbpQuarterPlanStopSelect>(organizationId: string, planId: string, select: S) {
     const plan = await this.prisma.tbpQuarterPlan.findFirst({
       where: { id: planId, organizationId },
       select: { id: true, quarterYear: true, quarterNumber: true },
@@ -576,13 +655,12 @@ export class PlanningController {
         // Spelled with the null: a bare "not" leaves out every row without a code.
         OR: [{ blockedCode: null }, { blockedCode: { not: 'ZONE_EXCLUDED' } }],
       },
-      select: { propertywareBuildingId: true },
+      orderBy: { sequence: 'asc' },
+      select,
     });
     return {
-      planId,
       quarter: quarterLabel({ year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] }),
-      visits: stops.length,
-      buildingIds: [...new Set(stops.map((stop) => stop.propertywareBuildingId!))],
+      stops: stops as Prisma.TbpQuarterPlanStopGetPayload<{ select: S }>[],
     };
   }
 

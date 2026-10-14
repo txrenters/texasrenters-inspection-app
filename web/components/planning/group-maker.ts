@@ -8,7 +8,7 @@ import type {
 } from '@/lib/planning-queries';
 
 import type { GroupFile, GroupFileRow } from './group-file';
-import { newGroupId, type ManualGroup, type ManualState } from './manual-grouping';
+import { groupPalette, newGroupId, type ManualGroup, type ManualState } from './manual-grouping';
 
 /**
  * The Group maker (2026-09-30): the manual grouping tool, over the properties
@@ -253,4 +253,31 @@ export function stateFromMatchedFile(
     };
   });
   return { state: { groups }, matched: placed.size, unmatched, ambiguous, repeated };
+}
+
+/**
+ * A quarter's unscheduled visits, grouped by the build's own rules on the
+ * server, as a new template (the office, 2026-10-15: regroup them "using the
+ * tbp group maker" for compact days). "Group 1" is furthest from downtown, as a
+ * build takes the groups; each holds what it was given, so a build fills it
+ * to that and no further.
+ */
+export function templateFromGroups(
+  name: string,
+  groups: readonly { buildingIds: readonly string[] }[],
+  minutesPerProperty: number,
+): GroupTemplateInput {
+  const colors = groupPalette();
+  return {
+    name: name.trim(),
+    minutesPerProperty,
+    groups: groups
+      .filter((group) => group.buildingIds.length > 0)
+      .map((group, index) => ({
+        name: `Group ${index + 1}`,
+        color: colors[index % colors.length]!,
+        target: Math.min(MOST_TARGET, group.buildingIds.length),
+        buildingIds: [...group.buildingIds],
+      })),
+  };
 }

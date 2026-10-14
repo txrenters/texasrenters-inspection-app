@@ -704,6 +704,19 @@ export const usePlanNotBooked = (planId: string | null) =>
     enabled: Boolean(planId),
   });
 
+/** Those same visits grouped into days by the build's own rules, for a template made in one step (2026-10-15). */
+export interface PlanNotBookedGroups {
+  planId: string;
+  quarter: string;
+  visits: number;
+  /** Visits at a property with no position: not on the map, and not in a group. */
+  withoutPosition: number;
+  groups: { buildingIds: string[]; visits: number }[];
+}
+
+export const readNotBookedGroups = (planId: string) =>
+  api<PlanNotBookedGroups>(`${PLANNING}/quarters/${planId}/not-booked/groups`);
+
 export const usePlanQuarters = () =>
   useQuery({
     queryKey: planningKeys.quarters,

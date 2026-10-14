@@ -61,3 +61,42 @@ describe('a quarter’s properties not booked yet', () => {
     await expect(controller.notBooked(request, 'plan-9')).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' });
   });
 });
+
+/**
+ * Grouped by the build's own rules, for the Group maker to make a template of
+ * in one step (the office, 2026-10-15). Ids invented; the places are near
+ * downtown Houston.
+ */
+describe('a quarter’s unscheduled visits grouped into days', () => {
+  const building = (id: string, latitude: number, extra: Record<string, unknown> = {}) => ({
+    propertywareBuildingId: id,
+    sequence: 1,
+    onSiteMinutes: 20,
+    inspectionType: 'HVAC',
+    zone: '1',
+    propertywareBuilding: { latitude, longitude: -95.37, geofence: null },
+    ...extra,
+  });
+
+  it('groups the properties, a building’s tenancies together, and counts those with no position', async () => {
+    const stops = [
+      ...Array.from({ length: 12 }, (_, index) => building(`near-${index}`, 29.76 + index * 0.002)),
+      // A second tenancy of the same building: one stop, two visits.
+      building('near-0', 29.76),
+      building('nowhere', 0, { propertywareBuilding: { latitude: null, longitude: null, geofence: null } }),
+    ];
+    const controller = controllerWith({
+      tbpQuarterPlan: { findFirst: jest.fn().mockResolvedValue({ id: 'plan-1', quarterYear: 2026, quarterNumber: 4 }) },
+      tbpQuarterPlanStop: { findMany: jest.fn().mockResolvedValue(stops) },
+    });
+
+    const result = await controller.notBookedGroups(request, 'plan-1');
+
+    expect(result).toMatchObject({ planId: 'plan-1', quarter: 'Q4 2026', visits: 14, withoutPosition: 1 });
+    const placed = result.groups.flatMap((group) => group.buildingIds);
+    expect(placed.sort()).toEqual(Array.from({ length: 12 }, (_, index) => `near-${index}`).sort());
+    // Twelve close properties: days of nine to ten, so two.
+    expect(result.groups).toHaveLength(2);
+    expect(result.groups.reduce((total, group) => total + group.visits, 0)).toBe(13);
+  });
+});
