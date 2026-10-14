@@ -461,15 +461,21 @@ export default function PlanningPage() {
           setUnscheduling(false);
           if ('stopIds' in input) setOpenStopId(null);
           const moved = result.unscheduled + result.removed + result.daysCleared;
-          toast.success(`${moved.toLocaleString()} ${moved === 1 ? 'visit' : 'visits'} unscheduled`, {
+          toast.success(`${moved.toLocaleString()} pending ${moved === 1 ? 'visit' : 'visits'} unscheduled`, {
             description: [
               result.unscheduled
                 ? `${result.unscheduled.toLocaleString()} go to Jobber’s Unscheduled list over the next minutes.`
                 : null,
-              'Rebuild to group them again, then Publish the rest.',
+              'Regroup them in the Group maker, Rebuild from that template, then Publish the rest.',
             ]
               .filter(Boolean)
               .join(' '),
+            // Where they are grouped again (2026-10-15), with only this quarter's unscheduled visits shown.
+            action: {
+              label: 'Open Group maker',
+              onClick: () => window.location.assign(`/group-maker?notBooked=${encodeURIComponent(plan.id)}`),
+            },
+            duration: 15_000,
           });
           if (result.kept.length)
             toast.info(
@@ -653,7 +659,7 @@ export default function PlanningPage() {
                     {!draft && canMoveVisits ? (
                       <DropdownMenuItem disabled={building || mutations.unschedule.isPending} onSelect={() => setUnscheduling('from')}>
                         <CalendarMinusIcon />
-                        Unschedule visits…
+                        Unschedule pending visits…
                       </DropdownMenuItem>
                     ) : null}
                     <DropdownMenuSeparator />

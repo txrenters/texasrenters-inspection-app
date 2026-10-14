@@ -7,6 +7,7 @@ import {
   type PlannableStop,
   anchorAsStop,
   anchorIdOf,
+  compactGroups,
   crewKey,
   dayVisitRange,
   estimatedDriveMinutes,
@@ -841,5 +842,50 @@ describe('ordering a day without a road matrix', () => {
     const pair = [at('a', 1, 29.76, -95.37), at('b', 2, 29.9, -95.37)];
     expect(nearestNeighbourOrder(pair).map((stop) => stop.stopId)).toEqual(['a', 'b']);
     expect(nearestNeighbourOrder([])).toEqual([]);
+  });
+});
+
+/**
+ * A quarter's unscheduled visits grouped for the Group maker (the office,
+ * 2026-10-15: "regroup those unscheduled visits for the Q4" for "a more compact
+ * grouping"): the build's own rules, with no calendar.
+ */
+describe('compact groups for a template', () => {
+  it('makes days of nine to ten from close visits, and never a drive longer than allowed', () => {
+    const groups = compactGroups([...cluster('a', 19), ...cluster('b', 10, 30, {}, 29.95)]);
+
+    expect(groups.flat()).toHaveLength(29);
+    for (const group of groups) {
+      expect(group.length).toBeLessThanOrEqual(10);
+      expect(longestLeg(group)).toBeLessThanOrEqual(20);
+    }
+    // 29 close visits: three days, not four.
+    expect(groups).toHaveLength(3);
+  });
+
+  it('keeps apart visits too far for one day, however few', () => {
+    // Two places about 40 km apart: no group crosses between them.
+    const groups = compactGroups([...cluster('near', 4), ...cluster('far', 4, 10, {}, 30.12)]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.map((stop) => stop.stopId[0]).join(''))).toEqual(
+      expect.arrayContaining(['nnnn', 'ffff']),
+    );
+  });
+
+  it('puts the groups furthest from downtown first', () => {
+    const groups = compactGroups([...cluster('town', 3, 1, {}, 29.76), ...cluster('out', 3, 10, {}, 30.2)]);
+
+    expect(groups[0]!.every((stop) => stop.stopId.startsWith('out'))).toBe(true);
+  });
+
+  it('leaves a visit longer than a day as a day of its own', () => {
+    const groups = compactGroups([...cluster('a', 3), at('long', 9, 29.761, -95.371, { onSiteMinutes: 400 })]);
+
+    expect(groups.find((group) => group.some((stop) => stop.stopId === 'long'))).toHaveLength(1);
+  });
+
+  it('is nothing for no visits', () => {
+    expect(compactGroups([])).toEqual([]);
   });
 });

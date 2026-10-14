@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +25,7 @@ const hooks = vi.hoisted(() => ({
   useGroupFileOnServer: vi.fn(),
   postGroupTemplateOps: vi.fn(),
   readGroupTemplate: vi.fn(),
+  readNotBookedGroups: vi.fn(),
   planningKeys: {
     groupTemplates: ['group-templates'],
     groupTemplate: (id: string) => ['group-templates', id],
@@ -322,7 +323,7 @@ describe('the Group maker', () => {
         pointerId: 1,
         pointerType: 'mouse',
       });
-      fireEvent.click(screen.getByRole('option', { name: /Q4 2026 · not booked yet/ }));
+      fireEvent.click(screen.getByRole('option', { name: /Q4 2026 · unscheduled visits/ }));
       expect(url.set).toHaveBeenCalledWith({ notBooked: 'plan-q4' });
     });
 
@@ -332,8 +333,46 @@ describe('the Group maker', () => {
 
       // Rows are numbered from 2, as a file's are: b2 is row 3, b3 row 4.
       expect(screen.getByTestId('offered').textContent).toBe('3,4');
-      expect(screen.getByText(/Showing the 2 properties of Q4 2026 not booked yet/)).toBeTruthy();
+      expect(screen.getByText(/Showing the 2 properties of Q4 2026’s unscheduled/)).toBeTruthy();
       expect(screen.getByText(/1 more have no position, or left the package/)).toBeTruthy();
+    });
+
+    /**
+     * The office (2026-10-15): "we should have a way on the tbp group maker too
+     * to regroup those unscheduled visits for the Q4" -- grouped by the build's
+     * own rules, saved as a new template, and opened with only those offered.
+     */
+    it('makes a template of a quarter’s unscheduled visits in one step, and opens it', async () => {
+      mount({ notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 3, buildingIds: ['b2', 'b3'] } });
+      hooks.readNotBookedGroups.mockResolvedValue({
+        planId: 'plan-q4',
+        quarter: 'Q4 2026',
+        visits: 3,
+        withoutPosition: 0,
+        groups: [{ buildingIds: ['b3', 'b2'], visits: 3 }],
+      });
+      mutations.create.mutateAsync.mockResolvedValue({ id: 'template-new', name: 'Q4 2026 regroup' });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Regroup unscheduled visits' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('3 unscheduled visits in Q4 2026.')).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Make the template' }));
+
+      await waitFor(() => expect(url.set).toHaveBeenCalledWith({ template: 'template-new', notBooked: 'plan-q4' }));
+      expect(hooks.readNotBookedGroups).toHaveBeenCalledWith('plan-q4');
+      expect(mutations.create.mutateAsync.mock.calls[0]![0]).toMatchObject({
+        name: 'Q4 2026 regroup',
+        groups: [{ name: 'Group 1', target: 2, buildingIds: ['b3', 'b2'] }],
+      });
+    });
+
+    it('makes nothing for a quarter with no unscheduled visits', async () => {
+      mount({ notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 0, buildingIds: [] } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Regroup unscheduled visits' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/has no unscheduled visits/)).toBeTruthy();
+      expect((within(dialog).getByRole('button', { name: 'Make the template' }) as HTMLButtonElement).disabled).toBe(true);
     });
 
     it('offers every property until a quarter is chosen', () => {
