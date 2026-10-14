@@ -36,6 +36,7 @@ interface StopRow {
   propertywareUnitId: string | null;
   propertywareLeaseId: string | null;
   jobberJobId: string | null;
+  jobberVisitId?: string | null;
   inspectionType: InspectionType;
   visitTitle: string | null;
   visitDetails: string | null;
@@ -68,6 +69,8 @@ const build = (
     existingInspectionId?: string | null;
     /** The quarter was sent out to nobody. */
     jobberUnassigned?: boolean;
+    /** A TBP_VISIT_UNSCHEDULE task for every stop, in this status. */
+    unscheduleTask?: string | null;
   } = {},
 ) => {
   const remaining = new Map(stops.map((row) => [row.id, row]));
@@ -87,25 +90,39 @@ const build = (
   const outboundCreate = jest.fn().mockResolvedValue({});
   const auditCreate = jest.fn().mockResolvedValue({});
   const inspectionUpdate = jest.fn().mockResolvedValue({});
+  const importUpsert = jest.fn().mockResolvedValue({});
+  const pushUpsert = jest.fn().mockResolvedValue({});
 
   const tx = {
-    inspection: { update: inspectionUpdate },
+    inspection: {
+      update: inspectionUpdate,
+      // `requestVisitPush` reads the visit off the inspection it was just given.
+      findFirst: jest.fn(() => Promise.resolve({ jobberVisitId: 'visit-unscheduled', jobberJobId: 'job-1' })),
+    },
     inspectionAssignment: { create: assignmentCreate },
-    jobberOutboundTask: { create: outboundCreate },
+    jobberOutboundTask: { create: outboundCreate, upsert: pushUpsert },
+    jobberVisitImport: { upsert: importUpsert },
     tbpQuarterPlanStop: { update: stopUpdate },
     tbpQuarterPlan: { findUnique: jest.fn().mockResolvedValue({ jobberUnassigned: options.jobberUnassigned ?? false }) },
     auditLog: { create: auditCreate },
   };
 
   const taskDeleteMany = jest.fn().mockResolvedValue({ count: 1 });
+  const taskUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const prisma = {
-    jobberOutboundTask: { deleteMany: taskDeleteMany },
+    jobberOutboundTask: {
+      deleteMany: taskDeleteMany,
+      updateMany: taskUpdateMany,
+      findFirst: jest.fn(() => Promise.resolve(options.unscheduleTask ? { status: options.unscheduleTask } : null)),
+    },
     tbpQuarterPlanStop: {
       count: jest.fn(({ where }: { where: { unitResolution?: string } }) =>
         Promise.resolve(where.unitResolution ? (options.withoutUnit ?? 0) : (options.blockedCount ?? 0)),
       ),
-      findMany: jest.fn(({ take }: { take: number }) =>
-        Promise.resolve([...remaining.values()].slice(0, take)),
+      findMany: jest.fn(({ take, where }: { take: number; where: { id?: { notIn: string[] } } }) =>
+        Promise.resolve(
+          [...remaining.values()].filter((row) => !where.id?.notIn.includes(row.id)).slice(0, take),
+        ),
       ),
       findFirst: jest.fn(({ where }: { where: { id: string } }) => Promise.resolve(remaining.get(where.id) ?? null)),
       update: stopUpdate,
@@ -133,6 +150,9 @@ const build = (
     inspectionUpdate,
     stopUpdateMany,
     taskDeleteMany,
+    taskUpdateMany,
+    importUpsert,
+    pushUpsert,
   };
 };
 
@@ -229,6 +249,31 @@ describe('publishing a reviewed quarter', () => {
     expect(queued![0].data.inspectionId).toBeUndefined();
     const marked = stopUpdate.mock.calls.find((call) => call[0].where.id === 's2');
     expect(marked![0].data.status).toBe(TbpStopStatus.UNSCHEDULED);
+  });
+
+  /**
+   * Unscheduled from the console or in Jobber, and left without a day by the
+   * build after (2026-10-15): its visit is there already, so no second job.
+   */
+  it('books no second job for a visit already in Jobber’s Unscheduled list', async () => {
+    const { service, outboundCreate, stopUpdate } = build([
+      aStop('s1', 1, { scheduledOn: null, jobberVisitId: 'visit-9' }),
+    ]);
+
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary).toMatchObject({ unscheduled: 1, failed: 0 });
+    expect(outboundCreate).not.toHaveBeenCalled();
+    expect(stopUpdate.mock.calls[0][0].data.status).toBe(TbpStopStatus.UNSCHEDULED);
+  });
+
+  it('leaves a visit still on its way to Jobber’s Unscheduled list for the next run, without stopping', async () => {
+    const { service, outboundCreate } = build([aStop('s1', 1, { jobberVisitId: null })], { unscheduleTask: 'FAILED' });
+
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary).toMatchObject({ waiting: 1, published: 0, failed: 0, status: TbpPlanStatus.PUBLISHED });
+    expect(outboundCreate).not.toHaveBeenCalled();
   });
 
   /**
@@ -443,14 +488,98 @@ describe('a visit given its day after the quarter was published', () => {
     expect(outboundCreate.mock.calls[0][0].data.kind).toBe(JobberOutboundKind.TBP_VISIT_CREATE);
   });
 
-  /** Its job and visit already exist there; a second would book the same work twice. */
-  it('refuses a visit that is already in Jobber with no day', async () => {
-    const { service } = build([
-      { ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, jobberVisitId: 'visit-9' } as StopRow,
-    ]);
+  /**
+   * Its job and visit already exist there (2026-10-15): that visit is given the
+   * day, never a second job -- the same work would be in Jobber twice.
+   */
+  describe('one already in Jobber’s Unscheduled list', () => {
+    const before = process.env.JOBBER_PUSH_EDITS_ENABLED;
+    beforeEach(() => {
+      process.env.JOBBER_PUSH_EDITS_ENABLED = 'true';
+    });
+    afterEach(() => {
+      if (before === undefined) delete process.env.JOBBER_PUSH_EDITS_ENABLED;
+      else process.env.JOBBER_PUSH_EDITS_ENABLED = before;
+    });
 
-    await expect(service.placeOne(USER, 's1')).rejects.toMatchObject({ code: 'VISIT_IS_IN_JOBBER' });
-    expect(creation.insertInspection).not.toHaveBeenCalled();
+    it('gives that visit the day: the inspection is made on it and its day, Details and claim are queued', async () => {
+      const { service, outboundCreate, importUpsert, pushUpsert, stopUpdate } = build([
+        { ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: 'visit-9' } as StopRow,
+      ]);
+
+      expect(await service.placeOne(USER, 's1')).toBe('PUBLISHED');
+
+      expect(creation.insertInspection.mock.calls[0][2]).toMatchObject({
+        source: 'JOBBER',
+        jobberVisitId: 'visit-9',
+        jobberJobId: 'job-1',
+      });
+      // No new job or visit.
+      expect(outboundCreate).not.toHaveBeenCalled();
+      expect(importUpsert.mock.calls[0][0].update).toMatchObject({ status: 'IMPORTED', inspectionId: 'insp-1' });
+      const kinds = pushUpsert.mock.calls.map(([call]) => call.create.kind);
+      expect(kinds).toEqual([
+        JobberOutboundKind.VISIT_RESCHEDULE,
+        JobberOutboundKind.VISIT_EDIT,
+        JobberOutboundKind.VISIT_ASSIGN,
+      ]);
+      expect(stopUpdate.mock.calls.at(-1)![0].data).toMatchObject({ status: TbpStopStatus.PUBLISHED, inspectionId: 'insp-1' });
+    });
+
+    it('sends nobody to it on a quarter sent out to nobody', async () => {
+      const { service, pushUpsert } = build(
+        [{ ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: 'visit-9' } as StopRow],
+        { jobberUnassigned: true },
+      );
+
+      await service.placeOne(USER, 's1');
+
+      expect(pushUpsert.mock.calls.map(([call]) => call.create.kind)).not.toContain(JobberOutboundKind.VISIT_ASSIGN);
+    });
+
+    it('takes the inspection the sync made when the office gave it its day in Jobber first', async () => {
+      const { service, stopUpdate } = build(
+        [{ ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: 'visit-9' } as StopRow],
+        { existingInspectionId: 'insp-from-jobber' },
+      );
+
+      expect(await service.placeOne(USER, 's1')).toBe('ADOPTED');
+      expect(creation.insertInspection).not.toHaveBeenCalled();
+      expect(stopUpdate.mock.calls[0][0].data).toMatchObject({ inspectionId: 'insp-from-jobber' });
+    });
+
+    it('waits while Jobber still has it on its old day', async () => {
+      const { service, outboundCreate } = build(
+        [{ ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: null } as StopRow],
+        { unscheduleTask: 'PENDING' },
+      );
+
+      expect(await service.placeOne(USER, 's1')).toBe('WAITING');
+      expect(creation.insertInspection).not.toHaveBeenCalled();
+      expect(outboundCreate).not.toHaveBeenCalled();
+    });
+
+    it('fails it, and tries Jobber again, when moving it to Unscheduled was given up on', async () => {
+      const { service, taskUpdateMany, stopUpdate } = build(
+        [{ ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: null } as StopRow],
+        { unscheduleTask: 'ABANDONED' },
+      );
+
+      expect(await service.placeOne(USER, 's1')).toBe('FAILED');
+      expect(taskUpdateMany.mock.calls[0][0].data).toMatchObject({ status: 'PENDING', attempts: 0 });
+      expect(stopUpdate.mock.calls[0][0].data).toMatchObject({ blockedCode: 'JOBBER_UNSCHEDULE_FAILED' });
+    });
+
+    it('refuses to give it a day here while edits are not sent to Jobber', async () => {
+      process.env.JOBBER_PUSH_EDITS_ENABLED = 'false';
+      const { service, stopUpdate } = build([
+        { ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: 'visit-9' } as StopRow,
+      ]);
+
+      expect(await service.placeOne(USER, 's1')).toBe('FAILED');
+      expect(stopUpdate.mock.calls[0][0].data).toMatchObject({ blockedCode: 'JOBBER_EDITS_OFF' });
+      expect(creation.insertInspection).not.toHaveBeenCalled();
+    });
   });
 
   it('does nothing for a visit that still has no day, or one already published', async () => {

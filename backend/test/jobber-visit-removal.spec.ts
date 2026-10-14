@@ -60,6 +60,7 @@ function harness(
           startedAt: null,
           scheduledAt: AHEAD,
           jobberVisitId: 'visit-1',
+          jobberJobId: 'job-1',
           cancellationReason: null,
           propertywareBuilding: { name: '605 Sorrento Dr', addressLine1: '605 Sorrento Dr' },
           assignments: [{ technicianId: 'tech-moses' }],
@@ -295,10 +296,20 @@ describe('a visit moved to Unscheduled in Jobber', () => {
       where: { organizationId: ORG, jobberVisitId: 'visit-1' },
       data: expect.objectContaining({ status: JobberVisitImportStatus.PENDING, inspectionId: null }),
     });
-    // The stop keeps its visit, and the import puts the new inspection on it.
+    // The stop waits as that visit, with no day: the import puts the new
+    // inspection on it, or "Publish the rest" gives the same visit a day.
     expect(models.tbpQuarterPlanStop.updateMany).toHaveBeenCalledWith({
       where: { organizationId: ORG, inspectionId: 'inspection-1' },
-      data: { status: TbpStopStatus.UNSCHEDULED, inspectionId: null, blockedCode: null, blockedMessage: null },
+      data: expect.objectContaining({
+        status: TbpStopStatus.UNSCHEDULED,
+        inspectionId: null,
+        jobberVisitId: 'visit-1',
+        jobberJobId: 'job-1',
+        scheduledOn: null,
+        assignedTechnicianId: null,
+        scheduleOverriddenAt: null,
+        technicianOverriddenAt: null,
+      }),
     });
   });
 });
@@ -368,9 +379,18 @@ describe('the sync, after a removal', () => {
       where: { organizationId: ORG, jobberVisitId: 'visit-1', status: { not: JobberVisitImportStatus.IGNORED } },
       data: expect.objectContaining({ status: JobberVisitImportStatus.IGNORED, failureCode: JOBBER_VISIT_DELETED }),
     });
+    // Whatever a rebuild made of the stop since: given a day and not published
+    // yet, it would otherwise re-date a visit Jobber no longer has.
     expect(stops.updateMany).toHaveBeenCalledWith({
-      where: { organizationId: ORG, jobberVisitId: 'visit-1', inspectionId: null, status: TbpStopStatus.UNSCHEDULED },
-      data: expect.objectContaining({ status: TbpStopStatus.EXCLUDED, jobberVisitId: null }),
+      where: {
+        organizationId: ORG,
+        jobberVisitId: 'visit-1',
+        inspectionId: null,
+        status: {
+          in: [TbpStopStatus.UNSCHEDULED, TbpStopStatus.PLANNED, TbpStopStatus.BLOCKED, TbpStopStatus.FAILED],
+        },
+      },
+      data: expect.objectContaining({ status: TbpStopStatus.EXCLUDED, jobberVisitId: null, scheduledOn: null }),
     });
   });
 });

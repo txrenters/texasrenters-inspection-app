@@ -112,3 +112,24 @@ describe('building with the planner’s own grouping', () => {
     expect(onBuild.mock.calls[0]![0].stopsPerDay).toBe(9);
   });
 });
+
+/**
+ * A quarter under way, grouped again from a later day (the office, 2026-10-15:
+ * "starting next week unschedule all tbp that was scheduled so we can regroup
+ * them"): its booked visits keep their days, and the rest go from the day asked.
+ */
+describe('rebuilding a quarter under way', () => {
+  it('asks from which day, and sends nothing when left on today', () => {
+    const { onBuild, build } = open({ rebuild: true, underWay: true });
+
+    expect(legends()).toContain('Regroup from');
+    build();
+    expect(onBuild.mock.calls[0]![0]).not.toHaveProperty('firstDay');
+  });
+
+  it('is not asked of a draft', () => {
+    open({ rebuild: true });
+
+    expect(legends()).not.toContain('Regroup from');
+  });
+});

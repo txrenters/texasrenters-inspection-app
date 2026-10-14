@@ -199,6 +199,10 @@ export class JobberOutboundWorker {
         : [JobberOutboundKind.TBP_VISIT_CREATE, JobberOutboundKind.TBP_JOB_UNSCHEDULED]),
       ...(this.config.bookingEnabled ? [] : [JobberOutboundKind.VISIT_CREATE]),
       ...(this.config.pushEditsEnabled ? [] : VISIT_EDIT_KINDS),
+      // It books a visit and deletes one: it waits for both switches.
+      ...(this.config.tbpBookingEnabled && this.config.pushEditsEnabled
+        ? []
+        : [JobberOutboundKind.TBP_VISIT_UNSCHEDULE]),
     ];
   }
 
@@ -226,6 +230,12 @@ export class JobberOutboundWorker {
     // off Jobber needs only the visit and its job.
     if (task.kind === JobberOutboundKind.VISIT_CANCEL && !task.inspectionId)
       return this.pushCancellation(organizationId, task);
+    // A booked visit unscheduled in the console: its inspection is already gone.
+    if (task.kind === JobberOutboundKind.TBP_VISIT_UNSCHEDULE) {
+      if (!task.tbpStopId)
+        throw new JobberError('This task has no plan stop to unschedule.', 'JOBBER_TASK_MISSING_STOP', 500);
+      return this.unscheduleVisit(organizationId, { ...task, tbpStopId: task.tbpStopId });
+    }
     // Every other kind is about an inspection, and a row without one should
     // never have been enqueued.
     if (!task.inspectionId)
@@ -874,6 +884,78 @@ export class JobberOutboundWorker {
     }
     const deleted = await this.client.request<{ visitDelete: JobberUserErrors }>(organizationId, VISIT_DELETE_MUTATION, {
       visitIds: [visitId],
+    });
+    this.assertNoUserErrors(deleted.visitDelete);
+  }
+
+  /**
+   * Moves a booked benefit-package visit to Jobber's Unscheduled list, on the
+   * job it is already on (the office, 2026-10-15: "if we unschedule it from
+   * console it should be unscheduled on jobber to same way").
+   *
+   * Jobber's API has no "unschedule": `visitEditSchedule` takes a day, not the
+   * absence of one. So the job is given a visit with no day -- the mutation that
+   * already puts the visits the planner could not place there -- and the dated
+   * visit is deleted. In that order: a failure between the two leaves the work
+   * on the job twice for a few minutes rather than not at all, and the retry
+   * finishes what is left. The new visit is on the stop by then, and the dated
+   * one is deleted only while Jobber still lists it.
+   *
+   * The new visit has nobody on it, and no link to an inspection: there is no
+   * inspection until the visit is given a day again.
+   */
+  private async unscheduleVisit(
+    organizationId: string,
+    task: { tbpStopId: string; jobberVisitId: string | null; jobberJobId: string | null },
+  ) {
+    const dated = task.jobberVisitId;
+    const jobId = task.jobberJobId;
+    if (!dated || !jobId)
+      throw new JobberError('This change has no Jobber visit to unschedule.', 'JOBBER_TASK_MISSING_VISIT', 500);
+    const stop = await this.prisma.tbpQuarterPlanStop.findFirst({
+      where: { id: task.tbpStopId, organizationId },
+      select: { jobberVisitId: true, visitTitle: true, visitDetails: true },
+    });
+    if (!stop?.visitTitle) throw new JobberError('This visit has nothing to book from.', 'JOBBER_TBP_STOP_MISSING', 500);
+
+    // The visit with no day, unless an earlier attempt -- or the office in
+    // Jobber, scheduling it since -- already gave the stop one.
+    if (!stop.jobberVisitId || stop.jobberVisitId === dated) {
+      const booked = await this.client.request<{
+        visitCreate: JobberUserErrors & { createdVisits?: { id: string }[] | null };
+      }>(organizationId, VISIT_CREATE_MUTATION, {
+        jobId,
+        input: { visits: [{ title: stop.visitTitle, instructions: stop.visitDetails }] },
+      });
+      this.assertNoUserErrors(booked.visitCreate);
+      const visitId = booked.visitCreate.createdVisits?.[0]?.id;
+      if (!visitId) throw new JobberError('Jobber created no visit.', 'JOBBER_VISIT_NOT_CREATED', 502);
+      await this.prisma.tbpQuarterPlanStop.update({
+        where: { id: task.tbpStopId },
+        data: { jobberVisitId: visitId, jobberJobId: jobId },
+      });
+    }
+
+    const job = (
+      await this.client.request<{
+        job: { visits: { nodes: { id: string; isComplete: boolean }[]; pageInfo: { hasNextPage: boolean } } } | null;
+      }>(organizationId, JOB_VISITS_QUERY, { id: jobId })
+    ).job;
+    const listed = job?.visits.nodes.find((visit) => visit.id === dated);
+    // Gone from Jobber already -- deleted there by somebody -- or done there
+    // since, which is a record and not this console's to delete.
+    if ((!listed && job && !job.visits.pageInfo.hasNextPage) || listed?.isComplete) {
+      this.logger.warn({
+        event: 'jobber_unschedule_left_dated_visit',
+        organizationId,
+        tbpStopId: task.tbpStopId,
+        jobberVisitId: dated,
+        reason: listed?.isComplete ? 'COMPLETE_IN_JOBBER' : 'NOT_IN_JOBBER',
+      });
+      return;
+    }
+    const deleted = await this.client.request<{ visitDelete: JobberUserErrors }>(organizationId, VISIT_DELETE_MUTATION, {
+      visitIds: [dated],
     });
     this.assertNoUserErrors(deleted.visitDelete);
   }

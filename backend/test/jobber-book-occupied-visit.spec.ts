@@ -210,6 +210,8 @@ describe('booking a console-created occupied inspection in Jobber', () => {
         JobberOutboundKind.VISIT_ASSIGN,
         JobberOutboundKind.VISIT_EDIT,
         JobberOutboundKind.VISIT_CANCEL,
+        // A visit unscheduled here books one and deletes one: it waits on both.
+        JobberOutboundKind.TBP_VISIT_UNSCHEDULE,
       ],
     });
   });

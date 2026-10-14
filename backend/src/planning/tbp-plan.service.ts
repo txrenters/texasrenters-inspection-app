@@ -322,6 +322,9 @@ export class TbpPlanService {
         planId: plan.id,
         status: { in: [TbpStopStatus.PLANNED, TbpStopStatus.BLOCKED] },
         inspectionId: null,
+        // One in Jobber's Unscheduled list stays: deleting it here would leave
+        // its visit there with nothing in the console to say whose it is.
+        jobberVisitId: null,
         propertywareTenantId: { notIn: enrolled.map((tenant) => tenant.id) },
         sequenceOverriddenAt: null,
         scheduleOverriddenAt: null,

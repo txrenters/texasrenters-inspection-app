@@ -129,6 +129,13 @@ export class PlanRoutingSettingsDto {
 export class PlanQuarterDto extends PlanRoutingSettingsDto {
   @Type(() => Number) @IsInt() @Min(2020) @Max(2100) year!: number;
   @Type(() => Number) @IsInt() @Min(1) @Max(4) quarter!: number;
+  /**
+   * The first day this build may give a visit, `YYYY-MM-DD`; never before
+   * today. For a quarter already under way (the office, 2026-10-15: regroup
+   * "starting next week"): the days before it keep what they hold. Not kept on
+   * the plan -- it is about this build, and the next starts from its own day.
+   */
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) firstDay?: string;
 }
 
 export class PlanStopListQueryDto {
@@ -157,6 +164,22 @@ export class PlanStopEditDto {
   /** Minutes on site, at most the plan's day on site. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(720) onSiteMinutes?: number;
   @IsOptional() @IsIn(TBP_INSPECTION_TYPES) inspectionType?: TbpInspectionType;
+}
+
+/**
+ * Which of a quarter's visits to take off their days: every one from a day on,
+ * or the ones named. One of the two.
+ */
+export class PlanUnscheduleDto {
+  /** `YYYY-MM-DD`: every visit on this day or later, from today on. */
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) from?: string;
+  /** These visits, whatever their day: a quarter is a few hundred. */
+  @IsOptional() @IsArray() @ArrayMaxSize(1000) @IsUUID('all', { each: true }) stopIds?: string[];
+}
+
+/** What unscheduling from a day on would do, before anybody confirms it. */
+export class PlanUnschedulePreviewQueryDto {
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) from!: string;
 }
 
 /** A visit clicked on the Days map, to join the day picked in the list. */
