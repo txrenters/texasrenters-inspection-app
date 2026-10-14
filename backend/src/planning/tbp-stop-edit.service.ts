@@ -44,6 +44,11 @@ export interface PlanStopEditResult {
    * that had already been published, so nothing else would have created it.
    */
   placed?: boolean;
+  /**
+   * Given its day, but still on its way to Jobber's Unscheduled list after
+   * being unscheduled here: "Publish the rest" books it once it is there.
+   */
+  waiting?: boolean;
   /** A booked visit's change was queued for its Jobber visit. */
   sentToJobber?: boolean;
 }
@@ -365,7 +370,12 @@ export class TbpStopEditService {
         ? await this.publisher.placeOne(user, stop.id)
         : null;
 
-    return { id: stop.id, changed, ...(placed ? { placed: placed !== 'FAILED' } : {}) };
+    return {
+      id: stop.id,
+      changed,
+      ...(placed ? { placed: placed === 'PUBLISHED' || placed === 'ADOPTED' } : {}),
+      ...(placed === 'WAITING' ? { waiting: true } : {}),
+    };
   }
 
   /**

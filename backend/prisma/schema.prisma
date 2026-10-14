@@ -2855,6 +2855,14 @@ enum JobberOutboundKind {
   /// The inspection was cancelled: the job is closed and its open visit
   /// removed, or only the visit when the job holds others.
   VISIT_CANCEL
+  /// A published benefit-package visit taken off its day in the console, moved
+  /// to Jobber's Unscheduled list on the same job (the office, 2026-10-15).
+  ///
+  /// Carries the plan stop and the DATED visit it replaces: its inspection was
+  /// deleted when the office unscheduled it. The job gets a visit with no day
+  /// (written onto the stop), then the dated one is deleted. Publishing the
+  /// stop again gives that same visit its new day.
+  TBP_VISIT_UNSCHEDULE
 }
 
 enum JobberOutboundStatus {

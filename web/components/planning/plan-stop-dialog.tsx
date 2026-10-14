@@ -107,6 +107,7 @@ export function PlanStopDialog({
   startsOn = null,
   dayGroups = null,
   booked = null,
+  onUnschedule,
 }: {
   /** The visit to show; null closes the window. */
   stop: PlanStop | null;
@@ -137,6 +138,12 @@ export function PlanStopDialog({
    * server sends the console's edits to Jobber (null when not known).
    */
   booked?: { manage: boolean; assign: boolean; jobberEditsPushed: boolean | null } | null;
+  /**
+   * Takes the visit off its day (the office, 2026-10-15): a booked one's
+   * inspection is deleted and its Jobber visit goes to the Unscheduled list.
+   * Left out where the office may not.
+   */
+  onUnschedule?: () => void;
 }) {
   const { editStop } = usePlanningMutations();
   const isBooked = Boolean(stop?.inspectionId);
@@ -487,6 +494,11 @@ export function PlanStopDialog({
         </section>
 
         <DialogFooter>
+          {onUnschedule && editable && (isBooked ? !started && !jobberOff : Boolean(scheduledOn && stop.status !== 'EXCLUDED')) ? (
+            <Button className="sm:mr-auto" onClick={onUnschedule} variant="outline">
+              {isBooked ? 'Unschedule' : 'Take off its day'}
+            </Button>
+          ) : null}
           {stop.inspectionId ? (
             <Button asChild variant="outline">
               <Link href={`/inspections/${stop.inspectionId}`}>Open inspection</Link>

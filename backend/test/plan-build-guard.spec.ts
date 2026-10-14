@@ -156,6 +156,26 @@ describe('building from the console', () => {
     expect(options).not.toHaveProperty('actorId');
   });
 
+  /**
+   * A quarter already under way, grouped again from a later day (the office,
+   * 2026-10-15: "starting next week"). Never a day already gone, and never a
+   * setting of the plan: the first day is this build's alone.
+   */
+  it('starts a build from the first day asked for, never before today', async () => {
+    const plans = { generate: jest.fn().mockResolvedValue({ planId: 'plan-1', stopCount: 3 }) };
+    const planner = { route: jest.fn().mockResolvedValue(routed()) };
+    const controller = controllerWith(new PlanBuildGuard(), { plans, planner, prisma: audited() });
+    const incoming = { ...request(), user: { organizationId: ORGANIZATION_ID, id: 'user-1' } };
+
+    await controller.generate(incoming as never, { ...quarter, firstDay: '2099-10-20' } as never);
+    await controller.generate(incoming as never, { ...quarter, firstDay: '2020-01-06' } as never);
+
+    expect(planner.route.mock.calls[0]![2]).not.toHaveProperty('firstDay');
+    expect(planner.route.mock.calls[0]![3]).toEqual({ today: '2099-10-20' });
+    expect(planner.route.mock.calls[1]![3].today).not.toBe('2020-01-06');
+    expect(planner.route.mock.calls[1]![3].today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
   describe('laying the days out again', () => {
     const plan = () => ({
       ...audited(),

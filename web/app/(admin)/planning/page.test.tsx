@@ -17,6 +17,7 @@ const hooks = vi.hoisted(() => ({
   usePlanningMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
   useGroupTemplates: vi.fn(),
+  usePlanUnschedulePreview: vi.fn(),
 }));
 
 vi.mock('@/lib/planning-queries', () => hooks);
@@ -208,7 +209,10 @@ function mount({
   optimizeDay = idle as unknown,
   optimizeDays = idle as unknown,
   moveToDay = idle as unknown,
+  unschedule = idle as unknown,
+  unschedulePreview = { isLoading: false, data: undefined } as unknown,
 } = {}) {
+  hooks.usePlanUnschedulePreview.mockReturnValue(unschedulePreview);
   hooks.usePlanLateMoveOuts.mockReturnValue({ data: lateMoveOuts });
   hooks.useGroupFileOnServer.mockReturnValue({ data: groupFile, isSuccess: true, isFetching: false, isError: false });
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
@@ -241,6 +245,7 @@ function mount({
     optimizeDay,
     optimizeDays,
     moveToDay,
+    unschedule,
   });
   return render(<PlanningPage />);
 }
@@ -1344,6 +1349,98 @@ describe('the benefit package plan page', () => {
     mount();
 
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * A published quarter's visits taken off their days, to be grouped again (the
+ * office, 2026-10-15): the booked ones' inspections deleted and their Jobber
+ * visits sent to its Unscheduled list.
+ */
+describe('unscheduling a published quarter’s visits', () => {
+  const PUBLISHED = { ...PLAN, status: 'PUBLISHED' };
+  const booking = { status: 'SCHEDULED', changeable: true, title: null, details: null };
+
+  it('reads back what goes from a day on, and which stay and why, before unscheduling', () => {
+    const unschedule = { mutate: vi.fn(), isPending: false };
+    mount({
+      plans: [PUBLISHED],
+      unschedule,
+      unschedulePreview: {
+        isLoading: false,
+        data: {
+          booked: 12,
+          notBooked: 2,
+          kept: [{ stopId: 's9', address: '9 Any St', date: '2026-10-21', reason: 'IN_USE' }],
+          firstDay: '2026-10-20',
+          lastDay: '2026-12-31',
+          jobberSwitchedOff: false,
+        },
+      },
+    });
+
+    openMenu('More');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unschedule visits…' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/booked visits go to Jobber’s Unscheduled list/)).toBeTruthy();
+    expect(within(dialog).getByText(/not booked yet/)).toBeTruthy();
+    expect(within(dialog).getByText(/9 Any St — started, recorded on or done/)).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unschedule 14 visits' }));
+    // Tomorrow, in Texas, unless another day is chosen.
+    expect(unschedule.mutate).toHaveBeenCalledWith({ planId: PLAN.id, from: '2026-09-20' }, expect.anything());
+  });
+
+  it('refuses while Jobber cannot be told', () => {
+    mount({
+      plans: [PUBLISHED],
+      unschedulePreview: {
+        isLoading: false,
+        data: { booked: 3, notBooked: 0, kept: [], firstDay: '2026-10-20', lastDay: '2026-10-22', jobberSwitchedOff: true },
+      },
+    });
+
+    openMenu('More');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unschedule visits…' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/does not send changes to Jobber/)).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'Unschedule 3 visits' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('is not offered on a draft, which has nothing booked', () => {
+    mount();
+
+    openMenu('More');
+    expect(screen.queryByRole('menuitem', { name: 'Unschedule visits…' })).toBeNull();
+  });
+
+  it('unschedules one booked visit from its window', async () => {
+    const unschedule = { mutate: vi.fn(), isPending: false };
+    mount({
+      plans: [PUBLISHED],
+      unschedule,
+      stops: [stop('s1'), stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1', jobberVisitId: 'jv-2', booking }), stop('s3')],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details of stop 2, 2 Any St' }));
+    const window = await screen.findByRole('dialog');
+    fireEvent.click(within(window).getByRole('button', { name: 'Unschedule' }));
+
+    const confirm = (await screen.findAllByRole('dialog')).at(-1)!;
+    expect(within(confirm).getByText(/moves to the Unscheduled list on the same job/)).toBeTruthy();
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Unschedule' }));
+    expect(unschedule.mutate).toHaveBeenCalledWith({ planId: PLAN.id, stopIds: ['s2'] }, expect.anything());
+  });
+
+  it('offers no unscheduling of a visit somebody has started', async () => {
+    mount({
+      plans: [PUBLISHED],
+      stops: [stop('s1'), stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1', booking: { ...booking, status: 'IN_PROGRESS', changeable: false } }), stop('s3')],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details of stop 2, 2 Any St' }));
+    const window = await screen.findByRole('dialog');
+    expect(within(window).queryByRole('button', { name: 'Unschedule' })).toBeNull();
   });
 });
 

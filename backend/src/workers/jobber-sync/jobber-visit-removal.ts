@@ -138,6 +138,7 @@ export async function removeWithdrawnInspection(
       startedAt: true,
       scheduledAt: true,
       jobberVisitId: true,
+      jobberJobId: true,
       cancellationReason: true,
       propertywareBuilding: { select: { name: true, addressLine1: true } },
       assignments: { where: { isCurrent: true }, select: { technicianId: true }, take: 1 },
@@ -208,7 +209,29 @@ export async function removeWithdrawnInspection(
       where: { organizationId, inspectionId },
       data:
         why === 'UNSCHEDULED'
-          ? { status: TbpStopStatus.UNSCHEDULED, inspectionId: null, blockedCode: null, blockedMessage: null }
+          ? {
+              status: TbpStopStatus.UNSCHEDULED,
+              inspectionId: null,
+              blockedCode: null,
+              blockedMessage: null,
+              /**
+               * The visit it waits as, and no day: it has none in Jobber (2026-10-15).
+               * A visit booked from the plan never wrote its id here, so when
+               * Jobber gave it a day again the sync found no stop to put the new
+               * inspection on; and a Rebuild could not tell it was in Jobber
+               * already and booked it a second job. With the id, either way
+               * round -- a day in Jobber, or a day here and "Publish the rest" --
+               * the same visit comes back on this stop.
+               */
+              jobberVisitId,
+              jobberJobId: inspection.jobberJobId,
+              scheduledOn: null,
+              assignedTechnicianId: null,
+              positionInDay: null,
+              driveSecondsForecast: null,
+              scheduleOverriddenAt: null,
+              technicianOverriddenAt: null,
+            }
           : {
               status: TbpStopStatus.EXCLUDED,
               inspectionId: null,

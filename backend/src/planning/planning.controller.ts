@@ -677,13 +677,16 @@ export class PlanningController {
   @Post('quarters')
   @RequirePermissions('planning:publish')
   generate(@Req() request: AuthenticatedRequest, @Body() body: PlanQuarterDto) {
-    const { year, quarter: number, ...settings } = body;
+    const { year, quarter: number, firstDay, ...settings } = body;
     const quarter: Quarter = { year, quarter: number as Quarter['quarter'] };
     const organizationId = request.user.organizationId;
+    // Never before today, whatever is asked: a day gone by is not plannable.
+    const today = businessDate();
+    const from = firstDay && firstDay > today ? firstDay : today;
     holdRequestOpen(request);
     return this.builds.run(organizationId, quarterLabel(quarter), async () => {
       const generated = await this.plans.generate(organizationId, quarter);
-      const routed = await this.planner.route(organizationId, generated.planId, settings, { today: businessDate() });
+      const routed = await this.planner.route(organizationId, generated.planId, settings, { today: from });
       await this.auditBuild(request, generated.planId, routed);
       return { ...generated, routing: routed };
     });

@@ -1,10 +1,11 @@
 'use client';
 
-import { type Quarter } from '@texasrenters/shared';
+import { type Quarter, quarterEnd } from '@texasrenters/shared';
 import { useId, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   Dialog,
   DialogContent,
@@ -16,7 +17,7 @@ import {
 import { FieldDescription } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
-import { businessToday } from '@/lib/clock';
+import { businessToday, shiftDay } from '@/lib/clock';
 import { formatRelative } from '@/lib/format';
 import { formatShortDay, planStartOptions, planStartValue, type PlanStartOption } from '@/lib/planning';
 import { useGroupTemplates, usePlanTechnicians, type PlanQuarter } from '@/lib/planning-queries';
@@ -50,6 +51,12 @@ export interface PlanBuildChoice {
    * office, 2026-09-30); null for the planner's own grouping.
    */
   groupTemplateId: string | null;
+  /**
+   * For a quarter under way, the first day a regrouped visit may be given
+   * (the office, 2026-10-15: regroup "starting next week"); left out, today.
+   * The days before it keep what they hold.
+   */
+  firstDay?: string;
 }
 
 /**
@@ -91,6 +98,7 @@ export function PlanBuildDialog({
   groupTemplate = null,
   groupTemplateRevision = null,
   stopsPerDay: planStopsPerDay = null,
+  underWay = false,
   pending = false,
   onBuild,
 }: {
@@ -113,6 +121,12 @@ export function PlanBuildDialog({
   groupTemplateRevision?: number | null;
   /** The plan's own visits a day, so a rebuild opens on the last one given rather than on nine. */
   stopsPerDay?: number | null;
+  /**
+   * A published quarter: its visits already have days, and a rebuild groups
+   * only the ones without -- from the day asked, so the office can unschedule
+   * from a day and group again from it (2026-10-15).
+   */
+  underWay?: boolean;
   pending?: boolean;
   onBuild: (choice: PlanBuildChoice) => void;
 }) {
@@ -140,6 +154,8 @@ export function PlanBuildDialog({
   const [pickedSize, setStopsPerDay] = useState<number | null>(null);
   const stopsPerDay = pickedSize ?? openingSize;
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  // Empty: today. Only asked of a quarter under way.
+  const [firstDay, setFirstDay] = useState('');
   const groupingName = useId();
   const templates = useGroupTemplates(open);
   const usable = useMemo(() => (templates.data ?? []).filter((template) => !template.archivedAt), [templates.data]);
@@ -164,6 +180,7 @@ export function PlanBuildDialog({
       setStopsPerDay(null);
       setSkipped(new Set());
       setGrouping(undefined);
+      setFirstDay('');
     }
     onOpenChange(next);
   };
@@ -187,7 +204,9 @@ export function PlanBuildDialog({
       // A template has its properties already, zone by zone (2026-10-02): no zone is left out of it.
       excludedZones: chosenTemplate ? [] : [...skipped].sort(),
       groupTemplateId: chosenGrouping,
+      ...(underWay && firstDay ? { firstDay } : {}),
     });
+    setFirstDay('');
     setGrouping(undefined);
     setPicked(null);
     setStart(null);
@@ -374,6 +393,30 @@ export function PlanBuildDialog({
             Days before the quarter take its first month’s visits. The second and third months keep their own.
           </FieldDescription>
         </fieldset>
+
+        {/* A quarter under way groups only its visits with no day, and from the
+            day asked (the office, 2026-10-15: "starting next week unschedule
+            all tbp ... so we can regroup them"). */}
+        {underWay ? (
+          <fieldset className="grid min-w-0 gap-2">
+            <legend className="mb-2 text-sm font-medium">Regroup from</legend>
+            <DatePicker
+              aria-label="First day for the visits without one"
+              // The quarter's last day: its end is the next one's first.
+              max={shiftDay(quarterEnd(quarter).toISOString().slice(0, 10), -1)}
+              min={today}
+              onChange={setFirstDay}
+              placeholder={`Today, ${formatShortDay(today)}`}
+              value={firstDay}
+            />
+            <FieldDescription>
+              Booked visits keep their days. The visits without one — unscheduled, or never placed — are grouped
+              onto days from {firstDay ? formatShortDay(firstDay) : 'today'} on
+              {firstDay && firstDay > today ? '; the days before it keep what they hold' : ''}. Then
+              &ldquo;Publish the rest&rdquo; books them, in Jobber on the visits already waiting there.
+            </FieldDescription>
+          </fieldset>
+        ) : null}
 
         {/* No "Lay published visits out again" here. A rebuild posts to
             /quarters, which never moved a published visit -- the box did

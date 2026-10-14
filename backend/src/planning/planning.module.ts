@@ -18,6 +18,7 @@ import { PlanBuildGuard } from './plan-build-guard';
 import { PlanDayMoveService } from './plan-day-move.service';
 import { PlanDayRouteController } from './plan-day-route.controller';
 import { PlanningController } from './planning.controller';
+import { PlanUnscheduleController } from './plan-unschedule.controller';
 import { PropertyServiceStatusController } from './property-service-status.controller';
 import { PropertyServiceStatusService } from './property-service-status.service';
 import { QuarterPlannerService } from './quarter-planner.service';
@@ -25,6 +26,7 @@ import { TbpGroupFileController } from './tbp-group-file.controller';
 import { TbpPlanService } from './tbp-plan.service';
 import { TbpPublishService } from './tbp-publish.service';
 import { TbpStopEditService } from './tbp-stop-edit.service';
+import { TbpUnscheduleService } from './tbp-unschedule.service';
 
 @Module({
   // Realtime: a lease call-off tells the technician whose job it was (2026-10-07).
@@ -39,6 +41,8 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     PropertyServiceStatusController,
     // Who left the package and who joined, under a template (2026-10-15).
     GroupTemplateChangesController,
+    // A published quarter's visits taken off their days, to be grouped again (2026-10-15).
+    PlanUnscheduleController,
   ],
   providers: [
     TbpPlanService,
@@ -55,6 +59,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     PlanDayMoveService,
     PropertyServiceStatusService,
     GroupTemplateChangesService,
+    TbpUnscheduleService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })

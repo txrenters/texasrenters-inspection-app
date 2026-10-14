@@ -1766,12 +1766,22 @@ export class JobberSyncWorker {
         failureMessage: 'Deleted in Jobber.',
       },
     });
+    // Waiting as this visit, whatever a rebuild made of it since: given a day
+    // here and not published yet, it would otherwise re-date a visit Jobber no
+    // longer has (2026-10-15).
     await this.prisma.tbpQuarterPlanStop.updateMany({
-      where: { organizationId, jobberVisitId, inspectionId: null, status: TbpStopStatus.UNSCHEDULED },
+      where: {
+        organizationId,
+        jobberVisitId,
+        inspectionId: null,
+        status: { in: [TbpStopStatus.UNSCHEDULED, TbpStopStatus.PLANNED, TbpStopStatus.BLOCKED, TbpStopStatus.FAILED] },
+      },
       data: {
         status: TbpStopStatus.EXCLUDED,
         jobberVisitId: null,
         jobberJobId: null,
+        scheduledOn: null,
+        positionInDay: null,
         blockedMessage: `Its Jobber visit was deleted on ${businessDate()}.`,
       },
     });

@@ -351,6 +351,11 @@ export interface PlanBuildInput {
    * the planner's own grouping. Left out, the plan keeps what it had.
    */
   groupTemplateId?: string | null;
+  /**
+   * The first day this build may give a visit, `YYYY-MM-DD`: for a quarter
+   * under way, grouped again from a later day (2026-10-15). Never kept on the plan.
+   */
+  firstDay?: string;
 }
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */
@@ -371,8 +376,48 @@ export interface PublishSummary {
   adopted: number;
   /** Sent to Jobber with no day on them, for the office to schedule there. */
   unscheduled: number;
+  /**
+   * Given a day, but still on their way to Jobber's Unscheduled list after
+   * being unscheduled here: the next "Publish the rest" books them. Absent from
+   * a server older than this.
+   */
+  waiting?: number;
   failed: number;
   status: PlanStatus;
+}
+
+/** Why unscheduling left a visit on its day: work somebody did, or a decision somebody made. */
+export type UnscheduleKeptReason = 'IN_USE' | 'CANCELLED' | 'COMPANION_IN_USE';
+
+export interface UnscheduleKept {
+  stopId: string;
+  address: string | null;
+  date: string | null;
+  reason: UnscheduleKeptReason;
+}
+
+/** What unscheduling a quarter's visits from a day on would do (2026-10-15). */
+export interface UnschedulePreview {
+  /** Booked visits that go to Jobber's Unscheduled list; their inspections are deleted. */
+  booked: number;
+  /** Visits with a day that were never booked: they only lose the day. */
+  notBooked: number;
+  kept: UnscheduleKept[];
+  firstDay: string | null;
+  lastDay: string | null;
+  /** Some are in Jobber, and this server cannot tell Jobber: unscheduling is refused. */
+  jobberSwitchedOff: boolean;
+}
+
+export interface UnscheduleSummary {
+  planId: string;
+  /** Moved to Jobber's Unscheduled list. */
+  unscheduled: number;
+  /** Booked here but never in Jobber: back on the plan with no day. */
+  removed: number;
+  /** Never booked: only the day was taken off. */
+  daysCleared: number;
+  kept: UnscheduleKept[];
 }
 
 export const planningKeys = {
@@ -389,7 +434,17 @@ export const planningKeys = {
   groupTemplateChanges: (id: string) => ['admin', 'planning', 'group-templates', id, 'changes'] as const,
   groupMakerProperties: ['admin', 'planning', 'group-maker', 'properties'] as const,
   lateMoveOuts: (planId: string) => ['admin', 'planning', planId, 'late-move-outs'] as const,
+  unschedulePreview: (planId: string, from: string) => ['admin', 'planning', planId, 'unschedule', from] as const,
 };
+
+/** What unscheduling from a day on would take off, read while the office chooses the day. */
+export const usePlanUnschedulePreview = (planId: string | undefined, from: string, enabled = true) =>
+  useQuery({
+    queryKey: planningKeys.unschedulePreview(planId ?? '', from),
+    queryFn: ({ signal }) =>
+      api<UnschedulePreview>(`${PLANNING}/quarters/${planId}/unschedule?from=${encodeURIComponent(from)}`, { signal }),
+    enabled: Boolean(planId && from) && enabled,
+  });
 
 /**
  * A move-out or move-in booked onto a technician's benefit-package day after
@@ -706,7 +761,7 @@ export function usePlanningMutations() {
     // server, so days, stops and counts are all read again after.
     editStop: useMutation({
       mutationFn: ({ stopId, ...input }: PlanStopEdit & { stopId: string }) =>
-        api<{ id: string; changed: string[]; placed?: boolean; sentToJobber?: boolean }>(`${PLANNING}/stops/${stopId}`, {
+        api<{ id: string; changed: string[]; placed?: boolean; waiting?: boolean; sentToJobber?: boolean }>(`${PLANNING}/stops/${stopId}`, {
           method: 'PATCH',
           body: JSON.stringify(input),
         }),
@@ -737,6 +792,16 @@ export function usePlanningMutations() {
     moveToDay: useMutation({
       mutationFn: ({ planId, dayId, stopId }: { planId: string; dayId: string; stopId: string }) =>
         post<{ stopId: string; days: OptimizedPlanDay[] }>(`/quarters/${planId}/days/${dayId}/visits`, { stopId }),
+      onSuccess: refresh,
+    }),
+    /**
+     * A quarter's visits off their days, from a day on or the ones named
+     * (2026-10-15): the booked ones to Jobber's Unscheduled list, their
+     * inspections deleted, so a Rebuild can group them again.
+     */
+    unschedule: useMutation({
+      mutationFn: ({ planId, ...input }: { planId: string; from?: string; stopIds?: string[] }) =>
+        post<UnscheduleSummary>(`/quarters/${planId}/unschedule`, input),
       onSuccess: refresh,
     }),
     // A crowded day's visits to the Monday after, here and in Jobber, once the office confirmed them.

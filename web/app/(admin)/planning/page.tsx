@@ -2,6 +2,7 @@
 
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
 import {
+  CalendarMinusIcon,
   CalendarRangeIcon,
   EllipsisIcon,
   FileSpreadsheetIcon,
@@ -27,6 +28,7 @@ import { PlanRules } from '@/components/planning/plan-rules';
 import { PlanSchedule } from '@/components/planning/plan-schedule';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
+import { KEPT_REASON, PlanUnscheduleDialog, type UnscheduleOne } from '@/components/planning/plan-unschedule-dialog';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import {
@@ -170,6 +172,11 @@ export default function PlanningPage() {
   const [publishing, setPublishing] = useState(false);
   // Build and Rebuild ask who goes out and the first day before anything is laid out (2026-09-19).
   const [choosing, setChoosing] = useState(false);
+  /**
+   * Visits being taken off their days (the office, 2026-10-15): every one from
+   * a day on, or the one open in its window.
+   */
+  const [unscheduling, setUnscheduling] = useState<false | 'from' | UnscheduleOne>(false);
   // The visit whose details are open, from its pin, its row in a day, or the table.
   const [openStopId, setOpenStopId] = useState<string | null>(null);
   /** Every visit as the schedule's map draws it: with its day, or none yet. */
@@ -255,6 +262,8 @@ export default function PlanningPage() {
     if (next) setState({ tab: 'schedule', show: 'all', day: next.id });
   };
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
+  // In Jobber's Unscheduled list and given a day here since: "Publish the rest" gives that visit the day.
+  const redated = (stops.data ?? []).filter((stop) => stop.status === 'UNSCHEDULED' && stop.scheduledOn);
   // On a day, whether or not it has been created yet: what the crew is going
   // out to. The office wants the two counts side by side (2026-09-20).
   const scheduled = (stops.data ?? []).filter(
@@ -432,6 +441,48 @@ export default function PlanningPage() {
     });
   };
 
+  /**
+   * Visits off their days (2026-10-15): the booked ones' inspections deleted
+   * and their Jobber visits sent to its Unscheduled list. Said in full -- how
+   * many went where, and which stayed and why -- because nothing here undoes it
+   * but a Rebuild and "Publish the rest".
+   */
+  const unschedule = (input: { from: string } | { stopIds: string[] }) => {
+    if (!plan) return;
+    mutations.unschedule.mutate(
+      { planId: plan.id, ...input },
+      {
+        onSuccess: (result) => {
+          setUnscheduling(false);
+          if ('stopIds' in input) setOpenStopId(null);
+          const moved = result.unscheduled + result.removed + result.daysCleared;
+          toast.success(`${moved.toLocaleString()} ${moved === 1 ? 'visit' : 'visits'} unscheduled`, {
+            description: [
+              result.unscheduled
+                ? `${result.unscheduled.toLocaleString()} go to Jobber’s Unscheduled list over the next minutes.`
+                : null,
+              'Rebuild to group them again, then Publish the rest.',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          });
+          if (result.kept.length)
+            toast.info(
+              `${result.kept.length.toLocaleString()} ${result.kept.length === 1 ? 'stayed on its day' : 'stayed on their days'}`,
+              {
+                description: result.kept
+                  .slice(0, 5)
+                  .map((row) => `${row.address ?? 'A visit'}: ${KEPT_REASON[row.reason]}`)
+                  .join('; '),
+                duration: 12_000,
+              },
+            );
+        },
+        onError: (error) => toast.error('The visits were not unscheduled', { description: error.message }),
+      },
+    );
+  };
+
   const publish = () => {
     if (!plan) return;
     mutations.publish.mutate(plan.id, {
@@ -443,9 +494,18 @@ export default function PlanningPage() {
           });
         else
           toast.success(`${(result.published + result.adopted).toLocaleString()} inspections created for ${choice.label}`, {
-            description: result.unscheduled
-              ? `${result.unscheduled.toLocaleString()} visits with no day went to Jobber unscheduled.`
-              : undefined,
+            description:
+              [
+                result.unscheduled
+                  ? `${result.unscheduled.toLocaleString()} visits with no day went to Jobber unscheduled.`
+                  : null,
+                // Unscheduled here a moment ago, and Jobber has not moved them yet.
+                result.waiting
+                  ? `${result.waiting.toLocaleString()} are still on their way to Jobber’s Unscheduled list: publish the rest again in a few minutes.`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' ') || undefined,
           });
       },
       onError: (error) => toast.error(`${choice.label} could not be published`, { description: error.message }),
@@ -585,6 +645,12 @@ export default function PlanningPage() {
                       <WindIcon />
                       Refresh filter sizes
                     </DropdownMenuItem>
+                    {!draft && canMoveVisits ? (
+                      <DropdownMenuItem disabled={building || mutations.unschedule.isPending} onSelect={() => setUnscheduling('from')}>
+                        <CalendarMinusIcon />
+                        Unschedule visits…
+                      </DropdownMenuItem>
+                    ) : null}
                     <DropdownMenuSeparator />
                   </>
                 ) : null}
@@ -606,7 +672,7 @@ export default function PlanningPage() {
           ) : null}
           {canPlace && plan ? (
             <Button
-              disabled={building || planned.length + unplaced.length === 0}
+              disabled={building || planned.length + unplaced.length + redated.length === 0}
               onClick={() => setPublishing(true)}
               size="sm"
               title={
@@ -886,9 +952,31 @@ export default function PlanningPage() {
           jobberEditsPushed: lateMoveOuts.data?.jobberEditsPushed ?? null,
         }}
         onOpenChange={(open) => !open && setOpenStopId(null)}
+        // Off its day, from its own window (2026-10-15); the inspections grant too, since a booked one's is deleted.
+        onUnschedule={
+          openStop && !draft && canMoveVisits
+            ? () =>
+                setUnscheduling({
+                  stopId: openStop.id,
+                  address: openStop.propertywareUnit?.addressLine1 ?? openStop.tenant.addressLine1,
+                  booked: Boolean(openStop.inspectionId),
+                  inJobber: Boolean(openStop.inspectionId),
+                })
+            : undefined
+        }
         quarter={quarter}
         startsOn={startsOn}
         stop={openStop}
+      />
+
+      <PlanUnscheduleDialog
+        label={choice.label}
+        onConfirm={unschedule}
+        onOpenChange={(open) => !open && setUnscheduling(false)}
+        one={typeof unscheduling === 'object' ? unscheduling : null}
+        open={unscheduling !== false}
+        pending={mutations.unschedule.isPending}
+        planId={plan?.id}
       />
 
       <PlanBuildDialog
@@ -909,6 +997,8 @@ export default function PlanningPage() {
         quarter={quarter}
         rebuild={Boolean(plan)}
         startsOn={startsOn}
+        // Published: a rebuild groups the visits without a day, from the day asked (2026-10-15).
+        underWay={plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED'}
       />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>
