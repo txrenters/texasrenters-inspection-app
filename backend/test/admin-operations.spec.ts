@@ -86,6 +86,13 @@ describe('administrator catalog operations', () => {
       expect(request.where.inspection.organizationId).toBe(user.organizationId);
       expect(request.where.technicianId.in).toEqual(['technician-1', 'technician-2']);
     }
+    // "Current" is open work. A finished visit stays assigned to whoever
+    // walked it, so counting every current assignment filed a technician's
+    // whole history under "Current" (2026-10-14).
+    expect(groupBy.mock.calls[0][0].where).toMatchObject({
+      isCurrent: true,
+      inspection: { status: { in: ['SCHEDULED', 'IN_PROGRESS', 'FOLLOW_UP_REQUIRED'] } },
+    });
     expect(result.items).toEqual([
       expect.objectContaining({
         id: 'technician-1',
@@ -780,7 +787,49 @@ describe('administrator assignment operations', () => {
     expect(prisma.userProfile.update).not.toHaveBeenCalled();
   });
 
-  it('returns a compact technician profile with a current-assignment count', async () => {
+  it('deactivates a technician whose only current assignments are finished visits', async () => {
+    // A finished visit stays assigned to whoever walked it and cannot be
+    // reassigned, so counting it made anyone who had ever finished a visit
+    // impossible to deactivate (2026-10-14). Only open work holds an account.
+    const prisma = {
+    ...ZERO_EVIDENCE,
+      userProfile: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'technician-1', isActive: true }),
+        update: jest.fn().mockResolvedValue({ id: 'technician-1', isActive: false }),
+      },
+      inspectionAssignment: { count: jest.fn().mockResolvedValue(0) },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    await expect(
+      service.updateTechnicianStatus(user, 'technician-1', { isActive: false }),
+    ).resolves.toMatchObject({ isActive: false });
+    expect(prisma.inspectionAssignment.count).toHaveBeenCalledWith({
+      where: {
+        technicianId: 'technician-1',
+        isCurrent: true,
+        inspection: {
+          organizationId: user.organizationId,
+          status: { in: ['SCHEDULED', 'IN_PROGRESS', 'FOLLOW_UP_REQUIRED'] },
+        },
+      },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'TECHNICIAN_DEACTIVATED' }),
+      }),
+    );
+  });
+
+  it('returns a technician profile with the same workload figures as the list', async () => {
+    // The detail page counted `current` alone and printed 0 for the other two,
+    // so a technician with hundreds of finished visits read "Completed 0".
+    const groupBy = jest
+      .fn()
+      .mockResolvedValueOnce([{ technicianId: 'technician-1', _count: { _all: 3 } }])
+      .mockResolvedValueOnce([{ technicianId: 'technician-1', _count: { _all: 1 } }])
+      .mockResolvedValueOnce([{ technicianId: 'technician-1', _count: { _all: 800 } }]);
     const prisma = {
     ...ZERO_EVIDENCE,
       userProfile: {
@@ -790,31 +839,23 @@ describe('administrator assignment operations', () => {
           displayName: 'Field Technician',
           isActive: true,
           createdAt: new Date(),
-          _count: { assignments: 3 },
         }),
       },
+      inspectionAssignment: { groupBy },
     };
     const service = new AdminService(prisma as never, new PresenceService());
 
     const result = await service.technician(user, 'technician-1');
 
-    expect(result).toMatchObject({ id: 'technician-1', workload: { current: 3 } });
-    expect(result).not.toHaveProperty('_count');
-    expect(prisma.userProfile.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        select: expect.objectContaining({
-          id: true,
-          // A cancelled visit is no one's current work (2026-10-07).
-          _count: {
-            select: {
-              assignments: {
-                where: { isCurrent: true, inspection: { status: { not: 'CANCELLED' } } },
-              },
-            },
-          },
-        }),
-      }),
-    );
+    expect(result).toMatchObject({
+      id: 'technician-1',
+      workload: { current: 3, inProgress: 1, completed: 800 },
+    });
+    expect(groupBy).toHaveBeenCalledTimes(3);
+    for (const [request] of groupBy.mock.calls) {
+      expect(request.where.inspection.organizationId).toBe(user.organizationId);
+      expect(request.where.technicianId.in).toEqual(['technician-1']);
+    }
   });
 });
 

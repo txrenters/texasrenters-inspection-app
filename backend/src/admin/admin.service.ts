@@ -49,7 +49,11 @@ import { moveStopWithVisit } from '../planning/move-stop-with-visit';
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
-import { DONE_INSPECTION_STATUSES, isDoneInspectionStatus } from '../common/inspection-done';
+import {
+  DONE_INSPECTION_STATUSES,
+  isDoneInspectionStatus,
+  UPCOMING_INSPECTION_STATUSES,
+} from '../common/inspection-done';
 import { inspectionSearchWhere, inspectionStatusWhere } from './inspection-list-where';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
@@ -151,11 +155,6 @@ const ACTIVE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.TBD,
   InspectionStatus.FOLLOW_UP_REQUIRED,
 ];
-
-/** Still to happen -- a visit somebody has to be sent to (`isUpcomingVisit`). */
-const UPCOMING_INSPECTION_STATUSES: InspectionStatus[] = ACTIVE_INSPECTION_STATUSES.filter(
-  (status) => !DONE_INSPECTION_STATUSES.includes(status),
-);
 
 // An inspection can no longer transition once finalized or cancelled.
 /**
@@ -3871,23 +3870,42 @@ export class AdminService {
       }),
       this.prisma.userProfile.count({ where }),
     ]);
-    const technicianIds = profiles.map((profile) => profile.id);
+    const workloads = await this.technicianWorkloads(
+      user.organizationId,
+      profiles.map((profile) => profile.id),
+    );
+    const items = profiles.map((profile) => ({
+      ...profile,
+      workload: workloads.get(profile.id) ?? { current: 0, inProgress: 0, completed: 0 },
+    }));
+    return this.page(items, total, query);
+  }
+
+  /**
+   * Each technician's open work, work under way, and finished visits.
+   *
+   * One definition for the list and the detail page. The detail page counted
+   * `current` alone and printed 0 for the other two, so a technician with 800
+   * finished visits read "Completed 0" on their own page.
+   *
+   * `current` is open work only (`UPCOMING_INSPECTION_STATUSES`). Finishing a
+   * visit leaves its assignment current, so counting every current assignment
+   * put a technician's whole history under "Current". `completed` counts every
+   * done visit they hold, current or not.
+   */
+  private async technicianWorkloads(organizationId: string, technicianIds: string[]) {
     const workloadWhere = {
       technicianId: { in: technicianIds },
-      inspection: { organizationId: user.organizationId },
+      inspection: { organizationId },
     } satisfies Prisma.InspectionAssignmentWhereInput;
     const [currentGroups, inProgressGroups, completedGroups] = technicianIds.length
       ? await Promise.all([
           this.prisma.inspectionAssignment.groupBy({
             by: ['technicianId'],
-            // A cancelled visit is no one's work (2026-10-07).
             where: {
               ...workloadWhere,
               isCurrent: true,
-              inspection: {
-                organizationId: user.organizationId,
-                status: { not: InspectionStatus.CANCELLED },
-              },
+              inspection: { organizationId, status: { in: UPCOMING_INSPECTION_STATUSES } },
             },
             _count: { _all: true },
           }),
@@ -3896,10 +3914,7 @@ export class AdminService {
             where: {
               ...workloadWhere,
               isCurrent: true,
-              inspection: {
-                organizationId: user.organizationId,
-                status: InspectionStatus.IN_PROGRESS,
-              },
+              inspection: { organizationId, status: InspectionStatus.IN_PROGRESS },
             },
             _count: { _all: true },
           }),
@@ -3908,7 +3923,7 @@ export class AdminService {
             where: {
               ...workloadWhere,
               inspection: {
-                organizationId: user.organizationId,
+                organizationId,
                 // Submitted is done (`DONE_INSPECTION_STATUSES`).
                 status: { in: DONE_INSPECTION_STATUSES },
               },
@@ -3922,20 +3937,20 @@ export class AdminService {
     const current = counts(currentGroups);
     const inProgress = counts(inProgressGroups);
     const completed = counts(completedGroups);
-    const items = profiles.map((profile) => ({
-      ...profile,
-      workload: {
-        current: current.get(profile.id) ?? 0,
-        inProgress: inProgress.get(profile.id) ?? 0,
-        completed: completed.get(profile.id) ?? 0,
-      },
-    }));
-    return this.page(items, total, query);
+    return new Map(
+      technicianIds.map((id) => [
+        id,
+        {
+          current: current.get(id) ?? 0,
+          inProgress: inProgress.get(id) ?? 0,
+          completed: completed.get(id) ?? 0,
+        },
+      ]),
+    );
   }
 
   async technician(user: AuthenticatedUser, id: string) {
     const technician = await this.prisma.userProfile.findFirst({
-      relationLoadStrategy: 'join',
       where: {
         id,
         memberships: {
@@ -3948,45 +3963,36 @@ export class AdminService {
         displayName: true,
         isActive: true,
         createdAt: true,
-        _count: {
-          select: {
-            assignments: {
-              where: {
-                isCurrent: true,
-                inspection: { status: { not: InspectionStatus.CANCELLED } },
-              },
-            },
-          },
-        },
       },
     });
     if (!technician)
       throw new ApplicationError(404, 'TECHNICIAN_NOT_FOUND', 'Technician was not found.');
-    const { _count, ...profile } = technician;
-    return {
-      ...profile,
-      workload: {
-        current: _count.assignments,
-      },
-    };
+    const workloads = await this.technicianWorkloads(user.organizationId, [technician.id]);
+    return { ...technician, workload: workloads.get(technician.id) };
   }
 
   async updateTechnicianStatus(user: AuthenticatedUser, id: string, input: TechnicianStatusDto) {
     await this.requireTechnician(user.organizationId, id, this.prisma, false);
     if (!input.isActive) {
       const activeAssignments = await this.prisma.inspectionAssignment.count({
-        // A cancelled visit does not keep a leaver's account open.
+        // Open work only. A cancelled visit does not keep a leaver's account
+        // open, and neither does a finished one: it stays assigned to whoever
+        // walked it and cannot be reassigned, so counting it made anyone who
+        // had ever finished a visit impossible to deactivate.
         where: {
           technicianId: id,
           isCurrent: true,
-          inspection: { status: { not: InspectionStatus.CANCELLED } },
+          inspection: {
+            organizationId: user.organizationId,
+            status: { in: UPCOMING_INSPECTION_STATUSES },
+          },
         },
       });
       if (activeAssignments > 0)
         throw new ApplicationError(
           409,
           'TECHNICIAN_HAS_ACTIVE_ASSIGNMENTS',
-          'Reassign or unassign current work before deactivating this technician.',
+          'Reassign or unassign their open visits before deactivating this technician.',
         );
     }
     const profile = await this.prisma.userProfile.update({
