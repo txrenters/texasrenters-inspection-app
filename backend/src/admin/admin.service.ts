@@ -3961,14 +3961,33 @@ export class AdminService {
         id: true,
         email: true,
         displayName: true,
+        phone: true,
         isActive: true,
         createdAt: true,
+        // Whether the same account also signs in to the console: the page
+        // links there, and only `users:manage` may change such an account's
+        // email (`AccountProfileService`).
+        memberships: {
+          where: {
+            organizationId: user.organizationId,
+            role: { not: UserRole.INSPECTION_TECHNICIAN },
+          },
+          select: { role: true },
+        },
+        _count: {
+          select: { roleAssignments: { where: { organizationId: user.organizationId } } },
+        },
       },
     });
     if (!technician)
       throw new ApplicationError(404, 'TECHNICIAN_NOT_FOUND', 'Technician was not found.');
+    const { memberships, _count, ...profile } = technician;
     const workloads = await this.technicianWorkloads(user.organizationId, [technician.id]);
-    return { ...technician, workload: workloads.get(technician.id) };
+    return {
+      ...profile,
+      hasConsoleAccess: memberships.length > 0 || _count.roleAssignments > 0,
+      workload: workloads.get(technician.id),
+    };
   }
 
   async updateTechnicianStatus(user: AuthenticatedUser, id: string, input: TechnicianStatusDto) {

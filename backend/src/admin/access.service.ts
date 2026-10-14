@@ -27,7 +27,7 @@ import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider';
 // Web-console access levels. INSPECTION_TECHNICIAN is deliberately excluded:
 // technician (mobile) accounts are created and managed on the Technicians page,
 // so this user-management surface never creates, lists, or edits them.
-const CONSOLE_ROLES = Object.values(UserRole).filter(
+export const CONSOLE_ROLES = Object.values(UserRole).filter(
   (role) => role !== UserRole.INSPECTION_TECHNICIAN,
 );
 // OrganizationMember remains the coarse organization/application membership.
@@ -233,7 +233,22 @@ export class AccessService {
 
   async user(user: AuthenticatedUser, id: string) {
     const record = await this.requireUser(user, id);
-    return this.mapUserDetail(record);
+    // Whether the same account also uses the inspection app. Asked
+    // separately because `userSelect` deliberately reads console memberships
+    // only -- the technician one is owned by the Technicians page -- and the
+    // user page only needs to know it exists, to link there.
+    const technicianMemberships = await this.prisma.organizationMember.count({
+      where: {
+        userProfileId: id,
+        organizationId: user.organizationId,
+        role: UserRole.INSPECTION_TECHNICIAN,
+      },
+    });
+    return {
+      ...this.mapUserDetail(record),
+      phone: record.phone,
+      hasTechnicianAccess: technicianMemberships > 0,
+    };
   }
 
   async createUser(user: AuthenticatedUser, input: CreateUserDto) {
@@ -341,15 +356,6 @@ export class AccessService {
         );
       throw error;
     }
-  }
-
-  async updateUser(user: AuthenticatedUser, id: string, displayName: string) {
-    await this.requireUser(user, id);
-    await this.prisma.userProfile.update({
-      where: { id },
-      data: { displayName: displayName.trim() },
-    });
-    return this.mapUserDetail(await this.requireUser(user, id));
   }
 
   async updateUserStatus(user: AuthenticatedUser, id: string, isActive: boolean) {
@@ -611,6 +617,7 @@ export class AccessService {
       id: true,
       email: true,
       displayName: true,
+      phone: true,
       isActive: true,
       createdAt: true,
       memberships: {

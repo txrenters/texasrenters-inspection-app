@@ -56,8 +56,15 @@ export class CreateUserDto {
   @IsArray() @ArrayNotEmpty() @ArrayUnique() @IsUUID('all', { each: true }) roleIds!: string[];
 }
 
-export class UpdateUserDto {
-  @IsString() @MinLength(2) @MaxLength(120) displayName!: string;
+/**
+ * A change to a person's own details, from the user page or the technician page
+ * (`AccountProfileService`). A field left out is left alone; `phone: null` or
+ * an empty string clears the number, which the service normalizes and checks.
+ */
+export class UpdateProfileDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(120) displayName?: string;
+  @IsOptional() @IsEmail() @MaxLength(320) email?: string;
+  @IsOptional() @IsString() @MaxLength(40) phone?: string | null;
 }
 
 export class UpdateUserStatusDto {

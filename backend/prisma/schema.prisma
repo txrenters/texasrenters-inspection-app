@@ -590,6 +590,9 @@ model UserProfile {
   authUserId           String                   @unique
   email                String                   @unique
   displayName          String
+  /// E.164 (`+17135550100`), written only through `normalizePhoneNumber`.
+  /// Null until somebody types one in.
+  phone                String?
   isActive             Boolean                  @default(true)
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt

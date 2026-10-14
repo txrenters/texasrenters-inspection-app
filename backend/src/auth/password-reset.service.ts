@@ -318,21 +318,83 @@ export class PasswordResetService {
         'This technician is deactivated. Reactivate the account before sending a reset link.',
       );
 
-    const credential = await this.prisma.authCredential.findUnique({
-      where: { authUserId: technician.authUserId },
-      select: { id: true },
+    return this.sendForAccount(user, technician, {
+      code: 'TECHNICIAN_HAS_NO_CREDENTIAL',
+      message: 'This technician has no sign-in credential yet, so there is no password to reset.',
     });
-    if (!credential)
+  }
+
+  /**
+   * An administrator sends a console user a reset link -- the user page's copy
+   * of `sendForTechnician`, under the same rules.
+   *
+   * Found through a console membership or a role in the caller's own
+   * organization, as `AccessService.requireUser` finds them. The protected
+   * bootstrap administrator is refused, as every other change to it from user
+   * management is.
+   */
+  async sendForUser(user: AuthenticatedUser, userId: string) {
+    const account = await this.prisma.userProfile.findFirst({
+      where: {
+        id: userId,
+        OR: [
+          {
+            memberships: {
+              some: {
+                organizationId: user.organizationId,
+                role: { not: UserRole.INSPECTION_TECHNICIAN },
+              },
+            },
+          },
+          { roleAssignments: { some: { organizationId: user.organizationId } } },
+        ],
+      },
+      select: {
+        id: true,
+        authUserId: true,
+        email: true,
+        displayName: true,
+        isActive: true,
+        memberships: { where: { organizationId: user.organizationId }, select: { role: true } },
+      },
+    });
+    if (!account) throw new ApplicationError(404, 'USER_NOT_FOUND', 'User was not found.');
+
+    if (account.memberships.some((membership) => membership.role === UserRole.SYSTEM_ADMIN))
       throw new ApplicationError(
         409,
-        'TECHNICIAN_HAS_NO_CREDENTIAL',
-        'This technician has no sign-in credential yet, so there is no password to reset.',
+        'SYSTEM_ADMIN_PROTECTED',
+        'A system administrator cannot be sent a reset link from user management.',
+      );
+    if (!account.isActive)
+      throw new ApplicationError(
+        409,
+        'USER_INACTIVE',
+        'This user is deactivated. Activate the account before sending a reset link.',
       );
 
+    return this.sendForAccount(user, account, {
+      code: 'USER_HAS_NO_CREDENTIAL',
+      message: 'This user has no sign-in credential yet, so there is no password to reset.',
+    });
+  }
+
+  /** The part both administrator buttons share, once the account is found. */
+  private async sendForAccount(
+    user: AuthenticatedUser,
+    account: { id: string; authUserId: string; email: string; displayName: string },
+    noCredential: { code: string; message: string },
+  ) {
+    const credential = await this.prisma.authCredential.findUnique({
+      where: { authUserId: account.authUserId },
+      select: { id: true },
+    });
+    if (!credential) throw new ApplicationError(409, noCredential.code, noCredential.message);
+
     const sent = await this.issueAndDeliver({
-      authUserId: technician.authUserId,
-      email: technician.email,
-      displayName: technician.displayName,
+      authUserId: account.authUserId,
+      email: account.email,
+      displayName: account.displayName,
     });
 
     // Audited whether or not the mail left. Issuing the token is the sensitive
@@ -345,12 +407,12 @@ export class PasswordResetService {
         actorUserId: user.id,
         action: 'PASSWORD_RESET_SENT',
         entityType: 'UserProfile',
-        entityId: technician.id,
+        entityId: account.id,
         metadata: { delivered: sent },
       },
     });
 
-    return { email: technician.email, delivered: sent };
+    return { email: account.email, delivered: sent };
   }
 
   /**

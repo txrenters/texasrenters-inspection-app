@@ -46,6 +46,7 @@ import type {
   ComparisonReport,
   AdminUser,
   AdminUserDetail,
+  UpdateAccountProfileInput,
   AiAnalysisPreview,
   AiEvaluationRun,
   AiEvaluationRunSummary,
@@ -1634,6 +1635,39 @@ export function useAccessMutations() {
         void verifyAffectedQueries(client, [keys.techniciansRoot]);
       },
     }),
+    /**
+     * Name, sign-in email and phone (`AccountProfileService`).
+     *
+     * The same account may be on the Technicians page too, so both directories
+     * are refreshed -- a rename there would otherwise wait for the cache.
+     */
+    updateUserProfile: useMutation({
+      mutationFn: ({ id, ...input }: UpdateAccountProfileInput & { id: string }) =>
+        api<AdminUserDetail>(`/api/v1/admin/access/users/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.user(variables.id), data);
+        void verifyAffectedQueries(client, [
+          keys.usersRoot,
+          keys.techniciansRoot,
+          keys.technician(variables.id),
+        ]);
+      },
+    }),
+    /**
+     * Mail a console user a reset link -- the technician page's
+     * `sendTechnicianPasswordReset`, from the user page. No cache to refresh:
+     * the token lives in a mailbox, not on the record.
+     */
+    sendUserPasswordReset: useMutation({
+      mutationFn: (userId: string) =>
+        api<{ email: string; delivered: boolean }>(
+          `/api/v1/admin/access/users/${userId}/password-reset`,
+          { method: 'POST' },
+        ),
+    }),
     createUser: useMutation({
       mutationFn: (input: { email: string; displayName: string; roleIds: string[] }) =>
         api<CreatedUserAccount>('/api/v1/admin/access/users', {
@@ -2324,8 +2358,9 @@ export function useAdminMutations() {
      *
      * One account, a second membership -- `UserProfile.email` is unique, so the
      * same person cannot hold two rows. Invalidates the user directory rather
-     * than the technician one: nothing about them as a technician changed, but
-     * they now appear on a list they were invisible to.
+     * than the technician roster: nothing about them as a technician changed,
+     * but they now appear on a list they were invisible to. Their own page is
+     * refreshed for its "Open user page" link.
      */
     grantTechnicianConsoleAccess: useMutation({
       mutationFn: (technicianId: string) =>
@@ -2333,8 +2368,8 @@ export function useAdminMutations() {
           `/api/v1/admin/technicians/${technicianId}/console-access`,
           { method: 'POST' },
         ),
-      onSuccess: () => {
-        void verifyAffectedQueries(client, [keys.usersRoot]);
+      onSuccess: (_data, technicianId) => {
+        void verifyAffectedQueries(client, [keys.usersRoot, keys.technician(technicianId)]);
       },
     }),
     /**
@@ -3067,6 +3102,25 @@ export function useAdminMutations() {
       onError: (_error, id, context) => {
         if (context) failEntityOperation(id, context.operationId);
         void verifyAffectedQueries(client, [keys.techniciansRoot, keys.technician(id)]);
+      },
+    }),
+    /**
+     * Name, sign-in email and phone, from the technician page. The mirror of
+     * `updateUserProfile`: one account, so both directories are refreshed.
+     */
+    updateTechnicianProfile: useMutation({
+      mutationFn: ({ id, ...input }: UpdateAccountProfileInput & { id: string }) =>
+        api<AdminTechnician>(`/api/v1/admin/technicians/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.technician(variables.id), data);
+        void verifyAffectedQueries(client, [
+          keys.techniciansRoot,
+          keys.usersRoot,
+          keys.user(variables.id),
+        ]);
       },
     }),
     updateTechnician: useMutation({

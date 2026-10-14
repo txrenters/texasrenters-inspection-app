@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
+import { PasswordResetService } from '../auth/password-reset.service';
 import {
   ApiAuthGuard,
   PermissionsGuard,
@@ -27,11 +28,12 @@ import {
   CreateRoleDto,
   CreateUserDto,
   SetUserRolesDto,
+  UpdateProfileDto,
   UpdateRoleDto,
-  UpdateUserDto,
   UpdateUserStatusDto,
 } from './access.dto';
 import { AccessService } from './access.service';
+import { AccountProfileService } from './account-profile.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 
@@ -50,6 +52,8 @@ export class AccessController {
     @Inject(ProfileDeletionService) private readonly deletion: ProfileDeletionService,
     @Inject(TechnicianProvisioningService)
     private readonly technicians: TechnicianProvisioningService,
+    @Inject(AccountProfileService) private readonly profiles: AccountProfileService,
+    @Inject(PasswordResetService) private readonly passwordResets: PasswordResetService,
   ) {}
 
   @Get('permissions')
@@ -110,14 +114,29 @@ export class AccessController {
     return this.service.user(request.user, id);
   }
 
+  /** Name, sign-in email and phone (`AccountProfileService`). */
   @Patch('users/:id')
   @RequirePermissions('users:manage')
-  updateUser(
+  async updateUser(
     @Req() request: AuthenticatedRequest,
     @Param('id') id: string,
-    @Body() body: UpdateUserDto,
+    @Body() body: UpdateProfileDto,
   ) {
-    return this.service.updateUser(request.user, id, body.displayName);
+    await this.profiles.update(request.user, id, 'CONSOLE', body);
+    return this.service.user(request.user, id);
+  }
+
+  /**
+   * Mail a console user a link that sets a new password.
+   *
+   * The user page's copy of the technician page's button: one credential
+   * serves both surfaces, but somebody who only uses the console had no way to
+   * be sent one except asking for it themselves.
+   */
+  @Post('users/:id/password-reset')
+  @RequirePermissions('users:manage')
+  sendUserPasswordReset(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.passwordResets.sendForUser(request.user, id);
   }
 
   @Patch('users/:id/status')

@@ -5,8 +5,11 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { formatPhoneNumber } from '@texasrenters/shared';
+
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { DeleteAccountDialog } from '@/components/delete-account-dialog';
+import { EditProfileDialog } from '@/components/edit-profile-dialog';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Stat, StatGroup } from '@/components/stat-card';
@@ -35,7 +38,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { TechnicianRouteCard } from '@/components/technician-route-card';
 import { EMPTY, formatDateTime, formatScheduledDate } from '@/lib/format';
-import { usePermissions } from '@/lib/auth';
+import { useAuth, usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,
   useAssignments,
@@ -155,16 +158,18 @@ export default function TechnicianDetailPage() {
   // which only covers issuing handset credentials. The button lives here; the
   // authority it needs follows the act, not the screen.
   const canManageUsers = permissions.has('users:manage');
+  const canReadUsers = permissions.has('users:read');
+  const { profile: me, refresh: refreshMe } = useAuth();
   const {
     updateTechnician: mutation,
+    updateTechnicianProfile: updateProfile,
     deleteTechnician: remove,
     sendTechnicianPasswordReset: sendReset,
     grantTechnicianConsoleAccess: grantConsole,
   } = useAdminMutations();
-  // Which confirmation the "More actions" menu opened. Held here because a
-  // menu item closes its menu, and a dialog rendered inside the menu would go
-  // with it.
-  const [dialog, setDialog] = useState<'console' | 'reset' | 'delete' | null>(null);
+  // Which dialog is open. Held here because a menu item closes its menu, and a
+  // dialog rendered inside the menu would go with it.
+  const [dialog, setDialog] = useState<'profile' | 'console' | 'reset' | 'delete' | null>(null);
 
   // isError first: a failed fetch has no data either.
   if (technician.isError)
@@ -196,6 +201,24 @@ export default function TechnicianDetailPage() {
     }
   }
 
+  function editProfile() {
+    updateProfile.reset();
+    setDialog('profile');
+  }
+
+  // The same rules `AccountProfileService` enforces, said before anybody types.
+  // A new address plus a reset link is the account, so one that also signs in
+  // to the console is kept to whoever manages users.
+  const emailLockedReason =
+    item.id === me?.id
+      ? 'You can’t change your own sign-in email. Ask another administrator to change it.'
+      : item.hasConsoleAccess && !canManageUsers
+        ? 'They also sign in to the console, so only someone who manages users can change this.'
+        : null;
+  // The user page link replaces the grant once there is one to open.
+  const linksToUser = Boolean(item.hasConsoleAccess) && canReadUsers;
+  const offersConsoleGrant = !item.hasConsoleAccess && canManageUsers;
+
   async function deleteTechnician() {
     try {
       await remove.mutateAsync(id);
@@ -211,9 +234,14 @@ export default function TechnicianDetailPage() {
     <>
       <PageHeader
         actions={
-          canManage || canProvision || canManageUsers ? (
+          canManage || canProvision || offersConsoleGrant || linksToUser ? (
             <>
-              {/* One visible button, the rest one menu away (console-development):
+              {canManage ? (
+                <Button onClick={editProfile} variant="outline">
+                  Edit profile
+                </Button>
+              ) : null}
+              {/* Deactivate visible, the rest one menu away (console-development):
                   four buttons, two of them solid red, wrapped onto two lines at
                   375px. Every confirmation below is unchanged; the menu only
                   opens it. */}
@@ -252,7 +280,7 @@ export default function TechnicianDetailPage() {
                   </AlertDialogContent>
                 </AlertDialog>
               ) : null}
-              {canManageUsers || canProvision || canManage ? (
+              {offersConsoleGrant || linksToUser || canProvision || canManage ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button aria-label="More actions" size="icon" variant="outline">
@@ -260,7 +288,12 @@ export default function TechnicianDetailPage() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-56">
-                    {canManageUsers ? (
+                    {linksToUser ? (
+                      <DropdownMenuItem asChild>
+                        <Link href={`/users/${id}`}>Open user page</Link>
+                      </DropdownMenuItem>
+                    ) : null}
+                    {offersConsoleGrant ? (
                       <DropdownMenuItem
                         disabled={grantConsole.isPending}
                         onSelect={() => setDialog('console')}
@@ -278,7 +311,9 @@ export default function TechnicianDetailPage() {
                     ) : null}
                     {canManage ? (
                       <>
-                        {canManageUsers || canProvision ? <DropdownMenuSeparator /> : null}
+                        {offersConsoleGrant || linksToUser || canProvision ? (
+                          <DropdownMenuSeparator />
+                        ) : null}
                         <DropdownMenuItem
                           disabled={remove.isPending}
                           onSelect={() => setDialog('delete')}
@@ -297,11 +332,40 @@ export default function TechnicianDetailPage() {
         badges={<StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />}
         // When the account was made, beside who it is -- as the user page has
         // it. It sat under "Completed" as if it dated the completed work.
-        description={`${item.email} · created ${formatDateTime(item.createdAt)}`}
+        description={
+          <>
+            {item.email}
+            {item.phone ? (
+              <>
+                {' · '}
+                <a className="hover:underline" href={`tel:${item.phone}`}>
+                  {formatPhoneNumber(item.phone)}
+                </a>
+              </>
+            ) : null}
+            {` · created ${formatDateTime(item.createdAt)}`}
+          </>
+        }
         title={item.displayName}
       />
 
-      {canManageUsers ? (
+      {canManage ? (
+        <EditProfileDialog
+          emailLockedReason={emailLockedReason}
+          error={updateProfile.error}
+          isPending={updateProfile.isPending}
+          matchedInJobber
+          onOpenChange={(open) => setDialog(open ? 'profile' : null)}
+          onSave={async (input) => {
+            await updateProfile.mutateAsync({ id, ...input });
+            // Their own name, in the sidebar, comes from the session's profile.
+            if (id === me?.id) void refreshMe();
+          }}
+          open={dialog === 'profile'}
+          profile={item}
+        />
+      ) : null}
+      {offersConsoleGrant ? (
         <AlertDialog
           onOpenChange={(open) => setDialog(open ? 'console' : null)}
           open={dialog === 'console'}

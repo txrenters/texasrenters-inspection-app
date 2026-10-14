@@ -39,6 +39,7 @@ import { PasswordResetService } from '../auth/password-reset.service';
 import { InspectionImportService } from './inspection-import/inspection-import.service';
 import type { UploadedReport } from './inspection-import/inspection-import.service';
 import { AccessService } from './access.service';
+import { AccountProfileService } from './account-profile.service';
 import { RouteService } from '../routing/route.service';
 import { TechnicianTimelineService } from '../technician/technician-timeline.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
@@ -112,6 +113,7 @@ import {
   UpdatePropertyAreaDto,
   UploadFloorPlanDto,
 } from './admin.dto';
+import { UpdateProfileDto } from './access.dto';
 import { AdminService } from './admin.service';
 import { AiEvaluationService } from './ai-evaluation.service';
 import { AiGuidanceService } from './ai-guidance.service';
@@ -178,6 +180,7 @@ export class AdminController {
     private readonly skills: TechnicianSkillsService,
     private readonly guidance: AiGuidanceService,
     private readonly evaluations: AiEvaluationService,
+    private readonly profiles: AccountProfileService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -1381,6 +1384,25 @@ export class AdminController {
   technician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
     return this.service.technician(request.user, id);
   }
+  /**
+   * Name, sign-in email and phone (`AccountProfileService`).
+   *
+   * Behind `technicians:manage`, the grant that already activates and deletes
+   * these accounts. An account that also signs in to the console keeps its
+   * email out of this permission's reach; the service refuses that change
+   * unless the caller manages users too.
+   */
+  @Patch('technicians/:technicianId')
+  @RequirePermissions('technicians:manage')
+  async updateTechnicianProfile(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Body() body: UpdateProfileDto,
+  ) {
+    await this.profiles.update(request.user, id, 'TECHNICIAN', body);
+    return this.service.technician(request.user, id);
+  }
+
   @Patch('technicians/:technicianId/status')
   @RequirePermissions('technicians:manage')
   technicianStatus(

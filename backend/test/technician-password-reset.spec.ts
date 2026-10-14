@@ -278,3 +278,118 @@ describe('admin-initiated technician password reset', () => {
     expect(prisma.tx.authPasswordResetToken.updateMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The user page's copy of the button (2026-10-14). A console-only account had
+ * no way to be sent a link except asking for one itself.
+ */
+describe('admin-initiated console user password reset', () => {
+  const user = {
+    id: '00000000-0000-4000-8000-000000000001',
+    organizationId: '00000000-0000-4000-8000-000000000002',
+  } as AuthenticatedUser;
+
+  const USER_ID = '00000000-0000-4000-8000-000000000004';
+
+  beforeEach(() => {
+    process.env.WEB_APP_ORIGIN = 'https://admin.example.com';
+  });
+  afterEach(() => {
+    delete process.env.WEB_APP_ORIGIN;
+  });
+
+  function build(account: unknown, credential: unknown = { id: 'cred-1' }) {
+    const tx = {
+      authPasswordResetToken: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const prisma = {
+      userProfile: { findFirst: jest.fn().mockResolvedValue(account) },
+      authCredential: { findUnique: jest.fn().mockResolvedValue(credential) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const mailer = {
+      readiness: () => ({ status: 'CONFIGURED' }),
+      sendPasswordReset: jest.fn().mockResolvedValue({ status: 'SENT' }),
+    };
+    const service = new PasswordResetService(
+      prisma as unknown as PrismaService,
+      {} as LocalIdentityProvider,
+      mailer as unknown as MailService,
+    );
+    return { service, prisma, mailer };
+  }
+
+  const consoleUser = {
+    id: USER_ID,
+    authUserId: 'auth-user-4',
+    email: 'office@texasrenters.com',
+    displayName: 'Office Coordinator',
+    isActive: true,
+    memberships: [{ role: UserRole.PROPERTY_ADMIN }],
+  };
+
+  it('finds the account only through console access in the caller organization', async () => {
+    const { service, prisma, mailer } = build(consoleUser);
+
+    await expect(service.sendForUser(user, USER_ID)).resolves.toEqual({
+      email: consoleUser.email,
+      delivered: true,
+    });
+
+    expect(prisma.userProfile.findFirst.mock.calls[0][0].where).toEqual({
+      id: USER_ID,
+      OR: [
+        {
+          memberships: {
+            some: {
+              organizationId: user.organizationId,
+              role: { not: UserRole.INSPECTION_TECHNICIAN },
+            },
+          },
+        },
+        { roleAssignments: { some: { organizationId: user.organizationId } } },
+      ],
+    });
+    expect(mailer.sendPasswordReset).toHaveBeenCalledWith(
+      expect.objectContaining({ to: consoleUser.email }),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'PASSWORD_RESET_SENT',
+        entityId: USER_ID,
+        metadata: { delivered: true },
+      }),
+    });
+  });
+
+  it.each([
+    ['an unknown account', null, 404, 'USER_NOT_FOUND'],
+    [
+      'the protected bootstrap administrator',
+      { ...consoleUser, memberships: [{ role: UserRole.SYSTEM_ADMIN }] },
+      409,
+      'SYSTEM_ADMIN_PROTECTED',
+    ],
+    ['a deactivated account', { ...consoleUser, isActive: false }, 409, 'USER_INACTIVE'],
+  ])('refuses %s without minting anything', async (_label, account, status, code) => {
+    const { service, prisma, mailer } = build(account);
+
+    await expect(service.sendForUser(user, USER_ID)).rejects.toMatchObject({ status, code });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(mailer.sendPasswordReset).not.toHaveBeenCalled();
+  });
+
+  it('refuses an account that has no sign-in credential', async () => {
+    const { service, mailer } = build(consoleUser, null);
+
+    await expect(service.sendForUser(user, USER_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'USER_HAS_NO_CREDENTIAL',
+    });
+    expect(mailer.sendPasswordReset).not.toHaveBeenCalled();
+  });
+});
