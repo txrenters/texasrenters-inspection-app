@@ -837,8 +837,11 @@ describe('administrator assignment operations', () => {
           id: 'technician-1',
           email: 'tech@example.com',
           displayName: 'Field Technician',
+          phone: '+17135550100',
           isActive: true,
           createdAt: new Date(),
+          memberships: [],
+          _count: { roleAssignments: 0 },
         }),
       },
       inspectionAssignment: { groupBy },
@@ -849,13 +852,44 @@ describe('administrator assignment operations', () => {
 
     expect(result).toMatchObject({
       id: 'technician-1',
+      phone: '+17135550100',
+      hasConsoleAccess: false,
       workload: { current: 3, inProgress: 1, completed: 800 },
     });
+    expect(result).not.toHaveProperty('memberships');
+    expect(result).not.toHaveProperty('_count');
     expect(groupBy).toHaveBeenCalledTimes(3);
     for (const [request] of groupBy.mock.calls) {
       expect(request.where.inspection.organizationId).toBe(user.organizationId);
       expect(request.where.technicianId.in).toEqual(['technician-1']);
     }
+  });
+
+  it.each([
+    ['a console membership', [{ role: 'PROPERTY_ADMIN' }], 0],
+    ['a custom role', [], 1],
+  ])('says a technician holding %s also has console access', async (_label, memberships, roles) => {
+    const prisma = {
+    ...ZERO_EVIDENCE,
+      userProfile: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'technician-1',
+          email: 'tech@example.com',
+          displayName: 'Field Technician',
+          phone: null,
+          isActive: true,
+          createdAt: new Date(),
+          memberships,
+          _count: { roleAssignments: roles },
+        }),
+      },
+      inspectionAssignment: { groupBy: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    await expect(service.technician(user, 'technician-1')).resolves.toMatchObject({
+      hasConsoleAccess: true,
+    });
   });
 });
 

@@ -71,6 +71,21 @@ export interface AdminUser {
 
 export interface AdminUserDetail extends AdminUser {
   permissions: string[];
+  /** E.164, or null when none is on file (`formatPhoneNumber` to show it). */
+  phone?: string | null;
+  /** The same account also signs in to the inspection app. */
+  hasTechnicianAccess?: boolean;
+}
+
+/**
+ * A change to a person's own details, from the user page or the technician
+ * page -- the same account either way. Every field is optional; a field left
+ * out is left alone. `phone: null` (or an empty string) clears the number.
+ */
+export interface UpdateAccountProfileInput {
+  displayName?: string;
+  email?: string;
+  phone?: string | null;
 }
 
 export interface CreatedUserAccount extends AdminUserDetail {
@@ -1322,6 +1337,10 @@ export interface AdminTechnician {
   assignments?: AdminAssignment[];
   isOnline?: boolean;
   lastSeenAt?: string | null;
+  /** Detail only. E.164, or null when none is on file. */
+  phone?: string | null;
+  /** Detail only. The same account also holds console access. */
+  hasConsoleAccess?: boolean;
 }
 
 export interface CreatedTechnicianAccount extends AdminTechnician {

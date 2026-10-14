@@ -7,6 +7,7 @@ import { TechnicianModule } from '../technician/technician.module';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { AccessController } from './access.controller';
 import { AccessService } from './access.service';
+import { AccountProfileService } from './account-profile.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { RoutingModule } from '../routing/routing.module';
@@ -53,6 +54,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     TechnicianTimelineService,
     PropertyGeocodeScheduler,
     AccessService,
+    AccountProfileService,
     AreaEvidenceService,
     AiGuidanceService,
     // Test runs of the AI against the office's decisions; reads the pipeline

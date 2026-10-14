@@ -166,6 +166,40 @@ describe('AccessService user role assignment', () => {
     });
   });
 
+  it('returns the phone number and whether the account also uses the app', async () => {
+    const prisma = {
+      userProfile: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'user-2',
+          email: 'u2@example.com',
+          displayName: 'User Two',
+          phone: '+17135550100',
+          isActive: true,
+          createdAt: new Date(),
+          memberships: [{ role: UserRole.PROPERTY_ADMIN }],
+          roleAssignments: [],
+        }),
+      },
+      organizationMember: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
+
+    await expect(service.user(admin, 'user-2')).resolves.toMatchObject({
+      id: 'user-2',
+      phone: '+17135550100',
+      hasTechnicianAccess: true,
+    });
+    // Asked inside the caller's organization: a technician membership somewhere
+    // else is not this console's business.
+    expect(prisma.organizationMember.count).toHaveBeenCalledWith({
+      where: {
+        userProfileId: 'user-2',
+        organizationId: admin.organizationId,
+        role: UserRole.INSPECTION_TECHNICIAN,
+      },
+    });
+  });
+
   it('deactivates a user whose only current assignments are finished visits', async () => {
     // A finished visit stays assigned to whoever walked it and cannot be
     // reassigned. The guard counted every current assignment -- finished and

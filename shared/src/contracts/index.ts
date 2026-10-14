@@ -97,3 +97,4 @@ export * from './property-details.js';
 export * from './property-service.js';
 export * from './area-sequence.js';
 export * from './technician-trail.js';
+export * from './phone-number.js';
