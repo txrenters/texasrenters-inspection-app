@@ -6,6 +6,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { RoutingModule } from '../routing/routing.module';
 import { GroupTemplateChangesController } from './group-template-changes.controller';
 import { GroupTemplateChangesService } from './group-template-changes.service';
+import { QuarterPackageChangesService } from './quarter-package-changes.service';
 import { GroupTemplateController } from './group-template.controller';
 import { GroupTemplateGateway } from './group-template.gateway';
 import { GroupTemplateService } from './group-template.service';
@@ -55,6 +56,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     PlanDayMoveService,
     PropertyServiceStatusService,
     GroupTemplateChangesService,
+    QuarterPackageChangesService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })
