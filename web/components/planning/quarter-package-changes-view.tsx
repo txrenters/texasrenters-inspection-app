@@ -6,6 +6,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { EmptyState } from '@/components/states';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDate } from '@/lib/format';
 import { quarterName } from '@/lib/planning';
 import { cn } from '@/lib/utils';
@@ -108,29 +109,29 @@ export function QuarterPackageChangesView({ changes }: { changes: QuarterPackage
           since Oct 15, 2026.
         </p>
         {changes.history.length ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-muted-foreground text-left text-xs">
-                <tr>
-                  <th className="px-3 py-2 font-medium">When</th>
-                  <th className="px-3 py-2 font-medium">Property</th>
-                  <th className="px-3 py-2 font-medium">What</th>
-                  <th className="px-3 py-2 font-medium">From</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
+          <div className="rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">When</TableHead>
+                  <TableHead scope="col">Property</TableHead>
+                  <TableHead scope="col">What</TableHead>
+                  <TableHead scope="col">From</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {changes.history.map((event) => (
-                  <tr key={event.id}>
-                    <td className="text-muted-foreground px-3 py-2 whitespace-nowrap tabular-nums">{formatDate(event.occurredAt)}</td>
-                    <td className="px-3 py-2">
+                  <TableRow key={event.id}>
+                    <TableCell className="text-muted-foreground whitespace-nowrap tabular-nums">{formatDate(event.occurredAt)}</TableCell>
+                    <TableCell>
                       <PropertyLink address={event.address} buildingId={event.buildingId} />
-                    </td>
-                    <td className={cn('px-3 py-2', event.kind === 'JOINED' ? 'text-success' : 'text-warning')}>{eventText(event)}</td>
-                    <td className="text-muted-foreground px-3 py-2">{eventSource(event)}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className={event.kind === 'JOINED' ? 'text-success' : 'text-warning'}>{eventText(event)}</TableCell>
+                    <TableCell className="text-muted-foreground">{eventSource(event)}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         ) : (
           <EmptyState

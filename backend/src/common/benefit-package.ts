@@ -1,4 +1,4 @@
-import { TbpPackageChangeKind, TbpPackageChangeSource } from '@prisma/client';
+import { TbpPackageChangeKind, type TbpPackageChangeSource } from '@prisma/client';
 import { isTbpZone, zoneNumberOf, type PackageLeftReason } from '@texasrenters/shared';
 
 import { SERVICE_STATUS_VIEW_SELECT } from '../admin/property-service-status';
