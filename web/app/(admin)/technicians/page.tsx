@@ -99,6 +99,16 @@ export default function TechniciansPage() {
           ) : undefined
         }
         description="Provision mobile accounts and manage assigned inspection workloads."
+        info={
+          <>
+            <p>Current is open work: visits scheduled, under way, or waiting on a follow-up visit.</p>
+            <p>
+              Completed counts every visit they have finished. A finished visit stays with whoever
+              walked it and does not stop the account being deactivated.
+            </p>
+          </>
+        }
+        infoLabel="About these figures"
         title="Technicians"
       />
 

@@ -31,6 +31,22 @@ export function isDoneInspectionStatus(status: InspectionStatus): boolean {
 }
 
 /**
+ * Still to happen -- a visit somebody has to be sent to (`isUpcomingVisit`).
+ *
+ * Neither done nor cancelled: scheduled, under way, or asking for another
+ * visit. This is a technician's open work. Finishing a visit never ends its
+ * assignment -- the record keeps who walked it -- so "current assignments"
+ * without this filter counted every visit a technician had ever finished, and
+ * a deactivation guard built on it could never be satisfied: a finished
+ * inspection cannot be reassigned (`INSPECTION_NOT_ASSIGNABLE`).
+ */
+export const UPCOMING_INSPECTION_STATUSES: InspectionStatus[] = Object.values(
+  InspectionStatus,
+).filter(
+  (status) => status !== InspectionStatus.CANCELLED && !DONE_INSPECTION_STATUSES.includes(status),
+);
+
+/**
  * The inspections in one visit state (`visitStateOf`), as a query.
  *
  * "Could not get in" is a done visit whose reason says so. "Done" is every

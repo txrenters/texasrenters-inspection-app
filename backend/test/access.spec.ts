@@ -166,6 +166,73 @@ describe('AccessService user role assignment', () => {
     });
   });
 
+  it('deactivates a user whose only current assignments are finished visits', async () => {
+    // A finished visit stays assigned to whoever walked it and cannot be
+    // reassigned. The guard counted every current assignment -- finished and
+    // cancelled ones, in any organization -- so anyone who had ever finished
+    // a visit could not be deactivated (2026-10-14).
+    const record = {
+      id: 'user-2',
+      email: 'u2@example.com',
+      displayName: 'User Two',
+      isActive: true,
+      createdAt: new Date(),
+      memberships: [],
+      roleAssignments: [],
+    };
+    const prisma = {
+      userProfile: {
+        findFirst: jest.fn().mockResolvedValue(record),
+        update: jest.fn(),
+      },
+      inspectionAssignment: { count: jest.fn().mockResolvedValue(0) },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
+
+    await service.updateUserStatus(admin, 'user-2', false);
+
+    expect(prisma.inspectionAssignment.count).toHaveBeenCalledWith({
+      where: {
+        technicianId: 'user-2',
+        isCurrent: true,
+        inspection: {
+          organizationId: admin.organizationId,
+          status: { in: ['SCHEDULED', 'IN_PROGRESS', 'FOLLOW_UP_REQUIRED'] },
+        },
+      },
+    });
+    expect(prisma.userProfile.update).toHaveBeenCalledWith({
+      where: { id: 'user-2' },
+      data: { isActive: false },
+    });
+  });
+
+  it('refuses to deactivate a user who still has open visits', async () => {
+    const prisma = {
+      userProfile: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'user-2',
+          email: 'u2@example.com',
+          displayName: 'User Two',
+          isActive: true,
+          createdAt: new Date(),
+          memberships: [],
+          roleAssignments: [],
+        }),
+        update: jest.fn(),
+      },
+      inspectionAssignment: { count: jest.fn().mockResolvedValue(2) },
+    };
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
+
+    await expect(service.updateUserStatus(admin, 'user-2', false)).rejects.toMatchObject({
+      status: 409,
+      code: 'USER_HAS_ACTIVE_ASSIGNMENTS',
+    });
+    expect(prisma.userProfile.update).not.toHaveBeenCalled();
+  });
+
   it('rejects assigning a custom role that belongs to a different organization', async () => {
     const prisma = {
       userProfile: {

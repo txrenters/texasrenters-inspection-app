@@ -11,6 +11,7 @@ import {
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { UPCOMING_INSPECTION_STATUSES } from '../common/inspection-done';
 import { PrismaService } from '../common/prisma.service';
 import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
@@ -361,14 +362,24 @@ export class AccessService {
     const target = await this.requireUser(user, id);
     this.assertNotSystemAdmin(target);
     if (!isActive) {
+      // Open work only, as on the technician page (`updateTechnicianStatus`): a
+      // finished visit stays assigned to whoever walked it and cannot be
+      // reassigned, so counting it made the account impossible to deactivate.
       const activeAssignments = await this.prisma.inspectionAssignment.count({
-        where: { technicianId: id, isCurrent: true },
+        where: {
+          technicianId: id,
+          isCurrent: true,
+          inspection: {
+            organizationId: user.organizationId,
+            status: { in: UPCOMING_INSPECTION_STATUSES },
+          },
+        },
       });
       if (activeAssignments > 0)
         throw new ApplicationError(
           409,
           'USER_HAS_ACTIVE_ASSIGNMENTS',
-          'Reassign this user’s active inspections before deactivating the account.',
+          'Reassign this user’s open visits before deactivating the account.',
         );
     }
     await this.prisma.userProfile.update({ where: { id }, data: { isActive } });
