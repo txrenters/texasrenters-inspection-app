@@ -20,6 +20,8 @@ const hooks = vi.hoisted(() => ({
   useGroupTemplate: vi.fn(),
   useGroupTemplateChanges: vi.fn(),
   useGroupTemplateMutations: vi.fn(),
+  usePlanQuarters: vi.fn(),
+  usePlanNotBooked: vi.fn(),
   useGroupFileOnServer: vi.fn(),
   postGroupTemplateOps: vi.fn(),
   readGroupTemplate: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock('@/lib/auth', () => ({
   usePermissions: () => ({ has: () => true }),
   useAuth: () => ({ profile: { id: 'me' } }),
 }));
-const url = vi.hoisted(() => ({ state: { template: '' }, set: vi.fn() }));
+const url = vi.hoisted(() => ({ state: { template: '', notBooked: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 
 /** The live channel, reduced to the handlers the maker gives it. */
@@ -52,10 +54,12 @@ vi.mock('@/components/planning/manual-grouping-view', () => ({
     initial,
     onChange,
     live,
+    only,
   }: {
     initial: { state: ManualState; minutesPerProperty: number };
     onChange: (snapshot: { state: ManualState; minutesPerProperty: number }) => void;
     live?: ManualLive;
+    only?: ReadonlySet<number> | null;
   }) {
     const [state, setState] = useState(initial.state);
     useEffect(() => {
@@ -65,6 +69,7 @@ vi.mock('@/components/planning/manual-grouping-view', () => ({
     useEffect(() => onChange({ state, minutesPerProperty: 30 }), [onChange, state]);
     return (
       <div data-testid="manual-grouping">
+        <span data-testid="offered">{only ? [...only].sort().join(',') : 'every property'}</span>
         <span data-testid="groups">{state.groups.map((group) => `${group.name}: ${group.stops.join(',')}`).join(' | ')}</span>
         <span data-testid="editing">
           {[...(live?.editingBy ?? new Map())].map(([groupId, names]) => `${groupId}=${names.join('+')}`).join(' ')}
@@ -145,8 +150,13 @@ function mount({
   templates = [{ ...TEMPLATE, groupCount: 1, propertyCount: 2 }] as unknown[],
   loading = false,
   changes = undefined as unknown,
+  notBooked = undefined as unknown,
 } = {}) {
   hooks.useGroupTemplateChanges.mockReturnValue({ data: changes });
+  hooks.usePlanQuarters.mockReturnValue({
+    data: [{ id: 'plan-q4', quarterYear: 2026, quarterNumber: 4, status: 'PUBLISHED' }],
+  });
+  hooks.usePlanNotBooked.mockReturnValue({ data: notBooked, isError: false });
   hooks.useGroupMakerProperties.mockReturnValue({
     isLoading: false,
     data: { properties: [property('b1'), property('b2'), property('b3')], withoutPosition: 0 },
@@ -167,7 +177,7 @@ function mount({
 
 describe('the Group maker', () => {
   beforeEach(() => {
-    url.state = { template: '' };
+    url.state = { template: '', notBooked: '' };
     url.set.mockReset();
     hooks.postGroupTemplateOps.mockReset();
     channel.focus.mockReset();
@@ -294,6 +304,42 @@ describe('the Group maker', () => {
       mount({ changes: { ...CHANGES, leavers: [], newcomers: [] } });
 
       expect(screen.getByText(/every property in it is in a group, and none of the template.s has left/)).toBeTruthy();
+    });
+  });
+
+  /**
+   * The office (2026-10-15): unschedule the rest of Q4 "so we can regroup them
+   * using the tbp group maker". Only the properties a Rebuild would lay out are
+   * offered; nothing already in a group is taken out of it.
+   */
+  describe('drawing a template for the rest of a quarter', () => {
+    it('offers a quarter’s properties not booked yet', () => {
+      mount();
+
+      // Radix opens a select on pointer-down, as it does a menu.
+      fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Properties shown' }), {
+        button: 0,
+        pointerId: 1,
+        pointerType: 'mouse',
+      });
+      fireEvent.click(screen.getByRole('option', { name: /Q4 2026 · not booked yet/ }));
+      expect(url.set).toHaveBeenCalledWith({ notBooked: 'plan-q4' });
+    });
+
+    it('hands the map only those properties, and says how many and why', () => {
+      url.state = { template: '', notBooked: 'plan-q4' };
+      mount({ notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 3, buildingIds: ['b2', 'b3', 'b-gone'] } });
+
+      // Rows are numbered from 2, as a file's are: b2 is row 3, b3 row 4.
+      expect(screen.getByTestId('offered').textContent).toBe('3,4');
+      expect(screen.getByText(/Showing the 2 properties of Q4 2026 not booked yet/)).toBeTruthy();
+      expect(screen.getByText(/1 more have no position, or left the package/)).toBeTruthy();
+    });
+
+    it('offers every property until a quarter is chosen', () => {
+      mount();
+
+      expect(screen.getByTestId('offered').textContent).toBe('every property');
     });
   });
 

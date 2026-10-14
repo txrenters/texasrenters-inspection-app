@@ -548,6 +548,45 @@ export class PlanningController {
   }
 
   /**
+   * The properties whose visit this quarter is not booked yet: what a Rebuild
+   * lays out, and so what the Group maker shows when the office draws a
+   * template for the rest of a quarter (2026-10-15: "unschedule all tbp that
+   * was scheduled so we can regroup them using the tbp group maker").
+   *
+   * A visit with no inspection, whatever its day -- unscheduled, never placed,
+   * or planned and not published -- and not one left out of the quarter, by a
+   * coordinator or because its zone is.
+   */
+  @Get('quarters/:planId/not-booked')
+  @RequirePermissions('planning:read')
+  async notBooked(@Req() request: AuthenticatedRequest, @Param('planId', ParseUUIDPipe) planId: string) {
+    const { organizationId } = request.user;
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { id: true, quarterYear: true, quarterNumber: true },
+    });
+    if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
+    const stops = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: {
+        planId,
+        organizationId,
+        inspectionId: null,
+        propertywareBuildingId: { not: null },
+        status: { not: TbpStopStatus.EXCLUDED },
+        // Spelled with the null: a bare "not" leaves out every row without a code.
+        OR: [{ blockedCode: null }, { blockedCode: { not: 'ZONE_EXCLUDED' } }],
+      },
+      select: { propertywareBuildingId: true },
+    });
+    return {
+      planId,
+      quarter: quarterLabel({ year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] }),
+      visits: stops.length,
+      buildingIds: [...new Set(stops.map((stop) => stop.propertywareBuildingId!))],
+    };
+  }
+
+  /**
    * The road line through one planned day, for the map.
    *
    * Drawn on request rather than stored: a plan holds sixty-odd days and a

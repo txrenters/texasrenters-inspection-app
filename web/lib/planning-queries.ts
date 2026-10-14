@@ -389,6 +389,7 @@ export const planningKeys = {
   groupTemplateChanges: (id: string) => ['admin', 'planning', 'group-templates', id, 'changes'] as const,
   groupMakerProperties: ['admin', 'planning', 'group-maker', 'properties'] as const,
   lateMoveOuts: (planId: string) => ['admin', 'planning', planId, 'late-move-outs'] as const,
+  notBooked: (planId: string) => ['admin', 'planning', planId, 'not-booked'] as const,
   packageChanges: (planId: string) => ['admin', 'planning', planId, 'package-changes'] as const,
 };
 
@@ -627,6 +628,26 @@ export const useGroupFileOnServer = (enabled: boolean) =>
 
 /** The most stops one request returns; a plan larger than this is read a page at a time. */
 const STOP_PAGE = 500;
+
+/**
+ * A quarter's properties whose visit is not booked yet: what a Rebuild lays
+ * out, offered alone in the Group maker to draw a template for the rest of a
+ * quarter (the office, 2026-10-15).
+ */
+export interface PlanNotBooked {
+  planId: string;
+  /** "Q4 2026". */
+  quarter: string;
+  visits: number;
+  buildingIds: string[];
+}
+
+export const usePlanNotBooked = (planId: string | null) =>
+  useQuery({
+    queryKey: planningKeys.notBooked(planId ?? ''),
+    queryFn: ({ signal }) => api<PlanNotBooked>(`${PLANNING}/quarters/${planId}/not-booked`, { signal }),
+    enabled: Boolean(planId),
+  });
 
 export const usePlanQuarters = () =>
   useQuery({
