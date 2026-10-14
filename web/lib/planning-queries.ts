@@ -1,6 +1,6 @@
 'use client';
 
-import type { GroupTemplateOp } from '@texasrenters/shared';
+import type { GroupTemplateChanges, GroupTemplateOp } from '@texasrenters/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
@@ -386,6 +386,7 @@ export const planningKeys = {
   groupFile: ['admin', 'planning', 'group-file'] as const,
   groupTemplates: ['admin', 'planning', 'group-templates'] as const,
   groupTemplate: (id: string) => ['admin', 'planning', 'group-templates', id] as const,
+  groupTemplateChanges: (id: string) => ['admin', 'planning', 'group-templates', id, 'changes'] as const,
   groupMakerProperties: ['admin', 'planning', 'group-maker', 'properties'] as const,
   lateMoveOuts: (planId: string) => ['admin', 'planning', planId, 'late-move-outs'] as const,
 };
@@ -510,6 +511,18 @@ export const useGroupTemplate = (id: string | null) =>
     enabled: Boolean(id),
     // An open template is the office's work in progress: never swapped underneath them by a refetch.
     staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
+
+/**
+ * What changed in the benefit package under a template (the office, 2026-10-15):
+ * who left and the group each is still in, who joined and the groups each would fit.
+ */
+export const useGroupTemplateChanges = (id: string | null) =>
+  useQuery({
+    queryKey: planningKeys.groupTemplateChanges(id ?? ''),
+    queryFn: ({ signal }) => api<GroupTemplateChanges>(`${PLANNING}/group-templates/${id}/changes`, { signal }),
+    enabled: Boolean(id),
     refetchOnWindowFocus: false,
   });
 

@@ -6,6 +6,7 @@ import {
   mapOpStops,
   type GroupTemplateEditor,
   type GroupTemplateOp,
+  type PackageChangeGroup,
 } from '@texasrenters/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArchiveIcon, EllipsisIcon, PlusIcon, ShapesIcon, StarIcon } from 'lucide-react';
@@ -47,6 +48,7 @@ import {
   readGroupTemplate,
   useGroupMakerProperties,
   useGroupTemplate,
+  useGroupTemplateChanges,
   useGroupTemplateMutations,
   useGroupTemplates,
   type GroupTemplateInput,
@@ -65,7 +67,6 @@ import {
   liveGroupsOf,
   liveGroupsOfTemplate,
   makerProperties,
-  missingStopLines,
   rowsToMatch,
   stateFromMatchedFile,
   stateFromTemplate,
@@ -74,6 +75,7 @@ import {
 } from './group-maker';
 import { DEFAULT_MINUTES_PER_PROPERTY, type ManualState } from './manual-grouping';
 import { ManualGroupingView, type ManualLiveControls } from './manual-grouping-view';
+import { PackageChangesPanel } from './package-changes-panel';
 import { TemplateSync, type SyncStatus } from './template-sync';
 import { useTemplateLive } from './use-template-live';
 import { zoneTerritories } from './zone-territories';
@@ -92,6 +94,12 @@ type StartFrom = 'blank' | 'copy' | 'file';
 
 /** How long after the last keystroke a template's new name goes out. */
 const NAME_DEBOUNCE_MS = 600;
+
+/**
+ * How long after a change the package changes are read again: long enough for
+ * a run of clicks to be one read, and for the change to have reached the server.
+ */
+const CHANGES_REFRESH_MS = 1_500;
 
 /** The server saying no -- archived, refused, not found -- rather than the network failing: said once, not retried. */
 function refusal(error: unknown): string | null {
@@ -158,6 +166,35 @@ export function GroupMakerView() {
   const waiting = useRef<GroupTemplateOp<string>[][]>([]);
   const nameTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  /** Who left the package and who joined, under the open template (2026-10-15). */
+  const changes = useGroupTemplateChanges(editor?.templateId ?? null);
+  /** Properties with a change from the package panel on its way: their buttons wait for it. */
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  /**
+   * Read the package changes again once what was just done is saved -- by this
+   * person, from the panel or the map, or by anyone else: a newcomer clicked
+   * into a group is no longer new. A run of changes is one read.
+   */
+  const refreshChanges = useCallback(() => {
+    clearTimeout(refreshTimer.current);
+    const attempt = () => {
+      if (engine.current?.pending) {
+        refreshTimer.current = setTimeout(attempt, CHANGES_REFRESH_MS);
+        return;
+      }
+      void client
+        .invalidateQueries({
+          predicate: (query) =>
+            query.queryKey.includes('group-templates') && query.queryKey[query.queryKey.length - 1] === 'changes',
+        })
+        .finally(() => setBusy(new Set()));
+    };
+    refreshTimer.current = setTimeout(attempt, CHANGES_REFRESH_MS);
+  }, [client]);
+  useEffect(() => () => clearTimeout(refreshTimer.current), []);
+
   /** Somebody else's batch, or the one that catches this copy up, made to what this person sees. */
   const applyToView = useCallback(
     (ops: GroupTemplateOp<string>[]) => {
@@ -181,8 +218,9 @@ export function GroupMakerView() {
       if (!rows.length) return;
       lastKnown.current = { groups: applyGroupOps(lastKnown.current, rows).groups };
       controls.current.rebase((state) => ({ groups: applyGroupOps(state, rows).groups }));
+      refreshChanges();
     },
-    [made],
+    [made, refreshChanges],
   );
 
   /**
@@ -193,7 +231,9 @@ export function GroupMakerView() {
     const template = detail.data;
     if (!template || !made || template.id !== openId) return;
     if (editor?.templateId === template.id) return;
-    const { state, missing } = stateFromTemplate(template, made.rowOf);
+    // A member the map cannot draw -- left the package, or no position -- is
+    // listed in the package panel, with its group and why (2026-10-15).
+    const { state } = stateFromTemplate(template, made.rowOf);
     engine.current?.close();
     viewReady.current = false;
     waiting.current = [];
@@ -230,29 +270,6 @@ export function GroupMakerView() {
       name: template.name,
       initial: { state, activeId: null, minutesPerProperty: template.minutesPerProperty },
     });
-    if (missing.length) {
-      const one = missing.length === 1;
-      toast.warning(`${missing.length.toLocaleString()} ${one ? 'property' : 'properties'} in ${template.name} left the package`, {
-        description: (
-          <div className="grid gap-1.5">
-            <ul className="grid gap-0.5">
-              {missingStopLines(missing).map((line) => (
-                <li key={line} className="font-medium text-foreground">
-                  {line}
-                </li>
-              ))}
-            </ul>
-            <span>
-              {one ? 'Or it lost its position. It is' : 'Or they lost their position. They are'} not on the map; the
-              template keeps {one ? 'it' : 'them'} until {one ? 'its' : 'their'} group is changed.
-            </span>
-          </div>
-        ),
-        // Long enough to read the addresses, and to go and find them.
-        duration: 20_000,
-        closeButton: true,
-      });
-    }
   }, [applyToView, client, detail.data, editor, made, openId]);
 
   useEffect(() => () => engine.current?.close(), []);
@@ -276,10 +293,46 @@ export function GroupMakerView() {
       }
       ops.push(...diffGroupOps(liveGroupsOf(lastKnown.current, made.buildingOf), liveGroupsOf(snapshot.state, made.buildingOf)));
       lastKnown.current = snapshot.state;
-      if (canChange && ops.length) engine.current?.local(ops);
+      if (canChange && ops.length) {
+        engine.current?.local(ops);
+        refreshChanges();
+      }
     },
-    [applyToView, canChange, made],
+    [applyToView, canChange, made, refreshChanges],
   );
+
+  /**
+   * A change from the package panel: made to the map as a click there would
+   * make it, and sent the same way. A leaver is not drawn, so taking it out
+   * changes only the saved template.
+   */
+  const applyFromPanel = useCallback(
+    (ops: GroupTemplateOp<string>[]) => {
+      if (!made || !canChange) return;
+      const rows = mapOpStops(ops, (building) => made.rowOf.get(building));
+      if (rows.length) {
+        lastKnown.current = { groups: applyGroupOps(lastKnown.current, rows).groups };
+        controls.current?.rebase((state) => ({ groups: applyGroupOps(state, rows).groups }));
+      }
+      engine.current?.local(ops);
+      refreshChanges();
+    },
+    [canChange, made, refreshChanges],
+  );
+
+  const addToGroup = (buildingId: string, group: PackageChangeGroup) => {
+    setBusy((was) => new Set(was).add(buildingId));
+    applyFromPanel([{ type: 'stop.add', groupId: group.id, stop: buildingId }]);
+    toast.success(`Added to ${group.name}`, {
+      description: 'It goes last in the group’s order: move it on the map if it belongs earlier.',
+    });
+  };
+
+  const takeOut = (buildingId: string, group: PackageChangeGroup) => {
+    setBusy((was) => new Set(was).add(buildingId));
+    applyFromPanel([{ type: 'stop.remove', stop: buildingId }]);
+    toast.success(`Taken out of ${group.name}`);
+  };
 
   const live = useTemplateLive(editor?.templateId ?? null, {
     onOps: (event) => engine.current?.received(event),
@@ -623,6 +676,16 @@ export function GroupMakerView() {
           {properties.data.withoutPosition === 1 ? 'property has' : 'properties have'} no position yet and cannot be
           grouped until geocoded; a quarter still visits them.
         </p>
+      ) : null}
+
+      {editor && changes.data?.templateId === editor.templateId ? (
+        <PackageChangesPanel
+          busy={busy}
+          canChange={canChange}
+          changes={changes.data}
+          onAdd={addToGroup}
+          onRemove={takeOut}
+        />
       ) : null}
 
       {editor && made ? (

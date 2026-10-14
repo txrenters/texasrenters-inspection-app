@@ -4,6 +4,8 @@ import { AdminModule } from '../admin/admin.module';
 import { DatabaseModule } from '../database/database.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { RoutingModule } from '../routing/routing.module';
+import { GroupTemplateChangesController } from './group-template-changes.controller';
+import { GroupTemplateChangesService } from './group-template-changes.service';
 import { GroupTemplateController } from './group-template.controller';
 import { GroupTemplateGateway } from './group-template.gateway';
 import { GroupTemplateService } from './group-template.service';
@@ -35,6 +37,8 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     PlanDayRouteController,
     // The office's switches on a property: they run the lease schedule (2026-10-08).
     PropertyServiceStatusController,
+    // Who left the package and who joined, under a template (2026-10-15).
+    GroupTemplateChangesController,
   ],
   providers: [
     TbpPlanService,
@@ -50,6 +54,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     LateMoveOutService,
     PlanDayMoveService,
     PropertyServiceStatusService,
+    GroupTemplateChangesService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })

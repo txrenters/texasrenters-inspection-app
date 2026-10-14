@@ -18,6 +18,7 @@ const hooks = vi.hoisted(() => ({
   useGroupMakerProperties: vi.fn(),
   useGroupTemplates: vi.fn(),
   useGroupTemplate: vi.fn(),
+  useGroupTemplateChanges: vi.fn(),
   useGroupTemplateMutations: vi.fn(),
   useGroupFileOnServer: vi.fn(),
   postGroupTemplateOps: vi.fn(),
@@ -25,6 +26,7 @@ const hooks = vi.hoisted(() => ({
   planningKeys: {
     groupTemplates: ['group-templates'],
     groupTemplate: (id: string) => ['group-templates', id],
+    groupTemplateChanges: (id: string) => ['group-templates', id, 'changes'],
   },
 }));
 vi.mock('@/lib/planning-queries', () => hooks);
@@ -109,7 +111,41 @@ const TEMPLATE = {
 const mutation = () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false });
 let mutations: Record<string, ReturnType<typeof mutation>>;
 
-function mount({ templates = [{ ...TEMPLATE, groupCount: 1, propertyCount: 2 }] as unknown[], loading = false } = {}) {
+const NORTH = { id: GROUP_ID, position: 1, name: 'North', color: '#e6194b' };
+
+/** What the server says changed in the package under the open template (2026-10-15). */
+const CHANGES = {
+  templateId: TEMPLATE_ID,
+  revision: 4,
+  leavers: [
+    {
+      buildingId: 'gone',
+      address: '9 Gone Ave',
+      group: NORTH,
+      reasons: [{ code: 'OPTED_OUT', since: '2026-10-14T15:00:00.000Z', by: 'Erika', detail: null }],
+    },
+  ],
+  unplaced: [],
+  newcomers: [
+    {
+      buildingId: 'b3',
+      address: 'b3 Main St',
+      city: 'Houston',
+      zone: '1',
+      firstOnReport: '2026-10-12T15:00:00.000Z',
+      suggestions: [
+        { group: NORTH, members: 2, target: 9, hasRoom: true, addedMinutes: 4, timing: 'ROAD', nearest: { address: 'b2 Main St', minutes: 3 } },
+      ],
+    },
+  ],
+};
+
+function mount({
+  templates = [{ ...TEMPLATE, groupCount: 1, propertyCount: 2 }] as unknown[],
+  loading = false,
+  changes = undefined as unknown,
+} = {}) {
+  hooks.useGroupTemplateChanges.mockReturnValue({ data: changes });
   hooks.useGroupMakerProperties.mockReturnValue({
     isLoading: false,
     data: { properties: [property('b1'), property('b2'), property('b3')], withoutPosition: 0 },
@@ -219,6 +255,45 @@ describe('the Group maker', () => {
 
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     expect(mutations.archive!.mutate).not.toHaveBeenCalled();
+  });
+
+  describe('benefit package changes (2026-10-15)', () => {
+    it('lists who left, with the group each is still in and why, and who is new, with where each would fit', () => {
+      mount({ changes: CHANGES });
+
+      expect(screen.getByText(/1 left the package · 1 new, not in a group/)).toBeTruthy();
+      expect(screen.getByText('9 Gone Ave')).toBeTruthy();
+      expect(screen.getByText(/Opted out of the benefit package on Oct 14, 2026 by Erika/)).toBeTruthy();
+      const fit = screen.getByRole('button', { name: 'Add b3 Main St to North' });
+      expect(fit.textContent).toContain('+4 min');
+      expect(fit.textContent).toContain('2 of 9');
+    });
+
+    it('puts a newcomer in the suggested group on the map, and sends it as a click would', async () => {
+      mount({ changes: CHANGES });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add b3 Main St to North' }));
+
+      await waitFor(() => expect(screen.getByTestId('groups').textContent).toBe('North: 2,3,4'));
+      await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalledTimes(1));
+      expect(hooks.postGroupTemplateOps.mock.calls[0]![2]).toEqual([{ type: 'stop.add', groupId: GROUP_ID, stop: 'b3' }]);
+    });
+
+    it('takes a leaver out of its group: only the saved template changes, it was never drawn', async () => {
+      mount({ changes: CHANGES });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Take 9 Gone Ave out of North' }));
+
+      await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalledTimes(1));
+      expect(hooks.postGroupTemplateOps.mock.calls[0]![2]).toEqual([{ type: 'stop.remove', stop: 'gone' }]);
+      expect(screen.getByTestId('groups').textContent).toBe('North: 2,3');
+    });
+
+    it('says so when nothing changed', () => {
+      mount({ changes: { ...CHANGES, leavers: [], newcomers: [] } });
+
+      expect(screen.getByText(/every property in it is in a group, and none of the template.s has left/)).toBeTruthy();
+    });
   });
 
   /** Console-development: the page's name stays while its data loads, rather than a blank skeleton. */
