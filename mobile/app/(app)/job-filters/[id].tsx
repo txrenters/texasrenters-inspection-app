@@ -14,8 +14,9 @@ import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import {
   filterAssessed,
-  FILTER_SIZE_PATTERN,
+  FILTER_SIZE_WITH_WORDS_PATTERN,
   MAX_BOOKED_FILTERS,
+  MAX_FILTER_SIZE_LENGTH,
   normalizeFilterSize,
   type VisitServicesReport,
 } from '@texasrenters/shared';
@@ -137,6 +138,10 @@ const blankEntry = (): FilterEntry => ({ size: '', quantity: 1 });
 /**
  * Every filter found on site, listed at once: a size and how many of it per
  * line, and another line for the next size.
+ *
+ * A size can carry words, the brand above all (Moses, 2026-10-16): an
+ * AprilAire 20x25x4 is not the filter a plain 20x25x4 is, and the office buys
+ * from what is written here.
  */
 function AddFiltersSheet({
   visible,
@@ -150,7 +155,7 @@ function AddFiltersSheet({
   const theme = useThemeColors();
   const [entries, setEntries] = useState<FilterEntry[]>(() => [blankEntry()]);
   const filled = entries.filter((entry) => entry.size.trim());
-  const invalid = filled.some((entry) => !FILTER_SIZE_PATTERN.test(entry.size));
+  const invalid = filled.some((entry) => !FILTER_SIZE_WITH_WORDS_PATTERN.test(entry.size));
   const total = filled.reduce((sum, entry) => sum + entry.quantity, 0);
 
   const update = (index: number, patch: Partial<FilterEntry>) =>
@@ -166,7 +171,8 @@ function AddFiltersSheet({
         <View className="gap-1">
           <Text className="text-lg font-bold text-foreground">Add filters</Text>
           <Text className="text-sm text-muted-foreground">
-            Every size you found, with how many of each.
+            Every size you found, with how many of each. Put the brand after the size when it matters, like
+            20x25x4 AprilAire.
           </Text>
         </View>
         <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 280 }}>
@@ -176,9 +182,12 @@ function AddFiltersSheet({
                 <TextInput
                   accessibilityLabel={`Filter size ${index + 1}`}
                   autoCapitalize="none"
+                  // "AprilAire" is not a typo, and "20x25x4" is not a word.
+                  autoCorrect={false}
                   autoFocus={index > 0 && index === entries.length - 1}
                   className="min-h-11 flex-1 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
                   keyboardType="numbers-and-punctuation"
+                  maxLength={MAX_FILTER_SIZE_LENGTH}
                   onChangeText={(size) => update(index, { size })}
                   placeholder="Size, like 20x25x1"
                   placeholderTextColor={theme.mutedForeground}
@@ -227,7 +236,11 @@ function AddFiltersSheet({
             ))}
           </View>
         </ScrollView>
-        {invalid ? <Text className="text-xs text-destructive">Write each size like 20x25x1.</Text> : null}
+        {invalid ? (
+          <Text className="text-xs text-destructive">
+            Start each with its size, like 20x25x1 or 20x25x4 AprilAire.
+          </Text>
+        ) : null}
         <Button
           icon={<PlusIcon size={16} className="text-foreground" />}
           label="Another size"
@@ -254,7 +267,12 @@ function AddFiltersSheet({
 /** In the photograph: answered as changed, with the photograph's key or id. */
 const inPhoto = (row: FilterRow) => Boolean(row.answer?.changed && (row.answer.photoKey || row.answer.photoId));
 
-/** The size a filter really is, when the one listed is wrong (Moses, 2026-10-01). */
+/**
+ * The size a filter really is, when the one listed is wrong (Moses, 2026-10-01),
+ * or needs its brand with it: "20x25x4 AprilAire" (2026-10-16).
+ *
+ * Opens on the size the row shows, so adding the brand is typing the brand.
+ */
 function ResizeSheet({
   row,
   onClose,
@@ -266,9 +284,15 @@ function ResizeSheet({
 }) {
   const theme = useThemeColors();
   const [size, setSize] = useState('');
-  const valid = FILTER_SIZE_PATTERN.test(size);
+  const [openedFor, setOpenedFor] = useState<FilterRow | null>(null);
+  if (row && row !== openedFor) {
+    setOpenedFor(row);
+    setSize(row.answer?.actualSize || row.filter.size);
+  }
+  const valid = FILTER_SIZE_WITH_WORDS_PATTERN.test(size);
   const close = () => {
     setSize('');
+    setOpenedFor(null);
     onClose();
   };
   return (
@@ -283,15 +307,19 @@ function ResizeSheet({
         <TextInput
           accessibilityLabel="The filter's real size"
           autoCapitalize="none"
+          autoCorrect={false}
           autoFocus
           className="min-h-11 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground"
           keyboardType="numbers-and-punctuation"
+          maxLength={MAX_FILTER_SIZE_LENGTH}
           onChangeText={setSize}
-          placeholder="Size, like 20x25x1"
+          placeholder="Size, like 20x25x1 or 20x25x4 AprilAire"
           placeholderTextColor={theme.mutedForeground}
           value={size}
         />
-        {size.length && !valid ? <Text className="text-xs text-destructive">Write it like 20x25x1.</Text> : null}
+        {size.length && !valid ? (
+          <Text className="text-xs text-destructive">Start with the size, like 20x25x1 or 20x25x4 AprilAire.</Text>
+        ) : null}
         <View className="flex-row gap-3">
           <Button className="flex-1" label="Cancel" onPress={close} variant="secondary" />
           <Button
@@ -301,6 +329,7 @@ function ResizeSheet({
             onPress={() => {
               onSave(normalizeFilterSize(size));
               setSize('');
+              setOpenedFor(null);
             }}
           />
         </View>

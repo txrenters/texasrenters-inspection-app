@@ -86,6 +86,19 @@ describe('adding every filter found in one go', () => {
     ]);
   });
 
+  it('keeps the words written with a size, apart from the plain size (Moses, 2026-10-16)', () => {
+    const report = withAddedFilters(empty(), null, [
+      { size: '20x25x4 AprilAire', quantity: 1 },
+      { size: 'aprilaire 20 x 25 x 4', quantity: 1 },
+      { size: '20x25x4', quantity: 1 },
+    ]);
+    expect(report.filters?.map((filter) => [filter.size, filter.slot])).toEqual([
+      ['20x25x4 AprilAire', 1],
+      ['20x25x4 aprilaire', 1],
+      ['20x25x4', 1],
+    ]);
+  });
+
   it('does not collide with a size the visit already listed', () => {
     // The visit lists 12x12x1 "downstairs"; one with no place is its own register.
     const report = withAddedFilters(empty(), DETAILS, [{ size: '12x12x1', quantity: 1 }]);

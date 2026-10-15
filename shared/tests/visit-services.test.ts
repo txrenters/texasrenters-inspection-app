@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FILTER_SIZE_PATTERN,
+  FILTER_SIZE_WITH_WORDS_PATTERN,
   bookedFilters,
   filterKey,
   filterLabel,
@@ -98,6 +99,39 @@ describe('the rest of the report', () => {
     for (const size of ['20x25x1', '20 X 25 x 1', '12 x 36', '20x25x4.5']) expect(FILTER_SIZE_PATTERN.test(size)).toBe(true);
     for (const size of ['20x', 'big one', '20-25-1']) expect(FILTER_SIZE_PATTERN.test(size)).toBe(false);
     expect(normalizeFilterSize(' 20 X 25 x 1 ')).toBe('20x25x1');
+  });
+
+  it('takes the words a technician writes with a size, and still asks for the size (Moses, 2026-10-16)', () => {
+    for (const size of ['20x25x4 AprilAire', 'AprilAire #213 20x25x4', '20 x 25 x 4 (April Aire)', '16x25x1 Lowe’s MERV 8', '20x25x1'])
+      expect(FILTER_SIZE_WITH_WORDS_PATTERN.test(size)).toBe(true);
+    for (const size of ['AprilAire', 'big one', '20x25x1; 16x25x1', '20x25x1, 16x25x1', '20x25x1\nAprilAire', `20x25x4 ${'a'.repeat(60)}`])
+      expect(FILTER_SIZE_WITH_WORDS_PATTERN.test(size)).toBe(false);
+    // The office's own Details still take a size alone: their reader files a word beside one as its place.
+    expect(FILTER_SIZE_PATTERN.test('20x25x4 AprilAire')).toBe(false);
+  });
+
+  it('writes the size first and the words after it, and a size alone exactly as before', () => {
+    expect(normalizeFilterSize('AprilAire  20 X 25 x 4')).toBe('20x25x4 AprilAire');
+    expect(normalizeFilterSize(' 20x25x4 - April Aire ')).toBe('20x25x4 April Aire');
+    expect(normalizeFilterSize('(AprilAire) 20×25×4')).toBe('20x25x4 (AprilAire)');
+    for (const size of ['20x25x1', '12 x 36', '20x25x4.5', '20X25X1', '16×20×1'])
+      expect(normalizeFilterSize(size)).toBe(size.replace(/\s+/g, '').replace(/[X×]/g, 'x'));
+    expect(filterKey({ size: 'AprilAire 20x25x4', location: null, slot: 1 })).toBe(
+      filterKey({ size: '20x25x4 AprilAire', location: null, slot: 1 }),
+    );
+  });
+
+  it('counts a branded filter apart from a plain one of the same size', () => {
+    const installed: VisitServicesReport = {
+      services: { filterChange: { done: true, reason: null, reschedule: false } },
+      filters: [
+        { size: '20x25x4', location: null, slot: 1, changed: true, reason: null, photoId: 'p', booked: true, actualSize: '20x25x4 AprilAire' },
+        { size: '20x25x4', location: null, slot: 2, changed: true, reason: null, photoId: 'p', booked: true },
+      ],
+      filtersInstalled: [],
+      notes: null,
+    };
+    expect(installedFiltersSummary(installed)).toBe('2 filters: 1 × 20x25x4 AprilAire, 1 × 20x25x4');
   });
 });
 

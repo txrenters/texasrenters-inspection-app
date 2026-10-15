@@ -132,6 +132,26 @@ describe('the services note', () => {
     expect(lines.some((line) => line.includes('NOT changed'))).toBe(false);
   });
 
+  /** Moses, 2026-10-16: an AprilAire filter "needs to be attached to the size". */
+  it('names a filter with the brand written with its size', () => {
+    const lines = jobberServicesNote({
+      report: report({
+        filtersInstalled: [],
+        filters: [
+          { size: '20x25x4', location: null, slot: 1, changed: true, reason: null, photoId: 'p-1', booked: true, actualSize: '20x25x4 AprilAire' },
+          { size: '16x25x1 Filtrete', location: null, slot: 1, changed: true, reason: null, photoId: 'p-1', booked: false },
+        ],
+      }),
+      details: 'Filter Change: 20x25x4 + Pest Control + HVAC Inspection',
+      inspectionType: 'HVAC',
+      inspectionDone: true,
+      technicianName: null,
+      recordedAt: RECORDED,
+    })!.split('\n');
+    expect(lines).toContain('1. Filter Change: done (installed 2 filters: 1 × 20x25x4 AprilAire, 1 × 16x25x1 Filtrete)');
+    expect(lines).toContain('   Listed as 20x25x4, actually 20x25x4 AprilAire.');
+  });
+
   /**
    * The invoice is made from this note. Three filters went in at 5706 Micah Ln
    * (2026-10-02), two of them 16x25x1, and the note said "installed 12x24x1,
