@@ -475,13 +475,30 @@ export function GroupMakerView() {
   };
 
   /**
+   * A template of every property -- the year-round one -- open under a
+   * quarter's filter: the quarter's properties are all inside its groups, so
+   * the map shows everything and the filter seems to do nothing (2026-10-15:
+   * "make sure it should show all the Q4 unscheduled ... and just the Q4").
+   * Told so, with the way to a template of the quarter's own.
+   */
+  const wholeYear = Boolean(
+    offered &&
+      editor &&
+      made &&
+      // Nearly every enrolled property in a group: a quarter's own template, a
+      // few of whose visits were booked since, never comes close.
+      editor.initial.state.groups.reduce((total, group) => total + group.stops.length, 0) >= made.rows.length * 0.9 &&
+      editor.initial.state.groups.some((group) => group.stops.some((row) => !offered.rows.has(row))),
+  );
+
+  /**
    * A quarter's unscheduled visits grouped by the build's own rules and saved
    * as a new template, opened with only those visits offered (the office,
    * 2026-10-15: "we should have a way on the tbp group maker too to regroup
    * those unscheduled visits for the Q4"). The office changes it as they like,
    * then rebuilds the quarter from it.
    */
-  const regroup = async (planId: string, name: string) => {
+  const regroup = async (planId: string, name: string, start: RegroupStart) => {
     setRegroupPending(true);
     try {
       const suggested = await readNotBookedGroups(planId);
@@ -489,24 +506,34 @@ export function GroupMakerView() {
         toast.info(`${suggested.quarter} has no unscheduled visits to group`);
         return;
       }
+      // By hand (the office, 2026-10-15: "so I can manually regroup them"):
+      // the quarter's unscheduled properties on the map, in no group yet.
       const created = await mutations.create.mutateAsync(
-        templateFromGroups(name, suggested.groups, DEFAULT_MINUTES_PER_PROPERTY),
+        start === 'grouped'
+          ? templateFromGroups(name, suggested.groups, DEFAULT_MINUTES_PER_PROPERTY)
+          : { name: name.trim(), minutesPerProperty: DEFAULT_MINUTES_PER_PROPERTY, groups: [] },
       );
       setRegrouping(false);
       engine.current?.close();
       setEditor(null);
       setUrl({ template: created.id, notBooked: planId });
+      const properties = suggested.groups.reduce((total, group) => total + group.buildingIds.length, 0);
       const unplaced = suggested.withoutPosition;
+      const then = `Then on the Benefit package plan, Rebuild ${suggested.quarter} from “${created.name}” and Publish the rest.`;
       toast.success(
-        `${created.name}: ${suggested.groups.length.toLocaleString()} days from ${suggested.visits.toLocaleString()} visits`,
+        start === 'grouped'
+          ? `${created.name}: ${suggested.groups.length.toLocaleString()} days from ${suggested.visits.toLocaleString()} visits`
+          : `${created.name}: ${properties.toLocaleString()} properties to group`,
         {
-          description: `Move properties between groups here if you like. Then on the Benefit package plan, Rebuild ${
-            suggested.quarter
-          } from “${created.name}” and Publish the rest.${
+          description: `${
+            start === 'grouped'
+              ? 'Move properties between groups here if you like.'
+              : `Only ${suggested.quarter}’s unscheduled visits are on the map. Click them into groups; every change is saved as you make it.`
+          } ${then}${
             unplaced
               ? ` ${unplaced.toLocaleString()} ${unplaced === 1 ? 'visit has' : 'visits have'} no position, so ${
                   unplaced === 1 ? 'it is' : 'they are'
-                } in no group; a Rebuild still places ${unplaced === 1 ? 'it' : 'them'}.`
+                } not on the map; a Rebuild still places ${unplaced === 1 ? 'it' : 'them'}.`
               : ''
           }`,
           duration: 15_000,
@@ -586,7 +613,8 @@ export function GroupMakerView() {
           ) : null}
           <RegroupDialog
             onOpenChange={setRegrouping}
-            onRegroup={(planId, name) => void regroup(planId, name)}
+            initialPlanId={url.notBooked || null}
+            onRegroup={(planId, name, start) => void regroup(planId, name, start)}
             open={regrouping}
             pending={regroupPending}
             quarters={quarters}
@@ -784,7 +812,22 @@ export function GroupMakerView() {
         </p>
       ) : null}
 
-      {url.notBooked && notBooked.data && offered ? (
+      {url.notBooked && notBooked.data && offered && editor && wholeYear ? (
+        <div className="bg-card flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2" role="status">
+          <p className="min-w-0 flex-1 text-sm">
+            &ldquo;{editor.name}&rdquo; groups every property, so {notBooked.data.quarter}&rsquo;s{' '}
+            {offered.rows.size.toLocaleString()} unscheduled properties are all inside its groups and the map shows
+            them all. To group only {notBooked.data.quarter}&rsquo;s, start a template of its own &mdash; nothing in
+            &ldquo;{editor.name}&rdquo; changes.
+          </p>
+          {canChange ? (
+            <Button onClick={() => whenSaved(() => setRegrouping(true))} size="sm">
+              <CalendarSyncIcon />
+              Start a {notBooked.data.quarter} template
+            </Button>
+          ) : null}
+        </div>
+      ) : url.notBooked && notBooked.data && offered ? (
         <p className="text-muted-foreground text-xs" role="status">
           Showing the {offered.rows.size.toLocaleString()} properties of {notBooked.data.quarter}&rsquo;s unscheduled
           visits ({notBooked.data.visits.toLocaleString()} {notBooked.data.visits === 1 ? 'visit' : 'visits'}, none booked
@@ -797,7 +840,9 @@ export function GroupMakerView() {
         <p className="text-warning text-xs">That quarter&rsquo;s visits could not be read: every property is shown.</p>
       ) : null}
 
-      {editor && changes.data?.templateId === editor.templateId ? (
+      {/* Not under a quarter's filter: there every property outside the quarter
+          would read as new to the package (2026-10-15). */}
+      {editor && !offered && changes.data?.templateId === editor.templateId ? (
         <PackageChangesPanel
           busy={busy}
           canChange={canChange}
@@ -963,6 +1008,9 @@ function NewTemplateDialog({
   );
 }
 
+/** How a template of a quarter's unscheduled visits starts: empty, or grouped by the build's rules. */
+type RegroupStart = 'hand' | 'grouped';
+
 /**
  * A quarter's unscheduled visits made into a template: which quarter, and what
  * to call it. Says how many visits there are before anything is made.
@@ -971,18 +1019,23 @@ function RegroupDialog({
   open,
   onOpenChange,
   quarters,
+  initialPlanId = null,
   pending,
   onRegroup,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   quarters: readonly { id: string; label: string }[];
+  /** The quarter already being looked at, chosen first. */
+  initialPlanId?: string | null;
   pending: boolean;
-  onRegroup: (planId: string, name: string) => void;
+  onRegroup: (planId: string, name: string, start: RegroupStart) => void;
 }) {
   const [chosen, setChosen] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const planId = chosen ?? quarters[0]?.id ?? null;
+  const [start, setStart] = useState<RegroupStart>('hand');
+  const planId =
+    chosen ?? (quarters.some((entry) => entry.id === initialPlanId) ? initialPlanId : null) ?? quarters[0]?.id ?? null;
   const quarter = quarters.find((entry) => entry.id === planId) ?? null;
   const count = usePlanNotBooked(open ? planId : null);
   const visits = count.data?.visits ?? 0;
@@ -991,9 +1044,31 @@ function RegroupDialog({
     if (!next) {
       setChosen(null);
       setName('');
+      setStart('hand');
     }
     onOpenChange(next);
   };
+  const option = (value: RegroupStart, title: string, detail: string) => (
+    <label
+      className={cn(
+        'hover:bg-accent/60 grid cursor-pointer gap-0.5 rounded-lg border px-3 py-2',
+        start === value && 'border-ring bg-accent',
+      )}
+    >
+      <span className="flex items-center gap-2">
+        <input
+          checked={start === value}
+          className="accent-primary"
+          name="regroup-start"
+          onChange={() => setStart(value)}
+          type="radio"
+          value={value}
+        />
+        <span className="text-sm font-medium">{title}</span>
+      </span>
+      <span className="text-muted-foreground text-xs">{detail}</span>
+    </label>
+  );
 
   return (
     <Dialog onOpenChange={reset} open={open}>
@@ -1001,10 +1076,8 @@ function RegroupDialog({
         <DialogHeader>
           <DialogTitle>Regroup unscheduled visits</DialogTitle>
           <DialogDescription>
-            A quarter&rsquo;s visits with no booked day &mdash; the ones unscheduled from its plan, and any never
-            placed &mdash; grouped into compact days by the same rules a build uses: 9 a day, a 10th where it is within
-            5 minutes, and never more than 20 minutes from one property to the next. They are saved as a new template
-            you can change here, then build the quarter from.
+            A new template of only a quarter&rsquo;s visits with no booked day &mdash; the ones unscheduled from its
+            plan, and any never placed. Only they are on the map. Your other templates do not change.
           </DialogDescription>
         </DialogHeader>
         {quarters.length > 1 ? (
@@ -1024,6 +1097,15 @@ function RegroupDialog({
             </Select>
           </fieldset>
         ) : null}
+        <fieldset className="grid gap-2">
+          <legend className="mb-2 text-sm font-medium">Start from</legend>
+          {option('hand', 'Nothing grouped — I group them by hand', 'Every one of them on the map, in no group yet.')}
+          {option(
+            'grouped',
+            'Grouped for me into compact days',
+            'As a build groups them: 9 a day, a 10th within 5 minutes, never more than 20 minutes between properties. Change them as you like.',
+          )}
+        </fieldset>
         <div className="grid gap-2">
           <Label htmlFor="regroup-template-name">Template name</Label>
           <Input
@@ -1049,7 +1131,7 @@ function RegroupDialog({
           </Button>
           <Button
             disabled={!planId || !visits || !title || pending}
-            onClick={() => planId && onRegroup(planId, title)}
+            onClick={() => planId && onRegroup(planId, title, start)}
             type="button"
           >
             {pending ? <Spinner /> : null}

@@ -152,6 +152,7 @@ function mount({
   loading = false,
   changes = undefined as unknown,
   notBooked = undefined as unknown,
+  templateGroups = [{ id: GROUP_ID, position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2'] }] as unknown[],
 } = {}) {
   hooks.useGroupTemplateChanges.mockReturnValue({ data: changes });
   hooks.usePlanQuarters.mockReturnValue({
@@ -164,7 +165,7 @@ function mount({
   });
   hooks.useGroupTemplates.mockReturnValue({ isLoading: loading, data: loading ? undefined : templates });
   hooks.useGroupTemplate.mockReturnValue({
-    data: { ...TEMPLATE, groups: [{ id: GROUP_ID, position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2'] }] },
+    data: { ...TEMPLATE, groups: templateGroups },
   });
   hooks.postGroupTemplateOps.mockResolvedValue({ revision: 5 });
   mutations = { create: mutation(), save: mutation(), setActive: mutation(), archive: mutation(), match: mutation() };
@@ -356,6 +357,7 @@ describe('the Group maker', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Regroup unscheduled visits' }));
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByText('3 unscheduled visits in Q4 2026.')).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('radio', { name: /Grouped for me into compact days/ }));
       fireEvent.click(within(dialog).getByRole('button', { name: 'Make the template' }));
 
       await waitFor(() => expect(url.set).toHaveBeenCalledWith({ template: 'template-new', notBooked: 'plan-q4' }));
@@ -364,6 +366,55 @@ describe('the Group maker', () => {
         name: 'Q4 2026 regroup',
         groups: [{ name: 'Group 1', target: 2, buildingIds: ['b3', 'b2'] }],
       });
+    });
+
+    /** The office (2026-10-15): "so I can manually regroup them without hassle". */
+    it('starts with nothing grouped unless asked, so the office groups them by hand', async () => {
+      mount({ notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 3, buildingIds: ['b2', 'b3'] } });
+      hooks.readNotBookedGroups.mockResolvedValue({
+        planId: 'plan-q4',
+        quarter: 'Q4 2026',
+        visits: 3,
+        withoutPosition: 0,
+        groups: [{ buildingIds: ['b3', 'b2'], visits: 3 }],
+      });
+      mutations.create.mutateAsync.mockResolvedValue({ id: 'template-new', name: 'Q4 by hand' });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Regroup unscheduled visits' }));
+      const dialog = await screen.findByRole('dialog');
+      expect((within(dialog).getByRole('radio', { name: /Nothing grouped — I group them by hand/ }) as HTMLInputElement).checked).toBe(true);
+      fireEvent.change(within(dialog).getByLabelText('Template name'), { target: { value: 'Q4 by hand' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Make the template' }));
+
+      await waitFor(() => expect(url.set).toHaveBeenCalledWith({ template: 'template-new', notBooked: 'plan-q4' }));
+      expect(mutations.create.mutateAsync.mock.calls[0]![0]).toEqual({ name: 'Q4 by hand', minutesPerProperty: 30, groups: [] });
+    });
+
+    /**
+     * The year-round template under the filter: every Q4 property is inside its
+     * groups, so the map shows them all. Said so, with the way to a Q4 template.
+     */
+    it('says why a template of every property shows everything, and offers a template of the quarter alone', async () => {
+      url.state = { template: '', notBooked: 'plan-q4' };
+      mount({
+        notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 1, buildingIds: ['b2'] },
+        templateGroups: [{ id: GROUP_ID, position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2', 'b3'] }],
+      });
+
+      expect(screen.getByText(/groups every property, so Q4 2026’s 1 unscheduled properties are all inside its groups/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Start a Q4 2026 template' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('Regroup unscheduled visits')).toBeTruthy();
+    });
+
+    it('leaves out the package changes under a quarter’s filter, where every other property would read as new', () => {
+      url.state = { template: '', notBooked: 'plan-q4' };
+      mount({
+        notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 2, buildingIds: ['b2', 'b3'] },
+        changes: { templateId: TEMPLATE_ID, revision: 4, leavers: [], unplaced: [], newcomers: [] },
+      });
+
+      expect(screen.queryByText('Benefit package changes')).toBeNull();
     });
 
     it('makes nothing for a quarter with no unscheduled visits', async () => {
