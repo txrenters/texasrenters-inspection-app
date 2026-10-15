@@ -64,11 +64,11 @@ const KIND_OPTIONS: PickOption[] = [
 const WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' });
 
 /** What a day is, when it is not an ordinary working day for the plan. */
-function dayNote(date: string, quarter: Quarter, closedDays: readonly string[], startsOn: string | null) {
+function dayNote(date: string, quarter: Quarter, closedDays: readonly string[], startsOn: string | null, useMondays = false) {
   const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (weekday === 0 || weekday === 6) return `A ${WEEKDAY.format(new Date(`${date}T00:00:00Z`))}: the office is closed.`;
   if (closedDays.includes(date)) return 'A day the office is closed.';
-  if (isRescheduleMonday(date, quarter, startsOn)) return 'A Monday kept for rescheduled visits.';
+  if (!useMondays && isRescheduleMonday(date, quarter, startsOn)) return 'A Monday kept for rescheduled visits.';
   return null;
 }
 
@@ -105,6 +105,7 @@ export function PlanStopDialog({
   quarter = null,
   closedDays = [],
   startsOn = null,
+  useMondays = false,
   dayGroups = null,
   booked = null,
   onUnschedule,
@@ -125,6 +126,8 @@ export function PlanStopDialog({
   closedDays?: readonly string[];
   /** The plan's own first day, `YYYY-MM-DD`, when it is not the quarter's: the earliest a visit can move to. */
   startsOn?: string | null;
+  /** The plan visits on Mondays too: none is kept free (2026-10-15). */
+  useMondays?: boolean;
   /**
    * A quarter sent out to nobody: its days' groups, which a visit is moved
    * between instead of people (the office, 2026-09-29). Null for a quarter whose
@@ -201,7 +204,7 @@ export function PlanStopDialog({
   };
   const scheduledOn = stop.scheduledOn ? stop.scheduledOn.slice(0, 10) : null;
   const severalUnits = stop.buildingUnits.length > 1;
-  const note = can.date && scheduledOn && quarter ? dayNote(scheduledOn, quarter, closedDays, startsOn) : null;
+  const note = can.date && scheduledOn && quarter ? dayNote(scheduledOn, quarter, closedDays, startsOn, useMondays) : null;
   // The last day of the quarter: the day before the next one starts.
   const lastDay = quarter ? new Date(quarterEnd(quarter).getTime() - 86_400_000).toISOString().slice(0, 10) : '';
   const firstDay = quarter ? (startsOn ?? quarterFirstDay(quarter)) : '';

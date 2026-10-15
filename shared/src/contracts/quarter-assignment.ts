@@ -378,12 +378,12 @@ export interface LayoutOptions {
    * day's visits, by stop id, in the template's order. Absent: the planner
    * groups the visits itself, as it always has.
    *
-   * A group is kept whole, as the office drew it. Only what a day cannot hold
-   * comes off its end -- more than six hours on site, more than a matrix can
-   * route -- and a day with a move-out gives up the visits furthest from it
-   * (`presetAroundAnchors`). Visits in no group -- a building new since the
-   * template was saved -- join the group they add least driving to, or make
-   * days of their own where there are a day's worth (`looseIntoGroups`).
+   * A group is kept whole, as the office drew it, a move-out's day included.
+   * Only what a day cannot hold comes off its end -- more than six hours on
+   * site, more than a matrix can route (`presetAroundAnchors`). Visits in no
+   * group -- a building new since the template was saved -- join the group
+   * they add least driving to, or make days of their own only where there are a
+   * day's worth together; never a day of one (`looseIntoGroups`).
    * Everything after the grouping is the same: the zone of the day, the crew,
    * the calendar, trips, and the visits nothing could take (`squeezeIn`).
    */
@@ -1331,10 +1331,13 @@ function joinNearest(stop: PlannableStop, groups: readonly Group[], rules: Group
  *
  * Where there is a day's worth of them together they are days of their own,
  * grouped as the planner groups any (`groupsOf`). The rest join the group they
- * add least driving to, while it has room -- the plan's most a day, its six
- * hours, and no drive between two properties longer than the office allows --
- * and a visit with nowhere to go is a short day of its own rather than a
- * tenancy nobody visits.
+ * add least driving to: one with room first -- under its target, inside six
+ * hours, no drive longer than allowed -- and failing that, whichever group they
+ * add least driving to that still has the time (`joinAnyway`). "Should respect
+ * the group template we create not make an own rule ... some group became 1
+ * property only and we dont want that" (the office, 2026-10-15): a visit no
+ * group had room for used to be a day of its own, and days of one visit is what
+ * that made. Now only a visit no group has six hours left for is.
  */
 function looseIntoGroups(loose: readonly PlannableStop[], groups: readonly Group[], rules: GroupRules): Group[] {
   if (loose.length === 0) return [...groups];
@@ -1344,14 +1347,42 @@ function looseIntoGroups(loose: readonly PlannableStop[], groups: readonly Group
     .filter((group) => group.path.length < rules.size)
     .flatMap((group) => group.path)
     .filter((stop) => !joinNearest(stop, pool, rules));
-  return [...pool, ...groupsOf(stranded, rules)];
+  // Only what no group has six hours left for -- a group drawn past a day's
+  // time -- is a day of its own: six hours on site is a day's limit, not a rule.
+  const overTime = stranded.filter((stop) => !joinAnyway(stop, pool, rules));
+  return [...pool, ...groupsOf(overTime, rules)];
+}
+
+/**
+ * A visit into the group it adds least driving to, whatever its target or the
+ * drive between properties, of those it still fits in six hours; false where
+ * none does. Only ever after `joinNearest` found no group with room -- the
+ * office would rather a group took one more than a day went out for one visit.
+ */
+function joinAnyway(stop: PlannableStop, groups: readonly Group[], rules: GroupRules): boolean {
+  let best: { group: Group; at: number; added: number } | null = null;
+  for (const group of groups) {
+    if (group.onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes) continue;
+    // The drive itself, not the priced one: a long leg is what this accepts.
+    const { at, added } = cheapestInsertion(group.path, stop, rules.drive);
+    if (!best || added < best.added) best = { group, at, added };
+  }
+  if (!best) return false;
+  best.group.path.splice(best.at, 0, stop);
+  best.group.cost = pathMinutes(best.group.path, rules.cost);
+  best.group.onSite += stop.onSiteMinutes;
+  return true;
 }
 
 /**
  * A day with a move-out or move-in, laid out from the office's groups: the
- * group nearest the appointments, less the visits furthest from them -- three
- * for each appointment (`ANCHOR_VISITS`), and any more its six hours need
- * (the office chose this, 2026-09-30). Null when no group is left to take.
+ * group nearest the appointments, whole, with them -- less only what its six
+ * hours cannot hold, the visits furthest from them first. Null when no group is
+ * left to take.
+ *
+ * Whole since 2026-10-15 ("should respect the group template we create not make
+ * an own rule"). It used to give up three visits for each appointment
+ * (`ANCHOR_VISITS`, 2026-09-30), and those went to a Monday as days of three.
  */
 function presetAroundAnchors(
   anchors: readonly DayAnchor[],
@@ -1371,11 +1402,10 @@ function presetAroundAnchors(
       nearest = minutes;
     }
   }
-  const most = Math.max(0, group.path.length - ANCHOR_VISITS * anchors.length);
   let onSite = anchors.reduce((total, anchor) => total + anchor.onSiteMinutes, 0);
   const kept = new Set<PlannableStop>();
   for (const stop of [...group.path].sort((left, right) => nearness(left) - nearness(right))) {
-    if (kept.size >= most || onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) break;
+    if (onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) break;
     kept.add(stop);
     onSite += stop.onSiteMinutes;
   }

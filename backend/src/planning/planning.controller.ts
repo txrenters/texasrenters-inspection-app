@@ -222,6 +222,7 @@ export class PlanningController {
           jobberUnassigned: true,
           groupTemplateId: true,
           groupTemplateRevision: true,
+          useMondays: true,
           // Named, so the build dialog can say which grouping the quarter has, and whether it changed since.
           groupTemplate: { select: { id: true, name: true, revision: true, archivedAt: true } },
           officeDetailsImportedAt: true,

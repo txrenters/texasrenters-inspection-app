@@ -124,6 +124,13 @@ export class PlanRoutingSettingsDto {
    * says, so a rebuild that does not mention it groups the same way.
    */
   @IsOptional() @IsUUID('all') groupTemplateId?: string | null;
+
+  /**
+   * Visit on Mondays too, rather than keep each Monday from the plan's second
+   * week free for rescheduled visits (the office, 2026-10-15). Left out:
+   * whatever the plan already says.
+   */
+  @IsOptional() @IsBoolean() useMondays?: boolean;
 }
 
 export class PlanQuarterDto extends PlanRoutingSettingsDto {

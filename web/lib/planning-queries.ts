@@ -44,6 +44,12 @@ export interface PlanSettings {
    * was built for, which is what the phone and the calendar read.
    */
   jobberUnassigned: boolean;
+  /**
+   * Visits on Mondays too, rather than each Monday from the plan's second week
+   * kept free for rescheduled visits (the office, 2026-10-15). Absent from a
+   * server older than this: Mondays kept.
+   */
+  useMondays?: boolean;
 }
 
 export interface PlanQuarter extends PlanSettings {
@@ -356,6 +362,8 @@ export interface PlanBuildInput {
    * under way, grouped again from a later day (2026-10-15). Never kept on the plan.
    */
   firstDay?: string;
+  /** Visit on Mondays too. Left out, the plan keeps what it had. */
+  useMondays?: boolean;
 }
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */

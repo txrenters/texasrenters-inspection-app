@@ -704,14 +704,39 @@ describe('a quarter built from the office’s own groups', () => {
     );
   });
 
-  it('visits a property far from every group on a short day rather than leave it out', () => {
+  /**
+   * The office (2026-10-15): "should respect the group template we create not
+   * make an own rule ... some group became 1 property only". A property far
+   * from every group, or with every group at its target, joins the group it
+   * adds least driving to -- never a day of one.
+   */
+  it('puts a property far from every group into the nearest one rather than a day of its own', () => {
     const group = cluster('g', 9);
     const alone = at('alone', 60, 30.2, -95.37);
 
     const { crews, unplaced } = layoutEveryDay([...group, alone], days(5, ['moses']), { presetGroups: [ids(group)] });
 
     expect(unplaced).toEqual([]);
-    expect(crews.find((day) => day.stops.some((stop) => stop.stopId === 'alone'))!.stops).toHaveLength(1);
+    expect(crews).toHaveLength(1);
+    expect(stopIds(crews[0]!)).toContain('alone');
+    expect(crews[0]!.preset).toBe(0);
+  });
+
+  it('puts a visit into a group already at its target rather than a day of its own', () => {
+    const north = cluster('n', 9);
+    const south = cluster('s', 9, 20, {}, 29.7);
+    const extra = at('extra', 50, 29.7605, -95.3705);
+
+    const { crews } = layoutEveryDay([...north, ...south, extra], days(5, ['moses']), {
+      presetGroups: [ids(north), ids(south)],
+      // Both drawn to hold nine, and both full.
+      presetTargets: [9, 9],
+    });
+
+    expect(crews).toHaveLength(2);
+    expect(crews.every((day) => day.preset !== undefined)).toBe(true);
+    // The nearer group took it.
+    expect(stopIds(crews.find((day) => day.preset === 0)!)).toContain('extra');
   });
 
   it('takes the last visits off a group that would run past six hours on site', () => {
@@ -749,7 +774,11 @@ describe('a quarter built from the office’s own groups', () => {
     const north = cluster('n', 9, 1, { zone: '1' });
     const south = cluster('s', 10, 10, { zone: '2' }, 29.56);
 
-    it('takes the group nearest it, less the three visits furthest from it', () => {
+    /**
+     * Whole since 2026-10-15 ("should respect the group template we create not
+     * make an own rule"): it used to give up three visits for the move-out.
+     */
+    it('takes the group nearest it, whole, with the move-out', () => {
       const { crews, unplaced } = layoutEveryDay([...north, ...south], days(5, ['moses']), {
         anchors: [moveOut],
         presetGroups: [ids(north), ids(south)],
@@ -758,12 +787,24 @@ describe('a quarter built from the office’s own groups', () => {
       expect(unplaced).toEqual([]);
       const anchored = crews.find((day) => day.anchors?.length)!;
       expect(anchored.preset).toBe(1);
-      expect(anchored.stops).toHaveLength(7);
-      expect(anchored.stops.every((stop) => stop.stopId.startsWith('s'))).toBe(true);
-      // The three it gave up furthest from the move-out, north along the street, still get a day.
-      expect(crews.flatMap(ofDay).sort()).toEqual([...ids(north), ...ids(south)].sort());
-      const given = ids(south).filter((id) => !ofDay(anchored).includes(id));
-      expect(given).toEqual(['s8', 's9', 's10']);
+      expect(ofDay(anchored).sort()).toEqual(ids(south).sort());
+      // Two days, each one of the office's groups: nothing given up, nothing made.
+      expect(crews).toHaveLength(2);
+      expect(crews.every((day) => day.preset !== undefined)).toBe(true);
+    });
+
+    it('gives up only what the move-out’s six hours cannot hold', () => {
+      // Sixteen visits of twenty minutes and an hour's move-out: fifteen fit.
+      const big = cluster('b', 16, 10, { zone: '2' }, 29.56);
+
+      const { crews, unplaced } = layoutEveryDay(big, days(5, ['moses']), {
+        anchors: [moveOut],
+        presetGroups: [ids(big)],
+      });
+
+      expect(unplaced).toEqual([]);
+      expect(crews.find((day) => day.anchors?.length)!.stops).toHaveLength(15);
+      expect(crews.flatMap(ofDay).sort()).toEqual(ids(big).sort());
     });
 
     it('keeps its day with the move-out alone once every group has a day', () => {

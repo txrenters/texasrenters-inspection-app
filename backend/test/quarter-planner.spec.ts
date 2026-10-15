@@ -1757,17 +1757,18 @@ describe('a quarter built from a group template', () => {
   });
 
   /**
-   * The office (2026-10-01): a group of nine drawn to hold nine stays nine. A
-   * property new since the template was saved joins a group only while it is
-   * under the size it was drawn to -- not up to the plan's most a day, which
-   * let a group of nine quietly become twelve.
+   * A property new since the template was saved joins a group still under the
+   * size it was drawn to first (the office, 2026-10-01). With every group at its
+   * size it joins the nearest anyway, rather than go out as a day of its own
+   * (2026-10-15: "some group became 1 property only and we dont want that").
    */
-  it('lets a new property join a group only while it is under its target', async () => {
+  it('puts a new property in a group under its target first, and otherwise the nearest -- never a day of its own', async () => {
     const full = [...tight(), stop('new', 11, 0.02, { buildingId: 'b-new' })];
     const atTarget = build(full, { templates: [template()] });
-    await atTarget.service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
+    const summary = await atTarget.service.route('org-1', 'plan-1', { groupTemplateId: TEMPLATE_ID });
     const groupDays = new Set(['s1', 's2'].map((id) => dayOf(atTarget.stopUpdate, id)));
-    expect(groupDays.has(dayOf(atTarget.stopUpdate, 'new'))).toBe(false);
+    expect(groupDays.has(dayOf(atTarget.stopUpdate, 'new'))).toBe(true);
+    expect(summary.days).toBe(2);
 
     const roomy = template({
       groups: [
@@ -1781,29 +1782,27 @@ describe('a quarter built from a group template', () => {
   });
 
   /**
-   * The dialog no longer asks how many a day once a template is chosen. The
-   * days it still sizes -- made from properties in none of its groups -- follow
-   * the office's standing nine, not a twelve an older console sends.
+   * A day's worth of properties in none of the template's groups, together:
+   * grouped at the office's nine, not a twelve an older console sends -- and
+   * the two left over join that day rather than go out as a day of two
+   * (2026-10-15).
    */
-  it('sizes the days of properties in no group at the office’s nine, whatever the plan says', async () => {
-    // Eleven new properties together, in none of the template's groups.
+  it('makes a day of a day’s worth of properties in no group, and never a day of what is left over', async () => {
+    // Eleven new properties together, far from the template's groups.
     const loose = Array.from({ length: 11 }, (_, index) =>
       stop(`n${index + 1}`, 20 + index, 3 + index * 0.05, { buildingId: `n-b${index + 1}` }),
     );
-    const daysOf = (stopUpdate: jest.Mock) => new Set(loose.map((row) => dayOf(stopUpdate, row.id)));
-
     const fromTemplate = build([...tight(), ...loose], { templates: [template()] });
     await fromTemplate.service.route('org-1', 'plan-1', {
       groupTemplateId: TEMPLATE_ID,
       minStopsPerDay: 12,
       maxStopsPerDay: 12,
     });
-    expect(daysOf(fromTemplate.stopUpdate).size).toBeGreaterThan(1);
 
-    // The same twelve, asked for without a template, is honoured: one day of all eleven.
-    const ownGrouping = build(loose);
-    await ownGrouping.service.route('org-1', 'plan-1', { minStopsPerDay: 12, maxStopsPerDay: 12 });
-    expect(daysOf(ownGrouping.stopUpdate).size).toBe(1);
+    const days = loose.map((row) => dayOf(fromTemplate.stopUpdate, row.id));
+    const perDay = new Map<string | undefined, number>();
+    for (const day of days) perDay.set(day, (perDay.get(day) ?? 0) + 1);
+    expect([...perDay.values()].every((count) => count > 2)).toBe(true);
   });
 
   /**
@@ -1866,16 +1865,16 @@ describe('a quarter built from a group template', () => {
   });
 
   /**
-   * The office (2026-10-01): a day with a move-out gives up the three visits
-   * furthest from it, and those go to the Monday after -- the day already kept
-   * for rescheduled visits -- with the same person, rather than being pushed
-   * into somebody else's group.
+   * A move-out's day keeps its group whole (the office, 2026-10-15: "should
+   * respect the group template we create not make an own rule"). Only what its
+   * six hours cannot hold goes to the Monday after -- the day already kept for
+   * rescheduled visits -- with the same person (2026-10-01).
    */
-  describe('a move-out day’s trimmed visits', () => {
+  describe('a move-out day’s group', () => {
     const MOVE_OUT = { id: 'move-out-1', scheduledAt: '2026-10-07', latitude: 29.76, assignedTo: 'tech-1' };
     const scheduled = (stopUpdate: jest.Mock, id: string) => updateFor(stopUpdate, id);
 
-    it('go to the Monday after, with the same person, passing over a holiday Monday', async () => {
+    it('stays whole on the move-out’s day', async () => {
       const { service, stopUpdate } = build(tight(), { templates: [template()], booked: [MOVE_OUT] });
 
       const summary = await service.route('org-1', 'plan-1', {
@@ -1883,14 +1882,33 @@ describe('a quarter built from a group template', () => {
         holidays: onlyOn('2026-10-07', '2026-10-08'),
       });
 
-      // The Odd group is nearest the move-out; its three furthest visits leave the day.
+      // The Odd group is nearest the move-out, and all of it goes with it.
       const odd = ['s1', 's3', 's5', 's7', 's9'];
+      expect(new Set(odd.map((id) => dayOf(stopUpdate, id)?.slice(0, 10)))).toEqual(new Set(['2026-10-07']));
+      expect(summary.template?.toMondays).toBe(0);
+    });
+
+    it('gives what its six hours cannot hold to the Monday after, with the same person, passing over a holiday Monday', async () => {
+      const { service, stopUpdate } = build(tight(), { templates: [template()], booked: [MOVE_OUT] });
+
+      // Ninety minutes a visit. Five are past six hours before any move-out, so
+      // the group's fifth comes off it and joins the nearest group with time --
+      // never a day of its own. The move-out's hour then leaves room for three.
+      const summary = await service.route('org-1', 'plan-1', {
+        groupTemplateId: TEMPLATE_ID,
+        holidays: onlyOn('2026-10-07', '2026-10-08'),
+        occupiedVisitMinutes: 90,
+      });
+
+      const odd = ['s1', 's3', 's5', 's7', 's9'];
+      expect(['s1', 's3', 's5'].map((id) => dayOf(stopUpdate, id)?.slice(0, 10))).toEqual(['2026-10-07', '2026-10-07', '2026-10-07']);
       const onMonday = odd.filter((id) => dayOf(stopUpdate, id)?.startsWith('2026-10-19'));
-      expect(onMonday.sort()).toEqual(['s5', 's7', 's9']);
-      expect(onMonday.every((id) => scheduled(stopUpdate, id)?.assignedTechnicianId === 'tech-1')).toBe(true);
+      expect(onMonday).toEqual(['s7']);
+      expect(scheduled(stopUpdate, 's7')?.assignedTechnicianId).toBe('tech-1');
+      expect(dayOf(stopUpdate, 's9')).toEqual(dayOf(stopUpdate, 's2'));
       // Monday 12 October is Columbus Day: the next Monday kept for rescheduled visits takes them.
       expect(odd.some((id) => dayOf(stopUpdate, id)?.startsWith('2026-10-12'))).toBe(false);
-      expect(summary.template?.toMondays).toBe(3);
+      expect(summary.template?.toMondays).toBe(1);
     });
 
     it('leave the rest of the group on the move-out’s day', async () => {
@@ -1925,5 +1943,45 @@ describe('a quarter built from a group template', () => {
 
       expect(tight().some((row) => new Date(dayOf(stopUpdate, row.id) ?? '2026-10-07').getUTCDay() === 1)).toBe(false);
     });
+  });
+});
+
+/**
+ * The office (2026-10-15): "an option too to use all mondays if we wanted".
+ * Each Monday from the plan's second week is otherwise kept free for
+ * rescheduled visits -- Q4 2026's first is October 5.
+ */
+describe('visiting on Mondays too', () => {
+  const many = () => Array.from({ length: 40 }, (_, index) => stop(`m-${index + 1}`, index + 1, index * 0.01));
+  const daysOf = (stopUpdate: jest.Mock, stops: StopRow[]) =>
+    new Set(stops.map((row) => (updateFor(stopUpdate, row.id)!.scheduledOn as Date).toISOString().slice(0, 10)));
+
+  it('keeps Mondays free unless asked', async () => {
+    const stops = many();
+    const { service, stopUpdate } = build(stops);
+
+    await service.route('org-1', 'plan-1', {});
+
+    expect(daysOf(stopUpdate, stops).has('2026-10-05')).toBe(false);
+  });
+
+  it('lays visits on Mondays when asked, and keeps the answer on the plan', async () => {
+    const stops = many();
+    const { service, stopUpdate, planUpdate } = build(stops);
+
+    await service.route('org-1', 'plan-1', { useMondays: true });
+
+    expect(daysOf(stopUpdate, stops).has('2026-10-05')).toBe(true);
+    expect(planUpdate.mock.calls[0][0].data).toMatchObject({ useMondays: true });
+  });
+
+  it('keeps the plan’s answer on a rebuild that does not say', async () => {
+    const stops = many();
+    const { service, stopUpdate, planUpdate } = build(stops, { plan: { useMondays: true } as never });
+
+    await service.route('org-1', 'plan-1', {});
+
+    expect(daysOf(stopUpdate, stops).has('2026-10-05')).toBe(true);
+    expect(planUpdate.mock.calls[0][0].data).toMatchObject({ useMondays: true });
   });
 });
