@@ -1022,6 +1022,7 @@ export default function PlanningPage() {
         startsOn={startsOn}
         // Published: a rebuild groups the visits without a day, from the day asked (2026-10-15).
         underWay={plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED'}
+        closedDays={plan?.holidays ?? []}
       />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>

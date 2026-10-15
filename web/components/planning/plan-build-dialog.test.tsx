@@ -114,22 +114,67 @@ describe('building with the planner’s own grouping', () => {
 });
 
 /**
- * A quarter under way, grouped again from a later day (the office, 2026-10-15:
- * "starting next week unschedule all tbp that was scheduled so we can regroup
- * them"): its booked visits keep their days, and the rest go from the day asked.
+ * A quarter under way, scheduled again from the day the office chooses (the
+ * office, 2026-10-15: "how should I be able to schedule it on the remaining
+ * days of october ... I should be able to schedule it starting from the date I
+ * want"): its booked visits keep their days, the rest go from the day asked.
  */
 describe('rebuilding a quarter under way', () => {
+  const Q4 = { year: 2026, quarter: 4 as const };
+
   it('asks from which day, and sends nothing when left on today', () => {
     const { onBuild, build } = open({ rebuild: true, underWay: true });
 
-    expect(legends()).toContain('Regroup from');
+    expect(legends()).toContain('Schedule from');
     build();
     expect(onBuild.mock.calls[0]![0]).not.toHaveProperty('firstDay');
   });
 
-  it('is not asked of a draft', () => {
+  it('does not offer to move the quarter’s start, and keeps the plan’s own', () => {
+    const { onBuild, build } = open({ rebuild: true, underWay: true, quarter: Q4, startsOn: '2026-09-16' });
+
+    expect(legends()).not.toContain('Start');
+    build();
+    expect(onBuild.mock.calls[0]![0]).toMatchObject({ startsOn: '2026-09-16' });
+  });
+
+  const underWayWithTemplate = (today: string) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(`${today}T15:00:00.000Z`));
+    open({
+      rebuild: true,
+      underWay: true,
+      quarter: Q4,
+      startsOn: '2026-09-16',
+      jobberUnassigned: true,
+      groupTemplate: { id: TEMPLATE.id, name: TEMPLATE.name, revision: 692, archivedAt: null },
+    });
+    return screen.getByRole('status').textContent ?? '';
+  };
+
+  it('says roughly which days a template’s groups take, one a day for each day group', () => {
+    try {
+      // 45 groups at one a day for the single crew member here, from Thursday
+      // 1 October: weekdays, past the Mondays kept and the November holidays.
+      const said = underWayWithTemplate('2026-10-01');
+      expect(said).toMatch(/^45 groups, 1 a day: about Oct 1 – Dec \d+ \(45 working days; Mondays are kept for reschedules\)/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says so when the groups need more days than the quarter has left', () => {
+    try {
+      expect(underWayWithTemplate('2026-10-15')).toMatch(/^45 groups at 1 a day need 45 working days, and the quarter has \d+ left from Oct 15/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is not asked of a draft, which still offers its start', () => {
     open({ rebuild: true });
 
-    expect(legends()).not.toContain('Regroup from');
+    expect(legends()).not.toContain('Schedule from');
+    expect(legends()).toContain('Start');
   });
 });
