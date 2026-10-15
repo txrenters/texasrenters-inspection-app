@@ -1,6 +1,6 @@
 'use client';
 
-import { type Quarter, quarterEnd } from '@texasrenters/shared';
+import { plannedVisitDaysOfQuarter, type Quarter, quarterEnd } from '@texasrenters/shared';
 import { useId, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -99,6 +99,7 @@ export function PlanBuildDialog({
   groupTemplateRevision = null,
   stopsPerDay: planStopsPerDay = null,
   underWay = false,
+  closedDays = [],
   pending = false,
   onBuild,
 }: {
@@ -127,6 +128,8 @@ export function PlanBuildDialog({
    * from a day and group again from it (2026-10-15).
    */
   underWay?: boolean;
+  /** The days the plan is closed besides weekends and US holidays: what "how many days" counts past. */
+  closedDays?: readonly string[];
   pending?: boolean;
   onBuild: (choice: PlanBuildChoice) => void;
 }) {
@@ -217,6 +220,26 @@ export function PlanBuildDialog({
   const count = listed.filter((technician) => selected.has(technician.id)).length;
   /** How many days a quarter sent out to nobody runs at once: the benefit-package crew's. */
   const crewSize = listed.filter((technician) => technician.crewOrder !== null).length;
+  /**
+   * Roughly when a template's groups are done from the day asked: one group a
+   * day for each person -- or each day group, sent out to nobody -- on the
+   * plan's own visit days (weekdays, less holidays and the Mondays kept for
+   * reschedules). Rough, because a day already holding booked visits, and a
+   * move-out day, change it; the build places them exactly.
+   */
+  const from = firstDay || today;
+  const perDay = sendUnassigned ? crewSize : count;
+  const visitDays = useMemo(
+    () => plannedVisitDaysOfQuarter(quarter, closedDays, startsOn).filter((date) => date >= from),
+    [quarter, closedDays, startsOn, from],
+  );
+  const reach =
+    underWay && chosenTemplate && perDay > 0
+      ? (() => {
+          const needed = Math.ceil(chosenTemplate.groupCount / perDay);
+          return { needed, first: visitDays[0] ?? null, last: visitDays[needed - 1] ?? null, left: visitDays.length };
+        })()
+      : null;
 
   return (
     <Dialog onOpenChange={close} open={open}>
@@ -319,6 +342,38 @@ export function PlanBuildDialog({
           ) : null}
         </fieldset>
 
+        {/* A quarter under way is scheduled from the day the office chooses
+            (2026-10-15: "I should be able to schedule it starting from the date
+            I want"), not from a start fifteen days either side of the quarter. */}
+        {underWay ? (
+          <fieldset className="grid min-w-0 gap-2">
+            <legend className="mb-2 text-sm font-medium">Schedule from</legend>
+            <DatePicker
+              aria-label="First day for the visits without one"
+              // The quarter's last day: its end is the next one's first.
+              max={shiftDay(quarterEnd(quarter).toISOString().slice(0, 10), -1)}
+              min={today}
+              onChange={setFirstDay}
+              placeholder={`Today, ${formatShortDay(today)}`}
+              value={firstDay}
+            />
+            <FieldDescription>
+              The visits without a day &mdash; unscheduled, or never placed &mdash; go on days from{' '}
+              {formatShortDay(from)} on. Booked visits keep their days
+              {firstDay && firstDay > today ? ', and the days before it keep what they hold' : ''}. Then &ldquo;Publish
+              the rest&rdquo; books them, in Jobber on the visits already waiting there.
+            </FieldDescription>
+            {reach ? (
+              <p className="text-sm" role="status">
+                {reach.last && reach.first
+                  ? `${chosenTemplate!.groupCount.toLocaleString()} groups, ${perDay} a day: about ${formatShortDay(reach.first)} – ${formatShortDay(reach.last)} (${reach.needed.toLocaleString()} working ${reach.needed === 1 ? 'day' : 'days'}; Mondays are kept for reschedules).`
+                  : `${chosenTemplate!.groupCount.toLocaleString()} groups at ${perDay} a day need ${reach.needed.toLocaleString()} working days, and the quarter has ${reach.left.toLocaleString()} left from ${formatShortDay(from)}.`}
+                {sendUnassigned ? '' : perDay === 1 ? ' Tick more technicians for more groups a day.' : ''}
+              </p>
+            ) : null}
+          </fieldset>
+        ) : null}
+
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Technicians</legend>
           {sendUnassigned ? (
@@ -360,6 +415,10 @@ export function PlanBuildDialog({
           )}
         </fieldset>
 
+        {/* Not for a quarter under way: its start is history, and moving it
+            would renumber the weeks and months of the days already visited. The
+            plan's own start is sent unchanged. */}
+        {underWay ? null : (
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Start</legend>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -393,30 +452,7 @@ export function PlanBuildDialog({
             Days before the quarter take its first month’s visits. The second and third months keep their own.
           </FieldDescription>
         </fieldset>
-
-        {/* A quarter under way groups only its visits with no day, and from the
-            day asked (the office, 2026-10-15: "starting next week unschedule
-            all tbp ... so we can regroup them"). */}
-        {underWay ? (
-          <fieldset className="grid min-w-0 gap-2">
-            <legend className="mb-2 text-sm font-medium">Regroup from</legend>
-            <DatePicker
-              aria-label="First day for the visits without one"
-              // The quarter's last day: its end is the next one's first.
-              max={shiftDay(quarterEnd(quarter).toISOString().slice(0, 10), -1)}
-              min={today}
-              onChange={setFirstDay}
-              placeholder={`Today, ${formatShortDay(today)}`}
-              value={firstDay}
-            />
-            <FieldDescription>
-              Booked visits keep their days. The visits without one — unscheduled, or never placed — are grouped
-              onto days from {firstDay ? formatShortDay(firstDay) : 'today'} on
-              {firstDay && firstDay > today ? '; the days before it keep what they hold' : ''}. Then
-              &ldquo;Publish the rest&rdquo; books them, in Jobber on the visits already waiting there.
-            </FieldDescription>
-          </fieldset>
-        ) : null}
+        )}
 
         {/* No "Lay published visits out again" here. A rebuild posts to
             /quarters, which never moved a published visit -- the box did
