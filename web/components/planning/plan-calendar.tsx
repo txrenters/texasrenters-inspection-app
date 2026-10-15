@@ -338,7 +338,7 @@ export function PlanCalendar({
         ? federal.has(date)
           ? 'US holiday'
           : 'Closed'
-        : isRescheduleMonday(date, { year, quarter: number }, startsOn)
+        : !settings.useMondays && isRescheduleMonday(date, { year, quarter: number }, startsOn)
           ? 'Kept free'
           : null,
     colourOf: (technicianId) => colours.get(technicianId) ?? TECHNICIAN_COLOURS[0]!,

@@ -178,3 +178,44 @@ describe('rebuilding a quarter under way', () => {
     expect(legends()).toContain('Start');
   });
 });
+
+/** The office (2026-10-15): "an option too to use all mondays if we wanted". */
+describe('visiting on Mondays too', () => {
+  it('keeps Mondays free unless ticked, and sends the answer either way', () => {
+    const { onBuild, build } = open({ rebuild: true });
+
+    const box = screen.getByRole('checkbox', { name: /Visit on Mondays too/ });
+    expect(box.getAttribute('aria-checked')).toBe('false');
+    build();
+    expect(onBuild.mock.calls[0]![0]).toMatchObject({ useMondays: false });
+  });
+
+  it('opens on the plan’s own answer, and sends a changed one', () => {
+    const { onBuild, build } = open({ rebuild: true, useMondays: true });
+
+    const box = screen.getByRole('checkbox', { name: /Visit on Mondays too/ });
+    expect(box.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(box);
+    build();
+    expect(onBuild.mock.calls[0]![0]).toMatchObject({ useMondays: false });
+  });
+
+  it('counts Mondays in the days a template’s groups take', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T15:00:00.000Z'));
+    try {
+      open({
+        rebuild: true,
+        underWay: true,
+        useMondays: true,
+        quarter: { year: 2026, quarter: 4 },
+        startsOn: '2026-09-16',
+        jobberUnassigned: true,
+        groupTemplate: { id: TEMPLATE.id, name: TEMPLATE.name, revision: 692, archivedAt: null },
+      });
+      expect(screen.getByRole('status').textContent).toMatch(/45 working days, Mondays included/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

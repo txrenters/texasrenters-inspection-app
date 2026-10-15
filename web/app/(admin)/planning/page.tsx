@@ -958,6 +958,7 @@ export default function PlanningPage() {
 
       <PlanStopDialog
         closedDays={closedDaysOfQuarter(quarter, plan?.holidays ?? [], startsOn)}
+        useMondays={plan?.useMondays ?? false}
         day={openStopDay}
         dayGroups={
           plan?.jobberUnassigned
@@ -1023,6 +1024,7 @@ export default function PlanningPage() {
         // Published: a rebuild groups the visits without a day, from the day asked (2026-10-15).
         underWay={plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED'}
         closedDays={plan?.holidays ?? []}
+        useMondays={plan?.useMondays ?? false}
       />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>

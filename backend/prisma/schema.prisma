@@ -3353,6 +3353,13 @@ model TbpQuarterPlan {
   /// Default false, which is the behaviour every existing plan had.
   jobberUnassigned     Boolean   @default(false)
 
+  /// Visit on Mondays too, rather than keeping each Monday from the plan's
+  /// second week free for rescheduled visits (the office, 2026-10-15: "an
+  /// option too to use all mondays if we wanted"). Asked in the build dialog
+  /// and kept for the next rebuild, as the crew is. Default false: every plan
+  /// before it kept its Mondays.
+  useMondays           Boolean   @default(false)
+
   /// The office's group template the days were laid out from, chosen in the
   /// build dialog (2026-09-30); null for the planner's own grouping, which every
   /// plan before it used. Kept on the plan like the crew, so a rebuild -- the

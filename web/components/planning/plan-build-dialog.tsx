@@ -1,6 +1,6 @@
 'use client';
 
-import { plannedVisitDaysOfQuarter, type Quarter, quarterEnd } from '@texasrenters/shared';
+import { plannedVisitDaysOfQuarter, type Quarter, quarterEnd, workingDaysOfQuarter } from '@texasrenters/shared';
 import { useId, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -57,6 +57,12 @@ export interface PlanBuildChoice {
    * The days before it keep what they hold.
    */
   firstDay?: string;
+  /**
+   * Visit on Mondays too, rather than keep each Monday from the plan's second
+   * week free for rescheduled visits (the office, 2026-10-15: "an option too to
+   * use all mondays if we wanted"). Kept on the plan for the next rebuild.
+   */
+  useMondays: boolean;
 }
 
 /**
@@ -100,6 +106,7 @@ export function PlanBuildDialog({
   stopsPerDay: planStopsPerDay = null,
   underWay = false,
   closedDays = [],
+  useMondays: planUseMondays = false,
   pending = false,
   onBuild,
 }: {
@@ -130,6 +137,8 @@ export function PlanBuildDialog({
   underWay?: boolean;
   /** The days the plan is closed besides weekends and US holidays: what "how many days" counts past. */
   closedDays?: readonly string[];
+  /** The plan's own answer, so a rebuild opens on it. */
+  useMondays?: boolean;
   pending?: boolean;
   onBuild: (choice: PlanBuildChoice) => void;
 }) {
@@ -159,6 +168,9 @@ export function PlanBuildDialog({
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   // Empty: today. Only asked of a quarter under way.
   const [firstDay, setFirstDay] = useState('');
+  // `null` until touched, so the plan's own answer shows through.
+  const [mondays, setMondays] = useState<boolean | null>(null);
+  const useMondays = mondays ?? planUseMondays;
   const groupingName = useId();
   const templates = useGroupTemplates(open);
   const usable = useMemo(() => (templates.data ?? []).filter((template) => !template.archivedAt), [templates.data]);
@@ -184,6 +196,7 @@ export function PlanBuildDialog({
       setSkipped(new Set());
       setGrouping(undefined);
       setFirstDay('');
+      setMondays(null);
     }
     onOpenChange(next);
   };
@@ -208,8 +221,10 @@ export function PlanBuildDialog({
       excludedZones: chosenTemplate ? [] : [...skipped].sort(),
       groupTemplateId: chosenGrouping,
       ...(underWay && firstDay ? { firstDay } : {}),
+      useMondays,
     });
     setFirstDay('');
+    setMondays(null);
     setGrouping(undefined);
     setPicked(null);
     setStart(null);
@@ -230,8 +245,11 @@ export function PlanBuildDialog({
   const from = firstDay || today;
   const perDay = sendUnassigned ? crewSize : count;
   const visitDays = useMemo(
-    () => plannedVisitDaysOfQuarter(quarter, closedDays, startsOn).filter((date) => date >= from),
-    [quarter, closedDays, startsOn, from],
+    () =>
+      (useMondays ? workingDaysOfQuarter(quarter, closedDays, startsOn) : plannedVisitDaysOfQuarter(quarter, closedDays, startsOn)).filter(
+        (date) => date >= from,
+      ),
+    [quarter, closedDays, startsOn, from, useMondays],
   );
   const reach =
     underWay && chosenTemplate && perDay > 0
@@ -366,13 +384,30 @@ export function PlanBuildDialog({
             {reach ? (
               <p className="text-sm" role="status">
                 {reach.last && reach.first
-                  ? `${chosenTemplate!.groupCount.toLocaleString()} groups, ${perDay} a day: about ${formatShortDay(reach.first)} – ${formatShortDay(reach.last)} (${reach.needed.toLocaleString()} working ${reach.needed === 1 ? 'day' : 'days'}; Mondays are kept for reschedules).`
+                  ? `${chosenTemplate!.groupCount.toLocaleString()} groups, ${perDay} a day: about ${formatShortDay(reach.first)} – ${formatShortDay(reach.last)} (${reach.needed.toLocaleString()} working ${reach.needed === 1 ? 'day' : 'days'}${useMondays ? ', Mondays included' : '; Mondays are kept for reschedules'}).`
                   : `${chosenTemplate!.groupCount.toLocaleString()} groups at ${perDay} a day need ${reach.needed.toLocaleString()} working days, and the quarter has ${reach.left.toLocaleString()} left from ${formatShortDay(from)}.`}
                 {sendUnassigned ? '' : perDay === 1 ? ' Tick more technicians for more groups a day.' : ''}
               </p>
             ) : null}
           </fieldset>
         ) : null}
+
+        <label className="hover:bg-accent/60 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2">
+          <Checkbox
+            checked={useMondays}
+            className="mt-0.5"
+            onCheckedChange={(checked) => setMondays(checked === true)}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">Visit on Mondays too</span>
+            <span className="text-muted-foreground block text-xs">
+              {useMondays
+                ? 'Every Monday is a visit day like the rest of the week.'
+                : 'Mondays from the second week are kept free for rescheduled visits.'}{' '}
+              Kept for the next rebuild.
+            </span>
+          </span>
+        </label>
 
         <fieldset className="grid min-w-0 gap-2">
           <legend className="mb-2 text-sm font-medium">Technicians</legend>

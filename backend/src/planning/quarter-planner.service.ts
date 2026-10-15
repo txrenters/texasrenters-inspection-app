@@ -39,6 +39,7 @@ import {
   rescheduleMondaysOfQuarter,
   shortestOpenPathOrder,
   shortestRouteOrder,
+  workingDaysOfQuarter,
   zoneNumberOf,
 } from '@texasrenters/shared';
 
@@ -407,7 +408,11 @@ export class QuarterPlannerService {
   async route(
     organizationId: string,
     planId: string,
-    input: PlanRoutingSettings = {},
+    /**
+     * With `useMondays` beside the settings: kept on the plan like them, but not
+     * one of them, so the many hand-built settings in the specs stay as they are.
+     */
+    input: PlanRoutingSettings & { useMondays?: boolean } = {},
     options: RouteOptions = {},
   ): Promise<RoutingSummary> {
     const plan = await this.prisma.tbpQuarterPlan.findFirst({
@@ -430,6 +435,7 @@ export class QuarterPlannerService {
         crewTechnicianIds: true,
         jobberUnassigned: true,
         groupTemplateId: true,
+        useMondays: true,
       },
     });
     if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
@@ -452,11 +458,15 @@ export class QuarterPlannerService {
       await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined),
       settings.jobberUnassigned,
     );
+    // Left out, the plan's own answer: a rebuild that does not mention Mondays keeps them as they were.
+    if (input.useMondays !== undefined && typeof input.useMondays !== 'boolean')
+      throw new ApplicationError(422, 'INVALID_PLAN_SETTINGS', 'Whether to visit on Mondays must be true or false.');
+    const useMondays = input.useMondays ?? plan.useMondays;
     // So is the template: a quarter is never quietly grouped some other way than the one chosen.
     const template = settings.groupTemplateId ? await this.groupTemplate(organizationId, settings.groupTemplateId) : null;
     await this.prisma.tbpQuarterPlan.update({
       where: { id: planId },
-      data: { ...planColumns(settings), groupTemplateRevision: template?.revision ?? null },
+      data: { ...planColumns(settings), groupTemplateRevision: template?.revision ?? null, useMondays },
     });
 
     // A visit a publish could not create -- no approved areas, no unit -- is
@@ -503,7 +513,10 @@ export class QuarterPlannerService {
     const zones = zoneCircle(stops, roster, settings.maxDriveMinutes);
     // Every planned day of the quarter, gone or not: the zones turn once a
     // planned day from its first, so a rebuild today starts where today's turn is.
-    const plannedDays = plannedVisitDaysOfQuarter(quarter, settings.holidays, settings.startsOn);
+    // Mondays too, when the office asked for them (2026-10-15): then none is kept free.
+    const plannedDays = useMondays
+      ? workingDaysOfQuarter(quarter, settings.holidays, settings.startsOn)
+      : plannedVisitDaysOfQuarter(quarter, settings.holidays, settings.startsOn);
     const days = await this.availability(
       organizationId,
       plannedDays.filter((date) => !options.today || date >= options.today),
@@ -530,7 +543,8 @@ export class QuarterPlannerService {
       : await this.dayAnchors(organizationId, quarter, roster.technicianIds, settings.startsOn);
     const presets = template ? templateStops(template, free, buildings) : null;
     // From a template, a move-out day's trimmed visits go to the Monday after it (2026-10-01).
-    const rescheduleMondays = presets
+    // None when Mondays are visit days: there is no Monday kept to send them to.
+    const rescheduleMondays = presets && !useMondays
       ? await this.availability(
           organizationId,
           rescheduleMondaysOfQuarter(quarter, settings.holidays, settings.startsOn).filter(
