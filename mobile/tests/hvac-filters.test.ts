@@ -145,6 +145,12 @@ describe('answering a filter', () => {
     expect(withFilterSize(resized, hallway, '20x25x1').filters![0]!.actualSize).toBeNull();
   });
 
+  it('keeps the brand with the size, which the office has to buy by (Moses, 2026-10-16)', () => {
+    const branded = withFilterSize(null, hallway, 'AprilAire  20 X 25 x 1');
+    expect(branded.filters![0]).toMatchObject({ size: '20x25x1', actualSize: '20x25x1 AprilAire' });
+    expect(filterRows(BOOKED, branded)[0]!.label).toBe('20x25x1 AprilAire · hallway');
+  });
+
   it('undoes "not changed" without losing the scores', () => {
     const declined = report([answer({ changed: false, photoKey: null, reason: 'Wrong size', ...scored })]);
     expect(withFilterUndeclined(declined, hallway, null).filters![0]).toMatchObject({ changed: false, reason: null, ...scored });

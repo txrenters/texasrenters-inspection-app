@@ -631,6 +631,22 @@ describe('the filters of an HVAC job', () => {
     expect(report.filtersInstalled).toEqual(['20x20x1']);
   });
 
+  it('keeps the brand written with a size, size first (Moses, 2026-10-16)', async () => {
+    const { service, prisma } = hvacJob();
+
+    await submit(service, [
+      filter({ ...scores, actualSize: 'AprilAire  20 x 25 x 1' }),
+      filter({ size: '12x12x1', location: 'downstairs', ...scores }),
+    ]);
+
+    const report = written(prisma).servicesReport as unknown as {
+      filters: Record<string, unknown>[];
+      filtersInstalled: string[];
+    };
+    expect(report.filters[0]).toMatchObject({ size: '20x25x1', actualSize: '20x25x1 AprilAire', booked: true });
+    expect(report.filtersInstalled).toEqual(['20x25x1 AprilAire', '12x12x1']);
+  });
+
   it('asks a visit that booked no filter change for its scores, and no photograph', async () => {
     const { service, prisma } = hvacJob('HVAC Inspection');
 

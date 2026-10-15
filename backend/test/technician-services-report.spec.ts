@@ -45,6 +45,29 @@ describe('what a submission may carry', () => {
     expect(await errorsFor({ servicesReport: complete })).toEqual([]);
   });
 
+  /**
+   * Moses, 2026-10-16: "sometimes it's an April air filter, which is different
+   * from other filters and that needs to be attached to the size."
+   */
+  it('takes the words a technician writes with a size', async () => {
+    const register = { size: '20x25x4 AprilAire', slot: 1, changed: true, photoKey: 'snapshot-12345678' };
+    expect(
+      await errorsFor({
+        servicesReport: {
+          ...complete,
+          filters: [register, { ...register, size: '20x25x4', actualSize: 'AprilAire #213 20x25x4' }],
+          filtersInstalled: ['20x25x4 AprilAire'],
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      await errorsFor({ servicesReport: { ...complete, filters: [{ ...register, size: 'AprilAire' }] } }),
+    ).not.toEqual([]);
+    expect(
+      await errorsFor({ servicesReport: { ...complete, filters: [{ ...register, actualSize: '20x25x4; 16x25x1' }] } }),
+    ).not.toEqual([]);
+  });
+
   it('refuses a filter size that is not one, and a service it does not know', async () => {
     expect(await errorsFor({ servicesReport: { ...complete, filtersInstalled: ['the big one'] } })).not.toEqual([]);
     expect(

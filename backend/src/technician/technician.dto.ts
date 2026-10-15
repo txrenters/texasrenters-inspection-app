@@ -1,6 +1,6 @@
 import { AreaCategory, AreaEnvironment, PhotoCaptureType } from '@prisma/client';
 import {
-  FILTER_SIZE_PATTERN,
+  FILTER_SIZE_WITH_WORDS_PATTERN,
   MAX_BOOKED_FILTERS,
   MAX_LOCATION_BATCH,
   MAX_SERVICE_REASON,
@@ -577,7 +577,11 @@ export class TechnicianServiceOutcomesDto {
  * job's AC filters area, so this carries a reference and never an image.
  */
 export class TechnicianFilterOutcomeDto {
-  @IsString() @Matches(FILTER_SIZE_PATTERN) size!: string;
+  /**
+   * The listed size, or the one a technician found on site -- which may carry
+   * words with it: "20x25x4 AprilAire" (Moses, 2026-10-16).
+   */
+  @IsString() @Matches(FILTER_SIZE_WITH_WORDS_PATTERN) size!: string;
   @IsOptional() @IsString() @MaxLength(120) location?: string | null;
   @IsInt() @Min(1) @Max(MAX_BOOKED_FILTERS) slot!: number;
   @IsBoolean() changed!: boolean;
@@ -602,8 +606,8 @@ export class TechnicianFilterOutcomeDto {
   @IsOptional() @IsString() @MaxLength(MAX_SERVICE_REASON) comment?: string | null;
   /** A listed filter that is not at the property. */
   @IsOptional() @IsBoolean() removed?: boolean;
-  /** The size actually there, when it is not the one listed. */
-  @IsOptional() @IsString() @Matches(FILTER_SIZE_PATTERN) actualSize?: string | null;
+  /** The size actually there, when it is not the one listed, with any words that go with it. */
+  @IsOptional() @IsString() @Matches(FILTER_SIZE_WITH_WORDS_PATTERN) actualSize?: string | null;
 }
 
 /** `VisitServicesReport` in shared, as it arrives. */
@@ -622,7 +626,7 @@ export class TechnicianServicesReportDto {
   @IsArray()
   @ArrayMaxSize(20)
   @IsString({ each: true })
-  @Matches(FILTER_SIZE_PATTERN, { each: true })
+  @Matches(FILTER_SIZE_WITH_WORDS_PATTERN, { each: true })
   filtersInstalled!: string[];
   @IsOptional() @IsString() @MaxLength(1000) notes?: string | null;
 }

@@ -142,11 +142,49 @@ export const FILTER_SIZE_PATTERN = /^\s*\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?
  */
 export const FILTER_SIZE_IN_TEXT = /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?/;
 
+/** The longest filter a technician can name: a size and the words that go with it. */
+export const MAX_FILTER_SIZE_LENGTH = 60;
+
+/** What may stand around the size: words, numbers and a little punctuation, never "," or ";". */
+const FILTER_SIZE_WORDS = String.raw`[\w\s.#'’&()/+×-]*`;
+
+/**
+ * A filter as a technician names it on the job: the size, and whatever words
+ * go with it -- "20x25x4 AprilAire", "AprilAire 213 20x25x4".
+ *
+ * Moses, 2026-10-16: "sometimes it's an April air filter, which is different
+ * from other filters and that needs to be attached to the size." An AprilAire
+ * 20x25x4 does not fit where a plain 20x25x4 does, so the office has to read
+ * the brand with the size to buy the right one. The size is still required:
+ * it is what the office buys by.
+ *
+ * Only for what the technician types. The office's own Details stay
+ * `FILTER_SIZE_PATTERN`, because the Details are read back by
+ * `parseVisitDetails`, which takes a word beside a size for its place. No ","
+ * or ";": the office's note lists filters with the one and the Details with the
+ * other.
+ */
+export const FILTER_SIZE_WITH_WORDS_PATTERN = new RegExp(
+  String.raw`^(?=.{1,${MAX_FILTER_SIZE_LENGTH}}$)${FILTER_SIZE_WORDS}?${FILTER_SIZE_IN_TEXT.source}${FILTER_SIZE_WORDS}$`,
+);
+
 export const MAX_SERVICE_REASON = 500;
 
-/** "20 X 25 x 1" becomes "20x25x1", so the office reads one spelling. */
+/**
+ * "20 X 25 x 1" becomes "20x25x1", so the office reads one spelling.
+ *
+ * Words with the size follow it, as typed and single-spaced: "AprilAire 20 x 25
+ * x 4" is "20x25x4 AprilAire". A size alone reads exactly as it always has, so
+ * no register answered before changes its identity (`filterKey`).
+ */
 export function normalizeFilterSize(size: string): string {
-  return size.replace(/\s+/g, '').replace(/[X×]/g, 'x');
+  const found = FILTER_SIZE_IN_TEXT.exec(size);
+  if (!found) return size.replace(/\s+/g, '').replace(/[X×]/g, 'x');
+  const dimensions = [found[1], found[2], found[3]].filter(Boolean).join('x');
+  const words = `${size.slice(0, found.index)} ${size.slice(found.index + found[0].length)}`
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s-]+|[\s-]+$/g, '');
+  return words ? `${dimensions} ${words}` : dimensions;
 }
 
 /** The services a visit's Details booked that the technician reports on, in the office's order. */
