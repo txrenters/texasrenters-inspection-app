@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { TimeSegmentSource } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import type { InspectionStatus, InspectionType, Prisma } from '@prisma/client';
 import {
   MAX_USEFUL_ACCURACY_M,
   SEGMENT_DEFAULTS,
@@ -67,7 +67,29 @@ export interface TimesheetVisit {
   adjusted: boolean;
   /** Some of it was added by hand rather than read from the trail. */
   addedByHand: boolean;
+  /**
+   * What the technician was there to do: every visit they had at this property
+   * that day, so a benefit-package stop that is also an HVAC inspection says
+   * both. Empty when no visit matches -- the page says so rather than guessing.
+   */
+  jobs: TimesheetJob[];
 }
+
+/** One visit behind a row on the timesheet. */
+export interface TimesheetJob {
+  inspectionId: string;
+  type: InspectionType;
+  /** Booked as the quarter's Tenant Benefit Package, whatever inspection it carries. */
+  benefitPackage: boolean;
+  status: InspectionStatus;
+}
+
+/**
+ * How a visit's Jobber title says it is the benefit package: "Q4 2026 Tenant
+ * Benefit Package", or the office's short "TBP" -- the same two phrases the
+ * Jobber sync types a visit by (`jobber.visit-type.ts`).
+ */
+const BENEFIT_PACKAGE_TITLE = /tenant benefit package|\btbp\b/i;
 
 /** What reading one technician's day did. */
 export interface DayRecompute {
@@ -82,6 +104,19 @@ export interface DayRecompute {
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A visit is on a day when it is booked for it or was worked on it.
+ *
+ * The second half is for the job done a day early or late, which is still
+ * where the technician was. `startedAt` and `submittedAt` find the day and
+ * nothing else; they are never the hours.
+ */
+const onDay = (start: Date, end: Date): Prisma.InspectionWhereInput[] => [
+  { scheduledAt: { gte: start, lt: end } },
+  { startedAt: { gte: start, lt: end } },
+  { submittedAt: { gte: start, lt: end } },
+];
 
 /**
  * Reading a technician's trail as the hours of their day.
@@ -220,11 +255,7 @@ export class TimeTrackingService {
         organizationId,
         propertywareBuildingId: { not: null },
         assignments: { some: { isCurrent: true, technicianId } },
-        OR: [
-          { scheduledAt: { gte: start, lt: end } },
-          { startedAt: { gte: start, lt: end } },
-          { submittedAt: { gte: start, lt: end } },
-        ],
+        OR: onDay(start, end),
       },
       select: {
         id: true,
@@ -624,6 +655,7 @@ export class TimeTrackingService {
           segmentIds: [segment.id],
           adjusted: Boolean(segment.adjustedAt),
           addedByHand: segment.source === TimeSegmentSource.MANUAL,
+          jobs: [],
         });
         continue;
       }
@@ -639,6 +671,8 @@ export class TimeTrackingService {
       visit.addedByHand ||= segment.source === TimeSegmentSource.MANUAL;
     }
 
+    await this.attachJobs(organizationId, [...visits.values()], query.date, start, end);
+
     return {
       date: query.date,
       totals: [...totals.values()].sort((left, right) => right.totalSeconds - left.totalSeconds),
@@ -647,6 +681,82 @@ export class TimeTrackingService {
           left.technician.localeCompare(right.technician) || left.arrivedAt.localeCompare(right.arrivedAt),
       ),
     };
+  }
+
+  /**
+   * What each row was for: the visits behind it, by the rule that made its
+   * property's circle count in the first place -- the technician's own visits
+   * there, booked for the day or worked on it. The row's filed visit is always
+   * among them, so a row from before stretches named a property still says
+   * what it was.
+   *
+   * Read once for the whole sheet, not per row, and in the order the time is
+   * filed by, so the visit the hours are kept under comes first.
+   */
+  private async attachJobs(
+    organizationId: string,
+    rows: TimesheetVisit[],
+    date: string,
+    start: Date,
+    end: Date,
+  ): Promise<void> {
+    if (!rows.length) return;
+    const buildingIds = [...new Set(rows.flatMap((row) => (row.buildingId ? [row.buildingId] : [])))];
+    const technicianIds = [...new Set(rows.map((row) => row.technicianId))];
+    const filedIds = [...new Set(rows.flatMap((row) => (row.inspectionId ? [row.inspectionId] : [])))];
+
+    const inspections = await this.prisma.inspection.findMany({
+      where: {
+        organizationId,
+        OR: [
+          ...(buildingIds.length
+            ? [
+                {
+                  propertywareBuildingId: { in: buildingIds },
+                  assignments: { some: { isCurrent: true, technicianId: { in: technicianIds } } },
+                  OR: onDay(start, end),
+                },
+              ]
+            : []),
+          ...(filedIds.length ? [{ id: { in: filedIds } }] : []),
+        ],
+      },
+      select: {
+        id: true,
+        inspectionType: true,
+        status: true,
+        jobberVisitTitle: true,
+        propertywareBuildingId: true,
+        scheduledAt: true,
+        startedAt: true,
+        submittedAt: true,
+        assignments: { where: { isCurrent: true }, select: { technicianId: true } },
+      },
+      orderBy: [{ scheduledAt: 'asc' }, { id: 'asc' }],
+    });
+
+    const within = (instant: Date | null) => Boolean(instant && instant >= start && instant < end);
+    for (const row of rows) {
+      row.jobs = inspections
+        .filter(
+          (inspection) =>
+            inspection.id === row.inspectionId ||
+            (row.buildingId !== null &&
+              inspection.propertywareBuildingId === row.buildingId &&
+              inspection.assignments.some((assignment) => assignment.technicianId === row.technicianId) &&
+              // A day column, so its UTC date is the day; the other two are instants.
+              (inspection.scheduledAt.toISOString().slice(0, 10) === date ||
+                within(inspection.startedAt) ||
+                within(inspection.submittedAt))),
+        )
+        .sort((left, right) => Number(right.id === row.inspectionId) - Number(left.id === row.inspectionId))
+        .map((inspection) => ({
+          inspectionId: inspection.id,
+          type: inspection.inspectionType,
+          benefitPackage: BENEFIT_PACKAGE_TITLE.test(inspection.jobberVisitTitle ?? ''),
+          status: inspection.status,
+        }));
+    }
   }
 
   /**
