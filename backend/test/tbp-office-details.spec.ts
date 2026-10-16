@@ -360,6 +360,8 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
             earlierUnitId && where.propertywareUnitId.in.includes(earlierUnitId) ? { propertywareUnitId: earlierUnitId } : null,
           ),
         ),
+        // No stale stop to clear: nothing left from an earlier run.
+        findMany: jest.fn().mockResolvedValue([]),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         count: jest.fn().mockResolvedValue(1),
       },

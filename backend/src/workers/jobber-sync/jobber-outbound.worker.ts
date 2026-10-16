@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { tenancyZoneLabel, type VisitServicesReport } from '@texasrenters/shared';
+import { isTbpZone, tenancyZoneLabel, zoneNumberOf, type VisitServicesReport } from '@texasrenters/shared';
 import {
   InspectionAreaCompletionStatus,
   InspectionSource,
@@ -45,7 +45,11 @@ const SHARE_LIFETIME_DAYS = 30;
 const BATCH_SIZE = 25;
 
 /** Failures a retry cannot fix, abandoned at once rather than after six tries. */
-const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED', 'JOBBER_EDIT_INSPECTION_MISSING']);
+const PERMANENT_FAILURES = new Set([
+  'JOBBER_BOOKING_CANCELLED',
+  'JOBBER_EDIT_INSPECTION_MISSING',
+  'JOBBER_TBP_ZONE_NOT_IN_PACKAGE',
+]);
 
 /** A booking's refusal for want of a Jobber property: the one a link, made later, answers. */
 const PROPERTY_NOT_LINKED = 'This property is not linked to a Jobber property.';
@@ -180,6 +184,11 @@ export class JobberOutboundWorker {
    * Only a visit still to come, or one with no day: a day already gone is not
    * booked into Jobber's past, and is the office's to move or unschedule.
    *
+   * Never a plan stop in a zone the package does not cover. The first run
+   * queued one again: a zone-5 visit with no day, refused since before zone 5
+   * left the package, which its new property match made bookable. Its booking
+   * is refused for the zone now, and a refusal from before is left as it is.
+   *
    * Never in the way of the queue: a failure here is logged, and what was due
    * has already been sent.
    */
@@ -209,20 +218,21 @@ export class JobberOutboundWorker {
             select: {
               propertywareBuildingId: true,
               propertywareUnitId: true,
-              tbpPlanStop: { select: { propertywareBuildingId: true, propertywareUnitId: true } },
+              tbpPlanStop: { select: { propertywareBuildingId: true, propertywareUnitId: true, zone: true } },
             },
           },
-          tbpStop: { select: { propertywareBuildingId: true, propertywareUnitId: true } },
+          tbpStop: { select: { propertywareBuildingId: true, propertywareUnitId: true, zone: true } },
         },
       });
 
       let rearmed = 0;
       for (const task of refused) {
         // Where the booking itself looks: a benefit-package visit books at its plan stop's property.
-        const place =
-          task.tbpStop ??
-          (task.kind === JobberOutboundKind.TBP_VISIT_CREATE ? task.inspection?.tbpPlanStop : task.inspection);
+        const stop =
+          task.tbpStop ?? (task.kind === JobberOutboundKind.TBP_VISIT_CREATE ? task.inspection?.tbpPlanStop : null);
+        const place = stop ?? (task.kind === JobberOutboundKind.VISIT_CREATE ? task.inspection : null);
         if (!place?.propertywareBuildingId) continue;
+        if (stop && !isTbpZone(stop.zone)) continue;
         const link = await linkedJobberProperty(this.prisma, organizationId, {
           buildingId: place.propertywareBuildingId,
           unitId: place.propertywareUnitId,
@@ -494,6 +504,7 @@ export class JobberOutboundWorker {
         'JOBBER_BOOKING_CANCELLED',
         409,
       );
+    this.refuseOutsideThePackage(stop.zone);
 
     const link = await this.bookableProperty(organizationId, {
       buildingId: stop.propertywareBuildingId,
@@ -563,6 +574,7 @@ export class JobberOutboundWorker {
         status: true,
         visitTitle: true,
         visitDetails: true,
+        zone: true,
         propertywareBuildingId: true,
         propertywareUnitId: true,
         inspectionId: true,
@@ -572,6 +584,7 @@ export class JobberOutboundWorker {
       throw new JobberError('This visit has nothing to book from.', 'JOBBER_TBP_STOP_MISSING', 500);
     // Given a day here while the task waited: the ordinary booking has it now.
     if (stop.inspectionId || stop.status !== TbpStopStatus.UNSCHEDULED) return;
+    this.refuseOutsideThePackage(stop.zone);
 
     const link = await this.bookableProperty(organizationId, {
       buildingId: stop.propertywareBuildingId,
@@ -648,6 +661,25 @@ export class JobberOutboundWorker {
       date: inspection.scheduledAt.toISOString().slice(0, 10),
       teamMemberIds: technicianJobberId ? [technicianJobberId] : [],
     });
+  }
+
+  /**
+   * Never a benefit-package visit in a zone the package does not cover.
+   *
+   * Zone 5 left the package on 2026-10-02 (`NON_TBP_ZONES`), and generation
+   * stopped making its visits -- but a stop made before then could still be
+   * waiting to be booked. One was, on 2026-10-16: a visit with no day, refused
+   * for want of a Jobber property since September, queued again once the
+   * property could be matched by its address. Refused for good here, and with
+   * its own message, so a property found later never queues it again.
+   */
+  private refuseOutsideThePackage(zone: string | null) {
+    if (isTbpZone(zone)) return;
+    throw new JobberError(
+      `Zone ${zoneNumberOf(zone)} is not part of the benefit package, so its visits are not booked in Jobber.`,
+      'JOBBER_TBP_ZONE_NOT_IN_PACKAGE',
+      422,
+    );
   }
 
   /** The Jobber property to book against, or the reason there is none. */
