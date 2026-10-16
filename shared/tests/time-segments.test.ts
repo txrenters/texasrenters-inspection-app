@@ -236,6 +236,25 @@ describe('a stop away from the properties', () => {
     expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:second']);
   });
 
+  /**
+   * The replay of 2026-10-17: every "stop" 100 to 150 m from a visit property
+   * sat right beside the visit itself, a phone gone quiet some way from the pin.
+   */
+  it('is not a quiet phone 130 m from the property the visit is at', () => {
+    const { stretches } = computeDayLedger(
+      [
+        ...standing(0, 900, 5),
+        ...driving(910, 300, 5, 3_873),
+        ...standing(1_220, 60, 3_873),
+        ...standing(1_800, 60, 3_873),
+        ...standing(1_890, 900, 4_003),
+      ],
+      [HOME, SECOND],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:second']);
+  });
+
   /** Inside a steel building the phone rarely does better than fifty metres. */
   it('counts fixes too vague for the circle but good enough to say where the store was', () => {
     const vague = standing(1_220, 1_200, STORE).map((at) => ({ ...at, accuracyMeters: 60 }));

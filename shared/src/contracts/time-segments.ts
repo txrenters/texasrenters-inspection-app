@@ -236,9 +236,17 @@ export const SEGMENT_DEFAULTS = {
    * The kerb outside, the neighbour's drive the van was left in, the end of a
    * big lot past the 30 m circle: those minutes belong to the visit's
    * surroundings and stay general time, or every visit would grow a stop on
-   * either side of it. The map's own "here" (`ARRIVAL_RADIUS_M`).
+   * either side of it.
+   *
+   * 150 m, from 30 days of production trails replayed on 2026-10-17. At 100 m
+   * there were 28 stops; the 13 between 100 and 150 m from a visit property
+   * every one sat directly before or after the time inside that same
+   * property's circle, and was almost all silent phone (137 of 153 minutes) --
+   * the visit, carried through a quiet phone some way from the pin, not a trip
+   * anywhere. Nothing at all fell between 150 and 200 m; the 15 left were 5 to
+   * 26 minutes, all over half a kilometre from any visit.
    */
-  stopPropertyMarginMeters: 100,
+  stopPropertyMarginMeters: 150,
 } as const;
 
 export type SegmentSettings = typeof SEGMENT_DEFAULTS;
