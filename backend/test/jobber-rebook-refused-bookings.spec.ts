@@ -100,6 +100,48 @@ describe('a booking refused for want of a Jobber property', () => {
     expect(prisma.jobberOutboundTask.updateMany.mock.calls.map(([args]) => args.where.id)).toEqual(['console', 'no-day']);
   });
 
+  /**
+   * The first run queued a zone-5 visit with no day again (2026-10-16). Zone 5
+   * left the package on 2026-10-02; its booking is refused for that now, and a
+   * refusal from before is left where it is.
+   */
+  it('is never queued again for a plan stop in a zone the package does not cover', async () => {
+    const { worker, prisma } = build({
+      refused: [
+        refusedVisit({
+          id: 'zone-5-on-a-day',
+          inspection: { ...place('inspection-building'), tbpPlanStop: { ...place('stop-building'), zone: '5' } },
+        }),
+        refusedVisit({
+          id: 'zone-5-no-day',
+          kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+          inspection: null,
+          tbpStop: { ...place('unscheduled-building'), zone: 'Zone 5' },
+        }),
+        refusedVisit({
+          id: 'zone-4',
+          inspection: { ...place('inspection-building'), tbpPlanStop: { ...place('stop-building'), zone: '4' } },
+        }),
+      ],
+      linkedBuildings: ['stop-building', 'unscheduled-building'],
+    });
+
+    await worker.run('org-1');
+
+    expect(prisma.jobberOutboundTask.updateMany.mock.calls.map(([args]) => args.where.id)).toEqual(['zone-4']);
+    expect(buildingsAskedAbout(prisma)).not.toContain('unscheduled-building');
+  });
+
+  it('asks for the zone of the plan stop each benefit-package booking books at', async () => {
+    const { worker, prisma } = build({ refused: [] });
+
+    await worker.run('org-1');
+
+    const { select } = prisma.jobberOutboundTask.findMany.mock.calls[1][0];
+    expect(select.tbpStop.select).toMatchObject({ zone: true });
+    expect(select.inspection.select.tbpPlanStop.select).toMatchObject({ zone: true });
+  });
+
   it('is asked for only while the visit is still to come, open and unbooked -- or has no day', async () => {
     const { worker, prisma } = build({ refused: [] });
 

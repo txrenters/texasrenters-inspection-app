@@ -317,25 +317,26 @@ export class TbpPlanService {
     // Anything left from a previous run whose tenancy is no longer enrolled.
     // Only untouched, unpublished stops: a coordinator's edit or a published
     // row is a decision, and a regeneration must not quietly reverse it.
+    const stale = {
+      planId: plan.id,
+      inspectionId: null,
+      // One in Jobber's Unscheduled list stays: deleting it here would leave
+      // its visit there with nothing in the console to say whose it is.
+      jobberVisitId: null,
+      propertywareTenantId: { notIn: enrolled.map((tenant) => tenant.id) },
+      sequenceOverriddenAt: null,
+      scheduleOverriddenAt: null,
+      technicianOverriddenAt: null,
+      inspectionTypeOverriddenAt: null,
+      visitTitleOverriddenAt: null,
+      visitDetailsOverriddenAt: null,
+      onSiteMinutesOverriddenAt: null,
+      unitOverriddenAt: null,
+    } satisfies Prisma.TbpQuarterPlanStopWhereInput;
     const { count: removed } = await this.prisma.tbpQuarterPlanStop.deleteMany({
-      where: {
-        planId: plan.id,
-        status: { in: [TbpStopStatus.PLANNED, TbpStopStatus.BLOCKED] },
-        inspectionId: null,
-        // One in Jobber's Unscheduled list stays: deleting it here would leave
-        // its visit there with nothing in the console to say whose it is.
-        jobberVisitId: null,
-        propertywareTenantId: { notIn: enrolled.map((tenant) => tenant.id) },
-        sequenceOverriddenAt: null,
-        scheduleOverriddenAt: null,
-        technicianOverriddenAt: null,
-        inspectionTypeOverriddenAt: null,
-        visitTitleOverriddenAt: null,
-        visitDetailsOverriddenAt: null,
-        onSiteMinutesOverriddenAt: null,
-        unitOverriddenAt: null,
-      },
+      where: { ...stale, status: { in: [TbpStopStatus.PLANNED, TbpStopStatus.BLOCKED] } },
     });
+    const removedOutsideThePackage = await this.removeUnsentOutsideThePackage(stale);
 
     const stopCount = await this.prisma.tbpQuarterPlanStop.count({ where: { planId: plan.id } });
     await this.prisma.tbpQuarterPlan.update({
@@ -353,6 +354,7 @@ export class TbpPlanService {
       blockedCount,
       unverifiedEnrollmentCount: unverified,
       removedUnenrolled: removed,
+      removedOutsideThePackage,
       officeDetailsMatched: office.byTenantId.size,
     });
 
@@ -364,6 +366,37 @@ export class TbpPlanService {
       unverifiedEnrollmentCount: unverified,
       regenerated: Boolean(existing),
     };
+  }
+
+  /**
+   * A stale visit with no day in a zone the package does not cover, when none
+   * of it ever reached Jobber.
+   *
+   * Zone 5 left the package on 2026-10-02 and its stops went with the next
+   * generation -- except the ones a publish had already sent to Jobber's
+   * Unscheduled list, which the clean-up above keeps. One of those had never
+   * got there: its booking was refused for want of a Jobber property until one
+   * was matched by its address, and on 2026-10-16 it was queued again. Nothing
+   * of it is in Jobber, so it goes, and its queued booking with it
+   * (`onDelete: Cascade`).
+   *
+   * Only while that is so: no visit or job on the stop, and no task that made
+   * one -- a job made before its visit failed is in Jobber too, and a visit
+   * being unscheduled from a day still is. What is in Jobber stays for the
+   * office, in any zone.
+   */
+  private async removeUnsentOutsideThePackage(stale: Prisma.TbpQuarterPlanStopWhereInput): Promise<number> {
+    const unsent = {
+      ...stale,
+      status: TbpStopStatus.UNSCHEDULED,
+      jobberJobId: null,
+      jobberTasks: { every: { kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED, jobberJobId: null, jobberVisitId: null } },
+    } satisfies Prisma.TbpQuarterPlanStopWhereInput;
+    const candidates = await this.prisma.tbpQuarterPlanStop.findMany({ where: unsent, select: { id: true, zone: true } });
+    const outside = candidates.filter((stop) => !isTbpZone(stop.zone)).map((stop) => stop.id);
+    if (!outside.length) return 0;
+    const { count } = await this.prisma.tbpQuarterPlanStop.deleteMany({ where: { ...unsent, id: { in: outside } } });
+    return count;
   }
 
   /**
