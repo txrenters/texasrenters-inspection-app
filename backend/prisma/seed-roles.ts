@@ -20,7 +20,10 @@ export const roleSeedEnvironmentSchema = z.object({
  *
  * They exist because the alternative is worse. A fresh organization opens the
  * Roles page, finds it empty, and has to derive five sensible permission sets
- * from a catalog of twenty-four keys before it can give anyone access at all.
+ * from a catalog of thirty keys before it can give anyone access at all.
+ *
+ * The two irreversible deletes, of an inspection and of a property's areas,
+ * are in none of them: an administrator hands those out deliberately.
  *
  * SYSTEM_ADMIN is deliberately absent. It is the bootstrap principal and
  * `resolveEffectivePermissions` already returns the entire catalog for it, so a
@@ -31,7 +34,7 @@ const ROLE_SEEDS: { name: string; description: string; permissions: PermissionKe
   {
     name: 'Property Administrator',
     description:
-      'Day-to-day operations: schedule and assign inspections, manage properties and technicians, and finalize completed work.',
+      "Day-to-day operations: schedule and assign inspections, plan and publish the benefit package's quarters, manage properties and technicians, and finalize completed work.",
     permissions: [
       'dashboard:read',
       'properties:read',
@@ -41,8 +44,11 @@ const ROLE_SEEDS: { name: string; description: string; permissions: PermissionKe
       'inspections:assign',
       'inspections:finalize',
       'technicians:read',
+      'technicians:locate',
       'technicians:manage',
       'technicians:provision',
+      'planning:read',
+      'planning:publish',
       'findings:read',
       'reports:share',
       'integrations:read',
@@ -51,7 +57,7 @@ const ROLE_SEEDS: { name: string; description: string; permissions: PermissionKe
   {
     name: 'Inspection Coordinator',
     description:
-      'Schedules work and keeps technicians moving. Can assign and reschedule, but cannot finalize an inspection or alter the findings that follow from it.',
+      "Schedules work and keeps technicians moving. Can assign and reschedule, see where technicians are and the quarter's plan, but cannot publish a quarter, finalize an inspection or alter the findings that follow from it.",
     permissions: [
       'dashboard:read',
       'properties:read',
@@ -59,6 +65,8 @@ const ROLE_SEEDS: { name: string; description: string; permissions: PermissionKe
       'inspections:manage',
       'inspections:assign',
       'technicians:read',
+      'technicians:locate',
+      'planning:read',
       'findings:read',
     ],
   },
@@ -97,6 +105,7 @@ const ROLE_SEEDS: { name: string; description: string; permissions: PermissionKe
       'properties:read',
       'inspections:read',
       'technicians:read',
+      'planning:read',
       'findings:read',
       'users:read',
       'roles:read',
