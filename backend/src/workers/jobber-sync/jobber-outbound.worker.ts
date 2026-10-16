@@ -47,6 +47,9 @@ const BATCH_SIZE = 25;
 /** Failures a retry cannot fix, abandoned at once rather than after six tries. */
 const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED', 'JOBBER_EDIT_INSPECTION_MISSING']);
 
+/** A booking's refusal for want of a Jobber property: the one a link, made later, answers. */
+const PROPERTY_NOT_LINKED = 'This property is not linked to a Jobber property.';
+
 /**
  * A completion whose visit booked a second job that is not in yet
  * (2026-10-13: an HVAC and an occupied inspection on one visit). Not a
@@ -161,7 +164,82 @@ export class JobberOutboundWorker {
         this.logger.warn(`Jobber push for inspection ${task.inspectionId} failed: ${message}`);
       }
     }
+    await this.rearmRefusedBookings(organizationId);
     return result;
+  }
+
+  /**
+   * Bookings refused for want of a Jobber property, queued again once there is one.
+   *
+   * Six refusals abandon a task, and nothing re-armed one: six Q4 visits on
+   * 7 October gave up at 02:40 on 21 September, eleven hours before their
+   * links appeared, and were never booked (2026-10-16). Linking a property by
+   * hand on the Jobber page did not send its visits either. Now the next run
+   * books them.
+   *
+   * Only a visit still to come, or one with no day: a day already gone is not
+   * booked into Jobber's past, and is the office's to move or unschedule.
+   *
+   * Never in the way of the queue: a failure here is logged, and what was due
+   * has already been sent.
+   */
+  private async rearmRefusedBookings(organizationId: string) {
+    try {
+      const today = new Date(`${businessDate()}T00:00:00.000Z`);
+      const refused = await this.prisma.jobberOutboundTask.findMany({
+        where: {
+          organizationId,
+          status: JobberOutboundStatus.ABANDONED,
+          lastError: PROPERTY_NOT_LINKED,
+          OR: [
+            {
+              kind: { in: [JobberOutboundKind.TBP_VISIT_CREATE, JobberOutboundKind.VISIT_CREATE] },
+              inspection: { status: InspectionStatus.SCHEDULED, jobberVisitId: null, scheduledAt: { gte: today } },
+            },
+            {
+              kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+              tbpStop: { status: TbpStopStatus.UNSCHEDULED, inspectionId: null },
+            },
+          ],
+        },
+        select: {
+          id: true,
+          kind: true,
+          inspection: {
+            select: {
+              propertywareBuildingId: true,
+              propertywareUnitId: true,
+              tbpPlanStop: { select: { propertywareBuildingId: true, propertywareUnitId: true } },
+            },
+          },
+          tbpStop: { select: { propertywareBuildingId: true, propertywareUnitId: true } },
+        },
+      });
+
+      let rearmed = 0;
+      for (const task of refused) {
+        // Where the booking itself looks: a benefit-package visit books at its plan stop's property.
+        const place =
+          task.tbpStop ??
+          (task.kind === JobberOutboundKind.TBP_VISIT_CREATE ? task.inspection?.tbpPlanStop : task.inspection);
+        if (!place?.propertywareBuildingId) continue;
+        const link = await linkedJobberProperty(this.prisma, organizationId, {
+          buildingId: place.propertywareBuildingId,
+          unitId: place.propertywareUnitId,
+        });
+        if (link.status !== 'LINKED') continue;
+        const { count } = await this.prisma.jobberOutboundTask.updateMany({
+          where: { id: task.id, status: JobberOutboundStatus.ABANDONED, lastError: PROPERTY_NOT_LINKED },
+          data: { status: JobberOutboundStatus.PENDING, attempts: 0, lastError: null, nextAttemptAt: new Date() },
+        });
+        rearmed += count;
+      }
+      if (rearmed) this.logger.log(`Queued ${rearmed} Jobber booking(s) again: their property can be booked now.`);
+    } catch (error) {
+      this.logger.warn(
+        `Could not look for refused Jobber bookings to queue again: ${error instanceof Error ? error.message : error}`,
+      );
+    }
   }
 
   /**
@@ -584,7 +662,7 @@ export class JobberOutboundWorker {
           'JOBBER_PROPERTY_AMBIGUOUS',
           422,
         )
-      : new JobberError('This property is not linked to a Jobber property.', 'JOBBER_PROPERTY_NOT_LINKED', 422);
+      : new JobberError(PROPERTY_NOT_LINKED, 'JOBBER_PROPERTY_NOT_LINKED', 422);
   }
 
   /**

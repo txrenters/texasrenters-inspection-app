@@ -3,6 +3,8 @@ import type { JobberPropertyLinkState } from '@texasrenters/shared';
 
 import type { PrismaService } from '../../common/prisma.service';
 
+import { addressKeyCandidates, formatJobberAddress, normalizeAddressKey } from './jobber.address';
+
 type BookingClient = Prisma.TransactionClient | PrismaService;
 
 export type LinkedJobberProperty =
@@ -123,7 +125,147 @@ export async function linkedJobberProperty(
        AND link."propertywareBuildingId" = ${place.buildingId}::uuid
        AND link.status = ${JobberLinkStatus.LINKED}::"JobberLinkStatus"
   `;
-  return pickJobberProperty(links, place.unitId);
+  const linked = pickJobberProperty(links, place.unitId);
+  if (linked.status !== 'NOT_LINKED') return linked;
+  return (await jobberPropertyAtTheAddress(client, organizationId, place)) ?? linked;
+}
+
+interface PlaceAddressRow {
+  addressLine1: string | null;
+  postalCode: string | null;
+  unitAddressLine1: string | null;
+  unitPostalCode: string | null;
+}
+
+interface SeenJobberPropertyRow {
+  jobberPropertyId: string | null;
+  street1: string | null;
+  street2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  lastUsedAt: string | null;
+  linkStatus: string | null;
+  linkedBuildingId: string | null;
+  linkedAddressLine1: string | null;
+  linkedPostalCode: string | null;
+}
+
+/**
+ * The Jobber property at this place's own address, when no link names one.
+ *
+ * Sixteen Q4 2026 visits were never booked (2026-10-16), each refused as "not
+ * linked". Six of them were at houses Jobber already held:
+ * - **Two Propertyware records for one house** (two houses): Jobber's property
+ *   was linked to the other record.
+ * - **A unit with no link of its own** (two backhouses behind one house):
+ *   Jobber holds one as a property of its own, "100 1/2 Example St", and books
+ *   the other's work at the house, "100 Example St".
+ * - **A property seen only on finished visits** (two houses): the sync skips a
+ *   completed visit before it records its property, so no link was ever made.
+ *
+ * So the Jobber properties the sync has seen on any visit are read, and one
+ * whose address is this place's -- street and five-digit ZIP, the matcher's
+ * own key -- is booked against. The unit's own address is tried first when it
+ * has one, then the building's.
+ *
+ * Refused, as before, wherever the answer is not plain:
+ * - a property a person or the matcher linked to a house at another address,
+ *   or set aside as not a property;
+ * - one marked "(Do not use)";
+ * - one with a unit on its second line, when this place is not that unit;
+ * - two properties at the address the office used on the same day, or never.
+ *
+ * Each property is read at its newest visit, so an address corrected in Jobber
+ * since is read as corrected.
+ */
+async function jobberPropertyAtTheAddress(
+  client: BookingClient,
+  organizationId: string,
+  place: { buildingId: string; unitId: string | null },
+): Promise<LinkedJobberProperty | null> {
+  const [address] = await client.$queryRaw<PlaceAddressRow[]>`
+    SELECT building."addressLine1",
+           building."postalCode",
+           unit."addressLine1" AS "unitAddressLine1",
+           unit."postalCode" AS "unitPostalCode"
+      FROM propertyware_buildings AS building
+      LEFT JOIN propertyware_units AS unit
+        ON unit.id = ${place.unitId}::uuid
+       AND unit."buildingId" = building.id
+     WHERE building."organizationId" = ${organizationId}::uuid
+       AND building.id = ${place.buildingId}::uuid
+  `;
+  const buildingKey = normalizeAddressKey(address?.addressLine1, address?.postalCode);
+  if (!buildingKey) return null;
+  const unitKey = normalizeAddressKey(address?.unitAddressLine1, address?.unitPostalCode ?? address?.postalCode);
+  const keys = unitKey && unitKey !== buildingKey ? [unitKey, buildingKey] : [buildingKey];
+  const postal = buildingKey.split('|')[1]!;
+
+  const seen = await client.$queryRaw<SeenJobberPropertyRow[]>`
+    SELECT seen.*,
+           link.status::text AS "linkStatus",
+           link."propertywareBuildingId" AS "linkedBuildingId",
+           linked."addressLine1" AS "linkedAddressLine1",
+           linked."postalCode" AS "linkedPostalCode"
+      FROM (
+        SELECT DISTINCT ON (visit.payload->'property'->>'id')
+               visit.payload->'property'->>'id' AS "jobberPropertyId",
+               visit.payload->'property'->'address'->>'street1' AS street1,
+               visit.payload->'property'->'address'->>'street2' AS street2,
+               visit.payload->'property'->'address'->>'city' AS city,
+               visit.payload->'property'->'address'->>'province' AS province,
+               visit.payload->'property'->'address'->>'postalCode' AS "postalCode",
+               max(visit.payload->>'startAt')
+                 OVER (PARTITION BY visit.payload->'property'->>'id') AS "lastUsedAt"
+          FROM "JobberVisitImport" AS visit
+         WHERE visit."organizationId" = ${organizationId}::uuid
+           AND visit.payload->'property'->>'id' IS NOT NULL
+         ORDER BY visit.payload->'property'->>'id', visit."updatedAt" DESC
+      ) AS seen
+      LEFT JOIN "JobberPropertyLink" AS link
+        ON link."organizationId" = ${organizationId}::uuid
+       AND link."jobberPropertyId" = seen."jobberPropertyId"
+      LEFT JOIN propertyware_buildings AS linked
+        ON linked.id = link."propertywareBuildingId"
+     WHERE left(regexp_replace(coalesce(seen."postalCode", ''), '[^0-9]', '', 'g'), 5) = ${postal}
+  `;
+
+  const usable = (row: SeenJobberPropertyRow) => {
+    if (!row.jobberPropertyId) return false;
+    if (/do not use/i.test(`${row.street1 ?? ''} ${row.street2 ?? ''}`)) return false;
+    if (row.linkStatus === JobberLinkStatus.IGNORED) return false;
+    // Somebody's answer that this property is another house stands.
+    return !(
+      row.linkStatus === JobberLinkStatus.LINKED &&
+      row.linkedBuildingId !== place.buildingId &&
+      normalizeAddressKey(row.linkedAddressLine1, row.linkedPostalCode) !== buildingKey
+    );
+  };
+  for (const key of keys) {
+    const atTheAddress = seen.filter(
+      (row) => usable(row) && addressKeyCandidates(row.street1, row.street2, row.postalCode)[0] === key,
+    );
+    if (!atTheAddress.length) continue;
+    const picked = pickJobberProperty(
+      atTheAddress.map((row) => ({
+        jobberPropertyId: row.jobberPropertyId!,
+        jobberAddress: formatJobberAddress({
+          addressLine1: row.street1,
+          addressLine2: row.street2,
+          city: row.city,
+          state: row.province,
+          postalCode: row.postalCode,
+        }),
+        propertywareUnitId: null,
+        lastUsedAt: row.lastUsedAt,
+      })),
+      null,
+    );
+    // Two at the unit's own address is no reason to book at the building's.
+    return picked.status === 'LINKED' ? picked : null;
+  }
+  return null;
 }
 
 /**

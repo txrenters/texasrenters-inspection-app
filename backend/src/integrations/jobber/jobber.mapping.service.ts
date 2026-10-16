@@ -11,6 +11,7 @@ import {
   buildAddressIndex,
   buildLooseAddressIndex,
   type AddressMatch,
+  formatJobberAddress,
   looseAddressKey,
   matchBuildingWithFallback,
   normalizeAddressKey,
@@ -37,16 +38,6 @@ export interface JobberPropertyDescriptor {
   state?: string | null;
   postalCode?: string | null;
 }
-
-const formatAddress = (property: JobberPropertyDescriptor) =>
-  [
-    property.addressLine1,
-    property.addressLine2,
-    [property.city, property.state].filter(Boolean).join(', '),
-    property.postalCode,
-  ]
-    .filter(Boolean)
-    .join(' • ') || null;
 
 /**
  * Turns Jobber properties into the Propertyware records an inspection needs.
@@ -141,7 +132,7 @@ export class JobberMappingService {
     const data = {
       jobberClientId: property.jobberClientId ?? null,
       jobberClientName: property.jobberClientName ?? null,
-      jobberAddress: formatAddress(property),
+      jobberAddress: formatJobberAddress(property),
       normalizedAddressKey: normalizedAddressKey || null,
       ...resolution,
     };
