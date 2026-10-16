@@ -314,3 +314,23 @@ export function matchBuildingWithFallback(
   if (strict.outcome !== 'NONE' || !looseKey) return strict;
   return matchBuilding(looseIndex, looseKey);
 }
+
+/** A Jobber property's address as the console shows it: `206 Winding Road • Friendswood, Texas • 77546`. */
+export function formatJobberAddress(address: {
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+}): string | null {
+  return (
+    [
+      address.addressLine1,
+      address.addressLine2,
+      [address.city, address.state].filter(Boolean).join(', '),
+      address.postalCode,
+    ]
+      .filter(Boolean)
+      .join(' • ') || null
+  );
+}
