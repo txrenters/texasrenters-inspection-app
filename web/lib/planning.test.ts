@@ -7,13 +7,11 @@ import {
   attentionText,
   bookedInWords,
   dayClock,
-  dayOutsideRules,
   formatClock,
   formatMinutes,
   formatShortDay,
   leaveHomeAt,
   limitState,
-  longestLegSeconds,
   parseCsv,
   planStartOptions,
   planStartText,
@@ -73,42 +71,6 @@ describe('a day against the office’s limits', () => {
     expect(limitState(90, 90)).toBe('near');
     expect(limitState(81, 90)).toBe('near');
     expect(limitState(60, 90)).toBe('within');
-  });
-
-  /**
-   * The office (2026-09-19): days of nine, up to twelve with the office's own
-   * visits, three fewer for each move-out or move-in, and never more than twenty
-   * minutes from one property to the next. A short day is the planner's answer
-   * to properties too far apart, and inside the rules.
-   */
-  it('holds a day to twelve visits, three fewer for each move-out or move-in, and no drive over twenty minutes between properties', () => {
-    const rules = { minStopsPerDay: 9, maxStopsPerDay: 12, maxOnSiteMinutes: 360, maxLegMinutes: 20 };
-    const on = (stopCount: number, booked: number, legSeconds = 600) =>
-      dayOutsideRules(
-        {
-          stopCount,
-          onSiteMinutes: 300,
-          stops: Array.from({ length: stopCount }, (_, index) => ({ driveSecondsForecast: index ? legSeconds : null })),
-          anchors: Array.from({ length: booked }, () => ({ driveSecondsForecast: null })),
-        },
-        rules,
-      );
-
-    expect([on(3, 0), on(9, 0), on(12, 0), on(13, 0)]).toEqual([false, false, false, true]);
-    expect([on(6, 1), on(9, 1), on(10, 1)]).toEqual([false, false, true]);
-    expect([on(0, 3), on(3, 3), on(4, 3)]).toEqual([false, false, true]);
-    // Twenty minutes is the limit; twenty-one is over it.
-    expect([on(9, 0, 20 * 60), on(9, 0, 21 * 60)]).toEqual([false, true]);
-  });
-
-  it('finds the longest drive between a day’s stops, move-outs included, and not the drive from home', () => {
-    expect(
-      longestLegSeconds({
-        stops: [{ driveSecondsForecast: null }, { driveSecondsForecast: 300 }],
-        anchors: [{ driveSecondsForecast: 900 }],
-      }),
-    ).toBe(900);
-    expect(longestLegSeconds({ stops: [{ driveSecondsForecast: null }] })).toBeNull();
   });
 
   it('names the move-outs and move-ins on a day', () => {

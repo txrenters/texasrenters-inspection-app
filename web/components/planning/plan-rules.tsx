@@ -1,7 +1,6 @@
 'use client';
 
 import { SECTION_LABEL } from '@/components/panel';
-import { formatMinutes } from '@/lib/planning';
 
 /**
  * The office's rules for laying out a quarter, and this quarter's own facts,
@@ -16,13 +15,11 @@ import { formatMinutes } from '@/lib/planning';
 export function PlanRules({
   minStopsPerDay,
   maxStopsPerDay,
-  maxOnSiteMinutes,
   maxLegMinutes,
   facts,
 }: {
   minStopsPerDay: number;
   maxStopsPerDay: number;
-  maxOnSiteMinutes: number;
   maxLegMinutes: number;
   /** "First day", "US holidays", "Crew"… with what this quarter has for each. */
   facts: readonly { label: string; value: string }[];
@@ -40,11 +37,6 @@ export function PlanRules({
         <li>A zone too far for a day’s drive is a trip of days in a row for whoever lives nearest.</li>
         <li>Weekdays only. US holidays are off; Mondays from week 2 are kept free for rescheduled visits.</li>
       </ul>
-      {/* What "outside the rules" in the summary means, said where the rules are (console-development). */}
-      <p className="text-muted-foreground">
-        A day outside the rules has more than {maxStopsPerDay} visits, more than {formatMinutes(maxOnSiteMinutes)}{' '}
-        inspecting, or a drive over {maxLegMinutes} minutes between properties. It has a coral edge on the calendar.
-      </p>
       {facts.length ? (
         <section className="grid gap-1.5 border-t pt-3">
           <h2 className={SECTION_LABEL}>This quarter</h2>
