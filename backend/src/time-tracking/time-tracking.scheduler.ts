@@ -10,6 +10,7 @@ import { CronJob } from 'cron';
 import { businessDate, businessDayBounds } from '../common/business-day';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
+import { StopNamingService } from './stop-naming.service';
 import { TimeTrackingService } from './time-tracking.service';
 
 /**
@@ -52,6 +53,7 @@ export class TimeTrackingScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(TimeTrackingService) private readonly time: TimeTrackingService,
+    @Inject(StopNamingService) private readonly stops: StopNamingService,
   ) {}
 
   onModuleInit() {
@@ -104,29 +106,34 @@ export class TimeTrackingScheduler implements OnModuleInit, OnModuleDestroy {
           where: { recordedAt: { gte: settling ? yesterday.start : today.start } },
         }),
       );
-      if (!tracked.length) return;
-
-      let read = 0;
-      let changed = 0;
-      let failed = 0;
-      for (const { organizationId, technicianId } of tracked)
-        for (const day of days) {
-          // Sequential on purpose. A burst of parallel readings would compete
-          // with the handsets reporting their positions, which is the one
-          // thing here that cannot wait.
-          const result = await withSystemTenant(() =>
-            this.time.recomputeDayAutomatically(organizationId, technicianId, day),
-          );
-          if (!result) failed += 1;
-          else {
-            read += 1;
-            if (result.changed) changed += 1;
+      if (tracked.length) {
+        let read = 0;
+        let changed = 0;
+        let failed = 0;
+        for (const { organizationId, technicianId } of tracked)
+          for (const day of days) {
+            // Sequential on purpose. A burst of parallel readings would compete
+            // with the handsets reporting their positions, which is the one
+            // thing here that cannot wait.
+            const result = await withSystemTenant(() =>
+              this.time.recomputeDayAutomatically(organizationId, technicianId, day),
+            );
+            if (!result) failed += 1;
+            else {
+              read += 1;
+              if (result.changed) changed += 1;
+            }
           }
-        }
-      // Said only when there is something to say: at this pace an unchanged
-      // run every five minutes would be most of the log.
-      if (changed || failed)
-        this.logger.log({ event: 'time_tracking_swept', technicians: tracked.length, read, changed, failed });
+        // Said only when there is something to say: at this pace an unchanged
+        // run every five minutes would be most of the log.
+        if (changed || failed)
+          this.logger.log({ event: 'time_tracking_swept', technicians: tracked.length, read, changed, failed });
+      }
+
+      // After the days are read, so a stop found in this sweep is named in it;
+      // and when nobody is out too, because a month recalculated by hand
+      // leaves its stops to be named. A handful at a time, and never throws.
+      await this.stops.nameWaiting();
     } catch (error) {
       // Never throw out of a cron callback: an unhandled rejection takes the
       // process down, and a missed sweep is not worth an outage.

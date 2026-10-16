@@ -45,6 +45,27 @@ export interface TechnicianTrail {
   segments: TrailSegment[];
   /** How many fixes the day held, before any were dropped or simplified away. */
   fixes: number;
+  /**
+   * Where they stopped between properties that is not one -- the hardware
+   * store, a supply run -- as the timesheet counts it (the office, 2026-10-17:
+   * "show it on the map"). Read from the timesheet's own stretches, so the map
+   * and the hours never disagree about where or how long.
+   */
+  stops?: TrailStop[];
+}
+
+/** A stop away from the properties, where it was and what it was. */
+export interface TrailStop {
+  id: string;
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  latitude: number;
+  longitude: number;
+  /** Null until it has been looked up. */
+  kind: 'PROPERTY' | 'HOME' | 'BUSINESS' | 'ADDRESS' | 'UNKNOWN' | null;
+  name: string | null;
+  address: string | null;
 }
 
 /** A fix claiming worse than this is not drawn. */

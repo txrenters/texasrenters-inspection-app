@@ -11,6 +11,7 @@ jest.mock('cron', () => ({
 import { CronJob } from 'cron';
 
 import type { PrismaService } from '../src/common/prisma.service';
+import type { StopNamingService } from '../src/time-tracking/stop-naming.service';
 import type { TimeTrackingService } from '../src/time-tracking/time-tracking.service';
 import { TimeTrackingScheduler } from '../src/time-tracking/time-tracking.scheduler';
 
@@ -38,11 +39,19 @@ const MORNING = new Date('2026-10-06T13:00:00.000Z');
 
 const read = (changed = false) => ({ changed });
 
+const naming = () => ({ nameWaiting: jest.fn().mockResolvedValue({ named: 0, waiting: 0 }) });
+
 function build(rows: unknown[] = TRACKED, recompute: jest.Mock = jest.fn().mockResolvedValue(read())) {
   const groupBy = jest.fn().mockResolvedValue(rows);
   const prisma = { technicianLocationPing: { groupBy } } as unknown as PrismaService;
   const time = { recomputeDayAutomatically: recompute } as unknown as TimeTrackingService;
-  return { scheduler: new TimeTrackingScheduler(prisma, time), groupBy, recompute };
+  const stops = naming();
+  return {
+    scheduler: new TimeTrackingScheduler(prisma, time, stops as unknown as StopNamingService),
+    groupBy,
+    recompute,
+    stops,
+  };
 }
 
 beforeEach(() => {
@@ -130,12 +139,39 @@ describe('sweeping', () => {
     expect(recompute).toHaveBeenLastCalledWith('org-2', 'tech-2', '2026-10-06');
   });
 
-  it('does nothing when nobody has a trail', async () => {
+  it('reads no day when nobody has a trail', async () => {
     const { scheduler, recompute } = build([]);
 
     await scheduler.sweep(AFTERNOON);
 
     expect(recompute).not.toHaveBeenCalled();
+  });
+
+  /** A stop found in this sweep is named in it, not five minutes later. */
+  it('names the stops waiting for a name once the days are read', async () => {
+    const order: string[] = [];
+    const recompute = jest.fn().mockImplementation(() => {
+      order.push('read');
+      return Promise.resolve(read());
+    });
+    const { scheduler, stops } = build(TRACKED, recompute);
+    stops.nameWaiting.mockImplementation(() => {
+      order.push('name');
+      return Promise.resolve({ named: 0, waiting: 0 });
+    });
+
+    await scheduler.sweep(AFTERNOON);
+
+    expect(order).toEqual(['read', 'read', 'name']);
+  });
+
+  /** A month recalculated by hand leaves stops to name, whoever is out today. */
+  it('still names waiting stops when nobody is out', async () => {
+    const { scheduler, stops } = build([]);
+
+    await scheduler.sweep(AFTERNOON);
+
+    expect(stops.nameWaiting).toHaveBeenCalledTimes(1);
   });
 
   /** A slow sweep must not stack on the next tick and read everything twice. */
@@ -176,7 +212,7 @@ describe('sweeping', () => {
     const groupBy = jest.fn().mockRejectedValue(new Error('database unreachable'));
     const prisma = { technicianLocationPing: { groupBy } } as unknown as PrismaService;
     const time = { recomputeDayAutomatically: jest.fn() } as unknown as TimeTrackingService;
-    const scheduler = new TimeTrackingScheduler(prisma, time);
+    const scheduler = new TimeTrackingScheduler(prisma, time, naming() as unknown as StopNamingService);
 
     await expect(scheduler.sweep(AFTERNOON)).resolves.toBeUndefined();
   });
