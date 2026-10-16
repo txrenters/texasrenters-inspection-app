@@ -1,4 +1,4 @@
-import { dayVisitRange, planStartRange, quarterFirstDay, type Quarter } from '@texasrenters/shared';
+import { planStartRange, quarterFirstDay, type Quarter } from '@texasrenters/shared';
 
 /**
  * The arithmetic and reading behind the benefit-package plan page.
@@ -76,48 +76,9 @@ const SHORT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numer
 /** "Oct 12" for `2026-10-12`. A calendar date, so read in UTC: in Manila, local time would show the day before. */
 export const formatShortDay = (date: string) => SHORT_DAY.format(new Date(`${date}T00:00:00Z`));
 
-interface MeasuredLegs {
-  stops: readonly { driveSecondsForecast: number | null }[];
-  anchors?: readonly { driveSecondsForecast: number | null }[];
-}
-
-/**
- * The longest measured drive from one of a day's stops to the next, in seconds,
- * or null when none was measured. The drive from home is not one of them.
- */
-export function longestLegSeconds(day: MeasuredLegs): number | null {
-  const legs = [...day.stops, ...(day.anchors ?? [])]
-    .map((stop) => stop.driveSecondsForecast)
-    .filter((seconds): seconds is number => seconds !== null);
-  return legs.length ? Math.max(...legs) : null;
-}
-
 /** Whether a drive between two properties is longer than the plan allows (the office, 2026-09-19: twenty minutes). */
 export const legOverLimit = (seconds: number | null, maxLegMinutes: number) =>
   seconds !== null && Math.round(seconds / 60) > maxLegMinutes;
-
-/**
- * A day outside the office's rules: more visits than a day may hold, more time
- * inspecting than a day holds, or a drive from one property to the next longer
- * than the plan allows.
- *
- * Twelve visits at most, three fewer for each move-out or move-in the day is
- * built around (`dayVisitRange`, 2026-09-18), and never more than twenty
- * minutes between properties (2026-09-19). A day of fewer than nine is inside
- * them: the planner makes one only where the properties are too far apart for
- * more, and the office fills it as it likes.
- */
-export function dayOutsideRules(
-  day: MeasuredLegs & { stopCount: number; onSiteMinutes: number },
-  rules: { minStopsPerDay: number; maxStopsPerDay: number; maxOnSiteMinutes: number; maxLegMinutes: number },
-) {
-  const range = dayVisitRange(rules, day.anchors?.length ?? 0);
-  return (
-    day.stopCount > range.max ||
-    day.onSiteMinutes > rules.maxOnSiteMinutes ||
-    legOverLimit(longestLegSeconds(day), rules.maxLegMinutes)
-  );
-}
 
 /** One of the three starts the office picks between when a quarter is built, and what it means. */
 export interface PlanStartOption {

@@ -13,7 +13,7 @@ import { useMemo, type ReactNode } from 'react';
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { businessToday } from '@/lib/clock';
-import { bookedInWords, dayClock, dayOutsideRules, formatClock, formatMinutes, formatShortDay } from '@/lib/planning';
+import { bookedInWords, dayClock, formatClock, formatMinutes, formatShortDay } from '@/lib/planning';
 import type { PlanDay, PlanDayAnchor, PlanDayStop, PlanRotation, PlanSettings } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
@@ -197,16 +197,14 @@ function zonesOf(day: PlanDay) {
 }
 
 /** A day in full, for a reader that cannot see its chip's colour and marks. */
-function dayLabel(day: PlanDay, settings: PlanSettings) {
+function dayLabel(day: PlanDay) {
   const zones = zonesOf(day);
   const booked = day.anchors ?? [];
   return `${LONG_DAY.format(at(day.date.slice(0, 10)))}: ${day.technician.displayName}, ${day.stopCount} ${
     day.stopCount === 1 ? 'visit' : 'visits'
   }${day.hvacStopCount ? ` (${day.hvacStopCount} HVAC)` : ''}${
     zones.length ? `, ${zones.length === 1 ? 'zone' : 'zones'} ${zones.join(', ')}` : ''
-  }${booked.length ? `, built around ${bookedInWords(booked)}` : ''}, ${formatMinutes(day.onSiteMinutes)} inspecting${
-    dayOutsideRules(day, settings) ? ', outside the rules' : ''
-  }`;
+  }${booked.length ? `, built around ${bookedInWords(booked)}` : ''}, ${formatMinutes(day.onSiteMinutes)} inspecting`;
 }
 
 const visitWord = (count: number) => `${count.toLocaleString()} ${count === 1 ? 'visit' : 'visits'}`;
@@ -237,7 +235,6 @@ function Avatar({ name, colour, className }: { name: string; colour: string; cla
 }
 
 interface Shared {
-  settings: PlanSettings;
   filter: CalendarFilter;
   today: string;
   selectedDayId?: string;
@@ -264,8 +261,10 @@ const shownVisits = (days: readonly PlanDay[], filter: CalendarFilter) =>
  * time (the office, 2026-10-05, from Jobber's schedule).
  *
  * Each technician keeps one colour, so a week reads at a glance as who covers
- * it; a day outside the office's rules is marked on its chip. A technician-day
- * clicked anywhere is the one picked -- the map beside the calendar draws it.
+ * it. No day is marked as breaking the office's rules (the office, 2026-10-17:
+ * a quarter built from their own groups is laid out as they drew it). A
+ * technician-day clicked anywhere is the one picked -- the map beside the
+ * calendar draws it.
  */
 export function PlanCalendar({
   quarter,
@@ -328,7 +327,6 @@ export function PlanCalendar({
 
   const shown = clampToCalendar(cursor ?? calendarDates(months)[0] ?? quarterFirstDay(quarter), months);
   const shared: Shared = {
-    settings,
     filter,
     today: businessToday(),
     selectedDayId,
@@ -437,9 +435,8 @@ const bookedDiamond = (needsRebuild: boolean) =>
 
 /** A technician-day on the month: who, the zone, the move-out diamond, and how many visits. */
 function DayChip({ day, shared }: { day: PlanDay; shared: Shared }) {
-  const outside = dayOutsideRules(day, shared.settings);
   const zones = zonesOf(day);
-  const label = dayLabel(day, shared.settings);
+  const label = dayLabel(day);
   return (
     <button
       aria-current={day.id === shared.selectedDayId || undefined}
@@ -447,10 +444,6 @@ function DayChip({ day, shared }: { day: PlanDay; shared: Shared }) {
       className={cn(
         'hover:bg-accent focus-visible:ring-ring/50 flex w-full min-w-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-left text-xs outline-none focus-visible:ring-[3px]',
         day.id === shared.selectedDayId && 'bg-accent border-ring',
-        // A coral left edge, as the Schedule marks a visit that needs a look
-        // (console-development): the whole chip outlined in red read as an
-        // error across a month of chips.
-        outside && 'border-l-destructive border-l-2',
       )}
       onClick={() => shared.onSelect(day.id)}
       title={label}
@@ -463,7 +456,6 @@ function DayChip({ day, shared }: { day: PlanDay; shared: Shared }) {
       {day.anchors?.length ? (
         <span aria-hidden className={bookedDiamond(day.anchors.some((anchor) => bookedProblem(day, anchor) !== null))} />
       ) : null}
-      {/* A plain figure: the coral edge already says the day breaks a rule (console-development). */}
       <span className="ml-auto shrink-0 font-mono tabular-nums">{day.stops.filter(shared.filter.visit).length}</span>
     </button>
   );
@@ -544,17 +536,13 @@ function WeekView({ dates, shared }: { dates: string[]; shared: Shared }) {
                   <div className={cn('grid gap-1 rounded-lg p-0.5', selected && 'bg-accent/60 ring-ring ring-1')} key={day.id}>
                     <button
                       aria-current={selected || undefined}
-                      aria-label={dayLabel(day, shared.settings)}
-                      className={cn(
-                        'hover:bg-accent flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs',
-                        dayOutsideRules(day, shared.settings) && 'border-l-destructive border-l-2',
-                      )}
+                      aria-label={dayLabel(day)}
+                      className="hover:bg-accent flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs"
                       onClick={() => shared.onSelect(day.id)}
                       type="button"
                     >
                       <Avatar colour={shared.colourOf(day.technicianId)} name={day.technician.displayName} />
                       <span className="truncate font-medium">{shortName(day.technician.displayName)}</span>
-                      {/* Plain, as on the month (console-development): the coral edge says the day breaks a rule. */}
                       <span className="text-muted-foreground ml-auto shrink-0 font-mono tabular-nums">
                         {day.stops.filter(shared.filter.visit).length}
                       </span>
@@ -605,15 +593,11 @@ function DayColumn({ day, shared }: { day: PlanDay; shared: Shared }) {
   const drive = day.totalDriveSeconds;
   return (
     <div
-      className={cn(
-        'grid gap-1.5 rounded-lg border p-1.5',
-        selected ? 'border-ring bg-accent/40' : 'hover:bg-muted/40',
-        dayOutsideRules(day, shared.settings) && 'border-l-destructive border-l-2',
-      )}
+      className={cn('grid gap-1.5 rounded-lg border p-1.5', selected ? 'border-ring bg-accent/40' : 'hover:bg-muted/40')}
     >
       <button
         aria-current={selected || undefined}
-        aria-label={dayLabel(day, shared.settings)}
+        aria-label={dayLabel(day)}
         className="hover:bg-accent flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left"
         onClick={() => shared.onSelect(day.id)}
         type="button"
@@ -626,7 +610,6 @@ function DayColumn({ day, shared }: { day: PlanDay; shared: Shared }) {
             {formatDrive(day.onSiteMinutes * 60 + (drive ?? 0))}
           </span>
         </span>
-        {/* A coral left edge on the column says the day breaks a rule; the count stays plain (console-development). */}
         <CountPill count={day.stops.filter(shared.filter.visit).length} />
       </button>
       {clock

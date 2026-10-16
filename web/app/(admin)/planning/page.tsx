@@ -63,7 +63,6 @@ import { formatRelative } from '@/lib/format';
 import {
   attentionOf,
   bookedInWords,
-  dayOutsideRules,
   formatShortDay,
   needsUnit,
   planStartText,
@@ -251,21 +250,6 @@ export default function PlanningPage() {
       return problem ? [{ day, anchor, problem }] : [];
     }),
   );
-  const daysOutsideRules = plan
-    ? (days.data ?? [])
-        .filter((day) => dayOutsideRules(day, plan))
-        .sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
-    : [];
-  /**
-   * "N days outside the rules" takes the calendar to one (console-development):
-   * the first, then on each click the next after the day picked. Red words
-   * explained only by a hover title gave the office nothing to do with them.
-   */
-  const showNextOutsideRules = () => {
-    const at = daysOutsideRules.findIndex((day) => day.id === state.day);
-    const next = daysOutsideRules[(at + 1) % daysOutsideRules.length];
-    if (next) setState({ tab: 'schedule', show: 'all', day: next.id });
-  };
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   // In Jobber's Unscheduled list and given a day here since: "Publish the rest" gives that visit the day.
   const redated = (stops.data ?? []).filter((stop) => stop.status === 'UNSCHEDULED' && stop.scheduledOn);
@@ -585,21 +569,8 @@ export default function PlanningPage() {
                 </button>,
               ]
             : []),
-          ...(daysOutsideRules.length
-            ? [
-                <button
-                  className="text-destructive font-medium underline-offset-4 hover:underline"
-                  key="outside"
-                  onClick={showNextOutsideRules}
-                  title={`Over ${plan.maxStopsPerDay} visits, the inspecting limit, or ${plan.maxLegMinutes} min between properties. Click to go to ${
-                    daysOutsideRules.length === 1 ? 'it' : 'the next one'
-                  } on the calendar.`}
-                  type="button"
-                >
-                  {daysOutsideRules.length.toLocaleString()} {daysOutsideRules.length === 1 ? 'day' : 'days'} outside the rules
-                </button>,
-              ]
-            : []),
+          // No "days outside the rules" (the office, 2026-10-17): a quarter
+          // built from their own groups is laid out as they drew it.
         ];
         return (
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -706,7 +677,6 @@ export default function PlanningPage() {
           <PlanRules
             facts={facts}
             maxLegMinutes={plan.maxLegMinutes}
-            maxOnSiteMinutes={plan.maxOnSiteMinutes}
             maxStopsPerDay={plan.maxStopsPerDay}
             minStopsPerDay={plan.minStopsPerDay}
           />

@@ -206,16 +206,15 @@ describe('the month', () => {
     expect(within(november).getByText('Closed')).toBeTruthy();
   });
 
-  it('says which days are outside the office’s rules', () => {
-    const long = day('kevin-oct-7', '2026-10-07', 'kevin', 'Kevin Granados', 9, '2');
+  /** The office (2026-10-17): no day is marked as outside the rules, however long its drives or many its visits. */
+  it('marks no day as outside the office’s rules', () => {
+    const long = day('kevin-oct-7', '2026-10-07', 'kevin', 'Kevin Granados', 13, '2');
     long.stops[4]!.driveSecondsForecast = 25 * 60;
     calendar({ days: [...DAYS, long], cursor: '2026-10-01' });
 
-    // A drive of twenty-five minutes between two of its properties.
-    expect(screen.getByRole('button', { name: /^Wednesday, October 7: Kevin Granados, 9 visits.*, outside the rules$/ })).toBeTruthy();
-    // Seven visits is a short day, not one against the rules; ten is the most a day holds.
-    expect(screen.getByRole('button', { name: /^Tuesday, October 6: Moses Rodriguez, 7 visits.*inspecting$/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^Friday, October 2: Emanuel Hall, 10 visits.*inspecting$/ })).toBeTruthy();
+    const chip = screen.getByRole('button', { name: /^Wednesday, October 7: Kevin Granados, 13 visits.*inspecting$/ });
+    expect(chip.className).not.toContain('border-l-destructive');
+    expect(screen.queryByRole('button', { name: /outside the rules/ })).toBeNull();
   });
 
   it('shows a plan’s days before the quarter, with the Mondays kept free from its own second week', () => {
@@ -255,17 +254,14 @@ describe('the month', () => {
     expect(diamondOf(/^Thursday, October 15:/).className).toContain('bg-warning');
   });
 
-  /** The office (2026-09-18): three visits fewer for each move-out or move-in on the day. */
-  it('names the move-outs and move-ins a day is built around, and holds it to three visits fewer for each', () => {
+  it('names the move-outs and move-ins a day is built around', () => {
     const anchored = {
       ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 4, '3'),
       anchors: [moveOut('anchor-1', '2026-10-14', 'moses'), moveOut('anchor-2', '2026-10-14', 'moses')],
     } as unknown as PlanDay;
     calendar({ days: [anchored], cursor: '2026-10-14' });
 
-    // Two of them leave room for up to four visits: inside the rules.
-    const button = screen.getByRole('button', { name: /built around 2 move-outs, / });
-    expect(button.getAttribute('aria-label')).not.toContain('outside the rules');
+    expect(screen.getByRole('button', { name: /^Wednesday, October 14: Moses Rodriguez, 4 visits.*, built around 2 move-outs, / })).toBeTruthy();
   });
 
   it('opens a day from its date', () => {
