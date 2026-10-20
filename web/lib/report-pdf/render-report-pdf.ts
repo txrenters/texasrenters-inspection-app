@@ -1,6 +1,7 @@
 import { buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport } from '@texasrenters/shared';
 
+import { inspectionFileLabel, reportPdfFileName } from './file-name';
 import { ReportDocument } from './report-document';
 import type { ReportImages } from './report-document';
 
@@ -68,13 +69,7 @@ export async function renderReportPdf(
   return Buffer.from(await renderToBuffer(ReportDocument({ view, images })));
 }
 
-/** `318-notional-harbor-ln-inspection-report.pdf` */
+/** `318 Notional Harbor Ln_Occupied Inspection.pdf` */
 export function reportFileName(report: PublicInspectionReport) {
-  const base = report.property.addressLine1 || report.property.name || 'inspection';
-  const slug = base
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return `${slug || 'inspection'}-inspection-report.pdf`;
+  return reportPdfFileName(report.property, inspectionFileLabel(report.inspection.type));
 }

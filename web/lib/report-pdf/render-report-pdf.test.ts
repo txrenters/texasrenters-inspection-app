@@ -335,8 +335,8 @@ describe('inspection report PDF', () => {
     });
   });
 
-  it('names the download after the property', () => {
-    expect(reportFileName(REPORT)).toBe('318-notional-harbor-ln-inspection-report.pdf');
+  it('names the download the way Propertyware files it: address, then the inspection', () => {
+    expect(reportFileName(REPORT)).toBe('318 Notional Harbor Ln_Occupied Inspection.pdf');
   });
 });
 

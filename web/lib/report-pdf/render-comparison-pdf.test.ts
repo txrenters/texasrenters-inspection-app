@@ -203,6 +203,6 @@ describe('comparison report PDF', () => {
   }, 30_000);
 
   it('is named for the property', () => {
-    expect(comparisonFileName(REPORT)).toBe('318-notional-harbor-ln-move-in-move-out-comparison.pdf');
+    expect(comparisonFileName(REPORT)).toBe('318 Notional Harbor Ln_Move In Move Out Comparison.pdf');
   });
 });

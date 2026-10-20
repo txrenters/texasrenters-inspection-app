@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { attachmentDisposition } from '@/lib/report-pdf/file-name';
 import {
   comparisonFileName,
   renderComparisonPdf,
@@ -74,7 +75,7 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
     headers: {
       'content-type': 'application/pdf',
       'content-length': String(pdf.length),
-      'content-disposition': `attachment; filename="${comparisonFileName(report)}"`,
+      'content-disposition': attachmentDisposition(comparisonFileName(report)),
       // Private to whoever holds the link; no shared cache keeps a copy.
       'cache-control': 'private, no-store',
     },
