@@ -85,24 +85,63 @@ CURRENT_TAG="$(read_env IMAGE_TAG)"
 REGISTRY="$(read_env IMAGE_REGISTRY)"
 REGISTRY="${REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}"
 
-# The releases API rather than the registry's tag list: a release is the thing a
-# human decided to ship, and `latest` moves without saying to what. The token is
-# the same one `docker login ghcr.io` uses; the repository is private, so an
+# The releases API first: a release is the thing a human decided to ship, and
+# `latest` moves without saying to what. The repository is private, so an
 # unauthenticated call returns 404 and is indistinguishable from "no releases".
 [ -n "${GITHUB_TOKEN:-}" ] || die "GITHUB_TOKEN is not set — a private repository's releases cannot be read without it."
 
-api_response="$(curl -fsS --max-time 30 \
+# The newest release whose images are in the registry, by its version tag.
+#
+# What to deploy when the releases API cannot be read. Since the repository went
+# private (2026-10-16, and again 2026-10-19) this host's token -- a read:packages
+# PAT, which reads the registry but not the repository -- has had a 404 from the
+# API on every check, and no release deployed while it did.
+#
+# The registry is the next best word on what was shipped: an X.Y.Z tag is written
+# only by *Publish images*, from a published release's tag (docker/metadata-action
+# `type=semver`), and both images must carry it. Not the deploy request the
+# workflow sends: the backend writes that file, and the backend must not be able
+# to choose what this host deploys. Prints nothing when it cannot tell.
+newest_registry_release() {
+  local host="${REGISTRY%%/*}" path="${REGISTRY#*/}" image token tags common=""
+  [ "${host}" = "ghcr.io" ] || return 1
+  for image in backend web; do
+    token="$(curl -fsS --max-time 30 -u "token:${GITHUB_TOKEN}" \
+      "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}/${image}:pull" 2>/dev/null \
+      | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')" || return 1
+    [ -n "${token}" ] || return 1
+    tags="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${token}" \
+      "https://ghcr.io/v2/${path}/${image}/tags/list?n=10000" 2>/dev/null \
+      | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | sort -u)" || return 1
+    [ -n "${tags}" ] || return 1
+    if [ "${image}" = backend ]; then common="${tags}"; else common="$(comm -12 <(printf '%s\n' "${common}") <(printf '%s\n' "${tags}"))"; fi
+  done
+  printf '%s\n' "${common}" | sort -V | tail -1
+}
+
+PUBLISHED_AT=""
+if api_response="$(curl -fsS --max-time 30 \
   -H "Authorization: Bearer ${GITHUB_TOKEN}" \
   -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null)" \
-  || die "Could not reach the GitHub releases API. Leaving ${CURRENT_TAG} in place."
-
-# `v1.0.0` in git, `1.0.0` in the registry — docker/metadata-action strips the
-# prefix, so IMAGE_TAG=v1.0.0 fails to pull with a message that reads like the
-# image was never published.
-LATEST_TAG="$(printf '%s' "${api_response}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-LATEST_TAG="${LATEST_TAG#v}"
-[ -n "${LATEST_TAG}" ] || die "Could not read tag_name from the releases API response."
+  "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null)"; then
+  # `v1.0.0` in git, `1.0.0` in the registry — docker/metadata-action strips the
+  # prefix, so IMAGE_TAG=v1.0.0 fails to pull with a message that reads like the
+  # image was never published.
+  LATEST_TAG="$(printf '%s' "${api_response}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  LATEST_TAG="${LATEST_TAG#v}"
+  [ -n "${LATEST_TAG}" ] || die "Could not read tag_name from the releases API response."
+  PUBLISHED_AT="$(printf '%s' "${api_response}" | sed -n 's/.*"published_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+else
+  log "Could not read the GitHub releases API; asking the registry for the newest release instead."
+  LATEST_TAG="$(newest_registry_release || true)"
+  [ -n "${LATEST_TAG}" ] || die "Could not reach the GitHub releases API or the registry. Leaving ${CURRENT_TAG} in place."
+  # Never a step back on the registry's word: a release set here by hand, or one
+  # whose tag the registry has lost, stays where it is.
+  if [ "$(printf '%s\n%s\n' "${LATEST_TAG}" "${CURRENT_TAG}" | sort -V | tail -1)" != "${LATEST_TAG}" ]; then
+    log "The registry's newest release, ${LATEST_TAG}, is older than ${CURRENT_TAG}; leaving ${CURRENT_TAG} in place."
+    LATEST_TAG="${CURRENT_TAG}"
+  fi
+fi
 
 log "running=${CURRENT_TAG} published=${LATEST_TAG}"
 
@@ -137,9 +176,9 @@ fi
 # says so. (2.5.73, 2026-09-17: FATAL "Could not pull backend:2.5.73" at 13:22,
 # deployed at 13:39.)
 IMAGE_WAIT_SECONDS="${IMAGE_WAIT_SECONDS:-2700}"
-PUBLISHED_AT="$(printf '%s' "${api_response}" | sed -n 's/.*"published_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 # No date reads as long ago, so a missing image is reported. `date -d ""` would
-# answer midnight today instead.
+# answer midnight today instead. (A release found in the registry has no date,
+# and needs none: its images are there.)
 published_epoch=0
 if [ -n "${PUBLISHED_AT}" ]; then
   published_epoch="$(date -u -d "${PUBLISHED_AT}" +%s 2>/dev/null || echo 0)"
