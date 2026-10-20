@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { attachmentDisposition } from '@/lib/report-pdf/file-name';
 import { renderReportPdf, reportFileName } from '@/lib/report-pdf/render-report-pdf';
 import type { PublicInspectionReport } from '@texasrenters/shared';
 
@@ -72,7 +73,7 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
     headers: {
       'content-type': 'application/pdf',
       'content-length': String(pdf.length),
-      'content-disposition': `attachment; filename="${reportFileName(report)}"`,
+      'content-disposition': attachmentDisposition(reportFileName(report)),
       // The report is private to whoever holds the link; never let a shared
       // cache keep a copy.
       'cache-control': 'private, no-store',

@@ -2,6 +2,7 @@ import { buildComparisonView } from '@texasrenters/shared';
 import type { ComparisonReport, ComparisonView, ReportPhotoView } from '@texasrenters/shared';
 
 import { ComparisonPdfDocument, comparisonPdfPhotos } from './comparison-document';
+import { COMPARISON_FILE_LABEL, reportPdfFileName } from './file-name';
 import type { ReportImages } from './report-document';
 import type { RenderOptions } from './render-report-pdf';
 
@@ -66,13 +67,7 @@ export async function renderComparisonPdf(
   return Buffer.from(await renderToBuffer(ComparisonPdfDocument({ view, images })));
 }
 
-/** `318-notional-harbor-ln-move-in-move-out-comparison.pdf` */
+/** `318 Notional Harbor Ln_Move In Move Out Comparison.pdf` */
 export function comparisonFileName(report: ComparisonReport) {
-  const base = report.property.addressLine1 || report.property.name || 'property';
-  const slug = base
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-  return `${slug || 'property'}-move-in-move-out-comparison.pdf`;
+  return reportPdfFileName(report.property, COMPARISON_FILE_LABEL);
 }
