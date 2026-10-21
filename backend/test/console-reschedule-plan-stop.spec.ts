@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { moveStopWithVisit } from '../src/planning/move-stop-with-visit';
 import { PresenceService } from '../src/realtime/presence.service';
 import { ZERO_EVIDENCE } from './support/prisma-evidence';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * A visit the office moved in the console moves its quarter plan's stop too.
@@ -103,6 +104,7 @@ function build({
     },
     inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    rescheduleRequest: rescheduleRequestDelegate(),
     jobberOutboundTask: {
       upsert: jest.fn().mockResolvedValue({ id: 'task-1' }),
       findFirst: jest.fn().mockResolvedValue(null),

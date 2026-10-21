@@ -4,6 +4,7 @@ import { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { PresenceService } from '../src/realtime/presence.service';
 import { ZERO_EVIDENCE } from './support/prisma-evidence';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * A Jobber visit is rescheduled in Jobber.
@@ -48,6 +49,7 @@ function build(existing: ReturnType<typeof visit>) {
     tbpQuarterPlanStop: { findFirst: jest.fn().mockResolvedValue(null) },
     inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    rescheduleRequest: rescheduleRequestDelegate(),
   };
   const prisma = {
     ...ZERO_EVIDENCE,

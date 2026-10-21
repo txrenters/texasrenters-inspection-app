@@ -23,6 +23,7 @@ import { CacheInvalidationService } from '../../cache/cache-invalidation.service
 import { businessDate } from '../../common/business-day';
 import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
+import { settleMovedInJobber, settleRebookedInJobber } from '../../common/reschedule-requests';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
@@ -1034,6 +1035,25 @@ export class JobberSyncWorker {
           },
         });
 
+        /**
+         * A visit a coordinator booked again in Jobber answers the request
+         * that asked for it (2026-10-21), so the queue does not offer to book a
+         * second one. Not for work Jobber already closed: that is history
+         * arriving late, not a rebooking.
+         */
+        const rebookOf = isComplete
+          ? null
+          : await settleRebookedInJobber(tx, {
+              organizationId,
+              inspection: {
+                id: inspection.id,
+                propertywareBuildingId: link.propertywareBuildingId,
+                propertywareUnitId: link.propertywareUnitId,
+                inspectionType: type.inspectionType,
+                scheduledAt: dayOf(visit.startAt!),
+              },
+            });
+
         await tx.auditLog.create({
           data: {
             organizationId,
@@ -1045,6 +1065,7 @@ export class JobberSyncWorker {
               jobberJobId: visit.job?.id ?? null,
               inspectionType: type.inspectionType,
               areasInspected: plan.scopedAreas.length,
+              ...(rebookOf ? { answeredRescheduleRequest: rebookOf } : {}),
             },
           },
         });
@@ -1383,13 +1404,21 @@ export class JobberSyncWorker {
           },
         });
         const planStop = await moveStopWithVisit(tx, organizationId, inspectionId, day);
+        // A technician who asked for another day is answered by the move a
+        // coordinator made in Jobber (2026-10-21).
+        const answered = await settleMovedInJobber(tx, { organizationId, inspectionId });
         await tx.auditLog.create({
           data: {
             organizationId,
             action: 'INSPECTION_RESCHEDULED_FROM_JOBBER',
             entityType: 'Inspection',
             entityId: inspectionId,
-            metadata: { jobberVisitId: visit.id, scheduledAt: visit.startAt, ...(planStop ? { planStop } : {}) },
+            metadata: {
+              jobberVisitId: visit.id,
+              scheduledAt: visit.startAt,
+              ...(planStop ? { planStop } : {}),
+              ...(answered.count ? { answeredRescheduleRequests: answered.count } : {}),
+            },
           },
         });
       });

@@ -3,6 +3,7 @@ import {
   FILTER_SIZE_WITH_WORDS_PATTERN,
   MAX_BOOKED_FILTERS,
   MAX_LOCATION_BATCH,
+  MAX_RESCHEDULE_REASON,
   MAX_SERVICE_REASON,
 } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
@@ -654,6 +655,18 @@ export class TechnicianSaveServicesDto {
  */
 export class TechnicianCouldNotAccessDto {
   @IsString() @MinLength(3) @MaxLength(MAX_SERVICE_REASON) reason!: string;
+}
+
+/**
+ * A job not yet started, asked onto another day (2026-10-21). A request to the
+ * office, which picks the day: nothing moves until it does.
+ */
+export class TechnicianRescheduleRequestDto {
+  @IsString() @MinLength(3) @MaxLength(MAX_RESCHEDULE_REASON) reason!: string;
+  /** The day the technician suggests, `YYYY-MM-DD` in Texas. Only a suggestion. */
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) preferredOn?: string;
+  /** The phone's key for this request, so a retried send makes no second one. */
+  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/u) clientRequestId?: string;
 }
 
 /**

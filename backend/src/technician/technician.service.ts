@@ -29,6 +29,8 @@ import {
   servicesReportProblems,
   SERVICE_PHOTO_AREA,
   SERVICE_PHOTO_AREA_NAMES,
+  servicesToReschedule,
+  VISIT_SERVICE_LABEL,
   type BookedFilter,
   type ReportableVisitService,
   type VisitFilterOutcome,
@@ -52,17 +54,24 @@ import {
   InspectionAreaCompletionStatus,
   InspectionStatus,
   InspectionType,
+  JobberOutboundKind,
   MediaProcessingStatus,
   MediaUploadStatus,
   Prisma,
   PropertyAreaStatus,
+  RescheduleRequestKind,
   VideoRecordingType,
 } from '@prisma/client';
 import type { FindingReviewStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
-import { businessDayBounds } from '../common/business-day';
+import { businessDate, businessDayBounds } from '../common/business-day';
+import {
+  openRescheduleRequest,
+  queueRescheduleNote,
+  withdrawRescheduleRequests,
+} from '../common/reschedule-requests';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
 import { DONE_INSPECTION_STATUSES } from '../common/inspection-done';
 import { inspectedAreas, inspectedAreaWhere } from '../common/inspected-areas';
@@ -100,6 +109,7 @@ import type {
   TechnicianJobDaysQueryDto,
   TechnicianMediaUploadDto,
   TechnicianPhotoUploadDto,
+  TechnicianRescheduleRequestDto,
   TechnicianSaveServicesDto,
 } from './technician.dto';
 import {
@@ -1198,6 +1208,16 @@ export class TechnicianService {
         },
         select: technicianInspectionSummarySelect,
       });
+      // The office's queue (2026-10-21): the whole visit, to book again. Not
+      // only a line in Jobber's note, which nothing tracked.
+      await openRescheduleRequest(tx, {
+        organizationId: user.organizationId,
+        inspectionId: id,
+        kind: RescheduleRequestKind.NO_ACCESS,
+        services: booked,
+        reason,
+        requestedById: user.id,
+      });
       // Jobber hears the same account: every service not done, needing a
       // rebooking. The visit is closed there with that note rather than left
       // open for somebody to chase.
@@ -1209,7 +1229,108 @@ export class TechnicianService {
       return row;
     });
     this.notifyInspectionChanged(user, id);
+    // The office used to learn of it only from Jobber's note, minutes later.
+    void this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
+      kind: 'RESCHEDULE_REQUESTED',
+      title: 'Could not get in',
+      body: [updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name, reason, user.displayName]
+        .filter(Boolean)
+        .join(' · '),
+      inspectionId: id,
+    });
     return this.mapInspection(updated, user.id);
+  }
+
+  /**
+   * The technician asks for their visit on another day, before going: the
+   * tenant asked for another day, or the day ran out (2026-10-21).
+   *
+   * A request, not a move. Jobber is the schedule, and the day is the office's
+   * to choose against the plan, the clash rule and the technician's other
+   * visits -- so the visit stays where it is, the request goes to the office's
+   * queue, and a note goes on the visit's job so a coordinator working in
+   * Jobber sees it too. The day suggested is only a suggestion.
+   *
+   * Only before the job is started: once it is, what was not done is marked
+   * on the job, or "Could not get in" ends it, and both ask the same office.
+   * A retried send with the same `clientRequestId` answers with the request it
+   * already made.
+   */
+  async requestReschedule(user: AuthenticatedUser, id: string, input: TechnicianRescheduleRequestDto) {
+    const select = {
+      id: true,
+      inspectionId: true,
+      requestedById: true,
+      kind: true,
+      status: true,
+      reason: true,
+      preferredOn: true,
+      createdAt: true,
+    } satisfies Prisma.RescheduleRequestSelect;
+    const view = (request: Prisma.RescheduleRequestGetPayload<{ select: typeof select }>) => ({
+      id: request.id,
+      inspectionId: request.inspectionId,
+      kind: request.kind,
+      status: request.status,
+      reason: request.reason,
+      preferredOn: request.preferredOn?.toISOString().slice(0, 10) ?? null,
+      requestedAt: request.createdAt.toISOString(),
+    });
+    if (input.clientRequestId) {
+      const already = await this.prisma.rescheduleRequest.findUnique({
+        where: {
+          organizationId_clientRequestId: { organizationId: user.organizationId, clientRequestId: input.clientRequestId },
+        },
+        select,
+      });
+      // Only the technician's own request, on this job: the key is the phone's,
+      // and answering anyone else's would read a request out by guessing it.
+      if (already && (already.inspectionId !== id || already.requestedById !== user.id))
+        throw new ApplicationError(409, 'CLIENT_REQUEST_ID_REUSED', 'This request key was already used for another job.');
+      if (already) return view(already);
+    }
+    const inspection = await this.assignedInspection(user, id);
+    if (inspection.status !== InspectionStatus.SCHEDULED)
+      throw new ApplicationError(
+        409,
+        'JOB_ALREADY_STARTED',
+        'Only a job not yet started can be moved to another day. Mark what was not done, or report that you could not get in.',
+      );
+    if (input.preferredOn && input.preferredOn <= businessDate())
+      throw new ApplicationError(422, 'PREFERRED_DAY_NOT_AHEAD', 'Suggest a day after today.');
+    const reason = input.reason.trim();
+    const request = await this.prisma.$transaction(async (tx) => {
+      const opened = await openRescheduleRequest(tx, {
+        organizationId: user.organizationId,
+        inspectionId: id,
+        kind: RescheduleRequestKind.BEFORE_VISIT,
+        services: [],
+        reason,
+        preferredOn: input.preferredOn ? new Date(`${input.preferredOn}T00:00:00.000Z`) : null,
+        requestedById: user.id,
+        clientRequestId: input.clientRequestId ?? null,
+      });
+      if (opened.created || opened.updated) {
+        const job = await tx.inspection.findUnique({ where: { id }, select: { jobberJobId: true } });
+        await queueRescheduleNote(tx, {
+          organizationId: user.organizationId,
+          rescheduleRequestId: opened.id,
+          kind: JobberOutboundKind.RESCHEDULE_REQUESTED_NOTE,
+          jobberJobId: job?.jobberJobId ?? null,
+          createdById: user.id,
+        });
+      }
+      return tx.rescheduleRequest.findUniqueOrThrow({ where: { id: opened.id }, select });
+    });
+    void this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
+      kind: 'RESCHEDULE_REQUESTED',
+      title: 'Reschedule requested',
+      body: [inspection.propertywareBuilding?.name ?? inspection.propertywareUnit?.name, reason, user.displayName]
+        .filter(Boolean)
+        .join(' · '),
+      inspectionId: id,
+    });
+    return view(request);
   }
 
   async completeInspection(
@@ -1303,6 +1424,34 @@ export class TechnicianService {
         },
         select: technicianInspectionSummarySelect,
       });
+      /**
+       * The services the technician asked to have booked again go to the
+       * office's queue (2026-10-21), from the report as it now stands -- sent
+       * with the submission or saved during the job.
+       *
+       * A submission asking for nothing takes back what is still open: a
+       * reopened job resubmitted with everything done, or a visit asked off
+       * its day and done on it after all.
+       */
+      const report = row.servicesReport as unknown as VisitServicesReport | null;
+      const toRebook = servicesToReschedule(report);
+      if (toRebook.length)
+        await openRescheduleRequest(tx, {
+          organizationId: user.organizationId,
+          inspectionId: id,
+          kind: RescheduleRequestKind.SERVICES_NOT_DONE,
+          services: toRebook,
+          reason: toRebook
+            .map((service) => `${VISIT_SERVICE_LABEL[service]}: ${report?.services[service]?.reason?.trim() || 'not done'}`)
+            .join('; '),
+          requestedById: user.id,
+        });
+      else
+        await withdrawRescheduleRequests(tx, {
+          organizationId: user.organizationId,
+          inspectionId: id,
+          why: 'Submitted with nothing left to book again.',
+        });
       /**
        * Jobber is told the visit happened, here rather than only at sign-off.
        *

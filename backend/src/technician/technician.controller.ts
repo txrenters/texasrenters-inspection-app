@@ -45,6 +45,7 @@ import {
   TechnicianCompleteInspectionDto,
   TechnicianStartInspectionDto,
   TechnicianCouldNotAccessDto,
+  TechnicianRescheduleRequestDto,
   TechnicianReplaceEvidenceDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
@@ -387,6 +388,14 @@ export class TechnicianController {
     @Body() body: TechnicianCouldNotAccessDto,
   ) {
     return this.service.couldNotAccess(request.user, id, body);
+  }
+  /** A job not yet started, asked onto another day: the office decides the day. */
+  @Post('inspections/:inspectionId/reschedule-request') requestReschedule(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: TechnicianRescheduleRequestDto,
+  ) {
+    return this.service.requestReschedule(request.user, id, body);
   }
   @Get('inspections/:inspectionId/rooms') rooms(
     @Req() request: AuthenticatedRequest,

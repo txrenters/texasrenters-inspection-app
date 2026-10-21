@@ -399,6 +399,7 @@ enum ChargeSource {
 model Organization {
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
+  rescheduleRequests RescheduleRequest[]
   tbpPackageChanges TbpPackageChange[]
   timeSegments      TimeSegment[]
   timeAdjustments   TimeAdjustment[]
@@ -587,6 +588,8 @@ model UserProfile {
   timeAdjustmentsMade  TimeAdjustment[]   @relation("TimeAdjustmentAdmin")
   trackingGaps         TrackingGap[]      @relation("TrackingGapTechnician")
   trackingGapsResolved TrackingGap[]      @relation("TrackingGapResolvedBy")
+  rescheduleRequestsMade     RescheduleRequest[] @relation("RescheduleRequestedBy")
+  rescheduleRequestsResolved RescheduleRequest[] @relation("RescheduleResolvedBy")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
   email                String                   @unique
@@ -1460,6 +1463,10 @@ model Inspection {
   @@index([organizationId, propertywareBuildingId, propertywareUnitId, propertywareLeaseId, inspectionType, scheduledAt])
   jobberOutboundTasks        JobberOutboundTask[]
   tbpPlanStop                TbpQuarterPlanStop?     @relation("TbpStopInspection")
+  /// This visit asked to be booked again.
+  rescheduleRequests         RescheduleRequest[]     @relation("RescheduleRequestInspection")
+  /// This visit is the booking-again of another's request.
+  rebookOf                   RescheduleRequest[]     @relation("RescheduleRequestRebook")
 }
 
 model PropertywarePortfolio {
@@ -2865,6 +2872,14 @@ enum JobberOutboundKind {
   /// (written onto the stop), then the dated one is deleted. Publishing the
   /// stop again gives that same visit its new day.
   TBP_VISIT_UNSCHEDULE
+  /// A technician asked for their visit on another day: a note on its job, so
+  /// a coordinator working in Jobber sees it. The visit is not moved -- the
+  /// office decides that. Carries the request, not the inspection.
+  RESCHEDULE_REQUESTED_NOTE
+  /// The office dismissed a request to book a visit again: a note on its job,
+  /// so nobody in Jobber books what the completion note said "needs to be
+  /// rescheduled". Carries the request, not the inspection.
+  RESCHEDULE_DISMISSED_NOTE
 }
 
 enum JobberOutboundStatus {
@@ -2925,11 +2940,16 @@ model JobberOutboundTask {
   /// administrator has finalized yet: a technician is not the owner of a report
   /// share. A later finalize claims it while the task is still unsent.
   createdById    String?              @db.Uuid
+  /// The reschedule request a RESCHEDULE_*_NOTE posts about. Those notes carry
+  /// no inspection: one inspection can have more than one request, and each
+  /// request gets its own note.
+  rescheduleRequestId String?         @db.Uuid
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   inspection     Inspection?          @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
   tbpStop        TbpQuarterPlanStop?  @relation(fields: [tbpStopId], references: [id], onDelete: Cascade)
+  rescheduleRequest RescheduleRequest? @relation(fields: [rescheduleRequestId], references: [id], onDelete: Cascade)
 
   /// One completion push per inspection. A re-finalize must not tell Jobber
   /// twice, and the enqueue relies on this rather than on reading first.
@@ -2937,7 +2957,100 @@ model JobberOutboundTask {
   /// The same for a visit with no inspection: one unscheduled job per stop, so
   /// publishing a plan again cannot make a second job in somebody's calendar.
   @@unique([organizationId, tbpStopId, kind])
+  /// One note of each kind per request: a retried dismissal posts nothing twice.
+  @@unique([organizationId, rescheduleRequestId, kind])
   @@index([organizationId, status, nextAttemptAt])
+}
+
+/// Why a visit has to be booked again.
+enum RescheduleRequestKind {
+  /// The technician asked before the visit: the tenant asked for another day,
+  /// or the day ran out. The visit is still to happen, so it can be moved.
+  BEFORE_VISIT
+  /// "Could not get in": the visit was closed unwalked, and all of it is to be
+  /// booked again.
+  NO_ACCESS
+  /// Services the technician left not done with "Ask the office to book it
+  /// again", on a visit otherwise done.
+  SERVICES_NOT_DONE
+}
+
+enum RescheduleRequestStatus {
+  /// With the office: never answered, or back after Jobber refused the answer.
+  OPEN
+  /// Moved or booked again here, waiting for Jobber to take it.
+  SENDING
+  DONE
+  DISMISSED
+}
+
+enum RescheduleRequestOutcome {
+  /// The same visit, on another day.
+  MOVED
+  /// A new visit for what was not done.
+  REBOOKED
+}
+
+/// A visit somebody has to book again, and how the office answered.
+///
+/// Before this, a technician's "book it again" was a flag in the services report
+/// and a line in the Jobber note ("Needs to be rescheduled"): nothing listed
+/// them, nothing said whether one had been booked, and a rebooking made in
+/// Jobber had no link back to the visit that asked for it (2026-10-21).
+///
+/// Opened in the same transaction as the technician's report that asks for it,
+/// and answered from the console's queue -- moved, booked again, or dismissed --
+/// each of which reaches Jobber. It is DONE only once Jobber has taken the
+/// change: a refused push puts it back with the office, with Jobber's reason.
+///
+/// At most one open (OPEN or SENDING) per inspection, enforced by a partial
+/// unique index in the migration (`RescheduleRequest_one_open_per_inspection`),
+/// which Prisma cannot express: the newest account of a visit replaces the one
+/// before it rather than queueing a second request.
+model RescheduleRequest {
+  id                 String                    @id @default(uuid()) @db.Uuid
+  organizationId     String                    @db.Uuid
+  /// The visit that asks to be booked again.
+  inspectionId       String                    @db.Uuid
+  kind               RescheduleRequestKind
+  status             RescheduleRequestStatus   @default(OPEN)
+  /// The booked services to do again, as the services report keys them
+  /// ("pestControl"). Empty when the visit itself is what is asked for again.
+  services           String[]                  @default([])
+  /// The technician's words: what the office reads before deciding.
+  reason             String
+  /// The day the technician suggested, if any. A suggestion: the office picks.
+  preferredOn        DateTime?                 @db.Date
+  /// The technician who asked.
+  requestedById      String?                   @db.Uuid
+  /// The phone's key for a request sent from it, so a retried send answers
+  /// with the request it already made.
+  clientRequestId    String?
+  outcome            RescheduleRequestOutcome?
+  /// Moved or booked by a coordinator in Jobber, and closed by the sync.
+  resolvedInJobber   Boolean                   @default(false)
+  /// The visit a "Book again" made, or the one the sync found booked in Jobber.
+  rebookInspectionId String?                   @db.Uuid
+  dismissReason      String?
+  /// Why Jobber refused the move or the booking: shown with the request, which
+  /// is back with the office.
+  jobberError        String?
+  resolvedById       String?                   @db.Uuid
+  resolvedAt         DateTime?
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection       Inspection           @relation("RescheduleRequestInspection", fields: [inspectionId], references: [id], onDelete: Cascade)
+  rebookInspection Inspection?          @relation("RescheduleRequestRebook", fields: [rebookInspectionId], references: [id], onDelete: SetNull)
+  requestedBy      UserProfile?         @relation("RescheduleRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  resolvedBy       UserProfile?         @relation("RescheduleResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  jobberTasks      JobberOutboundTask[]
+
+  @@unique([organizationId, clientRequestId])
+  @@index([organizationId, status, createdAt])
+  @@index([inspectionId])
+  @@index([rebookInspectionId])
 }
 
 /// An error that happened on somebody's phone or in their browser.

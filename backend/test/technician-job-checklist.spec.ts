@@ -4,6 +4,7 @@ import { UserRole } from '@texasrenters/shared';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ApplicationError } from '../src/common/errors';
 import { TechnicianService } from '../src/technician/technician.service';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * The job's checklist, answered as the work happens.
@@ -81,6 +82,8 @@ function build(record = job()) {
     propertyArea: { findFirst: jest.Mock; create: jest.Mock };
     property: { upsert: jest.Mock };
     jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
+    rescheduleRequest: ReturnType<typeof rescheduleRequestDelegate>;
+    auditLog: { create: jest.Mock };
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   } = {
@@ -100,6 +103,8 @@ function build(record = job()) {
     // The photographs this job holds, which the fixtures' registers point at.
     inspectionPhoto: { findMany: jest.fn().mockResolvedValue(JOB_PHOTOS) },
     jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
+    rescheduleRequest: rescheduleRequestDelegate(),
+    auditLog: { create: jest.fn().mockResolvedValue({}) },
     // The service area's advisory lock (`findOrCreateFloorlessArea`).
     $executeRaw: jest.fn().mockResolvedValue(1),
     $transaction: jest.fn(async (run: (tx: unknown) => unknown) => run(prisma)),
@@ -289,6 +294,27 @@ describe('a job nobody let the technician into', () => {
     expect(prisma.jobberOutboundTask.create).toHaveBeenCalled();
   });
 
+  it("puts the whole visit in the office's queue to book again (2026-10-21)", async () => {
+    const { service, prisma } = build();
+
+    await service.couldNotAccess(technician, 'job-1', { reason: 'Locked gate' });
+
+    expect(prisma.rescheduleRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          inspectionId: 'job-1',
+          kind: 'NO_ACCESS',
+          reason: 'Locked gate',
+          services: ['filterChange', 'pestControl'],
+          requestedById: technician.id,
+        }),
+      }),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ action: 'RESCHEDULE_REQUESTED' }) }),
+    );
+  });
+
   it('walks no areas, so it does not ask whether they were finished', async () => {
     const { service, prisma } = build();
 
@@ -350,6 +376,50 @@ describe('submitting a job whose registers were answered one by one', () => {
     // Only the ones actually changed, each one: two 20x25x1 went in, and the
     // invoice is made from this count.
     expect(report.filtersInstalled).toEqual(['20x25x1', '20x25x1']);
+  });
+
+  it("puts what was left not done in the office's queue to book again (2026-10-21)", async () => {
+    const { service, prisma } = build();
+
+    await service.completeInspection(technician, 'job-1', {
+      servicesReport: {
+        services: {
+          filterChange: { done: true },
+          pestControl: { done: false, reason: 'Tenant refused', reschedule: true },
+        },
+        filters: answered,
+        filtersInstalled: [],
+      } as never,
+    });
+
+    expect(prisma.rescheduleRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: 'SERVICES_NOT_DONE',
+          services: ['pestControl'],
+          reason: 'Pest control: Tenant refused',
+        }),
+      }),
+    );
+    expect(prisma.rescheduleRequest.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('takes back what an earlier submission asked, when nothing is left to book again', async () => {
+    const { service, prisma } = build();
+
+    await service.completeInspection(technician, 'job-1', {
+      servicesReport: {
+        services: { filterChange: { done: true }, pestControl: { done: true } },
+        filters: answered,
+        filtersInstalled: [],
+      } as never,
+    });
+
+    expect(prisma.rescheduleRequest.create).not.toHaveBeenCalled();
+    expect(prisma.rescheduleRequest.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: technician.organizationId, inspectionId: 'job-1', status: 'OPEN' },
+      data: expect.objectContaining({ status: 'DISMISSED', resolvedById: null }),
+    });
   });
 
   it('refuses a register marked changed with no photograph', async () => {
