@@ -21,7 +21,9 @@ import { jobberUserIdForEmail, linkedJobberProperty } from '../../integrations/j
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { VISIT_EDIT_KINDS } from '../../integrations/jobber/jobber.outbound';
+import { rescheduleDismissedNote, rescheduleRequestedNote } from '../../integrations/jobber/jobber.reschedule-note';
 import { jobberServicesNote } from '../../integrations/jobber/jobber.services-note';
+import { settleRescheduleRequests } from '../../common/reschedule-requests';
 import {
   JOB_CLOSE_MUTATION,
   JOB_CREATE_MUTATION,
@@ -48,6 +50,7 @@ const BATCH_SIZE = 25;
 const PERMANENT_FAILURES = new Set([
   'JOBBER_BOOKING_CANCELLED',
   'JOBBER_EDIT_INSPECTION_MISSING',
+  'JOBBER_NOTE_UNSENDABLE',
   'JOBBER_TBP_ZONE_NOT_IN_PACKAGE',
 ]);
 
@@ -133,12 +136,13 @@ export class JobberOutboundWorker {
       result.processed += 1;
       try {
         await this.send(organizationId, task);
-        await this.mark(task, {
+        const marked = await this.mark(task, {
           status: JobberOutboundStatus.SENT,
           sentAt: new Date(),
           attempts: task.attempts + 1,
           lastError: null,
         });
+        if (this.took(marked)) await this.settleRequests(task, { sent: true });
         result.sent += 1;
       } catch (error) {
         if (error instanceof CompanionStillOpenError) {
@@ -155,7 +159,7 @@ export class JobberOutboundWorker {
           error instanceof JobberError ? error.message : 'The Jobber update could not be sent.';
         const abandoned =
           attempts >= MAX_ATTEMPTS || (error instanceof JobberError && PERMANENT_FAILURES.has(error.code));
-        await this.mark(task, {
+        const marked = await this.mark(task, {
           status: abandoned ? JobberOutboundStatus.ABANDONED : JobberOutboundStatus.FAILED,
           attempts,
           lastError: message,
@@ -163,6 +167,7 @@ export class JobberOutboundWorker {
           // a retry storm against a rate limiter shared with the pull.
           nextAttemptAt: new Date(Date.now() + Math.min(2 ** attempts, 60) * 60_000),
         });
+        if (abandoned && this.took(marked)) await this.settleRequests(task, { sent: false, error: message });
         if (abandoned) result.abandoned += 1;
         else result.failed += 1;
         this.logger.warn(`Jobber push for inspection ${task.inspectionId} failed: ${message}`);
@@ -273,6 +278,32 @@ export class JobberOutboundWorker {
     });
   }
 
+  /** Whether a mark landed: a re-armed console edit is not this attempt's to mark. */
+  private took(marked: { count: number } | object) {
+    return !('count' in marked) || marked.count > 0;
+  }
+
+  /**
+   * The reschedule requests this push answered, now that Jobber has answered
+   * it: a move or a booking-again taken is DONE, one refused for good goes
+   * back to the office with Jobber's reason. Never in the way of the queue --
+   * the push is already marked, and a request left waiting is shown as such.
+   */
+  private async settleRequests(
+    task: { organizationId: string; inspectionId: string | null; kind: JobberOutboundKind },
+    answer: { sent: true } | { sent: false; error: string },
+  ) {
+    try {
+      await settleRescheduleRequests(this.prisma, task, answer);
+    } catch (error) {
+      this.logger.warn(
+        `Could not settle the reschedule requests for inspection ${task.inspectionId}: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+    }
+  }
+
   /**
    * The kinds whose switch is off, left waiting rather than attempted.
    *
@@ -287,6 +318,11 @@ export class JobberOutboundWorker {
         : [JobberOutboundKind.TBP_VISIT_CREATE, JobberOutboundKind.TBP_JOB_UNSCHEDULED]),
       ...(this.config.bookingEnabled ? [] : [JobberOutboundKind.VISIT_CREATE]),
       ...(this.config.pushEditsEnabled ? [] : VISIT_EDIT_KINDS),
+      // A reschedule request's notes are the console writing to a visit's job,
+      // like its edits: they wait for the same switch.
+      ...(this.config.pushEditsEnabled
+        ? []
+        : [JobberOutboundKind.RESCHEDULE_REQUESTED_NOTE, JobberOutboundKind.RESCHEDULE_DISMISSED_NOTE]),
       // It books a visit and deletes one: it waits for both switches.
       ...(this.config.tbpBookingEnabled && this.config.pushEditsEnabled
         ? []
@@ -306,8 +342,15 @@ export class JobberOutboundWorker {
       createdById: string | null;
       servicesNoteSentAt: Date | null;
       jobTitle: string | null;
+      rescheduleRequestId: string | null;
     },
   ) {
+    // A note about a reschedule request: it carries the request, not the inspection.
+    if (
+      task.kind === JobberOutboundKind.RESCHEDULE_REQUESTED_NOTE ||
+      task.kind === JobberOutboundKind.RESCHEDULE_DISMISSED_NOTE
+    )
+      return this.sendRescheduleNote(organizationId, task);
     // The one kind with no inspection behind it: a visit with no day.
     if (task.kind === JobberOutboundKind.TBP_JOB_UNSCHEDULED) {
       if (!task.tbpStopId)
@@ -444,6 +487,60 @@ export class JobberOutboundWorker {
       where: { id: task.id },
       data: { servicesNoteSentAt: new Date() },
     });
+  }
+
+  /**
+   * Posts a reschedule request's note on its visit's job: what a technician
+   * asked, or that the office decided not to book it again.
+   *
+   * Read when sent, so the note says what the request says now. Refused for
+   * good when there is no request or no job: a retry cannot find either.
+   */
+  private async sendRescheduleNote(
+    organizationId: string,
+    task: { kind: JobberOutboundKind; jobberJobId: string | null; rescheduleRequestId: string | null },
+  ) {
+    const request = task.rescheduleRequestId
+      ? await this.prisma.rescheduleRequest.findFirst({
+          where: { id: task.rescheduleRequestId, organizationId },
+          select: {
+            kind: true,
+            reason: true,
+            preferredOn: true,
+            dismissReason: true,
+            createdAt: true,
+            requestedBy: { select: { displayName: true } },
+            resolvedBy: { select: { displayName: true } },
+            inspection: { select: { scheduledAt: true, jobberJobId: true } },
+          },
+        })
+      : null;
+    if (!request)
+      throw new JobberError('The reschedule request this note is about no longer exists.', 'JOBBER_NOTE_UNSENDABLE', 404);
+    const jobId = task.jobberJobId ?? request.inspection.jobberJobId;
+    if (!jobId)
+      throw new JobberError('This visit has no Jobber job to put the note on.', 'JOBBER_NOTE_UNSENDABLE', 404);
+    const message =
+      task.kind === JobberOutboundKind.RESCHEDULE_REQUESTED_NOTE
+        ? rescheduleRequestedNote({
+            reason: request.reason,
+            preferredOn: request.preferredOn,
+            scheduledAt: request.inspection.scheduledAt,
+            technicianName: request.requestedBy?.displayName ?? null,
+            requestedAt: request.createdAt,
+          })
+        : rescheduleDismissedNote({
+            beforeVisit: request.kind === 'BEFORE_VISIT',
+            dismissReason: request.dismissReason,
+            scheduledAt: request.inspection.scheduledAt,
+            dismissedBy: request.resolvedBy?.displayName ?? null,
+          });
+    const note = await this.client.request<{ jobCreateNote: JobberUserErrors }>(
+      organizationId,
+      JOB_NOTE_CREATE_MUTATION,
+      { jobId, input: { message } },
+    );
+    this.assertNoUserErrors(note.jobCreateNote);
   }
 
   /** Books a benefit-package visit for a published plan stop. */

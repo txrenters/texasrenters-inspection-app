@@ -12,6 +12,7 @@ import type { JobberClient } from '../src/integrations/jobber/jobber.client';
 import { pairedVisitTypes, resolveVisitType } from '../src/integrations/jobber/jobber.visit-type';
 import { JobberOutboundWorker } from '../src/workers/jobber-sync/jobber-outbound.worker';
 import { JobberSyncWorker } from '../src/workers/jobber-sync/jobber-sync.worker';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * A Jobber visit that books an HVAC inspection and an occupied inspection is
@@ -79,6 +80,7 @@ function importer() {
   const tx = {
     tbpQuarterPlanStop: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    rescheduleRequest: rescheduleRequestDelegate(),
   };
   const prisma = {
     jobberVisitImport: {

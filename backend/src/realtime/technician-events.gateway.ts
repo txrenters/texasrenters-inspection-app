@@ -85,7 +85,8 @@ export interface TechnicianInspectionEvent {
  */
 export interface OrganizationNotification {
   id: string;
-  kind: 'INSPECTION_SUBMITTED' | 'AREA_ADDED';
+  /** RESCHEDULE_REQUESTED: a technician asked for a visit to be booked again (2026-10-21). */
+  kind: 'INSPECTION_SUBMITTED' | 'AREA_ADDED' | 'RESCHEDULE_REQUESTED';
   title: string;
   body: string;
   /** Where the console should navigate when the notification is opened. */

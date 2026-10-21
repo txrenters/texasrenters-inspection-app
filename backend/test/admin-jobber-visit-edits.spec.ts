@@ -4,6 +4,7 @@ import { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { PresenceService } from '../src/realtime/presence.service';
 import { ZERO_EVIDENCE } from './support/prisma-evidence';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * Changes made in the console to a visit Jobber already has are queued for
@@ -51,6 +52,7 @@ function build(inspection: ReturnType<typeof existing>) {
       update: jest.fn().mockResolvedValue({}),
     },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    rescheduleRequest: rescheduleRequestDelegate(),
     jobberOutboundTask: {
       upsert: jest.fn().mockResolvedValue({ id: 'task-1' }),
       findFirst: jest.fn().mockResolvedValue(null),

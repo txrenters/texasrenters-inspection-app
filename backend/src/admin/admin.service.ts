@@ -46,6 +46,7 @@ import { eraseInspectionRows } from '../common/erase-inspection';
 import { jobInWords } from '../common/job-in-words';
 import { ApplicationError } from '../common/errors';
 import { moveStopWithVisit } from '../planning/move-stop-with-visit';
+import { answerByMove, withdrawRescheduleRequests } from '../common/reschedule-requests';
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
@@ -2054,7 +2055,18 @@ export class AdminService {
     return this.page(items, total, query);
   }
 
-  async createInspection(user: AuthenticatedUser, input: CreateAdminInspectionDto) {
+  async createInspection(
+    user: AuthenticatedUser,
+    input: CreateAdminInspectionDto,
+    options: {
+      /**
+       * Runs in the creating transaction, after the inspection and its booking
+       * are written: a caller whose own record has to commit with the new
+       * inspection, or not at all -- a reschedule request booked again.
+       */
+      within?: (tx: Prisma.TransactionClient, created: { id: string; bookedInJobber: boolean }) => Promise<void>;
+    } = {},
+  ) {
     const booking = input.jobberBooking ? this.bookableRequest(input) : null;
     // A booking writes its services into the Details it sends; without one they
     // are the whole of the Details.
@@ -2108,6 +2120,7 @@ export class AdminService {
           source: 'INSPECTION_CREATION',
         });
       if (booking) await this.queueJobberBooking(tx, user, inspection.id, plan, booking);
+      await options.within?.(tx, { id: inspection.id, bookedInJobber: Boolean(booking) });
       return { id: inspection.id };
     }, ADMIN_TRANSACTION_OPTIONS);
     if (inspection && input.technicianId) {
@@ -2535,6 +2548,25 @@ export class AdminService {
        */
       const planStop =
         movesDay && scheduledAt ? await moveStopWithVisit(tx, user.organizationId, id, scheduledAt) : null;
+      /**
+       * A technician who asked for another day is answered by the move,
+       * wherever it is made from -- the queue, this dialog, the bulk bar, the
+       * plan (2026-10-21). It waits for Jobber when Jobber has to take it.
+       */
+      const answered = movesDay
+        ? await answerByMove(tx, {
+            organizationId: user.organizationId,
+            inspectionId: id,
+            resolvedById: user.id,
+            waitsForJobber: movesJobberVisit,
+          })
+        : [];
+      if (input.status === 'CANCELLED')
+        await withdrawRescheduleRequests(tx, {
+          organizationId: user.organizationId,
+          inspectionId: id,
+          why: `The visit was cancelled: ${input.cancellationReason}`,
+        });
       const current =
         input.status === 'CANCELLED'
           ? await tx.inspectionAssignment.findFirst({
@@ -2558,7 +2590,12 @@ export class AdminService {
         user,
         input.status === 'CANCELLED' ? 'INSPECTION_CANCELLED' : 'INSPECTION_UPDATED',
         id,
-        { ...input, closedAssignmentId: current?.id, ...(planStop ? { planStop } : {}) },
+        {
+          ...input,
+          closedAssignmentId: current?.id,
+          ...(planStop ? { planStop } : {}),
+          ...(answered.length ? { answeredRescheduleRequests: answered } : {}),
+        },
       );
       if (movesJobberVisit) await this.pushVisitEdit(tx, user, id, JobberOutboundKind.VISIT_RESCHEDULE);
       if (input.status === 'CANCELLED' && existing.jobberVisitId)
