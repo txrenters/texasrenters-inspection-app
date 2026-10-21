@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CalendarDays,
   CalendarRange,
+  CalendarSync,
   ClipboardCheck,
   Clock,
   DoorOpen,
@@ -40,7 +41,8 @@ export type AdminNavigationItem = {
   title: string;
   href: string;
   icon: LucideIcon;
-  permission?: string;
+  /** Shown to anyone holding this permission -- or, given several, any one of them. */
+  permission?: string | readonly string[];
   children?: AdminNavigationChild[];
 };
 
@@ -116,6 +118,15 @@ export const adminNavigation: AdminNavigationGroup[] = [
         href: '/schedule',
         icon: CalendarDays,
         permission: 'inspections:read',
+      },
+      {
+        // The visits to book again: asked off their day by a technician, not
+        // got into, or with a service left undone (2026-10-21). Answered by
+        // whoever manages inspections or publishes the plan.
+        title: 'Reschedules',
+        href: '/reschedules',
+        icon: CalendarSync,
+        permission: ['inspections:manage', 'planning:publish'],
       },
       {
         // The other work booked rather than typed in: the move-outs and move-ins
@@ -272,7 +283,7 @@ export function getVisibleAdminNavigation(hasPermission: (permission: string) =>
     .map((group) => ({
       ...group,
       items: group.items.filter(
-        (item) => item.permission === undefined || hasPermission(item.permission),
+        (item) => item.permission === undefined || [item.permission].flat().some(hasPermission),
       ),
     }))
     .filter((group) => group.items.length > 0);

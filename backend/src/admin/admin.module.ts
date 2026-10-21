@@ -30,6 +30,8 @@ import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
+import { RescheduleRequestsController } from './reschedule-requests.controller';
+import { RescheduleRequestsService } from './reschedule-requests.service';
 import { AuthModule } from '../auth/auth.module';
 import { MediaModule } from '../media/media.module';
 import { LocalIdentityProvider } from '../auth/local-identity.provider';
@@ -47,7 +49,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
   // this direction only — that module must never import this one, which is why
   // AreaChecklistAiService is provided there rather than imported from here.
   imports: [RealtimeModule, MailModule, AuthModule, MediaModule, TechnicianModule, RoutingModule],
-  controllers: [AdminController, AccessController, ReportsController],
+  controllers: [AdminController, AccessController, ReportsController, RescheduleRequestsController],
   providers: [
     AdminService,
     PropertyGeocodingService,
@@ -73,6 +75,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InspectionMediaStorageService,
     ProfileDeletionService,
     ReportShareService,
+    RescheduleRequestsService,
     TechnicianProvisioningService,
     TechnicianSkillsService,
     // One implementation now that Supabase is gone; the token remains so

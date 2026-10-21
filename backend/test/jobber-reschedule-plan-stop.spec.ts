@@ -4,6 +4,7 @@ import type { PrismaService } from '../src/common/prisma.service';
 import type { JobberVisit } from '../src/integrations/jobber/jobber.schemas';
 import { QuarterPlannerService, routingSettings } from '../src/planning/quarter-planner.service';
 import { JobberSyncWorker, type JobberSyncResult } from '../src/workers/jobber-sync/jobber-sync.worker';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * A visit the office moved in Jobber moves its quarter plan's stop too.
@@ -80,6 +81,7 @@ function sync({
       update: jest.fn(async ({ data }: { data: Partial<StopState> }) => Object.assign(stop!, data)),
     },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    rescheduleRequest: rescheduleRequestDelegate(),
   };
   const prisma = {
     jobberOutboundTask: { findMany: jest.fn().mockResolvedValue([]) },

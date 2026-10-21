@@ -6,6 +6,7 @@ import { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { TechnicianService } from '../src/technician/technician.service';
 import { ZERO_EVIDENCE } from './support/prisma-evidence';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
@@ -50,6 +51,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspection: { findFirst: jest.Mock; update: jest.Mock };
       jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
       inspectionArea: { count: jest.Mock };
+      rescheduleRequest: ReturnType<typeof rescheduleRequestDelegate>;
       $transaction: jest.Mock;
     } = {
       inspection: {
@@ -58,6 +60,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       },
       inspectionArea: { count: jest.fn().mockResolvedValue(0) },
       jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
+      rescheduleRequest: rescheduleRequestDelegate(),
       $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
     };
     const service = new TechnicianService(
@@ -114,6 +117,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspection: { findFirst: jest.Mock; update: jest.Mock };
       jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
       inspectionArea: { count: jest.Mock };
+      rescheduleRequest: ReturnType<typeof rescheduleRequestDelegate>;
       $transaction: jest.Mock;
     } = {
       inspection: {
@@ -124,6 +128,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       },
       inspectionArea: { count: jest.fn().mockResolvedValue(0) },
       jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
+      rescheduleRequest: rescheduleRequestDelegate(),
       // Submission now enqueues the Jobber completion in the same transaction,
       // so submitted and "Jobber will be told" commit together.
       $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
@@ -206,6 +211,7 @@ describe('inspection status lifecycle (spec §11)', () => {
           .mockResolvedValue({ source: 'MANUAL', jobberVisitId: null, jobberJobId: null }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
       jobberOutboundTask: { create: jest.fn().mockResolvedValue({}) },
     };
     const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
@@ -288,6 +294,7 @@ describe('inspection status lifecycle (spec §11)', () => {
           .mockResolvedValue({ source: 'JOBBER', jobberVisitId: 'visit-1', jobberJobId: 'job-1' }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
       jobberOutboundTask: { create: jest.fn().mockResolvedValue({ id: 'task-1' }) },
     };
     const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
@@ -342,6 +349,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     const tx = {
       inspection: { update: jest.fn().mockResolvedValue({}) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -375,6 +383,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     const tx = {
       inspection: { update: jest.fn().mockResolvedValue({}) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -409,6 +418,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     const tx = {
       inspection: { updateMany: jest.fn().mockResolvedValue({ count: updated }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
       // Reopening withdraws a Jobber completion push that has not gone yet.
       jobberOutboundTask: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
@@ -701,6 +711,7 @@ describe('duplicate area merge (spec §16)', () => {
         create: jest.fn().mockResolvedValue({}),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,

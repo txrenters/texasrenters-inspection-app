@@ -210,6 +210,9 @@ describe('booking a console-created occupied inspection in Jobber', () => {
         JobberOutboundKind.VISIT_ASSIGN,
         JobberOutboundKind.VISIT_EDIT,
         JobberOutboundKind.VISIT_CANCEL,
+        // A reschedule request's notes write to the job as the edits do.
+        JobberOutboundKind.RESCHEDULE_REQUESTED_NOTE,
+        JobberOutboundKind.RESCHEDULE_DISMISSED_NOTE,
         // A visit unscheduled here books one and deletes one: it waits on both.
         JobberOutboundKind.TBP_VISIT_UNSCHEDULE,
       ],

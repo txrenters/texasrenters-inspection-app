@@ -85,6 +85,7 @@ export * from './group-template-changes.js';
 export * from './quarter-package-changes.js';
 export * from './quarter-assignment.js';
 export * from './quarter-plan.js';
+export * from './reschedule-requests.js';
 export * from './tbp-visit-plan.js';
 export * from './time-segments.js';
 export * from './route-plan.js';

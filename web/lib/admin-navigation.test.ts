@@ -57,6 +57,17 @@ describe('admin navigation', () => {
     });
   });
 
+  it('shows the reschedule queue to whoever manages inspections or publishes the plan (2026-10-21)', () => {
+    const titles = (granted: string[]) =>
+      getVisibleAdminNavigation((permission) => granted.includes(permission))
+        .flatMap((group) => group.items)
+        .map((item) => item.title);
+
+    expect(titles(['inspections:manage'])).toContain('Reschedules');
+    expect(titles(['planning:publish'])).toContain('Reschedules');
+    expect(titles(['inspections:read'])).not.toContain('Reschedules');
+  });
+
   it('removes unauthorized items and empty groups without changing route ownership', () => {
     const visible = getVisibleAdminNavigation((permission) =>
       ['dashboard:read', 'properties:read'].includes(permission),

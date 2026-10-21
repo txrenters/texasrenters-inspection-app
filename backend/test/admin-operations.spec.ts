@@ -5,6 +5,7 @@ import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import { TechnicianProvisioningService } from '../src/admin/technician-provisioning.service';
 import { ZERO_EVIDENCE } from './support/prisma-evidence';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 const user: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
@@ -249,6 +250,7 @@ describe('administrator inspection operations', () => {
         findUnique: jest.fn().mockResolvedValue({ ...created, assignments: [] }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -327,6 +329,7 @@ describe('administrator inspection operations', () => {
       },
       inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -384,6 +387,7 @@ describe('administrator inspection operations', () => {
         create: jest.fn().mockResolvedValue({ id: 'occupied-1' }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -461,6 +465,7 @@ describe('administrator inspection operations', () => {
         },
         inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
         auditLog: { create: jest.fn().mockResolvedValue({}) },
+        rescheduleRequest: rescheduleRequestDelegate(),
       };
       const prisma = {
     ...ZERO_EVIDENCE,
@@ -518,6 +523,7 @@ describe('administrator inspection operations', () => {
         update: jest.fn().mockResolvedValue({ id: 'assignment-1', isCurrent: false }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -666,6 +672,7 @@ describe('administrator assignment operations', () => {
       },
       userProfile: { findFirst: jest.fn().mockResolvedValue({ id: 'technician-1' }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const events = { publish: jest.fn() };
     const prisma = {
@@ -706,6 +713,7 @@ describe('administrator assignment operations', () => {
       },
       userProfile: { findFirst: jest.fn().mockResolvedValue({ id: 'technician-new' }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE, $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
@@ -914,6 +922,7 @@ describe('technician account provisioning', () => {
       },
       organizationMember: { upsert: jest.fn().mockResolvedValue({ id: 'membership-1' }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,
@@ -983,6 +992,7 @@ describe('technician account provisioning', () => {
       },
       organizationMember: { upsert: jest.fn().mockResolvedValue({ id: 'membership-new' }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-new' }) },
+      rescheduleRequest: rescheduleRequestDelegate(),
     };
     const prisma = {
     ...ZERO_EVIDENCE,

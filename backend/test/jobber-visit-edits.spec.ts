@@ -11,6 +11,7 @@ import {
   JobberSyncWorker,
   type JobberSyncResult,
 } from '../src/workers/jobber-sync/jobber-sync.worker';
+import { rescheduleRequestDelegate } from './support/reschedule-request-mock';
 
 /**
  * Edits made in the console to a visit Jobber already has: a new day, a new
@@ -336,6 +337,7 @@ describe('the sync while a console edit is on its way to Jobber', () => {
     const tx = {
       jobberOutboundTask: { deleteMany: jest.fn().mockResolvedValue({ count: waiting.length }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      rescheduleRequest: rescheduleRequestDelegate(),
       inspection: { update: jest.fn().mockResolvedValue({}) },
       tbpQuarterPlanStop: { findFirst: jest.fn().mockResolvedValue(null) },
     };
