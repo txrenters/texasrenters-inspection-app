@@ -22,7 +22,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-/** Two stops, and a technician who has not reported today, so the day starts from home. */
+/** Two stops, the nearer the office second, and a technician who has not reported today, so the day starts at the office. */
 const prisma = {
   inspectionAssignment: {
     findMany: async () =>
@@ -34,7 +34,7 @@ const prisma = {
             name: `${id} address`,
             addressLine1: `${id} address`,
             city: 'Houston',
-            latitude: dec(29.9 + index * 0.01),
+            latitude: dec(29.91 - index * 0.01),
             longitude: dec(-95.5),
           },
           property: null,
@@ -42,9 +42,6 @@ const prisma = {
       })),
   },
   technicianLocationPing: { findFirst: async () => null },
-  technicianPlanningProfile: {
-    findFirst: async () => ({ homeLatitude: dec(29.95), homeLongitude: dec(-95.55) }),
-  },
 };
 
 const grid = (points: unknown[]) =>
@@ -233,7 +230,7 @@ describe('ordering the stops', () => {
 
   it('orders by the straight line, and still draws the drive, when no matrix answers', async () => {
     // Every matrix down, the drive still answering: an order from distance
-    // alone is far better than no route at all. From home, b is the nearer.
+    // alone is far better than no route at all. From the office, b is the nearer.
     const { service, calls } = routers('fails', 'unconfigured', 'answers', 'fails');
 
     const route = await service.planDay('org', 'tech', DAY);

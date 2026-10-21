@@ -123,12 +123,14 @@ export interface FileGroup {
   /** Where the group's number stands: its northernmost property, the top of its outline. */
   labelAt: { latitude: number; longitude: number };
   /**
-   * Where the drive starts, before the first property: a planned day's
-   * technician's home. Its route then has a leg more than the group has gaps,
-   * the drive from here first, drawn and written apart from the rest. Absent in
-   * a groups file and the Group maker, whose groups start at their first stop.
+   * Where the drive starts, before the first property: a planned day's office,
+   * or the technician's home on a day measured before 2026-10-22. Its route then
+   * has a leg more than the group has gaps, the drive from here first, drawn and
+   * written apart from the rest. `name` is how a leg from it is labelled
+   * ("Office"). Absent in a groups file and the Group maker, whose groups start
+   * at their first stop.
    */
-  origin?: { latitude: number; longitude: number; title: string } | null;
+  origin?: { latitude: number; longitude: number; title: string; name: string } | null;
 }
 
 /**
@@ -139,16 +141,23 @@ export interface FileGroup {
 export function legEnds(
   group: Pick<FileGroup, 'rows' | 'origin'>,
   index: number,
-): { from: { latitude: number; longitude: number }; to: GroupFileRow; fromStop: number | 'Home'; toStop: number } {
+): {
+  from: { latitude: number; longitude: number };
+  to: GroupFileRow;
+  fromStop: number | string;
+  toStop: number;
+  fromOrigin: boolean;
+} {
   const before = group.origin ? 1 : 0;
   const to = group.rows[index + 1 - before]!;
-  const home = index < before;
-  const from = home ? group.origin! : group.rows[index - before]!;
+  const fromOrigin = index < before;
+  const from = fromOrigin ? group.origin! : group.rows[index - before]!;
   return {
     from,
     to,
-    fromStop: home ? 'Home' : ((from as GroupFileRow).stop ?? index - before + 1),
+    fromStop: fromOrigin ? group.origin!.name : ((from as GroupFileRow).stop ?? index - before + 1),
     toStop: to.stop ?? index - before + 2,
+    fromOrigin,
   };
 }
 

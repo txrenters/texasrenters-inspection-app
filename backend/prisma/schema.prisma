@@ -3532,7 +3532,7 @@ model TbpQuarterPlanStop {
 
 /// Where a technician's planned day is measured from.
 enum PlanOriginKind {
-  /// A home or depot somebody confirmed.
+  /// The technician's home: a day measured before 2026-10-22.
   HOME
   /// Inferred from where their handset usually starts the day. Shown to a
   /// coordinator as a suggestion, never silently trusted.
@@ -3540,9 +3540,13 @@ enum PlanOriginKind {
   /// No origin at all, so the day is measured from the middle of its own stops.
   /// Honest, and useless for "when will they arrive at the first one".
   CLUSTER_CENTROID
-  /// Measured from the day's first property: a benefit-package day for a
-  /// technician with no home on file, or one built before days started from home.
+  /// Measured from the day's first property: a trip's later days, which start
+  /// where the trip is; before 2026-10-22, also a day for a technician with no
+  /// home on file, or one built before days started from home.
   FIRST_STOP
+  /// The office, where the crew sets out from: every day measured since
+  /// 2026-10-22 but a trip's later days.
+  OFFICE
 }
 
 /// Where a forecast's numbers came from.
@@ -3643,9 +3647,10 @@ model TbpQuarterPlanDay {
   /// Between the day's properties, first to last.
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
-  /// The drive from home to the first property, when the day was routed from a
-  /// home on file (`originKind` HOME). Shown, with when to leave, and not counted
-  /// against the limit.
+  /// The drive from where the day starts to the first property: the office
+  /// (`originKind` OFFICE), or a home on file for a day measured before
+  /// 2026-10-22 (HOME). Shown, with when to leave, and not counted against the
+  /// limit. Named for the home it was first measured from.
   homeDriveSeconds     Int?
   homeDriveMeters      Int?
 

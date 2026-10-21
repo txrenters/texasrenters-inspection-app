@@ -87,9 +87,9 @@ beforeEach(() => {
   hooks.usePlanningMutations.mockReturnValue({ editStop });
   hooks.usePlanTechnicians.mockReturnValue({
     data: [
-      { id: 'moses', displayName: 'Moses Rodriguez', crewOrder: 1, hasHome: true },
-      { id: 'kevin', displayName: 'Kevin Granados', crewOrder: 2, hasHome: true },
-      { id: 'amy', displayName: 'Amy Wilson', crewOrder: null, hasHome: false },
+      { id: 'moses', displayName: 'Moses Rodriguez', crewOrder: 1 },
+      { id: 'kevin', displayName: 'Kevin Granados', crewOrder: 2 },
+      { id: 'amy', displayName: 'Amy Wilson', crewOrder: null },
     ],
   });
 });

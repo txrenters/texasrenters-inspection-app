@@ -23,13 +23,13 @@ export interface PlanSettings {
   occupiedVisitMinutes: number;
   hvacVisitMinutes: number;
   maxOnSiteMinutes: number;
-  /** How far a zone may be from the crew's homes. Not a limit on a day's driving. */
+  /** How far a zone may be from the office. Not a limit on a day's driving. */
   maxDriveMinutes: number;
   /** The visits the planner groups into a day: nine (the office, 2026-09-19). */
   minStopsPerDay: number;
   /** The most a day may hold, with the visits the office adds by hand: twelve. */
   maxStopsPerDay: number;
-  /** The longest drive between two of a day's properties, in minutes: twenty. The drive from home is not held to it. */
+  /** The longest drive between two of a day's properties, in minutes: twenty. The drive from the office is not held to it. */
   maxLegMinutes: number;
   holidays: string[];
   /** The plan's first day when it is not the quarter's: up to fifteen days either side of it. */
@@ -175,10 +175,13 @@ export interface PlanDay {
   /** Between the day's properties, first to last. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
-  /** From the technician's home to the first property, when the day was routed from home. Shown apart. */
+  /** From where the day starts to the first property, when it was routed from there (`dayStartName`). Shown apart. */
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
-  /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
+  /**
+   * `OFFICE` when the day was routed from the office; `HOME` from the technician's
+   * home, on a day measured before 2026-10-22; `FIRST_STOP` when it starts at its first job.
+   */
   originKind: string;
   durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'MAPBOX_FREE_FLOW' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
@@ -289,7 +292,7 @@ export interface FilterSizeRefresh {
   stillMissing: TenancyWithoutFilterSize[];
 }
 
-/** A day put in the order that drives least from home, and what that did to its driving. */
+/** A day put in the order that drives least from the office, and what that did to its driving. */
 export interface OptimizedPlanDay {
   dayId: string;
   date: string;
@@ -299,7 +302,7 @@ export interface OptimizedPlanDay {
   /** Between its properties, before and after, in seconds. */
   driveSecondsBefore: number | null;
   driveSecondsAfter: number | null;
-  /** From home to its first property, before and after. */
+  /** From where it starts to its first property, before and after. */
   homeDriveSecondsBefore: number | null;
   homeDriveSecondsAfter: number | null;
 }
@@ -308,10 +311,13 @@ export interface PlanDayRoute {
   source: string | null;
   /** `[lat, lng]`, between the day's stops. Empty when nothing could draw the day. */
   geometry: [number, number][];
-  /** `[lat, lng]`, from home to the first stop. Empty when the day has no home or nothing drew it. */
-  homeGeometry: [number, number][];
-  /** The technician's home -- where the day starts, the "From" on the map -- when one is on file. */
-  home: { latitude: number; longitude: number; address: string | null } | null;
+  /** `[lat, lng]`, from where the day starts to the first stop. Empty when it starts at its first job or nothing drew it. */
+  startGeometry: [number, number][];
+  /**
+   * Where the day starts -- the "From" on the map: the office, or the technician's
+   * home on a day measured before 2026-10-22. Null when it starts at its first job.
+   */
+  start: { latitude: number; longitude: number; address: string | null } | null;
   legs: { durationSeconds: number; distanceMeters: number }[];
 }
 
@@ -322,9 +328,9 @@ export interface PlanDayRoute {
  */
 export interface PlanRotation {
   /** In the order the zones go round. */
-  crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
+  crew: { technicianId: string; displayName: string | null }[];
   zones: string[];
-  /** Zones nobody on the crew lives within the day's drive of. */
+  /** Zones further from the office than the day's drive. */
   outOfReach: string[];
 }
 
@@ -334,7 +340,6 @@ export interface PlanTechnician {
   displayName: string;
   /** Place in the crew's zone rotation; null is not on the crew. */
   crewOrder: number | null;
-  hasHome: boolean;
 }
 
 /**
@@ -833,7 +838,7 @@ export function usePlanningMutations() {
       onSuccess: refresh,
     }),
     // A day, or every day from today on, in the order that drives least from the
-    // technician's home (the office, 2026-10-02). Only the order changes.
+    // office (the office, 2026-10-02). Only the order changes.
     optimizeDay: useMutation({
       mutationFn: ({ planId, dayId }: { planId: string; dayId: string }) =>
         post<{ days: OptimizedPlanDay[] }>(`/quarters/${planId}/days/${dayId}/optimize-route`),

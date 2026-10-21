@@ -8,7 +8,7 @@ import { dayRouteView, planDaysFile } from './plan-days-groups';
 
 /**
  * The Days view drawn as the Group maker draws a template (the office,
- * 2026-10-02): each day a group, its route from the technician's home.
+ * 2026-10-02): each day a group, its route from the office.
  */
 
 const visitOnDay = (id: string, positionInDay: number, latitude: number, drive: number | null, status = 'PLANNED') => ({
@@ -39,7 +39,7 @@ const day = (overrides: Partial<PlanDay> = {}): PlanDay => ({
   totalDriveMeters: 9000,
   homeDriveSeconds: 1500,
   homeDriveMeters: 20000,
-  originKind: 'HOME',
+  originKind: 'OFFICE',
   durationSource: 'MAPBOX_FREE_FLOW',
   departureAssumedAt: null,
   templateGroup: null,
@@ -123,7 +123,7 @@ describe('a quarter’s days as the Group maker’s groups', () => {
 describe('a day’s road, as the map draws a group’s', () => {
   const route: PlanDayRoute = {
     source: 'MAPBOX_FREE_FLOW',
-    homeGeometry: [
+    startGeometry: [
       [29.6, -95.7],
       [29.7, -95.7],
     ],
@@ -132,21 +132,21 @@ describe('a day’s road, as the map draws a group’s', () => {
       [29.71, -95.7],
       [29.72, -95.7],
     ],
-    home: { latitude: 29.6, longitude: -95.7, address: 'Spring, TX' },
+    start: { latitude: 29.6, longitude: -95.7, address: '5225 Katy Fwy, Suite 545, Houston, TX 77007' },
     legs: [
       { durationSeconds: 240, distanceMeters: 1100 },
       { durationSeconds: 500, distanceMeters: 1200 },
     ],
   };
-  const home = { latitude: 29.6, longitude: -95.7 };
+  const start = { latitude: 29.6, longitude: -95.7 };
 
-  it('starts at home, with each leg’s drive as the plan has it, and counts only the driving between properties', () => {
+  it('starts at the office, with each leg’s drive as the plan has it, and counts only the driving between properties', () => {
     const made = planDaysFile([day()], []);
-    const view = dayRouteView(day(), made.file.groups[0]!, route, home);
+    const view = dayRouteView(day(), made.file.groups[0]!, route, start);
 
     expect(view.status).toBe('ok');
     if (view.status !== 'ok') return;
-    // From home first, then into the move-out and into the last visit: the plan's seconds, the road's metres.
+    // From the office first, then into the move-out and into the last visit: the plan's seconds, the road's metres.
     expect(view.route.legs).toEqual([
       { durationS: 1500, distanceM: 20000 },
       { durationS: 300, distanceM: 1100 },
@@ -159,8 +159,8 @@ describe('a day’s road, as the map draws a group’s', () => {
   it('draws the stops joined straight while the road is not one of this order', () => {
     const made = planDaysFile([day()], []);
 
-    expect(dayRouteView(day(), made.file.groups[0]!, { ...route, legs: route.legs.slice(1) }, home).status).toBe('error');
-    expect(dayRouteView(day(), made.file.groups[0]!, undefined, home).status).toBe('loading');
+    expect(dayRouteView(day(), made.file.groups[0]!, { ...route, legs: route.legs.slice(1) }, start).status).toBe('error');
+    expect(dayRouteView(day(), made.file.groups[0]!, undefined, start).status).toBe('loading');
   });
 });
 
@@ -168,10 +168,10 @@ describe('where a leg runs', () => {
   const rows = [1, 2, 3].map((stop) => ({ stop, latitude: 29.7 + stop / 100, longitude: -95.7 }) as never);
 
   it('starts at the origin when a group has one', () => {
-    const origin = { latitude: 29.6, longitude: -95.7, title: 'From: home' };
+    const origin = { latitude: 29.6, longitude: -95.7, title: 'From: the office', name: 'Office' };
 
-    expect(legEnds({ rows, origin }, 0)).toMatchObject({ from: origin, fromStop: 'Home', toStop: 1 });
-    expect(legEnds({ rows, origin }, 2)).toMatchObject({ fromStop: 2, toStop: 3 });
+    expect(legEnds({ rows, origin }, 0)).toMatchObject({ from: origin, fromStop: 'Office', toStop: 1, fromOrigin: true });
+    expect(legEnds({ rows, origin }, 2)).toMatchObject({ fromStop: 2, toStop: 3, fromOrigin: false });
   });
 
   it('runs from stop to stop when it has none', () => {

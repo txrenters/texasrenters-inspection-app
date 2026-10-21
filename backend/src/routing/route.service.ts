@@ -10,6 +10,7 @@ import {
   type NavigationLeg,
   type NavigationStep,
   needsReroute,
+  OFFICE,
   type RouteLeg,
   type RouteStop,
   type RouteTimingSource,
@@ -513,22 +514,13 @@ export class RouteService {
       .map((entry) => entry.stop);
 
     const now = Date.now();
-    const [position, profile] = await Promise.all([
-      this.prisma.technicianLocationPing.findFirst({
-        // That day's newest position, not the newest there is. Opening last
-        // Tuesday must not start its route from wherever somebody is today.
-        where: { organizationId, technicianId, recordedAt: { gte: dayStart, lt: dayEnd } },
-        orderBy: { recordedAt: 'desc' },
-        select: { latitude: true, longitude: true, recordedAt: true },
-      }),
-      // Scoped to the organization like the position above. The admin route
-      // endpoint takes any technician id, and an empty day for somebody in
-      // another organization still returns its origin -- their home.
-      this.prisma.technicianPlanningProfile.findFirst({
-        where: { organizationId, technicianId },
-        select: { homeLatitude: true, homeLongitude: true },
-      }),
-    ]);
+    const position = await this.prisma.technicianLocationPing.findFirst({
+      // That day's newest position, not the newest there is. Opening last
+      // Tuesday must not start its route from wherever somebody is today.
+      where: { organizationId, technicianId, recordedAt: { gte: dayStart, lt: dayEnd } },
+      orderBy: { recordedAt: 'desc' },
+      select: { latitude: true, longitude: true, recordedAt: true },
+    });
 
     /**
      * Where the day starts -- see `chooseRouteOrigin`.
@@ -544,26 +536,14 @@ export class RouteService {
             recordedAt: position.recordedAt.toISOString(),
           }
         : null,
-      profile?.homeLatitude && profile.homeLongitude
-        ? {
-            latitude: profile.homeLatitude.toNumber(),
-            longitude: profile.homeLongitude.toNumber(),
-          }
-        : null,
       dayStart,
       now,
     );
-    const origin = chosen?.point ?? null;
-    const originKind = chosen?.kind ?? null;
+    const origin = chosen.point;
+    const originKind = chosen.kind;
 
     const key = `${organizationId}:${technicianId}:${dayStart.toISOString()}`;
-    const history = await this.historyFor(
-      key,
-      profile?.homeLatitude && profile.homeLongitude
-        ? { latitude: profile.homeLatitude.toNumber(), longitude: profile.homeLongitude.toNumber() }
-        : null,
-      finishedStops,
-    );
+    const history = await this.historyFor(key, finishedStops);
 
     const empty: TechnicianRoute = {
       technicianId,
@@ -582,10 +562,10 @@ export class RouteService {
       source: null,
     };
 
-    // Without a position there is no starting point, and without at least one
-    // stop there is nothing to order. Both return the stops unordered rather
-    // than an error: the day is still known, it simply has no route yet.
-    if (!origin || !routable.length) return empty;
+    // Without at least one stop there is nothing to order. The stops come back
+    // unordered rather than as an error: the day is still known, it simply has
+    // no route yet.
+    if (!routable.length) return empty;
 
     /**
      * Reuse the drawn route unless the day has changed enough to redraw it.
@@ -615,7 +595,7 @@ export class RouteService {
      * Keyed by the day alone, a caller whose stop had just been finished could
      * join a draw still under way for the old stops, get that route back, and
      * remember it as drawn for the new ones -- after which nothing noticed the
-     * finished stop was still on it. A home route never redraws for age, so
+     * finished stop was still on it. An office route never redraws for age, so
      * that lasted the rest of the day.
      */
     const flightKey = `${key}:${originKind}:${[...stopIds].sort().join(',')}`;
@@ -774,7 +754,7 @@ export class RouteService {
   }
 
   /**
-   * The drive through a day's finished stops, from home when it is known.
+   * The drive through a day's finished stops, from the office.
    *
    * Drawn in the order the stops were handed in, which is the order they were
    * driven -- close enough for a line that says "this part of the day is done".
@@ -782,19 +762,11 @@ export class RouteService {
    * empty and the stops still marked; a failed draw is not remembered, for the
    * same reason as the route's.
    */
-  private async historyFor(
-    dayKey: string,
-    home: GeoPoint | null,
-    stops: RouteStop[],
-  ): Promise<TechnicianRoute['history']> {
-    const points: GeoPoint[] = [...(home ? [home] : []), ...stops];
-    if (points.length < 2) return { stops, geometry: [] };
+  private async historyFor(dayKey: string, stops: RouteStop[]): Promise<TechnicianRoute['history']> {
+    if (!stops.length) return { stops, geometry: [] };
+    const points: GeoPoint[] = [OFFICE, ...stops];
 
-    const cacheKey = [
-      dayKey,
-      home ? `${home.latitude},${home.longitude}` : 'no-home',
-      ...stops.map((stop) => stop.inspectionId),
-    ].join('|');
+    const cacheKey = [dayKey, ...stops.map((stop) => stop.inspectionId)].join('|');
     const cached = this.histories.get(cacheKey);
     if (cached) return { stops, geometry: cached };
 

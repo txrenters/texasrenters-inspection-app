@@ -13,7 +13,7 @@ import type { ZoneTerritory } from './zone-territories';
  * (the office, 2026-10-02).
  *
  * The day picked in the list is the group being built: drawn from the
- * technician's home along the road, each leg's drive written on it, and every
+ * office along the road, each leg's drive written on it, and every
  * other day faded when asked. A click on a property is the office's to decide
  * -- it joins the day picked, or opens the day's own visit -- so the map runs
  * in the Group maker's manual mode, which hands every click back.
@@ -40,7 +40,7 @@ export function PlanDaysMap({
   ungrouped: readonly GroupFileRow[];
   /** The day picked in the list. */
   activeKey: string | null;
-  /** Where the day picked starts: the technician's home, when the day is routed from it. */
+  /** Where the day picked starts: the office, when the day is routed from it. */
   origin: FileGroup['origin'];
   /** The day picked's road. */
   route: RouteView | undefined;
@@ -53,7 +53,7 @@ export function PlanDaysMap({
   /** The pin of a visit picked on the calendar: its details open, the map gone to it. */
   focusRow?: number | null;
 }) {
-  // Only the day picked starts at home: the others are drawn as the Group maker draws a group.
+  // Only the day picked starts at the office: the others are drawn as the Group maker draws a group.
   const drawn = useMemo(
     () => (origin ? groups.map((group) => (group.key === activeKey ? { ...group, origin } : group)) : groups),
     [activeKey, groups, origin],

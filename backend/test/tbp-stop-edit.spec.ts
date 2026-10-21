@@ -625,12 +625,12 @@ describe('the technicians a visit can be given to', () => {
       },
       technicianPlanningProfile: {
         findMany: jest.fn().mockResolvedValue([
-          { technicianId: 'moses', isPlannable: true, tbpZoneOrder: 1, homeLatitude: 29.8, homeLongitude: -95.4 },
-          { technicianId: 'kevin', isPlannable: true, tbpZoneOrder: 2, homeLatitude: 29.7, homeLongitude: -95.5 },
-          { technicianId: 'emanuel', isPlannable: true, tbpZoneOrder: 3, homeLatitude: null, homeLongitude: null },
-          { technicianId: 'amy', isPlannable: true, tbpZoneOrder: null, homeLatitude: 29.9, homeLongitude: -95.3 },
+          { technicianId: 'moses', isPlannable: true, tbpZoneOrder: 1 },
+          { technicianId: 'kevin', isPlannable: true, tbpZoneOrder: 2 },
+          { technicianId: 'emanuel', isPlannable: true, tbpZoneOrder: 3 },
+          { technicianId: 'amy', isPlannable: true, tbpZoneOrder: null },
           // On leave keeps a place in the rotation, and is not on the crew meanwhile.
-          { technicianId: 'thomas', isPlannable: false, tbpZoneOrder: 4, homeLatitude: null, homeLongitude: null },
+          { technicianId: 'thomas', isPlannable: false, tbpZoneOrder: 4 },
         ]),
       },
     } as unknown as PrismaService;
@@ -644,12 +644,12 @@ describe('the technicians a visit can be given to', () => {
 
     const technicians = await service.technicians('org-1');
 
-    expect(technicians.map((technician) => [technician.displayName, technician.crewOrder, technician.hasHome])).toEqual([
-      ['Moses Rodriguez', 1, true],
-      ['Kevin Granados', 2, true],
-      ['Emanuel Hall', 3, false],
-      ['Amy Wilson', null, true],
-      ['Thomas Allen', null, false],
+    expect(technicians.map((technician) => [technician.displayName, technician.crewOrder])).toEqual([
+      ['Moses Rodriguez', 1],
+      ['Kevin Granados', 2],
+      ['Emanuel Hall', 3],
+      ['Amy Wilson', null],
+      ['Thomas Allen', null],
     ]);
   });
 });

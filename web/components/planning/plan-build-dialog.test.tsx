@@ -24,7 +24,7 @@ const TEMPLATE = {
 vi.mock('@/lib/planning-queries', () => ({
   usePlanTechnicians: () => ({
     isLoading: false,
-    data: [{ id: 'tech-moses', displayName: 'Moses Rodriguez', crewOrder: 1, hasHome: true }],
+    data: [{ id: 'tech-moses', displayName: 'Moses Rodriguez', crewOrder: 1 }],
   }),
   useGroupTemplates: () => ({ isLoading: false, data: [TEMPLATE] }),
 }));

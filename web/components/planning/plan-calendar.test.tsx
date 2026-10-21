@@ -34,9 +34,9 @@ const SETTINGS: PlanSettings = {
 
 const ROTATION: PlanRotation = {
   crew: [
-    { technicianId: 'moses', displayName: 'Moses Rodriguez', hasHome: true },
-    { technicianId: 'kevin', displayName: 'Kevin Granados', hasHome: true },
-    { technicianId: 'emanuel', displayName: 'Emanuel Hall', hasHome: true },
+    { technicianId: 'moses', displayName: 'Moses Rodriguez' },
+    { technicianId: 'kevin', displayName: 'Kevin Granados' },
+    { technicianId: 'emanuel', displayName: 'Emanuel Hall' },
   ],
   zones: ['1', '2', '3', '4'],
   outOfReach: ['5'],
@@ -55,7 +55,7 @@ const day = (id: string, date: string, technicianId: string, displayName: string
     totalDriveMeters: null,
     homeDriveSeconds: null,
     homeDriveMeters: null,
-    originKind: 'HOME',
+    originKind: 'OFFICE',
     durationSource: null,
     stops: Array.from({ length: stopCount }, (_, index) => ({
       id: `${id}-stop-${index + 1}`,

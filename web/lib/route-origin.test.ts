@@ -22,8 +22,8 @@ describe('where a route starts, in words', () => {
     expect(describeOrigin(route({ originKind: 'LIVE' }))).toBe('from their live position');
   });
 
-  it('says a home start is home', () => {
-    expect(describeOrigin(route({ originKind: 'HOME' }))).toBe('from home');
+  it('says an office start is the office', () => {
+    expect(describeOrigin(route({ originKind: 'OFFICE' }))).toBe('from the office');
   });
 
   it('gives the last-seen time in Texas, not wherever the reader is', () => {

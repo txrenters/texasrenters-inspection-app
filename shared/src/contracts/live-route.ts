@@ -110,7 +110,7 @@ export function projectOntoPath(
  *   would erase a route they still have to drive every yard of. The redraw is
  *   what answers that, and until it lands the untrimmed line is the honest
  *   picture.
- * - **A route not started.** One drawn from home has no progress along it.
+ * - **A route not started.** One drawn from the office has no progress along it.
  *
  * The cut point is inserted exactly, so the remaining line begins at the
  * technician rather than at whichever shape point comes next -- which on a
@@ -171,8 +171,8 @@ export interface DrawnRoute {
  * In order of how certain the answer is:
  *
  * - **No route yet** -- nothing to reuse.
- * - **The origin changed kind.** Somebody came online, or a route from home
- *   learned they had left it. The start of the route moved somewhere
+ * - **The origin changed kind.** Somebody came online, or a route from the
+ *   office learned they had set off. The start of the route moved somewhere
  *   categorically different. Going *quiet* is the exception -- see below.
  * - **The remaining stops changed.** A visit finished, or the office moved an
  *   inspection onto or off their day. Compared as a set, because the order is
@@ -181,9 +181,9 @@ export interface DrawnRoute {
  * - **Traffic has had time to change** -- a live route older than
  *   `MAX_LIVE_ROUTE_AGE_MS`.
  *
- * A home route is never redrawn for age or for position. Until somebody's
+ * An office route is never redrawn for age or for position. Until somebody's
  * handset is reporting, there is no drive in progress to track, and the only
- * thing that should move the line is their day or their address changing.
+ * thing that should move the line is their day changing.
  *
  * Nor is a live route redrawn because the handset stopped reporting. Routes are
  * recalculated while somebody is online and sending; once they go quiet, the
@@ -238,7 +238,7 @@ export function needsReroute(
  *
  * A route is drawn once and reused for minutes, so its line starts where the
  * technician *was*. Projecting where they are now onto it is what lets the rest
- * of the day be timed from where they have since got to. A route from home has
+ * of the day be timed from where they have since got to. A route from the office has
  * not been started. A position nowhere near the line counts as not started
  * either, rather than as whichever point of the line happens to be closest.
  *
@@ -251,7 +251,7 @@ export function routeProgress(route: {
   origin: { latitude: number; longitude: number } | null;
   geometry: LatLngPath;
 }): number {
-  if (route.originKind === 'HOME' || !route.origin || route.geometry.length < 2) return 0;
+  if (route.originKind === 'OFFICE' || !route.origin || route.geometry.length < 2) return 0;
   const projected = projectOntoPath(route.origin, route.geometry);
   if (!projected || projected.totalMeters <= 0 || projected.offsetMeters > OFF_ROUTE_M) return 0;
   return projected.alongMeters / projected.totalMeters;

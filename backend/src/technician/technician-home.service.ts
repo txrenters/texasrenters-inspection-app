@@ -5,11 +5,12 @@ import { PrismaService } from '../common/prisma.service';
 import { PropertyGeocodingService } from '../admin/property-geocoding.service';
 
 /**
- * Where a technician's day starts, entered by the technician.
+ * A technician's home address, entered by the technician.
  *
- * A route drawn before anybody has set off has to begin somewhere, and the
- * previous answer -- the newest position, however old -- began Monday from
- * wherever a phone happened to be at four on Saturday morning.
+ * It was where a route drawn before anybody had set off began, until
+ * 2026-10-22: every route starts at the office now (`OFFICE`). The office kept
+ * the address on the profile rather than retiring it; only planned days
+ * measured before then are still drawn from it.
  *
  * Entered rather than inferred. Deriving somebody's home from where their phone
  * spends the night is exactly the tracking the location feature refuses to do

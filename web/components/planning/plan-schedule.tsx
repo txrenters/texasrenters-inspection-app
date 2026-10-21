@@ -37,8 +37,9 @@ import { formatDistance } from '@/lib/format';
 import {
   dayClock,
   formatClock,
+  dayStartName,
   formatMinutes,
-  leaveHomeAt,
+  leaveAt,
   legOverLimit,
   limitState,
   type LimitState,
@@ -167,7 +168,7 @@ function optimizedInWords(days: readonly OptimizedPlanDay[]) {
   if (!changed.length) return null;
   return `driving between properties ${minutes(total((day) => day.driveSecondsBefore))} → ${minutes(
     total((day) => day.driveSecondsAfter),
-  )}; from home ${minutes(total((day) => day.homeDriveSecondsBefore))} → ${minutes(total((day) => day.homeDriveSecondsAfter))}`;
+  )}; from the office ${minutes(total((day) => day.homeDriveSecondsBefore))} → ${minutes(total((day) => day.homeDriveSecondsAfter))}`;
 }
 
 type MovingVisit = Extract<DayMapEntry, { kind: 'visit' }>;
@@ -353,15 +354,19 @@ export function PlanSchedule({
   const focused = focus && focus.dayId === selected?.id ? (made.rowOfStop.get(focus.stopId) ?? null) : null;
   const route = usePlanDayRoute(planId, selected?.id);
   const group = selected ? (made.groupOf.get(selected.id) ?? null) : null;
-  const home = route.data?.home ?? null;
-  /** The day starts at home when it was routed from there: the "From" on the map. */
-  const origin = useMemo(
-    () =>
-      selected?.originKind === 'HOME' && home
-        ? { latitude: home.latitude, longitude: home.longitude, title: `From: ${home.address ?? 'the technician’s home'}` }
-        : null,
-    [home, selected?.originKind],
-  );
+  const start = route.data?.start ?? null;
+  /** Where the day starts when it was routed from somewhere: the "From" on the map. */
+  const origin = useMemo(() => {
+    const from = selected ? dayStartName(selected.originKind) : null;
+    return from && start
+      ? {
+          latitude: start.latitude,
+          longitude: start.longitude,
+          title: `From: ${start.address ?? (from === 'home' ? 'the technician’s home' : 'the office')}`,
+          name: from === 'home' ? 'Home' : 'Office',
+        }
+      : null;
+  }, [start, selected]);
   const routeView = useMemo(
     () => (selected && group ? dayRouteView(selected, group, route.data, origin) : undefined),
     [group, origin, route.data, selected],
@@ -386,7 +391,7 @@ export function PlanSchedule({
       focused && focus
         ? { key: `stop:${focus.stopId}:${focus.at}`, points: [focused], zoom: PROPERTY_ZOOM }
         : {
-            key: `${selected?.id ?? ''}:${origin ? 'home' : ''}`,
+            key: `${selected?.id ?? ''}:${origin ? 'start' : ''}`,
             points: [...(group?.rows ?? []), ...(origin ? [origin] : [])],
           },
     [focus, focused, group, origin, selected?.id],
@@ -670,10 +675,13 @@ export function PlanSchedule({
 
 /** How the day's drives were measured, in a line. */
 function measuredText(day: PlanDay) {
-  const fromHome = day.originKind === 'HOME';
-  const counted = fromHome
-    ? 'Routed from the technician’s home; the drive from home is shown apart.'
-    : 'Built without the technician’s home, so it starts at its first job. Optimize the route to start it from home.';
+  const from = dayStartName(day.originKind);
+  const counted =
+    from === 'the office'
+      ? 'Routed from the office; the drive from the office is shown apart.'
+      : from === 'home'
+        ? 'Routed from the technician’s home, before days started at the office. Optimize the route to start it from the office.'
+        : 'Starts at its first job. Optimize the route to start it from the office.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
       return `Drives measured by Google for a 9 AM start. ${counted}`;
@@ -687,8 +695,8 @@ function measuredText(day: PlanDay) {
     case 'HAVERSINE':
       return 'No drive times could be measured for this day; the distances are in a straight line.';
     default:
-      return fromHome
-        ? 'One property, so there is nothing to drive between; the drive from home is shown apart.'
+      return from
+        ? `One property, so there is nothing to drive between; the drive from ${from} is shown apart.`
         : 'One property, so there is nothing to drive between.';
   }
 }
@@ -714,7 +722,8 @@ function DayDetail({
   const clock = useMemo(() => dayClock(timeline), [timeline]);
   const drive = driveMinutes(day);
   const ends = clock.at(-1)?.leaves;
-  const homeMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
+  const from = dayStartName(day.originKind);
+  const startMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
   const onSite = limitState(day.onSiteMinutes, settings.maxOnSiteMinutes);
 
   return (
@@ -765,14 +774,14 @@ function DayDetail({
             </dd>
           </div>
           <div className="flex items-baseline gap-2">
-            <dt className="text-muted-foreground">From home</dt>
+            <dt className="text-muted-foreground">From {from ?? 'the office'}</dt>
             <dd className="font-mono tabular-nums">
-              {day.originKind !== 'HOME'
+              {!from
                 ? 'not used'
-                : homeMinutes === null || !clock.length
+                : startMinutes === null || !clock.length
                   ? 'not measured'
-                  : `${homeMinutes} min${day.homeDriveMeters ? ` · ${formatDistance(day.homeDriveMeters)}` : ''} · leave ${formatClock(
-                      leaveHomeAt(clock[0]!.arrives, day.homeDriveSeconds!),
+                  : `${startMinutes} min${day.homeDriveMeters ? ` · ${formatDistance(day.homeDriveMeters)}` : ''} · leave ${formatClock(
+                      leaveAt(clock[0]!.arrives, day.homeDriveSeconds!),
                     )}`}
             </dd>
           </div>
@@ -793,8 +802,10 @@ function DayDetail({
                   {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
                 </span>
               )
-            ) : homeMinutes !== null ? (
-              <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
+            ) : from && startMinutes !== null ? (
+              <span className="text-muted-foreground text-xs">
+                {startMinutes} min from {from}
+              </span>
             ) : null}
             {stop.kind === 'booked' ? (
               <div className="-mx-2 flex items-start gap-3 rounded-md px-2 py-1">
