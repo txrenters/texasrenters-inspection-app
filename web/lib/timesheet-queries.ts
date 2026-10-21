@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from './api';
 import { businessToday } from './clock';
+import { humanize } from './format';
 
 /**
  * The hours a technician worked, read from where they actually were.
@@ -61,6 +62,36 @@ export interface TimesheetVisit {
   /** A person has corrected some of this; reading the day again will not touch it. */
   adjusted: boolean;
   addedByHand: boolean;
+  /** Every visit the technician had there that day, the one the time is filed under first. */
+  jobs: TimesheetJob[];
+}
+
+/** One visit behind a row: what the technician was there to do. */
+export interface TimesheetJob {
+  inspectionId: string;
+  type: string;
+  /** Booked as the quarter's Tenant Benefit Package. */
+  benefitPackage: boolean;
+  status: string;
+}
+
+/** The office's names for the kinds of visit (the inspections list's, shortened). */
+const JOB_LABEL: Record<string, string> = {
+  MOVE_IN: 'Move-in',
+  OCCUPIED: 'Occupied',
+  BACK_TO_MARKET: 'Back-to-market',
+  MOVE_OUT: 'Move-out',
+  HVAC: 'HVAC',
+  ROOF: 'Roof',
+  SUPRA_LOCKBOX_PLACEMENT: 'Supra + lockbox placement',
+  SUPRA_LOCKBOX_REMOVAL: 'Supra + lockbox removal',
+  AC_FILTER_DELIVERY: 'AC filter delivery',
+};
+
+/** "Move-out", or the type in words for one this page has no name for yet. */
+export function jobLabel(job: Pick<TimesheetJob, 'type' | 'status'>): string {
+  const label = JOB_LABEL[job.type] ?? humanize(job.type);
+  return job.status === 'CANCELLED' ? `${label} (cancelled)` : label;
 }
 
 export interface Timesheet {

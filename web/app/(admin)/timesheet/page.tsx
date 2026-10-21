@@ -1,6 +1,7 @@
 'use client';
 
 import { ChevronDownIcon, PencilIcon } from 'lucide-react';
+import Link from 'next/link';
 import { Fragment, useId, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -34,8 +35,10 @@ import { businessDateTimeValue, businessToday, fromBusinessDateTimeValue, shiftD
 import { formatDay, formatTime } from '@/lib/format';
 import {
   asHours,
+  jobLabel,
   useTimesheet,
   useTimesheetActions,
+  type TimesheetJob,
   type TimesheetTotal,
   type TimesheetVisit,
 } from '@/lib/timesheet-queries';
@@ -288,6 +291,11 @@ export default function TimesheetPage() {
       },
     },
     {
+      key: 'job',
+      header: 'Job',
+      cell: (row) => <JobCell jobs={row.jobs} />,
+    },
+    {
       key: 'arrived',
       header: 'Arrived',
       cell: (row) => <span className="font-mono tabular-nums">{formatTime(row.arrivedAt)}</span>,
@@ -387,6 +395,37 @@ export default function TimesheetPage() {
         visit={correcting}
       />
     </>
+  );
+}
+
+/**
+ * What the technician was there to do: each visit by its kind, linked to the
+ * inspection, and a second line when the visit is the benefit package -- the
+ * kind of inspection it carries is still what the office checks the hours
+ * against. Nothing matched says so; the address alone is not a job.
+ */
+function JobCell({ jobs }: { jobs: TimesheetJob[] }) {
+  if (!jobs.length) return <span className="text-muted-foreground">No visit booked</span>;
+  return (
+    <div className="min-w-0">
+      <div className="flex flex-wrap gap-x-1.5">
+        {jobs.map((job, index) => (
+          <Fragment key={job.inspectionId}>
+            {index ? (
+              <span aria-hidden className="text-muted-foreground">
+                +
+              </span>
+            ) : null}
+            <Link className="underline-offset-2 hover:underline" href={`/inspections/${job.inspectionId}`}>
+              {jobLabel(job)}
+            </Link>
+          </Fragment>
+        ))}
+      </div>
+      {jobs.some((job) => job.benefitPackage) ? (
+        <div className="text-muted-foreground mt-0.5 text-xs">Benefit package</div>
+      ) : null}
+    </div>
   );
 }
 

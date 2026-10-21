@@ -53,10 +53,28 @@ const segment = (
 /** Another property, for the same technician. */
 const ELSEWHERE = { buildingId: 'b2', inspectionId: 'insp-2', building: { addressLine1: '9 Elm Ct' } };
 
-const sheetHarness = (segments: unknown[]) => {
+/** A visit as the timesheet reads it, booked on the day for tech-1 at 1 Oak St. */
+const inspection = (overrides: Record<string, unknown> = {}) => ({
+  id: 'insp-1',
+  inspectionType: 'OCCUPIED',
+  status: 'SCHEDULED',
+  jobberVisitTitle: null,
+  propertywareBuildingId: 'b1',
+  scheduledAt: new Date(`${DAY}T00:00:00.000Z`),
+  startedAt: null,
+  submittedAt: null,
+  assignments: [{ technicianId: 'tech-1' }],
+  ...overrides,
+});
+
+const sheetHarness = (segments: unknown[], inspections: unknown[] = []) => {
   const findMany = jest.fn().mockResolvedValue(segments);
-  const prisma = { timeSegment: { findMany } } as unknown as PrismaService;
-  return { service: new TimeTrackingService(prisma), findMany };
+  const findInspections = jest.fn().mockResolvedValue(inspections);
+  const prisma = {
+    timeSegment: { findMany },
+    inspection: { findMany: findInspections },
+  } as unknown as PrismaService;
+  return { service: new TimeTrackingService(prisma), findMany, findInspections };
 };
 
 describe('the timesheet', () => {
@@ -207,6 +225,95 @@ describe('the timesheet', () => {
     const { service } = sheetHarness([]);
 
     await expect(service.timesheet(USER, { date: 'last week' })).rejects.toThrow(/YYYY-MM-DD/);
+  });
+});
+
+describe('what each stop was for', () => {
+  it('names every visit the technician had at the property that day, the filed one first', async () => {
+    const { service } = sheetHarness(
+      [segment('tech-1', 'ONSITE', 0, 60)],
+      [
+        inspection({ id: 'insp-0', inspectionType: 'HVAC' }),
+        inspection({ jobberVisitTitle: '1 Oak St - Zone 4 - Q4 2026 Tenant Benefit Package' }),
+      ],
+    );
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.visits[0]!.jobs).toEqual([
+      { inspectionId: 'insp-1', type: 'OCCUPIED', benefitPackage: true, status: 'SCHEDULED' },
+      { inspectionId: 'insp-0', type: 'HVAC', benefitPackage: false, status: 'SCHEDULED' },
+    ]);
+  });
+
+  it('reads the office’s short "TBP" as the benefit package too', async () => {
+    const { service } = sheetHarness(
+      [segment('tech-1', 'ONSITE', 0, 60)],
+      [inspection({ jobberVisitTitle: 'Q4 TBP Filter Change + Pest Control' })],
+    );
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.visits[0]!.jobs[0]!.benefitPackage).toBe(true);
+  });
+
+  /**
+   * By the same rule that made the circle count: the technician's own visits
+   * there, on the day. A colleague's visit, or one booked for another day,
+   * is not what this technician was doing.
+   */
+  it('leaves out a colleague’s visit, and one on another day', async () => {
+    const { service } = sheetHarness(
+      [segment('tech-1', 'ONSITE', 0, 60, { inspectionId: null })],
+      [
+        inspection({ id: 'theirs', assignments: [{ technicianId: 'tech-2' }] }),
+        inspection({ id: 'tomorrow', scheduledAt: new Date('2026-10-07T00:00:00.000Z') }),
+        inspection({
+          id: 'worked-today',
+          scheduledAt: new Date('2026-10-05T00:00:00.000Z'),
+          startedAt: at(10),
+        }),
+      ],
+    );
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.visits[0]!.jobs.map((job) => job.inspectionId)).toEqual(['worked-today']);
+  });
+
+  /** The page says "No visit booked" rather than guessing from the address. */
+  it('lists no job when no visit matches', async () => {
+    const { service } = sheetHarness([segment('tech-1', 'ONSITE', 0, 60, { inspectionId: null })], []);
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.visits[0]!.jobs).toEqual([]);
+  });
+
+  it('asks once for the whole sheet, inside the caller’s organization', async () => {
+    const { service, findInspections } = sheetHarness([
+      segment('tech-1', 'ONSITE', 0, 60),
+      segment('tech-2', 'ONSITE', 0, 60, ELSEWHERE),
+    ]);
+
+    await service.timesheet(USER, { date: DAY });
+
+    expect(findInspections).toHaveBeenCalledTimes(1);
+    const where = findInspections.mock.calls[0]![0].where;
+    expect(where.organizationId).toBe('org-1');
+    expect(where.OR[0]).toMatchObject({
+      propertywareBuildingId: { in: ['b1', 'b2'] },
+      assignments: { some: { isCurrent: true, technicianId: { in: ['tech-1', 'tech-2'] } } },
+    });
+    expect(where.OR[1]).toEqual({ id: { in: ['insp-1', 'insp-2'] } });
+  });
+
+  it('does not ask at all for a day with no time at a property', async () => {
+    const { service, findInspections } = sheetHarness([segment('tech-1', 'GENERAL', 0, 15)]);
+
+    await service.timesheet(USER, { date: DAY });
+
+    expect(findInspections).not.toHaveBeenCalled();
   });
 });
 

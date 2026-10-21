@@ -48,6 +48,7 @@ const VISIT = {
   segmentIds: ['seg-1'],
   adjusted: false,
   addedByHand: false,
+  jobs: [{ inspectionId: 'insp-1', type: 'MOVE_OUT', benefitPackage: false, status: 'SCHEDULED' }],
 };
 
 const SHEET = {
@@ -208,6 +209,57 @@ describe('one row per property', () => {
 
     expect(screen.getByText('Corrected')).toBeInTheDocument();
     expect(screen.getByText('Added by hand')).toBeInTheDocument();
+  });
+});
+
+/**
+ * What the technician was there to do (the office, 2026-10-17): the kind of
+ * visit, from the visits the app already has, and nothing invented when none
+ * matches.
+ */
+describe('the job at each property', () => {
+  it('names the kind of visit and links to it', () => {
+    mount();
+
+    const row = within(table('Time at each property')).getByText('1902 Mockup Dr').closest('tr')!;
+    expect(within(row).getByRole('link', { name: 'Move-out' })).toHaveAttribute('href', '/inspections/insp-1');
+  });
+
+  it('names both when the technician had two visits there, and says it was the benefit package', () => {
+    mount({
+      ...SHEET,
+      visits: [
+        {
+          ...VISIT,
+          jobs: [
+            { inspectionId: 'insp-1', type: 'OCCUPIED', benefitPackage: true, status: 'SCHEDULED' },
+            { inspectionId: 'insp-2', type: 'HVAC', benefitPackage: true, status: 'SCHEDULED' },
+          ],
+        },
+      ],
+    });
+
+    const row = within(table('Time at each property')).getByText('1902 Mockup Dr').closest('tr')!;
+    expect(within(row).getByRole('link', { name: 'Occupied' })).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: 'HVAC' })).toHaveAttribute('href', '/inspections/insp-2');
+    expect(within(row).getByText('Benefit package')).toBeInTheDocument();
+  });
+
+  it('says a visit was cancelled rather than passing it off as the job', () => {
+    mount({
+      ...SHEET,
+      visits: [{ ...VISIT, jobs: [{ ...VISIT.jobs[0]!, status: 'CANCELLED' }] }],
+    });
+
+    expect(screen.getByRole('link', { name: 'Move-out (cancelled)' })).toBeInTheDocument();
+  });
+
+  it('says so plainly when no visit matches, rather than guessing', () => {
+    mount({ ...SHEET, visits: [{ ...VISIT, jobs: [] }] });
+
+    const row = within(table('Time at each property')).getByText('1902 Mockup Dr').closest('tr')!;
+    expect(within(row).getByText('No visit booked')).toBeInTheDocument();
+    expect(within(row).queryByRole('link')).toBeNull();
   });
 });
 
