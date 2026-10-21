@@ -82,6 +82,18 @@ export class LocationRetentionScheduler implements OnModuleInit, OnModuleDestroy
       );
       if (count > 0)
         this.logger.log({ event: 'location_history_pruned', deleted: count, retentionDays: days });
+
+      // Where a stop away from the properties was is the same fact about a
+      // person as the trail it was read from, and goes with it. What the stop
+      // was called stays with the hours it was paid for.
+      const { count: forgotten } = await withSystemTenant(() =>
+        this.prisma.timeSegment.updateMany({
+          where: { startedAt: { lt: cutoff }, placeLatitude: { not: null } },
+          data: { placeLatitude: null, placeLongitude: null },
+        }),
+      );
+      if (forgotten > 0)
+        this.logger.log({ event: 'stop_positions_forgotten', stops: forgotten, retentionDays: days });
     } catch (error) {
       // Never throw out of a cron callback: an unhandled rejection takes the
       // process down, and a missed prune is not worth an outage.

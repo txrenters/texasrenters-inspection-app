@@ -24,8 +24,14 @@ export interface TimesheetTotal {
   technician: string;
   /** Inside the circle of a property they had a visit at. */
   onsiteSeconds: number;
-  /** Everything else between the first arrival of the day and the last departure. */
+  /** On the road between properties: the drive. */
   generalSeconds: number;
+  /**
+   * Standing still between properties somewhere that is not one -- the
+   * hardware store, a supply run, lunch. Its own figure (the office, 2026-10-17).
+   */
+  stopSeconds: number;
+  /** All three: the day from the first arrival to the last departure. */
   totalSeconds: number;
   /**
    * How much of the total the phone was silent for.
@@ -94,11 +100,63 @@ export function jobLabel(job: Pick<TimesheetJob, 'type' | 'status'>): string {
   return job.status === 'CANCELLED' ? `${label} (cancelled)` : label;
 }
 
+/** What a stop away from the properties turned out to be, once looked up. */
+export type StopPlaceKind = 'PROPERTY' | 'HOME' | 'BUSINESS' | 'ADDRESS' | 'UNKNOWN';
+
+/**
+ * A stop away from the properties: where a technician stood still between
+ * two of them, and for how long. Only for somebody who may see a technician's
+ * position; everybody else sees the minutes in the totals and not where.
+ */
+export interface TimesheetStop {
+  key: string;
+  technicianId: string;
+  technician: string;
+  arrivedAt: string;
+  leftAt: string;
+  durationSeconds: number;
+  quietSeconds: number;
+  /** Null until it has been looked up, which happens within minutes. */
+  place: { kind: StopPlaceKind; name: string | null; address: string | null } | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
 export interface Timesheet {
   date: string;
   totals: TimesheetTotal[];
   visits: TimesheetVisit[];
+  /** Absent, not empty, for somebody who may not see where a technician was. */
+  stops?: TimesheetStop[];
 }
+
+/**
+ * What to call a stop, in the office's words.
+ *
+ * Home is only ever "Home" -- the office has no use for the address. A
+ * property with no visit says so, because the office will ask why the
+ * technician was there. A stop nobody could name says that rather than
+ * showing coordinates.
+ */
+export function stopTitle(stop: Pick<TimesheetStop, 'place'>): string {
+  const place = stop.place;
+  if (!place) return 'Finding the place…';
+  if (place.kind === 'HOME') return 'Home';
+  return place.name ?? place.address ?? 'A place with no name';
+}
+
+/** The second line under a stop's name: what kind of place it was. */
+export function stopDetail(stop: Pick<TimesheetStop, 'place'>): string | null {
+  const place = stop.place;
+  if (!place) return null;
+  if (place.kind === 'PROPERTY') return 'A property with no visit booked';
+  if (place.kind === 'BUSINESS') return place.address;
+  return null;
+}
+
+/** Whether a place's name came from OpenStreetMap, which then has to be credited. */
+export const namedByOpenStreetMap = (stop: Pick<TimesheetStop, 'place'>) =>
+  stop.place?.kind === 'BUSINESS' || stop.place?.kind === 'ADDRESS';
 
 export const timesheetKeys = {
   all: ['timesheet'] as const,

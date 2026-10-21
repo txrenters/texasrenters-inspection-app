@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDownIcon, PencilIcon } from 'lucide-react';
+import { ChevronDownIcon, MapIcon, PencilIcon, StoreIcon } from 'lucide-react';
 import Link from 'next/link';
 import { Fragment, useId, useState } from 'react';
 import { toast } from 'sonner';
@@ -36,9 +36,13 @@ import { formatDay, formatTime } from '@/lib/format';
 import {
   asHours,
   jobLabel,
+  namedByOpenStreetMap,
+  stopDetail,
+  stopTitle,
   useTimesheet,
   useTimesheetActions,
   type TimesheetJob,
+  type TimesheetStop,
   type TimesheetTotal,
   type TimesheetVisit,
 } from '@/lib/timesheet-queries';
@@ -83,13 +87,44 @@ const REASON_MIN_LENGTH = 4;
  * entitled to know which hours a person decided rather than the trail, and
  * which the trail could only answer by carrying the clock through a silence.
  */
-function payFlags(row: TimesheetVisit): string[] {
+function payFlags(row: Pick<TimesheetVisit, 'quietSeconds'> & Partial<TimesheetVisit>): string[] {
   return [
     row.adjusted ? 'Corrected' : null,
     row.addedByHand ? 'Added by hand' : null,
-    row.stays > 1 ? `Stepped out ${row.stays - 1} ${row.stays === 2 ? 'time' : 'times'}` : null,
+    row.stays && row.stays > 1 ? `Stepped out ${row.stays - 1} ${row.stays === 2 ? 'time' : 'times'}` : null,
     row.quietSeconds >= QUIET_WORTH_SAYING_SECONDS ? `Phone quiet ${asHours(row.quietSeconds)}` : null,
   ].filter((flag): flag is string => Boolean(flag));
+}
+
+/**
+ * A row of the day: the time at one property, or a stop away from them --
+ * one list in the order it happened, so "where was he at eleven?" has one
+ * place to look (the office, 2026-10-17).
+ */
+type DayRow =
+  | { kind: 'visit'; key: string; technician: string; arrivedAt: string; visit: TimesheetVisit }
+  | { kind: 'stop'; key: string; technician: string; arrivedAt: string; stop: TimesheetStop };
+
+function dayRows(visits: readonly TimesheetVisit[], stops: readonly TimesheetStop[]): DayRow[] {
+  const rows: DayRow[] = [
+    ...visits.map((visit) => ({
+      kind: 'visit' as const,
+      key: visit.key,
+      technician: visit.technician,
+      arrivedAt: visit.arrivedAt,
+      visit,
+    })),
+    ...stops.map((stop) => ({
+      kind: 'stop' as const,
+      key: stop.key,
+      technician: stop.technician,
+      arrivedAt: stop.arrivedAt,
+      stop,
+    })),
+  ];
+  return rows.sort(
+    (left, right) => left.technician.localeCompare(right.technician) || left.arrivedAt.localeCompare(right.arrivedAt),
+  );
 }
 
 export default function TimesheetPage() {
@@ -197,7 +232,8 @@ export default function TimesheetPage() {
     <PageHeader
       info={
         <p>
-          The clock runs while a technician is inside a property’s circle. Everything between
+          The clock runs while a technician is inside a property’s circle. Five minutes or more
+          standing still somewhere that is not a property is a stop. The rest of the time between
           properties is general time.
         </p>
       }
@@ -225,7 +261,13 @@ export default function TimesheetPage() {
 
   const data = sheet.data!;
   const onsiteTotal = data.totals.reduce((sum, row) => sum + row.onsiteSeconds, 0);
+  const stopTotal = data.totals.reduce((sum, row) => sum + row.stopSeconds, 0);
   const generalTotal = data.totals.reduce((sum, row) => sum + row.generalSeconds, 0);
+  // Absent for somebody who may not see where a technician was: the minutes
+  // are in the totals, the places are not on the page.
+  const seesStops = data.stops !== undefined;
+  const rows = dayRows(data.visits, data.stops ?? []);
+  const dayTitle = seesStops ? 'Time at each property and stop' : 'Time at each property';
 
   const totalColumns: Column<TimesheetTotal>[] = [
     {
@@ -244,6 +286,7 @@ export default function TimesheetPage() {
       ),
     },
     { key: 'onsite', header: 'On site', numeric: true, cell: (row) => asHours(row.onsiteSeconds) },
+    { key: 'stops', header: 'Stops', numeric: true, cell: (row) => asHours(row.stopSeconds) },
     { key: 'general', header: 'General time', numeric: true, cell: (row) => asHours(row.generalSeconds) },
     {
       key: 'total',
@@ -266,70 +309,92 @@ export default function TimesheetPage() {
     },
   ];
 
-  const visitColumns: Column<TimesheetVisit>[] = [
+  const dayColumns: Column<DayRow>[] = [
     { key: 'technician', header: 'Technician', primary: true, cell: (row) => row.technician },
     {
-      key: 'property',
-      header: 'Property',
-      cell: (row) => {
-        const flags = payFlags(row);
-        return (
-          <div className="min-w-0">
-            <div>{row.address ?? '—'}</div>
-            {flags.length ? (
-              <div className="text-muted-foreground mt-0.5 flex flex-wrap gap-x-1.5 text-xs">
-                {flags.map((flag, index) => (
-                  <Fragment key={flag}>
-                    {index ? <span aria-hidden>·</span> : null}
-                    <span>{flag}</span>
-                  </Fragment>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        );
-      },
+      key: 'place',
+      header: seesStops ? 'Place' : 'Property',
+      cell: (row) =>
+        row.kind === 'visit' ? (
+          <PlaceCell flags={payFlags(row.visit)} title={row.visit.address ?? '—'} />
+        ) : (
+          <PlaceCell
+            flags={[stopDetail(row.stop), ...payFlags(row.stop)].filter((flag): flag is string => Boolean(flag))}
+            stop
+            title={stopTitle(row.stop)}
+          />
+        ),
     },
     {
       key: 'job',
       header: 'Job',
-      cell: (row) => <JobCell jobs={row.jobs} />,
+      cell: (row) =>
+        row.kind === 'visit' ? (
+          <JobCell jobs={row.visit.jobs} />
+        ) : (
+          // A stop is not a visit. A property with no visit booked says so,
+          // because that is the one the office will ask about.
+          <span className="text-muted-foreground">
+            {row.stop.place?.kind === 'PROPERTY' ? 'No visit booked' : 'Stop'}
+          </span>
+        ),
     },
     {
       key: 'arrived',
       header: 'Arrived',
-      cell: (row) => <span className="font-mono tabular-nums">{formatTime(row.arrivedAt)}</span>,
+      cell: (row) => (
+        <span className="font-mono tabular-nums">
+          {formatTime(row.kind === 'visit' ? row.visit.arrivedAt : row.stop.arrivedAt)}
+        </span>
+      ),
     },
     {
       key: 'left',
       header: 'Left',
-      cell: (row) => <span className="font-mono tabular-nums">{formatTime(row.leftAt)}</span>,
+      cell: (row) => (
+        <span className="font-mono tabular-nums">
+          {formatTime(row.kind === 'visit' ? row.visit.leftAt : row.stop.leftAt)}
+        </span>
+      ),
     },
     {
-      key: 'onsite',
-      header: 'On site',
+      key: 'time',
+      header: seesStops ? 'Time' : 'On site',
       numeric: true,
-      cell: (row) => <span className="font-medium">{asHours(row.onsiteSeconds)}</span>,
+      cell: (row) => (
+        <span className="font-medium">
+          {asHours(row.kind === 'visit' ? row.visit.onsiteSeconds : row.stop.durationSeconds)}
+        </span>
+      ),
     },
-    ...(canChange
-      ? [
-          {
-            key: 'correct',
-            header: '',
-            cell: (row: TimesheetVisit) => (
-              <Button
-                aria-label={`Correct the time at ${row.address ?? 'this property'}`}
-                className="relative z-10"
-                onClick={() => setCorrecting(row)}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <PencilIcon />
-              </Button>
-            ),
-          } satisfies Column<TimesheetVisit>,
-        ]
-      : []),
+    {
+      key: 'actions',
+      header: '',
+      cell: (row) =>
+        row.kind === 'visit' ? (
+          canChange ? (
+            <Button
+              aria-label={`Correct the time at ${row.visit.address ?? 'this property'}`}
+              className="relative z-10"
+              onClick={() => setCorrecting(row.visit)}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <PencilIcon />
+            </Button>
+          ) : null
+        ) : (
+          // Their day on the map, where this stop is drawn on the trail.
+          <Button asChild className="relative z-10" size="icon-sm" variant="ghost">
+            <Link
+              aria-label={`Show ${stopTitle(row.stop)} on the map`}
+              href={`/map?${new URLSearchParams({ technician: row.stop.technicianId, date }).toString()}`}
+            >
+              <MapIcon />
+            </Link>
+          </Button>
+        ),
+    },
   ];
 
   return (
@@ -337,10 +402,11 @@ export default function TimesheetPage() {
       {header}
       {toolbar}
 
-      <StatGroup columns="grid-cols-1 sm:grid-cols-3">
+      <StatGroup columns="grid-cols-2 sm:grid-cols-4">
         <Stat label="On site" value={asHours(onsiteTotal)} />
+        <Stat label="Stops" value={asHours(stopTotal)} />
         <Stat label="General time" value={asHours(generalTotal)} />
-        <Stat label="Total" value={asHours(onsiteTotal + generalTotal)} />
+        <Stat label="Total" value={asHours(onsiteTotal + stopTotal + generalTotal)} />
       </StatGroup>
 
       {/* Panels with a quiet name, not h2 headings over floating tables
@@ -364,15 +430,30 @@ export default function TimesheetPage() {
         </div>
       )}
 
-      {data.visits.length ? (
-        <Panel className="mt-6" title="Time at each property">
+      {rows.length ? (
+        <Panel className="mt-6" title={dayTitle}>
           <DataTable
             className="rounded-none border-0"
-            columns={visitColumns}
-            label="Time at each property"
+            columns={dayColumns}
+            label={dayTitle}
             rowKey={(row) => row.key}
-            rows={data.visits}
+            rows={rows}
           />
+          {/* The licence the names are kept under asks for this. */}
+          {data.stops?.some(namedByOpenStreetMap) ? (
+            <p className="text-muted-foreground border-t px-4 py-2 text-xs">
+              Place names ©{' '}
+              <a
+                className="underline-offset-2 hover:underline"
+                href="https://www.openstreetmap.org/copyright"
+                rel="noreferrer"
+                target="_blank"
+              >
+                OpenStreetMap
+              </a>{' '}
+              contributors
+            </p>
+          ) : null}
         </Panel>
       ) : null}
 
@@ -395,6 +476,32 @@ export default function TimesheetPage() {
         visit={correcting}
       />
     </>
+  );
+}
+
+/**
+ * Where the time was spent, and what to know about it. A stop carries a small
+ * store mark so it reads as somewhere that is not a property at a glance,
+ * without a colour doing the work alone.
+ */
+function PlaceCell({ title, flags, stop = false }: { title: string; flags: string[]; stop?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-start gap-1.5">
+      {stop ? <StoreIcon aria-hidden className="text-muted-foreground mt-0.5 size-3.5 shrink-0" /> : null}
+      <div className="min-w-0">
+        <div>{title}</div>
+        {flags.length ? (
+          <div className="text-muted-foreground mt-0.5 flex flex-wrap gap-x-1.5 text-xs">
+            {flags.map((flag, index) => (
+              <Fragment key={flag}>
+                {index ? <span aria-hidden>·</span> : null}
+                <span>{flag}</span>
+              </Fragment>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

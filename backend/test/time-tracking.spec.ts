@@ -52,7 +52,15 @@ const visit = (id: string, at_: unknown) => ({ id, propertywareBuilding: at_ });
 
 /** One property, then a drive, then a second one four kilometres on. */
 const TWO_VISITS = [visit('insp-1', building('b1')), visit('insp-2', building('b2', 4_000))];
-const TWO_PROPERTY_TRAIL = [...at(0, 900, 5), ...at(930, 600, 2_000), ...at(1_560, 900, 4_003)];
+/** Between the two, two waits at junctions, each too short to be a stop. */
+const TWO_PROPERTY_TRAIL = [
+  ...at(0, 900, 5),
+  ...at(930, 270, 2_000),
+  ...at(1_230, 270, 2_600),
+  ...at(1_560, 900, 4_003),
+];
+/** The same day, with twenty minutes at a store between the two properties. */
+const STORE_TRAIL = [...at(0, 900, 5), ...at(930, 600, 2_000), ...at(1_560, 900, 4_003)];
 
 const row = (
   id: string,
@@ -211,6 +219,59 @@ describe('reading a day from the trail', () => {
 
     expect(result).toMatchObject({ changed: false, onsiteSeconds: 0 });
     expect(transaction).not.toHaveBeenCalled();
+  });
+});
+
+/** Somewhere that is not a property, between two that are (the office, 2026-10-17). */
+describe('a stop away from the properties', () => {
+  it('is written as a stop of its own, with where it was', async () => {
+    const { service, tx } = harness({ visits: TWO_VISITS, pings: STORE_TRAIL });
+
+    const result = await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    const stop = created(tx).find((written) => written.category === 'STOP') as unknown as Record<string, unknown>;
+    expect(stop).toMatchObject({ buildingId: null, inspectionId: null, startedAt: instant(930) });
+    expect(stop.placeLatitude as number).toBeCloseTo(PROPERTY.latitude + 2_000 * METRE, 4);
+    expect(stop.placeLongitude as number).toBeCloseTo(PROPERTY.longitude, 4);
+    expect(result).toMatchObject({ stopSeconds: 600, generalSeconds: 30 });
+  });
+
+  it('writes no position on anything but a stop', async () => {
+    const { service, tx } = harness({ visits: TWO_VISITS, pings: STORE_TRAIL });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    for (const written of created(tx) as unknown as Record<string, unknown>[])
+      if (written.category !== 'STOP') expect(written).toMatchObject({ placeLatitude: null, placeLongitude: null });
+  });
+
+  /** Its name was looked up from where it was first seen; a longer stay does not move it. */
+  it('lengthens a stop still going without moving it', async () => {
+    const { service, tx } = harness({
+      visits: TWO_VISITS,
+      pings: STORE_TRAIL,
+      stored: [
+        row('seg-1', 'ONSITE', 'b1', 'insp-1', 0, 930),
+        row('seg-2', 'STOP', null, null, 930, 1_230),
+      ],
+    });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    expect(tx.timeSegment.update).toHaveBeenCalledWith({
+      where: { id: 'seg-2' },
+      data: { inspectionId: null, endedAt: instant(1_530), durationSeconds: 600, quietSeconds: 0 },
+    });
+  });
+
+  it('counts the stop in the audit, but never says where it was', async () => {
+    const { service, audit } = harness({ visits: TWO_VISITS, pings: STORE_TRAIL });
+
+    await service.recomputeDay('org-1', 'tech-1', DAY, null);
+
+    const metadata = audit.mock.calls[0]![0].data.metadata;
+    expect(metadata).toMatchObject({ stopSeconds: 600, stops: 1 });
+    expect(JSON.stringify(metadata)).not.toMatch(/latitude|longitude|29\.7/i);
   });
 });
 
@@ -490,8 +551,10 @@ describe('the audit trail', () => {
       day: DAY,
       onsiteSeconds: 900,
       generalSeconds: 0,
+      stopSeconds: 0,
       quietSeconds: 0,
       stretches: 1,
+      stops: 0,
       properties: 1,
       fixesRead: 31,
       fixesDiscarded: 0,
@@ -530,6 +593,7 @@ describe('recalculating a range', () => {
           changed: day === '2026-10-02',
           onsiteSeconds: 0,
           generalSeconds: 0,
+          stopSeconds: 0,
           fixesRead: 0,
           fixesDiscarded: 0,
         }),

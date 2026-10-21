@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 
 import { DatabaseModule } from '../database/database.module';
+import { OpenStreetMapPlacesClient } from './openstreetmap-places.client';
+import { StopNamingService } from './stop-naming.service';
 import { TimeTrackingController } from './time-tracking.controller';
 import { TimeTrackingScheduler } from './time-tracking.scheduler';
 import { TimeTrackingService } from './time-tracking.service';
@@ -15,7 +17,7 @@ import { TimeTrackingService } from './time-tracking.service';
 @Module({
   imports: [DatabaseModule],
   controllers: [TimeTrackingController],
-  providers: [TimeTrackingService, TimeTrackingScheduler],
+  providers: [TimeTrackingService, TimeTrackingScheduler, StopNamingService, OpenStreetMapPlacesClient],
   exports: [TimeTrackingService],
 })
 export class TimeTrackingModule {}

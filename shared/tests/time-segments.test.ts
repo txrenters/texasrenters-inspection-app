@@ -51,6 +51,13 @@ const standing = (fromSeconds: number, forSeconds: number, metresNorth: number) 
     fix(fromSeconds + index * 30, metresNorth),
   );
 
+/** A drive in a straight line, a fix every ten seconds as a moving recorder makes them. */
+const driving = (fromSeconds: number, forSeconds: number, fromMetres: number, toMetres: number) =>
+  Array.from({ length: Math.floor(forSeconds / 10) + 1 }, (_, index) => {
+    const share = Math.min(1, (index * 10) / forSeconds);
+    return fix(fromSeconds + index * 10, fromMetres + (toMetres - fromMetres) * share);
+  });
+
 const shape = (stretches: readonly LedgerStretch[]) =>
   stretches.map((stretch) => `${stretch.category}:${stretch.fenceId ?? '-'}`);
 
@@ -111,7 +118,7 @@ describe('the day between properties', () => {
    */
   it('counts the time between two properties as general time', () => {
     const { stretches } = computeDayLedger(
-      [...standing(0, 900, 5), ...standing(930, 600, 2_000), ...standing(1_560, 900, 4_003)],
+      [...standing(0, 900, 5), ...driving(910, 600, 5, 4_003), ...standing(1_520, 900, 4_003)],
       [HOME, SECOND],
     );
 
@@ -120,13 +127,15 @@ describe('the day between properties', () => {
 
   it('leaves no hole between the first arrival and the last departure', () => {
     const { stretches } = computeDayLedger(
-      [...standing(0, 900, 5), ...standing(930, 600, 2_000), ...standing(1_560, 900, 4_003)],
+      [...standing(0, 900, 5), ...driving(910, 600, 5, 4_003), ...standing(1_520, 900, 4_003)],
       [HOME, SECOND],
     );
 
     for (const [index, stretch] of stretches.entries())
       if (index) expect(stretch.startedAt).toBe(stretches[index - 1]!.endedAt);
-    expect(secondsIn(stretches, 'ONSITE') + secondsIn(stretches, 'GENERAL')).toBe(1_560 + 900);
+    expect(secondsIn(stretches, 'ONSITE') + secondsIn(stretches, 'GENERAL')).toBe(
+      (stretches[stretches.length - 1]!.endedAt - stretches[0]!.startedAt) / 1000,
+    );
   });
 
   /** Decided by the office: the day is first arrival to last departure. */
@@ -160,6 +169,144 @@ describe('the day between properties', () => {
 
     expect(shape(stretches)).toEqual(['ONSITE:home', 'ONSITE:next-door']);
     expect(stretches[1]!.startedAt).toBe(START + 930 * 1000);
+  });
+});
+
+/**
+ * Somewhere that is not a property (the office, 2026-10-17): the hardware
+ * store, a supply run, lunch. Its own figure on the timesheet, so general time
+ * is the drive and nothing else.
+ */
+describe('a stop away from the properties', () => {
+  /** Two kilometres up the road from the first house, on the way to the second. */
+  const STORE = 2_000;
+  /** There from 1,220 s, and off again ten seconds after the last fix at the store. */
+  const toTheStoreAndOn = (atTheStore: SegmentFix[]) => {
+    const leaves = (atTheStore[atTheStore.length - 1]!.at - START) / 1000 + 10;
+    return [
+      ...standing(0, 900, 5),
+      ...driving(910, 300, 5, STORE),
+      ...atTheStore,
+      ...driving(leaves, 300, STORE, 4_003),
+      ...standing(leaves + 310, 900, 4_003),
+    ];
+  };
+
+  it('is a stop of its own between two drives', () => {
+    const { stretches } = computeDayLedger(toTheStoreAndOn(standing(1_220, 1_200, STORE)), [HOME, SECOND]);
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'STOP:-', 'GENERAL:-', 'ONSITE:second']);
+    const stop = stretches[2]!;
+    // Twenty minutes, give or take the last fix of the drive in and the first out.
+    expect(stop.durationSeconds).toBeGreaterThanOrEqual(1_200);
+    expect(stop.durationSeconds).toBeLessThanOrEqual(1_240);
+    // Placed where they stood, not at either property.
+    expect(stop.position!.latitude).toBeCloseTo(29.76 + STORE * METRE, 4);
+    expect(stop.fenceId).toBeNull();
+  });
+
+  it('still leaves no hole: on site, stops and the drive make the whole day', () => {
+    const { stretches } = computeDayLedger(toTheStoreAndOn(standing(1_220, 1_200, STORE)), [HOME, SECOND]);
+
+    for (const [index, stretch] of stretches.entries())
+      if (index) expect(stretch.startedAt).toBe(stretches[index - 1]!.endedAt);
+    expect(secondsIn(stretches, 'ONSITE') + secondsIn(stretches, 'STOP') + secondsIn(stretches, 'GENERAL')).toBe(
+      (stretches[stretches.length - 1]!.endedAt - stretches[0]!.startedAt) / 1000,
+    );
+  });
+
+  it('is not a red light, or a queue at a junction', () => {
+    const { stretches } = computeDayLedger(toTheStoreAndOn(standing(1_220, 120, STORE)), [HOME, SECOND]);
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:second']);
+  });
+
+  /** Waiting at the kerb outside the next house is the visit's surroundings. */
+  it('is not the kerb outside a property they had a visit at', () => {
+    const { stretches } = computeDayLedger(
+      [
+        ...standing(0, 900, 5),
+        ...driving(910, 300, 5, 3_920),
+        ...standing(1_220, 600, 3_920),
+        ...standing(1_830, 900, 4_003),
+      ],
+      [HOME, SECOND],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:second']);
+  });
+
+  /**
+   * The replay of 2026-10-17: every "stop" 100 to 150 m from a visit property
+   * sat right beside the visit itself, a phone gone quiet some way from the pin.
+   */
+  it('is not a quiet phone 130 m from the property the visit is at', () => {
+    const { stretches } = computeDayLedger(
+      [
+        ...standing(0, 900, 5),
+        ...driving(910, 300, 5, 3_873),
+        ...standing(1_220, 60, 3_873),
+        ...standing(1_800, 60, 3_873),
+        ...standing(1_890, 900, 4_003),
+      ],
+      [HOME, SECOND],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:second']);
+  });
+
+  /** Inside a steel building the phone rarely does better than fifty metres. */
+  it('counts fixes too vague for the circle but good enough to say where the store was', () => {
+    const vague = standing(1_220, 1_200, STORE).map((at) => ({ ...at, accuracyMeters: 60 }));
+    const { stretches } = computeDayLedger(toTheStoreAndOn(vague), [HOME, SECOND]);
+
+    expect(shape(stretches)).toContain('STOP:-');
+  });
+
+  it('stays one stop through a phone that goes quiet inside', () => {
+    const { stretches } = computeDayLedger(
+      toTheStoreAndOn([...standing(1_220, 120, STORE), ...standing(2_400, 120, STORE)]),
+      [HOME, SECOND],
+    );
+
+    const stops = stretches.filter((stretch) => stretch.category === 'STOP');
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.quietSeconds).toBe(2_400 - 1_340);
+  });
+
+  it('is not split by a fix thrown across the car park and straight back', () => {
+    const atTheStore = standing(1_220, 1_200, STORE);
+    atTheStore[20] = { ...atTheStore[20]!, latitude: atTheStore[20]!.latitude + 300 * METRE };
+    const { stretches } = computeDayLedger(toTheStoreAndOn(atTheStore), [HOME, SECOND]);
+
+    expect(stretches.filter((stretch) => stretch.category === 'STOP')).toHaveLength(1);
+  });
+
+  /** The office, 2026-10-17: only stops between properties are shown. */
+  it('leaves out a stop before the first property and after the last', () => {
+    const { stretches } = computeDayLedger(
+      [
+        ...standing(0, 1_200, 9_000),
+        ...driving(1_210, 600, 9_000, 5),
+        ...standing(1_820, 900, 5),
+        ...driving(2_730, 600, 5, 9_000),
+        ...standing(3_340, 1_200, 9_000),
+      ],
+      [HOME],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home']);
+  });
+
+  it('keeps where the stop was when hours a person decided are cut out of it', () => {
+    const { stretches } = computeDayLedger(toTheStoreAndOn(standing(1_220, 1_200, STORE)), [HOME, SECOND]);
+    const stop = stretches[2]!;
+    const middle = (stop.startedAt + stop.endedAt) / 2;
+
+    const pieces = withoutIntervals([stop], [{ startedAt: middle, endedAt: middle + 60_000 }]);
+
+    expect(pieces).toHaveLength(2);
+    for (const piece of pieces) expect(piece).toMatchObject({ category: 'STOP', position: stop.position });
   });
 });
 
