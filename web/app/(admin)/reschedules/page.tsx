@@ -390,11 +390,15 @@ function DayDialog({
           <Field>
             <FieldLabel htmlFor="reschedule-day">{answer === 'move' ? 'New day (Texas)' : 'Day (Texas)'}</FieldLabel>
             <DatePicker id="reschedule-day" min={today} onChange={setDay} value={day} />
-            <FieldDescription>
-              {request.preferredOn && request.preferredOn === request.suggestedDay
-                ? 'The day the technician suggested.'
-                : 'The next Monday kept for rescheduled visits.'}
-            </FieldDescription>
+            {/* Names the day it offers: a hint that said only "the next Monday" read
+                as describing whatever day was picked in the calendar instead. */}
+            {request.suggestedDay ? (
+              <FieldDescription>
+                {request.preferredOn === request.suggestedDay
+                  ? `The technician suggested ${formatScheduledDate(request.suggestedDay)}.`
+                  : `The next Monday kept for rescheduled visits is ${formatScheduledDate(request.suggestedDay)}.`}
+              </FieldDescription>
+            ) : null}
           </Field>
           {answer === 'book' ? (
             <Field>

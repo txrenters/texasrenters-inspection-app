@@ -2065,6 +2065,8 @@ export class AdminService {
        * inspection, or not at all -- a reschedule request booked again.
        */
       within?: (tx: Prisma.TransactionClient, created: { id: string; bookedInJobber: boolean }) => Promise<void>;
+      /** The visit this one books again, which it cannot clash with (`rebookOf`). */
+      rebookOf?: string;
     } = {},
   ) {
     const booking = input.jobberBooking ? this.bookableRequest(input) : null;
@@ -2086,6 +2088,7 @@ export class AdminService {
         scheduledAt: new Date(input.scheduledAt),
         areaIds: input.areaIds,
         allowTechnicianAreaCapture: input.allowTechnicianAreaCapture,
+        rebookOf: options.rebookOf,
       });
       const inspection = await insertInspection(tx, plan, {
         priority: input.priority,

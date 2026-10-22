@@ -391,6 +391,17 @@ describe("the office's queue", () => {
     });
   });
 
+  // 2026-10-22: a visit the technician could not get into stays submitted, and
+  // the clash check counted it, so it could not be booked again for its own day.
+  it('books it again as the visit that asked, so that visit is no clash for it', async () => {
+    const { service, admin } = queue(request({ kind: 'NO_ACCESS', services: [] }));
+
+    await service.bookAgain(manager, 'request-1', { scheduledOn: AHEAD });
+
+    const [, , options] = admin.createInspection.mock.calls[0];
+    expect(options).toMatchObject({ rebookOf: 'inspection-1' });
+  });
+
   it('books it once: a request answered in the meantime takes the new inspection back with it', async () => {
     const { service, prisma } = queue();
     prisma.rescheduleRequest.updateMany.mockResolvedValue({ count: 0 });
