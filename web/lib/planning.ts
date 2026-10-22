@@ -44,13 +44,23 @@ export function dayClock<T extends TimedStop>(stops: readonly T[], startsAt = DA
 }
 
 /**
- * When to leave home to reach the day's first property on time.
+ * When to set off to reach the day's first property on time.
  *
- * The drive from home is measured for the same nine o'clock start as the rest
- * of the day, so this is a forecast, not a promise about the morning's traffic.
+ * The drive from where the day starts is measured for the same nine o'clock
+ * start as the rest of the day, so this is a forecast, not a promise about the
+ * morning's traffic.
  */
-export function leaveHomeAt(firstArrives: number, homeDriveSeconds: number): number {
-  return firstArrives - Math.round(homeDriveSeconds / 60);
+export function leaveAt(firstArrives: number, startDriveSeconds: number): number {
+  return firstArrives - Math.round(startDriveSeconds / 60);
+}
+
+/**
+ * Where a planned day sets out from, in words, or null when it starts at its
+ * first job: the office since 2026-10-22, the technician's home on a day
+ * measured before.
+ */
+export function dayStartName(originKind: string): 'the office' | 'home' | null {
+  return originKind === 'OFFICE' ? 'the office' : originKind === 'HOME' ? 'home' : null;
 }
 
 /** "9:05 AM". */

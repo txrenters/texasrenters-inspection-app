@@ -17,12 +17,14 @@ import { ApiConnectionError } from '@/src/storage/offline-record-cache';
 registerIcons(CheckCircle2Icon, HomeIcon, MapPinIcon);
 
 /**
- * Where a technician's day starts.
+ * The technician's home address, kept on their profile.
  *
- * The office route map draws each day from here until the handset starts
- * reporting a live position. Entered by the technician rather than inferred —
- * working out somebody's home from where their phone spends the night is the
- * tracking this app refuses to do outside working hours.
+ * It set where the day's route started until 2026-10-22. Every route starts at
+ * the office now, and the office chose to keep the address rather than retire
+ * the screen, so this says so instead of promising a route from here. Entered
+ * by the technician rather than inferred — working out somebody's home from
+ * where their phone spends the night is the tracking this app refuses to do
+ * outside working hours.
  */
 
 /**
@@ -85,12 +87,12 @@ export default function HomeAddressScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Stack.Screen options={{ title: 'Home address' }} />
-        <Text className="px-5 pb-1 pt-1 text-sm text-muted-foreground">Where your route starts each day</Text>
+        <Text className="px-5 pb-1 pt-1 text-sm text-muted-foreground">Kept on your profile for the office</Text>
 
         <View className="mx-5 mt-2 rounded-2xl bg-card p-4">
           <Text className="text-sm leading-5 text-muted-foreground">
-            Before you start sharing your location, the office map draws your day&apos;s route from here.
-            Once your location is live, the route follows you instead.
+            Your route starts at the office each day, not at this address. The office keeps it on your
+            profile, and you can change or remove it at any time.
           </Text>
 
           <Text className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

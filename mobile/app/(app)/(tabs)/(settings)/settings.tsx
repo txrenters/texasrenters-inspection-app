@@ -308,16 +308,16 @@ export default function SettingsScreen() {
             description={locationAccess ? LOCATION_ACCESS_DESCRIPTION[locationAccess] : 'Checking…'}
             onPress={() => void Linking.openSettings()}
           />
-          {/* Beside the location switch, because both answer the same
-              question for the office map: where your day starts, and where you
-              are once it has. Shows the stored address so a stale one is
-              visible without opening the screen. */}
+          {/* Beside the location switch, where it has always been. It no longer
+              sets where the day starts -- routes start at the office since
+              2026-10-22 -- so it says only what is stored, and a stale address
+              is visible without opening the screen. */}
           <SettingLinkRow
             icon={HomeIcon}
             iconClassName="text-chart-1"
             iconBackground="bg-chart-1/15"
             title="Home address"
-            description={home.data?.address ?? 'Not set — your route starts from here each day'}
+            description={home.data?.address ?? 'Not set'}
             last
             onPress={() => router.push('/home-address')}
           />

@@ -113,10 +113,15 @@ export const technicianRouteSchema = z.object({
   /**
    * Which kind of starting point this was drawn from.
    *
-   * A route from somebody's house and a route from where they are standing are
+   * A route from the office and a route from where they are standing are
    * different claims, and navigation must not offer to drive the first one.
+   *
+   * `HOME` is what the server calls the office to a phone built before
+   * `OFFICE` existed (2026-10-22). A kind this build does not know reads as
+   * null rather than refusing the route: that refusal is why the server has
+   * to keep calling the office `HOME` at all.
    */
-  originKind: z.enum(['LIVE', 'LAST_KNOWN', 'HOME']).nullable().optional(),
+  originKind: z.enum(['LIVE', 'LAST_KNOWN', 'OFFICE', 'HOME']).nullable().optional().catch(null),
   /**
    * A position was reported and had to be refused -- it is nowhere near a road
    * we can route on. Distinct from `origin: null`, which means no handset has

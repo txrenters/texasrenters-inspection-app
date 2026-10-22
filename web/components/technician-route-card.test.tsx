@@ -109,10 +109,10 @@ describe('a route the planner produced', () => {
     expect(text).not.toMatch(/without traffic/i);
   });
 
-  it('says a route from home was measured from home', () => {
+  it('says a route from the office was measured from the office', () => {
     /**
-     * It gave the age of the position instead, which a route from home does
-     * not have -- so the card read "Measured from —".
+     * It gave the age of the position instead, which a route from the office
+     * does not have -- so the card read "Measured from —".
      */
     const { container } = render(
       <TechnicianRouteCard
@@ -120,14 +120,14 @@ describe('a route the planner produced', () => {
         route={{
           ...PLANNED,
           source: 'GOOGLE_TRAFFIC',
-          originKind: 'HOME',
+          originKind: 'OFFICE',
           origin: { latitude: 29.95, longitude: -95.55, recordedAt: null },
         }}
       />,
     );
     const text = container.textContent ?? '';
 
-    expect(text).toMatch(/measured from home/i);
+    expect(text).toMatch(/measured from the office/i);
     expect(text).not.toMatch(/measured from —/i);
   });
 });

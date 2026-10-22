@@ -193,7 +193,7 @@ export function planDaysFile(days: readonly PlanDay[], visits: readonly DayStop[
 const toLngLat = (path: readonly [number, number][]): LngLat[] => path.map(([latitude, longitude]) => [longitude, latitude]);
 
 /**
- * A day's road as the map draws a group's: the server's line from home and
+ * A day's road as the map draws a group's: the server's line from where the day starts and
  * through the stops, cut at each stop, with each leg's drive.
  *
  * The drive on each leg is the plan's own -- the figure the day's list, its
@@ -211,14 +211,14 @@ export function dayRouteView(
   const between = dayStopsInOrder(day).filter((stop) => onEarth(stop.latitude, stop.longitude));
   if (!route.geometry.length || route.legs.length !== group.rows.length - 1 || between.length !== group.rows.length)
     return { status: 'error', message: 'The road could not be drawn for this order' };
-  const home = origin && route.homeGeometry.length ? toLngLat(route.homeGeometry) : [];
-  const geometry = [...home, ...toLngLat(route.geometry)];
+  const start = origin && route.startGeometry.length ? toLngLat(route.startGeometry) : [];
+  const geometry = [...start, ...toLngLat(route.geometry)];
   const waypoints: LngLat[] = [
-    ...(home.length ? [[origin!.longitude, origin!.latitude] as LngLat] : []),
+    ...(start.length ? [[origin!.longitude, origin!.latitude] as LngLat] : []),
     ...group.rows.map((row) => [row.longitude, row.latitude] as LngLat),
   ];
   const legs: RoadLeg[] = [
-    ...(home.length
+    ...(start.length
       ? [{ durationS: day.homeDriveSeconds ?? 0, distanceM: day.homeDriveMeters ?? 0 }]
       : []),
     ...route.legs.map((leg, index) => ({
@@ -226,7 +226,7 @@ export function dayRouteView(
       distanceM: leg.distanceMeters,
     })),
   ];
-  const counted = home.length ? legs.slice(1) : legs;
+  const counted = start.length ? legs.slice(1) : legs;
   return {
     status: 'ok',
     route: {

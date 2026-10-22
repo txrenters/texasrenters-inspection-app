@@ -20,7 +20,7 @@ export const metadata: Metadata = {
  */
 export default function PrivacyPolicyPage() {
   return (
-    <PublicDocument title="Privacy Policy for the TexasRenters Inspection app" updated="October 9, 2026">
+    <PublicDocument title="Privacy Policy for the TexasRenters Inspection app" updated="October 22, 2026">
       <section>
         <p>
           TexasRenters Inspection is made by {CONTACT.company} (&ldquo;TexasRenters&rdquo;, &ldquo;we&rdquo;)
@@ -47,8 +47,9 @@ export default function PrivacyPolicyPage() {
             location&rdquo; in the app&rsquo;s Settings. The office can see when it is turned off.
           </li>
           <li>
-            <strong>Home address.</strong> If you enter one, it is used as the starting point of your
-            daily route. You can remove it at any time under Home address in the app&rsquo;s Settings.
+            <strong>Home address.</strong> If you enter one, it is kept on your profile. Since October 22,
+            2026 your daily route starts at the office, not at this address. You can change or remove it
+            at any time under Home address in the app&rsquo;s Settings.
           </li>
           <li>
             <strong>Inspection recordings and photos.</strong> Videos you record of each room, including
@@ -113,7 +114,7 @@ export default function PrivacyPolicyPage() {
           </li>
           <li>
             <strong>Mapbox</strong> and <strong>Google</strong> work out driving routes and place addresses
-            on the map, including your home address and route starting points.
+            on the map, including the home address you enter and where your route starts.
           </li>
           <li>
             <strong>Expo</strong>, <strong>Apple</strong> and <strong>Google</strong> (Firebase Cloud

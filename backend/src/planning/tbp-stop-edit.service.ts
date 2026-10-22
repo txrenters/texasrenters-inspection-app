@@ -59,7 +59,6 @@ export interface PlanTechnician {
   displayName: string;
   /** Place in the benefit-package crew's zone rotation; null is not on the crew. */
   crewOrder: number | null;
-  hasHome: boolean;
 }
 
 /** What makes a Jobber visit this programme's; the same phrase `TBP_TITLE_MARKER` looks for. */
@@ -586,7 +585,7 @@ export class TbpStopEditService {
       }),
       this.prisma.technicianPlanningProfile.findMany({
         where: { organizationId },
-        select: { technicianId: true, isPlannable: true, tbpZoneOrder: true, homeLatitude: true, homeLongitude: true },
+        select: { technicianId: true, isPlannable: true, tbpZoneOrder: true },
       }),
     ]);
     const profileOf = new Map(profiles.map((row) => [row.technicianId, row]));
@@ -597,7 +596,6 @@ export class TbpStopEditService {
           id: person.id,
           displayName: person.displayName,
           crewOrder: profile?.isPlannable && profile.tbpZoneOrder != null ? profile.tbpZoneOrder : null,
-          hasHome: profile?.homeLatitude != null && profile.homeLongitude != null,
         };
       })
       .sort(

@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { businessToday } from '@/lib/clock';
 import { EMPTY, formatDistance, formatScheduledDate } from '@/lib/format';
-import { dayClock, formatClock, formatMinutes, formatShortDay, leaveHomeAt } from '@/lib/planning';
+import { dayClock, dayStartName, formatClock, formatMinutes, formatShortDay, leaveAt } from '@/lib/planning';
 import {
   usePlanTechnicians,
   usePlanningMutations,
@@ -179,7 +179,6 @@ export function PlanStopDialog({
         : (technicians.data ?? []).map((technician) => ({
             value: technician.id,
             label: technician.displayName,
-            hint: technician.hasHome ? undefined : 'No home on file: the day starts at the first visit',
             group: technician.crewOrder === null ? 'Other technicians' : 'Benefit-package crew',
           })),
     [dayGroups, technicians.data],
@@ -246,11 +245,12 @@ export function PlanStopDialog({
       return timing.entry.driveSecondsForecast === null
         ? 'Not measured'
         : `${timing.entry.driveMinutes} min from stop ${timing.index}`;
-    if (day?.homeDriveSeconds !== null && day?.homeDriveSeconds !== undefined)
-      return `${formatMinutes(day.homeDriveSeconds / 60)} from home${
+    const from = day ? dayStartName(day.originKind) : null;
+    if (from && day?.homeDriveSeconds !== null && day?.homeDriveSeconds !== undefined)
+      return `${formatMinutes(day.homeDriveSeconds / 60)} from ${from}${
         day.homeDriveMeters ? ` · ${formatDistance(day.homeDriveMeters)}` : ''
-      } · leave ${formatClock(leaveHomeAt(timing.entry.arrives, day.homeDriveSeconds))}`;
-    return day?.originKind === 'HOME' ? 'From home, not measured' : 'First job of the day';
+      } · leave ${formatClock(leaveAt(timing.entry.arrives, day.homeDriveSeconds))}`;
+    return from ? `From ${from}, not measured` : 'First job of the day';
   })();
 
   return (

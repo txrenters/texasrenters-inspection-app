@@ -127,12 +127,22 @@ export class TechnicianController {
    * must never be handed.
    */
   @Get('route')
-  technicianRoute(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
-    return this.routes.planDay(
+  async technicianRoute(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
+    const route = await this.routes.planDay(
       request.user.organizationId,
       request.user.id,
       businessDayFromQuery(date),
     );
+    /**
+     * Sent as `HOME` to the phones, which do not know `OFFICE` (2026-10-22).
+     *
+     * Every app built before then parses `originKind` against the kinds it
+     * names and throws on any other, which drops the whole route and the
+     * day's suggested order with it -- the failure #220 fixed for
+     * `recordedAt`. No phone reads the kind beyond that parse, so the name it
+     * gets changes nothing it shows. Remove once every phone accepts `OFFICE`.
+     */
+    return route.originKind === 'OFFICE' ? { ...route, originKind: 'HOME' as const } : route;
   }
 
   /**
@@ -257,9 +267,10 @@ export class TechnicianController {
   }
 
   /**
-   * The technician's own home, which is where their day's route starts before
-   * they set off. Their own only -- there is no id in the path, so one
-   * technician cannot read or change another's.
+   * The technician's own home address. Their day's route started here until
+   * 2026-10-22; it starts at the office now, and only planned days measured
+   * before then are still drawn from it. Their own only -- there is no id in
+   * the path, so one technician cannot read or change another's.
    */
   @Get('home')
   home(@Req() request: AuthenticatedRequest) {

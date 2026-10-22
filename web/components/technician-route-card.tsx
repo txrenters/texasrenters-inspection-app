@@ -113,7 +113,7 @@ export function TechnicianRouteCard({
                 know before they are late, not after.
 
                 Where it was measured from is said in words. It used to be the
-                age of the position, which a route from home does not have --
+                age of the position, which a route from the office does not have --
                 it printed "Measured from —".
 
                 Only alongside times that exist: without a route there is

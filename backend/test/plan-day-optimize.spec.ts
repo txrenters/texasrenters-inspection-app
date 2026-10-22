@@ -1,4 +1,5 @@
 import { InspectionType, TbpStopStatus } from '@prisma/client';
+import { OFFICE } from '@texasrenters/shared';
 
 import type { TechnicianSkillsService } from '../src/admin/technician-skills.service';
 import type { PrismaService } from '../src/common/prisma.service';
@@ -9,30 +10,29 @@ import type { OsrmClient } from '../src/routing/osrm.client';
 
 /**
  * Optimize route on the Days view (the office, 2026-10-02): the days stay as
- * grouped, and each is put in the order that drives least from the
- * technician's home -- "just optimize the route and drive time", without the
+ * grouped, and each is put in the order that drives least from the office
+ * (2026-10-22) -- "just optimize the route and drive time", without the
  * twenty-minute rule a build orders by.
  */
 
 type Point = { latitude: number; longitude: number };
 
-const HOME = { latitude: 29.7, longitude: -95.37 };
 /** Three properties on one day, told apart by latitude. */
 const AT = { a: 29.71, b: 29.72, c: 29.73 } as const;
 const nameOf = (point: Point) =>
-  point.latitude === HOME.latitude ? 'home' : (Object.entries(AT).find(([, latitude]) => latitude === point.latitude)?.[0] ?? '?');
+  point.latitude === OFFICE.latitude ? 'office' : (Object.entries(AT).find(([, latitude]) => latitude === point.latitude)?.[0] ?? '?');
 
 /**
- * The least driving from home is home, a, b, c: 100 + 1,300 + 100 seconds. Its
+ * The least driving from the office is office, a, b, c: 100 + 1,300 + 100 seconds. Its
  * a-to-b leg is 21 minutes, over the build's twenty. The only order without a
- * leg over twenty minutes is home, a, c, b: 100 + 1,000 + 1,000, ten minutes
+ * leg over twenty minutes is office, a, c, b: 100 + 1,000 + 1,000, ten minutes
  * more driving. A build takes that one; Optimize route takes the shorter.
  */
 const SECONDS: Record<string, Record<string, number>> = {
-  home: { a: 100, b: 1500, c: 1500 },
-  a: { home: 100, b: 1300, c: 1000 },
-  b: { home: 1500, a: 1300, c: 100 },
-  c: { home: 1500, a: 1000, b: 1000 },
+  office: { a: 100, b: 1500, c: 1500 },
+  a: { office: 100, b: 1300, c: 1000 },
+  b: { office: 1500, a: 1300, c: 100 },
+  c: { office: 1500, a: 1000, b: 1000 },
 };
 
 const stopRow = (id: string, at: keyof typeof AT, positionInDay: number | null = null) => ({
@@ -65,9 +65,6 @@ function build(options: { stops?: ReturnType<typeof stopRow>[]; days?: { date: D
       upsert: dayUpsert,
       deleteMany: dayDeleteMany,
     },
-    technicianPlanningProfile: {
-      findFirst: jest.fn().mockResolvedValue({ homeLatitude: HOME.latitude, homeLongitude: HOME.longitude }),
-    },
   };
   const prisma = { ...client, $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(client) } as unknown as PrismaService;
   const mapbox = {
@@ -95,13 +92,13 @@ function build(options: { stops?: ReturnType<typeof stopRow>[]; days?: { date: D
 const DAY = { date: '2026-12-17', technicianId: 'tech-1' };
 
 describe('optimizing a day’s route', () => {
-  it('orders the day from home for the least driving, even through a leg over twenty minutes', async () => {
+  it('orders the day from the office for the least driving, even through a leg over twenty minutes', async () => {
     const { service, order, dayUpsert } = build();
 
     const [day] = await service.optimizeDays('org-1', 'plan-1', [DAY]);
 
     expect(order()).toEqual(['s-a', 's-b', 's-c']);
-    // The driving shown is between the properties; the drive from home is apart.
+    // The driving shown is between the properties; the drive from the office is apart.
     expect(day).toEqual({
       dayId: 'day-1',
       date: '2026-12-17',

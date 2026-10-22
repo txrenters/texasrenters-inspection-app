@@ -396,31 +396,26 @@ describe('a property near another zone’s day', () => {
   });
 });
 
-/** Zone 5 is some 200 km from every home (2026-09-18): "a 3-day trip for one person". */
+/** Zone 5 is some 200 km from the office (2026-09-18): "a 3-day trip for one person". */
 describe('a zone too far for a day’s drive', () => {
   /** Nacogdoches-ish, 30 visits on top of each other: three days of ten. */
   const far = Array.from({ length: 30 }, (_, index) =>
     at(`far${index + 1}`, 100 + index, 31.6 + (index % 6) * 0.004, -94.65 + Math.floor(index / 6) * 0.004, { zone: '5' }),
   );
   const local = cluster('local', 9, 1, { zone: '1' });
-  const homes = new Map([
-    ['moses', { latitude: 29.76, longitude: -95.37 }],
-    ['kevin', { latitude: 30.3, longitude: -95.0 }],
-  ]);
   const owners = { zoneTechnicians: { '1': 'moses' } };
 
-  it('is a trip of back-to-back days for the crew member living nearest it', () => {
+  it('is a trip of back-to-back days for the first of the crew, as everybody sets out from the office', () => {
     const { crews, unplaced } = layoutEveryDay([...local, ...far], days(10, ['moses', 'kevin'], owners), {
-      homes,
       tripZones: ['5'],
     });
 
     expect(unplaced).toEqual([]);
     const trip = crews.filter((day) => day.trip);
     expect(trip.map((day) => `${day.date} ${day.technicianId} day ${day.trip!.day} of ${day.trip!.days}`)).toEqual([
-      '2026-10-01 kevin day 1 of 3',
-      '2026-10-02 kevin day 2 of 3',
-      '2026-10-03 kevin day 3 of 3',
+      '2026-10-01 moses day 1 of 3',
+      '2026-10-02 moses day 2 of 3',
+      '2026-10-03 moses day 3 of 3',
     ]);
     for (const day of trip) {
       expect(day.stops).toHaveLength(10);
@@ -437,14 +432,14 @@ describe('a zone too far for a day’s drive', () => {
       ...owners,
     }));
 
-    const { crews } = layoutEveryDay([...local, ...far], planned, { homes, tripZones: ['5'] });
+    const { crews } = layoutEveryDay([...local, ...far], planned, { tripZones: ['5'] });
 
     // 1 October is on its own: the trip needs three days in a row.
     expect(crews.filter((day) => day.trip).map((day) => day.date)).toEqual(['2026-10-06', '2026-10-07', '2026-10-08']);
   });
 
   it('says so when no run of days in a row is free for anyone', () => {
-    const { unplaced } = layoutEveryDay(far, days(1, ['moses', 'kevin'], owners), { homes, tripZones: ['5'] });
+    const { unplaced } = layoutEveryDay(far, days(1, ['moses', 'kevin'], owners), { tripZones: ['5'] });
 
     expect(unplaced).toHaveLength(30);
     expect(new Set(unplaced.map((entry) => entry.reason))).toEqual(new Set(['NO_TRIP_DAYS']));
@@ -831,20 +826,15 @@ describe('a quarter built from the office’s own groups', () => {
       at(`far${index + 1}`, 100 + index, 31.6 + (index % 5) * 0.004, -94.65 + Math.floor(index / 5) * 0.004, { zone: '5' }),
     );
     const drawn = [ids(far).slice(0, 11), ids(far).slice(11)];
-    const homes = new Map([
-      ['moses', { latitude: 29.76, longitude: -95.37 }],
-      ['kevin', { latitude: 30.3, longitude: -95.0 }],
-    ]);
 
     const { crews, unplaced } = layoutEveryDay(far, days(10, ['moses', 'kevin'], { zoneTechnicians: { '1': 'moses' } }), {
-      homes,
       tripZones: ['5'],
       presetGroups: drawn,
     });
 
     expect(unplaced).toEqual([]);
     const trip = crews.filter((day) => day.trip);
-    expect(trip.map((day) => day.technicianId)).toEqual(['kevin', 'kevin']);
+    expect(trip.map((day) => day.technicianId)).toEqual(['moses', 'moses']);
     expect(trip.map(ofDay)).toEqual(expect.arrayContaining(drawn));
   });
 });

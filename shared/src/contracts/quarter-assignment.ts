@@ -31,7 +31,7 @@
  *   other property that will get more than 20mins of drive time". A property
  *   further than that from every visit left is not added to make up a nine, so
  *   a day holds fewer only where the properties are that far apart. The drive
- *   from home is not a leg between properties and is not held to it.
+ *   from the office is not a leg between properties and is not held to it.
  * - **The whole crew, every planned day, from the first** (2026-09-18), until
  *   every visit has a day: "all 3 should have schedules per day, it doesn't
  *   matter if they can finish all the TBP in a month". So the visits are done
@@ -73,7 +73,7 @@
  */
 
 import type { Quarter } from './quarter-plan.js';
-import { haversineMeters } from './route-plan.js';
+import { haversineMeters, OFFICE } from './route-plan.js';
 import { byZoneNumber } from './zone-rotation.js';
 
 /** A stop that can be placed: it has a rotation position, a location and a length. */
@@ -184,7 +184,7 @@ export const DEFAULT_DAY_LIMITS: DayLimits = {
  * The most stops one day can hold, whatever the office's own maximum says.
  *
  * Google's limit rather than the office's: a day is routed with one matrix of
- * every stop and the home against every other, and a matrix over 625 elements
+ * every stop and the office against every other, and a matrix over 625 elements
  * is refused.
  */
 export const MAX_STOPS_PER_DAY = 24;
@@ -356,9 +356,7 @@ export interface LayoutOptions {
    * takes the visits nearest it, from any zone.
    */
   anchors?: readonly DayAnchor[];
-  /** Where each crew member lives: for who makes a trip, and the trip's first day. */
-  homes?: ReadonlyMap<string, Point>;
-  /** Zones too far for a day's drive from home, laid out as trips. */
+  /** Zones too far for a day's drive from the office, laid out as trips. */
   tripZones?: readonly string[];
   /**
    * The Mondays kept for rescheduled visits, as days -- who works them and on
@@ -1144,11 +1142,11 @@ function chainedGroups(groups: readonly Group[], start: Point | undefined, drive
 /**
  * A far zone's visits as a trip: back-to-back days of one crew member.
  *
- * The visits are grouped as any are, a day a group. The crew member living
- * nearest the zone goes, on the first run of days in a row they are free and
- * qualified for all of it; with no run for them, the next nearest. The group
- * nearest their home is the day driven down, and each day after takes the
- * group nearest the one before.
+ * The visits are grouped as any are, a day a group. The crew goes in its own
+ * order, the first on the first run of days in a row they are free and
+ * qualified for all of it: everybody sets out from the office (2026-10-22), so
+ * nobody lives nearer it. The group nearest the office is the day driven down,
+ * and each day after takes the group nearest the one before.
  */
 function planTrip(
   zone: string,
@@ -1157,21 +1155,14 @@ function planTrip(
   crew: readonly string[],
   context: {
     rules: GroupRules;
-    homes: ReadonlyMap<string, Point> | undefined;
     unavailable: (key: string) => boolean;
     /** The trip's days, grouped already: the office's own groups (`presetGroups`). */
     groups?: Group[];
   },
 ): AssignedCrew[] | null {
-  const { rules, homes } = context;
+  const { rules } = context;
   const groups = context.groups ?? groupsOf(members, rules);
-  const middle = middleOf(members);
-  const fromHome = (technicianId: string) => {
-    const home = homes?.get(technicianId);
-    return home ? haversineMeters(home, middle) : Number.POSITIVE_INFINITY;
-  };
-  // Stable, so the crew's own order settles a tie and puts anyone without a home last.
-  for (const technicianId of [...crew].sort((left, right) => fromHome(left) - fromHome(right))) {
+  for (const technicianId of crew) {
     const run = firstRun(
       days,
       groups.length,
@@ -1180,7 +1171,7 @@ function planTrip(
         members.every((stop) => qualified(day, technicianId, stop)),
     );
     if (!run) continue;
-    const trip = chainedGroups(groups, homes?.get(technicianId), rules.drive);
+    const trip = chainedGroups(groups, OFFICE, rules.drive);
     return trip.map((group, index) => ({
       date: run[index]!.date,
       technicianId,
@@ -1575,7 +1566,6 @@ export function layoutEveryDay(
     }
     const trip = planTrip(zone, members, days, crew, {
       rules: { ...rules, zoned: false },
-      homes: options.homes,
       unavailable: (key) => Boolean(options.taken?.has(key)) || anchored.has(key) || onTrip.has(key),
       ...(presets ? { groups: [...tripGroups, ...groupsOf(looseHere, { ...rules, zoned: false })] } : {}),
     });

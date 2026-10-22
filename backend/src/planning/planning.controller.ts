@@ -19,6 +19,8 @@ import { InspectionStatus, InspectionType, PlanOriginKind, type Prisma, TbpPlanS
 import {
   compactGroups,
   haversineMeters,
+  OFFICE,
+  OFFICE_ADDRESS,
   type PlannableStop,
   type Quarter,
   quarterLabel,
@@ -78,32 +80,32 @@ const MAX_DRAWN_DAYS = 200;
 
 type LatLng = [number, number];
 
-/** A drawn day: the home leg apart from the drive between its properties, which is the one the limit counts. */
+/** A drawn day: the leg from its start apart from the drive between its properties, which is the one the limit counts. */
 interface DrawnDay {
   geometry: LatLng[];
-  homeGeometry: LatLng[];
+  startGeometry: LatLng[];
   legs: { durationSeconds: number; distanceMeters: number }[];
   /** Which router drew it, cached with the line so a hit does not claim the wrong one. */
   source: 'MAPBOX_FREE_FLOW' | 'GOOGLE_TRAFFIC_AWARE';
 }
 
 /**
- * A road line from home through a day's stops, cut where it reaches the first.
+ * A road line from the day's start through its stops, cut where it reaches the first.
  *
- * One Google call draws the whole drive, and the console shows the home leg
+ * One Google call draws the whole drive, and the console shows the start leg
  * differently: it is driven, and not counted. Google snaps a stop to its road,
  * so the line passes the first stop rather than through its coordinates, and
  * can pass it again later in the day. So the cut is found by distance along the
- * line -- the home leg's own length, as Google measured it -- and settled on the
+ * line -- the start leg's own length, as Google measured it -- and settled on the
  * vertex nearest the stop around there. Without a length, it is the first
  * vertex beside the stop, or the nearest one on the whole line.
  */
 export function splitAtFirstStop(
   path: readonly LatLng[],
   first: { latitude: number; longitude: number },
-  homeLegMeters?: number,
+  startLegMeters?: number,
 ) {
-  if (path.length < 2) return { homeGeometry: [...path], geometry: [] as LatLng[] };
+  if (path.length < 2) return { startGeometry: [...path], geometry: [] as LatLng[] };
   const toStop = ([latitude, longitude]: LatLng) => haversineMeters({ latitude, longitude }, first);
   const nearestIn = (from: number, to: number) => {
     let best = from;
@@ -112,7 +114,7 @@ export function splitAtFirstStop(
   };
 
   let cut: number;
-  if (homeLegMeters && homeLegMeters > 0) {
+  if (startLegMeters && startLegMeters > 0) {
     // Metres along the line to each vertex. A drawn line runs a little short of
     // the road it follows, so the stop is looked for within a margin of the
     // leg's length -- never far enough to reach a later pass by the same stop.
@@ -121,16 +123,16 @@ export function splitAtFirstStop(
       const [latitude, longitude] = path[index - 1]!;
       along.push(along[index - 1]! + haversineMeters({ latitude, longitude }, { latitude: path[index]![0], longitude: path[index]![1] }));
     }
-    const margin = Math.max(250, homeLegMeters * 0.05);
-    const near = along.flatMap((metres, index) => (Math.abs(metres - homeLegMeters) <= margin ? [index] : []));
+    const margin = Math.max(250, startLegMeters * 0.05);
+    const near = along.flatMap((metres, index) => (Math.abs(metres - startLegMeters) <= margin ? [index] : []));
     cut = near.length
       ? near.reduce((best, index) => (toStop(path[index]!) < toStop(path[best]!) ? index : best), near[0]!)
-      : Math.max(0, along.findIndex((metres) => metres >= homeLegMeters));
+      : Math.max(0, along.findIndex((metres) => metres >= startLegMeters));
   } else {
     cut = path.findIndex((point) => toStop(point) <= 60);
     if (cut === -1) cut = nearestIn(0, path.length - 1);
   }
-  return { homeGeometry: path.slice(0, cut + 1), geometry: path.slice(cut) };
+  return { startGeometry: path.slice(0, cut + 1), geometry: path.slice(cut) };
 }
 
 @ApiTags(PLANNING_TAG)
@@ -672,11 +674,12 @@ export class PlanningController {
    * coordinator looks at a handful. With no Google key the line is empty and
    * the console joins the stops with straight lines, saying so.
    *
-   * The technician's home is where the day starts -- the "From" on the map --
-   * and is read from the planning profile at the time of drawing, the one place
-   * the address is kept. A day routed from it starts the line there, with the
-   * leg to the first stop returned apart; a day built before days started from
-   * home still shows the home, with no leg drawn to it.
+   * The office is where the day starts -- the "From" on the map (2026-10-22).
+   * A day routed from it starts the line there, with the leg to the first stop
+   * returned apart. A day built before then was routed from the technician's
+   * home, read from the planning profile at the time of drawing, the one place
+   * the address is kept; it is drawn from there until it is measured again. A
+   * day that starts at its first job -- a trip's later days -- has no start.
    */
   @Get('quarters/:planId/days/:dayId/route')
   @RequirePermissions('planning:read')
@@ -717,26 +720,18 @@ export class PlanningController {
         const at = propertyPosition(stop.building);
         return at ? [{ id: stop.id, ...at }] : [];
       });
-    const profile = await this.prisma.technicianPlanningProfile.findFirst({
-      where: { technicianId: day.technicianId, organizationId },
-      select: { homeLatitude: true, homeLongitude: true, homeGeocodedFor: true },
-    });
-    const home =
-      profile?.homeLatitude != null && profile?.homeLongitude != null
-        ? {
-            latitude: Number(profile.homeLatitude),
-            longitude: Number(profile.homeLongitude),
-            address: profile.homeGeocodedFor ?? null,
-          }
-        : null;
-    // Only a day routed from home drives from it.
-    const start = day.originKind === PlanOriginKind.HOME ? home : null;
-    const undrawn = { source: null, geometry: [], homeGeometry: [], legs: [], home };
+    const start =
+      day.originKind === PlanOriginKind.OFFICE
+        ? { ...OFFICE, address: OFFICE_ADDRESS }
+        : day.originKind === PlanOriginKind.HOME
+          ? await this.homeOf(organizationId, day.technicianId)
+          : null;
+    const undrawn = { source: null, geometry: [], startGeometry: [], legs: [], start };
     if (points.length === 0 || points.length + (start ? 1 : 0) < 2) return undrawn;
 
     const key = `${day.id}:${start ? `${start.latitude},${start.longitude};` : ''}${points.map((point) => point.id).join(',')}`;
     const cached = this.drawnDays.get(key);
-    if (cached) return { home, ...cached };
+    if (cached) return { start, ...cached };
 
     const date = day.date.toISOString().slice(0, 10);
     const waypoints = start ? [start, ...points] : points;
@@ -764,10 +759,25 @@ export class PlanningController {
           legs: drawn.legs.slice(1),
           source,
         }
-      : { geometry: path, homeGeometry: [], legs: drawn.legs, source };
+      : { geometry: path, startGeometry: [], legs: drawn.legs, source };
     if (this.drawnDays.size >= MAX_DRAWN_DAYS) this.drawnDays.delete(this.drawnDays.keys().next().value!);
     this.drawnDays.set(key, line);
-    return { home, ...line };
+    return { start, ...line };
+  }
+
+  /** A technician's home, where a day routed before 2026-10-22 started; null with none on file. */
+  private async homeOf(organizationId: string, technicianId: string) {
+    const profile = await this.prisma.technicianPlanningProfile.findFirst({
+      where: { technicianId, organizationId },
+      select: { homeLatitude: true, homeLongitude: true, homeGeocodedFor: true },
+    });
+    return profile?.homeLatitude != null && profile?.homeLongitude != null
+      ? {
+          latitude: Number(profile.homeLatitude),
+          longitude: Number(profile.homeLongitude),
+          address: profile.homeGeocodedFor ?? null,
+        }
+      : null;
   }
 
   /**

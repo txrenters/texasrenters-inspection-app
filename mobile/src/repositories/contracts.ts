@@ -172,12 +172,12 @@ export interface DayRouteLeg {
 /** One point of a drawn line, **`[latitude, longitude]`**. Latitude first, always. */
 export type LatLngPoint = [number, number];
 
-/** Which kind of starting point a route was drawn from. */
-export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'HOME';
+/** Which kind of starting point a route was drawn from; `HOME` is the office, from a server talking to older phones. */
+export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'OFFICE' | 'HOME';
 
 export interface TechnicianDayRoute {
   technicianId: string;
-  /** `recordedAt` is null for a route from home, which has no moment to date. */
+  /** `recordedAt` is null for a route from the office, which has no moment to date. */
   origin: { latitude: number; longitude: number; recordedAt: string | null } | null;
   stops: DayRouteStop[];
   legs: DayRouteLeg[];
@@ -205,7 +205,7 @@ export interface TechnicianDayRoute {
   geometry: LatLngPoint[];
   /** The day so far: finished stops in order, and the drive through them. */
   history: { stops: DayRouteStop[]; geometry: LatLngPoint[] };
-  /** A route from home is a different claim from a route from where they stand. */
+  /** A route from the office is a different claim from a route from where they stand. */
   originKind?: RouteOriginKind | null;
   /** A position was reported and refused -- not the same as none being reported. */
   originOutsideServiceArea: boolean;

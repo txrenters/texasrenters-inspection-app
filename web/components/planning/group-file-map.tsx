@@ -117,22 +117,22 @@ const fromOrigin = (row: GroupFileRow, group: FileGroup | null) =>
   Boolean(group?.origin) && group!.rows[0]?.rowNumber === row.rowNumber;
 
 /** What a pin says when it is clicked. */
-/** "From stop 2: 8 min · 5.1 km", the drive into this stop along the roads -- or "From home" into a day's first. */
-function LegInto({ row, leg, fromHome = false }: { row: GroupFileRow; leg: RoadLeg | null; fromHome?: boolean }) {
+/** "From stop 2: 8 min · 5.1 km", the drive into this stop along the roads -- or "From office" into a day's first. */
+function LegInto({ row, leg, from = null }: { row: GroupFileRow; leg: RoadLeg | null; from?: string | null }) {
   if (!leg || row.stop === null) return null;
-  // The drive from home is not held to the 15 minutes: it is not the day's driving.
-  const slow = !fromHome && leg.durationS >= SLOW_LEG_S;
+  // The drive from the day's start is not held to the 15 minutes: it is not the day's driving.
+  const slow = !from && leg.durationS >= SLOW_LEG_S;
   return (
     <p className={slow ? 'text-warning font-medium' : undefined}>
-      {fromHome ? 'From home' : `From stop ${row.stop - 1}`}: {formatDrive(leg.durationS)} ·{' '}
+      {from ? `From ${from.toLowerCase()}` : `From stop ${row.stop - 1}`}: {formatDrive(leg.durationS)} ·{' '}
       <span className="text-road-distance font-medium">{formatKm(leg.distanceM)}</span>
       {slow ? ' · long leg' : null}
     </p>
   );
 }
 
-/** Where a planned day starts: the technician's home, labelled "From" as the office calls it. */
-function HomePin() {
+/** Where a planned day starts: the office, labelled "From" as the office calls it. */
+function StartPin() {
   return (
     <svg aria-hidden className="drop-shadow-sm" height="28" viewBox="0 0 66 28" width="66">
       <rect className="fill-map-technician" height="24" rx="12" stroke="#fff" strokeWidth="2" width="62" x="2" y="2" />
@@ -173,7 +173,7 @@ function RowDetails({ row, group, leg }: { row: GroupFileRow; group: FileGroup |
               Stop {row.stop} of {group.size}
             </p>
           )}
-          <LegInto fromHome={fromOrigin(row, group)} leg={leg} row={row} />
+          <LegInto from={fromOrigin(row, group) ? (group?.origin?.name ?? null) : null} leg={leg} row={row} />
         </>
       ) : (
         <p className="text-muted-foreground">In no group</p>
@@ -216,7 +216,7 @@ function HoverDetails({ row, group, leg }: { row: GroupFileRow; group: FileGroup
         {group ? `${groupTitle(group)} · stop ${row.stop}` : 'In no group'}
         {row.approximate ? ' · approximate location' : ''}
       </p>
-      <LegInto fromHome={fromOrigin(row, group)} leg={leg} row={row} />
+      <LegInto from={fromOrigin(row, group) ? (group?.origin?.name ?? null) : null} leg={leg} row={row} />
     </div>
   );
 }
@@ -280,8 +280,8 @@ function GroupFileLayers({
 }) {
   const { box, zoom } = useSettledView();
   const casing = useMapStroke('map-route-casing');
-  /** The drive from home, in the grey of a finished leg: shown apart from the day's driving, as on every day map. */
-  const homeColor = useMapStroke('map-route-done-line');
+  /** The drive from the day's start, in the grey of a finished leg: shown apart from the day's driving, as on every day map. */
+  const startColor = useMapStroke('map-route-done-line');
   const warning = useMapStroke('text-destructive');
   const amber = useMapStroke('text-warning');
   /** The road itself, in the purple-blue every road distance is written in (the office, 2026-09-30). */
@@ -330,7 +330,7 @@ function GroupFileLayers({
       const route = view?.status === 'ok' && view.route.legs.length === legCount(group) ? view.route : null;
       if (!route) return [];
       return route.legs.flatMap((leg, index) => {
-        const { from, to, fromStop, toStop } = legEnds(group, index);
+        const { from, to, fromStop, toStop, fromOrigin } = legEnds(group, index);
         const [longitude, latitude] =
           road ? midpointOf(legGeometry(route, index)) : [(from.longitude + to.longitude) / 2, (from.latitude + to.latitude) / 2];
         if (!legTimes.has(group.key) && reach && !inBox({ latitude, longitude }, reach)) return [];
@@ -342,7 +342,7 @@ function GroupFileLayers({
             from: fromStop,
             to: toStop,
             leg,
-            home: fromStop === 'Home',
+            fromOrigin,
             color: calmColor(group.color.fill),
             faded: Boolean(manual?.dimOthers && group.key !== manual.activeKey),
           },
@@ -426,8 +426,8 @@ function GroupFileLayers({
         };
 
         const features = [
-          // The drive from home, apart from the day's own driving.
-          ...(before ? [lineFeature(leg(0), { ...properties, kind: drawRoad ? 'home' : 'home-straight' })] : []),
+          // The drive from the day's start, apart from the day's own driving.
+          ...(before ? [lineFeature(leg(0), { ...properties, kind: drawRoad ? 'start' : 'start-straight' })] : []),
           ...(group.rows.length < 2
             ? []
             : [
@@ -451,7 +451,7 @@ function GroupFileLayers({
             : group.longHop + before;
           features.push(lineFeature(leg(hop), { ...properties, kind: 'hop' }));
         }
-        // The drive from home is not the day's driving, and is not held to the 15 minutes.
+        // The drive from the day's start is not the day's driving, and is not held to the 15 minutes.
         if (slowLegs && route)
           route.legs.forEach((entry, index) => {
             if (index >= before && entry.durationS >= SLOW_LEG_S)
@@ -501,7 +501,7 @@ function GroupFileLayers({
         {/* A pale casing under the colour, as every route here has: a thin line
             on its own disappears into the roads it crosses. */}
         <Layer
-          filter={['in', ['get', 'kind'], ['literal', ['route', 'road', 'home', 'home-straight']]]}
+          filter={['in', ['get', 'kind'], ['literal', ['route', 'road', 'start', 'start-straight']]]}
           id="group-file-route-casing"
           layout={{ visibility, 'line-cap': 'round', 'line-join': 'round' }}
           paint={{
@@ -525,21 +525,21 @@ function GroupFileLayers({
           }}
           type="line"
         />
-        {/* The drive from a planned day's home to its first stop, in grey: part
+        {/* The drive from a planned day's start to its first stop, in grey: part
             of the day as driven, and not the day's driving the figures count.
             Dashed when it is a straight line rather than the road. */}
         <Layer
-          filter={['==', ['get', 'kind'], 'home']}
-          id="group-file-home-line"
+          filter={['==', ['get', 'kind'], 'start']}
+          id="group-file-start-line"
           layout={{ visibility, 'line-cap': 'round', 'line-join': 'round' }}
-          paint={{ 'line-color': homeColor, 'line-opacity': dimmed(1), 'line-width': 3 }}
+          paint={{ 'line-color': startColor, 'line-opacity': dimmed(1), 'line-width': 3 }}
           type="line"
         />
         <Layer
-          filter={['==', ['get', 'kind'], 'home-straight']}
-          id="group-file-home-straight"
+          filter={['==', ['get', 'kind'], 'start-straight']}
+          id="group-file-start-straight"
           layout={{ visibility, 'line-join': 'round' }}
-          paint={{ 'line-color': homeColor, 'line-dasharray': [2, 1.5], 'line-opacity': dimmed(1), 'line-width': 2 }}
+          paint={{ 'line-color': startColor, 'line-dasharray': [2, 1.5], 'line-opacity': dimmed(1), 'line-width': 2 }}
           type="line"
         />
         {/* The road itself: solid, and purple-blue whatever the group -- the
@@ -622,8 +622,8 @@ function GroupFileLayers({
         </Marker>
       ))}
 
-      {/* Where a planned day starts: under the stops, so a stop at the
-          technician's own door is still the one clicked. */}
+      {/* Where a planned day starts: under the stops, so a stop next to the
+          office is still the one clicked. */}
       {groups.flatMap((group) =>
         group.origin
           ? [
@@ -635,7 +635,7 @@ function GroupFileLayers({
                 style={{ zIndex: 780 }}
               >
                 <span style={faded(group) ? { opacity: DIMMED } : undefined} title={group.origin.title}>
-                  <HomePin />
+                  <StartPin />
                 </span>
               </Marker>,
             ]
@@ -678,7 +678,7 @@ function GroupFileLayers({
           and letting every click through to what is under it. Amber from 15
           minutes, as the leg itself is. */}
       {legLabels.map((label) => {
-        const slow = !label.home && label.leg.durationS >= SLOW_LEG_S;
+        const slow = !label.fromOrigin && label.leg.durationS >= SLOW_LEG_S;
         return (
           <Marker
             anchor="center"
@@ -691,7 +691,7 @@ function GroupFileLayers({
               className={`bg-card/95 rounded-full border-2 px-1.5 py-px text-[10px] leading-tight font-semibold whitespace-nowrap shadow-sm ${
                 slow
                   ? 'border-warning text-warning'
-                  : label.home
+                  : label.fromOrigin
                     ? 'border-muted-foreground/60 text-muted-foreground'
                     : 'border-road-distance text-foreground'
               }`}

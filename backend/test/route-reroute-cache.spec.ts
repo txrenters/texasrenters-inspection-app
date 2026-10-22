@@ -1,3 +1,5 @@
+import { OFFICE } from '@texasrenters/shared';
+
 import { MAX_DRAWN_ROUTES, RouteService } from '../src/routing/route.service';
 
 /**
@@ -11,7 +13,8 @@ import { MAX_DRAWN_ROUTES, RouteService } from '../src/routing/route.service';
  */
 
 const dec = (value: number) => ({ toNumber: () => value }) as never;
-const HOME = { latitude: 29.95, longitude: -95.55 };
+/** Where the handset reports from, when it does. */
+const PLACE = { latitude: 29.95, longitude: -95.55 };
 
 /** Noon in Texas. Every test here runs at this instant, whenever it really runs. */
 const NOW = Date.parse('2026-09-14T17:00:00.000Z');
@@ -73,9 +76,6 @@ function day(initial: string[]) {
           recordedAt: ping.recordedAt,
         };
       },
-    },
-    technicianPlanningProfile: {
-      findFirst: async () => ({ homeLatitude: dec(HOME.latitude), homeLongitude: dec(HOME.longitude) }),
     },
   };
   return { prisma, state };
@@ -180,15 +180,15 @@ describe('redrawing a route', () => {
     expect(calls.route).toBe(2);
   });
 
-  it('starts from home and says so', async () => {
+  it('starts at the office and says so', async () => {
     const { prisma } = day(['a']);
     const { client } = google();
     const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     const route = await service.planDay('org', 'tech', DAY);
 
-    expect(route.originKind).toBe('HOME');
-    expect(route.origin?.latitude).toBe(HOME.latitude);
+    expect(route.originKind).toBe('OFFICE');
+    expect(route.origin).toMatchObject({ latitude: OFFICE.latitude, longitude: OFFICE.longitude, recordedAt: null });
   });
 
   it('reuses a route drawn as context however old, until the day changes', async () => {
@@ -201,13 +201,13 @@ describe('redrawing a route', () => {
     const { client, calls } = google();
     const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
-    state.ping = { ...HOME, recordedAt: new Date(NOW - MINUTE) };
+    state.ping = { ...PLACE, recordedAt: new Date(NOW - MINUTE) };
     await service.planDay('org', 'tech', DAY, { follow: false });
 
     // Twenty minutes on and a kilometre off the line: a followed route redraws.
     const later = NOW + 20 * MINUTE;
     jest.spyOn(Date, 'now').mockReturnValue(later);
-    state.ping = { latitude: HOME.latitude + 0.01, longitude: HOME.longitude, recordedAt: new Date(later - MINUTE) };
+    state.ping = { latitude: PLACE.latitude + 0.01, longitude: PLACE.longitude, recordedAt: new Date(later - MINUTE) };
     const reused = await service.planDay('org', 'tech', DAY, { follow: false });
 
     expect(calls.route).toBe(1);
@@ -218,7 +218,7 @@ describe('redrawing a route', () => {
     expect(calls.route).toBe(2);
 
     // The same day, followed, redraws for the position as it always did.
-    state.ping = { latitude: HOME.latitude + 0.03, longitude: HOME.longitude, recordedAt: new Date(later - MINUTE) };
+    state.ping = { latitude: PLACE.latitude + 0.03, longitude: PLACE.longitude, recordedAt: new Date(later - MINUTE) };
     await service.planDay('org', 'tech', DAY);
     expect(calls.route).toBe(3);
   });
@@ -232,10 +232,10 @@ describe('redrawing a route', () => {
     const { client, calls } = google();
     const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
-    state.ping = { ...HOME, recordedAt: new Date(NOW - MINUTE) };
+    state.ping = { ...PLACE, recordedAt: new Date(NOW - MINUTE) };
     expect((await service.planDay('org', 'tech', DAY)).originKind).toBe('LIVE');
 
-    state.ping = { ...HOME, recordedAt: new Date(NOW - 20 * MINUTE) };
+    state.ping = { ...PLACE, recordedAt: new Date(NOW - 20 * MINUTE) };
     const quiet = await service.planDay('org', 'tech', DAY);
 
     expect(quiet.originKind).toBe('LAST_KNOWN');
@@ -255,7 +255,7 @@ describe('which day a route belongs to', () => {
 
     // The same position starts today's route, and has no business in the past.
     expect(today.originKind).toBe('LIVE');
-    expect(earlier.originKind).toBe('HOME');
+    expect(earlier.originKind).toBe('OFFICE');
   });
 });
 

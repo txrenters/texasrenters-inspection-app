@@ -4,7 +4,6 @@ import type { PrismaService } from '../src/common/prisma.service';
 import {
   QuarterPlannerService,
   dayGroupNames,
-  forUnassigned,
   routingSettings,
 } from '../src/planning/quarter-planner.service';
 
@@ -254,15 +253,6 @@ describe('a quarter sent out to nobody needs nobody chosen', () => {
     expect(() => routingSettings(SETTINGS, { technicianIds: [] }, Q4)).toThrow(
       'Choose the technicians to send out on the plan, or send its visits out unassigned.',
     );
-  });
-
-  it('starts nobody’s day at somebody’s front door', () => {
-    const roster = {
-      technicianIds: ['tech-1', 'tech-2'],
-      homes: new Map([['tech-1', { latitude: 29.7, longitude: -95.4 }]]),
-    };
-    expect(forUnassigned(roster, true)).toEqual({ technicianIds: ['tech-1', 'tech-2'], homes: new Map() });
-    expect(forUnassigned(roster, false)).toBe(roster);
   });
 
   it('names the days by group, in the crew’s order, and anyone else after them', () => {

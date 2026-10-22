@@ -7,10 +7,11 @@ import {
   attentionText,
   bookedInWords,
   dayClock,
+  dayStartName,
   formatClock,
   formatMinutes,
   formatShortDay,
-  leaveHomeAt,
+  leaveAt,
   limitState,
   parseCsv,
   planStartOptions,
@@ -35,7 +36,7 @@ describe('a planned day as a clock', () => {
     ]);
   });
 
-  /** The clock starts at the first job at nine; the drive from home comes before it (`leaveHomeAt`). */
+  /** The clock starts at the first job at nine; the drive from the office comes before it (`leaveAt`). */
   it('starts the clock at the first stop, whatever the drive to it', () => {
     expect(dayClock([{ onSiteMinutes: 30, driveSecondsForecast: 3600 }])[0]).toMatchObject({ arrives: 540, driveMinutes: 0 });
   });
@@ -59,9 +60,15 @@ describe('writing times', () => {
     expect(formatShortDay('2026-12-25')).toBe('Dec 25');
   });
 
-  it('says when to leave home: the drive from home before the first job at nine', () => {
-    expect(formatClock(leaveHomeAt(9 * 60, 35 * 60 + 20))).toBe('8:25 AM');
-    expect(formatClock(leaveHomeAt(9 * 60, 0))).toBe('9:00 AM');
+  it('says when to leave: the drive from the office before the first job at nine', () => {
+    expect(formatClock(leaveAt(9 * 60, 35 * 60 + 20))).toBe('8:25 AM');
+    expect(formatClock(leaveAt(9 * 60, 0))).toBe('9:00 AM');
+  });
+
+  it('names where a day sets out from: the office, a home before 2026-10-22, or nowhere', () => {
+    expect(dayStartName('OFFICE')).toBe('the office');
+    expect(dayStartName('HOME')).toBe('home');
+    expect(dayStartName('FIRST_STOP')).toBeNull();
   });
 });
 

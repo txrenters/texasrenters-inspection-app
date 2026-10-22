@@ -191,10 +191,10 @@ export function shortestRouteOrder(matrix: DurationMatrix): number[] {
 /**
  * The order to visit the stops in when the day starts at whichever comes first.
  *
- * A planned benefit-package day for a technician with no home on file starts
- * at its first job, so the best order is the shortest path through the stops
- * from *any* of them. Takes a matrix of the stops alone and returns indices
- * into it (`0..n-1`).
+ * A planned benefit-package day that does not start at the office -- a trip's
+ * later days, which start where the trip is -- starts at its first job, so the
+ * best order is the shortest path through the stops from *any* of them. Takes a
+ * matrix of the stops alone and returns indices into it (`0..n-1`).
  *
  * The solver above wants an origin, so it is given one that costs nothing to
  * leave: every first stop is then equally cheap to reach and only the drive
@@ -346,15 +346,15 @@ export interface TechnicianRoute {
   /**
    * Where the route starts, and when that position was true.
    *
-   * `recordedAt` is null for a home origin, which describes where somebody
-   * lives rather than where they were at a moment.
+   * `recordedAt` is null for the office, which is where the day starts rather
+   * than where somebody was at a moment.
    */
   origin: { latitude: number; longitude: number; recordedAt: string | null } | null;
   /**
    * Which kind of starting point the route was drawn from.
    *
-   * Carried so the console can say so. A route from somebody's house and a
-   * route from where they are standing are different claims, and drawing them
+   * Carried so the console can say so. A route from the office and a route
+   * from where they are standing are different claims, and drawing them
    * identically invites a dispatcher to act on the wrong one.
    */
   originKind: RouteOriginKind | null;
@@ -415,7 +415,7 @@ export interface TechnicianRoute {
   geometry: [number, number][];
   /**
    * The day so far: the stops already finished, in the order they were
-   * finished, and the drive through them from home when it is known.
+   * finished, and the drive through them from the office.
    *
    * `geometry` is empty with fewer than two points to join, or when it could
    * not be drawn; the stops are still there to mark. The map draws this grey
@@ -504,17 +504,33 @@ export interface TechnicianAssignments {
 }
 
 /**
+ * Where every technician's day starts: the office (2026-10-22).
+ *
+ * It was each technician's home until the crew started setting out from the
+ * office. A route before the day's first fix, the line through the stops
+ * already finished, and a planned benefit-package day's first drive all start
+ * here. Mapbox's rooftop point for the building.
+ */
+export const OFFICE: { readonly latitude: number; readonly longitude: number } = {
+  latitude: 29.776627,
+  longitude: -95.413955,
+};
+
+/** The office's address, as the map's "From" pin names it. */
+export const OFFICE_ADDRESS = '5225 Katy Fwy, Suite 545, Houston, TX 77007';
+
+/**
  * Where a day's route starts.
  *
  * - `LIVE` — the handset reported in the last few minutes, so this is where
  *   they are.
  * - `LAST_KNOWN` — they have reported today but gone quiet. They are out in the
  *   field somewhere, most likely indoors at a property, and the last place they
- *   were seen is a far better start than their house.
- * - `HOME` — nothing today yet. They have not set off, so the day starts from
- *   where they live.
+ *   were seen is a far better start than the office.
+ * - `OFFICE` — nothing today yet. They have not set off, so the day starts
+ *   where the crew sets out from (`OFFICE`).
  */
-export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'HOME';
+export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'OFFICE';
 
 /**
  * How recent a fix must be to count as where somebody *is*.
@@ -528,7 +544,7 @@ export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'HOME';
 export const LIVE_POSITION_WITHIN_MS = 5 * 60_000;
 
 /**
- * The starting point for a route, or null when there is none worth drawing.
+ * The starting point for a route.
  *
  * Not "the newest position, however old". That was the previous rule, and it
  * started Monday's route from wherever a phone happened to be at four in the
@@ -536,19 +552,17 @@ export const LIVE_POSITION_WITHIN_MS = 5 * 60_000;
  *
  * Only a fix from **today** can be a live or last-known origin: yesterday's
  * last position describes yesterday. Before the first fix of the day the route
- * starts from home, which is the only honest answer to "where does this day
- * begin" for somebody who has not begun it.
+ * starts at the office, where the crew sets out from.
  *
- * Never falls back from a position today to home. A technician whose phone has
- * gone quiet mid-afternoon inside a property is not at home, and redrawing their
- * remaining route from their front door would be confidently wrong.
+ * Never falls back from a position today to the office. A technician whose
+ * phone has gone quiet mid-afternoon inside a property is not at the office,
+ * and redrawing their remaining route from there would be confidently wrong.
  */
 export function chooseRouteOrigin(
   latestFix: { latitude: number; longitude: number; recordedAt: string } | null,
-  home: { latitude: number; longitude: number } | null,
   dayStart: Date,
   now: number = Date.now(),
-): { point: { latitude: number; longitude: number; recordedAt: string | null }; kind: RouteOriginKind } | null {
+): { point: { latitude: number; longitude: number; recordedAt: string | null }; kind: RouteOriginKind } {
   const fixAt = latestFix ? Date.parse(latestFix.recordedAt) : Number.NaN;
   const fixToday = Number.isFinite(fixAt) && fixAt >= dayStart.getTime() && fixAt <= now;
 
@@ -563,6 +577,5 @@ export function chooseRouteOrigin(
     };
   }
 
-  if (home) return { point: { ...home, recordedAt: null }, kind: 'HOME' };
-  return null;
+  return { point: { ...OFFICE, recordedAt: null }, kind: 'OFFICE' };
 }

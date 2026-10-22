@@ -434,7 +434,6 @@ export function PlanBuildDialog({
                       <span className="block truncate text-sm font-medium">{technician.displayName}</span>
                       <span className="text-muted-foreground block text-xs">
                         {technician.crewOrder === null ? 'Not on the benefit-package crew' : 'Benefit-package crew'}
-                        {technician.hasHome ? '' : ' · no home on file, so days start at the first visit'}
                       </span>
                     </span>
                   </label>

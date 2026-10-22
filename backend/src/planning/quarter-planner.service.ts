@@ -30,6 +30,7 @@ import {
   haversineMeters,
   layoutEveryDay,
   monthOfQuarter,
+  OFFICE,
   planStartRange,
   plannedVisitDaysOfQuarter,
   quarterEnd,
@@ -68,10 +69,10 @@ const DAY_STARTS_AT = '09:00:00';
 
 /**
  * How close, in seconds between the properties, a day's two driving orders
- * must be for the one that starts nearer home to win when the day is not
- * ordered from home itself (`orientTowardHome`).
+ * must be for the one that starts nearer the office to win when the day is not
+ * ordered from the office itself (`orientTowardStart`).
  */
-const HOME_END_TOLERANCE_SECONDS = 120;
+const START_END_TOLERANCE_SECONDS = 120;
 
 /**
  * How long a move-out or move-in anchoring a day counts on site: an hour (the
@@ -100,7 +101,7 @@ export interface PlanRoutingSettings {
   maxOnSiteMinutes?: number;
   /**
    * How far, by an estimated drive, a zone's middle may be from the nearest
-   * crew member's home for the crew to work the zone (`zoneCircle`). Not a limit
+   * office for the crew to work the zone (`zoneCircle`). Not a limit
    * on the day (the office, 2026-09-17).
    */
   maxDriveMinutes?: number;
@@ -118,7 +119,7 @@ export interface PlanRoutingSettings {
   maxStopsPerDay?: number;
   /**
    * The longest drive between two of a day's properties, in minutes: twenty
-   * (2026-09-19). The drive from home is not held to it.
+   * (2026-09-19). The drive from the office is not held to it.
    */
   maxLegMinutes?: number;
   /**
@@ -251,10 +252,10 @@ export interface RoutingSummary {
 /** The crew and the zones it goes round, for the console. */
 export interface PlanRotation {
   /** The benefit-package crew, in the order the zones go round. */
-  crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
+  crew: { technicianId: string; displayName: string | null }[];
   /** The zones the crew goes round, in order. */
   zones: string[];
-  /** Zones too far for a day's drive from every crew member's home: each is a trip. */
+  /** Zones too far for a day's drive from the office: each is a trip. */
   outOfReach: string[];
 }
 
@@ -287,15 +288,15 @@ interface MeasuredCrew {
   /** Between the day's properties, first to last. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
-  /** Whether the day was routed from the technician's home. */
-  fromHome: boolean;
-  /** Home to the first property, when measured. */
+  /** Whether the day was routed from the office: every day but a trip's later ones. */
+  fromOffice: boolean;
+  /** The office to the first property, when measured. */
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
   durationSource: DriveTimeSource | null;
 }
 
-/** A day put in the order that drives least from home (`optimizeDays`), and what that did to its driving. */
+/** A day put in the order that drives least from the office (`optimizeDays`), and what that did to its driving. */
 export interface OptimizedDay {
   dayId: string;
   /** `YYYY-MM-DD`. */
@@ -306,38 +307,22 @@ export interface OptimizedDay {
   /** Between its properties, before and after; null where nothing measured it. */
   driveSecondsBefore: number | null;
   driveSecondsAfter: number | null;
-  /** From home to its first property, before and after. */
+  /** From where it starts to its first property, before and after: a day built before 2026-10-22 started at home. */
   homeDriveSecondsBefore: number | null;
   homeDriveSecondsAfter: number | null;
 }
 
-/** The matrix a day was measured with: the home first when the day has one (`homeIndex`). */
+/** The matrix a day was measured with: the office first when the day starts there (`startIndex`). */
 interface DayMatrix {
   durations: number[][];
   distances: number[][] | null;
   index: Map<string, number>;
-  homeIndex: number | null;
+  startIndex: number | null;
 }
 
-/** The benefit-package crew, in the order the zones go round, and where each lives. */
+/** The benefit-package crew, in the order the zones go round. */
 export interface Roster {
   technicianIds: string[];
-  homes: Map<string, GeoPoint>;
-}
-
-/**
- * The crew a quarter sent out to nobody is laid out with.
- *
- * The office, 2026-09-29: ticking "Send the visits out unassigned" means nobody
- * has the visits -- not in Jobber and not on a phone -- until the office hands
- * them out in Jobber. The planner still needs days, and a day is keyed to a crew
- * member (`TbpQuarterPlanDay.technicianId`), so the crew is kept as the number
- * of days that run at once and the zone each group takes in a week: groups, not
- * people. What it drops is where they live. A day nobody has been given does
- * not start at somebody's front door; it starts at its own first visit.
- */
-export function forUnassigned(roster: Roster, unassigned: boolean): Roster {
-  return unassigned ? { technicianIds: roster.technicianIds, homes: new Map() } : roster;
 }
 
 /**
@@ -390,10 +375,10 @@ export class QuarterPlannerService {
    *   Houston (`dailyZoneTechnicians`, 2026-10-03); a property within five
    *   minutes of a group joins it whatever its zone;
    * - at most `maxOnSiteMinutes` inspecting;
-   * - a zone too far for a day's drive from any home is a trip: back-to-back
-   *   days of the crew member nearest it, the first driven from home and the
-   *   rest from where the trip is;
-   * - each day driven from the technician's home, in the order that drives least;
+   * - a zone too far for a day's drive from the office is a trip: back-to-back
+   *   days of one crew member, the first driven from the office and the rest
+   *   from where the trip is;
+   * - each day driven from the office, in the order that drives least;
    * - a move-out anchors a day of the technician who handles move-outs, and a
    *   move-in the day of the crew member it is booked for: on its date their
    *   visits are the ones nearest it, from any zone, three fewer for each, and it
@@ -454,10 +439,7 @@ export class QuarterPlannerService {
     const quarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
     const settings = routingSettings(planSettings(plan), input, quarter);
     // A crew chosen now is checked before anything is written.
-    const roster = forUnassigned(
-      await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined),
-      settings.jobberUnassigned,
-    );
+    const roster = await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined);
     // Left out, the plan's own answer: a rebuild that does not mention Mondays keeps them as they were.
     if (input.useMondays !== undefined && typeof input.useMondays !== 'boolean')
       throw new ApplicationError(422, 'INVALID_PLAN_SETTINGS', 'Whether to visit on Mondays must be true or false.');
@@ -525,7 +507,6 @@ export class QuarterPlannerService {
       zones.circle,
       plannedDays,
     );
-    const homes = await this.homesWith(organizationId, roster, pins);
 
     // Visits a coordinator placed by hand keep the days they make -- a Monday
     // kept for rescheduled visits, somebody off the crew -- measured beside the
@@ -534,8 +515,7 @@ export class QuarterPlannerService {
     const free = stops.filter((stop) => !pinned.has(stop.stopId));
     const placedByHand = pinnedCrews(stops, pins);
 
-    // A zone too far for a day's drive from any home is a trip for the crew
-    // member living nearest it (the office, 2026-09-18).
+    // A zone too far for a day's drive from the office is a trip (the office, 2026-09-18).
     // A quarter sent out to nobody has day groups, not people: nobody's day can be
     // built around anybody's move-out until the office hands the days out in Jobber.
     const booked = settings.jobberUnassigned
@@ -561,7 +541,6 @@ export class QuarterPlannerService {
       rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
       taken: new Set(placedByHand.map((crew) => crewKey(crew.date, crew.technicianId))),
       anchors: booked.anchors,
-      homes: roster.homes,
       tripZones: zones.outOfReach,
       rescheduleMondays,
       quarter,
@@ -569,11 +548,11 @@ export class QuarterPlannerService {
     });
     const unplaced: RoutingSummary['unplaced'] = assignment.unplaced;
     // A day's move-outs and move-ins are routed and measured with its visits,
-    // as stops it drives to. A trip's later days start where the trip is, not at home.
+    // as stops it drives to. A trip's later days start where the trip is, not at the office.
     const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors' | 'trip'>) =>
       this.measure(
         { date: crew.date, technicianId: crew.technicianId, stops: [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops] },
-        crew.trip && crew.trip.day > 1 ? undefined : homes.get(crew.technicianId),
+        crew.trip && crew.trip.day > 1 ? undefined : OFFICE,
         settings.maxLegMinutes * 60,
       );
     const measured: MeasuredCrew[] = [];
@@ -759,7 +738,7 @@ export class QuarterPlannerService {
             ],
       ),
     );
-    const roster = forUnassigned(await this.roster(organizationId, plan.crewTechnicianIds), plan.jobberUnassigned);
+    const roster = await this.roster(organizationId, plan.crewTechnicianIds);
     const zones = zoneCircle(stops, roster, plan.maxDriveMinutes);
     const people = roster.technicianIds.length
       ? await this.prisma.userProfile.findMany({
@@ -775,7 +754,6 @@ export class QuarterPlannerService {
       crew: roster.technicianIds.map((technicianId) => ({
         technicianId,
         displayName: names.get(technicianId) ?? null,
-        hasHome: roster.homes.has(technicianId),
       })),
       zones: zones.circle,
       outOfReach: zones.outOfReach,
@@ -787,7 +765,7 @@ export class QuarterPlannerService {
    *
    * For a coordinator's change to a draft: a visit moved to another day or
    * technician leaves one day and joins another, and a new visit length changes
-   * a day's time inspecting. Each day is ordered from the technician's home and
+   * a day's time inspecting. Each day is ordered from the office and
    * measured on real roads, as routing measures one, and written back; a day
    * left with no visit goes. Nothing is refused for leaving a day short or long:
    * the day shows it, for the coordinator to see and decide.
@@ -812,18 +790,18 @@ export class QuarterPlannerService {
         continue;
       }
 
-      const crew = await this.measure({ date, technicianId, stops }, await this.homeOf(organizationId, technicianId), maxLegSeconds);
+      const crew = await this.measure({ date, technicianId, stops }, OFFICE, maxLegSeconds);
       await this.writeDay(organizationId, planId, crew);
     }
   }
 
   /**
-   * Put days in the order that drives least from the technician's home, and keep it.
+   * Put days in the order that drives least from the office, and keep it.
    *
    * The office, 2026-10-02: the days are already grouped and stay as grouped;
    * only the order changes, and it depends on where the technician sets out
-   * from. So each day is ordered from the technician's home for the least
-   * driving in all -- the drive from home counted in choosing the order, though
+   * from -- the office (2026-10-22). So each day is ordered from the office for
+   * the least driving in all -- the drive from it counted in choosing the order, though
    * the day's driving shown is still between its properties -- and the twenty-
    * minute rule a build orders by is not applied: "just optimize the route and
    * drive time".
@@ -855,7 +833,7 @@ export class QuarterPlannerService {
         continue;
       }
       const order = await this.orderOfDay(organizationId, planId, date, technicianId);
-      const crew = await this.measure({ date, technicianId, stops }, await this.homeOf(organizationId, technicianId));
+      const crew = await this.measure({ date, technicianId, stops }, OFFICE);
       const dayId = await this.writeDay(organizationId, planId, crew);
       optimized.push({
         dayId,
@@ -1208,7 +1186,7 @@ export class QuarterPlannerService {
   }
 
   /**
-   * The benefit-package crew, in the order the zones go round, and where each lives.
+   * The benefit-package crew, in the order the zones go round.
    *
    * The technicians the coordinator chose when building the plan (the office,
    * 2026-09-19: "before generating ... it should ask for the technicians"), in
@@ -1222,21 +1200,17 @@ export class QuarterPlannerService {
    * unplannable is left out even with a place: somebody on leave keeps it for
    * when they are back.
    *
-   * The home is where each day's route starts. The drive from it is shown, and
-   * not counted against the day's limits.
+   * Nobody's home is read: every day starts at the office (2026-10-22). The
+   * drive from it is shown, and not counted against the day's limits.
    */
   private async roster(organizationId: string, chosen: readonly string[] = [], strict = false): Promise<Roster> {
     if (chosen.length) return this.chosenRoster(organizationId, chosen, strict);
     const profiles = await this.prisma.technicianPlanningProfile.findMany({
       where: { organizationId, isPlannable: true, tbpZoneOrder: { not: null } },
       orderBy: [{ tbpZoneOrder: 'asc' }, { technicianId: 'asc' }],
-      select: { technicianId: true, homeLatitude: true, homeLongitude: true },
+      select: { technicianId: true },
     });
-    const homes = new Map<string, GeoPoint>();
-    for (const row of profiles)
-      if (row.homeLatitude != null && row.homeLongitude != null)
-        homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
-    return { technicianIds: profiles.map((row) => row.technicianId), homes };
+    return { technicianIds: profiles.map((row) => row.technicianId) };
   }
 
   /** The technicians a coordinator chose for a plan, as a crew: see `roster`. */
@@ -1253,7 +1227,7 @@ export class QuarterPlannerService {
       }),
       this.prisma.technicianPlanningProfile.findMany({
         where: { organizationId, technicianId: { in: ids } },
-        select: { technicianId: true, tbpZoneOrder: true, homeLatitude: true, homeLongitude: true },
+        select: { technicianId: true, tbpZoneOrder: true },
       }),
     ]);
     if (strict && people.length !== ids.length)
@@ -1263,42 +1237,7 @@ export class QuarterPlannerService {
     const ordered = [...people].sort(
       (left, right) => order(left.id) - order(right.id) || (left.displayName ?? '').localeCompare(right.displayName ?? ''),
     );
-    const homes = new Map<string, GeoPoint>();
-    for (const row of profiles)
-      if (row.homeLatitude != null && row.homeLongitude != null)
-        homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
-    return { technicianIds: ordered.map((person) => person.id), homes };
-  }
-
-  /**
-   * The crew's homes, and the home of anyone else a coordinator placed a visit
-   * with: somebody off the crew covering a day still drives from their own.
-   */
-  private async homesWith(organizationId: string, roster: Roster, pins: ReadonlyMap<string, Pin>) {
-    const others = [...new Set([...pins.values()].map((pin) => pin.technicianId))].filter(
-      (technicianId) => !roster.technicianIds.includes(technicianId),
-    );
-    if (others.length === 0) return roster.homes;
-    const profiles = await this.prisma.technicianPlanningProfile.findMany({
-      where: { organizationId, technicianId: { in: others } },
-      select: { technicianId: true, homeLatitude: true, homeLongitude: true },
-    });
-    const homes = new Map(roster.homes);
-    for (const row of profiles)
-      if (row.homeLatitude != null && row.homeLongitude != null)
-        homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
-    return homes;
-  }
-
-  /** Where a technician's day starts, when a home is on file: anyone's, not only the crew's. */
-  private async homeOf(organizationId: string, technicianId: string): Promise<GeoPoint | undefined> {
-    const profile = await this.prisma.technicianPlanningProfile.findFirst({
-      where: { organizationId, technicianId },
-      select: { homeLatitude: true, homeLongitude: true },
-    });
-    return profile?.homeLatitude != null && profile.homeLongitude != null
-      ? { latitude: Number(profile.homeLatitude), longitude: Number(profile.homeLongitude) }
-      : undefined;
+    return { technicianIds: ordered.map((person) => person.id) };
   }
 
   /**
@@ -1351,20 +1290,20 @@ export class QuarterPlannerService {
    * duration is worse than an absent one, and a plan that says "five hours"
    * when it means "we did not measure" is how somebody ends up late.
    *
-   * One matrix of the technician's home and the day's stops. The day is routed
-   * from home, in the order that drives least in all with no drive between two
+   * One matrix of the office and the day's stops. The day is routed from the
+   * office, in the order that drives least in all with no drive between two
    * properties longer than `maxLegSeconds` where any order manages that
-   * (`dayOrder`). Without a home on file the matrix is the stops alone and the
-   * day starts at its first job.
+   * (`dayOrder`). Without a start -- a trip's later days -- the matrix is the
+   * stops alone and the day starts at its first job.
    */
   private async measure(
     crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops'>,
-    home: GeoPoint | undefined,
+    start: GeoPoint | undefined,
     maxLegSeconds?: number,
   ): Promise<MeasuredCrew> {
     const stops = [...crew.stops];
-    const base = { date: crew.date, technicianId: crew.technicianId, fromHome: Boolean(home) };
-    if (stops.length === 0 || (stops.length === 1 && !home))
+    const base = { date: crew.date, technicianId: crew.technicianId, fromOffice: Boolean(start) };
+    if (stops.length === 0 || (stops.length === 1 && !start))
       // Nothing to drive between, which is a true zero rather than an unknown.
       return {
         ...base,
@@ -1377,9 +1316,9 @@ export class QuarterPlannerService {
         durationSource: null,
       };
 
-    // The home first, so row and column zero are the drives from and to it.
-    const points: GeoPoint[] = home ? [home, ...stops] : stops;
-    const offset = home ? 1 : 0;
+    // The start first, so row and column zero are the drives from and to it.
+    const points: GeoPoint[] = start ? [start, ...stops] : stops;
+    const offset = start ? 1 : 0;
     /**
      * Mapbox measures the day, and it needs no flag to turn it on.
      *
@@ -1412,11 +1351,11 @@ export class QuarterPlannerService {
         durations,
         distances: measured?.distances ?? null,
         index: new Map(stops.map((stop, position) => [stop.stopId, position + offset])),
-        homeIndex: home ? 0 : null,
+        startIndex: start ? 0 : null,
       };
       return {
         ...base,
-        ...inMatrixOrder(stops, matrix, home, maxLegSeconds),
+        ...inMatrixOrder(stops, matrix, start, maxLegSeconds),
         durationSource: google
           ? DriveTimeSource.GOOGLE_TRAFFIC_AWARE
           : mapbox
@@ -1442,10 +1381,10 @@ export class QuarterPlannerService {
     const metres = points.map((from) => points.map((to) => haversineMeters(from, to)));
     const seconds = (from: GeoPoint, to: GeoPoint) => Math.round(estimatedDriveMinutes(from, to) * 60);
     const between = stops.map((_, from) => stops.map((__, to) => metres[from + offset]![to + offset]!));
-    const order = dayOrder(between, home ? stops.map((_, to) => metres[0]![to + offset]!) : null, stops, home);
-    const homeLeg = home && order.length ? metres[0]![order[0]! + offset]! : null;
+    const order = dayOrder(between, start ? stops.map((_, to) => metres[0]![to + offset]!) : null, stops, start);
+    const startLeg = start && order.length ? metres[0]![order[0]! + offset]! : null;
     const ordered = order.map((index) => stops[index]!);
-    // The first stop's leg is the drive from home, which is not counted
+    // The first stop's leg is the drive from the office, which is not counted
     // against the day -- the same rule the road-time path follows.
     const legs = ordered.map((stop, position) =>
       position === 0 ? null : seconds(ordered[position - 1]!, stop),
@@ -1456,8 +1395,8 @@ export class QuarterPlannerService {
       legSeconds: legs,
       totalDriveSeconds: legs.reduce((sum: number, leg) => sum + (leg ?? 0), 0),
       totalDriveMeters: pathCost(between, order),
-      homeDriveSeconds: home && ordered.length ? seconds(home, ordered[0]!) : null,
-      homeDriveMeters: homeLeg,
+      homeDriveSeconds: start && ordered.length ? seconds(start, ordered[0]!) : null,
+      homeDriveMeters: startLeg,
       durationSource: DriveTimeSource.HAVERSINE,
     };
   }
@@ -1967,12 +1906,12 @@ function dayRow(crew: MeasuredCrew) {
     totalDriveMeters: whole(crew.totalDriveMeters),
     homeDriveSeconds: whole(crew.homeDriveSeconds),
     homeDriveMeters: whole(crew.homeDriveMeters),
-    // A day routed from home says so, and does not copy the home's coordinates
+    // A day routed from the office says so, and does not copy the office's coordinates
     // onto every day of the quarter: the planning profile stays the one place a
     // technician's address is kept.
-    originLatitude: crew.fromHome ? null : first.latitude,
-    originLongitude: crew.fromHome ? null : first.longitude,
-    originKind: crew.fromHome ? PlanOriginKind.HOME : PlanOriginKind.FIRST_STOP,
+    originLatitude: crew.fromOffice ? null : first.latitude,
+    originLongitude: crew.fromOffice ? null : first.longitude,
+    originKind: crew.fromOffice ? PlanOriginKind.OFFICE : PlanOriginKind.FIRST_STOP,
     durationSource: crew.durationSource,
     departureAssumedAt: businessInstant(crew.date, DAY_STARTS_AT),
   };
@@ -2017,13 +1956,11 @@ export function withZones<T extends PlannableStop>(stops: readonly T[]): T[] {
 /**
  * The zones the crew goes round, in order, and the zones none of them can reach.
  *
- * A zone is out of reach when every crew member's home is further from its
- * middle than the day's drive allows even to get there -- zone 5, some 200 km
- * from the three homes in Q4 2026. Left in the circle, it would take a person's
- * week and leave another zone without anybody; out of it, its visits are a trip
- * of back-to-back days for the crew member living nearest it (the office,
- * 2026-09-18). A crew member with no home on file starts at their first job, so
- * reaches anywhere.
+ * A zone is out of reach when the office is further from its middle than the
+ * day's drive allows even to get there -- zone 5, some 200 km away in Q4 2026.
+ * Left in the circle, it would take a person's week and leave another zone
+ * without anybody; out of it, its visits are a trip of back-to-back days for
+ * one crew member (the office, 2026-09-18).
  */
 export function zoneCircle(
   stops: readonly PlannableStop[],
@@ -2033,11 +1970,7 @@ export function zoneCircle(
   const zones = [...zoneMiddles(stops).entries()].sort(([left], [right]) => byZoneNumber(left, right));
   // Without a crew there is nobody to be out of reach of: routing says so per stop.
   if (roster.technicianIds.length === 0) return { circle: zones.map(([zone]) => zone), outOfReach: [] };
-  const reachable = (middle: GeoPoint) =>
-    roster.technicianIds.some((technicianId) => {
-      const home = roster.homes.get(technicianId);
-      return !home || estimatedDriveMinutes(home, middle) <= maxDriveMinutes;
-    });
+  const reachable = (middle: GeoPoint) => estimatedDriveMinutes(OFFICE, middle) <= maxDriveMinutes;
   return {
     circle: zones.filter(([, middle]) => reachable(middle)).map(([zone]) => zone),
     outOfReach: zones.filter(([, middle]) => !reachable(middle)).map(([zone]) => zone),
@@ -2053,73 +1986,74 @@ function pathCost(matrix: readonly (readonly number[])[], order: readonly number
 }
 
 /**
- * The same day driven the other way, when that starts nearer home.
+ * The same day driven the other way, when that starts nearer the office.
  *
- * Used only when the day cannot be routed from the home itself (`dayOrder`).
+ * Used only when the day cannot be routed from the office itself (`dayOrder`).
  * Between two orders within a couple of minutes of each other, the one that
- * starts at the end nearer the technician's home is the one they would choose.
+ * starts at the end nearer the office is the one they would choose.
  */
-function orientTowardHome(
+function orientTowardStart(
   order: number[],
   matrix: readonly (readonly number[])[],
   stops: readonly GeoPoint[],
-  home: GeoPoint | undefined,
+  start: GeoPoint | undefined,
   toleranceSeconds: number,
 ): number[] {
-  if (!home || order.length < 2) return order;
+  if (!start || order.length < 2) return order;
   const reversed = [...order].reverse();
-  const nearerHome = haversineMeters(home, stops[reversed[0]!]!) < haversineMeters(home, stops[order[0]!]!);
-  return nearerHome && pathCost(matrix, reversed) <= pathCost(matrix, order) + toleranceSeconds ? reversed : order;
+  const nearerStart = haversineMeters(start, stops[reversed[0]!]!) < haversineMeters(start, stops[order[0]!]!);
+  return nearerStart && pathCost(matrix, reversed) <= pathCost(matrix, order) + toleranceSeconds ? reversed : order;
 }
 
 /**
- * The order to drive a day in: from the technician's home, the order that drives
- * least in all.
+ * The order to drive a day in: from the office, the order that drives least in
+ * all.
  *
  * The office keeps the driving as short as the visits allow (2026-09-17), and a
- * day is driven from home. So the route is the shortest from home through every
- * property, which starts at or near the property nearest home; between two that
- * drive the same, the day starts at the property nearer home. Without a home,
- * or where nothing measured the drive from it, the day keeps the shortest path
- * through the properties alone, started at the end nearer home.
+ * day is driven from the office (2026-10-22). So the route is the shortest from
+ * the office through every property, which starts at or near the property
+ * nearest it; between two that drive the same, the day starts at the property
+ * nearer the office. Without a start -- a trip's later days -- or where nothing
+ * measured the drive from it, the day keeps the shortest path through the
+ * properties alone, started at the end nearer the start.
  *
  * No drive from one property to the next longer than `maxLegSeconds` (the
  * office, 2026-09-19: twenty minutes), where any order of the day manages it:
  * such a leg is priced out of the choice, so the day takes a slightly longer
- * way round rather than one long hop. The drive from home is not held to it.
+ * way round rather than one long hop. The drive from the office is not held to it.
  *
- * `between` is the stops' own matrix; `fromHome` the drive from home to each.
+ * `between` is the stops' own matrix; `fromStart` the drive from the start to each.
  */
 function dayOrder(
   measured: readonly (readonly number[])[],
-  fromHome: readonly number[] | null,
+  fromStart: readonly number[] | null,
   stops: readonly GeoPoint[],
-  home: GeoPoint | undefined,
+  start: GeoPoint | undefined,
   maxLegSeconds?: number,
 ): number[] {
   const between = maxLegSeconds
     ? measured.map((row) => row.map((seconds) => (seconds > maxLegSeconds ? seconds + OVER_LEG_SECONDS : seconds)))
     : measured;
-  const free = orientTowardHome(shortestOpenPathOrder(between), between, stops, home, HOME_END_TOLERANCE_SECONDS);
-  if (!fromHome || !home || stops.length === 0) return free;
+  const free = orientTowardStart(shortestOpenPathOrder(between), between, stops, start, START_END_TOLERANCE_SECONDS);
+  if (!fromStart || !start || stops.length === 0) return free;
   // The solver's origin is row zero; nothing ever drives back to it.
-  const withHome = [[0, ...fromHome], ...between.map((row) => [0, ...row])];
-  const solved = shortestRouteOrder(withHome).map((index) => index - 1);
+  const withStart = [[0, ...fromStart], ...between.map((row) => [0, ...row])];
+  const solved = shortestRouteOrder(withStart).map((index) => index - 1);
   if (solved.length !== stops.length) return free;
-  const total = (order: readonly number[]) => (order.length ? fromHome[order[0]!]! : 0) + pathCost(between, order);
+  const total = (order: readonly number[]) => (order.length ? fromStart[order[0]!]! : 0) + pathCost(between, order);
   const reversed = [...solved].reverse();
-  const homeFirst =
-    total(reversed) <= total(solved) && haversineMeters(home, stops[reversed[0]!]!) < haversineMeters(home, stops[solved[0]!]!)
+  const startFirst =
+    total(reversed) <= total(solved) && haversineMeters(start, stops[reversed[0]!]!) < haversineMeters(start, stops[solved[0]!]!)
       ? reversed
       : solved;
-  return Number.isFinite(total(homeFirst)) ? homeFirst : free;
+  return Number.isFinite(total(startFirst)) ? startFirst : free;
 }
 
-/** Stops ordered and measured from a matrix that holds them all, and the home when it has one. */
+/** Stops ordered and measured from a matrix that holds them all, and the start when it has one. */
 function inMatrixOrder(
   stops: readonly PlannableStop[],
   matrix: DayMatrix,
-  home: GeoPoint | undefined,
+  start: GeoPoint | undefined,
   maxLegSeconds?: number,
 ): Pick<
   MeasuredCrew,
@@ -2127,14 +2061,14 @@ function inMatrixOrder(
 > {
   const indexes = stops.map((stop) => matrix.index.get(stop.stopId)!);
   const durations = indexes.map((from) => indexes.map((to) => matrix.durations[from]![to]!));
-  const homeRow = matrix.homeIndex === null ? null : matrix.durations[matrix.homeIndex]!;
-  const order = dayOrder(durations, homeRow ? indexes.map((to) => homeRow[to]!) : null, stops, home, maxLegSeconds);
+  const startRow = matrix.startIndex === null ? null : matrix.durations[matrix.startIndex]!;
+  const order = dayOrder(durations, startRow ? indexes.map((to) => startRow[to]!) : null, stops, start, maxLegSeconds);
   const ordered = order.map((index) => stops[index]!);
   const legSeconds = order.map((index, position) => (position === 0 ? null : durations[order[position - 1]!]![index]!));
   const distances = matrix.distances;
   const first = order.length ? indexes[order[0]!]! : null;
-  const homeSeconds = homeRow && first !== null ? homeRow[first]! : null;
-  const homeMeters = distances && matrix.homeIndex !== null && first !== null ? distances[matrix.homeIndex]![first]! : null;
+  const startSeconds = startRow && first !== null ? startRow[first]! : null;
+  const startMeters = distances && matrix.startIndex !== null && first !== null ? distances[matrix.startIndex]![first]! : null;
   const betweenMeters = distances
     ? pathCost(
         indexes.map((from) => indexes.map((to) => distances[from]![to]!)),
@@ -2146,8 +2080,8 @@ function inMatrixOrder(
     legSeconds,
     totalDriveSeconds: pathCost(durations, order),
     totalDriveMeters: betweenMeters,
-    homeDriveSeconds: homeSeconds !== null && Number.isFinite(homeSeconds) ? homeSeconds : null,
-    homeDriveMeters: homeMeters !== null && Number.isFinite(homeMeters) ? homeMeters : null,
+    homeDriveSeconds: startSeconds !== null && Number.isFinite(startSeconds) ? startSeconds : null,
+    homeDriveMeters: startMeters !== null && Number.isFinite(startMeters) ? startMeters : null,
   };
 }
 

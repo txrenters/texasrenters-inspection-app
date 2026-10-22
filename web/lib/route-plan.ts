@@ -139,10 +139,10 @@ export function pluralStops(count: number) {
 /**
  * Where a route starts, in words.
  *
- * A route from somebody's house and a route from where they are standing are
+ * A route from the office and a route from where they are standing are
  * different claims. Drawn identically, a dispatcher reading "34 min driving" at
  * nine in the morning cannot tell whether that is the day ahead of somebody who
- * has not left home or of somebody already halfway through it.
+ * has not set off or of somebody already halfway through it.
  *
  * The last-seen time is in Texas, where the work is, rather than wherever the
  * reader happens to be -- the office is frequently in Manila.
@@ -151,8 +151,8 @@ export function describeOrigin(route: TechnicianRoute): string | null {
   switch (route.originKind) {
     case 'LIVE':
       return 'from their live position';
-    case 'HOME':
-      return 'from home';
+    case 'OFFICE':
+      return 'from the office';
     case 'LAST_KNOWN': {
       const time = businessTimeOfDay(route.origin?.recordedAt);
       return time ? `from where they were last seen at ${time}` : 'from where they were last seen';

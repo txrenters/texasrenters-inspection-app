@@ -115,10 +115,10 @@ const PLAN = {
 
 /** Who can be sent out: the crew first, in its order, then everyone else. */
 const TECHNICIANS = [
-  { id: 'tech-1', displayName: 'Moses Rivera', crewOrder: 1, hasHome: true },
-  { id: 'tech-2', displayName: 'Kevin Grant', crewOrder: 2, hasHome: true },
-  { id: 'tech-3', displayName: 'Emanuel Hall', crewOrder: 3, hasHome: true },
-  { id: 'tech-4', displayName: 'Amy Wilson', crewOrder: null, hasHome: false },
+  { id: 'tech-1', displayName: 'Moses Rivera', crewOrder: 1 },
+  { id: 'tech-2', displayName: 'Kevin Grant', crewOrder: 2 },
+  { id: 'tech-3', displayName: 'Emanuel Hall', crewOrder: 3 },
+  { id: 'tech-4', displayName: 'Amy Wilson', crewOrder: null },
 ];
 
 const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
@@ -226,9 +226,9 @@ function mount({
     isSuccess: true,
     data: {
       crew: [
-        { technicianId: 'tech-1', displayName: 'Moses Rivera', hasHome: true },
-        { technicianId: 'tech-2', displayName: 'Kevin Grant', hasHome: true },
-        { technicianId: 'tech-3', displayName: 'Emanuel Hall', hasHome: true },
+        { technicianId: 'tech-1', displayName: 'Moses Rivera' },
+        { technicianId: 'tech-2', displayName: 'Kevin Grant' },
+        { technicianId: 'tech-3', displayName: 'Emanuel Hall' },
       ],
       zones: ['1', '2', '3', '4'],
       outOfReach: ['5'],
@@ -824,7 +824,7 @@ describe('the benefit package plan page', () => {
     // Days of nine, room for the office's own, and no drive over twenty minutes between properties (2026-09-19).
     expect(screen.getByText('9 visits a day, up to 10 where the properties are within 5 minutes of each other.')).toBeTruthy();
     expect(screen.getByText('Never more than 20 minutes from one property to the next.')).toBeTruthy();
-    // How far the crew's homes may be from a zone is not a limit on a day.
+    // How far the office may be from a zone is not a limit on a day.
     expect(screen.queryByText(/90 min/)).toBeNull();
     expect(screen.queryByText(/360/)).toBeNull();
     // Thanksgiving is on the plan as well, and is a holiday rather than another closed day.
@@ -1141,15 +1141,26 @@ describe('the benefit package plan page', () => {
     expect(within(dialog).getByRole('button', { name: /Change the technician/ })).toBeTruthy();
   });
 
-  /** A day starts from home; its driving between the properties is shown apart from the drive from home. */
-  it('shows the drive from home and when to leave, apart from the driving between properties', () => {
+  /** A day starts at the office (2026-10-22); its driving between the properties is shown apart from the drive from it. */
+  it('shows the drive from the office and when to leave, apart from the driving between properties', () => {
+    mount({ day: { ...DAY, originKind: 'OFFICE', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
+
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
+    expect(within(day).getByText('From the office')).toBeTruthy();
+    expect(within(day).getByText('35 min · 42 km · leave 8:25 AM')).toBeTruthy();
+    expect(within(day).getByText('35 min from the office')).toBeTruthy();
+    expect(within(day).getByText(/^20 min between properties/)).toBeTruthy();
+    expect(within(day).getByText(/the drive from the office is shown apart/)).toBeTruthy();
+  });
+
+  /** A day measured before days started at the office still says it was driven from home, and how to change that. */
+  it('says a day measured before 2026-10-22 was routed from the technician’s home', () => {
     mount({ day: { ...DAY, originKind: 'HOME', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
-    expect(within(day).getByText('35 min · 42 km · leave 8:25 AM')).toBeTruthy();
+    expect(within(day).getByText('From home')).toBeTruthy();
     expect(within(day).getByText('35 min from home')).toBeTruthy();
-    expect(within(day).getByText(/^20 min between properties/)).toBeTruthy();
-    expect(within(day).getByText(/the drive from home is shown apart/)).toBeTruthy();
+    expect(within(day).getByText(/before days started at the office\. Optimize the route to start it from the office/)).toBeTruthy();
   });
 
   /**
@@ -1176,16 +1187,16 @@ describe('the benefit package plan page', () => {
     expect(screen.getByRole('button', { name: 'November 2026: choose a month' })).toBeTruthy();
   });
 
-  /** A plan built before days started from home, or for a technician with no home on file. */
-  it('says when a day was built without the technician’s home', () => {
+  /** A day that starts at its first job: a trip's later days, or one built before days had a start. */
+  it('says when a day starts at its first job', () => {
     mount();
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('not used')).toBeTruthy();
-    expect(within(day).getByText(/Optimize the route to start it from home/)).toBeTruthy();
+    expect(within(day).getByText(/Starts at its first job\. Optimize the route to start it from the office/)).toBeTruthy();
   });
 
-  it('puts one day, or every day, in the order that drives least from home', () => {
+  it('puts one day, or every day, in the order that drives least from the office', () => {
     const optimizeDay = { mutate: vi.fn(), isPending: false };
     const optimizeDays = { mutate: vi.fn(), isPending: false };
     mount({ optimizeDay, optimizeDays });
@@ -1271,13 +1282,13 @@ describe('the benefit package plan page', () => {
     expect(within(dialog).getByText('Booked once the plan is published')).toBeTruthy();
   });
 
-  it('shows the first visit’s drive from home, with when to leave', async () => {
-    mount({ day: { ...DAY, originKind: 'HOME', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
+  it('shows the first visit’s drive from the office, with when to leave', async () => {
+    mount({ day: { ...DAY, originKind: 'OFFICE', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Details of stop 1, 1 Any St' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('35 min from home · 42 km · leave 8:25 AM')).toBeTruthy();
+    expect(within(dialog).getByText('35 min from the office · 42 km · leave 8:25 AM')).toBeTruthy();
   });
 
   /** The office edits a draft visit where it reads it (2026-09-16): each value is its own control. */

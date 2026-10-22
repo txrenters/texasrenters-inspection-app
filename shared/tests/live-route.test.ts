@@ -63,7 +63,7 @@ describe('deciding whether to ask Google again', () => {
 
   it('draws when there is nothing drawn yet', () => {
     expect(
-      needsReroute(null, { originKind: 'HOME', stopIds: ['a'], position: null }, NOW),
+      needsReroute(null, { originKind: 'OFFICE', stopIds: ['a'], position: null }, NOW),
     ).toEqual({ reroute: true, reason: 'NO_ROUTE' });
   });
 
@@ -78,10 +78,10 @@ describe('deciding whether to ask Google again', () => {
   });
 
   it('redraws the moment somebody comes online', () => {
-    // The route was from home; now there is a live position to start from.
+    // The route was from the office; now there is a live position to start from.
     expect(
       needsReroute(
-        drawn({ originKind: 'HOME' }),
+        drawn({ originKind: 'OFFICE' }),
         { originKind: 'LIVE', stopIds: ['a', 'b'], position: onRoad },
         NOW,
       ).reason,
@@ -113,12 +113,12 @@ describe('deciding whether to ask Google again', () => {
     ).toBe('STOPS_CHANGED');
   });
 
-  it('redraws a route from home once they are known to have left it', () => {
-    // A position from today, even an old one, says the house is no longer
+  it('redraws a route from the office once they are known to have left it', () => {
+    // A position from today, even an old one, says the office is no longer
     // where the day starts.
     expect(
       needsReroute(
-        drawn({ originKind: 'HOME' }),
+        drawn({ originKind: 'OFFICE' }),
         { originKind: 'LAST_KNOWN', stopIds: ['a', 'b'], position: null },
         NOW,
       ).reason,
@@ -182,22 +182,22 @@ describe('deciding whether to ask Google again', () => {
       }).reason,
     ).toBe('STOPS_CHANGED');
     expect(
-      needsReroute(drawn({ originKind: 'HOME' }), { originKind: 'LIVE', stopIds: ['a', 'b'], position: offRoad }, NOW, {
+      needsReroute(drawn({ originKind: 'OFFICE' }), { originKind: 'LIVE', stopIds: ['a', 'b'], position: offRoad }, NOW, {
         follow: false,
       }).reason,
     ).toBe('ORIGIN_CHANGED');
   });
 
-  it('never redraws a home route for age or position', () => {
+  it('never redraws an office route for age or position', () => {
     /**
      * "Only recalculate once they are online and sending." Before the handset
-     * reports, there is no drive in progress to follow, so a home route stays
+     * reports, there is no drive in progress to follow, so an office route stays
      * put however old it gets.
      */
     expect(
       needsReroute(
-        drawn({ originKind: 'HOME', computedAt: NOW - 3 * 60 * 60_000 }),
-        { originKind: 'HOME', stopIds: ['a', 'b'], position: null },
+        drawn({ originKind: 'OFFICE', computedAt: NOW - 3 * 60 * 60_000 }),
+        { originKind: 'OFFICE', stopIds: ['a', 'b'], position: null },
         NOW,
       ),
     ).toEqual({ reroute: false, reason: null });
@@ -220,9 +220,9 @@ describe('how far down its line a route has got', () => {
     expect(routeProgress(route({}))).toBeCloseTo(0.5, 2);
   });
 
-  it('has not started a route from home', () => {
-    // Home is the start of the line by definition; nothing has been driven.
-    expect(routeProgress(route({ originKind: 'HOME' }))).toBe(0);
+  it('has not started a route from the office', () => {
+    // The office is the start of the line by definition; nothing has been driven.
+    expect(routeProgress(route({ originKind: 'OFFICE' }))).toBe(0);
   });
 
   it('counts a position nowhere near the line as not started', () => {

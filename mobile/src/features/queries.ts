@@ -1173,7 +1173,7 @@ export function matchesFindingFilter(status: FindingStatus, filter: string) {
   return filter === 'ALL' || status === filter;
 }
 
-/** The technician's own home -- where their route starts before they set off. */
+/** The technician's own home address, kept on their profile; their route starts at the office (2026-10-22). */
 export function useTechnicianHome() {
   return useQuery({
     queryKey: queryKeys.technicianHome,

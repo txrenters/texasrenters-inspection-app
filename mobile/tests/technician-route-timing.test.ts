@@ -43,6 +43,21 @@ describe('reading a technician route', () => {
   it('still reads a route from a server too old to say which router it used', () => {
     expect(technicianRouteSchema.safeParse(route()).success).toBe(true);
   });
+
+  /**
+   * The day starts at the office now (2026-10-22). The server still calls that
+   * `HOME` to the phones built before it, because those refuse a kind they do
+   * not name; this build reads either, and reads a kind it does not know as
+   * none rather than losing the route over it.
+   */
+  it('reads where the route starts, and keeps the route over a kind it does not know', () => {
+    const kind = (originKind: unknown) => technicianRouteSchema.parse(route({ originKind })).originKind;
+
+    expect(kind('OFFICE')).toBe('OFFICE');
+    expect(kind('HOME')).toBe('HOME');
+    expect(kind('LIVE')).toBe('LIVE');
+    expect(kind('DEPOT')).toBeNull();
+  });
 });
 
 describe('what the summary says about the drive times', () => {

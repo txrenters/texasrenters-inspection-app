@@ -1,3 +1,5 @@
+import { OFFICE } from '@texasrenters/shared';
+
 import { RouteService } from '../src/routing/route.service';
 
 /**
@@ -13,7 +15,6 @@ import { RouteService } from '../src/routing/route.service';
 const dec = (value: number) => ({ toNumber: () => value }) as never;
 const NOW = Date.parse('2026-09-14T17:00:00.000Z');
 const DAY = new Date(NOW);
-const HOME = { latitude: 29.95, longitude: -95.55 };
 
 beforeEach(() => {
   jest.spyOn(Date, 'now').mockReturnValue(NOW);
@@ -30,7 +31,7 @@ interface Row {
   latitude: number;
 }
 
-function day(rows: Row[], home: typeof HOME | null = HOME) {
+function day(rows: Row[]) {
   const seen: { statuses: unknown[] } = { statuses: [] };
   const prisma = {
     inspectionAssignment: {
@@ -56,10 +57,6 @@ function day(rows: Row[], home: typeof HOME | null = HOME) {
       },
     },
     technicianLocationPing: { findFirst: async () => null },
-    technicianPlanningProfile: {
-      findFirst: async () =>
-        home ? { homeLatitude: dec(home.latitude), homeLongitude: dec(home.longitude) } : null,
-    },
   };
   return { prisma, seen };
 }
@@ -129,7 +126,7 @@ describe('a day with finished stops', () => {
     ]);
   });
 
-  it('draws the drive already done from home, through them in that order', async () => {
+  it('draws the drive already done from the office, through them in that order', async () => {
     const { prisma } = day(THE_DAY);
     const { client, draws } = google();
     const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
@@ -138,7 +135,7 @@ describe('a day with finished stops', () => {
       DAY,
     );
 
-    expect(draws).toContainEqual([HOME.latitude, 29.91, 29.92]);
+    expect(draws).toContainEqual([OFFICE.latitude, 29.91, 29.92]);
     expect(route.history.geometry.length).toBeGreaterThan(1);
   });
 
@@ -151,14 +148,13 @@ describe('a day with finished stops', () => {
     await service.planDay('org', 'tech', DAY);
     await service.planDay('org', 'tech', DAY);
 
-    const historyDraws = draws.filter((points) => points.join() === [HOME.latitude, 29.91, 29.92].join());
+    const historyDraws = draws.filter((points) => points.join() === [OFFICE.latitude, 29.91, 29.92].join());
     expect(historyDraws).toHaveLength(1);
   });
 
-  it('marks a single finished stop without inventing a line to it', async () => {
-    // No home and one stop: nothing to join.
-    const { prisma } = day(THE_DAY.slice(0, 2), null);
-    const { client } = google();
+  it('joins a single finished stop to the office', async () => {
+    const { prisma } = day(THE_DAY.slice(0, 2));
+    const { client, draws } = google();
     const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
       'org',
       'tech',
@@ -166,7 +162,21 @@ describe('a day with finished stops', () => {
     );
 
     expect(route.history.stops).toHaveLength(1);
-    expect(route.history.geometry).toEqual([]);
+    expect(draws).toContainEqual([OFFICE.latitude, 29.92]);
+  });
+
+  it('draws no history before anything is finished', async () => {
+    const { prisma } = day(THE_DAY.slice(0, 1));
+    const { client, draws } = google();
+    const route = await new RouteService(prisma as never, osrmUnused, client as never, {} as never).planDay(
+      'org',
+      'tech',
+      DAY,
+    );
+
+    expect(route.history).toEqual({ stops: [], geometry: [] });
+    // The one draw is the day ahead, from the office to the stop left.
+    expect(draws).toEqual([[OFFICE.latitude, 29.93]]);
   });
 
   it('still returns the history when the whole day is done', async () => {
