@@ -118,6 +118,24 @@ describe('the reschedule queue', () => {
     );
   });
 
+  // 2026-10-22: a day picked in the calendar still read "The next Monday kept
+  // for rescheduled visits", as though the queue had offered it.
+  it('names the day it offers, so a day picked instead is not taken for it', () => {
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Book again…' }));
+    expect(
+      within(screen.getByRole('dialog')).getByText('The next Monday kept for rescheduled visits is Nov 2, 2099.'),
+    ).toBeTruthy();
+  });
+
+  it("names the technician's day when that is the one offered", () => {
+    mount({ ...LIST, items: [request('2', { kind: 'BEFORE_VISIT', action: 'MOVE', preferredOn: '2099-11-02' })] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move…' }));
+    expect(within(screen.getByRole('dialog')).getByText('The technician suggested Nov 2, 2099.')).toBeTruthy();
+  });
+
   it('lets a planner without the inspections grant dismiss, but not move or book', () => {
     permissions.granted = ['planning:publish'];
     mount();

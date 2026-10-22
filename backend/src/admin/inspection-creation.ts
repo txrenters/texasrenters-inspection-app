@@ -87,6 +87,12 @@ export interface InspectionCreationInput {
   scheduledEndAt?: Date | null;
   areaIds?: string[] | null;
   allowTechnicianAreaCapture?: boolean;
+  /**
+   * The visit this one books again, for a reschedule request: never a clash
+   * with the visit it replaces (see the duplicate check). Set by the server
+   * only, never read from a request body.
+   */
+  rebookOf?: string | null;
 }
 
 export interface InspectionRecordDetails {
@@ -527,9 +533,18 @@ export async function resolveInspectionPlan(
    * a clash left that unit unbookable for the rest of the day. Only a live
    * booking of the same type at the same time is genuinely a second copy of
    * the same job.
+   *
+   * Nor does the visit being booked again (2026-10-22). A technician who could
+   * not get in closes the visit as submitted, which this check still counts,
+   * so booking it again for the same day was refused as a clash with itself:
+   * the first request the office answered could not be booked for that
+   * afternoon. The new visit is the second attempt at
+   * that job, not a second copy of it. Only that one visit is left out; any
+   * other live booking of the type that day still refuses.
    */
   const duplicate = await tx.inspection.findFirst({
     where: {
+      ...(input.rebookOf ? { id: { not: input.rebookOf } } : {}),
       organizationId: input.organizationId,
       propertywareBuildingId: property.id,
       propertywareUnitId: unit?.id ?? null,

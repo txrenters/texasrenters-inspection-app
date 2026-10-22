@@ -273,6 +273,9 @@ export class RescheduleRequestsService {
           : {}),
     } as CreateAdminInspectionDto;
     await this.admin.createInspection(user, dto, {
+      // The visit that asked was closed as submitted, which the clash check
+      // still counts: without this it refuses a booking for that same day.
+      rebookOf: request.inspectionId,
       within: async (tx, created) => {
         const { count } = await tx.rescheduleRequest.updateMany({
           where: { id: request.id, organizationId: user.organizationId, status: RescheduleRequestStatus.OPEN, rebookInspectionId: null },

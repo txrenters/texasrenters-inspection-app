@@ -628,6 +628,40 @@ describe('multi-unit inspection creation', () => {
     expect(where.inspectionType).toBe('HVAC');
     // ...and finished work is a record, not a booking.
     expect(where.status).toEqual({ notIn: ['COMPLETED', 'CANCELLED'] });
+    // Nothing is left out of an ordinary booking.
+    expect(where.id).toBeUndefined();
+    expect(tx.inspection.create).toHaveBeenCalled();
+  });
+
+  /**
+   * A visit the technician could not get into is submitted, which still counts
+   * as a live booking here, so a reschedule request could not book it again for
+   * the same day (2026-10-22). Only that one visit is left out of the check.
+   */
+  it('books a visit again on the day of the visit it books again', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(
+      admin,
+      {
+        propertyId: 'building-1',
+        scheduledAt: '2026-08-01T15:00:00.000Z',
+        inspectionType: 'HVAC',
+        priority: 'STANDARD',
+      } as never,
+      { rebookOf: 'could-not-get-in' },
+    );
+
+    const { where } = tx.inspection.findFirst.mock.calls[0][0];
+    expect(where).toMatchObject({ id: { not: 'could-not-get-in' }, inspectionType: 'HVAC' });
+    expect(where.status).toEqual({ notIn: ['COMPLETED', 'CANCELLED'] });
     expect(tx.inspection.create).toHaveBeenCalled();
   });
 
