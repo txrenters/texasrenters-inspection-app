@@ -239,6 +239,30 @@ export const DonePin = memo(function DonePin() {
   );
 });
 
+/**
+ * Where a technician stopped between properties that is not one: a store, a
+ * supply run (the office, 2026-10-17).
+ *
+ * A rounded square, in the technician's colour, with a shopping bag -- a
+ * shape of its own, so it never reads as a property's teardrop or a route's
+ * numbered circle whatever the colour.
+ */
+export const AwayStopPin = memo(function AwayStopPin({ color, receded = false }: { color: string; receded?: boolean }) {
+  return (
+    <svg className={SHADOW} height="22" opacity={receded ? 0.45 : 1} viewBox="0 0 24 24" width="22">
+      <rect fill={color} height="20" rx="5" stroke="#fff" strokeWidth="2" width="20" x="2" y="2" />
+      <path
+        d="M8 10h8l-.7 7H8.7L8 10zm2 0V8.6a2 2 0 0 1 4 0V10"
+        fill="none"
+        stroke="#fff"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+});
+
 /** A plane, marking a journey nobody is driving. */
 export const PlanePin = memo(function PlanePin() {
   return (

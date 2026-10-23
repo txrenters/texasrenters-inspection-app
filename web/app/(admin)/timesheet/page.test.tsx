@@ -59,11 +59,33 @@ const SHEET = {
       technician: 'Moses Rodriguez',
       onsiteSeconds: 18_000,
       generalSeconds: 7_200,
+      stopSeconds: 0,
       totalSeconds: 25_200,
       quietSeconds: 0,
     },
   ],
   visits: [VISIT],
+};
+
+/** Half an hour at the hardware store, between 10:40 and 11:10 in Texas. */
+const STOP = {
+  key: 'seg-9',
+  technicianId: 'tech-1',
+  technician: 'Moses Rodriguez',
+  arrivedAt: '2026-10-06T15:40:00.000Z',
+  leftAt: '2026-10-06T16:10:00.000Z',
+  durationSeconds: 1_800,
+  quietSeconds: 0,
+  place: { kind: 'BUSINESS', name: 'The Home Depot', address: '1 Supply Rd, Houston' },
+  latitude: 29.9,
+  longitude: -95.5,
+};
+
+/** The same day, as somebody who may see where a technician was reads it. */
+const WITH_STOPS = {
+  ...SHEET,
+  totals: [{ ...SHEET.totals[0]!, stopSeconds: 1_800, generalSeconds: 5_400 }],
+  stops: [STOP],
 };
 
 function mount(sheet: unknown = SHEET) {
@@ -172,6 +194,112 @@ describe('the hours', () => {
     mount({ date: TODAY, totals: [], visits: [] });
 
     expect(screen.getByText('Nothing recorded on this day')).toBeInTheDocument();
+  });
+
+  /** The office, 2026-10-17: a stop is its own figure, so general time is the drive. */
+  it('counts stops as a figure of their own, in the day and by technician', () => {
+    mount(WITH_STOPS);
+
+    expect(screen.getByText('Stops', { selector: '*:not(th)' })).toBeInTheDocument();
+    const row = within(table('Hours by technician')).getByText('Moses Rodriguez').closest('tr')!;
+    expect(within(row).getByText('30m')).toBeInTheDocument();
+    expect(within(row).getByText('1h 30m')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Where a technician stopped that is not a property (the office, 2026-10-17:
+ * "if he goes to the hardware store"), in the day's one list, in order.
+ */
+describe('stops away from the properties', () => {
+  const dayTable = () => table('Time at each property and stop');
+
+  it('lists the stop between the visits, in the order it happened', () => {
+    mount({
+      ...WITH_STOPS,
+      visits: [
+        VISIT,
+        { ...VISIT, key: 'tech-1:b2', address: '9 Later Ave', arrivedAt: '2026-10-06T16:30:00.000Z' },
+      ],
+    });
+
+    const places = within(dayTable())
+      .getAllByRole('row')
+      .slice(1)
+      .map((row) => within(row).getAllByRole('cell')[1]!.textContent);
+    expect(places).toEqual([
+      expect.stringContaining('1902 Mockup Dr'),
+      expect.stringContaining('The Home Depot'),
+      expect.stringContaining('9 Later Ave'),
+    ]);
+  });
+
+  it('says what the place was, when, and for how long', () => {
+    mount(WITH_STOPS);
+
+    const row = within(dayTable()).getByText('The Home Depot').closest('tr')!;
+    expect(within(row).getByText('1 Supply Rd, Houston')).toBeInTheDocument();
+    expect(within(row).getByText('Stop')).toBeInTheDocument();
+    expect(within(row).getByText('10:40 AM')).toBeInTheDocument();
+    expect(within(row).getByText('11:10 AM')).toBeInTheDocument();
+    expect(within(row).getByText('30m')).toBeInTheDocument();
+  });
+
+  it('opens the technician’s day on the map, and offers no correction', () => {
+    mount(WITH_STOPS);
+
+    const row = within(dayTable()).getByText('The Home Depot').closest('tr')!;
+    expect(within(row).getByRole('link', { name: 'Show The Home Depot on the map' })).toHaveAttribute(
+      'href',
+      '/map?technician=tech-1&date=2026-10-06',
+    );
+    expect(within(row).queryByRole('button', { name: /Correct/ })).toBeNull();
+  });
+
+  it('calls a stop at home "Home", and never shows the address', () => {
+    mount({ ...WITH_STOPS, stops: [{ ...STOP, place: { kind: 'HOME', name: 'Home', address: null } }] });
+
+    expect(within(dayTable()).getByText('Home')).toBeInTheDocument();
+  });
+
+  /** The one the office will ask about. */
+  it('says when a stop was at a property with no visit booked', () => {
+    mount({
+      ...WITH_STOPS,
+      stops: [{ ...STOP, place: { kind: 'PROPERTY', name: '12 Elsewhere St', address: null } }],
+    });
+
+    const row = within(dayTable()).getByText('12 Elsewhere St').closest('tr')!;
+    expect(within(row).getByText('No visit booked')).toBeInTheDocument();
+    expect(within(row).getByText('A property with no visit booked')).toBeInTheDocument();
+  });
+
+  it('says a stop is still being looked up rather than leaving it blank', () => {
+    mount({ ...WITH_STOPS, stops: [{ ...STOP, place: null }] });
+
+    expect(within(dayTable()).getByText('Finding the place…')).toBeInTheDocument();
+  });
+
+  it('credits OpenStreetMap for the names it gave, and only then', () => {
+    const { unmount } = mount(WITH_STOPS);
+    expect(screen.getByRole('link', { name: 'OpenStreetMap' })).toHaveAttribute(
+      'href',
+      'https://www.openstreetmap.org/copyright',
+    );
+    unmount();
+
+    mount({ ...WITH_STOPS, stops: [{ ...STOP, place: { kind: 'HOME', name: 'Home', address: null } }] });
+    expect(screen.queryByRole('link', { name: 'OpenStreetMap' })).toBeNull();
+  });
+
+  /** The server leaves the list out for somebody who may not see positions. */
+  it('shows somebody who may not see where only the minutes, and no places', () => {
+    mount({ ...SHEET, totals: WITH_STOPS.totals });
+
+    expect(screen.queryByText('The Home Depot')).toBeNull();
+    expect(table('Time at each property')).toBeInTheDocument();
+    const row = within(table('Hours by technician')).getByText('Moses Rodriguez').closest('tr')!;
+    expect(within(row).getByText('30m')).toBeInTheDocument();
   });
 });
 

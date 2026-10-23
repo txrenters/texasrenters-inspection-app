@@ -261,6 +261,20 @@ export default function TechnicianMapPage() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  /**
+   * Opened from a stop on the timesheet (`?technician=…&date=…`): that
+   * technician's day, with them picked, so the stop is on the trail in front
+   * of the reader. Read once, from the address the page opened at; a day after
+   * today has no trail and is ignored.
+   */
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const asked = query.get('date');
+    if (asked && /^\d{4}-\d{2}-\d{2}$/.test(asked) && asked <= today) setDate(asked);
+    const technician = query.get('technician');
+    if (technician) setSelectedId(technician);
+  }, [today]);
+
   // One focus at a time. Both selections fly the map somewhere, so holding both
   // would leave two effects fighting over the view -- and "selected" would mean
   // two different things in one panel.

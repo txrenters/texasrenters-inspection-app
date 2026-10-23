@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { TimeSegmentSource } from '@prisma/client';
-import type { InspectionStatus, InspectionType, Prisma } from '@prisma/client';
+import type { InspectionStatus, InspectionType, Prisma, TimeStopPlaceKind } from '@prisma/client';
 import {
   MAX_USEFUL_ACCURACY_M,
   SEGMENT_DEFAULTS,
@@ -21,9 +21,15 @@ export interface TimesheetTotal {
   technician: string;
   /** Inside the circle of a property they had a visit at that day. */
   onsiteSeconds: number;
-  /** Everything else between the first arrival and the last departure. */
+  /** On the road between properties: the drive, and waits too short to be a stop. */
   generalSeconds: number;
-  /** The two together: the working day, with no hole in it. */
+  /**
+   * Standing still between properties somewhere that is not one -- the
+   * hardware store, a supply run, lunch. Its own figure (the office,
+   * 2026-10-17), so general time is the drive.
+   */
+  stopSeconds: number;
+  /** The three together: the working day, with no hole in it. */
   totalSeconds: number;
   /**
    * How much of the total the phone was silent for.
@@ -75,6 +81,30 @@ export interface TimesheetVisit {
   jobs: TimesheetJob[];
 }
 
+/**
+ * A stop away from the properties: where the technician stood still between
+ * two of them, and for how long.
+ *
+ * Only for somebody who may see a technician's position (`technicians:locate`,
+ * the key the map and the trail sit behind). Everybody else reads the same
+ * figure in the totals without being told where.
+ */
+export interface TimesheetStop {
+  /** The stretch's own id: a stop is one stretch, never merged. */
+  key: string;
+  technicianId: string;
+  technician: string;
+  arrivedAt: string;
+  leftAt: string;
+  durationSeconds: number;
+  quietSeconds: number;
+  /** Null until it has been looked up, which happens within minutes. */
+  place: { kind: TimeStopPlaceKind; name: string | null; address: string | null } | null;
+  /** For the map. Gone after the retention window, with the trail it came from. */
+  latitude: number | null;
+  longitude: number | null;
+}
+
 /** One visit behind a row on the timesheet. */
 export interface TimesheetJob {
   inspectionId: string;
@@ -99,6 +129,8 @@ export interface DayRecompute {
   changed: boolean;
   onsiteSeconds: number;
   generalSeconds: number;
+  /** Standing still between properties somewhere that is not one. */
+  stopSeconds: number;
   fixesRead: number;
   fixesDiscarded: number;
 }
@@ -301,6 +333,7 @@ export class TimeTrackingService {
         changed: false,
         onsiteSeconds: 0,
         generalSeconds: 0,
+        stopSeconds: 0,
         fixesRead: 0,
         fixesDiscarded: 0,
       };
@@ -379,6 +412,10 @@ export class TimeTrackingService {
       endedAt: new Date(stretch.endedAt),
       durationSeconds: stretch.durationSeconds,
       quietSeconds: stretch.quietSeconds,
+      // Where a stop was, for naming it and drawing it on the map. Written once,
+      // when the stop is first seen: what it is called is looked up from here.
+      placeLatitude: stretch.position?.latitude ?? null,
+      placeLongitude: stretch.position?.longitude ?? null,
     }));
 
     /**
@@ -396,7 +433,10 @@ export class TimeTrackingService {
      */
     const spare = [...stored];
     const creates: typeof wanted = [];
-    const updates: { id: string; data: Omit<(typeof wanted)[number], 'category' | 'buildingId' | 'startedAt'> }[] = [];
+    const updates: {
+      id: string;
+      data: Omit<(typeof wanted)[number], 'category' | 'buildingId' | 'startedAt' | 'placeLatitude' | 'placeLongitude'>;
+    }[] = [];
     for (const row of wanted) {
       const index = spare.findIndex(
         (old) =>
@@ -443,12 +483,16 @@ export class TimeTrackingService {
     const generalSeconds = wanted
       .filter((row) => row.category === 'GENERAL')
       .reduce((sum, row) => sum + row.durationSeconds, 0);
+    const stopSeconds = wanted
+      .filter((row) => row.category === 'STOP')
+      .reduce((sum, row) => sum + row.durationSeconds, 0);
     const result: DayRecompute = {
       day,
       technicianId,
       changed,
       onsiteSeconds,
       generalSeconds,
+      stopSeconds,
       fixesRead: fixes.length,
       fixesDiscarded: ledger.discardedFixes,
     };
@@ -481,8 +525,10 @@ export class TimeTrackingService {
           day,
           onsiteSeconds,
           generalSeconds,
+          stopSeconds,
           quietSeconds: wanted.reduce((sum, row) => sum + row.quietSeconds, 0),
           stretches: wanted.length,
+          stops: wanted.filter((row) => row.category === 'STOP').length,
           properties: fences.size,
           fixesRead: fixes.length,
           fixesDiscarded: ledger.discardedFixes,
@@ -492,7 +538,7 @@ export class TimeTrackingService {
 
     this.logger.log(
       `Day ${day} read for technician ${technicianId}: ${Math.round(onsiteSeconds / 60)} min on site, ` +
-        `${Math.round(generalSeconds / 60)} min general, from ${fixes.length} fixes at ${fences.size} properties.`,
+        `${Math.round(stopSeconds / 60)} min at stops, ${Math.round(generalSeconds / 60)} min general, from ${fixes.length} fixes at ${fences.size} properties.`,
     );
 
     return result;
@@ -603,6 +649,11 @@ export class TimeTrackingService {
         quietSeconds: true,
         source: true,
         adjustedAt: true,
+        placeKind: true,
+        placeName: true,
+        placeAddress: true,
+        placeLatitude: true,
+        placeLongitude: true,
         technician: { select: { displayName: true } },
         building: { select: { addressLine1: true } },
         inspection: { select: { propertywareBuilding: { select: { addressLine1: true } } } },
@@ -610,22 +661,44 @@ export class TimeTrackingService {
       orderBy: [{ technicianId: 'asc' }, { startedAt: 'asc' }],
     });
 
+    const mayLocate = user.permissions.includes('technicians:locate');
     const totals = new Map<string, TimesheetTotal>();
     const visits = new Map<string, TimesheetVisit>();
+    const stops: TimesheetStop[] = [];
     for (const segment of segments) {
       const total = totals.get(segment.technicianId) ?? {
         technicianId: segment.technicianId,
         technician: segment.technician.displayName,
         onsiteSeconds: 0,
         generalSeconds: 0,
+        stopSeconds: 0,
         totalSeconds: 0,
         quietSeconds: 0,
       };
       totals.set(segment.technicianId, total);
       total.totalSeconds += segment.durationSeconds;
       total.quietSeconds += segment.quietSeconds;
-      // One figure for everything away from a property. `DRIVING` is only on
-      // rows from before the day was read whole, and it belongs in here.
+      if (segment.category === 'STOP') {
+        total.stopSeconds += segment.durationSeconds;
+        if (mayLocate)
+          stops.push({
+            key: segment.id,
+            technicianId: segment.technicianId,
+            technician: segment.technician.displayName,
+            arrivedAt: segment.startedAt.toISOString(),
+            leftAt: segment.endedAt.toISOString(),
+            durationSeconds: segment.durationSeconds,
+            quietSeconds: segment.quietSeconds,
+            place: segment.placeKind
+              ? { kind: segment.placeKind, name: segment.placeName, address: segment.placeAddress }
+              : null,
+            latitude: segment.placeLatitude ? Number(segment.placeLatitude) : null,
+            longitude: segment.placeLongitude ? Number(segment.placeLongitude) : null,
+          });
+        continue;
+      }
+      // Everything else away from a property is the drive. `DRIVING` is only
+      // on rows from before the day was read whole, and it belongs in here.
       if (segment.category !== 'ONSITE') {
         total.generalSeconds += segment.durationSeconds;
         continue;
@@ -680,6 +753,16 @@ export class TimeTrackingService {
         (left, right) =>
           left.technician.localeCompare(right.technician) || left.arrivedAt.localeCompare(right.arrivedAt),
       ),
+      // Left out, not emptied, for somebody who may not see where: an empty
+      // list would say there were no stops.
+      ...(mayLocate
+        ? {
+            stops: stops.sort(
+              (left, right) =>
+                left.technician.localeCompare(right.technician) || left.arrivedAt.localeCompare(right.arrivedAt),
+            ),
+          }
+        : {}),
     };
   }
 

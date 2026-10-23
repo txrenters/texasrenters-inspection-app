@@ -25,7 +25,7 @@ describe('TechnicianTimelineService.trailFor', () => {
   it('reads one technician, one organization and one Texas day', async () => {
     const findMany = jest.fn().mockResolvedValue([]);
     const service = new TechnicianTimelineService(
-      { technicianLocationPing: { findMany } } as never,
+      { technicianLocationPing: { findMany }, timeSegment: { findMany: jest.fn().mockResolvedValue([]) } } as never,
       {} as never,
     );
 
@@ -66,6 +66,7 @@ describe('TechnicianTimelineService.trailFor', () => {
             ping(29.812, '2026-10-02T14:24:00.000Z'),
           ],
         },
+        timeSegment: { findMany: async () => [] },
       } as never,
       {} as never,
     );
@@ -80,6 +81,55 @@ describe('TechnicianTimelineService.trailFor', () => {
       [29.764, -95.37],
     ]);
     expect(trail.segments[1]!.startedAt).toBe('2026-10-02T14:23:00.000Z');
+  });
+
+  /**
+   * The timesheet's own stops (the office, 2026-10-17: "show it on the map"),
+   * so the map and the hours agree about where and for how long.
+   */
+  it('hands back the day’s stops away from the properties, as the timesheet counts them', async () => {
+    const stops = jest.fn().mockResolvedValue([
+      {
+        id: 'stop-1',
+        startedAt: new Date('2026-10-02T15:40:00.000Z'),
+        endedAt: new Date('2026-10-02T16:05:00.000Z'),
+        durationSeconds: 1_500,
+        placeLatitude: dec(29.9),
+        placeLongitude: dec(-95.5),
+        placeKind: 'BUSINESS',
+        placeName: 'The Home Depot',
+        placeAddress: '1 Supply Rd, Houston',
+      },
+    ]);
+    const service = new TechnicianTimelineService(
+      { technicianLocationPing: { findMany: async () => [] }, timeSegment: { findMany: stops } } as never,
+      {} as never,
+    );
+
+    const trail = await service.trailFor(user, 'tech-1', new Date('2026-10-02T12:00:00.000Z'));
+
+    expect(stops.mock.calls[0][0].where).toEqual({
+      organizationId: 'org-1',
+      technicianId: 'tech-1',
+      category: 'STOP',
+      startedAt: { gte: new Date('2026-10-02T05:00:00.000Z'), lt: new Date('2026-10-03T05:00:00.000Z') },
+      // One whose position went with the trail has nowhere to be drawn.
+      placeLatitude: { not: null },
+      placeLongitude: { not: null },
+    });
+    expect(trail.stops).toEqual([
+      {
+        id: 'stop-1',
+        startedAt: '2026-10-02T15:40:00.000Z',
+        endedAt: '2026-10-02T16:05:00.000Z',
+        durationSeconds: 1_500,
+        latitude: 29.9,
+        longitude: -95.5,
+        kind: 'BUSINESS',
+        name: 'The Home Depot',
+        address: '1 Supply Rd, Houston',
+      },
+    ]);
   });
 });
 

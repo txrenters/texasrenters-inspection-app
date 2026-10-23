@@ -47,6 +47,11 @@ const segment = (
   technician: { displayName: technicianId === 'tech-1' ? 'Moses' : 'Kevin' },
   building: category === 'ONSITE' ? { addressLine1: '1 Oak St' } : null,
   inspection: null,
+  placeKind: null,
+  placeName: null,
+  placeAddress: null,
+  placeLatitude: null,
+  placeLongitude: null,
   ...overrides,
 });
 
@@ -228,6 +233,83 @@ describe('the timesheet', () => {
   });
 });
 
+/**
+ * A stop away from the properties (the office, 2026-10-17): its own figure in
+ * the totals, so general time is the drive; and where it was only for the
+ * people who may see a technician's position.
+ */
+describe('stops away from the properties', () => {
+  const LOCATOR = { ...USER, permissions: ['inspections:read', 'technicians:locate'] } as unknown as AuthenticatedUser;
+  const store = {
+    placeKind: 'BUSINESS',
+    placeName: 'The Home Depot',
+    placeAddress: '1 Supply Rd, Houston',
+    placeLatitude: 29.9,
+    placeLongitude: -95.5,
+  };
+  const day = () => [
+    segment('tech-1', 'ONSITE', 0, 60),
+    segment('tech-1', 'GENERAL', 60, 70),
+    segment('tech-1', 'STOP', 70, 95, store),
+    segment('tech-1', 'GENERAL', 95, 105),
+    segment('tech-1', 'ONSITE', 105, 135, ELSEWHERE),
+  ];
+
+  it('counts a stop on its own, apart from the drive, and in the day', async () => {
+    const { service } = sheetHarness(day());
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.totals[0]).toMatchObject({
+      onsiteSeconds: 90 * 60,
+      generalSeconds: 20 * 60,
+      stopSeconds: 25 * 60,
+      totalSeconds: 135 * 60,
+    });
+  });
+
+  it('lists where and when for somebody who may see a technician’s position', async () => {
+    const { service } = sheetHarness(day());
+
+    const sheet = await service.timesheet(LOCATOR, { date: DAY });
+
+    expect(sheet.stops).toEqual([
+      {
+        key: expect.any(String),
+        technicianId: 'tech-1',
+        technician: 'Moses',
+        arrivedAt: at(70).toISOString(),
+        leftAt: at(95).toISOString(),
+        durationSeconds: 25 * 60,
+        quietSeconds: 0,
+        place: { kind: 'BUSINESS', name: 'The Home Depot', address: '1 Supply Rd, Houston' },
+        latitude: 29.9,
+        longitude: -95.5,
+      },
+    ]);
+    // A stop is not a property: it never becomes a row of its own there.
+    expect(sheet.visits).toHaveLength(2);
+  });
+
+  /** Left out rather than emptied: an empty list would say there were none. */
+  it('tells nobody else where the technician stopped, only for how long', async () => {
+    const { service } = sheetHarness(day());
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet).not.toHaveProperty('stops');
+    expect(sheet.totals[0]!.stopSeconds).toBe(25 * 60);
+  });
+
+  it('says a stop has not been looked up yet rather than inventing a name', async () => {
+    const { service } = sheetHarness([segment('tech-1', 'STOP', 0, 10, { placeLatitude: 29.9, placeLongitude: -95.5 })]);
+
+    const sheet = await service.timesheet(LOCATOR, { date: DAY });
+
+    expect(sheet.stops![0]!.place).toBeNull();
+  });
+});
+
 describe('what each stop was for', () => {
   it('names every visit the technician had at the property that day, the filed one first', async () => {
     const { service } = sheetHarness(
@@ -359,6 +441,7 @@ describe('correcting the time at a property', () => {
       changed: true,
       onsiteSeconds: 0,
       generalSeconds: 0,
+      stopSeconds: 0,
       fixesRead: 0,
       fixesDiscarded: 0,
     });
