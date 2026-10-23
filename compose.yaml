@@ -114,6 +114,11 @@ services:
       context: .
       dockerfile: docker/backend/Dockerfile
       target: runtime
+      # Re-resolve `node:24-bookworm-slim` on every build. Without it `--build`
+      # reuses whatever base Docker cached, so a Node security release never
+      # reaches this stack — including the beta, which the tunnel puts on the
+      # internet. Release images get this from buildx already.
+      pull: true
     # Absent on a fresh clone; `required: false` keeps `docker compose config`
     # working before anyone has written their local credentials.
     env_file:
@@ -135,6 +140,8 @@ services:
       # consoles the way it used to.
       dockerfile: docker/web/Dockerfile
       target: runtime
+      # See backend: a stale cached Node base otherwise outlives its patches.
+      pull: true
       args:
         # Next inlines NEXT_PUBLIC_* at build time, so these must be build args
         # rather than runtime environment. They are read by the browser and are

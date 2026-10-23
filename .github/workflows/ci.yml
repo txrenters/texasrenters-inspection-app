@@ -77,6 +77,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          # The runner's cached 24.x can trail a security release by days;
+          # this asks for the newest 24.x instead.
+          check-latest: true
           cache: npm
       # `npm ci` honours the `allowScripts` list in package.json. Without those
       # approvals Prisma, sharp and ffmpeg-static install with their scripts
