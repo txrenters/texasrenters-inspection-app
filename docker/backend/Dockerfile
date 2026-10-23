@@ -30,6 +30,10 @@ FROM node:24-bookworm-slim AS runtime
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+# Refuse to ship a Node older than engines.node, which names the patched releases.
+RUN --mount=type=bind,source=package.json,target=/tmp/engines/package.json \
+  --mount=type=bind,source=scripts/docker/assert-patched-node.mjs,target=/tmp/engines/assert-patched-node.mjs \
+  node /tmp/engines/assert-patched-node.mjs /tmp/engines/package.json
 ENV NODE_ENV=production
 ENV PORT=3000
 # Containers must listen on every interface, not loopback, or the Docker network

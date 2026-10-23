@@ -65,6 +65,10 @@ RUN npm run build --workspace @texasrenters/shared \
   && npm run build --workspace @texasrenters/web
 
 FROM node:24-bookworm-slim AS runtime
+# Refuse to ship a Node older than engines.node, which names the patched releases.
+RUN --mount=type=bind,source=package.json,target=/tmp/engines/package.json \
+  --mount=type=bind,source=scripts/docker/assert-patched-node.mjs,target=/tmp/engines/assert-patched-node.mjs \
+  node /tmp/engines/assert-patched-node.mjs /tmp/engines/package.json
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=5454
