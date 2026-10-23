@@ -21,9 +21,10 @@ import { featureCollection, lineFeature } from '@/components/map-geometry';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
 import type { PropertyVisit } from '@/lib/day-visits';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
-import { formatDistance, formatDuration } from '@/lib/format';
+import { formatDistance, formatDuration, formatTime } from '@/lib/format';
+import { namedByOpenStreetMap, stopDetail, stopTitle } from '@/lib/timesheet-queries';
 import { useMotionTracks } from '@/lib/use-motion-tracks';
-import { DonePin, PlanePin, StopPin } from '@/components/map-pins';
+import { AwayStopPin, DonePin, PlanePin, StopPin } from '@/components/map-pins';
 
 /**
  * Where every technician was when their handset last reported, over the
@@ -468,6 +469,82 @@ const TrailLayer = memo(function TrailLayer({
 });
 
 /**
+ * Where each technician stopped between properties that is not one -- the
+ * hardware store, a supply run -- on their trail (the office, 2026-10-17:
+ * "show it on the map"). The timesheet's own stops, so the map and the hours
+ * never disagree about where or for how long. Receded like the trails when
+ * somebody else is selected.
+ */
+export const TrailStopsLayer = memo(function TrailStopsLayer({
+  colors,
+  selectedTechnicianId,
+  trails,
+}: {
+  colors: ReadonlyMap<string, string>;
+  selectedTechnicianId: string | null;
+  trails: readonly TechnicianTrail[];
+}) {
+  const [openStop, setOpenStop] = useState<string | null>(null);
+  return (
+    <>
+      {trails.flatMap((trail) =>
+        (trail.stops ?? []).map((stop) => {
+          const receded = Boolean(selectedTechnicianId) && trail.technicianId !== selectedTechnicianId;
+          const place = stop.kind ? { kind: stop.kind, name: stop.name, address: stop.address } : null;
+          const title = stopTitle({ place });
+          const detail = stopDetail({ place });
+          const when = `${formatTime(stop.startedAt)} – ${formatTime(stop.endedAt)}`;
+          return (
+            <Fragment key={stop.id}>
+              <Marker
+                anchor="center"
+                latitude={stop.latitude}
+                longitude={stop.longitude}
+                onClick={(event) => {
+                  event.originalEvent.stopPropagation();
+                  setOpenStop(stop.id);
+                }}
+                // Under the route's numbered stops, which are what is being read
+                // while a route is shown.
+                style={{ zIndex: receded ? 600 : 650 }}
+              >
+                <span aria-label={`Stop: ${title}, ${when}`} role="img">
+                  <AwayStopPin color={colors.get(trail.technicianId) ?? UNCOLOURED_LINE} receded={receded} />
+                </span>
+              </Marker>
+              {openStop === stop.id ? (
+                <Popup
+                  anchor="bottom"
+                  closeOnClick={false}
+                  latitude={stop.latitude}
+                  longitude={stop.longitude}
+                  offset={14}
+                  onClose={() => setOpenStop(null)}
+                >
+                  <div className="text-popover-foreground grid gap-0.5 text-xs leading-relaxed">
+                    <div className="text-sm font-medium">{title}</div>
+                    {detail ? <div className="text-muted-foreground">{detail}</div> : null}
+                    <div className="mt-1">
+                      {when} · {formatDuration(stop.durationSeconds)}
+                    </div>
+                    <div className="text-muted-foreground">Stop away from the properties</div>
+                    {namedByOpenStreetMap({ place }) ? (
+                      <div className="text-muted-foreground mt-1 text-[10px]">
+                        Place name © OpenStreetMap contributors
+                      </div>
+                    ) : null}
+                  </div>
+                </Popup>
+              ) : null}
+            </Fragment>
+          );
+        }),
+      )}
+    </>
+  );
+});
+
+/**
  * Everybody's day still ahead of them, dashed in their colour: the line on to
  * the properties they are yet to visit (the office, 2026-10-02: "the lines that
  * connects to the scheduled property of the scheduled day").
@@ -859,6 +936,7 @@ export function TechnicianMap({
         selectedTechnicianId={selectedTechnicianId}
         trails={trails}
       />
+      <TrailStopsLayer colors={colors} selectedTechnicianId={selectedTechnicianId} trails={trails} />
       <RouteLayer
         currentInspectionIds={currentInspectionIds}
         drawDriven={!selectedHasTrail}

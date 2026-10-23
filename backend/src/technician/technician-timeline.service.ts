@@ -220,18 +220,61 @@ export class TechnicianTimelineService {
    */
   async trailFor(user: AuthenticatedUser, technicianId: string, date: Date): Promise<TechnicianTrail> {
     const { start, end } = businessDayBounds(date);
-    const fixes = await this.prisma.technicianLocationPing.findMany({
-      where: {
-        organizationId: user.organizationId,
-        technicianId,
-        recordedAt: { gte: start, lt: end },
-      },
-      select: { latitude: true, longitude: true, recordedAt: true, accuracyMeters: true },
-      orderBy: { recordedAt: 'asc' },
-    });
+    const [fixes, stops] = await Promise.all([
+      this.prisma.technicianLocationPing.findMany({
+        where: {
+          organizationId: user.organizationId,
+          technicianId,
+          recordedAt: { gte: start, lt: end },
+        },
+        select: { latitude: true, longitude: true, recordedAt: true, accuracyMeters: true },
+        orderBy: { recordedAt: 'asc' },
+      }),
+      // The timesheet's own stops, so the map says what the hours say. One
+      // whose position has gone with the trail has nowhere to be drawn.
+      this.prisma.timeSegment.findMany({
+        where: {
+          organizationId: user.organizationId,
+          technicianId,
+          category: 'STOP',
+          startedAt: { gte: start, lt: end },
+          placeLatitude: { not: null },
+          placeLongitude: { not: null },
+        },
+        select: {
+          id: true,
+          startedAt: true,
+          endedAt: true,
+          durationSeconds: true,
+          placeLatitude: true,
+          placeLongitude: true,
+          placeKind: true,
+          placeName: true,
+          placeAddress: true,
+        },
+        orderBy: { startedAt: 'asc' },
+      }),
+    ]);
     return {
       technicianId,
       fixes: fixes.length,
+      stops: stops.flatMap((stop) =>
+        stop.placeLatitude && stop.placeLongitude
+          ? [
+              {
+                id: stop.id,
+                startedAt: stop.startedAt.toISOString(),
+                endedAt: stop.endedAt.toISOString(),
+                durationSeconds: stop.durationSeconds,
+                latitude: stop.placeLatitude.toNumber(),
+                longitude: stop.placeLongitude.toNumber(),
+                kind: stop.placeKind,
+                name: stop.placeName,
+                address: stop.placeAddress,
+              },
+            ]
+          : [],
+      ),
       segments: trailSegments(
         fixes.map((fix) => ({
           latitude: fix.latitude.toNumber(),

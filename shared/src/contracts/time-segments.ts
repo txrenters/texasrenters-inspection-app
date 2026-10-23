@@ -61,17 +61,22 @@ export interface SegmentFix {
 }
 
 /**
- * `DRIVING` is no longer written. The office reads everything away from a
- * property as one figure, general time, and rows from before that are added
- * into it wherever they are read.
+ * `DRIVING` is no longer written. Everything away from a property is general
+ * time, and rows from before that are added into it wherever they are read --
+ * except a stop: somewhere that is not a property, where the technician stood
+ * still long enough to be doing something there (the office, 2026-10-17: a
+ * supply run to the hardware store). A stop is its own figure on the
+ * timesheet, so general time is the drive.
  */
-export type TimeSegmentCategory = 'ONSITE' | 'DRIVING' | 'GENERAL';
+export type TimeSegmentCategory = 'ONSITE' | 'DRIVING' | 'GENERAL' | 'STOP';
 
-/** A stretch of the day: at one property, or between properties. */
+/** A stretch of the day: at one property, at a stop, or on the road between. */
 export interface LedgerStretch {
-  category: 'ONSITE' | 'GENERAL';
-  /** The property the technician was at. Null for general time. */
+  category: 'ONSITE' | 'GENERAL' | 'STOP';
+  /** The property the technician was at. Null for general time and stops. */
   fenceId: string | null;
+  /** Where a stop was: the middle of the fixes that made it. Only on a stop. */
+  position?: { latitude: number; longitude: number };
   startedAt: number;
   endedAt: number;
   durationSeconds: number;
@@ -196,6 +201,52 @@ export const SEGMENT_DEFAULTS = {
    * being quiet -- it is the phone, the signal or the walls of the house.
    */
   maxFixGapSeconds: 300,
+
+  /**
+   * A stop is this long ...
+   *
+   * Five minutes, the shortest anybody runs into a store for: past a red light,
+   * a train crossing, a queue at a junction. Shorter waits stay general time.
+   */
+  stopMinSeconds: 300,
+
+  /**
+   * ... within this of one spot.
+   *
+   * 75 m, because a stop is a car park and a store, not a front room: a
+   * technician walking from the van to the back of a hardware store is a
+   * hundred metres from where they parked at the far end of it, and the phone
+   * indoors wanders tens of metres more.
+   */
+  stopRadiusMeters: 75,
+
+  /**
+   * Fixes vaguer than this cannot say where a stop was.
+   *
+   * Four times the circle's 25 m. A stop does not have to decide which side of
+   * a line somebody is on, only roughly where they stood, and inside a steel
+   * building the phone rarely does better than 50 m. The trail on the map
+   * draws to the same limit.
+   */
+  stopMaxAccuracyMeters: 100,
+
+  /**
+   * Not a stop this close to a property they had a visit at.
+   *
+   * The kerb outside, the neighbour's drive the van was left in, the end of a
+   * big lot past the 30 m circle: those minutes belong to the visit's
+   * surroundings and stay general time, or every visit would grow a stop on
+   * either side of it.
+   *
+   * 150 m, from 30 days of production trails replayed on 2026-10-17. At 100 m
+   * there were 28 stops; the 13 between 100 and 150 m from a visit property
+   * every one sat directly before or after the time inside that same
+   * property's circle, and was almost all silent phone (137 of 153 minutes) --
+   * the visit, carried through a quiet phone some way from the pin, not a trip
+   * anywhere. Nothing at all fell between 150 and 200 m; the 15 left were 5 to
+   * 26 minutes, all over half a kilometre from any visit.
+   */
+  stopPropertyMarginMeters: 150,
 } as const;
 
 export type SegmentSettings = typeof SEGMENT_DEFAULTS;
@@ -247,7 +298,8 @@ interface Run {
  * `fixes` must be in time order and belong to one technician; `fences` are the
  * properties they are due at that day. The answer runs from the first arrival
  * to the last departure and has no holes in it: each stretch is on site at one
- * property, or general time between them.
+ * property, a stop somewhere that is not one, or general time on the road
+ * between them.
  *
  * **The drive in and the drive home are not in it.** The day starts when the
  * technician first arrives at a property and ends when they leave the last
@@ -343,17 +395,149 @@ export function computeDayLedger(
   let lastOnsite = joined.length - 1;
   while (joined[lastOnsite]!.place === null) lastOnsite -= 1;
 
+  // Between properties, where the technician stood still somewhere is a stop
+  // and the rest is the drive. Only between: before the first arrival and
+  // after the last departure is not the day (the office, 2026-10-17).
+  const stopFixes = fixes.filter(
+    (fix) => fix.accuracyMeters === null || fix.accuracyMeters <= settings.stopMaxAccuracyMeters,
+  );
+  const stretches: LedgerStretch[] = [];
+  for (const run of joined.slice(firstOnsite, lastOnsite + 1)) {
+    if (run.place !== null) {
+      stretches.push(stretchOf(run, 'ONSITE'));
+      continue;
+    }
+    const stops = stopsBetween(stopFixes, run.from, run.to, fences, settings);
+    if (!stops.length) {
+      stretches.push(stretchOf(run, 'GENERAL'));
+      continue;
+    }
+    // The silences inside the drive, given to whichever piece they fell in.
+    const quiet = (from: number, to: number) => quietBetween(usableFixes, from, to, settings);
+    const drive = (start: number, end: number) =>
+      stretchOf({ place: null, from: start, to: end, quietSeconds: quiet(start, end) }, 'GENERAL');
+    let from = run.from;
+    for (const stop of stops) {
+      if (stop.from > from) stretches.push(drive(from, stop.from));
+      stretches.push({
+        ...stretchOf({ place: null, from: stop.from, to: stop.to, quietSeconds: quiet(stop.from, stop.to) }, 'STOP'),
+        position: stop.position,
+      });
+      from = stop.to;
+    }
+    if (run.to > from) stretches.push(drive(from, run.to));
+  }
+
+  return { stretches, discardedFixes };
+}
+
+function stretchOf(run: Run, category: LedgerStretch['category']): LedgerStretch {
   return {
-    stretches: joined.slice(firstOnsite, lastOnsite + 1).map((run) => ({
-      category: run.place === null ? 'GENERAL' : 'ONSITE',
-      fenceId: run.place,
-      startedAt: run.from,
-      endedAt: run.to,
-      durationSeconds: Math.round((run.to - run.from) / 1000),
-      quietSeconds: Math.round(run.quietSeconds),
-    })),
-    discardedFixes,
+    category,
+    fenceId: run.place,
+    startedAt: run.from,
+    endedAt: run.to,
+    durationSeconds: Math.round((run.to - run.from) / 1000),
+    quietSeconds: Math.round(run.quietSeconds),
   };
+}
+
+/**
+ * How long the trail was silent between two moments: every gap longer than
+ * `maxFixGapSeconds` between usable fixes, as far as it falls inside. The same
+ * silences `computeDayLedger` counts, so a drive cut in pieces around a stop
+ * keeps the quiet it had, shared out where it actually happened.
+ */
+function quietBetween(fixes: readonly SegmentFix[], from: number, to: number, settings: SegmentSettings): number {
+  let seconds = 0;
+  for (let index = 1; index < fixes.length; index += 1) {
+    const before = fixes[index - 1]!.at;
+    const after = fixes[index]!.at;
+    if (after <= from || before >= to || (after - before) / 1000 <= settings.maxFixGapSeconds) continue;
+    seconds += (Math.min(after, to) - Math.max(before, from)) / 1000;
+  }
+  return seconds;
+}
+
+interface FoundStop {
+  from: number;
+  to: number;
+  position: { latitude: number; longitude: number };
+}
+
+/**
+ * Where, between two properties, the technician stood still long enough to
+ * be doing something: `stopMinSeconds` within `stopRadiusMeters` of one spot.
+ *
+ * Fixes join a stop while they stay near the middle of the ones before them.
+ * One or two thrown further and straight back are skipped rather than ending
+ * it -- a phone inside a store does that every few minutes, and nobody walks
+ * across the car park and back in thirty seconds. A silence does not end a
+ * stop either, if the phone turns up in the same place afterwards: the same
+ * benefit of the doubt a quiet phone gets at a property.
+ *
+ * A stop is timed from its first fix to its last and placed at their median,
+ * so the throws that did get in do not drag it across the road.
+ */
+function stopsBetween(
+  fixes: readonly SegmentFix[],
+  from: number,
+  to: number,
+  fences: readonly DayFence[],
+  settings: SegmentSettings,
+): FoundStop[] {
+  const inside = fixes.filter((fix) => fix.at >= from && fix.at <= to);
+  const near = (centre: { latitude: number; longitude: number }, fix: SegmentFix) =>
+    haversineMeters(centre, fix) <= settings.stopRadiusMeters;
+  const stops: FoundStop[] = [];
+  let index = 0;
+  while (index < inside.length) {
+    const cluster: SegmentFix[] = [inside[index]!];
+    let centre = { latitude: inside[index]!.latitude, longitude: inside[index]!.longitude };
+    let next = index + 1;
+    while (next < inside.length) {
+      const fix = inside[next]!;
+      if (near(centre, fix)) {
+        cluster.push(fix);
+        centre = {
+          latitude: centre.latitude + (fix.latitude - centre.latitude) / cluster.length,
+          longitude: centre.longitude + (fix.longitude - centre.longitude) / cluster.length,
+        };
+        next += 1;
+        continue;
+      }
+      const returns =
+        cluster.length >= 3
+          ? [1, 2].find((ahead) => {
+              const later = inside[next + ahead];
+              return later !== undefined && near(centre, later);
+            })
+          : undefined;
+      if (returns === undefined) break;
+      next += returns;
+    }
+
+    const first = cluster[0]!;
+    const last = cluster[cluster.length - 1]!;
+    if ((last.at - first.at) / 1000 >= settings.stopMinSeconds) {
+      const position = {
+        latitude: median(cluster.map((fix) => fix.latitude)),
+        longitude: median(cluster.map((fix) => fix.longitude)),
+      };
+      const byAProperty = fences.some(
+        (fence) => haversineMeters(position, fence) <= settings.stopPropertyMarginMeters,
+      );
+      if (!byAProperty) stops.push({ from: first.at, to: last.at, position });
+    }
+    index = next;
+  }
+  return stops;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
 /**

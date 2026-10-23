@@ -4136,6 +4136,20 @@ model TimeSegment {
   /// location, a length nobody would expect. Null when it is ordinary.
   flag String?
 
+  /// Where a stop was: the middle of the fixes that made it. Only on a
+  /// `STOP`, and erased with the trail after the retention window -- the name
+  /// below stays with the hours, the position does not outlive the fixes it
+  /// was read from.
+  placeLatitude  Decimal?           @db.Decimal(9, 6)
+  placeLongitude Decimal?           @db.Decimal(9, 6)
+  /// What the stop was, once it has been looked up. Null until then.
+  placeKind      TimeStopPlaceKind?
+  /// "The Home Depot", "123 Main St", "Home". Null for a place nobody could name.
+  placeName      String?
+  placeAddress   String?
+  /// When the stop was looked up, found or not, so it is asked about once.
+  placeNamedAt   DateTime?
+
   computedAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -4154,6 +4168,23 @@ enum TimeSegmentCategory {
   ONSITE
   DRIVING
   GENERAL
+  /// Standing still between properties somewhere that is not one: the
+  /// hardware store, a supply run, lunch. Its own figure on the timesheet.
+  STOP
+}
+
+/// What a stop away from the properties turned out to be.
+enum TimeStopPlaceKind {
+  /// A property the office manages, with no visit booked that day.
+  PROPERTY
+  /// Where the technician said their day starts. Never shown as an address.
+  HOME
+  /// A named place: a store, a restaurant, a supplier.
+  BUSINESS
+  /// Only a street address could be found.
+  ADDRESS
+  /// Looked up, and nothing found.
+  UNKNOWN
 }
 
 enum TimeSegmentSource {
