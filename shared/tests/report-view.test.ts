@@ -516,9 +516,11 @@ describe('a checklist row answered with one choice', () => {
 });
 
 describe('the report’s type', () => {
-  // The maintenance team, 2026-10-08: Arial at 13.5, the web report and the PDF alike.
-  it('is Arial first, at 13.5 pt', () => {
+  // The maintenance team, 2026-10-08: Arial, the web report and the PDF alike.
+  // The office, 2026-10-28: 13.5 was too big, at least 2 px smaller -- 12 pt
+  // is 16 px against 13.5's 18.
+  it('is Arial first, at 12 pt', () => {
     expect(REPORT_TYPE.fontStack.startsWith('Arial,')).toBe(true);
-    expect(REPORT_TYPE.bodyPt).toBe(13.5);
+    expect(REPORT_TYPE.bodyPt).toBe(12);
   });
 });
