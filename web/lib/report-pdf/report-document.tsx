@@ -20,16 +20,20 @@ Font.registerHyphenationCallback((word) => [word]);
 
 const C = REPORT_PALETTE;
 /**
- * Running text, in points: 13.5 (the maintenance team, 2026-10-08). Every other
- * size here is set from it -- headings above, small labels below -- so the PDF
- * and the web report change together. Helvetica is the PDF's own Arial; see
- * `REPORT_TYPE`.
+ * Running text, in points: 12 (the office, 2026-10-28, down from 13.5). Every
+ * other size here is set from it -- headings above, small labels below -- so
+ * the PDF and the web report change together. Helvetica is the PDF's own
+ * Arial; see `REPORT_TYPE`.
  */
 const B = REPORT_TYPE.bodyPt;
 /** The condition table's lines (2026-10-08: drawn round every cell, as InspectCloud's are). */
 const GRID = 0.75;
-/** Tall enough for "Undamaged", slanted at 50 degrees, at 13.5 pt. */
-const AXIS_HEAD_HEIGHT = 74;
+/**
+ * Tall enough for "Undamaged", slanted at 50 degrees: the word is about 5.5
+ * lines long, so its rise plus its own line and lift fits in 5.5 lines. 74 pt
+ * at 13.5, and it shrinks with the type rather than leaving a gap above.
+ */
+const AXIS_HEAD_HEIGHT = Math.round(B * 5.5);
 /** The verdict headings' slant (the maintenance team, 2026-10-09: "around 50 degrees"). */
 const AXIS_HEAD_SLANT = 50;
 const SLANT_SIN = Math.sin((AXIS_HEAD_SLANT * Math.PI) / 180);
@@ -38,7 +42,7 @@ const SLANT_COS = Math.cos((AXIS_HEAD_SLANT * Math.PI) / 180);
 const AXIS_HEAD_LIFT = 4;
 /**
  * Where a heading's bottom-left corner sits, right of its column's middle, so
- * the name -- one line of 13.5 pt -- is centred between the two slanted lines
+ * the name -- one line of running text -- is centred between the two slanted lines
  * a column apart: (half the line + its lift x cos) / sin.
  */
 const AXIS_HEAD_OFFSET = (B / 2 + AXIS_HEAD_LIFT * SLANT_COS) / SLANT_SIN;
@@ -157,8 +161,8 @@ const styles = StyleSheet.create({
   /*
    * The condition table, drawn as a grid, as InspectCloud draws it (the
    * maintenance team, 2026-10-08): a line round every cell, each Y and N in
-   * the middle of its own box, and everything at Arial 13.5 -- headings, items,
-   * verdicts and comments alike. The verdict columns are narrow, their headings
+   * the middle of its own box, and everything at the running size -- headings,
+   * items, verdicts and comments alike. The verdict columns are narrow, their headings
    * turned upright to fit, so the Comments column has the room. Widths are
    * fixed rather than proportional so the columns line up down the page.
    */
@@ -544,7 +548,9 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
           </View>
         ) : null}
 
-        <View style={styles.disclaimer}>
+        {/* Whole, like the closing block: split, it left an empty strip of
+            its tint at the foot of one page and the text on the next. */}
+        <View style={styles.disclaimer} wrap={false}>
           <Text>{view.disclaimer}</Text>
         </View>
         <Text style={styles.brandLine}>

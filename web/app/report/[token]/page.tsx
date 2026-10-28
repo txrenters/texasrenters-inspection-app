@@ -109,8 +109,8 @@ function Room({ room }: { room: ReportRoomView }) {
           printing "N" would publish a defect nobody observed. */}
       {room.checklist.length ? (
         <div className="overflow-hidden rounded-lg border">
-          {/* Arial 13.5 throughout (the maintenance team, 2026-10-08: "Arial
-              13.5, all of it"), headings, items, verdicts and comments alike. */}
+          {/* The running size throughout (the maintenance team, 2026-10-08:
+              "all of it"), headings, items, verdicts and comments alike. */}
           <Table className="table-fixed text-[1em] [&_thead_th]:text-[1em]">
             {/* `colgroup` rather than per-cell widths: `table-fixed` reads the
                 first row to size the columns, so without it each room's table
@@ -306,7 +306,7 @@ function Room({ room }: { room: ReportRoomView }) {
 }
 
 /**
- * Arial, running text at 13.5 pt (the maintenance team, 2026-10-08); every
+ * Arial, running text at 12 pt (the office, 2026-10-28, down from 13.5); every
  * size inside is relative to it, so this is the one place the size is set.
  * A little wider than before, so the condition table keeps its columns at the
  * larger size.

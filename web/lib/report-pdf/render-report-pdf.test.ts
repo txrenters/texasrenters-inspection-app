@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderReportPdf, reportFileName } from './render-report-pdf';
-import { buildReportView } from '@texasrenters/shared';
+import { REPORT_TYPE, buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport } from '@texasrenters/shared';
 
 const REPORT: PublicInspectionReport = {
@@ -367,8 +367,10 @@ async function textSizes(pdf: Buffer) {
 }
 
 describe('the report’s type', () => {
-  // The maintenance team, 2026-10-08: Arial at 13.5, in the PDF too.
-  it('sets running text at 13.5 pt, headings above it and small labels below', async () => {
+  // The maintenance team, 2026-10-08: Arial, in the PDF too, the table at the
+  // running size. The office, 2026-10-28: too big, at least 2 px smaller than
+  // the 13.5 pt it was -- 1.5 pt, which is 2 px on screen.
+  it('sets running text at 12 pt, headings above it and small labels below', async () => {
     mockPhotoFetch();
 
     const pdf = await renderReportPdf(
@@ -388,12 +390,17 @@ describe('the report’s type', () => {
     // A wrapped line is its own piece of text, so this finds it by a fragment.
     const sizeOf = (fragment: string) =>
       [...sizes.entries()].find(([text]) => text.includes(fragment))?.[1];
-    // The condition table, comments included: Arial 13.5, all of it (2026-10-08).
-    expect(sizeOf('Clean the windows')).toBe(13.5);
-    expect(sizeOf('scratches on door')).toBe(13.5);
-    expect(sizeOf('DOORS AND LOCKS')).toBe(13.5);
-    expect(sizeOf('Room by room')).toBeGreaterThan(13.5);
-    expect(sizeOf('Page 1 of')).toBeLessThan(13.5);
+    // The condition table, comments included, all at the running size.
+    expect(sizeOf('Clean the windows')).toBe(12);
+    expect(sizeOf('scratches on door')).toBe(12);
+    expect(sizeOf('DOORS AND LOCKS')).toBe(12);
+    expect(sizeOf('Room by room')).toBeGreaterThan(12);
+    expect(sizeOf('Page 1 of')).toBeLessThan(12);
+    // Body, table and headings each at least 2 px (1.5 pt) under what they were.
+    const before = { body: 13.5, roomByRoom: 13.5 * 1.3, room: 13.5 * 1.15 };
+    expect(sizeOf('scratches on door')!).toBeLessThanOrEqual(before.body - 1.5);
+    expect(sizeOf('Room by room')!).toBeLessThanOrEqual(before.roomByRoom - 1.5);
+    expect(sizeOf('KITCHEN')!).toBeLessThanOrEqual(before.room - 1.5);
   }, 60_000);
 });
 
@@ -418,6 +425,9 @@ async function textPlaces(pdf: Buffer) {
   }
   return places;
 }
+
+/** A line of running text, in points. */
+const LINE = REPORT_TYPE.bodyPt;
 
 describe('the condition table, drawn as a grid', () => {
   // The maintenance team, 2026-10-08: lines on the Y and N, centred, "not
@@ -444,17 +454,17 @@ describe('the condition table, drawn as a grid', () => {
       // and above it.
       const letter = letters[index]!;
       expect(Math.abs(head.x - (letter.x + letter.width / 2))).toBeLessThan(12);
-      expect(head.y).toBeGreaterThan(letter.y + 13.5);
+      expect(head.y).toBeGreaterThan(letter.y + LINE);
     });
     // The last one leans over the Comments heading, and passes above it.
     const working = heading('Working');
     const comments = heading('Comments');
     const rise = Math.tan((50 * Math.PI) / 180);
-    expect(working.y + (comments.x - working.x) * rise).toBeGreaterThan(comments.y + 13.5);
+    expect(working.y + (comments.x - working.x) * rise).toBeGreaterThan(comments.y + LINE);
     // And the slanted names stand clear of each other: a column apart, they
-    // are further apart, square to their slant, than a line of 13.5 pt.
+    // are further apart, square to their slant, than a line of running text.
     const gap = (heading('Undamaged').x - heading('Clean').x) * Math.sin((50 * Math.PI) / 180);
-    expect(gap).toBeGreaterThan(13.5 * 1.2);
+    expect(gap).toBeGreaterThan(LINE * 1.2);
   }, 60_000);
 });
 

@@ -194,11 +194,15 @@ export interface ReportChecklistRowView {
 export const OTHER_ROW_LABEL = 'Other';
 
 /**
- * The report's type (the maintenance team, 2026-10-08): Arial, running text at
- * 13.5 pt, in the web report and the PDF alike, with headings scaled up from it
- * and small labels -- a photograph's time, the footer -- below it. The
- * condition table is 13.5 throughout, its comments included ("Arial 13.5, all
- * of it", the same day, after a morning at 9).
+ * The report's type: Arial, running text at 12 pt, in the web report and the
+ * PDF alike, with headings scaled up from it and small labels -- a photograph's
+ * time, the footer -- below it. The condition table is the running size
+ * throughout, its comments included.
+ *
+ * 12 pt is 16 px on screen. The maintenance team asked for 13.5 on 2026-10-08
+ * ("Arial 13.5, all of it", after a morning at 9); the office found that too
+ * big on 2026-10-28 and asked for at least 2 px smaller, which 13.5 (18 px) to
+ * 12 is exactly. Everything else in both renderers is set from this one value.
  *
  * The web report names Arial first. The PDF uses its standard Helvetica, which
  * Arial was drawn to match character for character, and which PDF viewers on
@@ -207,7 +211,7 @@ export const OTHER_ROW_LABEL = 'Other';
  */
 export const REPORT_TYPE = {
   fontStack: 'Arial, "Liberation Sans", Arimo, Helvetica, sans-serif',
-  bodyPt: 13.5,
+  bodyPt: 12,
 } as const;
 
 export interface ReportRoomView {
