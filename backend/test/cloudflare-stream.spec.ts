@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 
-import { CloudflareStreamService } from '../src/media/cloudflare-stream.service';
+import { CloudflareStreamService, saveFileName } from '../src/media/cloudflare-stream.service';
 
 const ORIGINAL_ENV = { ...process.env };
 const originalFetch = global.fetch;
@@ -202,5 +202,111 @@ describe('signed playback tokens', () => {
       CLOUDFLARE_STREAM_SIGNING_KEY_PEM: Buffer.from(pem).toString('base64'),
     });
     expect(() => new CloudflareStreamService().signPlaybackToken('uid', 60)).not.toThrow();
+  });
+});
+
+/**
+ * The office saves a recording as a file (2026-10-28). The link is Cloudflare's,
+ * signed here; what it must carry, and must not, is checked against the live
+ * account's behaviour: a token without `downloadable` gets a 403 on the MP4, and
+ * `filename` is what makes Cloudflare answer it as an attachment.
+ */
+describe('a link that saves a recording', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const MP4 = 'https://customer-abc.cloudflarestream.com/uid-7/downloads/default.mp4';
+
+  function signed() {
+    configure({
+      CLOUDFLARE_STREAM_SIGNING_KEY_ID: 'key-1',
+      CLOUDFLARE_STREAM_SIGNING_KEY_PEM: pem,
+    });
+  }
+
+  function payloadOf(url: string) {
+    const token = new URL(url).pathname.split('/')[1];
+    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as {
+      sub: string;
+      exp: number;
+      downloadable?: boolean;
+    };
+  }
+
+  it('signs the MP4 for this video alone, allowed to download, for minutes', async () => {
+    signed();
+    mockFetch({ json: async () => ({ result: { default: { status: 'ready', url: MP4 } } }) });
+
+    const link = await new CloudflareStreamService().saveLink('uid-7', '318_Kitchen');
+    expect(link.status).toBe('ready');
+    const { url } = link as { url: string };
+    // The token stands where the uid was: unsigned, the file is a 401.
+    expect(url).not.toContain('/uid-7/');
+    const payload = payloadOf(url);
+    expect(payload).toMatchObject({ sub: 'uid-7', downloadable: true });
+    expect(payload.exp * 1000).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+    expect(new URL(url).searchParams.get('filename')).toBe('318_Kitchen');
+  });
+
+  it('carries no credential of ours, only the one-video token', async () => {
+    signed();
+    mockFetch({ json: async () => ({ result: { default: { status: 'ready', url: MP4 } } }) });
+
+    const link = await new CloudflareStreamService().saveLink('uid-7', 'x');
+    const serialized = JSON.stringify(link);
+    expect(serialized).not.toContain('super-secret-token');
+    expect(serialized).not.toContain('acct-1');
+    expect(serialized).not.toContain('PRIVATE KEY');
+  });
+
+  it('asks Cloudflare once and reports a render in progress rather than waiting', async () => {
+    signed();
+    const fetchMock = mockFetch({
+      json: async () => ({ result: { default: { status: 'inprogress', percentComplete: 40 } } }),
+    });
+
+    await expect(new CloudflareStreamService().saveLink('uid-7', 'x')).resolves.toEqual({
+      status: 'preparing',
+      percentComplete: 40,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://api.cloudflare.com/client/v4/accounts/acct-1/stream/uid-7/downloads',
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' });
+  });
+
+  it('says so when Cloudflare could not make the file', async () => {
+    signed();
+    mockFetch({ json: async () => ({ result: { default: { status: 'error' } } }) });
+    const service = new CloudflareStreamService();
+    jest
+      .spyOn((service as unknown as { logger: { warn: () => void } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    await expect(service.saveLink('uid-7', 'x')).resolves.toEqual({ status: 'failed' });
+  });
+
+  it('refuses with a 503 where Stream is not configured', async () => {
+    delete process.env.CLOUDFLARE_ACCOUNT_ID;
+    await expect(new CloudflareStreamService().saveLink('uid-7', 'x')).rejects.toMatchObject({
+      code: 'STREAM_NOT_CONFIGURED',
+    });
+  });
+});
+
+describe('the name a saved recording gets', () => {
+  it('keeps the words apart, in the characters Cloudflare takes', () => {
+    expect(saveFileName('318 Notional Harbor Ln, Unit B_Kitchen_2026-10-27')).toBe(
+      '318_Notional_Harbor_Ln_Unit_B_Kitchen_2026-10-27',
+    );
+  });
+
+  it('drops an accent rather than the letter under it', () => {
+    expect(saveFileName('12 Ñandú Ct')).toBe('12_Nandu_Ct');
+  });
+
+  it('stays within 120 characters and is never empty', () => {
+    expect(saveFileName('a'.repeat(300))).toHaveLength(120);
+    expect(saveFileName('***')).toBe('recording');
   });
 });

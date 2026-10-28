@@ -2030,7 +2030,9 @@ export class AdminService {
 
     const items = rows.map((row) => {
       const areaName =
-        (row.action.startsWith('AREA_REVIEW') || row.action === 'AI_REANALYSIS_REQUESTED') &&
+        (row.action.startsWith('AREA_REVIEW') ||
+          row.action === 'AI_REANALYSIS_REQUESTED' ||
+          row.action === 'RECORDING_DOWNLOADED') &&
         row.metadata &&
         typeof row.metadata === 'object' &&
         !Array.isArray(row.metadata) &&

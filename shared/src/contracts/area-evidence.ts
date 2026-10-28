@@ -155,6 +155,20 @@ export interface RecordingTranscript {
   lines: Array<{ start: number; end: number; text: string }>;
 }
 
+/**
+ * Saving a recording as an MP4 file, from the console.
+ *
+ * `ready` carries a link signed for a few minutes that the browser follows at
+ * once; Cloudflare answers it as an attachment. `preparing` means Cloudflare is
+ * still making the file (ask again shortly); `processing` means the recording
+ * itself is not encoded yet. `unavailable` says why there is no file to save.
+ */
+export type RecordingDownload =
+  | { videoId: string; status: 'ready'; url: string; expiresAt: string }
+  | { videoId: string; status: 'preparing'; percentComplete: number | null }
+  | { videoId: string; status: 'processing' }
+  | { videoId: string; status: 'unavailable'; message: string };
+
 export interface AreaRecording {
   id: string;
   recordingType: 'PRIMARY_AREA' | 'ADDITIONAL_ISSUE';

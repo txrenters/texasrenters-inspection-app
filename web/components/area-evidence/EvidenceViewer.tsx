@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 
 import { fitWithin, type Size } from './area-photos';
 import { cachedPhoto, loadPhoto, preloadPhoto } from './photo-cache';
+import { RecordingDownloadButton } from './RecordingDownloadButton';
 import { RecordingSurface } from './RecordingSurface';
 
 /** Controls sit on a near-black backdrop, where the themed surfaces vanish. */
@@ -443,6 +444,14 @@ export function EvidenceViewer({
               <ZoomInIcon aria-hidden className="size-4" />
             </Button>
           </div>
+        ) : null}
+        {item.kind === 'recording' ? (
+          // Cloudflare's embedded player offers no download of its own.
+          <RecordingDownloadButton
+            className={`shrink-0 ${OVERLAY_CONTROL}`}
+            key={item.id}
+            mediaId={item.id}
+          />
         ) : null}
         {objectUrl ? (
           // The original, not a smaller copy: what a deck or a dispute needs.

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import type { RecordingTranscript } from '@texasrenters/shared';
+import type { RecordingDownload, RecordingTranscript } from '@texasrenters/shared';
 import {
   FrameSuggestionStatus,
   InspectionAreaCompletionStatus,
@@ -12,12 +12,13 @@ import {
 } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
+import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import type { RecordingCaptureDto } from './inspection-video.dto';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
-import { CloudflareStreamService } from './cloudflare-stream.service';
+import { CloudflareStreamService, saveFileName } from './cloudflare-stream.service';
 import { isAiFiled } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from '../technician/room-summary';
@@ -111,6 +112,47 @@ export interface UploadSessionInput {
   recordedAt?: string;
   /** The guided capture's account of the take; see `RecordingCaptureDto`. */
   capture?: RecordingCaptureDto;
+}
+
+/**
+ * What a saved recording is called: the property, the room, which recording,
+ * and the Texas day it was filmed -- `318_Notional_Harbor_Ln_Kitchen_Walkthrough_2026-10-27`.
+ *
+ * The day tells a move-in's kitchen from the move-out's. Underscores because
+ * Cloudflare, which names the file, takes only letters, digits, `-` and `_`.
+ */
+export function recordingFileName(media: {
+  recordingType: VideoRecordingType;
+  label: string | null;
+  recordedAt: Date | null;
+  createdAt: Date;
+  inspectionArea: {
+    propertyArea: { name: string };
+    inspection: {
+      property: { name: string; addressLine1: string } | null;
+      propertywareBuilding: { name: string; addressLine1: string | null } | null;
+      propertywareUnit: { addressLine1: string | null } | null;
+    };
+  };
+}) {
+  const { inspection, propertyArea } = media.inspectionArea;
+  // The unit's own address, else its building's, as a booked visit's title.
+  const address =
+    inspection.propertywareUnit?.addressLine1?.trim() ||
+    inspection.propertywareBuilding?.addressLine1?.trim() ||
+    inspection.property?.addressLine1?.trim() ||
+    inspection.propertywareBuilding?.name ||
+    inspection.property?.name ||
+    '';
+  const recording =
+    media.recordingType === VideoRecordingType.PRIMARY_AREA
+      ? 'Walkthrough'
+      : media.label?.trim() || 'Additional recording';
+  return saveFileName(
+    [address, propertyArea.name, recording, businessDate(media.recordedAt ?? media.createdAt)]
+      .filter(Boolean)
+      .join('_'),
+  );
 }
 
 /**
@@ -888,33 +930,8 @@ export class InspectionVideoService {
    * evidence about somebody's home.
    */
   async getPlayback(user: AuthenticatedUser, videoId: string) {
-    /**
-     * Annotated, and that is the point.
-     *
-     * This filter was written inline inside a conditional spread, which widens
-     * the object's type and switches off excess-property checking — so
-     * `inspection: { … }`, a relation InspectionMedia does not have, compiled
-     * cleanly and failed at runtime for every technician. Naming it with an
-     * explicit Prisma type puts the check back: get the relation wrong here and
-     * it will not build.
-     */
-    const assignedToCaller: Prisma.InspectionMediaWhereInput = {
-      inspectionArea: {
-        inspection: { assignments: { some: { technicianId: user.id, isCurrent: true } } },
-      },
-    };
     const media = await this.prisma.inspectionMedia.findFirst({
-      where: {
-        id: videoId,
-        organizationId: user.organizationId,
-        // Either an administrator with rights over inspections, or the
-        // technician this inspection is currently assigned to. Expressed in the
-        // query so an unauthorized caller gets a plain not-found and cannot use
-        // the endpoint to discover which video ids exist.
-        // Administrators see any video in their organization; everyone else
-        // only what they are currently assigned.
-        ...(user.permissions.includes('inspections:read') ? {} : assignedToCaller),
-      },
+      where: this.watchableBy(user, videoId),
       select: {
         id: true,
         provider: true,
@@ -1045,6 +1062,135 @@ export class InspectionVideoService {
       durationSeconds,
       expiresAt,
     };
+  }
+
+  /**
+   * The recordings a caller may watch, as a query filter: playback's rule, and
+   * the download's, so the two cannot drift apart.
+   *
+   * Either an administrator with rights over inspections, who sees any video in
+   * their organization, or the technician the inspection is currently assigned
+   * to. Expressed in the query so an unauthorized caller gets a plain not-found
+   * and cannot use either endpoint to discover which video ids exist.
+   */
+  private watchableBy(user: AuthenticatedUser, videoId: string): Prisma.InspectionMediaWhereInput {
+    /**
+     * Annotated, and that is the point.
+     *
+     * This filter was written inline inside a conditional spread, which widens
+     * the object's type and switches off excess-property checking — so
+     * `inspection: { … }`, a relation InspectionMedia does not have, compiled
+     * cleanly and failed at runtime for every technician. Naming it with an
+     * explicit Prisma type puts the check back: get the relation wrong here and
+     * it will not build.
+     */
+    const assignedToCaller: Prisma.InspectionMediaWhereInput = {
+      inspectionArea: {
+        inspection: { assignments: { some: { technicianId: user.id, isCurrent: true } } },
+      },
+    };
+    return {
+      id: videoId,
+      organizationId: user.organizationId,
+      ...(user.permissions.includes('inspections:read') ? {} : assignedToCaller),
+    };
+  }
+
+  /**
+   * A link that saves one recording as an MP4 file (the office, 2026-10-28:
+   * there was no way to keep a copy of a walkthrough, even full screen).
+   *
+   * Whoever may watch a recording may save it, and nobody else: the same query
+   * filter as playback. The bytes go from Cloudflare's edge straight to the
+   * browser, never through this backend. What the browser gets is a five-minute
+   * token for this one video, like the player's but allowed the MP4; the API
+   * token and the signing key stay here.
+   *
+   * Each link handed out is in the inspection's activity: a copy of a recording
+   * of somebody's home has left the system, and who took it is worth knowing.
+   */
+  async getDownload(user: AuthenticatedUser, videoId: string): Promise<RecordingDownload> {
+    const media = await this.prisma.inspectionMedia.findFirst({
+      where: this.watchableBy(user, videoId),
+      select: {
+        id: true,
+        inspectionId: true,
+        streamUid: true,
+        processingStatus: true,
+        readyAt: true,
+        failureCode: true,
+        recordingType: true,
+        label: true,
+        recordedAt: true,
+        createdAt: true,
+        inspectionArea: {
+          select: {
+            id: true,
+            propertyArea: { select: { name: true } },
+            inspection: {
+              select: {
+                property: { select: { name: true, addressLine1: true } },
+                propertywareBuilding: { select: { name: true, addressLine1: true } },
+                propertywareUnit: { select: { addressLine1: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!media)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Room video not found.');
+
+    // Recorded before the Stream migration, and played from the file itself:
+    // the player's own menu saves that one.
+    if (!media.streamUid)
+      return {
+        videoId: media.id,
+        status: 'unavailable',
+        message: 'This recording predates video streaming. Use the player’s own menu to save it.',
+      };
+    if (
+      media.processingStatus === MediaProcessingStatus.FAILED &&
+      media.failureCode === STREAM_ENCODING_FAILED
+    )
+      return {
+        videoId: media.id,
+        status: 'unavailable',
+        message: 'Cloudflare could not process this recording, so there is no file to save.',
+      };
+    // Asked of Cloudflare when our record says not yet, as playback does: the
+    // webhook that sets readyAt can be lost.
+    if (!media.readyAt && !(await this.refreshFromStream(media.streamUid))?.readyAt)
+      return { videoId: media.id, status: 'processing' };
+
+    const area = media.inspectionArea;
+    const link = await this.stream.saveLink(media.streamUid, recordingFileName(media));
+    if (link.status === 'failed')
+      return {
+        videoId: media.id,
+        status: 'unavailable',
+        message: 'Cloudflare could not prepare a file of this recording. Try again later.',
+      };
+    if (link.status === 'preparing')
+      return { videoId: media.id, status: 'preparing', percentComplete: link.percentComplete };
+
+    // On the inspection, like a re-run, so the page's Recent activity says who
+    // saved which room's recording.
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action: 'RECORDING_DOWNLOADED',
+        entityType: 'Inspection',
+        entityId: media.inspectionId,
+        metadata: {
+          inspectionMediaId: media.id,
+          inspectionAreaId: area.id,
+          areaName: area.propertyArea.name,
+        },
+      },
+    });
+    return { videoId: media.id, status: 'ready', url: link.url, expiresAt: link.expiresAt };
   }
 
   /**

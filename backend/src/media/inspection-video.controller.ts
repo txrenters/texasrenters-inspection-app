@@ -51,6 +51,21 @@ export class InspectionVideoController {
   }
 
   /**
+   * A short-lived link that saves the recording as an MP4 file.
+   *
+   * Authorized inside the service exactly as playback is: whoever may watch a
+   * recording may save it. A POST because it may ask Cloudflare to make the
+   * file and records who took a copy; asking again is safe.
+   */
+  @Post(':videoId/download')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  @HttpCode(200)
+  download(@Req() request: AuthenticatedRequest, @Param('videoId') videoId: string) {
+    return this.service.getDownload(request.user, videoId);
+  }
+
+  /**
    * Cut a still from a recording and file it as report evidence.
    *
    * Reviewer-side by design, and authorized inside the service against the

@@ -34,6 +34,25 @@ const DOWNLOAD_READY_TIMEOUT_MS = 3 * 60_000;
 /** Long enough for the backend to pull a walkthrough once, and no longer. */
 const DOWNLOAD_TOKEN_TTL_SECONDS = 30 * 60;
 
+/**
+ * How long a reviewer's "Download" link stays valid.
+ *
+ * The browser follows it the moment it arrives, and Cloudflare checks the
+ * token only on that first request before redirecting to the file, so a large
+ * download is not cut off when the token lapses. Anything longer is only a
+ * longer life for a link that may end up pasted somewhere.
+ */
+const SAVE_LINK_TTL_SECONDS = 5 * 60;
+
+/** Cloudflare's rule for `?filename=`: these characters, at most 120, `.mp4` added by Cloudflare. */
+const MAX_SAVE_FILE_NAME_LENGTH = 120;
+
+/** One look at a video's MP4, for a person waiting on it rather than a background job. */
+export type StreamSaveLink =
+  | { status: 'ready'; url: string; expiresAt: string }
+  | { status: 'preparing'; percentComplete: number | null }
+  | { status: 'failed' };
+
 export interface StreamDirectUpload {
   streamUid: string;
   uploadUrl: string;
@@ -241,7 +260,6 @@ export class CloudflareStreamService {
    */
   async ensureDownloadUrl(streamUid: string): Promise<string | null> {
     this.assertConfigured();
-    const path = `/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/stream/${encodeURIComponent(streamUid)}/downloads`;
 
     /**
      * Cloudflare renders the downloadable MP4 asynchronously, so this waits.
@@ -258,12 +276,7 @@ export class CloudflareStreamService {
      */
     const deadline = Date.now() + DOWNLOAD_READY_TIMEOUT_MS;
     for (let attempt = 0; ; attempt += 1) {
-      const response = await this.fetchStream(path, { method: 'POST' }, [409]);
-      const body = (await response.json().catch(() => null)) as {
-        result?: { default?: { status?: string; url?: string; percentComplete?: number } };
-      } | null;
-
-      const download = body?.result?.default;
+      const download = await this.requestDownload(streamUid);
       if (download?.url && download.status === 'ready') return this.signDownloadUrl(download.url, streamUid);
       if (download?.status === 'error') {
         this.logger.warn({ event: 'stream_download_render_failed', streamUid });
@@ -284,6 +297,52 @@ export class CloudflareStreamService {
   }
 
   /**
+   * A link that saves one recording as an MP4 file, for a reviewer who asked.
+   *
+   * Asks once and answers at once, unlike `ensureDownloadUrl`: a person is
+   * waiting, so a render still in progress is reported with its percentage and
+   * the console asks again, rather than holding a request open for minutes.
+   * Most recordings already have their MP4, since transcription rendered it.
+   *
+   * `filename` is what makes this a saved file rather than a tab playing the
+   * video. The console and Cloudflare are different origins, so the browser
+   * ignores an `<a download>` attribute; with `filename` set, Cloudflare answers
+   * `Content-Disposition: attachment` under that name (checked against the live
+   * account on 2026-10-28, as was the 403 a token without `downloadable` gets).
+   */
+  async saveLink(streamUid: string, fileName: string): Promise<StreamSaveLink> {
+    this.assertConfigured();
+    const download = await this.requestDownload(streamUid);
+    if (download?.status === 'error') {
+      this.logger.warn({ event: 'stream_download_render_failed', streamUid });
+      return { status: 'failed' };
+    }
+    if (!download?.url || download.status !== 'ready')
+      return { status: 'preparing', percentComplete: download?.percentComplete ?? null };
+
+    const url = new URL(this.signDownloadUrl(download.url, streamUid, SAVE_LINK_TTL_SECONDS));
+    url.searchParams.set('filename', saveFileName(fileName));
+    return {
+      status: 'ready',
+      url: url.toString(),
+      expiresAt: new Date(Date.now() + SAVE_LINK_TTL_SECONDS * 1000).toISOString(),
+    };
+  }
+
+  /** Cloudflare's view of a video's MP4, asking for one if there is none (POST is idempotent). */
+  private async requestDownload(streamUid: string) {
+    const response = await this.fetchStream(
+      `/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/stream/${encodeURIComponent(streamUid)}/downloads`,
+      { method: 'POST' },
+      [409],
+    );
+    const body = (await response.json().catch(() => null)) as {
+      result?: { default?: { status?: string; url?: string; percentComplete?: number } };
+    } | null;
+    return body?.result?.default ?? null;
+  }
+
+  /**
    * Swap the uid in a download URL for a signed token.
    *
    * Videos are created with `requireSignedURLs`, so every URL under
@@ -295,9 +354,9 @@ export class CloudflareStreamService {
    * Left untouched when signing is not configured: an account without signed
    * URLs serves the plain form, and rewriting it would break it.
    */
-  private signDownloadUrl(url: string, streamUid: string) {
+  private signDownloadUrl(url: string, streamUid: string, ttlSeconds = DOWNLOAD_TOKEN_TTL_SECONDS) {
     if (!this.signingConfigured) return url;
-    const { token } = this.signPlaybackToken(streamUid, DOWNLOAD_TOKEN_TTL_SECONDS, {
+    const { token } = this.signPlaybackToken(streamUid, ttlSeconds, {
       downloadable: true,
     });
     return url.replace(`/${streamUid}/`, `/${token}/`);
@@ -432,6 +491,24 @@ function encodeUploadMetadata(values: Record<string, string>) {
       value === '' ? key : `${key} ${Buffer.from(value).toString('base64')}`,
     )
     .join(',');
+}
+
+/**
+ * A name Cloudflare will take for `?filename=`: letters, digits, `-` and `_`.
+ *
+ * Anything else becomes `_`, so "318 Notional Harbor Ln" stays readable as
+ * `318_Notional_Harbor_Ln` rather than losing its spaces into one word.
+ */
+export function saveFileName(value: string) {
+  const name = value
+    // "Ñandú" as "Nandu" rather than "_and_": the accent goes, the letter stays.
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, MAX_SAVE_FILE_NAME_LENGTH)
+    .replace(/^[_-]+|[_-]+$/g, '');
+  return name || 'recording';
 }
 
 function base64Url(value: string) {

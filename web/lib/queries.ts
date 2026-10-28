@@ -2,6 +2,7 @@
 
 import type { VideoPlayback } from './playback';
 import type {
+  RecordingDownload,
   RecordingTranscript,
   AccountDeletionPreflight,
   AccountDeletionResult,
@@ -2788,6 +2789,18 @@ export function useAdminMutations() {
           queryKey: keys.areaEvidence(variables.inspectionId, variables.areaId),
         });
       },
+    }),
+    /**
+     * A short-lived link that saves one recording as an MP4.
+     *
+     * Asked again while Cloudflare is still making the file; see
+     * `RecordingDownloadButton`. Never cached: the link expires in minutes.
+     */
+    downloadRecording: useMutation({
+      mutationFn: ({ mediaId }: { mediaId: string }) =>
+        api<RecordingDownload>(`/api/v1/inspection-videos/${mediaId}/download`, {
+          method: 'POST',
+        }),
     }),
     /**
      * Adds approved property areas to an inspection already under way.
