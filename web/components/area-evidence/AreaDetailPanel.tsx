@@ -32,6 +32,7 @@ import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { FindingsReview } from './FindingsReview';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { ReanalyzeControl, ReanalyzeStatus, canReanalyze } from './ReanalyzeControl';
+import { RecordingDownloadButton } from './RecordingDownloadButton';
 import { RecordingSummaryCard } from './RecordingSummaryCard';
 import { RecordingTranscript } from './RecordingTranscript';
 import { RecordingMarkers } from './RecordingMarkers';
@@ -129,6 +130,9 @@ function RecordingCard({
             : recording.label || 'Additional recording'}
         </p>
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {canDownload(recording) ? (
+            <RecordingDownloadButton className="h-7 text-xs" mediaId={recording.id} />
+          ) : null}
           {reanalyze && canReanalyze(recording) ? (
             <ReanalyzeControl
               areaId={areaId}
@@ -237,6 +241,15 @@ function RecordingCard({
       </footer>
     </article>
   );
+}
+
+/**
+ * Whether there is a file to save: not before the upload has arrived, and not
+ * when Cloudflare could not encode it (FAILED alone means that). The server
+ * answers the same cases; this only keeps the button off them.
+ */
+function canDownload(recording: AreaRecording) {
+  return recording.processingStatus !== 'PENDING' && recording.processingStatus !== 'FAILED';
 }
 
 /** Filmed upright, by Cloudflare's measure. Unknown sizes are treated as landscape. */

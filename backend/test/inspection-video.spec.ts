@@ -1,10 +1,12 @@
 import { createHmac } from 'node:crypto';
 
+import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { UserRole } from '@texasrenters/shared';
 
-import type { AuthenticatedUser } from '../src/common/auth';
+import { ApiAuthGuard, type AuthenticatedUser } from '../src/common/auth';
 import { CloudflareStreamWebhookGuard } from '../src/media/cloudflare-stream-webhook.guard';
-import { InspectionVideoService } from '../src/media/inspection-video.service';
+import { InspectionVideoController } from '../src/media/inspection-video.controller';
+import { InspectionVideoService, recordingFileName } from '../src/media/inspection-video.service';
 
 const technician: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000004',
@@ -1163,5 +1165,237 @@ describe('webhook signature guard', () => {
     delete process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET;
     const time = Math.floor(Date.now() / 1000);
     expect(() => guard.canActivate(contextFor(`time=${time},sig1=x`))).toThrow(/not configured/i);
+  });
+});
+
+/**
+ * The office saves a recording as a file (2026-10-28: "there's no option to
+ * save the video, even if I click full screen"). Whoever may watch it may save
+ * it, and nobody else: the same filter as playback, organization first.
+ */
+describe('saving a recording as a file', () => {
+  const reviewer: AuthenticatedUser = {
+    ...technician,
+    id: '10000000-0000-4000-8000-000000000003',
+    roles: [UserRole.SYSTEM_ADMIN],
+    permissions: ['inspections:read'],
+  };
+
+  const recording = {
+    id: 'media-1',
+    inspectionId: 'insp-1',
+    streamUid: 'uid-1',
+    processingStatus: 'PROCESSING',
+    readyAt: new Date('2026-10-27T15:00:00.000Z'),
+    failureCode: null,
+    recordingType: 'PRIMARY_AREA',
+    label: null,
+    // 10:30 p.m. in Texas on the 27th, already the 28th in UTC.
+    recordedAt: new Date('2026-10-28T03:30:00.000Z'),
+    createdAt: new Date('2026-10-28T04:00:00.000Z'),
+    inspectionArea: {
+      id: 'area-1',
+      propertyArea: { name: 'Kitchen' },
+      inspection: {
+        property: null,
+        propertywareBuilding: { name: 'Harbor Duplex', addressLine1: '318 Notional Harbor Ln' },
+        propertywareUnit: { addressLine1: '318 Notional Harbor Ln Unit B' },
+      },
+    },
+  };
+
+  const SIGNED =
+    'https://customer-abc.cloudflarestream.com/signed.jwt.value/downloads/default.mp4?filename=x';
+
+  function harness(
+    media: Record<string, unknown> | null = {},
+    link: unknown = { status: 'ready', url: SIGNED, expiresAt: '2026-10-28T15:05:00.000Z' },
+  ) {
+    const prisma = {
+      inspectionMedia: {
+        findFirst: jest.fn().mockResolvedValue(media === null ? null : { ...recording, ...media }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const stream = {
+      customerCode: 'abc',
+      signingConfigured: true,
+      signPlaybackToken: jest.fn().mockReturnValue({
+        token: 'signed.jwt.value',
+        expiresAt: new Date(Date.now() + 7_200_000).toISOString(),
+      }),
+      saveLink: jest.fn().mockResolvedValue(link),
+      // Cloudflare agreeing an encode is unfinished, as in the playback tests.
+      getVideo: jest.fn().mockResolvedValue({
+        streamUid: 'uid-1',
+        state: 'inprogress',
+        durationSeconds: null,
+        widthPx: null,
+        heightPx: null,
+        thumbnailUrl: null,
+        errorReasonText: null,
+      }),
+    };
+    return {
+      prisma,
+      stream,
+      service: new InspectionVideoService(prisma as never, stream as never),
+    };
+  }
+
+  it('hands the reviewer a short-lived link to the file, signed for this video', async () => {
+    const { service, stream } = harness();
+    await expect(service.getDownload(reviewer, 'media-1')).resolves.toEqual({
+      videoId: 'media-1',
+      status: 'ready',
+      url: SIGNED,
+      expiresAt: '2026-10-28T15:05:00.000Z',
+    });
+    expect(stream.saveLink).toHaveBeenCalledWith(
+      'uid-1',
+      '318_Notional_Harbor_Ln_Unit_B_Kitchen_Walkthrough_2026-10-27',
+    );
+  });
+
+  it('keeps the organization in the query for everyone, reviewer included', async () => {
+    const { service, prisma } = harness();
+    await service.getDownload(reviewer, 'media-1');
+    const { where } = prisma.inspectionMedia.findFirst.mock.calls[0][0];
+    expect(where).toMatchObject({ id: 'media-1', organizationId: reviewer.organizationId });
+    // A reviewer was never the assigned technician.
+    expect(where.inspectionArea).toBeUndefined();
+  });
+
+  it('scopes a technician to the inspection they are assigned now', async () => {
+    const { service, prisma } = harness();
+    await service.getDownload(technician, 'media-1');
+    expect(prisma.inspectionMedia.findFirst.mock.calls[0][0].where).toEqual({
+      id: 'media-1',
+      organizationId: technician.organizationId,
+      inspectionArea: {
+        inspection: { assignments: { some: { technicianId: technician.id, isCurrent: true } } },
+      },
+    });
+  });
+
+  it('is exactly the reach of playback, for both kinds of caller', async () => {
+    for (const caller of [reviewer, technician]) {
+      const { service, prisma } = harness();
+      await service.getPlayback(caller, 'media-1');
+      await service.getDownload(caller, 'media-1');
+      const [playback, download] = prisma.inspectionMedia.findFirst.mock.calls;
+      expect(download[0].where).toEqual(playback[0].where);
+    }
+  });
+
+  it('answers not found outside that reach, and asks Cloudflare for nothing', async () => {
+    const { service, stream, prisma } = harness(null);
+    await expect(service.getDownload(technician, 'media-1')).rejects.toMatchObject({
+      code: 'INSPECTION_MEDIA_NOT_FOUND',
+    });
+    expect(stream.saveLink).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('records who took a copy, on the inspection, naming the room', async () => {
+    const { service, prisma } = harness();
+    await service.getDownload(reviewer, 'media-1');
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: reviewer.organizationId,
+        actorUserId: reviewer.id,
+        action: 'RECORDING_DOWNLOADED',
+        entityType: 'Inspection',
+        entityId: 'insp-1',
+        metadata: { inspectionMediaId: 'media-1', inspectionAreaId: 'area-1', areaName: 'Kitchen' },
+      },
+    });
+  });
+
+  it('says the file is being made, and records nothing until there is one', async () => {
+    const { service, prisma } = harness({}, { status: 'preparing', percentComplete: 40 });
+    await expect(service.getDownload(reviewer, 'media-1')).resolves.toEqual({
+      videoId: 'media-1',
+      status: 'preparing',
+      percentComplete: 40,
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('waits for Cloudflare to finish encoding before asking for a file', async () => {
+    const { service, stream } = harness({ readyAt: null });
+    await expect(service.getDownload(reviewer, 'media-1')).resolves.toEqual({
+      videoId: 'media-1',
+      status: 'processing',
+    });
+    expect(stream.saveLink).not.toHaveBeenCalled();
+  });
+
+  it('has no file to offer when Cloudflare could not encode the recording', async () => {
+    const { service, stream } = harness({
+      processingStatus: 'FAILED',
+      failureCode: 'STREAM_ENCODING_FAILED',
+    });
+    await expect(service.getDownload(reviewer, 'media-1')).resolves.toMatchObject({
+      status: 'unavailable',
+    });
+    expect(stream.saveLink).not.toHaveBeenCalled();
+  });
+
+  it('saves a recording whose analysis failed, since Cloudflare encoded it', async () => {
+    const { service } = harness({ processingStatus: 'FAILED', failureCode: null });
+    await expect(service.getDownload(reviewer, 'media-1')).resolves.toMatchObject({
+      status: 'ready',
+    });
+  });
+
+  it('points a pre-Stream recording at its own player instead', async () => {
+    const { service, stream } = harness({ streamUid: null });
+    await expect(service.getDownload(reviewer, 'media-1')).resolves.toMatchObject({
+      status: 'unavailable',
+      message: expect.stringContaining('player'),
+    });
+    expect(stream.saveLink).not.toHaveBeenCalled();
+  });
+
+  it('is behind the API sign-in like every other recording route', () => {
+    const guards = Reflect.getMetadata(
+      GUARDS_METADATA,
+      InspectionVideoController.prototype.download,
+    ) as unknown[];
+    expect(guards).toContain(ApiAuthGuard);
+  });
+});
+
+describe('the name a saved recording gets', () => {
+  const base = {
+    recordingType: 'PRIMARY_AREA' as never,
+    label: null,
+    recordedAt: null,
+    createdAt: new Date('2026-10-27T18:00:00.000Z'),
+    inspectionArea: {
+      propertyArea: { name: 'Primary Bedroom' },
+      inspection: {
+        property: { name: 'Elm', addressLine1: '7 Example Oak Ct' },
+        propertywareBuilding: null,
+        propertywareUnit: null,
+      },
+    },
+  };
+
+  it('is the property, the room, the walkthrough and the Texas day', () => {
+    expect(recordingFileName(base)).toBe(
+      '7_Example_Oak_Ct_Primary_Bedroom_Walkthrough_2026-10-27',
+    );
+  });
+
+  it('names an additional clip by its label', () => {
+    expect(
+      recordingFileName({
+        ...base,
+        recordingType: 'ADDITIONAL_ISSUE' as never,
+        label: 'Leak under sink',
+      }),
+    ).toBe('7_Example_Oak_Ct_Primary_Bedroom_Leak_under_sink_2026-10-27');
   });
 });

@@ -35,6 +35,7 @@ vi.mock('@/lib/queries', () => ({
     addFinding: { isPending: false, error: null, mutateAsync: async () => ({ id: 'finding-new' }) },
     captureSnapshot: { isPending: false, isError: false, error: null, mutate: state.capture },
     reanalyzeRecording: { isPending: false, isError: false, error: null, mutate: () => {} },
+    downloadRecording: { mutateAsync: async () => ({ status: 'processing' }) },
   }),
   useInspection: () => ({ data: { finalizedAt: state.finalizedAt } }),
   useSetAreaReviewed: () => ({ error: null, mutate: () => {} }),
@@ -242,6 +243,21 @@ describe('deciding a finding', () => {
 
     open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]), 'recording');
     expect(screen.getByRole('button', { name: 'Re-run AI' }).closest('header')).not.toBeNull();
+  });
+
+  // 2026-10-28: "there's no option to save the video, even if I click full
+  // screen". Cloudflare's embedded player has none, so the card carries it.
+  it('offers Download at the top of the recording, on both tabs', () => {
+    open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]));
+    expect(
+      screen.getByRole('button', { name: 'Download recording' }).closest('header'),
+    ).not.toBeNull();
+    cleanup();
+
+    open(bundle([finding('floor', 'Entrance floor damaged', 61, 74)]), 'recording');
+    expect(
+      screen.getByRole('button', { name: 'Download recording' }).closest('header'),
+    ).not.toBeNull();
   });
 
   // 10830 Harston Dr, 2026-10-02: finalized with its findings still waiting, and
