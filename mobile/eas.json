@@ -34,7 +34,7 @@
         "EXPO_PUBLIC_USE_ADB_REVERSE": "false"
       },
       "ios": {
-        "image": "latest"
+        "image": "macos-tahoe-26.5-xcode-26.6"
       }
     },
     "production-apk": {
