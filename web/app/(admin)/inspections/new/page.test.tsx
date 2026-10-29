@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '@/lib/api';
+
 import NewInspectionPage from './page';
 
 /**
@@ -173,5 +175,48 @@ describe('a failure on a property with no approved areas', () => {
 
     expect(screen.getByText('This property has no approved inspection areas')).toBeInTheDocument();
     expect(screen.getByText('The single area could not be prepared.')).toBeInTheDocument();
+  });
+});
+
+/**
+ * "Already booked" with a way to the booking. Refused on its own, the office
+ * went looking on the wrong technician's list: the visit was there, under
+ * somebody else the Jobber sync had moved it to.
+ */
+describe('a create refused because the visit is already booked', () => {
+  const refusedWith = (error: Error) =>
+    queries.useAdminMutations.mockReturnValue({
+      createInspection: { mutateAsync: vi.fn(), isPending: false, error },
+      createFallbackPropertyArea: { mutateAsync: vi.fn(), isPending: false },
+    });
+
+  it('opens the inspection it clashed with', () => {
+    refusedWith(
+      new ApiError(
+        409,
+        'DUPLICATE_INSPECTION',
+        'An inspection of this type is already booked for that day, assigned to Amy Wilson.',
+        undefined,
+        [{ inspectionId: 'booked-1', technician: 'Amy Wilson' }],
+      ),
+    );
+    render(<NewInspectionPage />);
+
+    expect(screen.getByText(/already booked for that day, assigned to Amy Wilson/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open the booked inspection' })).toHaveAttribute(
+      'href',
+      '/inspections/booked-1',
+    );
+  });
+
+  it('offers no link when the refusal does not say which inspection', () => {
+    // A race caught by the database has no row to point at.
+    refusedWith(
+      new ApiError(409, 'DUPLICATE_INSPECTION', 'An inspection of this type is already scheduled for this unit at that time.'),
+    );
+    render(<NewInspectionPage />);
+
+    expect(screen.getByText(/already scheduled for this unit/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open the booked inspection' })).toBeNull();
   });
 });

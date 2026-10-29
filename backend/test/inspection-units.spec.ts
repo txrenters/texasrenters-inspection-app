@@ -673,7 +673,10 @@ describe('multi-unit inspection creation', () => {
         create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
       },
       inspection: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'already-booked' }),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'already-booked',
+          assignments: [{ technician: { displayName: 'Amy Wilson' } }],
+        }),
         create: jest.fn(),
       },
     });
@@ -688,6 +691,38 @@ describe('multi-unit inspection creation', () => {
       } as never),
     ).rejects.toMatchObject({ status: 409, code: 'DUPLICATE_INSPECTION' });
     expect(tx.inspection.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The refusal points at the booking it clashed with. "Already scheduled"
+   * alone sent the office looking on the wrong technician's list: the Jobber
+   * sync had moved the visit to somebody else, and nothing said so.
+   */
+  it('names who has the booking it clashed with, and which inspection it is', async () => {
+    const booked = (assignments: unknown[]) =>
+      buildService(
+        buildTx({
+          propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+          inspection: {
+            findFirst: jest.fn().mockResolvedValue({ id: 'already-booked', assignments }),
+            create: jest.fn(),
+          },
+        }),
+      ).createInspection(admin, {
+        propertyId: 'building-1',
+        scheduledAt: '2026-08-01T15:00:00.000Z',
+        inspectionType: 'OCCUPIED',
+        priority: 'STANDARD',
+      } as never);
+
+    await expect(booked([{ technician: { displayName: 'Amy Wilson' } }])).rejects.toMatchObject({
+      message: 'An inspection of this type is already booked for that day, assigned to Amy Wilson.',
+      details: [{ inspectionId: 'already-booked', technician: 'Amy Wilson' }],
+    });
+    await expect(booked([])).rejects.toMatchObject({
+      message: 'An inspection of this type is already booked for that day, with no technician assigned yet.',
+      details: [{ inspectionId: 'already-booked', technician: null }],
+    });
   });
 
   // Not "when the unique index catches a race", as this was named: there is no
