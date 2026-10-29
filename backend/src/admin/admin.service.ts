@@ -59,7 +59,9 @@ import { inspectionSearchWhere, inspectionStatusWhere } from './inspection-list-
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import {
+  DUPLICATE_BOOKING_SELECT,
   PORTFOLIO_VISIBLE,
+  duplicateBooking,
   type InspectionPlan,
   insertInspection,
   requireBuilding,
@@ -2503,13 +2505,9 @@ export class AdminService {
             scheduledAt,
             status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
           },
+          select: DUPLICATE_BOOKING_SELECT,
         });
-        if (duplicate)
-          throw new ApplicationError(
-            409,
-            'DUPLICATE_INSPECTION',
-            'An inspection of this type is already scheduled for this unit at that time.',
-          );
+        if (duplicate) throw duplicateBooking(duplicate);
       }
       /**
        * The same 409 the check above raises, for the case the check cannot see.
@@ -5138,11 +5136,7 @@ export class AdminService {
           'Inspection_scheduled_booking_key',
         )
       )
-        throw new ApplicationError(
-          409,
-          'DUPLICATE_INSPECTION',
-          'An inspection of this type is already scheduled for this unit at that time.',
-        );
+        throw duplicateBooking();
       throw error;
     }
   }

@@ -275,6 +275,42 @@ export function leaseSnapshot(lease: {
  * anything, so a caller can validate a candidate visit — a Jobber sync deciding
  * whether a visit is bookable yet — without creating a row.
  */
+/** What the duplicate check reads of the booking it found: enough to point at it. */
+export const DUPLICATE_BOOKING_SELECT = {
+  id: true,
+  assignments: {
+    where: { isCurrent: true },
+    select: { technician: { select: { displayName: true } } },
+    take: 1,
+  },
+} satisfies Prisma.InspectionSelect;
+
+const DUPLICATE_BOOKING_MESSAGE = 'An inspection of this type is already scheduled for this unit at that time.';
+
+/**
+ * The refusal for a second live booking of the same work.
+ *
+ * It names who has the booking and carries its id, because "already
+ * scheduled" alone sent the office looking. On 2026-10-29 a technician stood
+ * at a visit the Jobber sync had moved to somebody else; the office tried to
+ * book it for them, was refused, and could not find the booking on that
+ * technician's list, which is where they were looking.
+ *
+ * Without the row (a race caught by the database), the message stays general.
+ */
+export function duplicateBooking(existing?: Prisma.InspectionGetPayload<{ select: typeof DUPLICATE_BOOKING_SELECT }>) {
+  if (!existing) return new ApplicationError(409, 'DUPLICATE_INSPECTION', DUPLICATE_BOOKING_MESSAGE);
+  const technician = existing.assignments[0]?.technician.displayName ?? null;
+  return new ApplicationError(
+    409,
+    'DUPLICATE_INSPECTION',
+    technician
+      ? `An inspection of this type is already booked for that day, assigned to ${technician}.`
+      : 'An inspection of this type is already booked for that day, with no technician assigned yet.',
+    [{ inspectionId: existing.id, technician }],
+  );
+}
+
 export async function resolveInspectionPlan(
   tx: InspectionCreationClient,
   input: InspectionCreationInput,
@@ -552,14 +588,9 @@ export async function resolveInspectionPlan(
       scheduledAt,
       status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
     },
-    select: { id: true },
+    select: DUPLICATE_BOOKING_SELECT,
   });
-  if (duplicate)
-    throw new ApplicationError(
-      409,
-      'DUPLICATE_INSPECTION',
-      'An inspection of this type is already scheduled for this unit at that time.',
-    );
+  if (duplicate) throw duplicateBooking(duplicate);
 
   return {
     organizationId: input.organizationId,
@@ -1180,12 +1211,7 @@ export async function insertInspection(
      * The mapping is kept because P2002 can still arrive from the nested
      * area creates, and a 409 is the honest answer to either.
      */
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-      throw new ApplicationError(
-        409,
-        'DUPLICATE_INSPECTION',
-        'An inspection of this type is already scheduled for this unit at that time.',
-      );
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw duplicateBooking();
     throw error;
   }
 }

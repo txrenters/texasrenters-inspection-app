@@ -139,6 +139,19 @@ function propertyAddress(property?: AdminProperty | null) {
   return [property.addressLine1, property.addressLine2, locality].filter(Boolean).join(', ');
 }
 
+/**
+ * The inspection a refused create clashed with, when that is the refusal.
+ *
+ * "Already booked" without a way to it sent the office looking on the wrong
+ * technician's list: the booking was there, under somebody else. The API names
+ * the inspection; this reads it back out so the form can open it.
+ */
+function alreadyBookedAs(error: unknown) {
+  if (!(error instanceof ApiError) || error.code !== 'DUPLICATE_INSPECTION') return undefined;
+  const [first] = error.details as Array<{ inspectionId?: unknown } | null | undefined>;
+  return typeof first?.inspectionId === 'string' ? first.inspectionId : undefined;
+}
+
 function CreateInspectionForm() {
   const router = useRouter();
   const search = useSearchParams();
@@ -467,6 +480,8 @@ function CreateInspectionForm() {
       // The mutation error is rendered below the form without rejecting submit.
     }
   }
+
+  const bookedAs = alreadyBookedAs(mutation.error);
 
   return (
     <>
@@ -1060,7 +1075,14 @@ function CreateInspectionForm() {
             property the setup alert shows for, and was never shown there. */}
         {mutation.error || fallbackArea.error ? (
           <Alert variant="destructive">
-            <AlertDescription>{(mutation.error ?? fallbackArea.error)?.message}</AlertDescription>
+            <AlertDescription>
+              {(mutation.error ?? fallbackArea.error)?.message}
+              {bookedAs ? (
+                <Link className="underline underline-offset-4" href={`/inspections/${bookedAs}`}>
+                  Open the booked inspection
+                </Link>
+              ) : null}
+            </AlertDescription>
           </Alert>
         ) : null}
 
