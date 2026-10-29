@@ -1380,12 +1380,26 @@ export default function RoomCameraScreen() {
   };
 
   if (!hasPermissions) {
+    /**
+     * This screen comes before the system's own question, so it explains and
+     * nothing more. App Review rejected 1.4.0 under guideline 5.1.1(iv)
+     * (2026-10-29) because its button read "Enable camera & microphone": a
+     * screen in front of a permission request may say why, but its button must
+     * read "Continue" or "Next", leaving the answer to the system dialogue.
+     * Once the phone has been told no, only Settings can change it.
+     */
+    const refused =
+      cameraPermission?.canAskAgain === false || microphonePermission?.canAskAgain === false;
     return (
       <SafeAreaView className="flex-1 items-center justify-center bg-black px-8">
         <CameraIcon size={44} className="text-white" />
-        <Text className="mt-5 text-xl font-bold text-white">Camera access required</Text>
+        <Text className="mt-5 text-xl font-bold text-white">
+          {refused ? 'Camera and microphone are off' : 'Recording this room'}
+        </Text>
         <Text className="mt-2 text-center text-sm leading-6 text-white/70">
-          Allow camera and microphone access to capture this room with narration.
+          {refused
+            ? 'A room is filmed with your spoken narration, so it needs both. You can change this in Settings.'
+            : 'A room is filmed with your spoken narration, so the next step asks to use the camera and the microphone.'}
         </Text>
         {error ? (
           <Text accessibilityRole="alert" className="mt-3 text-center text-sm text-red-300">
@@ -1395,16 +1409,10 @@ export default function RoomCameraScreen() {
         <Pressable
           accessibilityRole="button"
           className="mt-6 min-h-12 rounded-xl bg-primary px-6 py-4"
-          onPress={() =>
-            cameraPermission?.canAskAgain === false || microphonePermission?.canAskAgain === false
-              ? void Linking.openSettings()
-              : void requestPermissions()
-          }
+          onPress={() => (refused ? void Linking.openSettings() : void requestPermissions())}
         >
           <Text className="font-bold text-primary-foreground">
-            {cameraPermission?.canAskAgain === false || microphonePermission?.canAskAgain === false
-              ? 'Open device settings'
-              : 'Enable camera & microphone'}
+            {refused ? 'Open Settings' : 'Continue'}
           </Text>
         </Pressable>
       </SafeAreaView>

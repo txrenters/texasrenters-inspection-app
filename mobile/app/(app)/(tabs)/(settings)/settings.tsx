@@ -95,10 +95,12 @@ function useLocationAccess() {
   return access;
 }
 
+// States the answer and where to change it, never which answer to give: App
+// Review rejects copy that steers a permission choice (guideline 5.1.1(iv)).
 const LOCATION_ACCESS_DESCRIPTION: Record<LocationAccess, string> = {
   ALWAYS: 'Allowed all the time',
-  WHILE_USING: 'Only while using the app. Tap, then choose “Allow all the time” (iPhone: “Always”)',
-  OFF: 'Not allowed. Tap to allow location for this app',
+  WHILE_USING: 'Only while using the app. Tap to change it in Settings',
+  OFF: 'Not allowed. Tap to change it in Settings',
 };
 
 export default function SettingsScreen() {
