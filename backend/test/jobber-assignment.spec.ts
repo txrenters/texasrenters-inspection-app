@@ -74,6 +74,50 @@ describe('matching a Jobber assignee to a technician', () => {
     expect(resolution).toMatchObject({ outcome: 'MATCHED', match: { technicianId: 'tech-amy' } });
   });
 
+  it('keeps the technician the inspection already has while Jobber still names them', async () => {
+    // Jobber lists a second person first; that is not the job changing hands.
+    const prisma = prismaWith([
+      { id: 'tech-amy', email: 'amy.w@txhomemp.com' },
+      { id: 'tech-moses', email: 'mvr@txhomemp.com' },
+    ]);
+    const resolution = await resolveAssignment(
+      prisma,
+      'org-1',
+      visit([
+        { email: 'amy.w@txhomemp.com', name: 'Amy Wilson' },
+        { email: 'mvr@txhomemp.com', name: 'Moses Rodriguez' },
+      ]),
+      { keepTechnicianId: 'tech-moses' },
+    );
+    expect(resolution).toEqual({
+      outcome: 'MATCHED',
+      match: { technicianId: 'tech-moses', email: 'mvr@txhomemp.com' },
+    });
+  });
+
+  it('does not keep a technician Jobber no longer names, or who is no longer active', async () => {
+    const twoNamed = visit([{ email: 'amy.w@txhomemp.com' }, { email: 'mvr@txhomemp.com' }]);
+    // The current technician has left: the lookup of active technicians does not return them.
+    const inactive = await resolveAssignment(
+      prismaWith([{ id: 'tech-amy', email: 'amy.w@txhomemp.com' }]),
+      'org-1',
+      twoNamed,
+      { keepTechnicianId: 'tech-moses' },
+    );
+    expect(inactive).toMatchObject({ outcome: 'MATCHED', match: { technicianId: 'tech-amy' } });
+
+    const removed = await resolveAssignment(
+      prismaWith([
+        { id: 'tech-amy', email: 'amy.w@txhomemp.com' },
+        { id: 'tech-moses', email: 'mvr@txhomemp.com' },
+      ]),
+      'org-1',
+      visit([{ email: 'amy.w@txhomemp.com' }]),
+      { keepTechnicianId: 'tech-moses' },
+    );
+    expect(removed).toMatchObject({ outcome: 'MATCHED', match: { technicianId: 'tech-amy' } });
+  });
+
   it('reports no assignee separately from an unrecognised one', async () => {
     // Different situations: nobody is on the visit yet, versus somebody is and
     // we cannot place them. Only the second needs a person to look.

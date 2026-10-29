@@ -43,9 +43,9 @@ export function visitAssignees(visit: JobberVisit) {
 }
 
 /**
- * Resolves the first Jobber assignee that is a technician here.
+ * Resolves the Jobber assignee that is a technician here.
  *
- * First rather than all, because an inspection carries one current technician.
+ * One rather than all, because an inspection carries one current technician.
  * A visit with two assignees where only one is known to us is a match on that
  * one; a visit where none is known is left alone with every name recorded, so
  * the console can say who Jobber actually named.
@@ -54,20 +54,36 @@ export async function resolveAssignment(
   prisma: PrismaService,
   organizationId: string,
   visit: JobberVisit,
-  /**
-   * Whether somebody who has since left may be named.
-   *
-   * True only when the work is already finished and nobody is named against
-   * it, which is the one case where an assignment is a record of the past
-   * rather than a routing decision. Six completed June visits read
-   * "Unassigned" because the three technicians who walked them have since been
-   * deactivated -- Jobber knew who did the work the whole time.
-   *
-   * Never for work still to be done. Sending an inspection to somebody who has
-   * left puts it in a queue nobody looks at, which is what the active check is
-   * there to prevent.
-   */
-  { includeDeactivated = false }: { includeDeactivated?: boolean } = {},
+  {
+    includeDeactivated = false,
+    keepTechnicianId = null,
+  }: {
+    /**
+     * Whether somebody who has since left may be named.
+     *
+     * True only when the work is already finished and nobody is named against
+     * it, which is the one case where an assignment is a record of the past
+     * rather than a routing decision. Six completed June visits read
+     * "Unassigned" because the three technicians who walked them have since been
+     * deactivated -- Jobber knew who did the work the whole time.
+     *
+     * Never for work still to be done. Sending an inspection to somebody who has
+     * left puts it in a queue nobody looks at, which is what the active check is
+     * there to prevent.
+     */
+    includeDeactivated?: boolean;
+    /**
+     * The technician the inspection already has. Still named in Jobber, they
+     * keep it, wherever Jobber lists them.
+     *
+     * A second person added to a visit is not the job changing hands. On
+     * 2026-10-28 a coordinator added a second technician to two benefit-package
+     * visits that already had one. Jobber listed the newcomer first, so both
+     * left the first technician's phone, who then reached the door of one with
+     * nothing to open.
+     */
+    keepTechnicianId?: string | null;
+  } = {},
 ): Promise<AssignmentResolution> {
   const assignees = visitAssignees(visit);
   if (!assignees.length) return { outcome: 'NO_ASSIGNEE' };
@@ -93,8 +109,14 @@ export async function resolveAssignment(
   });
   const byEmail = new Map(candidates.map((c) => [c.email.toLowerCase(), c.id]));
 
-  // Jobber's own ordering is respected: the first assignee it lists that we
-  // recognise is the one the coordinator put there first.
+  if (keepTechnicianId) {
+    const kept = assignees.find((assignee) => assignee.email && byEmail.get(assignee.email) === keepTechnicianId);
+    if (kept) return { outcome: 'MATCHED', match: { technicianId: keepTechnicianId, email: kept.email! } };
+  }
+
+  // Otherwise the first one Jobber lists that we recognise. Jobber's order is
+  // not the order people were added in -- the 2026-10-28 visits listed the
+  // newcomer first -- so it decides only who gets a job nobody here has.
   for (const assignee of assignees) {
     const technicianId = assignee.email ? byEmail.get(assignee.email) : undefined;
     if (technicianId) return { outcome: 'MATCHED', match: { technicianId, email: assignee.email! } };
