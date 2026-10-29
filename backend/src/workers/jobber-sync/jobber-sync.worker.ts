@@ -1940,6 +1940,7 @@ export class JobberSyncWorker {
      */
     const resolution = await resolveAssignment(this.prisma, organizationId, visit, {
       includeDeactivated: worked,
+      keepTechnicianId: current?.technicianId,
     });
     if (resolution.outcome === 'NO_ASSIGNEE') return;
     if (resolution.outcome === 'UNKNOWN_ASSIGNEE') {
