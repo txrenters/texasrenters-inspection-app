@@ -9,6 +9,7 @@
 import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 import { REPORT_PALETTE, REPORT_TYPE } from '@texasrenters/shared';
 import type { ReportRoomView, ReportView } from '@texasrenters/shared';
+import { Fragment } from 'react';
 
 /**
  * Words wrap whole, never broken with a hyphen. At 13.5 pt (2026-10-08) the
@@ -47,6 +48,24 @@ const AXIS_HEAD_LIFT = 4;
  */
 const AXIS_HEAD_OFFSET = (B / 2 + AXIS_HEAD_LIFT * SLANT_COS) / SLANT_SIN;
 
+/** The space between two rooms. */
+const ROOM_GAP = 14;
+/** A room card's inner padding. */
+const CARD_PAD = 12;
+/** The card's padding under its last row, carried by that row; see `roomBody`. */
+const ROOM_END = { marginBottom: CARD_PAD };
+/** A line of running text, as the page sets it (`lineHeight: 1.4`). */
+const LINE = B * 1.4;
+/**
+ * Roughly how many characters a line holds in the table's two text columns.
+ *
+ * The room body is 498 pt wide: the item column a third of it, in letter-spaced
+ * capitals; Comments about half, in sentence case. On the low side, so an
+ * estimate errs towards keeping a room's start together.
+ */
+const LABEL_CHARS_PER_LINE = 15;
+const COMMENT_CHARS_PER_LINE = 34;
+
 /** Photo bytes keyed by photo id, as data URIs. */
 export type ReportImages = Map<string, string>;
 
@@ -81,7 +100,14 @@ const styles = StyleSheet.create({
   },
   coverTitle: { color: '#ffffff', fontSize: B * 2, fontFamily: 'Helvetica-Bold', lineHeight: 1.2 },
   coverSubtitle: { color: '#cfdcf5', fontSize: B, marginTop: 5 },
-  coverMetaRow: { flexDirection: 'row', marginTop: 18, gap: 26 },
+  /*
+   * Columns that do not fit move to a second line, and one longer than the
+   * whole band wraps within itself. Kept to one line, a long form name or two
+   * inspectors printed the four values over each other and pushed "ROOMS
+   * INSPECTED" off the page.
+   */
+  coverMetaRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 18, columnGap: 26, rowGap: 10 },
+  coverMetaCell: { maxWidth: '100%' },
   coverMetaLabel: { color: '#a9c0ee', fontSize: B * 0.7, letterSpacing: 1.1 },
   coverMetaValue: { color: '#ffffff', fontSize: B, fontFamily: 'Helvetica-Bold', marginTop: 3 },
 
@@ -99,7 +125,14 @@ const styles = StyleSheet.create({
   },
 
   // ---- rooms -------------------------------------------------------------
-  roomCard: { borderWidth: 1, borderColor: C.border, borderRadius: 6, marginBottom: 14 },
+  /*
+   * Spaced from the room above, never from the one below. @react-pdf moves an
+   * element to the next page when its bottom margin would cross the foot of the
+   * page, even when the element itself fits -- and even when it could split. A
+   * bottom margin here sent the first room of every report to page two and left
+   * the cover page blank (the office, 2026-10-30, a 16-page move-out).
+   */
+  roomCard: { borderWidth: 1, borderColor: C.border, borderRadius: 6, marginTop: ROOM_GAP },
   roomHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -127,11 +160,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   roomFloor: { color: C.muted, fontSize: B * 0.8, marginTop: 1 },
-  roomBody: { padding: 12 },
+  /*
+   * No bottom padding: the room's last row -- of the table or of photographs --
+   * carries that space as its own margin (`ROOM_END`), so it travels with the
+   * row. As padding it stayed behind whenever the row only just fitted, and
+   * @react-pdf printed it at the top of the next page as an empty box.
+   */
+  roomBody: { paddingTop: CARD_PAD, paddingHorizontal: CARD_PAD },
 
-  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   // Three a row, filling it: the room body is 498 pt wide, less two 8 pt gaps
-  // (2026-10-08: bigger photographs). 4:3, as the cameras shoot.
+  // (2026-10-08: bigger photographs). 4:3, as the cameras shoot. A row is kept
+  // whole, so a page break falls between rows.
+  photoRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   photoCell: { width: 160 },
   photo: {
     width: 160,
@@ -157,7 +197,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
 
-  emptyRoom: { color: C.muted, fontSize: B },
+  emptyRoom: { color: C.muted, fontSize: B, marginBottom: CARD_PAD },
   /*
    * The condition table, drawn as a grid, as InspectCloud draws it (the
    * maintenance team, 2026-10-08): a line round every cell, each Y and N in
@@ -165,14 +205,24 @@ const styles = StyleSheet.create({
    * items, verdicts and comments alike. The verdict columns are narrow, their headings
    * turned upright to fit, so the Comments column has the room. Widths are
    * fixed rather than proportional so the columns line up down the page.
+   *
+   * The outline is drawn by each row, not round the table: a table broken
+   * across pages then still closes at the foot of one page and opens under
+   * its repeated headings on the next.
    */
-  checklistTable: {
-    marginBottom: 8,
+  checklistHeadRow: {
+    flexDirection: 'row',
+    backgroundColor: C.surfaceSubtle,
     borderWidth: GRID,
     borderColor: C.border,
   },
-  checklistHeadRow: { flexDirection: 'row', backgroundColor: C.surfaceSubtle },
-  checklistRow: { flexDirection: 'row', borderTopWidth: GRID, borderTopColor: C.border },
+  checklistRow: {
+    flexDirection: 'row',
+    borderLeftWidth: GRID,
+    borderRightWidth: GRID,
+    borderBottomWidth: GRID,
+    borderColor: C.border,
+  },
   // Every cell centres what it holds, top to bottom, so a row reads across.
   checklistCell: { paddingVertical: 4, paddingHorizontal: 4, justifyContent: 'center' },
   checklistHeadText: { fontSize: B, color: C.muted },
@@ -330,14 +380,16 @@ function axisTone(value: string) {
   return {};
 }
 
-function ChecklistTable({ room }: { room: ReportRoomView }) {
+function ChecklistTable({ room, last }: { room: ReportRoomView; last: boolean }) {
   if (!room.checklist.length) return null;
   // An occupied room answers each question once. Heading it with three verdict
   // columns it never fills is what made its answers look missing.
   const answersOnly = room.checklist.every((row) => row.kind === 'ANSWER');
   return (
-    <View style={styles.checklistTable}>
-      <View style={styles.checklistHeadRow}>
+    <View>
+      {/* Repeated at the top of each page the table carries on to, so the
+          letters there are not read without their column. */}
+      <View fixed style={styles.checklistHeadRow}>
         <View style={[styles.checklistCell, styles.checklistLabel, { justifyContent: 'flex-end' }]}>
           <Text style={styles.checklistHeadText}>Room / item</Text>
         </View>
@@ -366,11 +418,18 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
           <Text style={styles.checklistHeadText}>Comments</Text>
         </View>
       </View>
-      {room.checklist.map((row) => (
-        // Wrappable. A row whose comment runs long can be longer than the space
-        // left on the page, and `wrap={false}` there does not move it -- it
-        // clips it, losing the explanation the column exists for.
-        <View key={row.id} style={styles.checklistRow}>
+      {room.checklist.map((row, index) => (
+        // Whole on one page: a row that does not fit moves to the next one.
+        // Split, its blank cells broke across the page with their borders cut,
+        // and a label on two lines -- which cannot split -- was drawn whole
+        // past the foot of the page, over the footer (the office, 2026-10-30:
+        // "LIGHTS AND POWER POINTS" across "Page 10 of 16"). A row taller than
+        // a whole page would still be cut, but that is a comment of 40 lines.
+        <View
+          key={row.id}
+          style={[styles.checklistRow, last && index === room.checklist.length - 1 ? ROOM_END : {}]}
+          wrap={false}
+        >
           <View style={[styles.checklistCell, styles.checklistLabel]}>
             <Text style={styles.checklistLabelText}>{row.label}</Text>
           </View>
@@ -403,28 +462,80 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
   );
 }
 
-function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) {
+/**
+ * Photographs three to a row, each row a unit of its own. A wrapping grid let
+ * @react-pdf break a row between its photographs, and its last one could not
+ * carry the card's bottom padding with it.
+ */
+function photoRows<T>(photos: T[]) {
+  const rows: T[][] = [];
+  for (let index = 0; index < photos.length; index += 3) rows.push(photos.slice(index, index + 3));
+  return rows;
+}
+
+/** Lines a piece of text takes in a column of `perLine` characters. */
+function linesOf(text: string, perLine: number) {
+  return text ? Math.ceil(text.length / perLine) : 0;
+}
+
+/**
+ * How tall the start of a room is: its header, its table's headings and first
+ * row -- or its first photograph -- which have to share a page.
+ *
+ * An estimate from character counts, since the layout is not known until it is
+ * done; it errs high, so the worst it does is start a room on the next page a
+ * little early.
+ */
+function roomStartHeight(room: ReportRoomView, photos: ReportRoomView['photos']) {
+  const header = 16 + B * 1.15 * 1.4 + (room.floorName ? B * 0.8 * 1.4 + 1 : 0) + 2;
+  const first = room.checklist[0];
+  if (first) {
+    const head = room.checklist.every((row) => row.kind === 'ANSWER') ? LINE + 8 : AXIS_HEAD_HEIGHT;
+    const lines = Math.max(
+      1,
+      linesOf(first.label, LABEL_CHARS_PER_LINE),
+      [first.comment, ...first.actions].reduce(
+        (sum, text) => sum + linesOf(text, COMMENT_CHARS_PER_LINE),
+        0,
+      ),
+    );
+    return header + CARD_PAD + head + lines * LINE + 8 + 4;
+  }
+  return header + CARD_PAD + (photos.length ? 120 + B * 0.75 * 1.4 + 3 : LINE) + CARD_PAD + 4;
+}
+
+function Room({ room, images, first }: { room: ReportRoomView; images: ReportImages; first: boolean }) {
   const photos = room.photos.filter((photo) => images.has(photo.id));
   return (
     // Small rooms stay whole on one page; large ones are allowed to split
     // rather than leaving most of a page blank.
     <View
-      style={styles.roomCard}
+      style={[styles.roomCard, first ? { marginTop: 0 } : {}]}
       wrap={room.checklist.length + photos.length > 4}
     >
       <View style={styles.roomHeader}>
-        <View>
+        {/* Wraps clear of the status chip rather than running under it. */}
+        <View style={{ flexShrink: 1, marginRight: 12 }}>
           <Text style={styles.roomName}>{room.name}</Text>
           {room.floorName ? <Text style={styles.roomFloor}>{room.floorName}</Text> : null}
         </View>
         <Chip label={room.statusLabel} tone={room.inspected ? INSPECTED_TONE : QUIET_TONE} />
       </View>
       <View style={styles.roomBody}>
-        <ChecklistTable room={room} />
-        {photos.length ? (
-          <View style={styles.photoGrid}>
-            {photos.map((photo) => (
-              <View key={photo.id} style={styles.photoCell} wrap={false}>
+        <ChecklistTable last={!photos.length} room={room} />
+        {photoRows(photos).map((row, index, rows) => (
+          <View
+            key={row[0]!.id}
+            style={[
+              styles.photoRow,
+              // Under the table, or straight under the header's padding.
+              index === 0 && !room.checklist.length ? { marginTop: 0 } : {},
+              index === rows.length - 1 ? ROOM_END : {},
+            ]}
+            wrap={false}
+          >
+            {row.map((photo) => (
+              <View key={photo.id} style={styles.photoCell}>
                 <View style={styles.photoFrame}>
                   <Image style={styles.photo} src={images.get(photo.id)!} />
                   {photo.stamp ? <Text style={styles.photoStamp}>{photo.stamp}</Text> : null}
@@ -433,7 +544,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
               </View>
             ))}
           </View>
-        ) : null}
+        ))}
         {!room.checklist.length && !photos.length ? (
           <Text style={styles.emptyRoom}>
             {room.skipReason
@@ -477,17 +588,17 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
               out, and when. The inspector is omitted rather than shown blank
               when nobody is assigned. */}
           <View style={styles.coverMetaRow}>
-            <View>
+            <View style={styles.coverMetaCell}>
               <Text style={styles.coverMetaLabel}>INSPECTION TEMPLATE</Text>
               <Text style={styles.coverMetaValue}>{view.templateLabel}</Text>
             </View>
             {view.inspectorLabel ? (
-              <View>
+              <View style={styles.coverMetaCell}>
                 <Text style={styles.coverMetaLabel}>INSPECTOR</Text>
                 <Text style={styles.coverMetaValue}>{view.inspectorLabel}</Text>
               </View>
             ) : null}
-            <View>
+            <View style={styles.coverMetaCell}>
               <Text style={styles.coverMetaLabel}>DATE</Text>
               <Text style={styles.coverMetaValue}>{view.dateLabel}</Text>
             </View>
@@ -495,7 +606,7 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
                 the summary of findings that used to fill the first page are
                 gone with the findings lists they counted (2026-10-07), so
                 the rooms start on the cover page. */}
-            <View>
+            <View style={styles.coverMetaCell}>
               <Text style={styles.coverMetaLabel}>ROOMS INSPECTED</Text>
               <Text style={styles.coverMetaValue}>
                 {view.summary.roomsInspected} of {view.summary.roomsTotal}
@@ -508,12 +619,28 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
         <Text style={styles.sectionHint}>
           The condition table, photographs and walkthrough recording for each area of the property.
         </Text>
-        {roomsWithEvidence.map((room) => (
-          <Room key={room.id} room={room} images={images} />
+        {roomsWithEvidence.map((room, index) => (
+          <Fragment key={room.id}>
+            {/* Nothing to draw: it moves the room to the next page when less
+                than its start is left on this one, rather than leaving its
+                header, or its table's headings, alone at the foot of a page.
+                @react-pdf only weighs what follows an element, so the room
+                cannot ask this of itself. */}
+            <View
+              minPresenceAhead={
+                (index === 0 ? 0 : ROOM_GAP) +
+                roomStartHeight(
+                  room,
+                  room.photos.filter((photo) => images.has(photo.id)),
+                )
+              }
+            />
+            <Room first={index === 0} images={images} room={room} />
+          </Fragment>
         ))}
 
         {quietRooms.length ? (
-          <View wrap={false}>
+          <View style={{ marginTop: ROOM_GAP }} wrap={false}>
             <Text style={[styles.sectionTitle, { marginTop: 6 }]}>Other areas</Text>
             <Text style={styles.sectionHint}>
               Inspected with nothing to report, or not accessible on the day.

@@ -7,7 +7,7 @@
  * structurally valid. The route handler runs on the Node runtime, so this is
  * also the environment the code actually ships in.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { renderReportPdf, reportFileName } from './render-report-pdf';
 import { REPORT_TYPE, buildReportView } from '@texasrenters/shared';
@@ -523,6 +523,174 @@ describe('a long report', () => {
       expect(text).toContain(`Page ${index + 1} of ${pages.length}`);
     });
   }, 120_000);
+});
+
+/**
+ * A move-out shaped like the one the office sent back on 2026-10-30, 16 pages:
+ * rooms of five to twelve items, many of them two lines long, mostly unscored,
+ * with two to eight photographs each and an occasional long comment.
+ */
+function longMoveOut(): PublicInspectionReport {
+  const base = ['Doors and locks', 'Walls and ceilings', 'Floor and coverings', 'Windows and locks', 'Lights and power points'];
+  const bedroom = [...base, 'Blinds and curtains', 'Built-ins and mirrors', 'Closet', 'Smoke alarms'];
+  const shape: Array<[string, string[], number]> = [
+    ['Entrance', [...base, 'Entry closet'], 3],
+    ['Living Room', [...base, 'Blinds and curtains', 'Smoke alarms'], 2],
+    ['Dining Area', [...base, 'Blinds and curtains', 'Smoke alarms'], 3],
+    ['Kitchen', [...base, 'Cupboards, drawers and bench tops', 'Sink, taps and spouts', 'Stove, hobs and griller', 'Refrigerator', 'Microwave', 'Dishwasher', 'Smoke alarms'], 8],
+    ['Main Bedroom', bedroom, 4],
+    ['Bedroom 2', bedroom, 4],
+    ['Bedroom 3', bedroom, 5],
+    ['Bedroom 4', bedroom, 3],
+    ['Main Bathroom', [...base, 'Bath, shower and shower screen', 'Toilet', 'Vanity, basin and taps', 'Exhaust fan', 'Towel rails and fittings'], 6],
+    ['Bathroom 2', [...base, 'Bath, shower and shower screen', 'Toilet', 'Vanity, basin and taps', 'Exhaust fan'], 4],
+    ['Laundry', [...base, 'Washer and dryer connections', 'Tub and taps'], 3],
+    ['Hallway', [...base, 'Smoke alarms'], 2],
+    ['Garage', ['Doors and locks', 'Walls and ceilings', 'Floor', 'Garage door and opener', 'Lights and power points'], 3],
+    ['Back Yard', ['Fences and gates', 'Lawn and garden beds', 'Patio and deck', 'Hose bibs'], 4],
+    ['Front Yard', ['Lawn and garden beds', 'Driveway and walkways', 'Mailbox'], 2],
+    ['HVAC', ['Thermostat', 'Air filter', 'Outdoor unit'], 2],
+  ];
+  const comment =
+    'Carpet stained in front of the closet and along the wall by the window; deep clean needed, replace if the stain does not lift';
+  let photo = 0;
+  return {
+    ...REPORT,
+    inspection: { ...REPORT.inspection, type: 'MOVE_OUT', templateLabel: 'Exit Inspection' },
+    rooms: shape.map(([name, labels], room) => ({
+      id: `area-${room}`,
+      name,
+      floorName: null,
+      completionStatus: 'COMPLETED',
+      skipReason: null,
+      completedAt: '2026-10-29T20:00:00.000Z',
+      checklist: labels.map((label, item) => ({
+        id: `item-${room}-${item}`,
+        label,
+        isClean: room === 0 ? true : null,
+        isUndamaged: room === 0 ? item !== 2 : null,
+        isWorking: room === 0 ? true : null,
+        comment: room % 3 === 1 && item === 2 ? comment : null,
+      })),
+      ...(room % 4 === 2
+        ? { actions: [{ heading: 'Cleaning', items: [{ text: 'Clean the window tracks and wipe down every sill in the room', details: [], itemId: `item-${room}-3` }] }] }
+        : {}),
+    })),
+    findings: [],
+    photos: shape.flatMap(([, , count], room) =>
+      Array.from({ length: count }, () => {
+        photo += 1;
+        return {
+          id: `photo-${photo}`,
+          roomId: `area-${room}`,
+          label: null,
+          notes: null,
+          capturedAt: '2026-10-29T20:37:27.000Z',
+          width: 1600,
+          height: 1200,
+          contentPath: `/api/v1/reports/tok/photos/photo-${photo}`,
+        };
+      }),
+    ),
+  };
+}
+
+/** The page's bottom padding: the content stops here and the footer begins below it. */
+const CONTENT_BOTTOM = 56;
+
+describe('page breaks in a long report', () => {
+  // Rendered once: a 16-page report with 58 photographs takes a few seconds.
+  let places: Awaited<ReturnType<typeof textPlaces>> = [];
+  const isFooter = (text: string) => /^Page \d+ of \d+$/.test(text) || text.startsWith(REPORT.property.addressLine1);
+
+  beforeAll(async () => {
+    mockPhotoFetch();
+    places = await textPlaces(await renderReportPdf(longMoveOut(), { apiOrigin: 'http://x' }));
+    vi.unstubAllGlobals();
+  }, 120_000);
+
+  // The office, 2026-10-30: "LIGHTS AND POWER POINTS" printed across the
+  // footer, over "Page 10 of 16" and the address. A row split at the foot of a
+  // page drew its two-line label whole past the bottom, and cut its cells.
+  it('never draws a row, or anything else, over the footer', () => {
+    const intoFooter = places.filter((place) => !isFooter(place.str) && place.y < CONTENT_BOTTOM);
+    expect(intoFooter).toEqual([]);
+  });
+
+  it('keeps each row whole: every line of a comment on one page', () => {
+    const comment = longMoveOut().rooms[1]!.checklist[2]!.comment!;
+    // Each printing of the comment, line by line, in reading order.
+    const printings: Array<typeof places> = [];
+    for (const place of places.filter((entry) => comment.includes(entry.str))) {
+      if (place.str.startsWith('Carpet stained')) printings.push([]);
+      printings.at(-1)?.push(place);
+    }
+    expect(printings.length).toBeGreaterThan(1);
+    for (const lines of printings) {
+      expect(lines.map((line) => line.str).join(' ')).toBe(comment);
+      expect(new Set(lines.map((line) => line.page)).size).toBe(1);
+    }
+  });
+
+  // The cover page was blank under "Room by room": the first room fitted, but
+  // its bottom margin did not, and @react-pdf moved the whole room on.
+  it('starts the first room on the cover page', () => {
+    expect(places.find((place) => place.str === 'ENTRANCE')?.page).toBe(1);
+  });
+
+  it('never leaves a room’s header or its table headings alone at the foot of a page', () => {
+    const rooms = longMoveOut().rooms;
+    for (const room of rooms) {
+      const header = places.find((place) => place.str === room.name.toUpperCase())!;
+      const first = room.checklist[0]!.label.toUpperCase();
+      const firstRow = places.find(
+        (place) => place.page === header.page && place.y < header.y && place.str.startsWith(first.split(' ')[0]!),
+      );
+      expect(firstRow, `${room.name} starts with its first row on page ${header.page}`).toBeDefined();
+    }
+  });
+
+  // A table carried on to the next page printed its letters with no columns.
+  it('repeats the table headings on every page a table carries on to', () => {
+    const labels = new Set(longMoveOut().rooms.flatMap((room) => room.checklist.map((row) => row.label.toUpperCase())));
+    const lastPage = Math.max(...places.map((place) => place.page));
+    for (let page = 1; page <= lastPage; page += 1) {
+      const rows = places.filter((place) => place.page === page && labels.has(place.str));
+      if (!rows.length) continue;
+      const top = rows.reduce((high, place) => (place.y > high.y ? place : high));
+      const heading = places.find(
+        (place) => place.page === page && place.str === 'Room / item' && place.y > top.y,
+      );
+      expect(heading, `page ${page} heads its table`).toBeDefined();
+    }
+  });
+});
+
+describe('the cover with long values', () => {
+  // Two inspectors and a long form name printed the four values over each
+  // other and pushed "ROOMS INSPECTED" off the page.
+  it('wraps them rather than printing one over another, inside the page', async () => {
+    mockPhotoFetch();
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        inspection: {
+          ...REPORT.inspection,
+          inspector: 'Lovely Mae Fernandez / Beatriz Gonzales / Field Tech',
+          templateLabel: 'Exit Inspection with Pre-Listing Walkthrough',
+        },
+      },
+      { apiOrigin: 'http://x' },
+    );
+    const cover = (await textPlaces(pdf)).filter(
+      (place) => place.page === 1 && place.y > 600 && place.angle === 0,
+    );
+    for (const place of cover) expect(place.x + place.width).toBeLessThanOrEqual(612 - 44 + 0.5);
+    for (const a of cover)
+      for (const b of cover)
+        if (a !== b && Math.abs(a.y - b.y) < 2)
+          expect(a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5, `${a.str} | ${b.str}`).toBe(true);
+  }, 60_000);
 });
 
 describe('the capture time on a photograph', () => {
