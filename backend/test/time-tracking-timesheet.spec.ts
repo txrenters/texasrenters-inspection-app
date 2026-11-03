@@ -50,6 +50,7 @@ const segment = (
   placeKind: null,
   placeName: null,
   placeAddress: null,
+  placeCategory: null,
   placeLatitude: null,
   placeLongitude: null,
   ...overrides,
@@ -244,6 +245,7 @@ describe('stops away from the properties', () => {
     placeKind: 'BUSINESS',
     placeName: 'The Home Depot',
     placeAddress: '1 Supply Rd, Houston',
+    placeCategory: 'shop=doityourself',
     placeLatitude: 29.9,
     placeLongitude: -95.5,
   };
@@ -282,7 +284,12 @@ describe('stops away from the properties', () => {
         leftAt: at(95).toISOString(),
         durationSeconds: 25 * 60,
         quietSeconds: 0,
-        place: { kind: 'BUSINESS', name: 'The Home Depot', address: '1 Supply Rd, Houston' },
+        place: {
+          kind: 'BUSINESS',
+          name: 'The Home Depot',
+          address: '1 Supply Rd, Houston',
+          category: 'shop=doityourself',
+        },
         latitude: 29.9,
         longitude: -95.5,
       },
@@ -307,6 +314,97 @@ describe('stops away from the properties', () => {
     const sheet = await service.timesheet(LOCATOR, { date: DAY });
 
     expect(sheet.stops![0]!.place).toBeNull();
+  });
+});
+
+/**
+ * The office, 2026-11-04: "we should be able to determine the drive time".
+ * Each stretch of general time, in order, with the rows it ran between.
+ */
+describe('the drive between places', () => {
+  const LOCATOR = { ...USER, permissions: ['technicians:locate'] } as unknown as AuthenticatedUser;
+  const visitKey = (building: string) => `tech-1:${building}:${DAY}`;
+
+  it('names where each drive came from and went to: a property, a stop, the next property', async () => {
+    const onsite = segment('tech-1', 'ONSITE', 0, 60);
+    const toStore = segment('tech-1', 'GENERAL', 60, 72, { quietSeconds: 120 });
+    const stop = segment('tech-1', 'STOP', 72, 95, { placeKind: 'BUSINESS', placeName: 'Corner Store' });
+    const onward = segment('tech-1', 'GENERAL', 95, 104);
+    const next = segment('tech-1', 'ONSITE', 104, 130, ELSEWHERE);
+    const { service } = sheetHarness([onsite, toStore, stop, onward, next]);
+
+    const sheet = await service.timesheet(LOCATOR, { date: DAY });
+
+    expect(sheet.drives).toEqual([
+      {
+        key: toStore.id,
+        technicianId: 'tech-1',
+        technician: 'Moses',
+        startedAt: at(60).toISOString(),
+        endedAt: at(72).toISOString(),
+        durationSeconds: 12 * 60,
+        quietSeconds: 120,
+        fromKey: visitKey('b1'),
+        toKey: stop.id,
+      },
+      expect.objectContaining({ key: onward.id, fromKey: stop.id, toKey: visitKey('b2'), durationSeconds: 9 * 60 }),
+    ]);
+    // The rows they name are the rows on the sheet.
+    expect(sheet.visits.map((visit) => visit.key)).toEqual([visitKey('b1'), visitKey('b2')]);
+    expect(sheet.stops!.map((row) => row.key)).toEqual([stop.id]);
+  });
+
+  /** Out to the van and back is general time, but it is not a drive somewhere. */
+  it('says a step out of the circle came back to the same property', async () => {
+    const { service } = sheetHarness([
+      segment('tech-1', 'ONSITE', 0, 20),
+      segment('tech-1', 'GENERAL', 20, 23),
+      segment('tech-1', 'ONSITE', 23, 40),
+    ]);
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.drives).toEqual([expect.objectContaining({ fromKey: visitKey('b1'), toKey: visitKey('b1') })]);
+  });
+
+  it('keeps every technician’s drives to their own day', async () => {
+    const { service } = sheetHarness([
+      segment('tech-1', 'ONSITE', 0, 20),
+      segment('tech-1', 'GENERAL', 20, 30),
+      segment('tech-2', 'ONSITE', 0, 15),
+      segment('tech-2', 'GENERAL', 15, 25),
+      segment('tech-2', 'ONSITE', 25, 40, ELSEWHERE),
+      segment('tech-1', 'ONSITE', 30, 50, ELSEWHERE),
+    ]);
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.drives.map(({ technicianId, fromKey, toKey }) => ({ technicianId, fromKey, toKey }))).toEqual([
+      // Kevin sorts before Moses.
+      { technicianId: 'tech-2', fromKey: `tech-2:b1:${DAY}`, toKey: `tech-2:b2:${DAY}` },
+      { technicianId: 'tech-1', fromKey: visitKey('b1'), toKey: visitKey('b2') },
+    ]);
+  });
+
+  /**
+   * Somebody who may not see where a stop was learns only that the drive went
+   * to one -- which the stop minutes in the totals already say.
+   */
+  it('gives the drives to everybody, and the stop behind them only to those who may see it', async () => {
+    const stop = segment('tech-1', 'STOP', 70, 95, { placeKind: 'BUSINESS', placeName: 'Corner Store' });
+    const { service } = sheetHarness([
+      segment('tech-1', 'ONSITE', 0, 60),
+      segment('tech-1', 'GENERAL', 60, 70),
+      stop,
+      segment('tech-1', 'GENERAL', 95, 100),
+      segment('tech-1', 'ONSITE', 100, 120, ELSEWHERE),
+    ]);
+
+    const sheet = await service.timesheet(USER, { date: DAY });
+
+    expect(sheet.drives.map((drive) => drive.toKey)).toEqual([stop.id, visitKey('b2')]);
+    expect(sheet).not.toHaveProperty('stops');
+    expect(JSON.stringify(sheet)).not.toContain('Corner Store');
   });
 });
 

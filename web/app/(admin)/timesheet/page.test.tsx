@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ConsoleShellProvider } from '@/components/console-shell-context';
+
 import TimesheetPage from './page';
 
 /**
@@ -515,5 +517,122 @@ describe('recalculating', () => {
     mount();
 
     expect(screen.queryByRole('button', { name: 'Recalculate' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The Jobber-style layout (the office, 2026-11-04): one row per technician
+ * that opens into their day -- each property, each drive and each stop, with
+ * the store's name and what kind of place it is.
+ */
+describe('in the Jobber-style layout', () => {
+  /** 10:00 to 10:40 in Texas: from the house to the store. */
+  const TO_STORE = {
+    key: 'seg-5',
+    technicianId: 'tech-1',
+    technician: 'Moses Rodriguez',
+    startedAt: '2026-10-06T15:00:00.000Z',
+    endedAt: '2026-10-06T15:40:00.000Z',
+    durationSeconds: 2_400,
+    quietSeconds: 0,
+    fromKey: VISIT.key,
+    toKey: STOP.key,
+  };
+  const DAY_IN_FULL = {
+    ...WITH_STOPS,
+    stops: [{ ...STOP, place: { ...STOP.place, category: 'shop=doityourself' } }],
+    drives: [TO_STORE],
+  };
+
+  function mountJobber(sheet: unknown = DAY_IN_FULL) {
+    hooks.useTimesheet.mockReturnValue({ isLoading: false, isError: false, data: sheet, refetch: vi.fn() });
+    hooks.useTimesheetActions.mockReturnValue({ correct, recalculate });
+    return render(
+      <ConsoleShellProvider shell="jobber">
+        <TimesheetPage />
+      </ConsoleShellProvider>,
+    );
+  }
+
+  it('leads with the day’s on site, driving, stops and total', () => {
+    mountJobber();
+
+    const glance = screen.getByRole('region', { name: 'The day at a glance' });
+    expect(within(glance).getByText('On site').parentElement).toHaveTextContent('5h');
+    expect(within(glance).getByText('Driving').parentElement).toHaveTextContent('1h 30m');
+    expect(within(glance).getByText('Stops').parentElement).toHaveTextContent('30m');
+    expect(within(glance).getByText('Total').parentElement).toHaveTextContent('7h');
+  });
+
+  it('opens the day of a technician into each property, drive and stop, in order', () => {
+    mountJobber();
+
+    // One technician on the day: already open.
+    const row = screen.getByRole('button', { name: /Moses Rodriguez/ });
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    const lines = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(lines.map((line) => line.textContent)).toEqual([
+      expect.stringContaining('Move-out'),
+      expect.stringContaining('From 1902 Mockup Dr to The Home Depot'),
+      expect.stringContaining('The Home Depot'),
+    ]);
+    // The drive, how long it took, and when.
+    expect(lines[1]).toHaveTextContent('40m');
+    expect(lines[1]).toHaveTextContent('10:00 AM');
+    expect(lines[1]).toHaveTextContent('10:40 AM');
+  });
+
+  it('names the store, what kind of place it is, and its address', () => {
+    mountJobber();
+
+    const store = within(screen.getByRole('table')).getAllByRole('row')[3]!;
+    expect(store).toHaveTextContent('The Home Depot');
+    expect(store).toHaveTextContent('Home improvement store');
+    expect(store).toHaveTextContent('1 Supply Rd, Houston');
+    expect(within(store).getByRole('link', { name: 'Show The Home Depot on the map' })).toHaveAttribute(
+      'href',
+      '/map?technician=tech-1&date=2026-10-06',
+    );
+  });
+
+  it('links each visit to its inspection, and corrects it from the same row', () => {
+    mountJobber();
+
+    expect(screen.getByRole('link', { name: 'Move-out' })).toHaveAttribute('href', '/inspections/insp-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Correct the time at 1902 Mockup Dr' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Correct the time at 1902 Mockup Dr');
+  });
+
+  it('starts with several technicians closed, and opens them all at once', () => {
+    const second = { ...SHEET.totals[0]!, technicianId: 'tech-2', technician: 'Jordan Hale' };
+    mountJobber({ ...DAY_IN_FULL, totals: [...DAY_IN_FULL.totals, second] });
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(screen.getAllByRole('table')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Collapse all' })).toBeInTheDocument();
+  });
+
+  /** The minutes are everybody's; where a technician stopped is not. */
+  it('tells somebody who may not see where only that the drive went to a stop', () => {
+    mountJobber({ ...SHEET, drives: [TO_STORE] });
+
+    expect(screen.getByText('From 1902 Mockup Dr to a stop')).toBeInTheDocument();
+    expect(screen.queryByText('The Home Depot')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /on the map/ })).not.toBeInTheDocument();
+  });
+
+  it('credits OpenStreetMap for the names it gave', () => {
+    mountJobber();
+
+    expect(screen.getByRole('link', { name: 'OpenStreetMap' })).toBeInTheDocument();
+  });
+});
+
+describe('the kind of place, in the classic layout too', () => {
+  it('says a stop was a home improvement store beside its name', () => {
+    mount({ ...WITH_STOPS, stops: [{ ...STOP, place: { ...STOP.place, category: 'shop=doityourself' } }] });
+
+    expect(screen.getByText('Home improvement store')).toBeInTheDocument();
   });
 });

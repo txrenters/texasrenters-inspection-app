@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Fragment, useId, useState } from 'react';
 import { toast } from 'sonner';
 
+import { useConsoleShell } from '@/components/console-shell-context';
 import { DataTable, type Column } from '@/components/data-table';
 import { DayFilter } from '@/components/day-filter';
 import { SelectFilter } from '@/components/list-toolbar';
@@ -12,6 +13,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
+import { JobberTimesheet } from '@/components/timesheet/jobber-timesheet';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -38,6 +40,7 @@ import {
   jobLabel,
   namedByOpenStreetMap,
   stopDetail,
+  stopKind,
   stopTitle,
   useTimesheet,
   useTimesheetActions,
@@ -130,6 +133,8 @@ function dayRows(visits: readonly TimesheetVisit[], stops: readonly TimesheetSto
 export default function TimesheetPage() {
   const { has } = usePermissions();
   const canChange = has('inspections:manage');
+  // Jobber's arrangement: a row per technician that opens into their day.
+  const jobber = useConsoleShell() === 'jobber';
   const today = businessToday();
   const [date, setDate] = useState(today);
   const [technicianId, setTechnicianId] = useState<string | undefined>(undefined);
@@ -234,11 +239,11 @@ export default function TimesheetPage() {
         <p>
           The clock runs while a technician is inside a property’s circle. Five minutes or more
           standing still somewhere that is not a property is a stop. The rest of the time between
-          properties is general time.
+          properties is {jobber ? 'driving, with any step out of a property’s circle' : 'general time'}.
         </p>
       }
       infoLabel="How the hours are counted"
-      title="Timesheet"
+      title={jobber ? 'Timesheets' : 'Timesheet'}
     />
   );
 
@@ -319,7 +324,9 @@ export default function TimesheetPage() {
           <PlaceCell flags={payFlags(row.visit)} title={row.visit.address ?? '—'} />
         ) : (
           <PlaceCell
-            flags={[stopDetail(row.stop), ...payFlags(row.stop)].filter((flag): flag is string => Boolean(flag))}
+            flags={[stopKind(row.stop), stopDetail(row.stop), ...payFlags(row.stop)].filter(
+              (flag): flag is string => Boolean(flag),
+            )}
             stop
             title={stopTitle(row.stop)}
           />
@@ -397,6 +404,44 @@ export default function TimesheetPage() {
     },
   ];
 
+  const correctDialog = (
+    <CorrectDialog
+      onClose={() => setCorrecting(null)}
+      onSave={(startedAt, endedAt, reason) => {
+        if (!correcting) return;
+        actions.correct.mutate(
+          { segmentIds: correcting.segmentIds, startedAt, endedAt, reason },
+          {
+            onSuccess: (saved) =>
+              toast.success(`Corrected to ${asHours(saved.durationSeconds)} on site`, {
+                description: 'What the trail said is kept beside it.',
+              }),
+            onError: (error) => toast.error('That could not be saved', { description: error.message }),
+          },
+        );
+        setCorrecting(null);
+      }}
+      visit={correcting}
+    />
+  );
+
+  if (jobber)
+    return (
+      <>
+        {header}
+        {toolbar}
+        {data.totals.length ? (
+          <JobberTimesheet canChange={canChange} date={date} onCorrect={setCorrecting} sheet={data} />
+        ) : (
+          <EmptyState
+            description="Nobody was inside the circle of a property they had a visit at. If somebody was working, check the property’s pin and its distances, then recalculate this day."
+            title="Nothing recorded on this day"
+          />
+        )}
+        {correctDialog}
+      </>
+    );
+
   return (
     <>
       {header}
@@ -457,24 +502,7 @@ export default function TimesheetPage() {
         </Panel>
       ) : null}
 
-      <CorrectDialog
-        onClose={() => setCorrecting(null)}
-        onSave={(startedAt, endedAt, reason) => {
-          if (!correcting) return;
-          actions.correct.mutate(
-            { segmentIds: correcting.segmentIds, startedAt, endedAt, reason },
-            {
-              onSuccess: (saved) =>
-                toast.success(`Corrected to ${asHours(saved.durationSeconds)} on site`, {
-                  description: 'What the trail said is kept beside it.',
-                }),
-              onError: (error) => toast.error('That could not be saved', { description: error.message }),
-            },
-          );
-          setCorrecting(null);
-        }}
-        visit={correcting}
-      />
+      {correctDialog}
     </>
   );
 }

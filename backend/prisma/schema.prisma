@@ -4173,6 +4173,10 @@ model TimeSegment {
   /// "The Home Depot", "123 Main St", "Home". Null for a place nobody could name.
   placeName      String?
   placeAddress   String?
+  /// What kind of place a business was, as OpenStreetMap tags it:
+  /// "shop=hardware", "shop=convenience", "amenity=fuel". Null until asked; an
+  /// empty string once asked with no answer, so it is asked about once.
+  placeCategory  String?
   /// When the stop was looked up, found or not, so it is asked about once.
   placeNamedAt   DateTime?
 

@@ -117,9 +117,36 @@ export interface TimesheetStop {
   durationSeconds: number;
   quietSeconds: number;
   /** Null until it has been looked up, which happens within minutes. */
-  place: { kind: StopPlaceKind; name: string | null; address: string | null } | null;
+  place: {
+    kind: StopPlaceKind;
+    name: string | null;
+    address: string | null;
+    /**
+     * What kind of place a business is, as OpenStreetMap tags it:
+     * "shop=hardware". Null when not known yet, empty when it had none.
+     * `stopKind` puts it in words.
+     */
+    category?: string | null;
+  } | null;
   latitude: number | null;
   longitude: number | null;
+}
+
+/**
+ * The time between two places: a stretch of general time, with the rows it
+ * ran between named by their keys -- a visit's or a stop's. Both ends the same
+ * visit is a step out of the circle and back, not a drive.
+ */
+export interface TimesheetDrive {
+  key: string;
+  technicianId: string;
+  technician: string;
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  quietSeconds: number;
+  fromKey: string | null;
+  toKey: string | null;
 }
 
 export interface Timesheet {
@@ -128,6 +155,8 @@ export interface Timesheet {
   visits: TimesheetVisit[];
   /** Absent, not empty, for somebody who may not see where a technician was. */
   stops?: TimesheetStop[];
+  /** Every drive of the day, in order. Absent from a server older than 2026-11-04. */
+  drives?: TimesheetDrive[];
 }
 
 /**
@@ -157,6 +186,144 @@ export function stopDetail(stop: Pick<TimesheetStop, 'place'>): string | null {
 /** Whether a place's name came from OpenStreetMap, which then has to be credited. */
 export const namedByOpenStreetMap = (stop: Pick<TimesheetStop, 'place'>) =>
   stop.place?.kind === 'BUSINESS' || stop.place?.kind === 'ADDRESS';
+
+/**
+ * OpenStreetMap's tags in the office's words: the places a technician stops
+ * at between properties. Home Depot and Lowe's are "doityourself" there.
+ */
+const PLACE_KIND: Record<string, string> = {
+  'shop=hardware': 'Hardware store',
+  'shop=doityourself': 'Home improvement store',
+  'shop=trade': 'Building supplies',
+  'shop=paint': 'Paint store',
+  'shop=electrical': 'Electrical supplies',
+  'shop=locksmith': 'Locksmith',
+  'shop=garden_centre': 'Garden center',
+  'shop=convenience': 'Convenience store',
+  'shop=supermarket': 'Grocery store',
+  'shop=general': 'General store',
+  'shop=variety_store': 'Dollar store',
+  'shop=department_store': 'Department store',
+  'shop=car_parts': 'Auto parts store',
+  'shop=car_repair': 'Auto repair',
+  'shop=tyres': 'Tire shop',
+  'shop=chemist': 'Pharmacy',
+  'shop=mobile_phone': 'Phone store',
+  'amenity=fuel': 'Gas station',
+  'amenity=car_wash': 'Car wash',
+  'amenity=fast_food': 'Fast food',
+  'amenity=restaurant': 'Restaurant',
+  'amenity=cafe': 'Coffee shop',
+  'amenity=bank': 'Bank',
+  'amenity=atm': 'ATM',
+  'amenity=pharmacy': 'Pharmacy',
+  'amenity=post_office': 'Post office',
+  'amenity=parking': 'Parking lot',
+  'amenity=toilets': 'Restroom',
+};
+
+/**
+ * What kind of place a stop was -- "Hardware store", "Convenience store" --
+ * or null when that is not known. A tag this page has no words for yet says
+ * its own: "shop=pet" is "Pet".
+ */
+export function stopKind(stop: Pick<TimesheetStop, 'place'>): string | null {
+  const category = stop.place?.kind === 'BUSINESS' ? stop.place.category : null;
+  if (!category) return null;
+  const known = PLACE_KIND[category];
+  if (known) return known;
+  const value = category.split('=')[1];
+  return value ? humanize(value) : null;
+}
+
+/** One line of a technician's day, in the order it happened. */
+export type DayEntry =
+  | {
+      kind: 'visit';
+      key: string;
+      startedAt: string;
+      endedAt: string;
+      seconds: number;
+      visit: TimesheetVisit;
+      /** Out of the circle and back to it, inside this visit: general time, not a drive. */
+      steppedOutSeconds: number;
+    }
+  | { kind: 'stop'; key: string; startedAt: string; endedAt: string; seconds: number; stop: TimesheetStop }
+  | {
+      kind: 'drive';
+      key: string;
+      startedAt: string;
+      endedAt: string;
+      seconds: number;
+      drive: TimesheetDrive;
+      /** Where it set off from and went to, in words; null when the day does not say. */
+      from: string | null;
+      to: string | null;
+    };
+
+/**
+ * One technician's day as a list, the way Jobber's timesheet reads: each
+ * property, each drive and each stop, in order. A drive names its two ends --
+ * a property's address, a store's name, or only "a stop" for somebody who may
+ * not see where -- and a step out of a property's circle and back is folded
+ * into that visit instead of listed as a drive.
+ */
+export function technicianDay(sheet: Timesheet, technicianId: string): DayEntry[] {
+  const visits = sheet.visits.filter((visit) => visit.technicianId === technicianId);
+  const stops = (sheet.stops ?? []).filter((stop) => stop.technicianId === technicianId);
+  const drives = (sheet.drives ?? []).filter((drive) => drive.technicianId === technicianId);
+  const visitByKey = new Map(visits.map((visit) => [visit.key, visit]));
+  const stopByKey = new Map(stops.map((stop) => [stop.key, stop]));
+
+  const nameOf = (key: string | null): string | null => {
+    if (!key) return null;
+    const visit = visitByKey.get(key);
+    if (visit) return visit.address ?? 'a property';
+    const stop = stopByKey.get(key);
+    // Not named yet is still a stop; "Finding the place…" is for its own row.
+    return stop?.place ? stopTitle(stop) : 'a stop';
+  };
+
+  const steppedOut = new Map<string, number>();
+  const entries: DayEntry[] = [];
+  for (const drive of drives) {
+    if (drive.fromKey && drive.fromKey === drive.toKey && visitByKey.has(drive.fromKey)) {
+      steppedOut.set(drive.fromKey, (steppedOut.get(drive.fromKey) ?? 0) + drive.durationSeconds);
+      continue;
+    }
+    entries.push({
+      kind: 'drive',
+      key: drive.key,
+      startedAt: drive.startedAt,
+      endedAt: drive.endedAt,
+      seconds: drive.durationSeconds,
+      drive,
+      from: nameOf(drive.fromKey),
+      to: nameOf(drive.toKey),
+    });
+  }
+  for (const visit of visits)
+    entries.push({
+      kind: 'visit',
+      key: visit.key,
+      startedAt: visit.arrivedAt,
+      endedAt: visit.leftAt,
+      seconds: visit.onsiteSeconds,
+      visit,
+      steppedOutSeconds: steppedOut.get(visit.key) ?? 0,
+    });
+  for (const stop of stops)
+    entries.push({
+      kind: 'stop',
+      key: stop.key,
+      startedAt: stop.arrivedAt,
+      endedAt: stop.leftAt,
+      seconds: stop.durationSeconds,
+      stop,
+    });
+
+  return entries.sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+}
 
 export const timesheetKeys = {
   all: ['timesheet'] as const,
