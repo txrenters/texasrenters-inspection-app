@@ -1,6 +1,6 @@
 import { OFFICE } from '@texasrenters/shared';
 
-import { RouteService } from '../src/routing/route.service';
+import { FAILED_DRAW_RETRY_MS, RouteService } from '../src/routing/route.service';
 
 /**
  * The day so far, kept on the map rather than dropped from it.
@@ -150,6 +150,25 @@ describe('a day with finished stops', () => {
 
     const historyDraws = draws.filter((points) => points.join() === [OFFICE.latitude, 29.91, 29.92].join());
     expect(historyDraws).toHaveLength(1);
+  });
+
+  it('asks for a history that would not draw only once FAILED_DRAW_RETRY_MS has passed', async () => {
+    // The whole day done, so every draw is the history's: an hour of the
+    // console polling every 30 seconds used to be 120 directions requests.
+    const { prisma } = day(THE_DAY.slice(1));
+    let draws = 0;
+    const refusing = { configured: true, route: async () => (draws++, null) };
+    const service = new RouteService(prisma as never, osrmUnused, refusing as never, {} as never);
+
+    for (let poll = 0; poll < 120; poll += 1) {
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + poll * 30_000);
+      const route = await service.planDay('org', 'tech', DAY);
+      expect(route.history).toMatchObject({ geometry: [] });
+      expect(route.history.stops).toHaveLength(2);
+    }
+
+    expect(FAILED_DRAW_RETRY_MS).toBe(15 * 60_000);
+    expect(draws).toBe(4);
   });
 
   it('joins a single finished stop to the office', async () => {

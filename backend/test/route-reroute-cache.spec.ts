@@ -1,6 +1,6 @@
 import { OFFICE } from '@texasrenters/shared';
 
-import { MAX_DRAWN_ROUTES, RouteService } from '../src/routing/route.service';
+import { FAILED_DRAW_RETRY_MS, MAX_DRAWN_ROUTES, RouteService } from '../src/routing/route.service';
 
 /**
  * Asking Google only when the day has changed.
@@ -9,7 +9,7 @@ import { MAX_DRAWN_ROUTES, RouteService } from '../src/routing/route.service';
  * technician's route on a timer, and every poll used to redraw it --
  * a matrix call and a route call -- whether or not anything had moved. These
  * pin down that a still day costs one draw, that a real change costs another,
- * and that a draw which failed is never remembered.
+ * and that a draw which failed is asked for again only after a while.
  */
 
 const dec = (value: number) => ({ toNumber: () => value }) as never;
@@ -153,19 +153,91 @@ describe('redrawing a route', () => {
     expect(calls.route).toBe(2);
   });
 
-  it('does not remember a draw that failed', async () => {
+  it('asks again for a draw that failed only once FAILED_DRAW_RETRY_MS has passed', async () => {
     /**
-     * An outage returns a route with no legs. Caching it would pin that empty
-     * route in place for five minutes after Google recovered, which reads on
-     * the map exactly like routing being broken.
+     * A day that will not draw -- here Mapbox times the stops and then has no
+     * road to one of them -- used to be asked for again on every poll. The
+     * console polls a selected technician every 30 seconds: an hour of that
+     * on a nine-stop day was 120 matrices of 100 elements and 120 directions
+     * requests, for the same empty answer each time.
      */
-    const { prisma } = day(['a', 'b']);
+    const stops = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+    const { prisma } = day(stops);
+    const calls = { elements: 0, directions: 0 };
+    const mapbox = {
+      configured: true,
+      matrix: async (points: unknown[]) => {
+        calls.elements += points.length * points.length;
+        const grid = points.map((_, i) => points.map((__, j) => (i === j ? 0 : 600)));
+        return { durations: grid, distances: grid };
+      },
+      route: async () => {
+        calls.directions += 1;
+        return null;
+      },
+    };
+    const service = new RouteService(
+      prisma as never,
+      osrmUnused,
+      { configured: false } as never,
+      mapbox as never,
+    );
+
+    for (let poll = 0; poll < 120; poll += 1) {
+      jest.spyOn(Date, 'now').mockReturnValue(NOW + poll * 30_000);
+      const route = await service.planDay('org', 'tech', DAY);
+      expect(route.legs).toEqual([]);
+      // Still the whole day, ordered, for the panel to list.
+      expect(route.stops).toHaveLength(stops.length);
+    }
+
+    // Once at 0, 15, 30 and 45 minutes: four draws of ten points, not 120.
+    expect(FAILED_DRAW_RETRY_MS).toBe(15 * MINUTE);
+    expect(calls.directions).toBe(4);
+    expect(calls.elements).toBe(4 * 100);
+  });
+
+  it('asks again at once when the day a draw failed for changes', async () => {
+    const { prisma, state } = day(['a', 'b']);
     const { client, calls } = google('fail');
     const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
 
     await service.planDay('org', 'tech', DAY);
     await service.planDay('org', 'tech', DAY);
+    expect(calls.route).toBe(1);
 
+    // A stop finished: a different day, so a different question.
+    state.stops = ['b'];
+    await service.planDay('org', 'tech', DAY);
+    expect(calls.route).toBe(2);
+
+    // The handset came online: the day starts somewhere else now.
+    state.ping = { ...PLACE, recordedAt: new Date(NOW - MINUTE) };
+    await service.planDay('org', 'tech', DAY);
+    expect(calls.route).toBe(3);
+  });
+
+  it('draws the route once the router recovers, and keeps that one', async () => {
+    const { prisma } = day(['a', 'b']);
+    let recovered = false;
+    const { client, calls } = google();
+    const route = client.route;
+    client.route = async (points: unknown[]) => (recovered ? route(points) : (calls.route++, null));
+    const service = new RouteService(prisma as never, osrmUnused, client as never, {} as never);
+
+    expect((await service.planDay('org', 'tech', DAY)).legs).toEqual([]);
+    recovered = true;
+
+    // Within the window the failure stands...
+    jest.spyOn(Date, 'now').mockReturnValue(NOW + FAILED_DRAW_RETRY_MS - 1);
+    expect((await service.planDay('org', 'tech', DAY)).legs).toEqual([]);
+    expect(calls.route).toBe(1);
+
+    // ...and past it the day draws, and is reused like any drawn route.
+    jest.spyOn(Date, 'now').mockReturnValue(NOW + FAILED_DRAW_RETRY_MS);
+    expect((await service.planDay('org', 'tech', DAY)).legs.length).toBeGreaterThan(0);
+    jest.spyOn(Date, 'now').mockReturnValue(NOW + FAILED_DRAW_RETRY_MS + MINUTE);
+    await service.planDay('org', 'tech', DAY);
     expect(calls.route).toBe(2);
   });
 
