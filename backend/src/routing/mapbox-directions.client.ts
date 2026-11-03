@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { ceilingFrom, DailyAllowance, spendFrom } from '../common/daily-allowance';
+
 import type { GeoPoint, OsrmRoute } from './osrm.client';
 import { parseRouteResponse, toOsrmCoordinates } from './osrm.client';
 
@@ -39,6 +41,39 @@ export const MAX_COORDINATES = 25;
 
 /** A hosted API gets a strict timeout; a plan redraw must not hang on it. */
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * The most matrix elements this backend asks Mapbox for in one day.
+ *
+ * Mapbox bills the matrix per element -- every point against every other, so a
+ * day of nine stops and the office is a hundred -- and only the first hundred
+ * thousand of a month are free. On 15 October 2026 the Group maker's
+ * suggestions asked for 384,009 in one day, and nobody knew until the invoice
+ * came: $764 for a month that would otherwise have cost nothing. Past the
+ * ceiling the matrix answers null, which every caller already reads as
+ * "measure it in a straight line instead", so a mistake like that one costs a
+ * day of estimates rather than a bill.
+ *
+ * Above the busiest ordinary day so far (24,539, on 27 October). The count is
+ * this process's and starts again when it restarts, so it bounds a runaway; it
+ * is not an exact meter (see `DailyAllowance`). `MAPBOX_DAILY_MATRIX_ELEMENTS`
+ * overrides it.
+ */
+export const DAILY_MATRIX_ELEMENTS = 30_000;
+
+/**
+ * Of that, what a caller with an estimate already in hand may spend: a
+ * suggestion improved by the road, rather than a plan measured on it.
+ * `MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS` overrides it.
+ */
+export const DAILY_OPTIONAL_MATRIX_ELEMENTS = 2_000;
+
+/**
+ * Directions requests in one day. The busiest so far asked for 858, half of
+ * them from the console's own browser. `MAPBOX_DAILY_DIRECTIONS_REQUESTS`
+ * overrides it.
+ */
+export const DAILY_DIRECTIONS_REQUESTS = 3_000;
 
 /**
  * Split a run of points into requests, each overlapping the last by one.
@@ -125,6 +160,19 @@ export function stitch(parts: readonly OsrmRoute[]): OsrmRoute | null {
 export class MapboxDirectionsClient {
   private readonly logger = new Logger(MapboxDirectionsClient.name);
 
+  private readonly matrixToday = new DailyAllowance(
+    'mapbox-matrix',
+    ceilingFrom('MAPBOX_DAILY_MATRIX_ELEMENTS', DAILY_MATRIX_ELEMENTS),
+  );
+  private readonly optionalMatrixToday = new DailyAllowance(
+    'mapbox-optional-matrix',
+    ceilingFrom('MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS', DAILY_OPTIONAL_MATRIX_ELEMENTS),
+  );
+  private readonly directionsToday = new DailyAllowance(
+    'mapbox-directions',
+    ceilingFrom('MAPBOX_DAILY_DIRECTIONS_REQUESTS', DAILY_DIRECTIONS_REQUESTS),
+  );
+
   /**
    * Absent configuration means Mapbox routing is unavailable and the caller
    * falls back, rather than every request spending ten seconds discovering
@@ -177,6 +225,8 @@ export class MapboxDirectionsClient {
     if (!this.configured || points.length < 2) return null;
 
     const chunks = chunkForRequests(points.length);
+    // Every request of the route or none: half a line is worse than a straight one.
+    if (!spendFrom(chunks.length, [this.directionsToday], this.logger)) return null;
     const parts: OsrmRoute[] = [];
     for (const [start, end] of chunks) {
       const coordinates = toOsrmCoordinates(points.slice(start, end));
@@ -207,9 +257,18 @@ export class MapboxDirectionsClient {
    * day past the limit is refused rather than half-answered, and falls back to
    * the straight-line estimate, which is at least wrong in a way the console
    * already reports. Days here are nine or ten stops and a home.
+   *
+   * `optional` for a caller that has an estimate to show anyway -- a
+   * suggestion rather than a plan. Those stop at a much lower ceiling, so the
+   * day's allowance is still there for the plans.
    */
-  async matrix(points: readonly GeoPoint[]) {
+  async matrix(points: readonly GeoPoint[], options: { optional?: boolean } = {}) {
     if (!this.configured || points.length < 2 || points.length > MAX_COORDINATES) return null;
+    const elements = points.length * points.length;
+    const allowances = options.optional
+      ? [this.matrixToday, this.optionalMatrixToday]
+      : [this.matrixToday];
+    if (!spendFrom(elements, allowances, this.logger)) return null;
     return parseMatrixResponse(
       await this.get(
         `/directions-matrix/v1/mapbox/driving/${toOsrmCoordinates(points)}` +

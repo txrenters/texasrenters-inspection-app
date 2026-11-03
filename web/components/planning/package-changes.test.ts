@@ -1,7 +1,17 @@
-import type { GroupSuggestion } from '@texasrenters/shared';
+import type { GroupSuggestion, GroupTemplateChanges, GroupTemplateOp } from '@texasrenters/shared';
 import { describe, expect, it } from 'vitest';
 
-import { addedText, changesSummary, leftReasonText, newcomerSince, roomText, suggestionTitle } from './package-changes';
+import {
+  addedText,
+  changesSince,
+  changesSummary,
+  leftReasonText,
+  newcomerSince,
+  NOTHING_REMOVED,
+  removedBy,
+  roomText,
+  suggestionTitle,
+} from './package-changes';
 
 /** The words for what changed in the benefit package under a template (2026-10-15). */
 
@@ -85,5 +95,68 @@ describe('a suggested group', () => {
       'Adds about 4 min of driving to Group 3 (by road). Nearest in it: 1 Oak St, 3 min away. It has 8 of the 10 properties it is meant to hold.',
     );
     expect(suggestionTitle({ ...suggestion, timing: 'ESTIMATE' })).toContain('estimated in a straight line');
+  });
+});
+
+/**
+ * Read once, then kept true on the page (the Mapbox invoice for October 2026):
+ * every read is timed on the road and billed, and the Group maker used to read
+ * it again after every click.
+ */
+describe('the package changes, since they were read', () => {
+  const NORTH = { id: 'g-north', position: 1, name: 'North', color: '#e6194b' };
+  const SOUTH = { id: 'g-south', position: 2, name: 'South', color: '#3cb44b' };
+  const fits = (group: typeof NORTH) =>
+    ({ group, members: 2, target: 9, hasRoom: true, addedMinutes: 4, timing: 'ROAD', nearest: null }) as const;
+  const READ: GroupTemplateChanges = {
+    templateId: 't-1',
+    revision: 4,
+    leavers: [
+      { buildingId: 'gone-n', address: '1 Gone Ave', group: NORTH, reasons: [] },
+      { buildingId: 'gone-s', address: '2 Gone Ave', group: SOUTH, reasons: [] },
+    ],
+    unplaced: [{ buildingId: 'lost', address: '3 Lost Ln', group: SOUTH }],
+    newcomers: [
+      { buildingId: 'new-1', address: '4 New St', city: null, zone: null, firstOnReport: null, joinedAt: null, suggestions: [fits(NORTH), fits(SOUTH)] },
+      { buildingId: 'new-2', address: '5 New St', city: null, zone: null, firstOnReport: null, joinedAt: null, suggestions: [fits(NORTH)] },
+    ],
+  };
+
+  it('is the read itself when nothing has happened since', () => {
+    expect(changesSince(READ, new Set(), NOTHING_REMOVED)).toEqual(READ);
+  });
+
+  it('takes a newcomer put in a group off the list', () => {
+    const now = changesSince(READ, new Set(['new-1', 'somewhere-else']), NOTHING_REMOVED);
+    expect(now.newcomers.map((newcomer) => newcomer.buildingId)).toEqual(['new-2']);
+  });
+
+  it('takes off a leaver taken out of its group', () => {
+    const removed = removedBy(NOTHING_REMOVED, [{ type: 'stop.remove', stop: 'gone-n' }]);
+    expect(changesSince(READ, new Set(), removed).leavers.map((leaver) => leaver.buildingId)).toEqual(['gone-s']);
+  });
+
+  it('takes off whatever was in a deleted group, and stops offering that group', () => {
+    const removed = removedBy(NOTHING_REMOVED, [{ type: 'group.delete', groupId: SOUTH.id }]);
+    const now = changesSince(READ, new Set(), removed);
+
+    expect(now.leavers.map((leaver) => leaver.buildingId)).toEqual(['gone-n']);
+    expect(now.unplaced).toEqual([]);
+    expect(now.newcomers[0]!.suggestions.map((suggestion) => suggestion.group.id)).toEqual([NORTH.id]);
+  });
+
+  it('forgets a removal that was put back', () => {
+    const out = removedBy(NOTHING_REMOVED, [{ type: 'stop.remove', stop: 'gone-n' }]);
+    const back = removedBy(out, [{ type: 'stop.add', groupId: NORTH.id, stop: 'gone-n' }]);
+    expect(back.stops.has('gone-n')).toBe(false);
+  });
+
+  /** A reorder takes nothing out, so the panel has no reason to draw again. */
+  it('is the same object after edits that removed nothing', () => {
+    const ops: GroupTemplateOp<string>[] = [
+      { type: 'stops.order', groupId: NORTH.id, stops: ['a', 'b'] },
+      { type: 'stop.add', groupId: NORTH.id, stop: 'c' },
+    ];
+    expect(removedBy(NOTHING_REMOVED, ops)).toBe(NOTHING_REMOVED);
   });
 });

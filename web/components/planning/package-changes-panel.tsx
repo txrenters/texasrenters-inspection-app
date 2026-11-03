@@ -1,7 +1,7 @@
 'use client';
 
 import type { GroupTemplateChanges, PackageChangeGroup } from '@texasrenters/shared';
-import { ChevronDownIcon, MapPinOffIcon, UserMinusIcon, UserPlusIcon } from 'lucide-react';
+import { ChevronDownIcon, MapPinOffIcon, RefreshCwIcon, UserMinusIcon, UserPlusIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -19,44 +19,70 @@ import { addedText, changesSummary, leftReasonText, newcomerSince, roomText, sug
  * Above the map rather than a passing toast: a leaver is not drawn, so this is
  * the only place it can be found; a newcomer is drawn in no group's colour, and
  * this says which groups it would fit.
+ *
+ * Read when the template opens, not after every edit: the page takes a placed
+ * newcomer or a removed leaver off the list itself, and Refresh reads it all
+ * again -- the drive times and room counts with it.
  */
 export function PackageChangesPanel({
   changes,
   canChange,
-  busy,
   onAdd,
   onRemove,
+  onRefresh,
+  refreshing,
 }: {
   changes: GroupTemplateChanges;
   canChange: boolean;
-  /** Properties with a change on its way: their buttons wait for it. */
-  busy: ReadonlySet<string>;
   /** Put a newcomer in a group, at the end of its order: reorder on the map as usual. */
   onAdd: (buildingId: string, group: PackageChangeGroup) => void;
   /** Take a leaver out of the group it is still in. */
   onRemove: (buildingId: string, group: PackageChangeGroup) => void;
+  /** Read who left and who joined again, with fresh drive times. */
+  onRefresh: () => void;
+  refreshing: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const summary = changesSummary(changes);
+  const refresh = (
+    <Button
+      className="text-muted-foreground h-7 shrink-0 gap-1.5 px-2 text-xs"
+      disabled={refreshing}
+      onClick={onRefresh}
+      size="sm"
+      title="Read who left and who joined again, with fresh drive times"
+      type="button"
+      variant="ghost"
+    >
+      <RefreshCwIcon aria-hidden className={cn('size-3.5', refreshing && 'animate-spin')} />
+      Refresh
+    </Button>
+  );
   if (!summary)
     return (
-      <p className="text-muted-foreground text-xs" role="status">
-        Benefit package: every property in it is in a group, and none of the template&rsquo;s has left.
-      </p>
+      <div className="flex flex-wrap items-center gap-x-2" role="status">
+        <p className="text-muted-foreground text-xs">
+          Benefit package: every property in it is in a group, and none of the template&rsquo;s has left.
+        </p>
+        {refresh}
+      </div>
     );
 
   return (
     <section aria-label="Benefit package changes" className="bg-card rounded-lg border">
-      <button
-        aria-expanded={open}
-        className="hover:bg-accent/40 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-2 text-left text-sm"
-        onClick={() => setOpen((was) => !was)}
-        type="button"
-      >
-        <span className="font-medium">Benefit package changes</span>
-        <span className="text-muted-foreground text-xs">{summary}</span>
-        <ChevronDownIcon aria-hidden className={cn('text-muted-foreground ml-auto size-4 transition-transform', open && 'rotate-180')} />
-      </button>
+      <div className="flex items-center gap-1 pr-2">
+        <button
+          aria-expanded={open}
+          className="hover:bg-accent/40 flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-2 text-left text-sm"
+          onClick={() => setOpen((was) => !was)}
+          type="button"
+        >
+          <span className="font-medium">Benefit package changes</span>
+          <span className="text-muted-foreground text-xs">{summary}</span>
+          <ChevronDownIcon aria-hidden className={cn('text-muted-foreground ml-auto size-4 transition-transform', open && 'rotate-180')} />
+        </button>
+        {refresh}
+      </div>
       {open ? (
         <div className="grid gap-4 border-t px-3 py-3 lg:grid-cols-2">
           {changes.newcomers.length ? (
@@ -86,7 +112,7 @@ export function PackageChangesPanel({
                         <Button
                           aria-label={`Add ${newcomer.address} to ${suggestion.group.name}`}
                           className="h-7 gap-1.5 px-2 text-xs"
-                          disabled={!canChange || busy.has(newcomer.buildingId)}
+                          disabled={!canChange}
                           key={suggestion.group.id}
                           onClick={() => onAdd(newcomer.buildingId, suggestion.group)}
                           size="sm"
@@ -133,7 +159,6 @@ export function PackageChangesPanel({
                     <Button
                       aria-label={`Take ${leaver.address} out of ${leaver.group.name}`}
                       className="h-7 px-2 text-xs"
-                      disabled={busy.has(leaver.buildingId)}
                       onClick={() => onRemove(leaver.buildingId, leaver.group)}
                       size="sm"
                       type="button"

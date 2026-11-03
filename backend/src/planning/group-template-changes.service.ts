@@ -39,6 +39,21 @@ const SUGGESTIONS = 3;
 /** How many newcomers are timed on the road at once. */
 const ROAD_CONCURRENCY = 4;
 
+/**
+ * How many newcomers are timed on the road in one read, the latest to join
+ * first. The rest keep the estimate they are ranked by.
+ *
+ * Every newcomer used to be timed, and that is what the Mapbox invoice for
+ * October 2026 was. A newcomer is any property in the package that the open
+ * template groups nowhere, so a template drawn from nothing starts with the
+ * whole package as newcomers -- about four hundred -- and the Group maker reads
+ * this again after every saved edit. Drawing the Q4 templates on 15 October
+ * asked Mapbox for 384,009 matrix elements in a day, for suggestions about
+ * properties that had joined nothing. The ones that did join are the panel's
+ * reason to exist, and they are few.
+ */
+const ROAD_TIMED_NEWCOMERS = 10;
+
 /** How long a road matrix is kept: the roads do not move, but a member can. */
 const ROAD_CACHE_MS = 30 * 60 * 1000;
 const ROAD_CACHE_SIZE = 1000;
@@ -193,6 +208,12 @@ export class GroupTemplateChangesService {
       firstOnReport(this.prisma, organizationId, freshIds),
       packageHistory(this.prisma, organizationId, freshIds, TbpPackageChangeKind.JOINED),
     ]);
+    // Both are ISO instants, so the text sorts as the time does.
+    const since = (buildingId: string) =>
+      joins.get(buildingId)?.[0]?.occurredAt.toISOString() ?? onReport.get(buildingId) ?? '';
+    const onRoad = new Set(
+      [...freshIds].sort((left, right) => since(right).localeCompare(since(left))).slice(0, ROAD_TIMED_NEWCOMERS),
+    );
 
     const results: PackageNewcomer[] = new Array<PackageNewcomer>(fresh.length);
     let next = 0;
@@ -210,7 +231,7 @@ export class GroupTemplateChangesService {
           zone: property.zone,
           firstOnReport: onReport.get(property.buildingId) ?? null,
           joinedAt: joins.get(property.buildingId)?.[0]?.occurredAt.toISOString() ?? null,
-          suggestions: await this.timed(point, ranked, pathOf),
+          suggestions: await this.timed(point, ranked, pathOf, onRoad.has(property.buildingId)),
         };
       }
     };
@@ -224,7 +245,8 @@ export class GroupTemplateChangesService {
    * Ranked first in a straight line, the planner's own estimate, then the
    * cheapest place in each of the few groups is timed by Mapbox: the drive in
    * from the member before it and on to the member after, less the drive it
-   * replaces. One small matrix per newcomer. When no router answers, the
+   * replaces. One small matrix per newcomer `onRoad` picked out
+   * (`ROAD_TIMED_NEWCOMERS`). For the rest, or when no router answers, the
    * estimate stands and says so.
    */
   private async timed(
@@ -234,6 +256,7 @@ export class GroupTemplateChangesService {
       string,
       { ref: PackageChangeGroup; target: number; members: { address: string; point: GeoPoint }[] }
     >,
+    onRoad: boolean,
   ): Promise<GroupSuggestion[]> {
     const points: GeoPoint[] = [point];
     const slot = new Map<string, number>();
@@ -256,7 +279,7 @@ export class GroupTemplateChangesService {
         nearest: insertion.nearest ? indexOf(insertion.groupId, insertion.nearest.index) : null,
       };
     });
-    const seconds = await this.road(points);
+    const seconds = onRoad ? await this.road(points) : null;
 
     const suggestions = ranked.map((insertion, index): GroupSuggestion => {
       const path = pathOf.get(insertion.groupId)!;
@@ -307,7 +330,8 @@ export class GroupTemplateChangesService {
     const kept = this.roads.get(key);
     if (kept && Date.now() - kept.at < ROAD_CACHE_MS) return kept.seconds;
     try {
-      const matrix = await this.mapbox.matrix(points);
+      // Optional: the estimate is already in hand, and the day's matrix allowance belongs to the plans.
+      const matrix = await this.mapbox.matrix(points, { optional: true });
       if (!matrix) return null;
       if (this.roads.size >= ROAD_CACHE_SIZE) this.roads.delete(this.roads.keys().next().value!);
       this.roads.set(key, { at: Date.now(), seconds: matrix.durations });

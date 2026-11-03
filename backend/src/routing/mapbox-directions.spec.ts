@@ -1,5 +1,8 @@
+import { Logger } from '@nestjs/common';
+
 import {
   chunkForRequests,
+  MapboxDirectionsClient,
   parseMatrixResponse,
   stitch,
   MAX_COORDINATES,
@@ -185,5 +188,104 @@ describe('reading a duration matrix', () => {
     expect(parseMatrixResponse({ code: 'Ok' })).toBeNull();
     expect(parseMatrixResponse({ code: 'Ok', durations: [] })).toBeNull();
     expect(parseMatrixResponse({ code: 'Ok', durations: ['nope'] })).toBeNull();
+  });
+});
+
+describe('asking Mapbox within the day', () => {
+  const saved = { ...process.env };
+  const realFetch = global.fetch;
+  const square = (count: number) => ({
+    code: 'Ok',
+    durations: Array.from({ length: count }, () => Array.from({ length: count }, () => 60)),
+  });
+  const points = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ latitude: 29.8, longitude: -95.4 + index / 1000 }));
+  let fetchMock: jest.Mock;
+  let warn: jest.SpyInstance;
+
+  beforeEach(() => {
+    process.env.MAPBOX_TOKEN = 'pk.test';
+    fetchMock = jest.fn().mockImplementation((url: string) => {
+      const count = (url.split('/driving/')[1] ?? '').split('?')[0]!.split(';').length;
+      const body = url.includes('/directions-matrix/')
+        ? square(count)
+        : {
+            code: 'Ok',
+            routes: [{ distance: 100, duration: 60, legs: [{ distance: 100, duration: 60 }], geometry: { coordinates: [] } }],
+          };
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    process.env = { ...saved };
+    global.fetch = realFetch;
+    warn.mockRestore();
+  });
+
+  it('stops asking for matrices once the day’s elements are spent, and says so once', async () => {
+    process.env.MAPBOX_DAILY_MATRIX_ELEMENTS = '250';
+    const mapbox = new MapboxDirectionsClient();
+
+    // Eleven points are 121 elements: two fit in 250, a third does not.
+    expect(await mapbox.matrix(points(11))).not.toBeNull();
+    expect(await mapbox.matrix(points(11))).not.toBeNull();
+    expect(await mapbox.matrix(points(11))).toBeNull();
+    expect(await mapbox.matrix(points(11))).toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'daily_allowance_reached', allowance: 'mapbox-matrix', ceiling: 250 }),
+    );
+  });
+
+  /**
+   * A suggestion has its estimate already; a plan has nothing else. Once the
+   * suggestions have had their share, the plans still get theirs.
+   */
+  it('stops a suggestion at its own ceiling while a plan still gets its matrix', async () => {
+    process.env.MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS = '100';
+    const mapbox = new MapboxDirectionsClient();
+
+    expect(await mapbox.matrix(points(10), { optional: true })).not.toBeNull();
+    expect(await mapbox.matrix(points(10), { optional: true })).toBeNull();
+    expect(await mapbox.matrix(points(10))).not.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ allowance: 'mapbox-optional-matrix', ceiling: 100 }));
+  });
+
+  it('counts a refused suggestion against nothing', async () => {
+    process.env.MAPBOX_DAILY_MATRIX_ELEMENTS = '100';
+    process.env.MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS = '0';
+    const mapbox = new MapboxDirectionsClient();
+
+    expect(await mapbox.matrix(points(10), { optional: true })).toBeNull();
+    // All hundred still there for the plan.
+    expect(await mapbox.matrix(points(10))).not.toBeNull();
+  });
+
+  it('asks for a whole route or none of it', async () => {
+    process.env.MAPBOX_DAILY_DIRECTIONS_REQUESTS = '1';
+    const mapbox = new MapboxDirectionsClient();
+
+    // Thirty points are two requests; one is allowed, so neither is made.
+    expect(await mapbox.route(points(30))).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await mapbox.route(points(10))).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /** An empty line in the env file is not a ceiling of zero, which would switch Mapbox off. */
+  it('reads an empty or unreadable setting as the default', async () => {
+    process.env.MAPBOX_DAILY_MATRIX_ELEMENTS = '';
+    process.env.MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS = 'lots';
+    const mapbox = new MapboxDirectionsClient();
+
+    expect(await mapbox.matrix(points(25), { optional: true })).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

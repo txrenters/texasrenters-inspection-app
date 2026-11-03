@@ -1,4 +1,7 @@
+import { Logger } from '@nestjs/common';
+
 import {
+  GoogleGeocodingClient,
   parseGoogleResponse,
   precisionFromLocationType,
 } from './google-geocoding.client';
@@ -107,5 +110,41 @@ describe('how precise Google says it was', () => {
     // Unknown means untrusted, not "probably fine".
     expect(precisionFromLocationType('SOMETHING_NEW')).toBe('CENTROID');
     expect(precisionFromLocationType(undefined)).toBe('CENTROID');
+  });
+});
+
+/**
+ * The hourly pass asks again for every address it could not place, and records
+ * no miss, so an address Google cannot find would be asked for every hour for
+ * ever. Past the day's ceiling the answer is null, and the caller goes to the
+ * Census geocoder, which is free.
+ */
+describe('a day of Google geocoding, counted', () => {
+  const saved = process.env.GOOGLE_DAILY_GEOCODE_REQUESTS;
+  const realFetch = global.fetch;
+  let warn: jest.SpyInstance;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.GOOGLE_DAILY_GEOCODE_REQUESTS;
+    else process.env.GOOGLE_DAILY_GEOCODE_REQUESTS = saved;
+    global.fetch = realFetch;
+    warn.mockRestore();
+  });
+
+  it('stops asking Google once the day’s lookups are spent', async () => {
+    process.env.GOOGLE_DAILY_GEOCODE_REQUESTS = '2';
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(ok()) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const google = new GoogleGeocodingClient('test-key');
+
+    expect(await google.geocode('9612 Figment Rd, Houston, TX 77045')).not.toBeNull();
+    expect(await google.geocode('9612 Figment Rd, Houston, TX 77045')).not.toBeNull();
+    expect(await google.geocode('9612 Figment Rd, Houston, TX 77045')).toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'daily_allowance_reached', allowance: 'google-geocode', ceiling: 2 }),
+    );
   });
 });

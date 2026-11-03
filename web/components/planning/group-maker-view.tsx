@@ -79,6 +79,7 @@ import {
 } from './group-maker';
 import { DEFAULT_MINUTES_PER_PROPERTY, type ManualState } from './manual-grouping';
 import { ManualGroupingView, type ManualLiveControls } from './manual-grouping-view';
+import { changesSince, NOTHING_REMOVED, removedBy, type RemovedSince } from './package-changes';
 import { PackageChangesPanel } from './package-changes-panel';
 import { TemplateSync, type SyncStatus } from './template-sync';
 import { useTemplateLive } from './use-template-live';
@@ -98,12 +99,6 @@ type StartFrom = 'blank' | 'copy' | 'file';
 
 /** How long after the last keystroke a template's new name goes out. */
 const NAME_DEBOUNCE_MS = 600;
-
-/**
- * How long after a change the package changes are read again: long enough for
- * a run of clicks to be one read, and for the change to have reached the server.
- */
-const CHANGES_REFRESH_MS = 1_500;
 
 /** The server saying no -- archived, refused, not found -- rather than the network failing: said once, not retried. */
 function refusal(error: unknown): string | null {
@@ -196,34 +191,34 @@ export function GroupMakerView() {
   const waiting = useRef<GroupTemplateOp<string>[][]>([]);
   const nameTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  /** Who left the package and who joined, under the open template (2026-10-15). */
-  const changes = useGroupTemplateChanges(editor?.templateId ?? null);
-  /** Properties with a change from the package panel on its way: their buttons wait for it. */
-  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
   /**
-   * Read the package changes again once what was just done is saved -- by this
-   * person, from the panel or the map, or by anyone else: a newcomer clicked
-   * into a group is no longer new. A run of changes is one read.
+   * Who left the package and who joined, under the open template (2026-10-15).
+   * Not read under a quarter's filter, where the panel is hidden: drawing Q4's
+   * templates that way still asked for it after every edit, and each read is
+   * billed by Mapbox.
    */
-  const refreshChanges = useCallback(() => {
-    clearTimeout(refreshTimer.current);
-    const attempt = () => {
-      if (engine.current?.pending) {
-        refreshTimer.current = setTimeout(attempt, CHANGES_REFRESH_MS);
-        return;
-      }
-      void client
-        .invalidateQueries({
-          predicate: (query) =>
-            query.queryKey.includes('group-templates') && query.queryKey[query.queryKey.length - 1] === 'changes',
-        })
-        .finally(() => setBusy(new Set()));
-    };
-    refreshTimer.current = setTimeout(attempt, CHANGES_REFRESH_MS);
-  }, [client]);
-  useEffect(() => () => clearTimeout(refreshTimer.current), []);
+  const changes = useGroupTemplateChanges(editor?.templateId ?? null, !offered);
+  /**
+   * The package changes are read once, when the template opens, and again only
+   * on Refresh. They used to be read again 1.5 s after every saved edit, and
+   * each read timed every newcomer's suggestions through Mapbox: drawing the Q4
+   * templates on 15 October 2026 cost $764 that way. What happens since is
+   * applied to the one read instead (`changesSince`): who is in a group now,
+   * and what was taken out or deleted, by this person or anyone else.
+   */
+  const [grouped, setGrouped] = useState<ReadonlySet<string>>(() => new Set());
+  const [removed, setRemoved] = useState<RemovedSince>(NOTHING_REMOVED);
+  const shownChanges = useMemo(
+    () => (changes.data ? changesSince(changes.data, grouped, removed) : null),
+    [changes.data, grouped, removed],
+  );
+
+  /** The groups as this browser now has them, and who is in one: a newcomer put in a group leaves the panel. */
+  const know = useCallback((state: ManualState, buildingOf: ReadonlyMap<number, string>) => {
+    lastKnown.current = state;
+    const now = new Set(liveGroupsOf(state, buildingOf).groups.flatMap((group) => group.stops));
+    setGrouped((was) => (was.size === now.size && [...now].every((id) => was.has(id)) ? was : now));
+  }, []);
 
   /** Somebody else's batch, or the one that catches this copy up, made to what this person sees. */
   const applyToView = useCallback(
@@ -241,16 +236,17 @@ export function GroupMakerView() {
           controls.current.setMinutes(op.minutesPerProperty);
         }
       }
+      // Before the map's share is taken: a leaver someone took out is not drawn, and this is its only trace.
+      setRemoved((was) => removedBy(was, ops));
       const rows = mapOpStops(
         ops.filter((op) => op.type !== 'template.update'),
         (building) => made.rowOf.get(building),
       );
       if (!rows.length) return;
-      lastKnown.current = { groups: applyGroupOps(lastKnown.current, rows).groups };
+      know({ groups: applyGroupOps(lastKnown.current, rows).groups }, made.buildingOf);
       controls.current.rebase((state) => ({ groups: applyGroupOps(state, rows).groups }));
-      refreshChanges();
     },
-    [made, refreshChanges],
+    [know, made],
   );
 
   /**
@@ -267,7 +263,10 @@ export function GroupMakerView() {
     engine.current?.close();
     viewReady.current = false;
     waiting.current = [];
-    lastKnown.current = state;
+    know(state, made.buildingOf);
+    // Opening a template is when its package changes are read: afresh, even for one opened before.
+    setRemoved(NOTHING_REMOVED);
+    void client.invalidateQueries({ queryKey: planningKeys.groupTemplateChanges(template.id) });
     minutes.current = template.minutesPerProperty;
     engine.current = new TemplateSync({
       base: liveGroupsOfTemplate(template),
@@ -300,7 +299,7 @@ export function GroupMakerView() {
       name: template.name,
       initial: { state, activeId: null, minutesPerProperty: template.minutesPerProperty },
     });
-  }, [applyToView, client, detail.data, editor, made, openId]);
+  }, [applyToView, client, detail.data, editor, know, made, openId]);
 
   useEffect(() => () => engine.current?.close(), []);
 
@@ -310,7 +309,7 @@ export function GroupMakerView() {
       if (!made) return;
       if (!viewReady.current) {
         viewReady.current = true;
-        lastKnown.current = snapshot.state;
+        know(snapshot.state, made.buildingOf);
         minutes.current = snapshot.minutesPerProperty;
         for (const ops of waiting.current.splice(0)) applyToView(ops);
         return;
@@ -322,13 +321,13 @@ export function GroupMakerView() {
           ops.push({ type: 'template.update', minutesPerProperty: snapshot.minutesPerProperty });
       }
       ops.push(...diffGroupOps(liveGroupsOf(lastKnown.current, made.buildingOf), liveGroupsOf(snapshot.state, made.buildingOf)));
-      lastKnown.current = snapshot.state;
+      know(snapshot.state, made.buildingOf);
       if (canChange && ops.length) {
         engine.current?.local(ops);
-        refreshChanges();
+        setRemoved((was) => removedBy(was, ops));
       }
     },
-    [applyToView, canChange, made, refreshChanges],
+    [applyToView, canChange, know, made],
   );
 
   /**
@@ -341,17 +340,16 @@ export function GroupMakerView() {
       if (!made || !canChange) return;
       const rows = mapOpStops(ops, (building) => made.rowOf.get(building));
       if (rows.length) {
-        lastKnown.current = { groups: applyGroupOps(lastKnown.current, rows).groups };
+        know({ groups: applyGroupOps(lastKnown.current, rows).groups }, made.buildingOf);
         controls.current?.rebase((state) => ({ groups: applyGroupOps(state, rows).groups }));
       }
       engine.current?.local(ops);
-      refreshChanges();
+      setRemoved((was) => removedBy(was, ops));
     },
-    [canChange, made, refreshChanges],
+    [canChange, know, made],
   );
 
   const addToGroup = (buildingId: string, group: PackageChangeGroup) => {
-    setBusy((was) => new Set(was).add(buildingId));
     applyFromPanel([{ type: 'stop.add', groupId: group.id, stop: buildingId }]);
     toast.success(`Added to ${group.name}`, {
       description: 'It goes last in the group’s order: move it on the map if it belongs earlier.',
@@ -359,7 +357,6 @@ export function GroupMakerView() {
   };
 
   const takeOut = (buildingId: string, group: PackageChangeGroup) => {
-    setBusy((was) => new Set(was).add(buildingId));
     applyFromPanel([{ type: 'stop.remove', stop: buildingId }]);
     toast.success(`Taken out of ${group.name}`);
   };
@@ -842,13 +839,14 @@ export function GroupMakerView() {
 
       {/* Not under a quarter's filter: there every property outside the quarter
           would read as new to the package (2026-10-15). */}
-      {editor && !offered && changes.data?.templateId === editor.templateId ? (
+      {editor && !offered && shownChanges?.templateId === editor.templateId ? (
         <PackageChangesPanel
-          busy={busy}
           canChange={canChange}
-          changes={changes.data}
+          changes={shownChanges}
           onAdd={addToGroup}
+          onRefresh={() => void changes.refetch()}
           onRemove={takeOut}
+          refreshing={changes.isFetching}
         />
       ) : null}
 

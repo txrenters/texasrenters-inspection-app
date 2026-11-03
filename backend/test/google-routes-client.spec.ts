@@ -1,4 +1,7 @@
+import { Logger } from '@nestjs/common';
+
 import {
+  GoogleRoutesClient,
   MAX_MATRIX_ELEMENTS,
   matrixWaitMs,
   parseDuration,
@@ -157,5 +160,61 @@ describe('the billing guard', () => {
 
     const wholeQuarter = 400 * 400;
     expect(wholeQuarter).toBeGreaterThan(MAX_MATRIX_ELEMENTS);
+  });
+});
+
+/**
+ * A day's ceiling, as on Mapbox -- and because of it. The live route asks
+ * Mapbox first and Google next, so without one here a Mapbox allowance spent
+ * for the day would have moved every later redraw onto Google, uncapped.
+ */
+describe('a day of Google, counted', () => {
+  const saved = { ...process.env };
+  const realFetch = global.fetch;
+  const points = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ latitude: 29.8, longitude: -95.4 + index / 1000 }));
+  let fetchMock: jest.Mock;
+  let warn: jest.SpyInstance;
+
+  beforeEach(() => {
+    process.env.GOOGLE_ROUTES_API_KEY = 'test-key';
+    fetchMock = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    process.env = { ...saved };
+    global.fetch = realFetch;
+    warn.mockRestore();
+  });
+
+  it('stops asking for matrices once the day’s elements are spent', async () => {
+    process.env.GOOGLE_DAILY_MATRIX_ELEMENTS = '250';
+    const google = new GoogleRoutesClient();
+    const departure = new Date(Date.now() + 3_600_000);
+
+    // Eleven points are 121 elements: two fit in 250, the third is never sent.
+    await google.matrix(points(11), departure);
+    await google.matrix(points(11), departure);
+    expect(await google.matrix(points(11), departure)).toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'daily_allowance_reached', allowance: 'google-matrix', ceiling: 250 }),
+    );
+  });
+
+  it('stops drawing routes, and navigation legs, each at its own ceiling', async () => {
+    process.env.GOOGLE_DAILY_ROUTE_REQUESTS = '1';
+    process.env.GOOGLE_DAILY_NAVIGATION_REQUESTS = '0';
+    const google = new GoogleRoutesClient();
+    const [from, to] = points(2) as [{ latitude: number; longitude: number }, { latitude: number; longitude: number }];
+
+    await google.route([from, to]);
+    expect(await google.route([from, to])).toBeNull();
+    expect(await google.routeWithSteps(from, to)).toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
