@@ -196,8 +196,13 @@ export function GroupMakerView() {
   const waiting = useRef<GroupTemplateOp<string>[][]>([]);
   const nameTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  /** Who left the package and who joined, under the open template (2026-10-15). */
-  const changes = useGroupTemplateChanges(editor?.templateId ?? null);
+  /**
+   * Who left the package and who joined, under the open template (2026-10-15).
+   * Not read under a quarter's filter, where the panel is hidden: drawing Q4's
+   * templates that way still asked for it after every edit, and each read is
+   * billed by Mapbox.
+   */
+  const changes = useGroupTemplateChanges(editor?.templateId ?? null, !offered);
   /** Properties with a change from the package panel on its way: their buttons wait for it. */
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

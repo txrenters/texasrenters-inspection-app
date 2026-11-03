@@ -1,5 +1,9 @@
+import { Logger } from '@nestjs/common';
+
 import {
   chunkForRequests,
+  DailyAllowance,
+  MapboxDirectionsClient,
   parseMatrixResponse,
   stitch,
   MAX_COORDINATES,
@@ -185,5 +189,146 @@ describe('reading a duration matrix', () => {
     expect(parseMatrixResponse({ code: 'Ok' })).toBeNull();
     expect(parseMatrixResponse({ code: 'Ok', durations: [] })).toBeNull();
     expect(parseMatrixResponse({ code: 'Ok', durations: ['nope'] })).toBeNull();
+  });
+});
+
+/**
+ * The ceiling on what one day may ask Mapbox for.
+ *
+ * The invoice that asked for it: $764 for October 2026, nearly all of it
+ * 384,009 matrix elements on 15 October, from the Group maker's suggestions.
+ * Every other day of the month fitted in the free allowance.
+ */
+describe('a day of Mapbox, counted', () => {
+  it('spends up to the ceiling and refuses past it', () => {
+    const today = new DailyAllowance('matrix', 250, () => new Date('2026-10-15T12:00:00Z'));
+
+    expect(today.fits(121)).toBe(true);
+    today.spend(121);
+    expect(today.fits(121)).toBe(true);
+    today.spend(121);
+    // 242 spent: a third matrix of 121 would be 363.
+    expect(today.fits(121)).toBe(false);
+    expect(today.fits(8)).toBe(true);
+  });
+
+  /** UTC, the day Mapbox's own statistics page counts in, not Texas's. */
+  it('starts again at midnight UTC', () => {
+    let now = new Date('2026-10-15T23:59:00Z');
+    const today = new DailyAllowance('matrix', 100, () => now);
+    today.spend(100);
+    expect(today.fits(1)).toBe(false);
+
+    now = new Date('2026-10-16T00:00:00Z');
+    expect(today.fits(100)).toBe(true);
+  });
+
+  it('says only the first refusal of a day is the first', () => {
+    let now = new Date('2026-10-15T09:00:00Z');
+    const today = new DailyAllowance('matrix', 0, () => now);
+
+    expect(today.refuse()).toBe(true);
+    expect(today.refuse()).toBe(false);
+    now = new Date('2026-10-16T09:00:00Z');
+    expect(today.refuse()).toBe(true);
+  });
+});
+
+describe('asking Mapbox within the day', () => {
+  const saved = { ...process.env };
+  const realFetch = global.fetch;
+  const square = (count: number) => ({
+    code: 'Ok',
+    durations: Array.from({ length: count }, () => Array.from({ length: count }, () => 60)),
+  });
+  const points = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({ latitude: 29.8, longitude: -95.4 + index / 1000 }));
+  let fetchMock: jest.Mock;
+  let warn: jest.SpyInstance;
+
+  beforeEach(() => {
+    process.env.MAPBOX_TOKEN = 'pk.test';
+    fetchMock = jest.fn().mockImplementation((url: string) => {
+      const count = (url.split('/driving/')[1] ?? '').split('?')[0]!.split(';').length;
+      const body = url.includes('/directions-matrix/')
+        ? square(count)
+        : {
+            code: 'Ok',
+            routes: [{ distance: 100, duration: 60, legs: [{ distance: 100, duration: 60 }], geometry: { coordinates: [] } }],
+          };
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    process.env = { ...saved };
+    global.fetch = realFetch;
+    warn.mockRestore();
+  });
+
+  it('stops asking for matrices once the day’s elements are spent, and says so once', async () => {
+    process.env.MAPBOX_DAILY_MATRIX_ELEMENTS = '250';
+    const mapbox = new MapboxDirectionsClient();
+
+    // Eleven points are 121 elements: two fit in 250, a third does not.
+    expect(await mapbox.matrix(points(11))).not.toBeNull();
+    expect(await mapbox.matrix(points(11))).not.toBeNull();
+    expect(await mapbox.matrix(points(11))).toBeNull();
+    expect(await mapbox.matrix(points(11))).toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'mapbox_daily_allowance_reached', allowance: 'matrix', ceiling: 250 }),
+    );
+  });
+
+  /**
+   * A suggestion has its estimate already; a plan has nothing else. Once the
+   * suggestions have had their share, the plans still get theirs.
+   */
+  it('stops a suggestion at its own ceiling while a plan still gets its matrix', async () => {
+    process.env.MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS = '100';
+    const mapbox = new MapboxDirectionsClient();
+
+    expect(await mapbox.matrix(points(10), { optional: true })).not.toBeNull();
+    expect(await mapbox.matrix(points(10), { optional: true })).toBeNull();
+    expect(await mapbox.matrix(points(10))).not.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ allowance: 'optional-matrix', ceiling: 100 }));
+  });
+
+  it('counts a refused suggestion against nothing', async () => {
+    process.env.MAPBOX_DAILY_MATRIX_ELEMENTS = '100';
+    process.env.MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS = '0';
+    const mapbox = new MapboxDirectionsClient();
+
+    expect(await mapbox.matrix(points(10), { optional: true })).toBeNull();
+    // All hundred still there for the plan.
+    expect(await mapbox.matrix(points(10))).not.toBeNull();
+  });
+
+  it('asks for a whole route or none of it', async () => {
+    process.env.MAPBOX_DAILY_DIRECTIONS_REQUESTS = '1';
+    const mapbox = new MapboxDirectionsClient();
+
+    // Thirty points are two requests; one is allowed, so neither is made.
+    expect(await mapbox.route(points(30))).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await mapbox.route(points(10))).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /** An empty line in the env file is not a ceiling of zero, which would switch Mapbox off. */
+  it('reads an empty or unreadable setting as the default', async () => {
+    process.env.MAPBOX_DAILY_MATRIX_ELEMENTS = '';
+    process.env.MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS = 'lots';
+    const mapbox = new MapboxDirectionsClient();
+
+    expect(await mapbox.matrix(points(25), { optional: true })).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

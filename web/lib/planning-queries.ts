@@ -600,12 +600,16 @@ export const useGroupTemplate = (id: string | null) =>
 /**
  * What changed in the benefit package under a template (the office, 2026-10-15):
  * who left and the group each is still in, who joined and the groups each would fit.
+ *
+ * `enabled` only while the panel is on screen: the server times a joiner's
+ * suggestions through Mapbox, which bills each one, and the Group maker asks
+ * again after every saved edit.
  */
-export const useGroupTemplateChanges = (id: string | null) =>
+export const useGroupTemplateChanges = (id: string | null, enabled = true) =>
   useQuery({
     queryKey: planningKeys.groupTemplateChanges(id ?? ''),
     queryFn: ({ signal }) => api<GroupTemplateChanges>(`${PLANNING}/group-templates/${id}/changes`, { signal }),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && enabled,
     refetchOnWindowFocus: false,
   });
 

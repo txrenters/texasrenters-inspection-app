@@ -49,6 +49,8 @@ const build = (
     /** L left because the report stopped saying Yes, rather than by the office's switch. */
     leftByReport?: boolean;
     history?: Change[];
+    /** More properties the Group maker draws, in no group: more newcomers. */
+    more?: GroupMakerProperty[];
   } = {},
 ) => {
   const template =
@@ -110,7 +112,14 @@ const build = (
   const templates = {
     properties: jest.fn().mockResolvedValue({
       // N is new, between B (west) and C (east), much nearer the west.
-      properties: [property('A', -95.4), property('B', -95.39), property('C', -95.3), property('D', -95.29), property('N', -95.385)],
+      properties: [
+        property('A', -95.4),
+        property('B', -95.39),
+        property('C', -95.3),
+        property('D', -95.29),
+        property('N', -95.385),
+        ...(options.more ?? []),
+      ],
       withoutPosition: 1,
     }),
   } as unknown as GroupTemplateService;
@@ -176,6 +185,38 @@ describe('what changed under a template', () => {
       expect(suggestion.addedMinutes).toBe(10);
       expect(suggestion.nearest?.minutes).toBe(10);
     }
+  });
+
+  /**
+   * The October 2026 Mapbox invoice. A template drawn from nothing has the
+   * whole package as newcomers, and each was timed with a matrix of its own
+   * after every edit: 384,009 elements on 15 October. Only the latest to join
+   * are timed now; the rest keep the estimate they were ranked by.
+   */
+  it('times only the latest joiners on the road, and the rest on the estimate', async () => {
+    const more = Array.from({ length: 13 }, (_, index) => property(`X${index}`, -95.395 + index * 0.007));
+    const { service, matrix } = build({
+      matrix: (points) => points.map((_, from) => points.map((__, to) => (from === to ? 0 : 600))),
+      more,
+      history: [
+        { buildingId: 'X5', kind: 'JOINED', reason: null, occurredAt: new Date('2026-10-20T08:00:00Z') },
+        { buildingId: 'X9', kind: 'JOINED', reason: null, occurredAt: new Date('2026-10-25T08:00:00Z') },
+      ],
+    });
+    const { newcomers } = await service.changes(ORG, TEMPLATE);
+    expect(newcomers).toHaveLength(14);
+
+    const timing = new Map(newcomers.map((newcomer) => [newcomer.buildingId, newcomer.suggestions[0]!.timing]));
+    expect([...timing.values()].filter((value) => value === 'ROAD')).toHaveLength(10);
+    expect([...timing.values()].filter((value) => value === 'ESTIMATE')).toHaveLength(4);
+    // The two the history saw join, then N, first on the report: the panel's reason to exist.
+    expect(timing.get('X9')).toBe('ROAD');
+    expect(timing.get('X5')).toBe('ROAD');
+    expect(timing.get('N')).toBe('ROAD');
+
+    expect(matrix).toHaveBeenCalledTimes(10);
+    // A suggestion, not a plan: it stops at the smaller of the day's two ceilings.
+    for (const call of matrix.mock.calls) expect(call[1]).toEqual({ optional: true });
   });
 
   it('dates a leave the report made by the history, which saw it go', async () => {

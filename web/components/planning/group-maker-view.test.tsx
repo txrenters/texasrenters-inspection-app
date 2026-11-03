@@ -417,6 +417,24 @@ describe('the Group maker', () => {
       expect(screen.queryByText('Benefit package changes')).toBeNull();
     });
 
+    /**
+     * Nor asked for. Each read times its joiners through Mapbox, which bills
+     * them, and the Q4 templates were drawn under this filter on 15 October
+     * with the hidden panel read again after every edit.
+     */
+    it('does not ask for the package changes it is not showing', () => {
+      url.state = { template: '', notBooked: 'plan-q4' };
+      mount({ notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 2, buildingIds: ['b2', 'b3'] } });
+
+      expect(hooks.useGroupTemplateChanges).toHaveBeenLastCalledWith(TEMPLATE_ID, false);
+    });
+
+    it('asks for them when every property is shown', () => {
+      mount({ changes: CHANGES });
+
+      expect(hooks.useGroupTemplateChanges).toHaveBeenLastCalledWith(TEMPLATE_ID, true);
+    });
+
     it('makes nothing for a quarter with no unscheduled visits', async () => {
       mount({ notBooked: { planId: 'plan-q4', quarter: 'Q4 2026', visits: 0, buildingIds: [] } });
 
