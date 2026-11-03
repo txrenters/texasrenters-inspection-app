@@ -1,11 +1,12 @@
 'use client';
 
 import { isDemoProperty, leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
-import { Trash2Icon } from 'lucide-react';
+import { Building2Icon, Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
+import { useConsoleShell } from '@/components/console-shell-context';
 import { DataTable, type Column } from '@/components/data-table';
 import {
   DemoPropertyDeleteDialog,
@@ -17,6 +18,8 @@ import { Panel, SECTION_LABEL } from '@/components/panel';
 import { PropertyDetailsPanel } from '@/components/property-details-panel';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
 import { PropertyServiceCard } from '@/components/property-service-card';
+import { PropertyCreateMenu, PropertyRecordAside, PropertyWork } from '@/components/record/property-record';
+import { FactTable, RecordLayout } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -155,6 +158,8 @@ export default function PropertyDetailPage() {
   const property = useProperty(id);
   const [pendingDelete, setPendingDelete] = useState<DeletableDemoProperty | null>(null);
   const [state, setState] = useUrlState({ tab: 'details' });
+  /** Jobber's record layout, in the Jobber-style shell only. */
+  const jobber = useConsoleShell() === 'jobber';
 
   // isError first: a failed fetch has no data either, and checking `!data`
   // ahead of it would show a skeleton forever instead of the error.
@@ -164,6 +169,7 @@ export default function PropertyDetailPage() {
   const item = property.data;
 
   const badges = [
+    jobber && item.isActive ? <StatusBadge key="active" value="ACTIVE" /> : null,
     isDemoProperty(item) ? (
       <Badge key="demo" variant="warning">
         Demo
@@ -220,9 +226,15 @@ export default function PropertyDetailPage() {
               </Button>
             ) : null}
             {item.isActive && permissions.has('inspections:manage') ? (
-              <Button asChild>
-                <Link href={`/inspections/new?propertyId=${item.id}`}>Create inspection</Link>
-              </Button>
+              // Jobber's "+ Create" on a client, by inspection type, in the
+              // Jobber-style shell; the one button in the classic console.
+              jobber ? (
+                <PropertyCreateMenu propertyId={item.id} />
+              ) : (
+                <Button asChild>
+                  <Link href={`/inspections/new?propertyId=${item.id}`}>Create inspection</Link>
+                </Button>
+              )
             ) : null}
           </>
         }
@@ -231,12 +243,58 @@ export default function PropertyDetailPage() {
            they have been looking at a demo property is after booking a visit. */
         badges={badges.length ? badges : null}
         description={formatAddress(item)}
+        record={{ icon: Building2Icon, tone: 'text-chart-1', label: 'Property' }}
         title={item.name}
       />
+
+      <RecordContent
+        aside={
+          <PropertyRecordAside
+            inspections={item._count?.inspections}
+            lastSyncedAt={item.lastSyncedAt}
+            leases={item.leases?.length ?? 0}
+            units={item._count?.units ?? item.units?.length}
+          />
+        }
+        jobber={jobber}
+      >
 
       {/* One hairline panel, not six bordered cards (console-development): six
           boxes of one fact each read as six things to look at. Six cells divide
           evenly into two and three columns, so no seam is left empty. */}
+      {jobber ? (
+        <div className="grid gap-x-8 lg:grid-cols-2">
+          <FactTable
+            facts={[
+              {
+                label: 'Portfolio',
+                value: item.portfolio?.name ?? 'Unassigned',
+                detail: item.portfolio ? undefined : 'Propertyware holds no portfolio for this property',
+              },
+              { label: 'Total area', value: item.totalArea?.label ?? EMPTY, detail: areaSource },
+              {
+                label: 'Lease summary',
+                value: item.leaseSummary?.summary ?? 'Lease data not synchronized',
+                detail:
+                  item.leaseSummary?.leaseDataAvailable === false ? (
+                    <span className="text-warning">No units have synchronized, so lease status is unknown</span>
+                  ) : item.leaseSummary?.nextLeaseEndDate ? (
+                    `Next lease ends ${formatScheduledDate(item.leaseSummary.nextLeaseEndDate)}`
+                  ) : undefined,
+              },
+            ]}
+            label="Property details"
+          />
+          <FactTable
+            facts={[
+              { label: 'Source status', value: item.sourceStatus ?? EMPTY },
+              { label: 'External reference', value: <span className="font-mono break-all">{item.externalId}</span> },
+              { label: 'Last synchronized', value: formatRelative(item.lastSyncedAt) },
+            ]}
+            label="Propertyware record"
+          />
+        </div>
+      ) : (
       <dl className="bg-border grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-3">
         <div className="bg-card p-4">
           <dt className={SECTION_LABEL}>Portfolio</dt>
@@ -294,6 +352,7 @@ export default function PropertyDetailPage() {
           </dd>
         </div>
       </dl>
+      )}
 
       {/*
         Two tabs (the office, 2026-10-01): the property's details, which is
@@ -317,6 +376,11 @@ export default function PropertyDetailPage() {
           <div className="mb-4">
             <PropertyServiceCard propertyId={item.id} propertyName={item.name} />
           </div>
+          {jobber ? (
+            <div className="mb-4">
+              <PropertyWork propertyId={item.id} propertyName={item.name} />
+            </div>
+          ) : null}
           <PropertyDetailsPanel canSeePrivate={permissions.has('properties:manage')} property={item} />
 
           {/*
@@ -375,6 +439,7 @@ export default function PropertyDetailPage() {
           />
         </TabsContent>
       </Tabs>
+      </RecordContent>
 
       {/* Back to the list once it is gone: this page is *about* the property that
           no longer exists, so staying would show a 404 where the record was. */}
@@ -386,5 +451,18 @@ export default function PropertyDetailPage() {
         />
       ) : null}
     </>
+  );
+}
+
+/**
+ * The page body, with Jobber's side panel beside it from xl in the Jobber-style
+ * shell, and exactly as it was in the classic console.
+ */
+function RecordContent({ aside, children, jobber }: { aside: ReactNode; children: ReactNode; jobber: boolean }) {
+  if (!jobber) return <>{children}</>;
+  return (
+    <RecordLayout aside={aside} asideLabel="About this property">
+      {children}
+    </RecordLayout>
   );
 }
