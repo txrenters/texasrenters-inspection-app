@@ -48,6 +48,10 @@ const tenant = (sizes: string[], overrides: Record<string, unknown> = {}) => ({
   propertywareBuildingId: null,
   unitExternalId: null,
   unitName: null,
+  contactName: null,
+  contactPhones: [],
+  contactEmail: null,
+  building: null,
   ...overrides,
 });
 

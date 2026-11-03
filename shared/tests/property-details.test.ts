@@ -5,6 +5,7 @@ import {
   isAccessField,
   isPlaceholderValue,
   propertyDetailSections,
+  visitAccessFields,
 } from '../src/contracts/property-details';
 
 /** The property page's Details tab (the office, 2026-10-01). Values invented. */
@@ -63,5 +64,27 @@ describe('the sections on the page', () => {
   it('label the office’s awkward names plainly', () => {
     expect(customFieldLabel('Owner Pet Prefences')).toBe('Owner pet preferences');
     expect(customFieldLabel('Zone')).toBe('Zone');
+  });
+});
+
+describe('the codes a visit carries', () => {
+  it('takes the key information, lockbox and gate code, in that order, as the office labels them', () => {
+    expect(
+      visitAccessFields([
+        { name: 'Gated Community? Gate Code?', value: '#1234' },
+        { name: 'Alarm System Code', value: '9999' },
+        { name: 'Lockbox Code', value: '  Supra   0000 ' },
+        { name: 'Key Information - anything we need to know', value: '#4 in the key box' },
+      ]),
+    ).toEqual([
+      { label: 'Key Information', value: '#4 in the key box' },
+      { label: 'Lockbox Code', value: 'Supra 0000' },
+      { label: 'Gate Code', value: '#1234' },
+    ]);
+  });
+
+  it('leaves out a field the office never filled', () => {
+    expect(visitAccessFields([{ name: 'Lockbox Code', value: 'Not Completed' }, { name: 'Gated Community? Gate Code?', value: '.' }])).toEqual([]);
+    expect(visitAccessFields(null)).toEqual([]);
   });
 });

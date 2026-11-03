@@ -143,6 +143,28 @@ export function isPlaceholderValue(value: string | null | undefined): boolean {
   return !text || PLACEHOLDER.test(text);
 }
 
+/**
+ * The access fields a technician needs at the door, in the office's order on
+ * the building's "Keys and Code Work" section, labelled as they are on a visit.
+ * The alarm, garage and mailbox codes stay on the property page.
+ */
+const VISIT_ACCESS_FIELDS: readonly { name: string; label: string }[] = [
+  { name: 'Key Information - anything we need to know', label: 'Key Information' },
+  { name: 'Lockbox Code', label: 'Lockbox Code' },
+  { name: 'Gated Community? Gate Code?', label: 'Gate Code' },
+];
+
+/** The building's key information, lockbox and gate codes that say something. */
+export function visitAccessFields(
+  customFields: readonly PropertyCustomField[] | null | undefined,
+): { label: string; value: string }[] {
+  const byName = new Map((customFields ?? []).map((field) => [field.name.trim().toLowerCase(), field.value]));
+  return VISIT_ACCESS_FIELDS.flatMap(({ name, label }) => {
+    const value = byName.get(name.toLowerCase())?.replace(/\s+/g, ' ').trim();
+    return value && !isPlaceholderValue(value) ? [{ label, value }] : [];
+  });
+}
+
 /** How a custom field is labelled on the page; the office's own label when it reads well. */
 const FIELD_LABELS: Record<string, string> = {
   'Gated Community? Gate Code?': 'Gate code',

@@ -329,6 +329,18 @@ export const TENANT_REPORT_OPTIONAL_COLUMNS = {
   unitName: 'Unit Name',
   unit: 'Unit',
   unitAbbreviation: 'Unit Abbreviation',
+  /**
+   * The lease's primary contact (the office, 2026-11-04). The REST API refuses
+   * leases, so the report is the only way to the tenant's phone and email.
+   * "Primary Contact" itself comes through empty in the published JSON, so the
+   * name is read from the first and last name columns.
+   */
+  contactFirstName: 'Primary Contact First Name',
+  contactLastName: 'Primary Contact Last Name',
+  contactMobile: 'Primary Contact Mobile',
+  contactHomePhone: 'Primary Contact Home Phone',
+  contactWorkPhone: 'Primary Contact Work Phone',
+  contactEmail: 'Primary Contact Email',
 } as const;
 
 export type TenantReportColumnKey = keyof typeof TENANT_REPORT_COLUMNS;

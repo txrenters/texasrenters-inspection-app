@@ -130,6 +130,9 @@ const propertySchema = z.object({
  */
 const jobFileSchema = z.object({
   tenantNames: z.array(z.string()).default([]),
+  tenantPhones: z.array(z.string()).default([]),
+  tenantEmail: nullableString,
+  access: z.array(z.object({ label: z.string(), value: z.string() })).default([]),
   plan: nullableString,
   hvacPlan: nullableString,
   benefitPackage: nullableString,

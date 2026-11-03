@@ -66,6 +66,9 @@ interface TenancyRow {
   lastFilterDelivery: string | null;
   lastHvacInspection: Date | null;
   lastOccupiedInspection: string | null;
+  contactName: string | null;
+  contactPhones: string[];
+  contactEmail: string | null;
 }
 
 interface LastVisitRow {
@@ -94,6 +97,22 @@ const TENANCY: TenancyRow = {
   lastFilterDelivery: 'June 2026',
   lastHvacInspection: new Date('2026-03-12T00:00:00.000Z'),
   lastOccupiedInspection: '2026-06-18',
+  contactName: 'Rosa Alvarez',
+  contactPhones: ['(555) 010-0142'],
+  contactEmail: 'rosa@example.com',
+};
+
+/** The building's custom fields as the sync stores them; the codes are invented. */
+const BUILDING_DETAILS = {
+  building: {},
+  leasing: {},
+  management: {},
+  customFields: [
+    { name: 'Key Information - anything we need to know', value: '#4 in the key box' },
+    { name: 'Lockbox Code', value: 'Supra 0000' },
+    { name: 'Gated Community? Gate Code?', value: 'Not Completed' },
+    { name: 'Alarm System Code', value: '1111' },
+  ],
 };
 
 const LAST_VISIT: LastVisitRow = {
@@ -109,12 +128,14 @@ function build({
   units = 2,
   lastVisit = LAST_VISIT as LastVisitRow | null,
   job = JOB,
+  details = BUILDING_DETAILS as unknown,
 }: {
   leases?: LeaseRow[];
   tenancies?: TenancyRow[];
   units?: number;
   lastVisit?: LastVisitRow | null;
   job?: typeof JOB;
+  details?: unknown;
 } = {}) {
   const prisma = {
     inspection: {
@@ -126,6 +147,7 @@ function build({
     propertywareLease: { findMany: jest.fn().mockResolvedValue(leases) },
     propertywareTenant: { findMany: jest.fn().mockResolvedValue(tenancies) },
     propertywareUnit: { count: jest.fn().mockResolvedValue(units) },
+    propertywareBuilding: { findFirst: jest.fn().mockResolvedValue({ details }) },
   };
   const service = new TechnicianService(prisma as never, {} as never, {} as never, {} as never);
   return { service, prisma };
@@ -139,6 +161,12 @@ describe('the file the office holds on a job', () => {
 
     expect(job.onFile).toEqual({
       tenantNames: ['Rosa Alvarez', 'Luis Alvarez'],
+      tenantPhones: ['(555) 010-0142'],
+      tenantEmail: 'rosa@example.com',
+      access: [
+        { label: 'Key Information', value: '#4 in the key box' },
+        { label: 'Lockbox Code', value: 'Supra 0000' },
+      ],
       plan: 'Basic',
       hvacPlan: 'Opted out',
       benefitPackage: 'Enrolled',
@@ -150,6 +178,29 @@ describe('the file the office holds on a job', () => {
       movedIn: '2024-03-01',
       leaseEnds: '2027-02-28',
     });
+  });
+
+  /**
+   * "we need to add the key information ... and tenant information" -- the
+   * office, 2026-11-04. The gate code is left out because the office never
+   * filled it in, and the alarm code because a benefit-package visit does not
+   * need it: the property page keeps both.
+   */
+  it('gives the key information and codes the visit needs, and none it does not', async () => {
+    const { service } = build();
+
+    const job = await service.inspection(user, 'job-1');
+
+    expect(job.onFile?.access.map((field) => field.label)).toEqual(['Key Information', 'Lockbox Code']);
+  });
+
+  it('names the tenant from the report when no single lease is certain', async () => {
+    // One tenancy in a house of one unit: the report's line is certainly this home's.
+    const { service } = build({ leases: [], units: 1 });
+
+    const job = await service.inspection(user, 'job-1');
+
+    expect(job.onFile?.tenantNames).toEqual(['Rosa Alvarez']);
   });
 
   it('carries the job clock, so the app can count from Start', async () => {
@@ -204,11 +255,21 @@ describe('the file the office holds on a job', () => {
   });
 
   it('sends nothing at all when the office holds no file', async () => {
-    const { service } = build({ leases: [], tenancies: [] });
+    const { service } = build({ leases: [], tenancies: [], details: null });
 
     const job = await service.inspection(user, 'job-1');
 
     expect(job.onFile).toBeNull();
+  });
+
+  it('still gives the building’s codes when no tenancy is certain', async () => {
+    // The codes are the building's, so they hold whichever unit is visited.
+    const { service } = build({ leases: [], tenancies: [] });
+
+    const job = await service.inspection(user, 'job-1');
+
+    expect(job.onFile?.access).toHaveLength(2);
+    expect(job.onFile?.plan).toBeNull();
   });
 
   it('shows what the last visit flagged, and drops the part nobody wrote', async () => {

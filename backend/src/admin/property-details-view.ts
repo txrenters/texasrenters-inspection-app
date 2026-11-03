@@ -2,6 +2,7 @@ import {
   customFieldLabel,
   isAccessField,
   isPlaceholderValue,
+  visitAccessFields,
   type PropertyDetailsSnapshot,
   type PropertyDetailsView,
   type PropertyOwnerDetails,
@@ -53,6 +54,17 @@ export function privateDetails(storedDetails: unknown, storedOwner: unknown): Pr
         ? { mobile: owner.mobilePhones, home: owner.homePhones }
         : null,
   };
+}
+
+/**
+ * The key information, lockbox and gate codes a visit carries to its technician.
+ *
+ * Only for the visit's own Details and the assigned technician's job, which is
+ * how the office already passes them on in Jobber -- never the property page's
+ * cached response.
+ */
+export function visitAccess(storedDetails: unknown): { label: string; value: string }[] {
+  return visitAccessFields(snapshot(storedDetails)?.customFields);
 }
 
 /** The stored JSON, when it is a snapshot; anything else reads as none rather than breaking the page. */

@@ -244,6 +244,11 @@ export interface Inspection {
  */
 export interface JobFile {
   tenantNames: string[];
+  /** The tenant's numbers and email, from the lease's primary contact. */
+  tenantPhones: string[];
+  tenantEmail?: string;
+  /** The building's key information, lockbox and gate codes, as the office labels them. */
+  access: { label: string; value: string }[];
   /** The management plan: Basic, Plus, Premium. */
   plan?: string;
   /** Whether the tenant is on the HVAC plan, as the report writes it. */

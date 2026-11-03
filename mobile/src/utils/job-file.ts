@@ -48,6 +48,10 @@ export function jobFileRows(file: JobFile | undefined): JobFileRow[] {
   const filters = filtersRow(file);
   const rows: (JobFileRow | null)[] = [
     file.tenantNames.length ? { label: 'Tenant', value: file.tenantNames.join(', ') } : null,
+    file.tenantPhones.length ? { label: 'Phone', value: file.tenantPhones.join(', ') } : null,
+    file.tenantEmail ? { label: 'Email', value: file.tenantEmail } : null,
+    // Before the plan and filters: they are what gets a technician in.
+    ...file.access.map((field) => ({ label: field.label, value: field.value })),
     file.plan ? { label: 'Plan', value: file.plan } : null,
     file.hvacPlan ? { label: 'HVAC plan', value: file.hvacPlan } : null,
     filters ? { label: 'Filters on file', value: filters } : null,
