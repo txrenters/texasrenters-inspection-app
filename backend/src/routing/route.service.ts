@@ -51,6 +51,19 @@ import { OsrmClient } from './osrm.client';
 export const MAX_DRAWN_ROUTES = 100;
 
 /**
+ * How long a draw that failed is remembered before the same day is asked again.
+ *
+ * A failed draw used to be asked for again on every poll -- the console every
+ * 30 or 60 seconds, the phone every two minutes -- and a day that will not draw
+ * (a stop off the road network, a provider refusing) fails the same way every
+ * time: a Mapbox matrix, n² elements for n points, and a directions request
+ * each poll, for an answer that never changed. A change to the day itself, its
+ * stops or where it starts, still asks at once (see `needsReroute`); only
+ * asking again for nothing waits this long.
+ */
+export const FAILED_DRAW_RETRY_MS = 15 * 60_000;
+
+/**
  * Work that is finished or abandoned is not somewhere to drive to.
  *
  * `TECHNICIAN_SUBMITTED` and everything after it means the technician has left
@@ -171,9 +184,13 @@ export class RouteService {
    *
    * In memory, because there is one backend process and a restart costs one
    * redraw per technician. Held with what it was drawn *from* -- the origin kind
-   * and the stops -- which is what `needsReroute` compares against.
+   * and the stops -- which is what `needsReroute` compares against. A draw that
+   * failed is held too, marked `failed`, for `FAILED_DRAW_RETRY_MS`.
    */
-  private readonly drawn = new Map<string, { route: TechnicianRoute; drawn: DrawnRoute }>();
+  private readonly drawn = new Map<
+    string,
+    { route: TechnicianRoute; drawn: DrawnRoute; failed: boolean }
+  >();
 
   /**
    * Draws already under way, so two callers asking at once share one.
@@ -193,7 +210,7 @@ export class RouteService {
    * times a day -- so the map can poll every thirty seconds without asking
    * Google again each time.
    */
-  private readonly histories = new Map<string, [number, number][]>();
+  private readonly histories = new Map<string, { geometry: [number, number][]; at: number }>();
   private readonly historiesInFlight = new Map<string, Promise<[number, number][]>>();
 
   constructor(
@@ -585,7 +602,17 @@ export class RouteService {
       now,
       options,
     );
-    if (!decision.reroute && cached)
+    /**
+     * A failed draw waits out `FAILED_DRAW_RETRY_MS` unless the day itself
+     * changed. Age and leaving the line are reasons to redraw a line that
+     * exists; a failure has none, and asking again sooner gets the same failure.
+     */
+    const reuse = cached?.failed
+      ? decision.reason !== 'ORIGIN_CHANGED' &&
+        decision.reason !== 'STOPS_CHANGED' &&
+        now - cached.drawn.computedAt < FAILED_DRAW_RETRY_MS
+      : !decision.reroute;
+    if (reuse && cached)
       // The history is the fresh one: it is read every call and cached on its own.
       return { ...cached.route, origin, originKind, history };
 
@@ -608,25 +635,26 @@ export class RouteService {
     const route = await pending;
 
     /**
-     * Only a route that actually drew is remembered.
+     * A draw that failed is remembered too, as failed.
      *
-     * A draw that failed -- an outage, a quota, a position off the network --
-     * comes back with no legs. Caching that would pin an empty route in place
-     * for five minutes after the router recovered, which reads on the map
-     * exactly like routing being broken.
+     * An outage, a quota, a stop off the network: it comes back with no legs.
+     * It was once never remembered, so that an empty route would not stay
+     * pinned after the router recovered -- and every poll of a day that would
+     * not draw bought another matrix and another directions request. Now it is
+     * kept for `FAILED_DRAW_RETRY_MS`: at most that long showing no line after a
+     * recovery, against a billed draw every thirty seconds until one.
      */
+    // Deleted and re-added rather than overwritten, so the map stays in drawn
+    // order and the bound below forgets the longest-untouched day.
     this.drawn.delete(key);
-    if (route.legs.length) {
-      // Deleted and re-added rather than overwritten, so the map stays in
-      // drawn order and the bound below forgets the longest-untouched day.
-      this.drawn.set(key, {
-        route,
-        drawn: { originKind, stopIds, geometry: route.geometry, computedAt: Date.now() },
-      });
-      for (const oldest of this.drawn.keys()) {
-        if (this.drawn.size <= MAX_DRAWN_ROUTES) break;
-        this.drawn.delete(oldest);
-      }
+    this.drawn.set(key, {
+      route,
+      drawn: { originKind, stopIds, geometry: route.geometry, computedAt: Date.now() },
+      failed: !route.legs.length,
+    });
+    for (const oldest of this.drawn.keys()) {
+      if (this.drawn.size <= MAX_DRAWN_ROUTES) break;
+      this.drawn.delete(oldest);
     }
 
     return route;
@@ -759,8 +787,8 @@ export class RouteService {
    * Drawn in the order the stops were handed in, which is the order they were
    * driven -- close enough for a line that says "this part of the day is done".
    * Nothing to join (fewer than two points) or nothing drawn leaves the line
-   * empty and the stops still marked; a failed draw is not remembered, for the
-   * same reason as the route's.
+   * empty and the stops still marked; a failed draw is remembered for
+   * `FAILED_DRAW_RETRY_MS`, for the same reason as the route's.
    */
   private async historyFor(dayKey: string, stops: RouteStop[]): Promise<TechnicianRoute['history']> {
     if (!stops.length) return { stops, geometry: [] };
@@ -768,7 +796,8 @@ export class RouteService {
 
     const cacheKey = [dayKey, ...stops.map((stop) => stop.inspectionId)].join('|');
     const cached = this.histories.get(cacheKey);
-    if (cached) return { stops, geometry: cached };
+    if (cached && (cached.geometry.length || Date.now() - cached.at < FAILED_DRAW_RETRY_MS))
+      return { stops, geometry: cached.geometry };
 
     const pending =
       this.historiesInFlight.get(cacheKey) ??
@@ -779,12 +808,11 @@ export class RouteService {
     this.historiesInFlight.set(cacheKey, pending);
     const geometry = await pending;
 
-    if (geometry.length) {
-      this.histories.set(cacheKey, geometry);
-      for (const oldest of this.histories.keys()) {
-        if (this.histories.size <= MAX_DRAWN_ROUTES) break;
-        this.histories.delete(oldest);
-      }
+    this.histories.delete(cacheKey);
+    this.histories.set(cacheKey, { geometry, at: Date.now() });
+    for (const oldest of this.histories.keys()) {
+      if (this.histories.size <= MAX_DRAWN_ROUTES) break;
+      this.histories.delete(oldest);
     }
     return { stops, geometry };
   }

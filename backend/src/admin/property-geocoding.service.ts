@@ -53,6 +53,38 @@ export const GEOCODE_SOURCE = 'CENSUS';
 const REQUEST_TIMEOUT_MS = 15_000;
 const PAUSE_BETWEEN_REQUESTS_MS = 250;
 
+/**
+ * How long an address no geocoder could place is left alone.
+ *
+ * The hourly pass used to ask about it again every hour, for ever: a billed
+ * Google lookup each time, for an answer that changes only when somebody
+ * corrects the address -- and a corrected address is asked about at once,
+ * because the miss is recorded with the address it was for. A week bounds
+ * the other case, a geocoder that has since learned the street. A geocoder
+ * that could not be reached at all is not a miss, and is asked again next hour.
+ */
+export const GEOCODE_MISS_BACKOFF_MS = 7 * 24 * 60 * 60_000;
+
+/** Census could not be asked: an outage, which says nothing about the address. */
+const UNAVAILABLE = 'UNAVAILABLE' as const;
+
+/**
+ * Whether the pass should leave a row alone because this address missed recently.
+ *
+ * Exported for its tests.
+ */
+export function missedRecently(
+  row: { geocodeMissFor: string | null; geocodeMissAt: Date | null },
+  address: string,
+  now: number,
+): boolean {
+  return (
+    row.geocodeMissFor === address &&
+    row.geocodeMissAt !== null &&
+    now - row.geocodeMissAt.getTime() < GEOCODE_MISS_BACKOFF_MS
+  );
+}
+
 interface CensusMatch {
   coordinates?: { x?: unknown; y?: unknown };
   matchedAddress?: unknown;
@@ -134,6 +166,12 @@ export class PropertyGeocodingService {
    * billing problem.
    */
   async geocodeAddress(address: string): Promise<GeocodeAnswer | null> {
+    const answer = await this.lookUp(address);
+    return answer === UNAVAILABLE ? null : answer;
+  }
+
+  /** `geocodeAddress`, telling "nothing matched" (null) from "Census could not be asked". */
+  private async lookUp(address: string): Promise<GeocodeAnswer | null | typeof UNAVAILABLE> {
     if (this.google.configured) {
       const answer = await this.google.geocode(address);
       if (answer) return { ...answer, source: GOOGLE_GEOCODE_SOURCE };
@@ -142,7 +180,7 @@ export class PropertyGeocodingService {
   }
 
   /** The keyless fallback, and the only geocoder this used to have. */
-  private async geocodeWithCensus(address: string): Promise<GeocodeAnswer | null> {
+  private async geocodeWithCensus(address: string): Promise<GeocodeAnswer | null | typeof UNAVAILABLE> {
     const url = new URL(CENSUS_ENDPOINT);
     url.searchParams.set('address', address);
     url.searchParams.set('benchmark', BENCHMARK);
@@ -155,7 +193,7 @@ export class PropertyGeocodingService {
       });
       if (!response.ok) {
         this.logger.warn({ event: 'geocode_http_error', status: response.status });
-        return null;
+        return UNAVAILABLE;
       }
       return parseCensusResponse(await response.json());
     } catch (error) {
@@ -165,8 +203,16 @@ export class PropertyGeocodingService {
         event: 'geocode_request_failed',
         message: error instanceof Error ? error.message : String(error),
       });
-      return null;
+      return UNAVAILABLE;
     }
+  }
+
+  /** Writes down that nothing could place `address`, so the pass leaves it alone a while. */
+  private recordMiss(table: 'property' | 'propertywareBuilding', id: string, address: string) {
+    const data = { geocodeMissFor: address, geocodeMissAt: new Date() };
+    return table === 'property'
+      ? this.prisma.property.update({ where: { id }, data })
+      : this.prisma.propertywareBuilding.update({ where: { id }, data });
   }
 
   /**
@@ -196,16 +242,23 @@ export class PropertyGeocodingService {
           latitude: true,
           longitude: true,
           geocodedFor: true,
+          geocodeMissFor: true,
+          geocodeMissAt: true,
         },
+        // Never-missed rows first, then the oldest misses: a pile of addresses
+        // nobody can place must not fill every batch ahead of a new property.
+        orderBy: [{ geocodeMissAt: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
         take: limit,
       });
 
-      const pending = candidates.filter((property) =>
-        needsGeocoding({
-          ...property,
-          latitude: property.latitude?.toNumber() ?? null,
-          longitude: property.longitude?.toNumber() ?? null,
-        }),
+      const now = Date.now();
+      const pending = candidates.filter(
+        (property) =>
+          needsGeocoding({
+            ...property,
+            latitude: property.latitude?.toNumber() ?? null,
+            longitude: property.longitude?.toNumber() ?? null,
+          }) && !missedRecently(property, geocodableAddress(property), now),
       );
       if (!pending.length) return { examined: candidates.length, geocoded: 0, failed: 0 };
 
@@ -217,8 +270,9 @@ export class PropertyGeocodingService {
           await new Promise((resolve) => setTimeout(resolve, PAUSE_BETWEEN_REQUESTS_MS));
 
         const address = geocodableAddress(property);
-        const answer = await this.geocodeAddress(address);
-        if (!answer) {
+        const answer = await this.lookUp(address);
+        if (!answer || answer === UNAVAILABLE) {
+          if (!answer) await this.recordMiss('property', property.id, address);
           failed += 1;
           continue;
         }
@@ -235,6 +289,8 @@ export class PropertyGeocodingService {
             geocodedAt: new Date(),
             geocodeSource: answer.source,
             geocodePrecision: answer.precision,
+            geocodeMissFor: null,
+            geocodeMissAt: null,
           },
         });
         geocoded += 1;
@@ -549,26 +605,39 @@ export class PropertyGeocodingService {
           geocodedFor: true,
           geocodeSource: true,
           geocodePrecision: true,
+          geocodeMissFor: true,
+          geocodeMissAt: true,
         },
+        // As the property pass: never-missed rows first, then the oldest misses.
+        orderBy: [{ geocodeMissAt: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
         take: limit,
       });
 
+      const addressOf = (building: (typeof candidates)[number]) =>
+        geocodableAddress({
+          addressLine1: building.addressLine1 ?? '',
+          city: building.city ?? '',
+          state: building.state ?? '',
+          postalCode: building.postalCode ?? '',
+        });
+      const now = Date.now();
       const pending = candidates.filter(
         (building) =>
           // An upgrade candidate has a perfectly good coordinate, so
           // `needsGeocoding` says no about it -- correctly, for the question it
           // is answering. This is a different question: not "is this placed"
           // but "is this placed as well as it could be".
-          (upgrading && building.geocodeSource === GEOCODE_SOURCE) ||
-          needsGeocoding({
-            addressLine1: building.addressLine1 ?? '',
-            city: building.city ?? '',
-            state: building.state ?? '',
-            postalCode: building.postalCode ?? '',
-            latitude: building.latitude?.toNumber() ?? null,
-            longitude: building.longitude?.toNumber() ?? null,
-          geocodedFor: building.geocodedFor,
-        }),
+          ((upgrading && building.geocodeSource === GEOCODE_SOURCE) ||
+            needsGeocoding({
+              addressLine1: building.addressLine1 ?? '',
+              city: building.city ?? '',
+              state: building.state ?? '',
+              postalCode: building.postalCode ?? '',
+              latitude: building.latitude?.toNumber() ?? null,
+              longitude: building.longitude?.toNumber() ?? null,
+              geocodedFor: building.geocodedFor,
+            })) &&
+          !missedRecently(building, addressOf(building), now),
       );
       if (!pending.length) return { examined: candidates.length, geocoded: 0, failed: 0 };
 
@@ -579,14 +648,12 @@ export class PropertyGeocodingService {
         if (index > 0)
           await new Promise((resolve) => setTimeout(resolve, PAUSE_BETWEEN_REQUESTS_MS));
 
-        const address = geocodableAddress({
-          addressLine1: building.addressLine1 ?? '',
-          city: building.city ?? '',
-          state: building.state ?? '',
-          postalCode: building.postalCode ?? '',
-        });
-        const answer = await this.geocodeAddress(address);
-        if (!answer) {
+        const address = addressOf(building);
+        const answer = await this.lookUp(address);
+        if (!answer || answer === UNAVAILABLE) {
+          // Only "nothing matched" is written down. A Census outage says
+          // nothing about the address, so that row is asked again next hour.
+          if (!answer) await this.recordMiss('propertywareBuilding', building.id, address);
           failed += 1;
           continue;
         }
@@ -619,6 +686,8 @@ export class PropertyGeocodingService {
             geocodedAt: new Date(),
             geocodeSource: answer.source,
             geocodePrecision: answer.precision,
+            geocodeMissFor: null,
+            geocodeMissAt: null,
           },
         });
         geocoded += 1;

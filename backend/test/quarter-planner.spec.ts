@@ -232,7 +232,8 @@ const build = (
         ),
       ),
     },
-    tbpQuarterPlanDay: { deleteMany: dayDeleteMany, create: dayCreate, upsert: dayUpsert },
+    // No day measured before, unless a case says so.
+    tbpQuarterPlanDay: { deleteMany: dayDeleteMany, create: dayCreate, upsert: dayUpsert, findMany: jest.fn().mockResolvedValue([]) },
     tbpQuarterPlanAnchor: {
       deleteMany: anchorDeleteMany,
       create: anchorCreate,
@@ -336,6 +337,9 @@ const build = (
     service: new QuarterPlannerService(prisma, skills, google, osrm, mapbox),
     dayCreate,
     dayUpsert,
+    dayFindMany: client.tbpQuarterPlanDay.findMany,
+    anchorFindMany: client.tbpQuarterPlanAnchor.findMany,
+    mapbox,
     stopFindMany: client.tbpQuarterPlanStop.findMany,
     stopUpdate,
     stopUpdateMany,
@@ -1976,5 +1980,128 @@ describe('visiting on Mondays too', () => {
 
     expect(daysOf(stopUpdate, stops).has('2026-10-05')).toBe(true);
     expect(planUpdate.mock.calls[0][0].data).toMatchObject({ useMondays: true });
+  });
+});
+
+/**
+ * A Rebuild keeps the measurement of every day it lays out exactly as before.
+ *
+ * It used to measure every crew-day again: a Mapbox matrix of the office and
+ * the day's stops each, a hundred elements for a nine-stop day, whether or not
+ * the day had changed. The office rebuilds a quarter several times while
+ * settling it, and most of its days come out the same each time.
+ */
+describe('rebuilding a quarter that has not changed', () => {
+  // Ninety visits, one technician: eight days or so, each a matrix of the office and its stops.
+  const quarter = () => Array.from({ length: 90 }, (_, index) => stop(`q-${index + 1}`, index + 1, index * 0.1));
+  const mapboxSeconds = (from: Point, to: Point) =>
+    from === to ? 0 : Math.round(60 + Math.abs(from.latitude - to.latitude) * 30_000);
+
+  /** What the database holds after a build: the days it created and each visit's place in one. */
+  function heldAfter(built: ReturnType<typeof build>) {
+    const days = built.dayCreate.mock.calls.map((call) => call[0].data);
+    const positions = new Map<string, Record<string, unknown>>();
+    for (const [args] of built.stopUpdate.mock.calls as [{ where: { id: string }; data: Record<string, unknown> }][])
+      positions.set(args.where.id, { id: args.where.id, ...args.data });
+    return { days, positions: [...positions.values()] };
+  }
+
+  /** The next build reads what the last one wrote, as it would from the database. */
+  async function readBack(built: ReturnType<typeof build>) {
+    const plannable = await built.stopFindMany({ where: {} });
+    const held = heldAfter(built);
+    built.dayFindMany.mockResolvedValue(held.days);
+    built.stopFindMany.mockImplementation(({ where }: { where: { positionInDay?: unknown } }) =>
+      Promise.resolve(where.positionInDay ? held.positions : plannable),
+    );
+    built.dayCreate.mockClear();
+    built.stopUpdate.mockClear();
+    (built.mapbox.matrix as jest.Mock).mockClear();
+    return held;
+  }
+
+  const elements = (mapbox: MapboxDirectionsClient) =>
+    (mapbox.matrix as jest.Mock).mock.calls.reduce((total, [points]) => total + points.length ** 2, 0);
+
+  it('asks Mapbox for nothing the second time', async () => {
+    delete process.env.PLANNING_ROAD_DRIVE_TIMES;
+    const built = build(quarter(), { mapboxSeconds });
+
+    await built.service.route('org-1', 'plan-1');
+    const first = heldAfter(built);
+    expect(first.days.length).toBeGreaterThanOrEqual(8);
+    expect(elements(built.mapbox)).toBeGreaterThanOrEqual(first.days.length * 100);
+
+    await readBack(built);
+    await built.service.route('org-1', 'plan-1');
+
+    // The same days, measured as before, for no matrix at all.
+    expect(elements(built.mapbox)).toBe(0);
+    const second = heldAfter(built);
+    const summary = (days: Record<string, unknown>[]) =>
+      days.map((day) => [day.measuredFor, day.totalDriveSeconds, day.totalDriveMeters, day.homeDriveSeconds, day.durationSource]);
+    expect(summary(second.days)).toEqual(summary(first.days));
+    const order = (positions: Record<string, unknown>[]) =>
+      positions.map((row) => [row.id, row.scheduledOn, row.positionInDay, row.driveSecondsForecast]).sort();
+    expect(order(second.positions)).toEqual(order(first.positions));
+  });
+
+  it('measures again only the days a moved property changed', async () => {
+    delete process.env.PLANNING_ROAD_DRIVE_TIMES;
+    const stops = quarter();
+    const built = build(stops, { mapboxSeconds });
+    await built.service.route('org-1', 'plan-1');
+    const days = heldAfter(built).days.length;
+
+    const held = await readBack(built);
+    // The office corrects one property's pin by a metre.
+    const plannable = (await built.stopFindMany({ where: {} })) as { id: string; propertywareBuilding: Point }[];
+    const moved = plannable.find((row) => row.id === 'q-1')!;
+    moved.propertywareBuilding = { latitude: moved.propertywareBuilding.latitude + 0.00001, longitude: -95.37 };
+    built.stopFindMany.mockImplementation(({ where }: { where: { positionInDay?: unknown } }) =>
+      Promise.resolve(where.positionInDay ? held.positions : plannable),
+    );
+    await built.service.route('org-1', 'plan-1');
+
+    // A day the move changed -- its own, and any the layout regrouped around
+    // it -- is measured again; every other day is kept as it was.
+    const before = new Set(held.days.map((day) => day.measuredFor));
+    const after = heldAfter(built).days;
+    const changed = after.filter((day) => !before.has(day.measuredFor)).length;
+    expect(after).toHaveLength(days);
+    expect(changed).toBeGreaterThanOrEqual(1);
+    expect(changed).toBeLessThan(days);
+    expect((built.mapbox.matrix as jest.Mock).mock.calls).toHaveLength(changed);
+  });
+
+  it('measures every day again when the longest leg allowed changes', async () => {
+    delete process.env.PLANNING_ROAD_DRIVE_TIMES;
+    const built = build(quarter(), { mapboxSeconds });
+    await built.service.route('org-1', 'plan-1');
+    const days = heldAfter(built).days.length;
+
+    await readBack(built);
+    await built.service.route('org-1', 'plan-1', { maxLegMinutes: 25 });
+
+    expect((built.mapbox.matrix as jest.Mock).mock.calls).toHaveLength(heldAfter(built).days.length);
+    expect(heldAfter(built).days.length).toBeGreaterThanOrEqual(days - 1);
+  });
+
+  it('measures again a day that was only estimated, so it can get road times', async () => {
+    delete process.env.PLANNING_ROAD_DRIVE_TIMES;
+    const built = build(quarter(), { mapboxSeconds });
+    await built.service.route('org-1', 'plan-1');
+
+    const held = await readBack(built);
+    built.dayFindMany.mockImplementation(({ where }: { where: { durationSource?: { in: DriveTimeSource[] } } }) =>
+      Promise.resolve(
+        held.days
+          .map((day) => ({ ...day, durationSource: DriveTimeSource.HAVERSINE }))
+          .filter((day) => !where.durationSource || where.durationSource.in.includes(day.durationSource)),
+      ),
+    );
+    await built.service.route('org-1', 'plan-1');
+
+    expect((built.mapbox.matrix as jest.Mock).mock.calls).toHaveLength(held.days.length);
   });
 });

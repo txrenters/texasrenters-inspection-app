@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   DriveTimeSource,
@@ -294,7 +296,61 @@ interface MeasuredCrew {
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
   durationSource: DriveTimeSource | null;
+  /** What it was measured from (`measuredFor`), kept on the day. */
+  measuredFor: string;
 }
+
+/**
+ * A day's measurement as the plan holds it, read before a Rebuild clears it:
+ * its stops in driving order with the drive into each, and its totals.
+ */
+interface StoredMeasurement {
+  date: string;
+  order: string[];
+  legSeconds: (number | null)[];
+  totalDriveSeconds: number | null;
+  totalDriveMeters: number | null;
+  homeDriveSeconds: number | null;
+  homeDriveMeters: number | null;
+  durationSource: DriveTimeSource;
+}
+
+/**
+ * What a day is measured from, as one key: where it starts, the longest drive
+ * its order allows between two properties, and each stop with where it is.
+ *
+ * Kept on the day, the way a property keeps `geocodedFor`, so a Rebuild can tell
+ * a day it has already measured from one that changed. A quarter Rebuild used
+ * to measure every crew-day again -- a Mapbox matrix of the office and the
+ * day's stops each, a hundred elements for a nine-stop day and close to five
+ * thousand for Q4 2026's 431 visits -- when most of its days came out exactly
+ * as before.
+ * Sorted, because the order is what measuring decides. A hash: it is a key, not
+ * something anybody reads.
+ */
+export function measuredFor(
+  stops: readonly Pick<PlannableStop, 'stopId' | 'latitude' | 'longitude'>[],
+  start: GeoPoint | undefined,
+  maxLegSeconds: number | undefined,
+): string {
+  const at = (point: GeoPoint) => `${point.latitude.toFixed(6)},${point.longitude.toFixed(6)}`;
+  const parts = [
+    start ? `from ${at(start)}` : 'from the first stop',
+    `legs ${maxLegSeconds ?? 'any'}`,
+    ...stops.map((stop) => `${stop.stopId}@${at(stop)}`).sort(),
+  ];
+  return createHash('sha256').update(parts.join('|')).digest('hex');
+}
+
+/**
+ * Measured on a road, so worth keeping. A straight-line day is free to measure
+ * again, and measuring it again is how it gets road times once Mapbox answers.
+ */
+const ROAD_SOURCES: DriveTimeSource[] = [
+  DriveTimeSource.MAPBOX_FREE_FLOW,
+  DriveTimeSource.GOOGLE_TRAFFIC_AWARE,
+  DriveTimeSource.OSRM_FREE_FLOW,
+];
 
 /** A day put in the order that drives least from the office (`optimizeDays`), and what that did to its driving. */
 export interface OptimizedDay {
@@ -547,14 +603,23 @@ export class QuarterPlannerService {
       ...(presets ? { presetGroups: presets.groups, presetTargets: presets.targets } : {}),
     });
     const unplaced: RoutingSummary['unplaced'] = assignment.unplaced;
+    // Read before `persist` clears them: a day laid out exactly as before keeps
+    // its measurement rather than buying another matrix (`measuredFor`).
+    const stored = await this.storedMeasurements(organizationId, planId);
+    let reused = 0;
     // A day's move-outs and move-ins are routed and measured with its visits,
     // as stops it drives to. A trip's later days start where the trip is, not at the office.
-    const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors' | 'trip'>) =>
-      this.measure(
-        { date: crew.date, technicianId: crew.technicianId, stops: [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops] },
-        crew.trip && crew.trip.day > 1 ? undefined : OFFICE,
-        settings.maxLegMinutes * 60,
-      );
+    const measureCrew = async (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors' | 'trip'>) => {
+      const day = {
+        date: crew.date,
+        technicianId: crew.technicianId,
+        stops: [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops],
+      };
+      const start = crew.trip && crew.trip.day > 1 ? undefined : OFFICE;
+      const kept = reuseMeasurement(stored, day, start, settings.maxLegMinutes * 60);
+      if (kept) reused += 1;
+      return kept ?? (await this.measure(day, start, settings.maxLegMinutes * 60));
+    };
     const measured: MeasuredCrew[] = [];
     for (const crew of assignment.crews) {
       // The office's group the day is, so it is shown in that group's number, name and colour.
@@ -642,6 +707,9 @@ export class QuarterPlannerService {
       crewChosen: settings.technicianIds.length > 0,
       startsOn: settings.startsOn ?? quarterFirstDay(quarter),
       plannedDays: days.length,
+      // Days measured on the road this time, and days kept as they were measured.
+      measuredDays: crews.length - reused,
+      reusedDays: reused,
       zones: zones.circle,
       zonesOutOfReach: zones.outOfReach,
       tripDays: assignment.crews.filter((crew) => crew.trip).length,
@@ -1282,6 +1350,73 @@ export class QuarterPlannerService {
   }
 
   /**
+   * Every day of the plan measured on a road, by what it was measured from
+   * (`measuredFor`): its stops in driving order, the drive into each, and its
+   * totals. The stops and anchors are read only when there is a day to read
+   * them for.
+   */
+  private async storedMeasurements(organizationId: string, planId: string): Promise<Map<string, StoredMeasurement>> {
+    const days = await this.prisma.tbpQuarterPlanDay.findMany({
+      where: { planId, organizationId, measuredFor: { not: null }, durationSource: { in: ROAD_SOURCES } },
+      select: {
+        date: true,
+        technicianId: true,
+        measuredFor: true,
+        totalDriveSeconds: true,
+        totalDriveMeters: true,
+        homeDriveSeconds: true,
+        homeDriveMeters: true,
+        durationSource: true,
+      },
+    });
+    if (days.length === 0) return new Map();
+
+    const [stops, anchors] = await Promise.all([
+      this.prisma.tbpQuarterPlanStop.findMany({
+        where: { planId, organizationId, positionInDay: { not: null } },
+        select: { id: true, scheduledOn: true, assignedTechnicianId: true, positionInDay: true, driveSecondsForecast: true },
+      }),
+      this.prisma.tbpQuarterPlanAnchor.findMany({
+        where: { planId, organizationId, positionInDay: { not: null } },
+        select: { inspectionId: true, date: true, technicianId: true, positionInDay: true, driveSecondsForecast: true },
+      }),
+    ]);
+    const onDay = new Map<string, { stopId: string; at: number; seconds: number | null }[]>();
+    const add = (date: Date | null, technicianId: string | null, entry: { stopId: string; at: number; seconds: number | null }) => {
+      if (!date || !technicianId) return;
+      const key = crewKey(date.toISOString().slice(0, 10), technicianId);
+      onDay.set(key, [...(onDay.get(key) ?? []), entry]);
+    };
+    for (const stop of stops)
+      add(stop.scheduledOn, stop.assignedTechnicianId, { stopId: stop.id, at: stop.positionInDay!, seconds: stop.driveSecondsForecast });
+    // Keyed as the measured day keys them (`anchorAsStop`), as `orderOfDay` does.
+    for (const anchor of anchors)
+      add(anchor.date, anchor.technicianId, {
+        stopId: `anchor:${anchor.inspectionId}`,
+        at: anchor.positionInDay!,
+        seconds: anchor.driveSecondsForecast,
+      });
+
+    const measurements = new Map<string, StoredMeasurement>();
+    for (const day of days) {
+      const date = day.date.toISOString().slice(0, 10);
+      const entries = (onDay.get(crewKey(date, day.technicianId)) ?? []).sort((left, right) => left.at - right.at);
+      if (!entries.length) continue;
+      measurements.set(day.measuredFor!, {
+        date,
+        order: entries.map((entry) => entry.stopId),
+        legSeconds: entries.map((entry) => entry.seconds),
+        totalDriveSeconds: day.totalDriveSeconds,
+        totalDriveMeters: day.totalDriveMeters,
+        homeDriveSeconds: day.homeDriveSeconds,
+        homeDriveMeters: day.homeDriveMeters,
+        durationSource: day.durationSource!,
+      });
+    }
+    return measurements;
+  }
+
+  /**
    * Order one technician-day and measure its drives.
    *
    * Google first, OSRM second, straight-line last. The fallbacks are ordered by
@@ -1302,7 +1437,12 @@ export class QuarterPlannerService {
     maxLegSeconds?: number,
   ): Promise<MeasuredCrew> {
     const stops = [...crew.stops];
-    const base = { date: crew.date, technicianId: crew.technicianId, fromOffice: Boolean(start) };
+    const base = {
+      date: crew.date,
+      technicianId: crew.technicianId,
+      fromOffice: Boolean(start),
+      measuredFor: measuredFor(stops, start, maxLegSeconds),
+    };
     if (stops.length === 0 || (stops.length === 1 && !start))
       // Nothing to drive between, which is a true zero rather than an unknown.
       return {
@@ -1914,6 +2054,46 @@ function dayRow(crew: MeasuredCrew) {
     originKind: crew.fromOffice ? PlanOriginKind.OFFICE : PlanOriginKind.FIRST_STOP,
     durationSource: crew.durationSource,
     departureAssumedAt: businessInstant(crew.date, DAY_STARTS_AT),
+    measuredFor: crew.measuredFor,
+  };
+}
+
+/**
+ * The day as it was measured last time, when nothing it was measured from has
+ * changed (`measuredFor`), or null to measure it. Taken from `stored`, so no
+ * two days can claim one measurement.
+ *
+ * A traffic-aware day was timed against its own morning, so it is kept only on
+ * its own date; a free-flow one is the same road whatever day it is driven.
+ */
+export function reuseMeasurement(
+  stored: Map<string, StoredMeasurement>,
+  crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops'>,
+  start: GeoPoint | undefined,
+  maxLegSeconds: number | undefined,
+): MeasuredCrew | null {
+  const key = measuredFor(crew.stops, start, maxLegSeconds);
+  const day = stored.get(key);
+  if (!day) return null;
+  if (day.durationSource === DriveTimeSource.GOOGLE_TRAFFIC_AWARE && day.date !== crew.date) return null;
+  const byId = new Map(crew.stops.map((stop) => [stop.stopId, stop]));
+  const ordered = day.order.map((stopId) => byId.get(stopId));
+  if (ordered.length !== crew.stops.length || ordered.some((stop) => !stop)) return null;
+  stored.delete(key);
+  return {
+    date: crew.date,
+    technicianId: crew.technicianId,
+    // The stops as they are now -- a visit's length may have changed, which is
+    // nothing to do with the road -- in the order they were measured in.
+    stops: ordered as PlannableStop[],
+    legSeconds: day.legSeconds,
+    totalDriveSeconds: day.totalDriveSeconds,
+    totalDriveMeters: day.totalDriveMeters,
+    fromOffice: Boolean(start),
+    homeDriveSeconds: day.homeDriveSeconds,
+    homeDriveMeters: day.homeDriveMeters,
+    durationSource: day.durationSource,
+    measuredFor: key,
   };
 }
 
