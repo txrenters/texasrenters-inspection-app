@@ -1,4 +1,11 @@
-import type { GroupSuggestion, GroupTemplateChanges, PackageLeftReason, PackageNewcomer } from '@texasrenters/shared';
+import type {
+  GroupSuggestion,
+  GroupTemplateChanges,
+  GroupTemplateOp,
+  PackageChangeGroup,
+  PackageLeftReason,
+  PackageNewcomer,
+} from '@texasrenters/shared';
 
 import { formatDate } from '@/lib/format';
 
@@ -70,4 +77,62 @@ export function suggestionTitle(suggestion: GroupSuggestion): string {
     ? ` It has ${suggestion.members} of the ${suggestion.target} properties it is meant to hold.`
     : ` It already has ${suggestion.members} of the ${suggestion.target} it is meant to hold; adding makes it longer than planned.`;
   return `Adds about ${suggestion.addedMinutes} min of driving to ${suggestion.group.name} (${timed}).${nearest}${room}`;
+}
+
+/**
+ * Template members taken out of their group since the package changes were
+ * read, and groups deleted since: what the one read no longer describes.
+ */
+export interface RemovedSince {
+  stops: ReadonlySet<string>;
+  groups: ReadonlySet<string>;
+}
+
+export const NOTHING_REMOVED: RemovedSince = { stops: new Set(), groups: new Set() };
+
+/**
+ * `was`, with what `ops` took out -- by this person or anyone else. The same
+ * object when they took out nothing, so nothing redraws for a reorder.
+ */
+export function removedBy(was: RemovedSince, ops: readonly GroupTemplateOp<string>[]): RemovedSince {
+  let stops: Set<string> | null = null;
+  let groups: Set<string> | null = null;
+  for (const op of ops) {
+    if (op.type === 'stop.remove') (stops ??= new Set(was.stops)).add(op.stop);
+    else if (op.type === 'stop.add' && (stops ?? was.stops).has(op.stop)) (stops ??= new Set(was.stops)).delete(op.stop);
+    else if (op.type === 'group.delete') (groups ??= new Set(was.groups)).add(op.groupId);
+  }
+  return stops || groups ? { stops: stops ?? was.stops, groups: groups ?? was.groups } : was;
+}
+
+/**
+ * The package changes read when the template opened, as they stand now.
+ *
+ * Read once rather than after every edit (the Mapbox invoice for October
+ * 2026): every read times the newcomers' suggestions on the road, which Mapbox
+ * bills, and re-reading after each click on the map is what ran it up. So what
+ * the office does since is applied here instead. A newcomer now in a group is
+ * no longer new; a leaver taken out, or whose group was deleted, is no longer
+ * in it; a suggested group that was deleted is no longer offered. The drive
+ * times and room counts stay as read, until Refresh.
+ */
+export function changesSince(
+  changes: GroupTemplateChanges,
+  grouped: ReadonlySet<string>,
+  removed: RemovedSince,
+): GroupTemplateChanges {
+  const stillIn = (member: { buildingId: string; group: PackageChangeGroup }) =>
+    !removed.stops.has(member.buildingId) && !removed.groups.has(member.group.id);
+  return {
+    ...changes,
+    newcomers: changes.newcomers
+      .filter((newcomer) => !grouped.has(newcomer.buildingId))
+      .map((newcomer) =>
+        newcomer.suggestions.some((suggestion) => removed.groups.has(suggestion.group.id))
+          ? { ...newcomer, suggestions: newcomer.suggestions.filter((suggestion) => !removed.groups.has(suggestion.group.id)) }
+          : newcomer,
+      ),
+    leavers: changes.leavers.filter(stillIn),
+    unplaced: changes.unplaced.filter(stillIn),
+  };
 }

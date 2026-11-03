@@ -116,6 +116,8 @@ const TEMPLATE = {
 
 const mutation = () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false });
 let mutations: Record<string, ReturnType<typeof mutation>>;
+/** Refresh on the package panel: the only read of it after the template opens. */
+const refetchChanges = vi.fn();
 
 const NORTH = { id: GROUP_ID, position: 1, name: 'North', color: '#e6194b' };
 
@@ -154,7 +156,7 @@ function mount({
   notBooked = undefined as unknown,
   templateGroups = [{ id: GROUP_ID, position: 1, name: 'North', color: '#e6194b', target: 9, buildingIds: ['b1', 'b2'] }] as unknown[],
 } = {}) {
-  hooks.useGroupTemplateChanges.mockReturnValue({ data: changes });
+  hooks.useGroupTemplateChanges.mockReturnValue({ data: changes, refetch: refetchChanges, isFetching: false });
   hooks.usePlanQuarters.mockReturnValue({
     data: [{ id: 'plan-q4', quarterYear: 2026, quarterNumber: 4, status: 'PUBLISHED' }],
   });
@@ -182,6 +184,7 @@ describe('the Group maker', () => {
     url.state = { template: '', notBooked: '' };
     url.set.mockReset();
     hooks.postGroupTemplateOps.mockReset();
+    refetchChanges.mockReset();
     channel.focus.mockReset();
   });
 
@@ -290,6 +293,8 @@ describe('the Group maker', () => {
       await waitFor(() => expect(screen.getByTestId('groups').textContent).toBe('North: 2,3,4'));
       await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalledTimes(1));
       expect(hooks.postGroupTemplateOps.mock.calls[0]![2]).toEqual([{ type: 'stop.add', groupId: GROUP_ID, stop: 'b3' }]);
+      // Off the list at once, from what the page knows: no read of the panel for it.
+      expect(screen.queryByRole('button', { name: 'Add b3 Main St to North' })).toBeNull();
     });
 
     it('takes a leaver out of its group: only the saved template changes, it was never drawn', async () => {
@@ -300,6 +305,35 @@ describe('the Group maker', () => {
       await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalledTimes(1));
       expect(hooks.postGroupTemplateOps.mock.calls[0]![2]).toEqual([{ type: 'stop.remove', stop: 'gone' }]);
       expect(screen.getByTestId('groups').textContent).toBe('North: 2,3');
+      expect(screen.queryByText('9 Gone Ave')).toBeNull();
+    });
+
+    /**
+     * The October 2026 Mapbox invoice: the panel was read again 1.5 s after
+     * every saved edit, and every read timed its newcomers on the road. Now it
+     * is read when the template opens and on Refresh, and never because of an edit.
+     */
+    it('is not read again because of an edit', async () => {
+      const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+      mount({ changes: CHANGES });
+      invalidate.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add b3 Main St to North' }));
+      await waitFor(() => expect(hooks.postGroupTemplateOps).toHaveBeenCalledTimes(1));
+      // Past the 1.5 s the old re-read waited for.
+      await new Promise((resolve) => setTimeout(resolve, 1_700));
+
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(refetchChanges).not.toHaveBeenCalled();
+      invalidate.mockRestore();
+    });
+
+    it('reads it again on Refresh', () => {
+      mount({ changes: CHANGES });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+      expect(refetchChanges).toHaveBeenCalledTimes(1);
     });
 
     it('says so when nothing changed', () => {

@@ -11,6 +11,7 @@
 - AI findings remain `PENDING_REVIEW` until an authorized human reviews them.
 - AI cannot approve tenant charges or make legal-responsibility decisions.
 - Validate all external, webhook, and AI payloads before persistence.
+- Count what a billed provider call costs (Mapbox, Google, AI providers, Cloudflare Stream, SMS/email) per user action, and how often that action repeats. Never put one on a path re-read after every edit, on a poll, or once per item of a large list, unless it is cached on what actually changed and bounded by a daily ceiling; test the call count with a realistic large case. (October 2026: the Group maker re-read a panel after every edit, each read timed ~400 properties through Mapbox, and one day cost $764.)
 - Add tests for business rules and authorization boundaries.
 - Run lint, typecheck, tests, and builds before reporting completion.
 - Report command failures honestly; never claim a command ran when it did not.
