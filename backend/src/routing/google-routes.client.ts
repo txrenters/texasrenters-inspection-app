@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { ceilingFrom, DailyAllowance, spendFrom } from '../common/daily-allowance';
+
 import type { GeoPoint } from './osrm.client';
 
 /**
@@ -118,6 +120,23 @@ function matrixElementsPerMinute(): number {
 }
 
 const MINUTE_MS = 60_000;
+
+/**
+ * The most of Google's Routes API one day may ask for, past which every call
+ * answers null as if Google were unavailable (see `DailyAllowance`).
+ *
+ * Added with the same ceiling on Mapbox, because of it: the live route asks
+ * Mapbox first and Google next, so a Mapbox allowance spent for the day would
+ * otherwise have moved the rest of the day's redraws onto a provider that bills
+ * per element with no ceiling at all. Google is the fallback here, not the
+ * main router, so these are well above what a day of fallbacks needs and well
+ * below a runaway. `GOOGLE_DAILY_MATRIX_ELEMENTS`,
+ * `GOOGLE_DAILY_ROUTE_REQUESTS` and `GOOGLE_DAILY_NAVIGATION_REQUESTS` override them.
+ */
+export const DAILY_MATRIX_ELEMENTS = 5_000;
+export const DAILY_ROUTE_REQUESTS = 1_000;
+/** Turn-by-turn legs are billed at the Advanced tier, and the phone re-asks on every reroute. */
+export const DAILY_NAVIGATION_REQUESTS = 2_000;
 
 /**
  * How long to wait before asking for `elements` more, given what was asked for
@@ -427,6 +446,18 @@ export class GoogleRoutesClient {
   private readonly logger = new Logger(GoogleRoutesClient.name);
   /** Route-matrix elements asked for, oldest first, for pacing under the per-minute quota. */
   private readonly matrixHistory: { at: number; elements: number }[] = [];
+  private readonly matrixToday = new DailyAllowance(
+    'google-matrix',
+    ceilingFrom('GOOGLE_DAILY_MATRIX_ELEMENTS', DAILY_MATRIX_ELEMENTS),
+  );
+  private readonly routesToday = new DailyAllowance(
+    'google-routes',
+    ceilingFrom('GOOGLE_DAILY_ROUTE_REQUESTS', DAILY_ROUTE_REQUESTS),
+  );
+  private readonly navigationToday = new DailyAllowance(
+    'google-navigation',
+    ceilingFrom('GOOGLE_DAILY_NAVIGATION_REQUESTS', DAILY_NAVIGATION_REQUESTS),
+  );
 
   /**
    * Absent configuration means traffic-aware routing is unavailable, which the
@@ -459,6 +490,7 @@ export class GoogleRoutesClient {
       });
       return null;
     }
+    if (!spendFrom(elements, [this.matrixToday], this.logger)) return null;
 
     await this.paced(elements);
 
@@ -523,6 +555,7 @@ export class GoogleRoutesClient {
    */
   async route(points: readonly GeoPoint[], departureTime?: Date): Promise<GoogleRoute | null> {
     if (!this.configured || points.length < 2) return null;
+    if (!spendFrom(1, [this.routesToday], this.logger)) return null;
 
     // Google refuses a departure in the past, and "now" is what a live route
     // wants anyway -- this is the drive the technician is about to make.
@@ -581,6 +614,7 @@ export class GoogleRoutesClient {
     departureTime?: Date,
   ): Promise<GoogleNavigationLeg | null> {
     if (!this.configured) return null;
+    if (!spendFrom(1, [this.navigationToday], this.logger)) return null;
 
     // Google refuses a departure in the past, and "now" is what navigation
     // means anyway -- this is the drive being made at this moment.

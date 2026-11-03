@@ -1,6 +1,8 @@
 import { Logger } from '@nestjs/common';
 import type { GeocodePrecision } from '@texasrenters/shared';
 
+import { ceilingFrom, DailyAllowance, spendFrom } from '../common/daily-allowance';
+
 /**
  * Google's Geocoder, for the one thing the Census geocoder cannot do: roofs.
  *
@@ -23,6 +25,17 @@ const ENDPOINT = 'https://maps.googleapis.com/maps/api/geocode/json';
 const REQUEST_TIMEOUT_MS = 15_000;
 
 export const GOOGLE_GEOCODE_SOURCE = 'GOOGLE';
+
+/**
+ * Lookups one day may ask Google for; past it the answer is null and the
+ * caller falls back to the Census geocoder, which is free (see `DailyAllowance`).
+ *
+ * The hourly geocoding pass asks again for every address it could not place,
+ * and records no miss, so an address Google cannot find is asked for every hour
+ * for ever. An ordinary day is a handful of new or corrected addresses.
+ * `GOOGLE_DAILY_GEOCODE_REQUESTS` overrides it.
+ */
+export const DAILY_GEOCODE_REQUESTS = 500;
 
 export interface GoogleGeocodeAnswer {
   latitude: number;
@@ -92,6 +105,10 @@ export function parseGoogleResponse(body: unknown): GoogleGeocodeAnswer | null {
 
 export class GoogleGeocodingClient {
   private readonly logger = new Logger(GoogleGeocodingClient.name);
+  private readonly today = new DailyAllowance(
+    'google-geocode',
+    ceilingFrom('GOOGLE_DAILY_GEOCODE_REQUESTS', DAILY_GEOCODE_REQUESTS),
+  );
 
   constructor(private readonly apiKey: string | undefined) {}
 
@@ -102,6 +119,7 @@ export class GoogleGeocodingClient {
 
   async geocode(address: string): Promise<GoogleGeocodeAnswer | null> {
     if (!this.apiKey) return null;
+    if (!spendFrom(1, [this.today], this.logger)) return null;
 
     const url = new URL(ENDPOINT);
     url.searchParams.set('address', address);

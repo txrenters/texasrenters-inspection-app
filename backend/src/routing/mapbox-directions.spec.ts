@@ -2,7 +2,6 @@ import { Logger } from '@nestjs/common';
 
 import {
   chunkForRequests,
-  DailyAllowance,
   MapboxDirectionsClient,
   parseMatrixResponse,
   stitch,
@@ -192,48 +191,6 @@ describe('reading a duration matrix', () => {
   });
 });
 
-/**
- * The ceiling on what one day may ask Mapbox for.
- *
- * The invoice that asked for it: $764 for October 2026, nearly all of it
- * 384,009 matrix elements on 15 October, from the Group maker's suggestions.
- * Every other day of the month fitted in the free allowance.
- */
-describe('a day of Mapbox, counted', () => {
-  it('spends up to the ceiling and refuses past it', () => {
-    const today = new DailyAllowance('matrix', 250, () => new Date('2026-10-15T12:00:00Z'));
-
-    expect(today.fits(121)).toBe(true);
-    today.spend(121);
-    expect(today.fits(121)).toBe(true);
-    today.spend(121);
-    // 242 spent: a third matrix of 121 would be 363.
-    expect(today.fits(121)).toBe(false);
-    expect(today.fits(8)).toBe(true);
-  });
-
-  /** UTC, the day Mapbox's own statistics page counts in, not Texas's. */
-  it('starts again at midnight UTC', () => {
-    let now = new Date('2026-10-15T23:59:00Z');
-    const today = new DailyAllowance('matrix', 100, () => now);
-    today.spend(100);
-    expect(today.fits(1)).toBe(false);
-
-    now = new Date('2026-10-16T00:00:00Z');
-    expect(today.fits(100)).toBe(true);
-  });
-
-  it('says only the first refusal of a day is the first', () => {
-    let now = new Date('2026-10-15T09:00:00Z');
-    const today = new DailyAllowance('matrix', 0, () => now);
-
-    expect(today.refuse()).toBe(true);
-    expect(today.refuse()).toBe(false);
-    now = new Date('2026-10-16T09:00:00Z');
-    expect(today.refuse()).toBe(true);
-  });
-});
-
 describe('asking Mapbox within the day', () => {
   const saved = { ...process.env };
   const realFetch = global.fetch;
@@ -281,7 +238,7 @@ describe('asking Mapbox within the day', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'mapbox_daily_allowance_reached', allowance: 'matrix', ceiling: 250 }),
+      expect.objectContaining({ event: 'daily_allowance_reached', allowance: 'mapbox-matrix', ceiling: 250 }),
     );
   });
 
@@ -298,7 +255,7 @@ describe('asking Mapbox within the day', () => {
     expect(await mapbox.matrix(points(10))).not.toBeNull();
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ allowance: 'optional-matrix', ceiling: 100 }));
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ allowance: 'mapbox-optional-matrix', ceiling: 100 }));
   });
 
   it('counts a refused suggestion against nothing', async () => {

@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { ceilingFrom, DailyAllowance, spendFrom } from '../common/daily-allowance';
+
 import type { GeoPoint, OsrmRoute } from './osrm.client';
 import { parseRouteResponse, toOsrmCoordinates } from './osrm.client';
 
@@ -54,7 +56,8 @@ const REQUEST_TIMEOUT_MS = 10_000;
  *
  * Above the busiest ordinary day so far (24,539, on 27 October). The count is
  * this process's and starts again when it restarts, so it bounds a runaway; it
- * is not an exact meter. `MAPBOX_DAILY_MATRIX_ELEMENTS` overrides it.
+ * is not an exact meter (see `DailyAllowance`). `MAPBOX_DAILY_MATRIX_ELEMENTS`
+ * overrides it.
  */
 export const DAILY_MATRIX_ELEMENTS = 30_000;
 
@@ -71,59 +74,6 @@ export const DAILY_OPTIONAL_MATRIX_ELEMENTS = 2_000;
  * overrides it.
  */
 export const DAILY_DIRECTIONS_REQUESTS = 3_000;
-
-/** A whole number from the environment, else the default: an empty value is not zero. */
-function ceilingFrom(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 0 ? value : fallback;
-}
-
-/**
- * A count that starts again every day, the way Mapbox counts its own: in UTC,
- * so the ceiling and the account's statistics page agree about which day it is.
- *
- * Exported for its tests.
- */
-export class DailyAllowance {
-  private day = '';
-  private spent = 0;
-  private refused = false;
-
-  constructor(
-    readonly name: string,
-    readonly ceiling: number,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
-
-  /** Whether `amount` more stays within today's ceiling. */
-  fits(amount: number): boolean {
-    this.roll();
-    return this.spent + amount <= this.ceiling;
-  }
-
-  spend(amount: number): void {
-    this.roll();
-    this.spent += amount;
-  }
-
-  /** Notes a refusal. True only for the day's first, which is the one worth a log line. */
-  refuse(): boolean {
-    this.roll();
-    const first = !this.refused;
-    this.refused = true;
-    return first;
-  }
-
-  private roll() {
-    const day = this.now().toISOString().slice(0, 10);
-    if (day === this.day) return;
-    this.day = day;
-    this.spent = 0;
-    this.refused = false;
-  }
-}
 
 /**
  * Split a run of points into requests, each overlapping the last by one.
@@ -211,37 +161,17 @@ export class MapboxDirectionsClient {
   private readonly logger = new Logger(MapboxDirectionsClient.name);
 
   private readonly matrixToday = new DailyAllowance(
-    'matrix',
+    'mapbox-matrix',
     ceilingFrom('MAPBOX_DAILY_MATRIX_ELEMENTS', DAILY_MATRIX_ELEMENTS),
   );
   private readonly optionalMatrixToday = new DailyAllowance(
-    'optional-matrix',
+    'mapbox-optional-matrix',
     ceilingFrom('MAPBOX_DAILY_OPTIONAL_MATRIX_ELEMENTS', DAILY_OPTIONAL_MATRIX_ELEMENTS),
   );
   private readonly directionsToday = new DailyAllowance(
-    'directions',
+    'mapbox-directions',
     ceilingFrom('MAPBOX_DAILY_DIRECTIONS_REQUESTS', DAILY_DIRECTIONS_REQUESTS),
   );
-
-  /**
-   * Spends `amount` from every allowance given, or from none when any of them
-   * is short. Counted when asked rather than when answered: Mapbox bills the
-   * request.
-   */
-  private allow(amount: number, allowances: readonly DailyAllowance[]): boolean {
-    const short = allowances.find((allowance) => !allowance.fits(amount));
-    if (short) {
-      if (short.refuse())
-        this.logger.warn({
-          event: 'mapbox_daily_allowance_reached',
-          allowance: short.name,
-          ceiling: short.ceiling,
-        });
-      return false;
-    }
-    for (const allowance of allowances) allowance.spend(amount);
-    return true;
-  }
 
   /**
    * Absent configuration means Mapbox routing is unavailable and the caller
@@ -296,7 +226,7 @@ export class MapboxDirectionsClient {
 
     const chunks = chunkForRequests(points.length);
     // Every request of the route or none: half a line is worse than a straight one.
-    if (!this.allow(chunks.length, [this.directionsToday])) return null;
+    if (!spendFrom(chunks.length, [this.directionsToday], this.logger)) return null;
     const parts: OsrmRoute[] = [];
     for (const [start, end] of chunks) {
       const coordinates = toOsrmCoordinates(points.slice(start, end));
@@ -338,7 +268,7 @@ export class MapboxDirectionsClient {
     const allowances = options.optional
       ? [this.matrixToday, this.optionalMatrixToday]
       : [this.matrixToday];
-    if (!this.allow(elements, allowances)) return null;
+    if (!spendFrom(elements, allowances, this.logger)) return null;
     return parseMatrixResponse(
       await this.get(
         `/directions-matrix/v1/mapbox/driving/${toOsrmCoordinates(points)}` +
