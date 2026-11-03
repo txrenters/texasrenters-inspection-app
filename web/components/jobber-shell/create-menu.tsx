@@ -15,22 +15,22 @@ import { useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SidebarMenuButton, useSidebar } from '@/components/ui/sidebar';
 import { usePermissions } from '@/lib/auth';
+import { typeTone } from '@/lib/inspection-type-tone';
 import { JOBBER_CREATE_PERMISSION, JOBBER_CREATE_TYPES } from '@/lib/jobber-navigation';
 import { cn } from '@/lib/utils';
 
 import { JOBBER_NAV_ROW } from './nav-row';
 
 /**
- * Each type's mark, coloured as Jobber colours its records (a request is
- * orange, a job green, an invoice blue), so a type is told apart at a glance.
- * The categorical chart tokens, which are measured for exactly that.
+ * Each type's mark, in its type's colour (lib/inspection-type-tone), the same
+ * one the Schedule's visits wear.
  */
-const TYPE_MARKS: Record<string, { icon: LucideIcon; tone: string }> = {
-  MOVE_IN: { icon: LogInIcon, tone: 'text-chart-5' },
-  OCCUPIED: { icon: HouseIcon, tone: 'text-chart-1' },
-  BACK_TO_MARKET: { icon: SignpostIcon, tone: 'text-chart-4' },
-  MOVE_OUT: { icon: LogOutIcon, tone: 'text-chart-3' },
-  HVAC: { icon: FanIcon, tone: 'text-chart-2' },
+const TYPE_ICONS: Record<string, LucideIcon> = {
+  MOVE_IN: LogInIcon,
+  OCCUPIED: HouseIcon,
+  BACK_TO_MARKET: SignpostIcon,
+  MOVE_OUT: LogOutIcon,
+  HVAC: FanIcon,
 };
 
 /**
@@ -74,8 +74,7 @@ export function CreateMenu() {
       >
         <ul className="flex flex-wrap gap-1">
           {JOBBER_CREATE_TYPES.map((entry) => {
-            const mark = TYPE_MARKS[entry.type];
-            const Icon = mark?.icon ?? CirclePlusIcon;
+            const Icon = TYPE_ICONS[entry.type] ?? CirclePlusIcon;
             return (
               <li key={entry.type}>
                 <Link
@@ -83,7 +82,7 @@ export function CreateMenu() {
                   href={entry.href}
                   onClick={chosen}
                 >
-                  <Icon aria-hidden className={cn('size-5', mark?.tone)} />
+                  <Icon aria-hidden className={cn('size-5', typeTone(entry.type).text)} />
                   {entry.title}
                 </Link>
               </li>
