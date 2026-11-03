@@ -13,6 +13,8 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { DataTable, type Column } from '@/components/data-table';
+import { useConsoleShell } from '@/components/console-shell-context';
+import { ReschedulesSummary } from '@/components/summaries/directory-summaries';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { Badge } from '@/components/ui/badge';
@@ -174,6 +176,7 @@ const NOBODY = 'nobody';
 export default function ReschedulesPage() {
   const { has } = usePermissions();
   const canManage = has('inspections:manage');
+  const jobber = useConsoleShell() === 'jobber';
   const [filter, setFilter] = useState<RescheduleRequestFilter>('open');
   const requests = useRescheduleRequests(filter);
   const [answering, setAnswering] = useState<Answering | null>(null);
@@ -222,6 +225,7 @@ export default function ReschedulesPage() {
   return (
     <>
       {header}
+      {jobber ? <ReschedulesSummary /> : null}
       <div className="grid gap-4">
         <Tabs onValueChange={(value) => setFilter(value as RescheduleRequestFilter)} value={filter}>
           <TabsList>

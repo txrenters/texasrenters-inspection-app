@@ -126,6 +126,7 @@ export default function TechniciansPage() {
       ) : null}
 
       <ListToolbar
+        heading="All technicians"
         activeFilters={
           state.active
             ? [

@@ -7,11 +7,13 @@ import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import { useConsoleShell } from '@/components/console-shell-context';
 import { DayFilter } from '@/components/day-filter';
 import { InspectionBulkBar } from '@/components/inspection-bulk-bar';
 import { InspectionBulkDeleteDialog } from '@/components/inspection-bulk-delete-dialog';
 import type { DeletableInspection } from '@/components/inspection-delete-dialog';
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
+import { InspectionsSummary } from '@/components/summaries/inspections-summary';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -377,6 +379,8 @@ export default function InspectionsPage() {
     [setState],
   );
 
+  // Jobber's strip and list heading, in the Jobber-style shell only.
+  const jobber = useConsoleShell() === 'jobber';
   const section = state.type ? DESCRIPTIONS[state.type] : undefined;
   // The type as the page's title spells it -- "move-out", "HVAC" -- not the
   // enum humanized ("move out", "hvac").
@@ -494,6 +498,8 @@ export default function InspectionsPage() {
         title={section?.title ?? 'Inspections'}
       />
 
+      {jobber ? <InspectionsSummary type={state.type} /> : null}
+
       {/* The types as tabs across the list, with how many of each the same
           day and filters hold (console-development). The sidebar's sub-items
           reach the same views; these say how the day divides up at a glance. */}
@@ -532,6 +538,7 @@ export default function InspectionsPage() {
 
       <ListToolbar
         activeFilters={activeFilters}
+        heading={section ? `All ${typeName} inspections` : 'All inspections'}
         filters={
           <>
             {/* One day, as the timesheet picks one (2026-10-07). */}
