@@ -3802,6 +3802,13 @@ model TbpQuarterPlanDay {
   templateGroupName     String?
   templateGroupColor    String?
 
+  /// What the day was measured from, as one key (`measuredFor` in the
+  /// planner): where it starts, the longest leg its order allows, and every
+  /// stop with where it is. A Rebuild reuses the measurement of a day whose key
+  /// is unchanged rather than asking Mapbox again. Null for a day measured
+  /// before the key existed, which is measured once more.
+  measuredFor String?
+
   computedAt DateTime @default(now())
 
   organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
