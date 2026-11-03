@@ -400,7 +400,9 @@ function Jobs({ visit }: { visit: TimesheetVisit }) {
   return (
     <span className="flex flex-wrap gap-x-1.5 font-semibold">
       {visit.jobs.map((job, index) => (
-        <Fragment key={job.inspectionId}>
+        // With its place in the list: the key must hold even if a visit is
+        // ever listed twice, rather than React dropping one of them.
+        <Fragment key={`${index}:${job.inspectionId}`}>
           {index ? (
             <span aria-hidden className="text-muted-foreground">
               +

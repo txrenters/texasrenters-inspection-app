@@ -627,6 +627,19 @@ describe('in the Jobber-style layout', () => {
 
     expect(screen.getByRole('link', { name: 'OpenStreetMap' })).toBeInTheDocument();
   });
+
+  /** Seen in the console on 2026-11-04: "Encountered two children with the same key". */
+  it('draws both jobs of a visit even when they name the same inspection', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const twice = { ...VISIT, jobs: [VISIT.jobs[0]!, { ...VISIT.jobs[0]!, type: 'HVAC' }] };
+
+    mountJobber({ ...DAY_IN_FULL, visits: [twice] });
+
+    expect(screen.getByRole('link', { name: 'Move-out' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'HVAC' })).toBeInTheDocument();
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    errors.mockRestore();
+  });
 });
 
 describe('the kind of place, in the classic layout too', () => {
@@ -634,5 +647,16 @@ describe('the kind of place, in the classic layout too', () => {
     mount({ ...WITH_STOPS, stops: [{ ...STOP, place: { ...STOP.place, category: 'shop=doityourself' } }] });
 
     expect(screen.getByText('Home improvement store')).toBeInTheDocument();
+  });
+
+  it('draws both jobs of a visit even when they name the same inspection', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const twice = { ...VISIT, jobs: [VISIT.jobs[0]!, { ...VISIT.jobs[0]!, type: 'HVAC' }] };
+
+    mount({ ...SHEET, visits: [twice] });
+
+    expect(screen.getByRole('link', { name: 'HVAC' })).toBeInTheDocument();
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    errors.mockRestore();
   });
 });

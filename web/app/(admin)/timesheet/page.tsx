@@ -545,7 +545,7 @@ function JobCell({ jobs }: { jobs: TimesheetJob[] }) {
     <div className="min-w-0">
       <div className="flex flex-wrap gap-x-1.5">
         {jobs.map((job, index) => (
-          <Fragment key={job.inspectionId}>
+          <Fragment key={`${index}:${job.inspectionId}`}>
             {index ? (
               <span aria-hidden className="text-muted-foreground">
                 +
