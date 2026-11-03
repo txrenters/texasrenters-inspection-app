@@ -50,11 +50,15 @@ export function PageHeader({
 }) {
   return (
     <div
-      className={cn('flex flex-wrap items-start justify-between gap-3 pb-3 sm:gap-4', className)}
+      className={cn('flex flex-wrap items-start justify-between gap-3 pb-3 sm:gap-4 jobber:pb-6', className)}
     >
       <div className="min-w-0 space-y-0.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
+          {/* In the Jobber-style shell, Jobber's page title: large, heavy,
+              in the display face, and allowed to wrap as Jobber's do. */}
+          <h1 className="jobber:font-display jobber:text-heading jobber:text-[1.75rem] sm:jobber:text-[2rem] jobber:leading-tight jobber:font-extrabold jobber:tracking-normal jobber:whitespace-normal truncate text-lg font-semibold tracking-tight">
+            {title}
+          </h1>
           {info ? (
             <Popover>
               <PopoverTrigger asChild>
@@ -101,7 +105,9 @@ export function SectionHeader({
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-3', className)}>
       <div className="min-w-0 space-y-0.5">
-        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+        <h2 className="jobber:text-heading jobber:text-xl jobber:font-bold text-base font-semibold tracking-tight">
+          {title}
+        </h2>
         {description ? <p className="text-muted-foreground text-sm">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}

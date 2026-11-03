@@ -9,6 +9,7 @@ import {
   LogOutIcon,
   MonitorIcon,
   MoonIcon,
+  PanelsTopLeftIcon,
   SearchIcon,
   SunIcon,
   UserRoundIcon,
@@ -17,6 +18,7 @@ import { useTheme } from 'next-themes';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
+import { useConsoleShell, useSwitchConsoleShell } from '@/components/console-shell-context';
 import { usePageSearch, type PageSearch } from '@/components/page-search';
 import { Button } from '@/components/ui/button';
 import {
@@ -34,9 +36,11 @@ import { Spinner } from '@/components/ui/spinner';
 import { getVisibleAdminNavigation } from '@/lib/admin-navigation';
 import { api, type Page, queryString } from '@/lib/api';
 import { useAuth, usePermissions } from '@/lib/auth';
+import type { ConsoleShell } from '@/lib/console-shell';
 import { formatScheduledDate, humanize } from '@/lib/format';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useSearchText } from '@/lib/use-search-text';
+import { cn } from '@/lib/utils';
 
 /** How many of each kind of record the search shows: enough to pick from. */
 const RECORDS = 5;
@@ -122,24 +126,30 @@ function useShortcutLabel() {
  * underneath; the shortcut beside it still searches everything.
  */
 function HeaderListSearch({
+  jobber = false,
   search,
   onSearchEverything,
   shortcut,
 }: {
+  /** Drawn as Jobber's search: 40px tall, filled with the frame's darker taupe. */
+  jobber?: boolean;
   search: PageSearch;
   onSearchEverything: () => void;
   shortcut: string;
 }) {
   const [text, setText] = useSearchText(search.value, search.onChange);
   return (
-    <div className="relative w-full sm:w-72">
+    <div className={cn('relative w-full', jobber ? 'sm:w-80' : 'sm:w-72')}>
       <SearchIcon
         aria-hidden
         className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"
       />
       <Input
         aria-label={search.label}
-        className="h-8 pr-20 pl-8"
+        className={cn(
+          'h-8 pr-20 pl-8',
+          jobber && 'bg-sidebar-hover dark:bg-sidebar-hover h-10 rounded-lg border-transparent',
+        )}
         onChange={(event) => setText(event.target.value)}
         placeholder={search.placeholder}
         type="search"
@@ -161,14 +171,24 @@ function HeaderListSearch({
   );
 }
 
+/** True while somebody is typing, when "/" is a character and not a shortcut. */
+function isTypingInto(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName);
+}
+
 /**
  * The header's search.
  *
  * On a list page it is that list's search. Everywhere, Ctrl K (⌘K) finds inspections,
  * properties and technicians by what was typed, and every page the account can
- * open -- the same permission-filtered navigation the sidebar draws.
+ * open -- the same permission-filtered navigation the sidebar draws. "/" opens it
+ * too, as it does in Jobber, whenever the key would not be typed into a field.
+ *
+ * `variant="jobber"` draws the trigger as Jobber's wide "Press / to search" box
+ * (components/jobber-shell); what it searches is the same.
  */
-export function CommandPalette() {
+export function CommandPalette({ variant = 'classic' }: { variant?: ConsoleShell }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const term = useDebouncedValue(query.trim(), 250);
@@ -180,12 +200,27 @@ export function CommandPalette() {
   const groups = getVisibleAdminNavigation(has);
   const records = useRecordSearch(term, open);
   const shortcut = useShortcutLabel();
+  const shell = useConsoleShell();
+  const switchShell = useSwitchConsoleShell();
+  const jobber = variant === 'jobber';
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'k' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         setOpen((current) => !current);
+        return;
+      }
+      if (
+        event.key === '/' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.defaultPrevented &&
+        !isTypingInto(event.target)
+      ) {
+        event.preventDefault();
+        setOpen(true);
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -233,6 +268,15 @@ export function CommandPalette() {
       icon: LogOutIcon,
       action: () => void auth.signOut().then(() => router.replace('/login')),
     },
+    // The other frame (lib/console-shell.ts). Found by either name, so "jobber"
+    // and "classic" both reach it from whichever layout is showing.
+    {
+      value: 'layout switch',
+      words: 'Account layout shell look Jobber-style classic',
+      label: shell === 'jobber' ? 'Classic layout' : 'Jobber-style layout',
+      icon: PanelsTopLeftIcon,
+      action: () => switchShell(shell === 'jobber' ? 'classic' : 'jobber'),
+    },
   ].filter((command) => matchesWords(command.words, query));
   const themes = [
     { value: 'light theme', label: 'Light', icon: SunIcon, theme: 'light' },
@@ -240,14 +284,46 @@ export function CommandPalette() {
     { value: 'system theme', label: 'System', icon: MonitorIcon, theme: 'system' },
   ].filter((command) => matchesWords(`Theme ${command.value}`, query));
 
+  // Jobber's search box: a wide, filled field saying which key opens it. A
+  // button that looks like a field, since it opens the dialog rather than
+  // taking text itself. An icon alone on a phone.
+  const jobberSearchButton = (className?: string) => (
+    <button
+      aria-label="Search"
+      className={cn(
+        'bg-sidebar-hover text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex h-10 w-10 items-center justify-center gap-2 rounded-lg text-sm outline-none focus-visible:ring-[3px] sm:w-80 sm:justify-start sm:px-3',
+        className,
+      )}
+      onClick={() => setOpen(true)}
+      title={`Search (/ or ${shortcut})`}
+      type="button"
+    >
+      <SearchIcon aria-hidden className="text-heading size-5 shrink-0" />
+      <span className="hidden truncate sm:inline">Press / to search</span>
+    </button>
+  );
+
   return (
     <>
-      {pageSearch ? (
-        <HeaderListSearch
-          onSearchEverything={() => setOpen(true)}
-          search={pageSearch}
-          shortcut={shortcut}
-        />
+      {pageSearch && jobber ? (
+        // On a phone the list keeps its own search box under the title (the
+        // classic header hides its search there for the same reason), so the
+        // bar offers only the search for everything.
+        <>
+          <div className="hidden sm:block">
+            <HeaderListSearch
+              jobber
+              onSearchEverything={() => setOpen(true)}
+              search={pageSearch}
+              shortcut={shortcut}
+            />
+          </div>
+          {jobberSearchButton('sm:hidden')}
+        </>
+      ) : pageSearch ? (
+        <HeaderListSearch onSearchEverything={() => setOpen(true)} search={pageSearch} shortcut={shortcut} />
+      ) : jobber ? (
+        jobberSearchButton()
       ) : (
         <Button
           className="text-muted-foreground w-full justify-start gap-2 sm:w-56"

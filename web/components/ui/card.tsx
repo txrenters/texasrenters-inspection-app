@@ -68,7 +68,7 @@ function CardTitle({
       className={cn(
         variant === 'label'
           ? 'text-muted-foreground font-mono text-[10.5px] leading-none font-medium tracking-[0.12em] uppercase'
-          : 'leading-none font-semibold',
+          : 'jobber:text-heading jobber:text-base jobber:font-bold leading-none font-semibold',
         className,
       )}
       {...props}
