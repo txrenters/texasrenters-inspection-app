@@ -87,6 +87,7 @@ import { PrismaService } from '../common/prisma.service';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
+import { visitAccess } from '../admin/property-details-view';
 import { tenancyOnFile } from '../admin/tenancy-on-file';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { AreaChecklistAiService } from '../admin/area-checklist-ai.service';
@@ -763,12 +764,18 @@ export class TechnicianService {
     const buildingId = record.propertywareBuilding?.id;
     if (!buildingId) return { onFile: null, lastVisit: null };
     const unitId = record.propertywareUnit?.id ?? null;
-    const [file, previous] = await Promise.all([
+    const [file, building, previous] = await Promise.all([
       tenancyOnFile(this.prisma, {
         organizationId,
         buildingId,
         unitId,
         leaseId: record.propertywareLeaseId,
+      }),
+      // The key information and codes, for the technician this job is assigned
+      // to -- the same the office writes into the visit in Jobber.
+      this.prisma.propertywareBuilding.findFirst({
+        where: { id: buildingId, organizationId },
+        select: { details: true },
       }),
       /**
        * The last visit here that left the office a note.
@@ -799,7 +806,16 @@ export class TechnicianService {
     ]);
 
     const onFile = {
-      tenantNames: file.tenantNames,
+      // The lease's names where one lease is certain; the report's contact
+      // otherwise, which is the tenancy the plan and filters below belong to.
+      tenantNames: file.tenantNames.length
+        ? file.tenantNames
+        : file.tenancy?.contactName
+          ? [file.tenancy.contactName]
+          : [],
+      tenantPhones: file.tenancy?.contactPhones ?? [],
+      tenantEmail: file.tenancy?.contactEmail ?? null,
+      access: visitAccess(building?.details),
       plan: file.tenancy?.managementPlan ?? null,
       hvacPlan: file.tenancy?.hvacPlan ?? null,
       benefitPackage: file.tenancy?.tbpEnrollment ?? null,

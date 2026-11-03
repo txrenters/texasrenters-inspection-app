@@ -29,6 +29,10 @@ export interface TenancyRecordOnFile {
   lastFilterDelivery: string | null;
   lastHvacInspection: Date | null;
   lastOccupiedInspection: string | null;
+  /** The lease's primary contact, from the report's Primary Contact columns. */
+  contactName: string | null;
+  contactPhones: string[];
+  contactEmail: string | null;
 }
 
 export interface LeaseOnFile {
@@ -85,6 +89,9 @@ export async function tenancyOnFile(
         lastFilterDelivery: true,
         lastHvacInspection: true,
         lastOccupiedInspection: true,
+        contactName: true,
+        contactPhones: true,
+        contactEmail: true,
       },
     }),
     prisma.propertywareUnit.count({ where: { organizationId, buildingId, isActive: true } }),

@@ -29,11 +29,13 @@ import {
   tbpServicesLine,
   tbpServicesLineFromTenancy,
   tbpVisitDetails,
+  type TbpVisitInfo,
   tenancyZoneLabel,
   unitFilterSizes,
   withInspectionLink,
 } from '@texasrenters/shared';
 
+import { visitAccess } from '../admin/property-details-view';
 import { leftBenefitPackage, SERVICE_SWITCHES_SELECT } from '../admin/property-service-status';
 import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -84,6 +86,12 @@ const TENANT_SELECT = {
   propertywareBuildingId: true,
   unitExternalId: true,
   unitName: true,
+  // What the visit's Details tell the technician: the tenant's contact, and
+  // the building's key information and codes (`planVisitInfo`).
+  contactName: true,
+  contactPhones: true,
+  contactEmail: true,
+  building: { select: { details: true } },
 } satisfies Prisma.PropertywareTenantSelect;
 
 type PlanTenant = Prisma.PropertywareTenantGetPayload<{ select: typeof TENANT_SELECT }>;
@@ -846,7 +854,11 @@ export class TbpPlanService {
   private async enrolledTenancies(organizationId: string) {
     const tenancies = await this.prisma.propertywareTenant.findMany({
       where: { organizationId, isActive: true },
-      select: { ...TENANT_SELECT, tbpEnrollment: true, building: { select: { serviceStatus: { select: SERVICE_SWITCHES_SELECT } } } },
+      select: {
+        ...TENANT_SELECT,
+        tbpEnrollment: true,
+        building: { select: { details: true, serviceStatus: { select: SERVICE_SWITCHES_SELECT } } },
+      },
       orderBy: { externalId: 'asc' },
     });
 
@@ -858,7 +870,8 @@ export class TbpPlanService {
         // Zone 5 is not part of the benefit package (the office, 2026-10-02):
         // no visit, so a quarter has nothing there to hold back. A visit already
         // made for one goes with the next generation, as any tenancy's that left.
-        if (isTbpZone(rest.zone) && !leftBenefitPackage(building?.serviceStatus)) enrolled.push(rest);
+        if (isTbpZone(rest.zone) && !leftBenefitPackage(building?.serviceStatus))
+          enrolled.push({ ...rest, building: building ? { details: building.details } : null });
       } else if ((tbpEnrollment ?? '').trim().toLowerCase() !== 'no') unverified += 1;
     }
     return { enrolled, unverified };
@@ -1541,11 +1554,40 @@ export function visitTitle(
  * inspections, silently.
  */
 export function planVisitDetails(
-  tenant: Pick<PlanTenant, 'hvacFilterSizes' | 'hvacFilterLocation' | 'managementPlan' | 'hvacPlan'>,
+  tenant: Pick<
+    PlanTenant,
+    | 'hvacFilterSizes'
+    | 'hvacFilterLocation'
+    | 'managementPlan'
+    | 'hvacPlan'
+    | 'contactName'
+    | 'contactPhones'
+    | 'contactEmail'
+    | 'building'
+  >,
   inspectionType: TbpInspectionType,
   officeDetails?: string | null,
 ): string {
-  return tbpVisitDetails(servicesLineFor(tenant, inspectionType, officeDetails));
+  return tbpVisitDetails(servicesLineFor(tenant, inspectionType, officeDetails), planVisitInfo(tenant));
+}
+
+/**
+ * The management plan, the tenant's contact and the building's access codes a
+ * planned visit carries (the office, 2026-11-04).
+ *
+ * The tenancy's own contact, from the tenant report: a building of several
+ * units has a tenant per unit, and the stop is one tenancy's visit.
+ */
+export function planVisitInfo(
+  tenant: Pick<PlanTenant, 'managementPlan' | 'contactName' | 'contactPhones' | 'contactEmail' | 'building'>,
+): TbpVisitInfo {
+  return {
+    managementPlan: tenant.managementPlan,
+    tenantName: tenant.contactName,
+    tenantPhones: tenant.contactPhones,
+    tenantEmail: tenant.contactEmail,
+    access: visitAccess(tenant.building?.details),
+  };
 }
 
 /** The services line a planned visit's Details open with: the office's, or one written from the tenancy. */

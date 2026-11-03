@@ -53,6 +53,11 @@ export interface TenantReportRow {
   unitExternalId: string | null;
   /** The unit as the office names it ("North", "1/2"), when the report carries it. */
   unitName: string | null;
+  /** The lease's primary contact, when the report carries the columns. */
+  contactName: string | null;
+  /** Mobile, home and work, in that order, each number once. */
+  contactPhones: string[];
+  contactEmail: string | null;
 }
 
 /**
@@ -85,6 +90,21 @@ const value = (raw: string | undefined) => {
  * see it for why this is no longer a list of known placeholders.
  */
 const filterSizesOf = (cells: (string | null)[]) => cells.filter((cell): cell is string => Boolean(cell) && filterSizeEntry(cell!));
+
+/**
+ * A tenant's numbers, each once. 379 of the 431 tenants with a mobile gave the
+ * same number as their home phone, and it is one phone to call. Compared by
+ * digits, so "(832) 576-1062" and "+18325761062" are the same number.
+ */
+function contactPhonesOf(cells: (string | null)[]): string[] {
+  const seen = new Set<string>();
+  return cells.filter((cell): cell is string => {
+    const digits = (cell ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+    if (digits.length < 7 || seen.has(digits)) return false;
+    seen.add(digits);
+    return true;
+  });
+}
 
 export function parseTenantReport(payload: unknown): TenantReportRow[] {
   const report = propertywareLeaseReportSchema.safeParse(payload);
@@ -141,6 +161,12 @@ export function parseTenantReport(payload: unknown): TenantReportRow[] {
         postalCode: opt(record, 'postalCode'),
         unitExternalId: opt(record, 'unitExternalId'),
         unitName: opt(record, 'unitName') ?? opt(record, 'unit') ?? opt(record, 'unitAbbreviation'),
+        contactName:
+          [opt(record, 'contactFirstName'), opt(record, 'contactLastName')].filter(Boolean).join(' ') || null,
+        contactPhones: contactPhonesOf(
+          ['contactMobile', 'contactHomePhone', 'contactWorkPhone'].map((field) => opt(record, field)),
+        ),
+        contactEmail: opt(record, 'contactEmail'),
       },
     ];
   });

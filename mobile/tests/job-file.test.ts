@@ -8,6 +8,12 @@ import { jobFileRows, lastVisitNotes } from '../src/utils/job-file';
 
 const FILE: JobFile = {
   tenantNames: ['Rosa Alvarez', 'Luis Alvarez'],
+  tenantPhones: ['(555) 010-0142', '(555) 010-0199'],
+  tenantEmail: 'rosa@example.com',
+  access: [
+    { label: 'Key Information', value: '#4 in the key box' },
+    { label: 'Lockbox Code', value: '0000' },
+  ],
   plan: 'Basic',
   hvacPlan: 'Opted out',
   benefitPackage: 'Enrolled',
@@ -27,6 +33,10 @@ describe('the file the office holds on a tenancy', () => {
   it('reads as rows in the order a technician needs them', () => {
     expect(jobFileRows(FILE).map((row) => row.label)).toEqual([
       'Tenant',
+      'Phone',
+      'Email',
+      'Key Information',
+      'Lockbox Code',
       'Plan',
       'HVAC plan',
       'Filters on file',
@@ -36,6 +46,15 @@ describe('the file the office holds on a tenancy', () => {
       'Moved in',
       'Lease ends',
     ]);
+  });
+
+  /** "we need to add the key information ... and tenant information" -- the office, 2026-11-04. */
+  it('gives the tenant’s numbers on one line, and the building’s codes as the office labels them', () => {
+    const rows = jobFileRows(FILE);
+
+    expect(value(rows, 'Phone')).toBe('(555) 010-0142, (555) 010-0199');
+    expect(value(rows, 'Email')).toBe('rosa@example.com');
+    expect(value(rows, 'Lockbox Code')).toBe('0000');
   });
 
   it('puts the sizes and where they are on one line', () => {
@@ -70,7 +89,7 @@ describe('the file the office holds on a tenancy', () => {
 
   it('is empty for a tenancy the office could not resolve', () => {
     expect(jobFileRows(undefined)).toEqual([]);
-    expect(jobFileRows({ tenantNames: [], filterSizes: [] })).toEqual([]);
+    expect(jobFileRows({ tenantNames: [], tenantPhones: [], access: [], filterSizes: [] })).toEqual([]);
   });
 });
 

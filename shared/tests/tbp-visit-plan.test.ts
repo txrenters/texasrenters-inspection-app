@@ -7,6 +7,7 @@ import {
   unitFilterSizes,
   tbpServicesLineFromTenancy,
   tbpVisitDetails,
+  tbpVisitInfoText,
   withInspectionLink,
 } from '../src/contracts/tbp-visit-plan.js';
 import { parseVisitDetails } from '../src/contracts/visit-details.js';
@@ -77,12 +78,26 @@ describe('which inspection a benefit-package visit is', () => {
    * plan is what decides it, whatever the management plan is called.
    */
   it('is an HVAC inspection for any other plan on our AC plan', () => {
-    for (const tier of ['Premium (w/o HVAC)', 'BX', 'MX', null])
+    for (const tier of ['Premium (w/o HVAC)', null])
       expect(tbpInspectionFor(4, plan(tier, 'On our AC Plan'))).toEqual({
         inspectionType: 'HVAC',
         reason: 'HVAC_PLAN_ADDED',
         needsReview: false,
       });
+  });
+
+  /** "if it says BX or MX even if it says on our AC plan ... only occupied inspection" -- the office, 2026-11-04. */
+  it.each([['BX'], ['MX'], ['bx plan'], [' MX ']])('is an occupied inspection for %s, even on our AC plan', (tier) => {
+    for (const hvac of ['On our AC Plan', 'HVAC Covered by Warranty and Our Plan', 'Not Completed'])
+      expect(tbpInspectionFor(4, plan(tier, hvac))).toEqual({
+        inspectionType: 'OCCUPIED',
+        reason: 'MANAGEMENT_PLAN_WITHOUT_HVAC',
+        needsReview: false,
+      });
+  });
+
+  it('does not read a plan that only starts with the letters as BX or MX', () => {
+    expect(tbpInspectionFor(4, plan('BXL', 'On our AC Plan'))).toMatchObject({ inspectionType: 'HVAC' });
   });
 
   it('flags Premium with no HVAC plan recorded rather than guessing', () => {
@@ -268,5 +283,69 @@ describe('the Details of a planned visit', () => {
     expect(linked).toContain('HVAC Inspection\n\nTexas Renters inspection: https://console.example.com/inspections/1\n\nInstruction for completion');
     expect(withInspectionLink(linked, 'https://console.example.com/inspections/1')).toBe(linked);
     expect(parseVisitDetails(linked).completionInstructions).toEqual(parseVisitDetails(details).completionInstructions);
+  });
+});
+
+/**
+ * "we need to add the key information, management plan, Filter sizes and tenant
+ * information, those are needed" -- the office, 2026-11-04. The values below are
+ * invented; the shapes are the report's.
+ */
+describe('what a planned visit tells the technician', () => {
+  const INFO = {
+    managementPlan: 'BX',
+    tenantName: 'Jane Doe',
+    tenantPhones: ['(555) 010-0142', '+15550100199'],
+    tenantEmail: 'jane@example.com',
+    access: [
+      { label: 'Key Information', value: '#4 JB 9/25/2024' },
+      { label: 'Lockbox Code', value: 'Supra removed 10/30/2024 Code 0000' },
+    ],
+  };
+  const details = tbpVisitDetails('Filter Change: 20x25x4 + Pest Control + Occupied Inspection', INFO);
+
+  it('writes the plan, the tenant and the codes between the services and the completion steps', () => {
+    expect(details).toContain(
+      [
+        'Filter Change: 20x25x4 + Pest Control + Occupied Inspection',
+        'Management Plan: BX',
+        'Tenant: Jane Doe (555) 010-0142 (555) 010-0199\nTenant email: jane@example.com',
+        'Key Information: #4 JB 9/25/2024\nLockbox Code: Supra removed 10/30/2024 Code 0000',
+        'Instruction for completion',
+      ].join('\n\n'),
+    );
+  });
+
+  it('is read back on the phone as the tenant, the access notes and the same services', () => {
+    const read = parseVisitDetails(details);
+
+    expect(read.tenants).toEqual([{ unit: null, name: 'Jane Doe', phones: ['(555) 010-0142', '(555) 010-0199'] }]);
+    expect(read.accessNotes).toEqual(['Key Information: #4 JB 9/25/2024', 'Lockbox Code: Supra removed 10/30/2024 Code 0000']);
+    expect(read.notes).toEqual(['Management Plan: BX', 'Tenant email: jane@example.com']);
+    expect(read.filters.map((filter) => filter.size)).toEqual(['20x25x4']);
+    expect(reportableServices(read)).toEqual(['filterChange', 'pestControl']);
+  });
+
+  it('keeps the services line the one a later edit renames', () => {
+    // A phone written with "+1" would be a second line with a "+" on it.
+    expect(details).not.toMatch(/\+1/);
+    expect(detailsNamingInspection(details, 'HVAC', 'unused').split('\n')[0]).toBe(
+      'Filter Change: 20x25x4 + Pest Control + HVAC Inspection',
+    );
+  });
+
+  it('leaves out what is not on file, and the whole block when nothing is', () => {
+    expect(tbpVisitInfoText({ ...INFO, tenantName: null, tenantEmail: null, access: [] })).toBe(
+      'Management Plan: BX\n\nTenant: (555) 010-0142 (555) 010-0199',
+    );
+    expect(
+      tbpVisitDetails('Pest Control + Occupied Inspection', {
+        managementPlan: null,
+        tenantName: null,
+        tenantPhones: [],
+        tenantEmail: null,
+        access: [],
+      }),
+    ).toBe(tbpVisitDetails('Pest Control + Occupied Inspection'));
   });
 });

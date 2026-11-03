@@ -3197,6 +3197,14 @@ model PropertywareTenant {
   unitExternalId String?
   unitName       String?
 
+  /// The lease's primary contact, from the report's Primary Contact columns
+  /// (the office, 2026-11-04: a technician needs the tenant's name, phone and
+  /// email at the visit). Phones are the mobile, home and work numbers with
+  /// duplicates dropped -- most tenants give the same number twice.
+  contactName   String?
+  contactPhones String[] @default([])
+  contactEmail  String?
+
   hvacFilterLocation String?
   /// Up to four, as the report publishes them. Kept as written — sizes are
   /// text like `20x25x1` and arithmetic is never done on them.

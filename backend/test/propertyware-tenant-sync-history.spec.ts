@@ -32,6 +32,9 @@ const row = (externalId: string, buildingExternalId: string, tbpEnrollment: stri
   postalCode: null,
   unitExternalId: null,
   unitName: null,
+  contactName: null,
+  contactPhones: [],
+  contactEmail: null,
 });
 
 const tenancy = (buildingId: string, tbpEnrollment: string) => ({

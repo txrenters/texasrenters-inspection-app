@@ -79,8 +79,11 @@ const SIZE = /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.
 const COMPLETION_HEADING =
   /^\s*(?:instructions?\s+for\s+completion|completion\s+instructions?|instructions?\s+completion)\b/i;
 const CONTACT_BEFORE_ARRIVAL = /contact\s+(?:the\s+)?tenants?\s+(?:that\s+)?you\s*(?:'|’)?\s*(?:a)?re\s+on\s+(?:your|the)\s+way/i;
-/** A code, a lockbox or a numbered gate -- not merely the word "door" beside a number. */
-const ACCESS = /\bcode\b|\block\s?box\b|\bsupra\b|\bgate\s*#/i;
+/**
+ * A code, a lockbox, a numbered gate or the building's key information -- not
+ * merely the word "door" beside a number.
+ */
+const ACCESS = /\bcode\b|\block\s?box\b|\bsupra\b|\bgate\s*#|\bkey\s+info/i;
 /** "Occupied Inspection", and the "Occuied" / "Ocupied" it is sometimes typed as. */
 const OCCUPIED = /\boc{1,2}u\w{0,3}ied\s+insp/i;
 /**

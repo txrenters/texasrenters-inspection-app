@@ -86,6 +86,10 @@ const build = (
       hvacFilterLocation: null,
       managementPlan: 'Basic',
       hvacPlan: 'On our AC Plan',
+      contactName: null,
+      contactPhones: [],
+      contactEmail: null,
+      building: null,
     },
     ...overrides,
   };

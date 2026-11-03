@@ -10,8 +10,11 @@
  *   still has to say "On our AC Plan" or "Not Completed".
  * - Standard and Basic tenancies can add the HVAC plan, and the ones that have
  *   ("On our AC Plan") get the HVAC inspection too.
- * - So does a tenancy on any other plan -- BX, "Premium (w/o HVAC)" -- whose
- *   HVAC Plan says "On our AC Plan" (the office, asked about the 26 of those).
+ * - So does a tenancy on any other plan -- "Premium (w/o HVAC)" -- whose HVAC
+ *   Plan says "On our AC Plan" (the office, asked about the 26 of those).
+ * - Except BX and MX, which are occupied inspections every quarter, even "On our
+ *   AC Plan" (the office, 2026-11-04). That reverses the answer above for the
+ *   BX tenancies among the 26.
  *
  * Checked against the report before it was written down. Of the Standard and
  * Basic tenancies "On our AC Plan", 33 of 47 had their last HVAC inspection in
@@ -41,6 +44,7 @@ export type TbpInspectionReason =
   | 'PLAN_INCLUDES_HVAC'
   | 'HVAC_PLAN_ADDED'
   | 'HVAC_OPTED_OUT'
+  | 'MANAGEMENT_PLAN_WITHOUT_HVAC'
   | 'HVAC_PLAN_NOT_ADDED'
   | 'HVAC_PLAN_NOT_RECORDED'
   | 'SET_BY_COORDINATOR';
@@ -64,6 +68,7 @@ export const TBP_INSPECTION_REASON_TEXT: Record<TbpInspectionReason, string> = {
   PLAN_INCLUDES_HVAC: 'Premium and Plus include the HVAC plan.',
   HVAC_PLAN_ADDED: 'On our AC Plan.',
   HVAC_OPTED_OUT: 'Opted out of the HVAC plan.',
+  MANAGEMENT_PLAN_WITHOUT_HVAC: 'BX and MX get an occupied inspection, even on our AC Plan.',
   HVAC_PLAN_NOT_ADDED: 'Not on our AC Plan, and the management plan does not include it.',
   HVAC_PLAN_NOT_RECORDED: 'Premium or Plus, but the HVAC plan is not recorded.',
   SET_BY_COORDINATOR: 'Set by a coordinator.',
@@ -85,8 +90,21 @@ type HvacPlan = 'ON_PLAN' | 'NOT_COMPLETED' | 'OPTED_OUT' | 'UNKNOWN';
  * tenancies an HVAC inspection nobody sold them.
  */
 function includesHvac(plan: string | null): boolean {
-  const name = (plan ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/ plan$/, '');
+  const name = planName(plan);
   return name === 'premium' || name === 'plus';
+}
+
+/**
+ * Whether the management plan never takes the HVAC inspection: BX and MX.
+ *
+ * The plan's own name, so "BX Plan" counts and "BXL" would not.
+ */
+function excludesHvac(plan: string | null): boolean {
+  return /^[bm]x\b/.test(planName(plan));
+}
+
+function planName(plan: string | null): string {
+  return (plan ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/ plan$/, '');
 }
 
 /**
@@ -117,13 +135,16 @@ export function tbpInspectionFor(quarter: QuarterNumber, tenancy: TbpTenancyPlan
   // Before the tier: a tenant who opted out has no HVAC inspection, whatever
   // the plan would otherwise include.
   if (hvac === 'OPTED_OUT') return decision('OCCUPIED', 'HVAC_OPTED_OUT');
+  // And before the AC plan: BX and MX are occupied inspections even when the
+  // report says "On our AC Plan".
+  if (excludesHvac(tenancy.managementPlan)) return decision('OCCUPIED', 'MANAGEMENT_PLAN_WITHOUT_HVAC');
 
   if (includesHvac(tenancy.managementPlan))
     return hvac === 'ON_PLAN' || hvac === 'NOT_COMPLETED'
       ? decision('HVAC', 'PLAN_INCLUDES_HVAC')
       : decision('OCCUPIED', 'HVAC_PLAN_NOT_RECORDED', true);
 
-  // Every other plan -- Standard, Basic, BX, MX, Premium (w/o HVAC) -- gets
+  // Every other plan -- Standard, Basic, Premium (w/o HVAC) -- gets
   // the HVAC inspection when the tenancy is on our AC plan, and not otherwise.
   return hvac === 'ON_PLAN' ? decision('HVAC', 'HVAC_PLAN_ADDED') : decision('OCCUPIED', 'HVAC_PLAN_NOT_ADDED');
 }
@@ -339,15 +360,70 @@ export function tbpServicesLineFromTenancy(tenancy: TbpTenancyServices, inspecti
 
 const COMPLETION_HEADING = 'Instruction for completion';
 
+/** What the office knows about a tenancy that a technician needs at the visit. */
+export interface TbpVisitInfo {
+  managementPlan: string | null;
+  tenantName: string | null;
+  tenantPhones: readonly string[];
+  tenantEmail: string | null;
+  /** The building's key information, lockbox and gate codes (`visitAccessFields`). */
+  access: readonly { label: string; value: string }[];
+}
+
+/**
+ * A phone as "(832) 576-1062" where it is a US number, so every Details line
+ * reads alike and none carries a "+": a services line is found by its "+".
+ */
+function phoneText(phone: string): string {
+  const digits = phone.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+  return digits.length === 10
+    ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+    : phone.replace(/\+/g, '').trim();
+}
+
+/**
+ * The management plan, the tenant's contact and the building's access codes,
+ * as the office writes them on a visit (2026-11-04: "we need to add the key
+ * information, management plan, filter sizes and tenant information").
+ *
+ * One paragraph each, so the phone reads each as its own part: a "Tenant:" line
+ * is the tenant, a code line is an access note, the rest are notes. Lines with
+ * nothing to say are left out, and an empty string when none has anything.
+ */
+export function tbpVisitInfoText(info: TbpVisitInfo): string {
+  const plan = info.managementPlan?.trim();
+  const name = info.tenantName?.trim();
+  const phones = info.tenantPhones.map(phoneText).filter(Boolean);
+  const email = info.tenantEmail?.trim();
+  const tenant = [
+    name || phones.length ? ['Tenant:', name, ...phones].filter(Boolean).join(' ') : null,
+    email ? `Tenant email: ${email}` : null,
+  ].filter(Boolean);
+  return [
+    plan ? `Management Plan: ${plan}` : null,
+    tenant.join('\n'),
+    info.access.map(({ label, value }) => `${label}: ${value}`).join('\n'),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 /**
  * The whole Details of a planned benefit-package visit.
  *
- * The services line, then the office's completion steps pointed at the app --
- * the same block a visit booked from the console carries, which asks for the
- * filter change and pest control on an HVAC visit as much as an occupied one.
+ * The services line, what the office knows about the tenancy, then the office's
+ * completion steps pointed at the app -- the same block a visit booked from the
+ * console carries, which asks for the filter change and pest control on an HVAC
+ * visit as much as an occupied one.
  */
-export function tbpVisitDetails(servicesLine: string): string {
-  return [servicesLine.trim(), [COMPLETION_HEADING, ...OCCUPIED_COMPLETION_STEPS].join('\n')].join('\n\n');
+export function tbpVisitDetails(servicesLine: string, info?: TbpVisitInfo): string {
+  return [
+    servicesLine.trim(),
+    info ? tbpVisitInfoText(info) : '',
+    [COMPLETION_HEADING, ...OCCUPIED_COMPLETION_STEPS].join('\n'),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 /** How the Details introduce the link to the inspection: the technician follows it out of the Jobber visit. */

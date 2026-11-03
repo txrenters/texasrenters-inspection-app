@@ -18,6 +18,10 @@ const TENANCY = {
   hvacFilterLocation: null,
   managementPlan: 'Premium',
   hvacPlan: 'Not Completed',
+  contactName: null,
+  contactPhones: [],
+  contactEmail: null,
+  building: null,
 };
 
 describe('the Jobber visit a quarterly plan will create', () => {
@@ -55,7 +59,7 @@ describe('the Jobber visit a quarterly plan will create', () => {
     const office = 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection';
 
     expect(planVisitDetails(TENANCY, 'HVAC', office)).toMatch(
-      /^Filter Change: 20x25x1 \+ Pest Control \+ HVAC Inspection\n\nInstruction for completion\n/,
+      /^Filter Change: 20x25x1 \+ Pest Control \+ HVAC Inspection\n\nManagement Plan: Premium\n\nInstruction for completion\n/,
     );
     expect(planVisitDetails(TENANCY, 'OCCUPIED', office).split('\n')[0]).toBe(office);
   });

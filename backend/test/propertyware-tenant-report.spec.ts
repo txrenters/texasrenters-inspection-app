@@ -165,6 +165,49 @@ describe('parsing the tenancy report', () => {
     expect(tenant!.hvacFilterSizes).toEqual([]);
   });
 
+  /**
+   * "TX Inspection App - Tenants" (2026-11-04) adds the lease's primary contact.
+   * Its "Primary Contact" column arrives empty in the published JSON, so the
+   * name is the first and last name columns; 379 of 431 tenants gave the same
+   * number as mobile and home phone, in two spellings.
+   */
+  it('reads the tenant’s contact, each number once', () => {
+    const contact = [
+      'Primary Contact',
+      'Primary Contact First Name',
+      'Primary Contact Last Name',
+      'Primary Contact Mobile',
+      'Primary Contact Home Phone',
+      'Primary Contact Work Phone',
+      'Primary Contact Email',
+    ].map((label, index) => ({ index: String(20 + index), dataType: 'text', label }));
+    const [tenant] = parseTenantReport({
+      totalCount: 1,
+      columns: [...columns, ...contact],
+      records: [
+        row({
+          '20': '',
+          '21': 'Jane',
+          '22': 'Doe',
+          '23': '(555) 010-0142',
+          '24': '+15550100142',
+          '25': '(555) 010-0199',
+          '26': 'jane@example.com',
+        }),
+      ],
+    });
+    expect(tenant).toMatchObject({
+      contactName: 'Jane Doe',
+      contactPhones: ['(555) 010-0142', '(555) 010-0199'],
+      contactEmail: 'jane@example.com',
+    });
+  });
+
+  it('reads no contact from a report without the columns', () => {
+    const [tenant] = parseTenantReport(report([row()]));
+    expect(tenant).toMatchObject({ contactName: null, contactPhones: [], contactEmail: null });
+  });
+
   it('skips a row that identifies nothing', () => {
     expect(parseTenantReport(report([row({ '0': '', '16': '' })]))).toEqual([]);
   });

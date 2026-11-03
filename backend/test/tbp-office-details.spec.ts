@@ -33,6 +33,10 @@ const tenancy = (id: string, addressLine1: string, postalCode = '77433-0101') =>
   managementPlan: 'Standard',
   hvacPlan: 'On our AC Plan',
   propertywareBuildingId: `building-${id}`,
+  contactName: null,
+  contactPhones: [],
+  contactEmail: null,
+  building: null,
 });
 
 describe('matching the office’s sheet to the quarter’s tenancies', () => {
