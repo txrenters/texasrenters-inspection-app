@@ -25,10 +25,15 @@ export const rescheduleKeys = {
   list: (filter: RescheduleRequestFilter) => ['admin', 'reschedule-requests', filter] as const,
 };
 
-export function useRescheduleRequests(filter: RescheduleRequestFilter) {
+export function useRescheduleRequests(
+  filter: RescheduleRequestFilter,
+  /** Off for an account that may not answer requests (Home's Workflow card asks only when allowed). */
+  enabled = true,
+) {
   return useQuery({
     queryKey: rescheduleKeys.list(filter),
     queryFn: ({ signal }) => api<RescheduleRequestList>(`${RESCHEDULE_REQUESTS}?filter=${filter}`, { signal }),
+    enabled,
   });
 }
 
