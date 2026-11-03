@@ -1,6 +1,9 @@
-import { InfoIcon } from 'lucide-react';
+'use client';
+
+import { InfoIcon, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { useConsoleShell } from '@/components/console-shell-context';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
@@ -24,6 +27,7 @@ export function PageHeader({
   actions,
   info,
   infoLabel = 'How this works',
+  record,
   className,
 }: {
   title: string;
@@ -46,30 +50,63 @@ export function PageHeader({
    */
   badges?: ReactNode;
   actions?: ReactNode;
+  /**
+   * The page is one record -- an inspection, a property -- and, in the
+   * Jobber-style shell, is headed as Jobber heads one: the record's icon in its
+   * colour and its status on a line above, the actions at the right of that
+   * line, the name large beneath. Ignored in the classic console.
+   */
+  record?: { icon: LucideIcon; tone: string; label: string };
   className?: string;
 }) {
+  const jobber = useConsoleShell() === 'jobber';
+
+  if (record && jobber) {
+    const Icon = record.icon;
+    return (
+      <header className={cn('flex flex-col gap-3 pb-6', className)}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span
+              className={cn('bg-muted inline-flex size-8 shrink-0 items-center justify-center rounded-lg', record.tone)}
+              title={record.label}
+            >
+              <Icon aria-hidden className="size-5" />
+              <span className="sr-only">{record.label}</span>
+            </span>
+            {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}
+          </div>
+          {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        </div>
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="font-display text-heading text-[1.75rem] leading-tight font-extrabold sm:text-[2.25rem]">
+              {title}
+            </h1>
+            {info ? <InfoButton info={info} infoLabel={infoLabel} /> : null}
+          </div>
+          {typeof description === 'string' ? (
+            description && <p className="text-muted-foreground max-w-2xl text-sm text-pretty">{description}</p>
+          ) : description ? (
+            <div className="text-muted-foreground text-sm">{description}</div>
+          ) : null}
+        </div>
+      </header>
+    );
+  }
+
   return (
     <div
-      className={cn('flex flex-wrap items-start justify-between gap-3 pb-3 sm:gap-4', className)}
+      className={cn('flex flex-wrap items-start justify-between gap-3 pb-3 sm:gap-4 jobber:pb-6', className)}
     >
       <div className="min-w-0 space-y-0.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
-          {info ? (
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button aria-label={infoLabel} className="text-muted-foreground -ml-1.5" size="icon-sm" variant="ghost">
-                  <InfoIcon />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-96 max-w-[calc(100vw-2rem)] text-sm">
-                <p className="text-muted-foreground mb-2 font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
-                  {infoLabel}
-                </p>
-                <div className="space-y-2 leading-relaxed">{info}</div>
-              </PopoverContent>
-            </Popover>
-          ) : null}
+          {/* In the Jobber-style shell, Jobber's page title: large, heavy,
+              in the display face, and allowed to wrap as Jobber's do. */}
+          <h1 className="jobber:font-display jobber:text-heading jobber:text-[1.75rem] sm:jobber:text-[2rem] jobber:leading-tight jobber:font-extrabold jobber:tracking-normal jobber:whitespace-normal truncate text-lg font-semibold tracking-tight">
+            {title}
+          </h1>
+          {info ? <InfoButton info={info} infoLabel={infoLabel} /> : null}
           {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}
         </div>
         {typeof description === 'string' ? (
@@ -83,6 +120,25 @@ export function PageHeader({
           sideways (the plan's Publish button sat past the edge at 375px). */}
       {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
+  );
+}
+
+/** The (i) beside a title, opening the page's rules. */
+function InfoButton({ info, infoLabel }: { info: ReactNode; infoLabel: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button aria-label={infoLabel} className="text-muted-foreground -ml-1.5" size="icon-sm" variant="ghost">
+          <InfoIcon />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-96 max-w-[calc(100vw-2rem)] text-sm">
+        <p className="text-muted-foreground mb-2 font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
+          {infoLabel}
+        </p>
+        <div className="space-y-2 leading-relaxed">{info}</div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -101,7 +157,9 @@ export function SectionHeader({
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-3', className)}>
       <div className="min-w-0 space-y-0.5">
-        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+        <h2 className="jobber:text-heading jobber:text-xl jobber:font-bold text-base font-semibold tracking-tight">
+          {title}
+        </h2>
         {description ? <p className="text-muted-foreground text-sm">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}

@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ConsoleShellProvider } from '@/components/console-shell-context';
+
 import SchedulePage from './page';
 
 /**
@@ -11,9 +13,14 @@ import SchedulePage from './page';
  * reason a Jobber action is off said where it can be read.
  */
 
-const url = vi.hoisted(() => ({ state: { date: '2026-10-07', view: 'day' }, set: vi.fn() }));
+const url = vi.hoisted(() => ({
+  state: { date: '2026-10-07', view: 'day' } as Record<string, string>,
+  set: vi.fn(),
+}));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
+// The calendar's map is its own test's business.
+vi.mock('@/components/schedule/schedule-map', () => ({ ScheduleMap: () => null }));
 
 const held = vi.hoisted(() => ({ comparison: null as unknown }));
 vi.mock('@/lib/queries', () => ({
@@ -22,6 +29,8 @@ vi.mock('@/lib/queries', () => ({
     queryFn: async () => ({ ...(held.comparison as object), date }),
   }),
   useJobberDayAction: () => ({ mutate: vi.fn(), isPending: false }),
+  useUnassignedCount: () => ({ data: 0 }),
+  useInspections: () => ({ isError: false, isLoading: false, data: { items: [] } }),
 }));
 
 function row(over: Partial<JobberDayRow> = {}): JobberDayRow {
@@ -128,5 +137,40 @@ describe('the Schedule', () => {
     const name = await screen.findByText('Amy Wilson');
     expect(name.parentElement!.className).toContain('sticky');
     expect(screen.getByText('Technician').parentElement!.className).toContain('sticky');
+  });
+});
+
+describe('the two ways of reading it', () => {
+  const mountIn = (shell: 'classic' | 'jobber') =>
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ConsoleShellProvider shell={shell}>
+          <SchedulePage />
+        </ConsoleShellProvider>
+      </QueryClientProvider>,
+    );
+  const pressed = (name: string) =>
+    within(screen.getByRole('group', { name: 'Schedule' })).getByRole('button', { name }).getAttribute('aria-pressed');
+
+  it('opens on the comparison with Jobber in the classic console', async () => {
+    mountIn('classic');
+    expect(await screen.findByRole('link', { name: /1 difference/ })).toBeTruthy();
+    expect(pressed('Against Jobber')).toBe('true');
+  });
+
+  /** The office, 2026-11-04: the Jobber-style shell is for people who live in Jobber. */
+  it('opens on the calendar in the Jobber-style shell, with the comparison one click away', async () => {
+    mountIn('jobber');
+    expect(await screen.findByRole('button', { name: 'October 2026, choose a day' })).toBeTruthy();
+    expect(pressed('Calendar')).toBe('true');
+
+    fireEvent.click(within(screen.getByRole('group', { name: 'Schedule' })).getByRole('button', { name: 'Against Jobber' }));
+    expect(url.set).toHaveBeenCalledWith({ mode: 'compare' });
+  });
+
+  it('keeps a choice made in the address, whichever shell it is opened in', async () => {
+    url.state = { date: '2026-10-07', view: 'day', mode: 'compare' };
+    mountIn('jobber');
+    expect(await screen.findByRole('link', { name: /1 difference/ })).toBeTruthy();
   });
 });

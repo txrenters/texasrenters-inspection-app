@@ -40,7 +40,8 @@ export function Panel({
   return (
     <section className={cn('bg-card overflow-hidden rounded-xl border', className)}>
       <header className="flex min-h-11 items-center gap-3 border-b px-4 py-2">
-        <h2 className={SECTION_LABEL}>{title}</h2>
+        {/* Jobber's section heading in the Jobber-style shell: bold words, not a label. */}
+        <h2 className={cn(SECTION_LABEL, 'jobber:text-heading jobber:font-sans jobber:text-base jobber:font-bold jobber:tracking-normal jobber:normal-case')}>{title}</h2>
         {count !== undefined && count !== null ? (
           <span
             className={cn(

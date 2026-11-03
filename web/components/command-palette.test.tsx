@@ -190,3 +190,32 @@ describe('a list page’s search, in the header', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Search…/ })).toBeInTheDocument());
   });
 });
+
+describe('opening the search', () => {
+  /** Jobber's key for its search, so the office's habit works here too. */
+  it('opens on "/" from anywhere on the page', () => {
+    mount();
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByPlaceholderText(/Search inspections, properties/)).toBeVisible();
+  });
+
+  it('leaves "/" alone while somebody is typing in a field', () => {
+    mount(<input aria-label="A note" />);
+    fireEvent.keyDown(screen.getByLabelText('A note'), { key: '/' });
+    expect(screen.queryByPlaceholderText(/Search inspections, properties/)).toBeNull();
+  });
+
+  it('is drawn as Jobber’s search box in the Jobber-style shell', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <PageSearchProvider>
+          <CommandPalette variant="jobber" />
+        </PageSearchProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(screen.getByText('Press / to search')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search inspections, properties/)).toBeVisible();
+  });
+});

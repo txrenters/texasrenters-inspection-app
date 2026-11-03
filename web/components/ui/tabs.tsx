@@ -30,6 +30,9 @@ function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.L
         // counts pushed the whole page sideways at 375px. `justify-start`, or an
         // overflowing track would clip its first tab off the left edge.
         'bg-muted text-muted-foreground inline-flex h-9 w-fit max-w-full items-center justify-start overflow-x-auto rounded-lg p-[3px]',
+        // Jobber's tabs, in the Jobber-style shell: words on a hairline, the
+        // one you are on underlined in green.
+        'jobber:h-auto jobber:w-full jobber:gap-5 jobber:rounded-none jobber:border-b jobber:bg-transparent jobber:p-0',
         className,
       )}
       {...props}
@@ -43,6 +46,9 @@ function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsPrimitiv
       data-slot="tabs-trigger"
       className={cn(
         "data-[state=active]:bg-background dark:data-[state=active]:text-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:outline-ring dark:data-[state=active]:border-input dark:data-[state=active]:bg-input/30 text-foreground dark:text-muted-foreground inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:outline-1 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:shadow-sm [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        'jobber:h-auto jobber:flex-none jobber:rounded-none jobber:border-0 jobber:border-b-[3px] jobber:border-transparent jobber:px-0.5 jobber:pt-1 jobber:pb-2 jobber:text-muted-foreground jobber:hover:text-heading',
+        'jobber:data-[state=active]:border-primary jobber:data-[state=active]:bg-transparent jobber:data-[state=active]:text-heading jobber:data-[state=active]:shadow-none',
+        'dark:jobber:data-[state=active]:border-primary dark:jobber:data-[state=active]:bg-transparent dark:jobber:text-muted-foreground dark:jobber:data-[state=active]:text-heading',
         className,
       )}
       {...props}

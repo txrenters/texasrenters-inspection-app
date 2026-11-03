@@ -26,17 +26,23 @@ const DOT =
  * chips), and the colour stopped meaning anything. Now colour is only the dot,
  * and the WORD is coloured only where somebody has to act (warning, destructive).
  * Done and informational states read in the ordinary text colours.
+ *
+ * In the Jobber-style shell (`jobber:`) the toned ones become Jobber's status
+ * pill instead: the same dot and word, on a rounded tint of the tone, with the
+ * word in the tone, because that is how a status reads to somebody who spends
+ * the day in Jobber. The tint alphas are the ones the contrast suite measures
+ * the Jobber palette against (10% light, 8% dark).
  */
 const dotVariants = cva(`${BASE} border-transparent bg-transparent gap-1.5 px-0`, {
   variants: {
     variant: {
       default: 'text-foreground',
       secondary: 'text-muted-foreground',
-      destructive: `text-destructive ${DOT} not-has-[>svg]:before:bg-destructive`,
+      destructive: `text-destructive ${DOT} not-has-[>svg]:before:bg-destructive jobber:rounded-full jobber:px-2 jobber:py-0.5 jobber:bg-destructive/10 dark:jobber:bg-destructive/8`,
       outline: 'text-foreground border-border px-1.5',
-      success: `text-muted-foreground ${DOT} not-has-[>svg]:before:bg-success [&>svg]:text-success [a&]:hover:text-foreground`,
-      warning: `text-warning ${DOT} not-has-[>svg]:before:bg-warning`,
-      info: `text-foreground ${DOT} not-has-[>svg]:before:bg-info [&>svg]:text-info`,
+      success: `text-muted-foreground ${DOT} not-has-[>svg]:before:bg-success [&>svg]:text-success [a&]:hover:text-foreground jobber:rounded-full jobber:px-2 jobber:py-0.5 jobber:bg-success/10 dark:jobber:bg-success/8 jobber:text-success`,
+      warning: `text-warning ${DOT} not-has-[>svg]:before:bg-warning jobber:rounded-full jobber:px-2 jobber:py-0.5 jobber:bg-warning/10 dark:jobber:bg-warning/8`,
+      info: `text-foreground ${DOT} not-has-[>svg]:before:bg-info [&>svg]:text-info jobber:rounded-full jobber:px-2 jobber:py-0.5 jobber:bg-info/10 dark:jobber:bg-info/8 jobber:text-info`,
     },
   },
   defaultVariants: { variant: 'default' },

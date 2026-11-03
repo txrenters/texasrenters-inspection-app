@@ -348,7 +348,11 @@ export const useJobberBookingContext = (
     enabled: enabled && Boolean(query.propertyId),
     placeholderData: keepPreviousData,
   });
-export const useInspections = (query: Record<string, string | number | boolean | undefined>) =>
+export const useInspections = (
+  query: Record<string, string | number | boolean | undefined>,
+  /** Off for an account that may not read inspections, so nothing is asked that will be refused. */
+  enabled = true,
+) =>
   useQuery({
     queryKey: keys.inspections(query),
     queryFn: ({ signal }) =>
@@ -359,6 +363,7 @@ export const useInspections = (query: Record<string, string | number | boolean |
         { signal },
       ),
     placeholderData: keepPreviousData,
+    enabled,
   });
 /**
  * How many upcoming inspections have nobody on them: the dashboard's

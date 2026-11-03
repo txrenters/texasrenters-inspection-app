@@ -1,8 +1,11 @@
 'use client';
 
+import type { AdminDashboard, JobberDayComparison } from '@texasrenters/shared';
 import { ArrowRightIcon } from 'lucide-react';
 import Link from 'next/link';
 
+import { useConsoleShell } from '@/components/console-shell-context';
+import { JobberHome } from '@/components/home/jobber-home';
 import { JobberDayPanel } from '@/components/jobber-day-panel';
 import { PageHeader } from '@/components/page-header';
 import { Panel, PanelRow } from '@/components/panel';
@@ -19,22 +22,13 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { businessToday } from '@/lib/clock';
 import { formatCount, formatDateTime, formatRelative, humanize } from '@/lib/format';
+import { texasDayLabel } from '@/lib/home-workflow';
 import { usePermissions } from '@/lib/auth';
 import { useDashboard, useJobberDay } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 /** Providers in these states need somebody; READY and CONFIGURED do not. */
 const PROVIDER_NEEDS_A_PERSON = new Set(['NOT_CONFIGURED', 'DEGRADED', 'UNAVAILABLE', 'ERROR']);
-
-/** "Friday, October 9", for the Texas business day (the office reads from Manila). */
-function texasDayLabel() {
-  return new Date(`${businessToday()}T00:00:00Z`).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
-}
 
 function Header() {
   return (
@@ -51,7 +45,7 @@ function Header() {
       }
       description={
         <span className="font-mono text-[10.5px] font-medium tracking-[0.12em] uppercase">
-          {texasDayLabel()} · Texas
+          {texasDayLabel(businessToday())} · Texas
         </span>
       }
       title="Today's operations"
@@ -59,11 +53,27 @@ function Header() {
   );
 }
 
+/**
+ * Two layouts of one dashboard. The Jobber-style shell (lib/console-shell.ts)
+ * opens on Jobber's Home -- a greeting, the Workflow cards and today's visits
+ * -- with the panels below; the classic console keeps its figures and panels.
+ * The panels are the same component in both, so neither can lose one.
+ */
 export default function DashboardPage() {
+  const shell = useConsoleShell();
   const dashboard = useDashboard();
   const { has } = usePermissions();
   const canReadInspections = has('inspections:read');
   const jobberDay = useJobberDay(businessToday(), canReadInspections);
+
+  if (shell === 'jobber')
+    return (
+      <JobberHome canReadInspections={canReadInspections} dashboard={dashboard} jobberDay={jobberDay}>
+        {dashboard.data ? (
+          <DashboardPanels canReadInspections={canReadInspections} data={dashboard.data} jobberDay={jobberDay.data} jobberDayLoading={jobberDay.isLoading} />
+        ) : null}
+      </JobberHome>
+    );
 
   if (dashboard.isError)
     return (
@@ -83,28 +93,6 @@ export default function DashboardPage() {
     );
 
   const data = dashboard.data;
-
-  // Grouped by code, entity and message: the same failure repeated forty times
-  // is one problem, and listing it forty times buries the other three.
-  const groupedErrors = Array.from(
-    data.recentErrors
-      .reduce((groups, error) => {
-        const key = `${error.errorCode}:${error.entityType}:${error.sanitizedMessage}`;
-        const current = groups.get(key);
-        groups.set(key, current ? { ...current, count: current.count + 1 } : { ...error, count: 1 });
-        return groups;
-      }, new Map<string, (typeof data.recentErrors)[number] & { count: number }>())
-      .values(),
-  );
-  const providersNeedingAPerson = data.providerReadiness.filter((provider) =>
-    PROVIDER_NEEDS_A_PERSON.has(provider.status),
-  );
-  const jobberDifferences = jobberDay.data?.rows.filter((row) => row.state !== 'MATCHES').length ?? 0;
-  const needsAPerson =
-    (data.metrics.unassigned ? 1 : 0) +
-    (jobberDifferences ? 1 : 0) +
-    groupedErrors.length +
-    providersNeedingAPerson.length;
 
   return (
     <>
@@ -137,13 +125,58 @@ export default function DashboardPage() {
         <Stat detail="All time" label="Completed" value={formatCount(data.metrics.completed)} />
       </StatGroup>
 
+      <DashboardPanels
+        canReadInspections={canReadInspections}
+        data={data}
+        jobberDay={jobberDay.data}
+        jobberDayLoading={jobberDay.isLoading}
+      />
+    </>
+  );
+}
+
+/**
+ * Today against Jobber, what needs a person, the systems, and the portfolio:
+ * everything under the dashboard's figures, in both layouts.
+ */
+function DashboardPanels({
+  canReadInspections,
+  data,
+  jobberDay,
+  jobberDayLoading,
+}: {
+  canReadInspections: boolean;
+  data: AdminDashboard;
+  jobberDay: JobberDayComparison | undefined;
+  jobberDayLoading: boolean;
+}) {
+  // Grouped by code, entity and message: the same failure repeated forty times
+  // is one problem, and listing it forty times buries the other three.
+  const groupedErrors = Array.from(
+    data.recentErrors
+      .reduce((groups, error) => {
+        const key = `${error.errorCode}:${error.entityType}:${error.sanitizedMessage}`;
+        const current = groups.get(key);
+        groups.set(key, current ? { ...current, count: current.count + 1 } : { ...error, count: 1 });
+        return groups;
+      }, new Map<string, (typeof data.recentErrors)[number] & { count: number }>())
+      .values(),
+  );
+  const providersNeedingAPerson = data.providerReadiness.filter((provider) =>
+    PROVIDER_NEEDS_A_PERSON.has(provider.status),
+  );
+  const jobberDifferences = jobberDay?.rows.filter((row) => row.state !== 'MATCHES').length ?? 0;
+  const needsAPerson =
+    (data.metrics.unassigned ? 1 : 0) +
+    (jobberDifferences ? 1 : 0) +
+    groupedErrors.length +
+    providersNeedingAPerson.length;
+
+  return (
+    <>
       <div className="mt-5 grid items-start gap-5 lg:grid-cols-3">
         {canReadInspections ? (
-          <JobberDayPanel
-            className="lg:col-span-2"
-            day={jobberDay.data}
-            loading={jobberDay.isLoading}
-          />
+          <JobberDayPanel className="lg:col-span-2" day={jobberDay} loading={jobberDayLoading} />
         ) : null}
 
         <div className={cn('grid gap-5', !canReadInspections && 'lg:col-span-3 lg:grid-cols-3')}>
@@ -175,7 +208,7 @@ export default function DashboardPage() {
                 <PanelRow
                   detail="Today, as of the last Jobber sync"
                   title={
-                    <Link className="hover:underline" href={`/schedule?date=${jobberDay.data!.date}`}>
+                    <Link className="hover:underline" href={`/schedule?date=${jobberDay!.date}`}>
                       {jobberDifferences === 1
                         ? '1 visit differs from Jobber'
                         : `${jobberDifferences} visits differ from Jobber`}

@@ -50,6 +50,8 @@ function TableHeader({ className, ...props }: ComponentProps<'thead'>) {
       data-slot="table-header"
       className={cn(
         'bg-muted [&_tr]:border-b',
+        // Jobber's lists have a white header on a hairline, not a grey band.
+        'jobber:bg-card',
         // Sticky ONLY at lg, matching the breakpoint where the container above
         // stops being a scroll box. Applying it unconditionally is what broke
         // every table in the console: `top` on a sticky element means "never
@@ -107,6 +109,8 @@ function TableHead({ className, ...props }: ComponentProps<'th'>) {
       data-slot="table-head"
       className={cn(
         'text-muted-foreground h-9 px-3 text-left align-middle font-mono text-[10.5px] font-medium tracking-[0.08em] uppercase whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+        // Jobber's column heads are words in the heading ink, not mono labels.
+        'jobber:text-heading jobber:h-11 jobber:font-sans jobber:text-[13px] jobber:font-semibold jobber:tracking-normal jobber:normal-case',
         className,
       )}
       {...props}
@@ -123,6 +127,8 @@ function TableCell({ className, ...props }: ComponentProps<'td'>) {
         // which costs eight pixels of row height for nothing: the row is already
         // separated by a rule, and four extra rows on screen is a scroll saved.
         'px-3 py-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+        // Jobber's rows are roomier.
+        'jobber:py-3',
         className,
       )}
       {...props}

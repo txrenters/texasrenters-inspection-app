@@ -107,6 +107,7 @@ export default function UsersPage() {
       {creating ? <UserCreateDialog onClose={() => setCreating(false)} /> : null}
 
       <ListToolbar
+        heading="All users"
         activeFilters={
           state.active
             ? [

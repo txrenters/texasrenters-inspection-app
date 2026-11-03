@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   ChevronsUpDownIcon,
   LogOutIcon,
+  PanelsTopLeftIcon,
   SettingsIcon,
   UserRoundIcon,
 } from 'lucide-react';
@@ -11,6 +12,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useId, useState } from 'react';
 
+import { useSwitchConsoleShell } from '@/components/console-shell-context';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -69,14 +71,20 @@ const NAV_ICON = 'hidden group-data-[collapsible=icon]:block';
  */
 export function NavigationSection({
   activeChild,
+  className,
   count,
+  iconClassName = NAV_ICON,
   isActive,
   item,
   onNavigate,
 }: {
   activeChild: AdminNavigationChild | undefined;
+  /** The header row's look, for the Jobber-style sidebar's taller rows. */
+  className?: string;
   /** Work waiting in this section, shown in amber beside its name. */
   count?: number;
+  /** Classic shows the icon only on the rail; the Jobber-style sidebar always. */
+  iconClassName?: string;
   isActive: boolean;
   item: AdminNavigationItem;
   onNavigate: () => void;
@@ -125,11 +133,12 @@ export function NavigationSection({
         // The accent marks ONE place. When the active child is on screen it
         // carries the mark, and the section header stays plain; collapsed (or
         // on the icon rail) the header is all there is, so it carries it.
+        className={className}
         isActive={isActive && !(expanded && activeChild)}
         onClick={toggle}
         tooltip={item.title}
       >
-        <Icon aria-hidden className={NAV_ICON} />
+        <Icon aria-hidden className={iconClassName} />
         <span>{item.title}</span>
         {count ? (
           <span className="text-warning ml-auto font-mono text-[11px] tabular-nums group-data-[collapsible=icon]:hidden">
@@ -266,6 +275,7 @@ export function AppSidebar() {
   const auth = useAuth();
   const { has } = usePermissions();
   const { isMobile, setOpenMobile } = useSidebar();
+  const switchShell = useSwitchConsoleShell();
   const groups = getVisibleAdminNavigation(has);
   const unassigned = useUnassignedCount(has('inspections:read'));
   const counts: Record<string, number | undefined> = { '/inspections': unassigned.data };
@@ -374,6 +384,13 @@ export function AppSidebar() {
                     </Link>
                   </DropdownMenuItem>
                 ) : null}
+                {/* The same console in Jobber's frame (components/jobber-shell),
+                    for anybody who would rather it looked like Jobber. Every
+                    page and permission is the same; only the frame changes. */}
+                <DropdownMenuItem onSelect={() => switchShell('jobber')}>
+                  <PanelsTopLeftIcon aria-hidden />
+                  Jobber-style layout
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   aria-label="Sign out of administrator workspace"

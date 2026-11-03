@@ -301,9 +301,11 @@ export function VisitCard({
         ) : null}
 
         {/* Where the record came from, mostly: "Imported from an Inspect &
-            Cloud PDF report", "Booked from Propertyware". Never published. */}
+            Cloud PDF report", "Booked from Propertyware". Never published.
+            Not in the Jobber-style shell, where the notes have the side
+            panel's Notes card, as Jobber keeps them. */}
         {inspection.internalNotes ? (
-          <p className="text-muted-foreground border-t pt-3 text-xs whitespace-pre-wrap">
+          <p className="text-muted-foreground jobber:hidden border-t pt-3 text-xs whitespace-pre-wrap">
             {inspection.internalNotes}
           </p>
         ) : null}

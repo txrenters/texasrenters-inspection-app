@@ -1,13 +1,14 @@
 'use client';
 
 import { isFinishedStatus } from '@texasrenters/shared';
-import { MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
+import { ClipboardCheckIcon, HistoryIcon, MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useRef, useState, type ReactNode } from 'react';
 
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
 import { AssignmentDialog } from '@/components/assignment-dialog';
+import { useConsoleShell } from '@/components/console-shell-context';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InspectionDeleteDialog } from '@/components/inspection-delete-dialog';
 import {
@@ -21,6 +22,8 @@ import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Panel } from '@/components/panel';
+import { InspectionRecordAside, InspectionRecordTop } from '@/components/record/inspection-record';
+import { RecordLayout } from '@/components/record/record-kit';
 import { ReportShareDialog } from '@/components/report-share-dialog';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -38,6 +41,7 @@ import { VisitCard } from '@/components/visit-card';
 import { usePermissions } from '@/lib/auth';
 import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
+import { typeTitle, typeTone } from '@/lib/inspection-type-tone';
 import {
   useAreaEvidenceSummary,
   useAssignments,
@@ -101,6 +105,15 @@ function InspectionDetail() {
   const [markingComplete, setMarkingComplete] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** Jobber's record layout, in the Jobber-style shell only. */
+  const jobber = useConsoleShell() === 'jobber';
+  /** The assignment history and activity, opened from the header or the side panel. */
+  const moreInfo = useRef<HTMLDetailsElement>(null);
+  const showActivity = () => {
+    if (!moreInfo.current) return;
+    moreInfo.current.open = true;
+    moreInfo.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
   // Defects only: room condition summaries are context, never a decision.
   const pendingFindings = useInspectionFindings(
     id,
@@ -189,13 +202,21 @@ function InspectionDetail() {
       <PageHeader
         actions={
           <>
+            {jobber ? (
+              <Button aria-label="View activity" onClick={showActivity} size="icon" title="View activity" variant="ghost">
+                <HistoryIcon />
+              </Button>
+            ) : null}
+            {/* In the Jobber-style shell the one thing to do next is the green
+                button, as Jobber's "Show Late Visit": assigning while nobody is
+                on a visit to come, sharing once the visit is over. */}
             {!visitOver && permissions.has('inspections:assign') ? (
-              <Button onClick={() => setAssigning(true)} variant="outline">
+              <Button onClick={() => setAssigning(true)} variant={jobber && !current ? 'default' : 'outline'}>
                 {current ? 'Reassign' : 'Assign technician'}
               </Button>
             ) : null}
             {permissions.has('reports:share') ? (
-              <Button onClick={() => setSharing(true)} variant="outline">
+              <Button onClick={() => setSharing(true)} variant={jobber && visitOver ? 'default' : 'outline'}>
                 Share report
               </Button>
             ) : null}
@@ -259,6 +280,11 @@ function InspectionDetail() {
           </>
         }
         description={`${item.propertywareUnit?.name ?? 'Entire property'} · ${formatScheduledDate(item.scheduledAt)}`}
+        record={{
+          icon: ClipboardCheckIcon,
+          tone: typeTone(item.inspectionType).text,
+          label: `${typeTitle(item.inspectionType)} inspection`,
+        }}
         title={item.propertywareBuilding?.name ?? 'Inspection'}
       />
 
@@ -276,10 +302,42 @@ function InspectionDetail() {
         completion nobody performs, said nothing true. Who walked it and for how
         long are the visit's facts and moved into its card below.
       */}
+      <RecordContent
+        aside={
+          <InspectionRecordAside
+            activity={audit.data?.items}
+            item={item}
+            notesAction={
+              canEditOrAssign && permissions.has('inspections:manage') ? (
+                <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
+                  Edit
+                </Button>
+              ) : null
+            }
+            onSeeActivity={showActivity}
+            technicianName={current?.technician?.displayName ?? null}
+          />
+        }
+        jobber={jobber}
+      >
       <section aria-label="Review" className="mt-3 space-y-3">
-        {/* One instrument, as the dashboard's figures (console-development):
+        {jobber ? (
+          <InspectionRecordTop
+            figures={{
+              areasReviewed: areaSummary.data
+                ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
+                : null,
+              findingsToReview: showsFindings ? (pendingFindings.data ? pending : undefined) : null,
+              comparedWith: baseline,
+              comparesToMoveIn,
+            }}
+            item={item}
+            technicianName={current?.technician?.displayName ?? null}
+          />
+        ) : (
+        /* One instrument, as the dashboard's figures (console-development):
             three separate bordered tiles left an empty third of the row on
-            every inspection not compared with a move-in. */}
+            every inspection not compared with a move-in. */
         <StatGroup columns={figureColumns}>
           <Stat
             label="Areas reviewed"
@@ -316,6 +374,7 @@ function InspectionDetail() {
             />
           ) : null}
         </StatGroup>
+        )}
 
         {/*
           A move-out with nothing to compare against.
@@ -389,7 +448,7 @@ function InspectionDetail() {
             workspace for attention; `open` on a details element keeps them one
             click away and keyboard-reachable without any custom disclosure
             logic. */}
-        <details className="group">
+        <details className="group" ref={moreInfo}>
           <summary className="bg-card hover:bg-accent flex cursor-pointer items-center gap-2 rounded-xl border p-3 text-sm font-medium select-none">
             Additional information
             <span className="text-muted-foreground font-normal">
@@ -498,6 +557,7 @@ function InspectionDetail() {
           </div>
         </details>
       </div>
+      </RecordContent>
 
       {assigning ? (
         <AssignmentDialog current={current} inspectionId={id} onClose={() => setAssigning(false)} />
@@ -532,6 +592,20 @@ function InspectionDetail() {
         />
       ) : null}
     </>
+  );
+}
+
+/**
+ * The page body, with Jobber's side panel beside it in the Jobber-style shell
+ * -- from 2xl only, as the area workspace needs the width more than the panel
+ * does -- and exactly as it was in the classic console.
+ */
+function RecordContent({ aside, children, jobber }: { aside: ReactNode; children: ReactNode; jobber: boolean }) {
+  if (!jobber) return <>{children}</>;
+  return (
+    <RecordLayout aside={aside} asideLabel="About this inspection" from="2xl">
+      {children}
+    </RecordLayout>
   );
 }
 

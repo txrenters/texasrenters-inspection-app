@@ -12,6 +12,7 @@ import {
   type DeletableDemoProperty,
 } from '@/components/demo-property-delete-dialog';
 import { ListToolbar } from '@/components/list-toolbar';
+import { useConsoleShell } from '@/components/console-shell-context';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { SearchableSelect } from '@/components/searchable-select';
@@ -22,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatAddress, formatDateTime, formatRelative } from '@/lib/format';
+import { PropertiesSummary } from '@/components/summaries/directory-summaries';
 import { useAdminMutations, usePortfolios, useProperties } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
@@ -152,6 +154,7 @@ export default function PropertiesPage() {
   });
   const [portfolioSearch, setPortfolioSearch] = useState('');
   const canManage = usePermissions().has('properties:manage');
+  const jobber = useConsoleShell() === 'jobber';
   const createDemoProperty = useAdminMutations().createDemoProperty;
   const [pendingDelete, setPendingDelete] = useState<DeletableDemoProperty | null>(null);
 
@@ -257,6 +260,8 @@ export default function PropertiesPage() {
         title="Properties"
       />
 
+      {jobber ? <PropertiesSummary /> : null}
+
       {/* Occupancy, not management status. Every tab is already limited to
           properties under management; this splits them by whether a tenant is
           in residence, which is the question a move-out turns on. */}
@@ -280,6 +285,13 @@ export default function PropertiesPage() {
       </Tabs>
 
       <ListToolbar
+        heading={
+          state.occupancy === 'OCCUPIED'
+            ? 'Occupied properties'
+            : state.occupancy === 'VACANT'
+              ? 'Vacant properties'
+              : 'All properties'
+        }
         activeFilters={
           selectedPortfolio
             ? [

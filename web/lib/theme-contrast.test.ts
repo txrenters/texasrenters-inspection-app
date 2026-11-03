@@ -28,17 +28,43 @@ type LinearRgb = [number, number, number];
 const CSS = readFileSync(join(import.meta.dirname, '..', 'app', 'globals.css'), 'utf8');
 
 /**
- * Reads one custom property out of a `:root` / `.dark` block.
+ * The palettes, by the selector that declares them: the classic console's
+ * light and dark, and the Jobber-style shell's (components/jobber-shell).
+ */
+const SELECTORS = {
+  ':root': ':root',
+  '.dark': '.dark',
+  jobber: "[data-shell='jobber']",
+  'jobber-dark': ".dark [data-shell='jobber']",
+} as const;
+type Scope = keyof typeof SELECTORS;
+
+/**
+ * Where a scope's undeclared tokens come from, as the cascade resolves them.
+ * The Jobber shell declares only what it changes -- the brand green, for one,
+ * is the console's own in both shells. In dark mode its frame matches both the
+ * light Jobber block and the dark one, so a token the dark block leaves out
+ * falls to the light Jobber value before the classic dark one.
+ */
+const INHERITS: Partial<Record<Scope, Scope>> = { jobber: ':root', 'jobber-dark': 'jobber' };
+
+/**
+ * Reads one custom property out of a palette block.
  *
  * Scoped to the block rather than matched globally: `--primary` is declared in
- * both, and a global match would silently return whichever came first.
+ * every palette, and a global match would silently return whichever came first.
+ * The selector must open its line, so `[data-shell='jobber']` is not found
+ * inside `.dark [data-shell='jobber']`.
  */
-function readToken(scope: ':root' | '.dark', name: string): string {
-  const block = new RegExp(`${scope.replace('.', '\\.')}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(CSS);
-  if (!block) throw new Error(`No ${scope} block in globals.css`);
+function readToken(scope: Scope, name: string): string {
+  const selector = SELECTORS[scope].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const block = new RegExp(`(?:^|\\n)${selector}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(CSS);
+  if (!block) throw new Error(`No ${SELECTORS[scope]} block in globals.css`);
   const declaration = new RegExp(`--${name}:\\s*([^;]+);`).exec(block[1]);
-  if (!declaration) throw new Error(`No --${name} in ${scope}`);
-  return declaration[1].trim();
+  if (declaration) return declaration[1].trim();
+  const parent = INHERITS[scope];
+  if (parent) return readToken(parent, name);
+  throw new Error(`No --${name} in ${SELECTORS[scope]}`);
 }
 
 function parseOklch(value: string): Oklch {
@@ -78,8 +104,7 @@ function composite(fg: LinearRgb, bg: LinearRgb, alpha: number): LinearRgb {
   return fg.map((channel, index) => channel * alpha + bg[index] * (1 - alpha)) as LinearRgb;
 }
 
-const colour = (scope: ':root' | '.dark', name: string) =>
-  toLinearRgb(parseOklch(readToken(scope, name)));
+const colour = (scope: Scope, name: string) => toLinearRgb(parseOklch(readToken(scope, name)));
 
 /** WCAG AA for body text. Everything asserted here is 12-14px, so this is the bar. */
 const AA_BODY = 4.5;
@@ -183,5 +208,91 @@ describe.each([
    */
   it('card is a distinct surface from the canvas', () => {
     expect(contrast(colour(scope, 'card'), colour(scope, 'background'))).toBeGreaterThan(1.02);
+  });
+});
+
+/**
+ * The Jobber-style shell's palette (Atlantis's values; see the block's header
+ * in globals.css). The same bars as the classic console, with two changes that
+ * follow from how Jobber draws a page:
+ *
+ * - There is no "card vs canvas" pair. The page and its cards are the same
+ *   white, told apart by a border. What has to differ is the page from the
+ *   taupe frame around it (the sidebar and the top bar).
+ * - The sidebar's page-you-are-on is the white page colour in bold, not a tint,
+ *   so the pairs asserted are the nav text on the frame, on the hovered row and
+ *   on that white.
+ */
+describe.each([
+  { mode: 'light', scope: 'jobber' as const, alpha: 0.1 },
+  { mode: 'dark', scope: 'jobber-dark' as const, alpha: 0.08 },
+])('Jobber-style shell, $mode palette', ({ scope, alpha }) => {
+  const surfaces = ['background', 'card', 'muted', 'sidebar'] as const;
+
+  it.each(surfaces)('foreground is readable on %s', (surface) => {
+    expect(contrast(colour(scope, 'foreground'), colour(scope, surface))).toBeGreaterThanOrEqual(
+      AA_BODY,
+    );
+  });
+
+  it.each(surfaces)('muted-foreground is comfortable on %s', (surface) => {
+    expect(contrast(colour(scope, 'muted-foreground'), colour(scope, surface))).toBeGreaterThan(5);
+  });
+
+  it('headings are readable on the page', () => {
+    expect(contrast(colour(scope, 'heading'), colour(scope, 'card'))).toBeGreaterThanOrEqual(AA_BODY);
+  });
+
+  it.each(['success', 'warning', 'destructive', 'info'] as const)(
+    '%s badge text is readable on its own tint',
+    (tone) => {
+      const text = colour(scope, tone);
+      const tint = composite(text, colour(scope, 'card'), alpha);
+      expect(contrast(text, tint)).toBeGreaterThanOrEqual(AA_BODY);
+    },
+  );
+
+  it.each(['success', 'warning', 'destructive', 'info'] as const)(
+    '%s is readable as plain text on the page',
+    (tone) => {
+      expect(contrast(colour(scope, tone), colour(scope, 'card'))).toBeGreaterThanOrEqual(AA_BODY);
+    },
+  );
+
+  it.each(['card', 'background', 'sidebar'] as const)(
+    'highlight is readable as text on %s',
+    (surface) => {
+      expect(contrast(colour(scope, 'highlight'), colour(scope, surface))).toBeGreaterThanOrEqual(
+        AA_BODY,
+      );
+    },
+  );
+
+  it.each([
+    ['primary-foreground', 'primary'],
+    ['destructive-foreground', 'destructive'],
+    ['brand-foreground', 'brand'],
+  ] as const)('%s is readable on the %s fill', (text, fill) => {
+    expect(contrast(colour(scope, text), colour(scope, fill))).toBeGreaterThanOrEqual(AA_BODY);
+  });
+
+  it.each(['sidebar', 'sidebar-hover', 'sidebar-accent'] as const)(
+    'the navigation is readable on %s',
+    (surface) => {
+      expect(
+        contrast(colour(scope, 'sidebar-foreground'), colour(scope, surface)),
+      ).toBeGreaterThanOrEqual(AA_BODY);
+    },
+  );
+
+  it.each(['success', 'destructive', 'primary'] as const)(
+    'a glyph in the page background colour stays visible on the %s fill',
+    (tone) => {
+      expect(contrast(colour(scope, 'background'), colour(scope, tone))).toBeGreaterThanOrEqual(3);
+    },
+  );
+
+  it('the page is a distinct surface from the frame around it', () => {
+    expect(contrast(colour(scope, 'card'), colour(scope, 'sidebar'))).toBeGreaterThan(1.05);
   });
 });

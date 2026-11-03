@@ -4,12 +4,14 @@ import type { JobberDayComparison, JobberDayRow } from '@texasrenters/shared';
 import { useQueries } from '@tanstack/react-query';
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
+import { useConsoleShell } from '@/components/console-shell-context';
 import { DayFilter } from '@/components/day-filter';
 import { JobberDayActions } from '@/components/jobber-day-actions';
 import { PageHeader } from '@/components/page-header';
 import { Panel, PanelRow } from '@/components/panel';
+import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
 import { ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented';
@@ -18,16 +20,75 @@ import { businessTimeOfDay, businessToday, shiftDay } from '@/lib/clock';
 import { formatRelative, formatScheduledDate } from '@/lib/format';
 import { JOBBER_DAY_LABEL, TYPE_MARK, isOneSided, jobberDayTone } from '@/lib/jobber-day';
 import { jobberDayQuery } from '@/lib/queries';
+import { parseCalendarView } from '@/lib/schedule-calendar';
 import { useUrlState } from '@/lib/url-state';
 import { cn } from '@/lib/utils';
 
 /**
+ * The Schedule, two ways.
+ *
+ * - **Calendar** (2026-11-04): laid out as Jobber's, for an office that lives
+ *   in Jobber -- Month, Week, and a Day with a column per technician
+ *   (components/schedule). The default in the Jobber-style shell.
+ * - **Against Jobber** (console-development, 2026-10-09): the week by
+ *   technician, every visit marked against Jobber, with the differences and
+ *   their actions. The default in the classic console.
+ *
+ * Both read the same day comparison, built from what the Jobber sync last
+ * stored. The only things here that change Jobber are the actions beside a
+ * difference, each confirmed first and sent through the integration's own
+ * outbox; the calendar changes nothing.
+ */
+
+const MODES = [
+  { value: 'calendar', label: 'Calendar' },
+  { value: 'compare', label: 'Against Jobber' },
+] as const;
+type Mode = (typeof MODES)[number]['value'];
+
+const isDay = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+export default function SchedulePage() {
+  const today = businessToday();
+  const shell = useConsoleShell();
+  const [state, setState] = useUrlState({ date: '', view: 'week', mode: '', map: '' });
+  const preferred: Mode = shell === 'jobber' ? 'calendar' : 'compare';
+  const mode: Mode = state.mode === 'calendar' || state.mode === 'compare' ? state.mode : preferred;
+
+  const modeSwitch = (
+    <SegmentedControl
+      aria-label="Schedule"
+      onChange={(next) => setState({ mode: next === preferred ? '' : next })}
+      options={MODES}
+      value={mode}
+    />
+  );
+
+  if (mode === 'calendar')
+    return (
+      <ScheduleCalendar
+        modeSwitch={modeSwitch}
+        onChange={(next) =>
+          setState({
+            ...(next.anchor !== undefined ? { date: next.anchor === today ? '' : next.anchor } : {}),
+            ...(next.view !== undefined ? { view: next.view } : {}),
+            ...(next.map !== undefined ? { map: next.map ? '1' : '' } : {}),
+          })
+        }
+        state={{
+          anchor: isDay(state.date) ? state.date : today,
+          view: parseCalendarView(state.view),
+          map: state.map === '1',
+        }}
+      />
+    );
+
+  return <JobberComparison modeSwitch={modeSwitch} setState={setState} state={state} />;
+}
+
+/**
  * The week by technician, every visit marked against Jobber
  * (console-development, 2026-10-09).
- *
- * Built from the day comparison, which reads what the Jobber sync last stored.
- * The only things here that change Jobber are the actions beside a difference,
- * each confirmed first and sent through the integration's own outbox.
  */
 
 const CHIPS_SHOWN = 4;
@@ -64,10 +125,18 @@ const SAYS_MORE = new Set(['TIME_DIFFERS', 'DAY_DIFFERS', 'TECHNICIAN_DIFFERS', 
 const detailOf = (row: JobberDayRow) =>
   (SAYS_MORE.has(row.state) ? row.differences : row.differences.slice(1)).join(' · ');
 
-export default function SchedulePage() {
+function JobberComparison({
+  modeSwitch,
+  setState,
+  state,
+}: {
+  modeSwitch: ReactNode;
+  setState: (patch: { date?: string; view?: string }) => void;
+  state: { date: string; view: string };
+}) {
   const today = businessToday();
-  const [state, setState] = useUrlState({ date: '', view: 'week' });
-  const anchor = /^\d{4}-\d{2}-\d{2}$/.test(state.date) ? state.date : today;
+  const anchor = isDay(state.date) ? state.date : today;
+  // A month, chosen on the calendar, reads here as its week.
   const week = state.view !== 'day';
   const monday = mondayOf(anchor);
   const allDays = useMemo(
@@ -138,6 +207,7 @@ export default function SchedulePage() {
             ) : null}
           </span>
         }
+        actions={modeSwitch}
         title="Schedule"
       />
 

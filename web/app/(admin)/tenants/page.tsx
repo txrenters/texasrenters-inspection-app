@@ -5,6 +5,8 @@ import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { ListToolbar } from '@/components/list-toolbar';
+import { useConsoleShell } from '@/components/console-shell-context';
+import { TenantsSummary } from '@/components/summaries/directory-summaries';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -107,6 +109,7 @@ export default function TenantsPage() {
   const [state, setState, reset] = useUrlState({ page: 1, q: '', enrollment: '' });
   const debouncedSearch = useDebouncedValue(state.q);
   const isSearchPending = state.q.trim() !== debouncedSearch.trim();
+  const jobber = useConsoleShell() === 'jobber';
 
   const base = { search: debouncedSearch, active: true };
   const tenants = useTenants({
@@ -152,6 +155,8 @@ export default function TenantsPage() {
         title="Tenants"
       />
 
+      {jobber ? <TenantsSummary /> : null}
+
       <Tabs
         onValueChange={(enrollment) => setState({ enrollment, page: 1 })}
         value={state.enrollment}
@@ -172,6 +177,7 @@ export default function TenantsPage() {
       </Tabs>
 
       <ListToolbar
+        heading="All tenants"
         onClear={reset}
         onSearch={(q) => setState({ q, page: 1 })}
         pending={isSearchPending}

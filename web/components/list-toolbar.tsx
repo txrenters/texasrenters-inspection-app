@@ -3,6 +3,7 @@
 import { SearchIcon, XIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { useConsoleShell } from '@/components/console-shell-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,6 +39,11 @@ export const ALL = '__all__';
  * narrowing the list is legible without opening each dropdown to check. That is
  * also the fix for the old app's real failure mode: an empty table with no
  * indication that a status filter from ten minutes ago was still applied.
+ *
+ * In the Jobber-style shell (lib/console-shell.ts) it is laid out as Jobber's
+ * lists are: "All jobs (19,864 results)" as a heading, the filters as pills,
+ * and the list's own search box at the right of them -- inside the list, not
+ * in the top bar, whose search there is always the search for everything.
  */
 export function ListToolbar({
   search,
@@ -46,6 +52,7 @@ export function ListToolbar({
   searchLabel = 'Search',
   pending,
   resultLabel,
+  heading,
   filters,
   activeFilters,
   onClear,
@@ -58,45 +65,107 @@ export function ListToolbar({
   /** True while the debounced query has not caught up with the input. */
   pending?: boolean;
   resultLabel: string;
+  /** "All inspections": the list's heading in the Jobber-style shell, with the count beside it. */
+  heading?: string;
   filters?: ReactNode;
   activeFilters?: Array<{ label: string; value: string; onRemove: () => void }>;
   onClear?: () => void;
   children?: ReactNode;
 }) {
+  const jobber = useConsoleShell() === 'jobber';
   const [text, setText] = useSearchText(search, onSearch);
   // The header holds this list's search (the office, 2026-10-07: one search
   // box, not two). This field stays only where the header has no room for one.
-  const inHeader = useProvidePageSearch({
-    label: searchLabel,
-    placeholder: searchPlaceholder,
-    value: search,
-    onChange: onSearch,
-    pending,
-  });
+  // In the Jobber-style shell nothing is lent: the field is here, as Jobber's.
+  const registered = useProvidePageSearch(
+    jobber
+      ? null
+      : {
+          label: searchLabel,
+          placeholder: searchPlaceholder,
+          value: search,
+          onChange: onSearch,
+          pending,
+        },
+  );
+  const inHeader = registered && !jobber;
   const hasActive = Boolean(activeFilters?.length);
+
+  const searchField = (
+    <div
+      className={cn(
+        'relative min-w-0 flex-1 max-sm:basis-full sm:max-w-xs',
+        inHeader && 'sm:hidden',
+        jobber && 'sm:ml-auto sm:w-72 sm:flex-none',
+      )}
+    >
+      <SearchIcon
+        aria-hidden
+        className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
+      />
+      <Input
+        aria-label={searchLabel}
+        className={cn('pl-9', jobber && 'h-10 rounded-lg')}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={searchPlaceholder}
+        type="search"
+        value={text}
+      />
+      {pending ? (
+        <Spinner className="text-muted-foreground absolute top-1/2 right-3 size-4 -translate-y-1/2" />
+      ) : null}
+    </div>
+  );
+
+  const chips = (
+    <>
+      {activeFilters?.map((filter) => (
+        <Badge key={`${filter.label}-${filter.value}`} variant="secondary" className="gap-1 pr-1">
+          <span className="text-muted-foreground">{filter.label}:</span>
+          {filter.value}
+          <button
+            aria-label={`Remove ${filter.label} filter`}
+            className="hover:bg-background/80 -mr-0.5 rounded-sm p-0.5 transition-colors"
+            onClick={filter.onRemove}
+            type="button"
+          >
+            <XIcon className="size-3" />
+          </button>
+        </Badge>
+      ))}
+      {hasActive && onClear ? (
+        <Button onClick={onClear} size="sm" type="button" variant="ghost">
+          Clear all
+        </Button>
+      ) : null}
+    </>
+  );
+
+  if (jobber)
+    return (
+      <div className="space-y-3 pb-4">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          {heading ? <h2 className="text-heading text-xl font-bold">{heading}</h2> : null}
+          <p className="text-muted-foreground text-sm" aria-live="polite">
+            {heading ? `(${resultLabel})` : resultLabel}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {filters}
+          {children}
+          {searchField}
+        </div>
+        {hasActive ? <div className="flex flex-wrap items-center gap-2">{chips}</div> : null}
+      </div>
+    );
+
   return (
     <div className="space-y-3 pb-4">
       <div className="flex flex-wrap items-center gap-2">
         {/* A whole row on a phone, the filters wrapping under it: sharing the
             row, the field shrank until a toggle beside it was drawn over it
             (the Error log at 375px). */}
-        <div className={cn('relative min-w-0 flex-1 max-sm:basis-full sm:max-w-xs', inHeader && 'sm:hidden')}>
-          <SearchIcon
-            aria-hidden
-            className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
-          />
-          <Input
-            aria-label={searchLabel}
-            className="pl-9"
-            onChange={(event) => setText(event.target.value)}
-            placeholder={searchPlaceholder}
-            type="search"
-            value={text}
-          />
-          {pending ? (
-            <Spinner className="text-muted-foreground absolute top-1/2 right-3 size-4 -translate-y-1/2" />
-          ) : null}
-        </div>
+        {searchField}
         {filters}
         {children}
       </div>
@@ -105,25 +174,7 @@ export function ListToolbar({
         <p className="text-muted-foreground mr-auto text-sm" aria-live="polite">
           {resultLabel}
         </p>
-        {activeFilters?.map((filter) => (
-          <Badge key={`${filter.label}-${filter.value}`} variant="secondary" className="gap-1 pr-1">
-            <span className="text-muted-foreground">{filter.label}:</span>
-            {filter.value}
-            <button
-              aria-label={`Remove ${filter.label} filter`}
-              className="hover:bg-background/80 -mr-0.5 rounded-sm p-0.5 transition-colors"
-              onClick={filter.onRemove}
-              type="button"
-            >
-              <XIcon className="size-3" />
-            </button>
-          </Badge>
-        ))}
-        {hasActive && onClear ? (
-          <Button onClick={onClear} size="sm" type="button" variant="ghost">
-            Clear all
-          </Button>
-        ) : null}
+        {chips}
       </div>
     </div>
   );
@@ -134,6 +185,9 @@ export function ListToolbar({
  *
  * Every list page in the old app repeated the same twenty lines — a Field, a
  * Label, a Select, and the sentinel translation — once per filter.
+ *
+ * In the Jobber-style shell it is Jobber's filter pill, "Status | All", filled
+ * once it narrows the list.
  */
 export function SelectFilter({
   label,
@@ -150,11 +204,29 @@ export function SelectFilter({
   allLabel?: string;
   className?: string;
 }) {
+  const jobber = useConsoleShell() === 'jobber';
   const everything = allLabel ?? `All ${label.toLowerCase()}`;
+  const chosen = options.find((option) => option.value === value)?.label;
   return (
     <Select onValueChange={(next) => onChange(next === ALL ? '' : next)} value={value || ALL}>
-      <SelectTrigger aria-label={label} className={cn('w-[168px]', className)} size="default">
-        <SelectValue placeholder={everything} />
+      <SelectTrigger
+        aria-label={label}
+        className={
+          jobber
+            ? cn(className, 'h-10 w-auto max-w-72 gap-2 rounded-full px-4', value && 'bg-accent dark:bg-accent')
+            : cn('w-[168px]', className)
+        }
+        size="default"
+      >
+        {jobber ? (
+          <>
+            <span className="text-heading shrink-0 font-semibold">{label}</span>
+            <span aria-hidden className="bg-border h-4 w-px shrink-0" />
+            <SelectValue>{value && chosen ? chosen : 'All'}</SelectValue>
+          </>
+        ) : (
+          <SelectValue placeholder={everything} />
+        )}
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL}>{everything}</SelectItem>
