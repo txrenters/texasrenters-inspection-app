@@ -2,9 +2,10 @@ import type { PrismaService } from '../src/common/prisma.service';
 import {
   OpenStreetMapPlacesClient,
   formatNominatimAddress,
+  nominatimCategory,
   parseNominatimReverse,
 } from '../src/time-tracking/openstreetmap-places.client';
-import { StopNamingService } from '../src/time-tracking/stop-naming.service';
+import { NO_CATEGORY, StopNamingService } from '../src/time-tracking/stop-naming.service';
 
 /**
  * Naming a stop away from the properties (the office, 2026-10-17: "if he goes
@@ -28,7 +29,11 @@ function harness(rows: Rows = {}, answer: unknown = null, enabled = true) {
     propertywareBuilding: { findMany: jest.fn().mockResolvedValue(rows.buildings ?? []) },
     timeSegment: { findMany: jest.fn().mockResolvedValue(rows.known ?? []), updateMany: jest.fn() },
   };
-  const openStreetMap = { enabled, placeAt: jest.fn().mockResolvedValue(answer) };
+  const openStreetMap = {
+    enabled,
+    placeAt: jest.fn().mockResolvedValue(answer),
+    businessAt: jest.fn().mockResolvedValue(answer),
+  };
   const service = new StopNamingService(
     prisma as unknown as PrismaService,
     openStreetMap as unknown as OpenStreetMapPlacesClient,
@@ -49,6 +54,7 @@ describe('what a stop was', () => {
       kind: 'HOME',
       name: 'Home',
       address: null,
+      category: null,
     });
     expect(openStreetMap.placeAt).not.toHaveBeenCalled();
   });
@@ -65,6 +71,7 @@ describe('what a stop was', () => {
       kind: 'PROPERTY',
       name: '5 Near Ln',
       address: null,
+      category: null,
     });
     expect(openStreetMap.placeAt).not.toHaveBeenCalled();
   });
@@ -90,6 +97,7 @@ describe('what a stop was', () => {
           placeKind: 'BUSINESS',
           placeName: 'The Home Depot',
           placeAddress: '1 Supply Rd, Houston',
+          placeCategory: 'shop=doityourself',
           placeLatitude: north(20).latitude,
           placeLongitude: north(20).longitude,
         },
@@ -100,17 +108,47 @@ describe('what a stop was', () => {
       kind: 'BUSINESS',
       name: 'The Home Depot',
       address: '1 Supply Rd, Houston',
+      category: 'shop=doityourself',
     });
     expect(openStreetMap.placeAt).not.toHaveBeenCalled();
   });
 
+  /** A name kept before the kind of place was is asked about once more, for both. */
+  it('asks again rather than borrow a business named before its kind was kept', async () => {
+    const { service, openStreetMap } = harness(
+      {
+        known: [
+          {
+            placeKind: 'BUSINESS',
+            placeName: 'Corner Store',
+            placeAddress: null,
+            placeCategory: null,
+            placeLatitude: north(10).latitude,
+            placeLongitude: north(10).longitude,
+          },
+        ],
+      },
+      { kind: 'BUSINESS', name: 'Corner Store', address: '3 Elm St', category: 'shop=convenience' },
+    );
+
+    await expect(service.placeFor('org-1', 'tech-1', STORE)).resolves.toMatchObject({
+      name: 'Corner Store',
+      category: 'shop=convenience',
+    });
+    expect(openStreetMap.placeAt).toHaveBeenCalledTimes(1);
+  });
+
   it('asks OpenStreetMap for anything our own data cannot name', async () => {
-    const { service, openStreetMap } = harness({}, { kind: 'BUSINESS', name: "Lowe's", address: '2 Lumber Ln' });
+    const { service, openStreetMap } = harness(
+      {},
+      { kind: 'BUSINESS', name: "Lowe's", address: '2 Lumber Ln', category: 'shop=doityourself' },
+    );
 
     await expect(service.placeFor('org-1', 'tech-1', STORE)).resolves.toEqual({
       kind: 'BUSINESS',
       name: "Lowe's",
       address: '2 Lumber Ln',
+      category: 'shop=doityourself',
     });
     // The position and nothing else: no technician, no organization.
     expect(openStreetMap.placeAt).toHaveBeenCalledWith(STORE);
@@ -123,7 +161,15 @@ describe('what a stop was', () => {
       kind: 'UNKNOWN',
       name: null,
       address: null,
+      category: null,
     });
+  });
+
+  /** Asked and answered "no kind": written down, so it is not asked again. */
+  it('marks a business OpenStreetMap gave no kind as asked', async () => {
+    const { service } = harness({}, { kind: 'BUSINESS', name: 'Shop', address: null, category: null });
+
+    await expect(service.placeFor('org-1', 'tech-1', STORE)).resolves.toMatchObject({ category: NO_CATEGORY });
   });
 
   /** Unreachable is not the same as nothing there, and is asked again later. */
@@ -157,7 +203,7 @@ describe('naming the stops waiting for one', () => {
       .mockResolvedValueOnce([waiting('stop-1')]) // the stops waiting
       .mockResolvedValue([]); // nothing named near it yet
 
-    await expect(service.nameWaiting()).resolves.toEqual({ named: 1, waiting: 1 });
+    await expect(service.nameWaiting()).resolves.toEqual({ named: 1, waiting: 1, categorized: 0 });
 
     expect(prisma.timeSegment.updateMany).toHaveBeenCalledWith({
       where: { id: 'stop-1', organizationId: 'org-1', placeNamedAt: null },
@@ -170,7 +216,28 @@ describe('naming the stops waiting for one', () => {
     openStreetMap.placeAt.mockResolvedValue(undefined);
     prisma.timeSegment.findMany.mockResolvedValueOnce([waiting('stop-1')]).mockResolvedValue([]);
 
-    await expect(service.nameWaiting()).resolves.toEqual({ named: 0, waiting: 1 });
+    await expect(service.nameWaiting()).resolves.toEqual({ named: 0, waiting: 1, categorized: 0 });
+    expect(prisma.timeSegment.updateMany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The loop behind October's Mapbox bill, ruled out here: while OpenStreetMap
+   * is down, a full backlog costs one question a sweep, not one for every stop
+   * waiting, and the older stops are not asked about either.
+   */
+  it('stops asking at the first lookup that cannot be made, however many are waiting', async () => {
+    const { service, prisma, openStreetMap } = harness();
+    openStreetMap.placeAt.mockResolvedValue(undefined);
+    const backlog = Array.from({ length: StopNamingService.BATCH }, (_, index) => waiting(`stop-${index}`));
+    prisma.timeSegment.findMany.mockImplementation(({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve('placeNamedAt' in where ? backlog : []),
+    );
+
+    // A day of sweeps, one every five minutes.
+    for (let sweep = 0; sweep < 288; sweep += 1) await service.nameWaiting();
+
+    expect(openStreetMap.placeAt).toHaveBeenCalledTimes(288);
+    expect(openStreetMap.businessAt).not.toHaveBeenCalled();
     expect(prisma.timeSegment.updateMany).not.toHaveBeenCalled();
   });
 
@@ -191,7 +258,89 @@ describe('naming the stops waiting for one', () => {
     const { service, prisma } = harness();
     prisma.timeSegment.findMany.mockRejectedValue(new Error('database unreachable'));
 
-    await expect(service.nameWaiting()).resolves.toEqual({ named: 0, waiting: 0 });
+    await expect(service.nameWaiting()).resolves.toEqual({ named: 0, waiting: 0, categorized: 0 });
+  });
+});
+
+describe('giving a kind of place to businesses named before it was kept', () => {
+  const named = (id: string) => ({
+    id,
+    organizationId: 'org-1',
+    placeLatitude: STORE.latitude,
+    placeLongitude: STORE.longitude,
+  });
+  /** Nothing waiting for a name; these waiting for a kind; `known` near them. */
+  const rows =
+    (unsorted: unknown[], known: unknown[] = []) =>
+    ({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve('placeNamedAt' in where ? [] : where.placeCategory === null ? unsorted : known);
+
+  it('asks OpenStreetMap for the business alone, and keeps the name it has', async () => {
+    const { service, prisma, openStreetMap } = harness(
+      {},
+      { kind: 'BUSINESS', name: 'Hardware Hank', address: null, category: 'shop=hardware' },
+    );
+    prisma.timeSegment.findMany.mockImplementation(rows([named('stop-1')]));
+
+    await expect(service.nameWaiting()).resolves.toMatchObject({ categorized: 1 });
+
+    expect(openStreetMap.businessAt).toHaveBeenCalledWith(STORE);
+    expect(openStreetMap.placeAt).not.toHaveBeenCalled();
+    expect(prisma.timeSegment.updateMany).toHaveBeenCalledWith({
+      where: { id: 'stop-1', organizationId: 'org-1', placeCategory: null },
+      data: { placeCategory: 'shop=hardware' },
+    });
+  });
+
+  it('borrows the kind from a stop at the same place that has one', async () => {
+    const { service, prisma, openStreetMap } = harness();
+    prisma.timeSegment.findMany.mockImplementation(
+      rows(
+        [named('stop-1')],
+        [
+          {
+            placeKind: 'BUSINESS',
+            placeCategory: 'shop=convenience',
+            placeLatitude: STORE.latitude,
+            placeLongitude: STORE.longitude,
+          },
+        ],
+      ),
+    );
+
+    await service.nameWaiting();
+
+    expect(openStreetMap.businessAt).not.toHaveBeenCalled();
+    expect(prisma.timeSegment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { placeCategory: 'shop=convenience' } }),
+    );
+  });
+
+  it('writes down that OpenStreetMap had no kind, so it is asked once', async () => {
+    const { service, prisma } = harness({}, null);
+    prisma.timeSegment.findMany.mockImplementation(rows([named('stop-1')]));
+
+    await service.nameWaiting();
+
+    expect(prisma.timeSegment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { placeCategory: NO_CATEGORY } }),
+    );
+  });
+
+  it('asks about a few a sweep, and stops at the first that cannot be asked', async () => {
+    const { service, prisma, openStreetMap } = harness();
+    openStreetMap.businessAt.mockResolvedValue(undefined);
+    prisma.timeSegment.findMany.mockImplementation(rows([named('stop-1'), named('stop-2'), named('stop-3')]));
+
+    await expect(service.nameWaiting()).resolves.toMatchObject({ categorized: 0 });
+
+    expect(openStreetMap.businessAt).toHaveBeenCalledTimes(1);
+    const calls = prisma.timeSegment.findMany.mock.calls as [{ where: Record<string, unknown>; take?: number }][];
+    const unsorted = calls.find(([query]) => query.where.placeCategory === null)![0];
+    expect(unsorted).toMatchObject({
+      where: { placeKind: 'BUSINESS', placeLatitude: { not: null } },
+      take: StopNamingService.CATEGORY_BATCH,
+    });
   });
 });
 
@@ -204,12 +353,24 @@ describe('reading what OpenStreetMap says', () => {
     ...extra,
   });
 
-  it('takes a business near the stop, with its address', () => {
-    expect(parseNominatimReverse(answer(north(90)), STORE, 'poi')).toEqual({
+  it('takes a business near the stop, with its address and what kind of place it is', () => {
+    expect(
+      parseNominatimReverse(answer(north(90), { category: 'shop', type: 'doityourself' }), STORE, 'poi'),
+    ).toEqual({
       kind: 'BUSINESS',
       name: 'The Home Depot',
       address: '1234 FM 1960 Road West, Houston',
+      category: 'shop=doityourself',
     });
+  });
+
+  it('reads the kind of place as OpenStreetMap tags it, and nothing that is not a tag', () => {
+    expect(nominatimCategory({ category: 'shop', type: 'convenience' })).toBe('shop=convenience');
+    expect(nominatimCategory({ category: 'Amenity', type: 'fuel' })).toBe('amenity=fuel');
+    // "building=yes" says nothing about what the place is.
+    expect(nominatimCategory({ category: 'building', type: 'yes' })).toBeNull();
+    expect(nominatimCategory({ category: 'shop', type: '<b>x</b>' })).toBeNull();
+    expect(nominatimCategory({})).toBeNull();
   });
 
   /** Nominatim always answers with its nearest thing, however far. */
@@ -225,6 +386,7 @@ describe('reading what OpenStreetMap says', () => {
       kind: 'ADDRESS',
       name: null,
       address: '1234 FM 1960 Road West, Houston',
+      category: null,
     });
   });
 
@@ -244,6 +406,7 @@ describe('asking OpenStreetMap', () => {
   afterEach(() => {
     global.fetch = realFetch;
     delete process.env.STOP_PLACE_LOOKUP_ENABLED;
+    delete process.env.STOP_PLACE_DAILY_LOOKUPS;
   });
 
   it('sends the position rounded to about ten metres, and says who is asking', async () => {
@@ -265,6 +428,22 @@ describe('asking OpenStreetMap', () => {
 
     await expect(new OpenStreetMapPlacesClient().placeAt(STORE)).resolves.toBeUndefined();
   });
+
+  /** Free, and capped anyway: a runaway here would get us blocked. */
+  it('stops asking for the day once its ceiling is reached', async () => {
+    process.env.STOP_PLACE_DAILY_LOOKUPS = '2';
+    const fetch = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ error: 'Unable to geocode' }) });
+    global.fetch = fetch as unknown as typeof global.fetch;
+    const client = new OpenStreetMapPlacesClient();
+
+    // The business, then the address: two requests, nothing found.
+    await expect(client.placeAt(STORE)).resolves.toBeNull();
+    // Past the ceiling: "could not ask", so the stop waits for tomorrow.
+    await expect(client.placeAt(STORE)).resolves.toBeUndefined();
+    await expect(client.businessAt(STORE)).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+  }, 10_000);
 
   it('can be switched off', () => {
     process.env.STOP_PLACE_LOOKUP_ENABLED = 'false';

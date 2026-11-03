@@ -99,10 +99,46 @@ export interface TimesheetStop {
   durationSeconds: number;
   quietSeconds: number;
   /** Null until it has been looked up, which happens within minutes. */
-  place: { kind: TimeStopPlaceKind; name: string | null; address: string | null } | null;
+  place: {
+    kind: TimeStopPlaceKind;
+    name: string | null;
+    address: string | null;
+    /**
+     * What kind of place a business is, as OpenStreetMap tags it:
+     * "shop=hardware", "shop=convenience". Null when not known yet, empty
+     * when OpenStreetMap had none. The console puts it in words.
+     */
+    category: string | null;
+  } | null;
   /** For the map. Gone after the retention window, with the trail it came from. */
   latitude: number | null;
   longitude: number | null;
+}
+
+/**
+ * The time between two places on the day, in order: the drive from one
+ * property or stop to the next (the office, 2026-11-04: "we should be able to
+ * determine the drive time"). Read from the general-time stretches the day
+ * already stores, so it costs no lookup of any kind.
+ *
+ * It names its two ends by the keys of the rows they are -- a visit's key or a
+ * stop's -- so somebody who may not see where a stop was is told only that
+ * there was one, as the totals already say. Both ends the same visit is a
+ * technician who stepped out of the circle and came back.
+ */
+export interface TimesheetDrive {
+  /** The stretch's own id. */
+  key: string;
+  technicianId: string;
+  technician: string;
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  quietSeconds: number;
+  /** The row they left. Null only for a corrected day that starts on the road. */
+  fromKey: string | null;
+  /** The row they went to next. Null only for one that ends on the road. */
+  toKey: string | null;
 }
 
 /** One visit behind a row on the timesheet. */
@@ -652,6 +688,7 @@ export class TimeTrackingService {
         placeKind: true,
         placeName: true,
         placeAddress: true,
+        placeCategory: true,
         placeLatitude: true,
         placeLongitude: true,
         technician: { select: { displayName: true } },
@@ -665,6 +702,16 @@ export class TimeTrackingService {
     const totals = new Map<string, TimesheetTotal>();
     const visits = new Map<string, TimesheetVisit>();
     const stops: TimesheetStop[] = [];
+    const drives: TimesheetDrive[] = [];
+    // Per technician: the row they were last at, and the drives since it that
+    // are still waiting to learn where they went. Segments come in time order.
+    const lastRow = new Map<string, string>();
+    const headingFor = new Map<string, TimesheetDrive[]>();
+    const arrive = (technicianId: string, rowKey: string) => {
+      for (const drive of headingFor.get(technicianId) ?? []) drive.toKey = rowKey;
+      headingFor.set(technicianId, []);
+      lastRow.set(technicianId, rowKey);
+    };
     for (const segment of segments) {
       const total = totals.get(segment.technicianId) ?? {
         technicianId: segment.technicianId,
@@ -680,6 +727,7 @@ export class TimeTrackingService {
       total.quietSeconds += segment.quietSeconds;
       if (segment.category === 'STOP') {
         total.stopSeconds += segment.durationSeconds;
+        arrive(segment.technicianId, segment.id);
         if (mayLocate)
           stops.push({
             key: segment.id,
@@ -690,7 +738,12 @@ export class TimeTrackingService {
             durationSeconds: segment.durationSeconds,
             quietSeconds: segment.quietSeconds,
             place: segment.placeKind
-              ? { kind: segment.placeKind, name: segment.placeName, address: segment.placeAddress }
+              ? {
+                  kind: segment.placeKind,
+                  name: segment.placeName,
+                  address: segment.placeAddress,
+                  category: segment.placeCategory,
+                }
               : null,
             latitude: segment.placeLatitude ? Number(segment.placeLatitude) : null,
             longitude: segment.placeLongitude ? Number(segment.placeLongitude) : null,
@@ -701,6 +754,19 @@ export class TimeTrackingService {
       // on rows from before the day was read whole, and it belongs in here.
       if (segment.category !== 'ONSITE') {
         total.generalSeconds += segment.durationSeconds;
+        const drive: TimesheetDrive = {
+          key: segment.id,
+          technicianId: segment.technicianId,
+          technician: segment.technician.displayName,
+          startedAt: segment.startedAt.toISOString(),
+          endedAt: segment.endedAt.toISOString(),
+          durationSeconds: segment.durationSeconds,
+          quietSeconds: segment.quietSeconds,
+          fromKey: lastRow.get(segment.technicianId) ?? null,
+          toKey: null,
+        };
+        drives.push(drive);
+        headingFor.set(segment.technicianId, [...(headingFor.get(segment.technicianId) ?? []), drive]);
         continue;
       }
       total.onsiteSeconds += segment.durationSeconds;
@@ -708,6 +774,7 @@ export class TimeTrackingService {
       // The property, or the visit for a row from before stretches named one.
       const place = segment.buildingId ?? segment.inspectionId ?? segment.id;
       const key = `${segment.technicianId}:${place}:${query.date}`;
+      arrive(segment.technicianId, key);
       const startedAt = segment.startedAt.toISOString();
       const endedAt = segment.endedAt.toISOString();
       const visit = visits.get(key);
@@ -752,6 +819,10 @@ export class TimeTrackingService {
       visits: [...visits.values()].sort(
         (left, right) =>
           left.technician.localeCompare(right.technician) || left.arrivedAt.localeCompare(right.arrivedAt),
+      ),
+      drives: drives.sort(
+        (left, right) =>
+          left.technician.localeCompare(right.technician) || left.startedAt.localeCompare(right.startedAt),
       ),
       // Left out, not emptied, for somebody who may not see where: an empty
       // list would say there were no stops.

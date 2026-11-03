@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { haversineMeters } from '@texasrenters/shared';
 
+import { ceilingFrom, DailyAllowance, spendFrom } from '../common/daily-allowance';
+
 /**
  * What OpenStreetMap calls the place a technician stopped at.
  *
@@ -19,6 +21,12 @@ import { haversineMeters } from '@texasrenters/shared';
  * about who stood there.
  *
  * Never throws. A lookup that fails is tried again on a later sweep.
+ *
+ * **Free, and still capped.** Nominatim bills nothing, so no invoice can come
+ * from here -- but a loop that asks again on every sweep is how October's
+ * Mapbox bill happened, and the same loop here would get us blocked. So it has
+ * a daily ceiling like every paid client (`DailyAllowance`), and past it a
+ * lookup is "could not ask", left for tomorrow.
  */
 
 const DEFAULT_ENDPOINT = 'https://nominatim.openstreetmap.org';
@@ -37,10 +45,35 @@ const POI_WITHIN_METERS = 150;
 /** An address further than this is a different lot. */
 const ADDRESS_WITHIN_METERS = 100;
 
+/**
+ * Requests a day, across every organization. A day has a handful of stops and
+ * most are named from our own data; the calibration month (2026-10) had about
+ * eleven distinct places. Two hundred is a busy month's worth in one day, and
+ * at most two requests a stop. `STOP_PLACE_DAILY_LOOKUPS` changes it.
+ */
+export const DAILY_LOOKUPS = 200;
+
+/** OpenStreetMap's tag for a place, "shop=hardware": a key and a value, lower case. */
+const TAG_PART = /^[a-z][a-z0-9_]{0,39}$/;
+
 export interface PlaceAnswer {
   kind: 'BUSINESS' | 'ADDRESS';
   name: string | null;
   address: string | null;
+  /**
+   * What kind of place a business is, as OpenStreetMap tags it:
+   * "shop=hardware", "shop=convenience", "amenity=fuel". Null for an address,
+   * or a business OpenStreetMap gave no tag.
+   */
+  category: string | null;
+}
+
+/** "shop=hardware" from Nominatim's `category` and `type`, or null for anything else. */
+export function nominatimCategory(answer: { category?: unknown; type?: unknown }): string | null {
+  const key = typeof answer.category === 'string' ? answer.category.trim().toLowerCase() : '';
+  const value = typeof answer.type === 'string' ? answer.type.trim().toLowerCase() : '';
+  if (!TAG_PART.test(key) || !TAG_PART.test(value) || value === 'yes') return null;
+  return `${key}=${value}`;
 }
 
 interface NominatimAddress {
@@ -75,7 +108,14 @@ export function parseNominatimReverse(
   layer: 'poi' | 'address',
 ): PlaceAnswer | null {
   if (!body || typeof body !== 'object' || 'error' in body) return null;
-  const answer = body as { lat?: unknown; lon?: unknown; name?: unknown; address?: unknown };
+  const answer = body as {
+    lat?: unknown;
+    lon?: unknown;
+    name?: unknown;
+    address?: unknown;
+    category?: unknown;
+    type?: unknown;
+  };
   const latitude = Number(answer.lat);
   const longitude = Number(answer.lon);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
@@ -85,16 +125,25 @@ export function parseNominatimReverse(
   if (layer === 'poi') {
     const name = typeof answer.name === 'string' ? answer.name.trim() : '';
     if (!name || metres > POI_WITHIN_METERS) return null;
-    return { kind: 'BUSINESS', name: name.slice(0, 200), address: address?.slice(0, 300) ?? null };
+    return {
+      kind: 'BUSINESS',
+      name: name.slice(0, 200),
+      address: address?.slice(0, 300) ?? null,
+      category: nominatimCategory(answer),
+    };
   }
   if (!address || metres > ADDRESS_WITHIN_METERS) return null;
-  return { kind: 'ADDRESS', name: null, address: address.slice(0, 300) };
+  return { kind: 'ADDRESS', name: null, address: address.slice(0, 300), category: null };
 }
 
 @Injectable()
 export class OpenStreetMapPlacesClient {
   private readonly logger = new Logger(OpenStreetMapPlacesClient.name);
   private lastRequestAt = 0;
+  private readonly allowance = new DailyAllowance(
+    'openstreetmap_place_lookups',
+    ceilingFrom('STOP_PLACE_DAILY_LOOKUPS', DAILY_LOOKUPS),
+  );
 
   /** Off with `STOP_PLACE_LOOKUP_ENABLED=false`; stops are then named from our own data only. */
   get enabled(): boolean {
@@ -112,10 +161,20 @@ export class OpenStreetMapPlacesClient {
     return this.reverse(stop, 'address');
   }
 
+  /**
+   * The business at a stop and nothing else: for a stop named before the kind
+   * of place was kept, so it can say "Hardware store" too. One request.
+   */
+  businessAt(stop: { latitude: number; longitude: number }): Promise<PlaceAnswer | null | undefined> {
+    return this.reverse(stop, 'poi');
+  }
+
   private async reverse(
     stop: { latitude: number; longitude: number },
     layer: 'poi' | 'address',
   ): Promise<PlaceAnswer | null | undefined> {
+    // Counted when asked, not when answered: a refused request was still sent.
+    if (!spendFrom(1, [this.allowance], this.logger)) return undefined;
     const wait = this.lastRequestAt + SPACING_MS - Date.now();
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     this.lastRequestAt = Date.now();
