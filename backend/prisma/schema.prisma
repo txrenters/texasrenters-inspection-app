@@ -825,6 +825,14 @@ model Property {
   /// something nobody knows, so the console is told and decides.
   geocodeSource    String?
   geocodePrecision String?
+
+  /// The address no geocoder could place, and when it last tried.
+  ///
+  /// Without them the hourly pass asked about an unplaceable address every
+  /// hour for ever -- a billed Google lookup each time. The pass skips it
+  /// until the address changes or `GEOCODE_MISS_BACKOFF_MS` has passed.
+  geocodeMissFor   String?
+  geocodeMissAt    DateTime?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   organization   Organization         @relation(fields: [organizationId], references: [id])
@@ -1594,6 +1602,9 @@ model PropertywareBuilding {
   geocodedAt          DateTime?
   geocodeSource       String?
   geocodePrecision    String?
+  /// The address no geocoder could place, and when -- see `Property.geocodeMissFor`.
+  geocodeMissFor      String?
+  geocodeMissAt       DateTime?
   sourceHash          String?
   /// The property as Propertyware describes it beyond the columns above -- the
   /// building record and the office's custom fields (`PropertyDetailsSnapshot`
