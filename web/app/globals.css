@@ -28,6 +28,12 @@
 /* shadcn's canonical dark signal. `next-themes` stamps `.dark` on <html>. */
 @custom-variant dark (&:is(.dark *));
 
+/* The Jobber-style shell (components/jobber-shell). `jobber:` styles an element
+   only inside that shell, so a component can look like Jobber there and stay as
+   it is in the classic console. `:where()` keeps it at zero specificity, so a
+   `jobber:` class competes with its classic twin by source order alone. */
+@custom-variant jobber (&:where([data-shell='jobber'], [data-shell='jobber'] *));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -101,11 +107,23 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* The sidebar row under the pointer. The classic console has no token of its
+     own for it (it is the accent); the Jobber shell darkens the frame instead,
+     and makes the accent the white of the page you are on. */
+  --color-sidebar-hover: var(--sidebar-hover);
+  /* Page and card titles. The foreground in the classic console; a deeper ink
+     than the body text in the Jobber shell, as Jobber draws its headings. */
+  --color-heading: var(--heading);
 
   /* Set from next/font in app/layout.tsx. The fallbacks matter: they are what
      renders during the swap window and on any build where the font fails to
      fetch, so they are a real UI state rather than dead defensive text. */
-  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* Through --font-ui rather than --font-geist directly, so a shell can choose
+     the face: Geist in the classic console, Inter in the Jobber shell. */
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* Page titles only. Geist (the same face) in the classic console; Poppins in
+     the Jobber shell, the open-licence face Jobber names as its own fallback. */
+  --font-display: var(--font-display-face), ui-sans-serif, system-ui, sans-serif;
   /* Geist Mono is not decoration here. Identifiers, timestamps, durations and
      money are read *down a column* in this console, and a proportional font
      makes "0:33 / 0:46 / 1:19" a ragged edge. See `font-mono` at those sites. */
@@ -270,6 +288,10 @@
   --sidebar-accent-foreground: oklch(0.245 0.024 258);
   --sidebar-border: oklch(0.898 0.009 252);
   --sidebar-ring: oklch(0.45 0.08 262);
+  --sidebar-hover: var(--sidebar-accent);
+  --heading: var(--foreground);
+  --font-ui: var(--font-geist);
+  --font-display-face: var(--font-geist);
 }
 
 .dark {
@@ -335,6 +357,135 @@
   --sidebar-accent-foreground: oklch(0.94 0.004 258);
   --sidebar-border: oklch(1 0 0 / 7%);
   --sidebar-ring: oklch(0.75 0.065 262);
+}
+
+/**
+ * ── The Jobber-style shell ──────────────────────────────────────────────────
+ * The office works in Jobber all day, so the console can wear Jobber's frame:
+ * a warm taupe frame, a white page, dark teal text and green actions.
+ *
+ * Every value is from Jobber's own published design system, Atlantis
+ * (`@jobber/design` 0.124.0, MIT licence), converted to oklch. Nothing here is
+ * copied from Jobber's application, and no Jobber name, logo, font or artwork
+ * is used. "Jobber Pro" is Jobber's own typeface and is not ours to use;
+ * Poppins stands in for it, as Atlantis itself falls back to it.
+ *
+ * The shell sets `data-shell="jobber"` on its frame and on <html> (for dialogs
+ * and menus, which portal to <body>). Only the tokens move, so every page keeps
+ * working unchanged: same components, same pages, new skin.
+ *
+ * Three things deliberately differ from the classic palette, and the contrast
+ * suite (lib/theme-contrast.test.ts) asserts this block as well:
+ *   - The page and its cards are the same white. Jobber separates them by a
+ *     1px border, not by fill; the frame (`--sidebar`) is the taupe.
+ *   - Status text uses Atlantis's "onSurface" shades (green 700, red 700...),
+ *     not the bright base colours, which fail AA on their own 10% tint.
+ *   - The page you are on, in the sidebar, is the white page colour in bold, as
+ *     Jobber draws it, not the classic sage mark.
+ */
+[data-shell='jobber'] {
+  --radius: 0.5rem;
+  /* Jobber's top bar is 60px. Table headers pin beneath it by this token. */
+  --app-header-height: 3.75rem;
+  --font-ui: var(--font-inter);
+  --font-display-face: var(--font-poppins);
+
+  /* surface #ffffff, text #233d48, heading #032b3a */
+  --background: oklch(1 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.344 0.037 226.9);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.344 0.037 226.9);
+  --foreground: oklch(0.344 0.037 226.9);
+  --heading: oklch(0.271 0.05 228.5);
+
+  /* surface--background--subtle #f9f8f6, text--secondary #49646f */
+  --muted: oklch(0.979 0.003 84.6);
+  --muted-foreground: oklch(0.486 0.036 225);
+  /* surface--hover #eeece7 */
+  --secondary: oklch(0.943 0.007 88.6);
+  --secondary-foreground: oklch(0.271 0.05 228.5);
+  --accent: oklch(0.943 0.007 88.6);
+  --accent-foreground: oklch(0.271 0.05 228.5);
+
+  /* border #dadfe2; fields one step darker so an empty input still reads */
+  --border: oklch(0.901 0.007 233.6);
+  --input: oklch(0.843 0.011 226);
+
+  /* interactive #388523 under white (4.6:1); focus #84979f */
+  --primary: oklch(0.548 0.152 139.8);
+  --primary-foreground: oklch(1 0 0);
+  --ring: oklch(0.664 0.025 225);
+  /* green 700 #276515: the active nav word, a live figure */
+  --highlight: oklch(0.449 0.128 139.7);
+
+  /* destructive--hover #b31200, job--onSurface #276515,
+     warning--onSurface #645916, informative--onSurface #225c8c */
+  --destructive: oklch(0.487 0.192 30.6);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.449 0.128 139.7);
+  --warning: oklch(0.462 0.085 99.6);
+  --info: oklch(0.461 0.098 247.2);
+
+  /* The frame: surface--background #eeece7, hover #dcdad5, the page you are
+     on in white, separators #dcdad5. */
+  --sidebar: oklch(0.943 0.007 88.6);
+  --sidebar-foreground: oklch(0.271 0.05 228.5);
+  --sidebar-primary: oklch(0.548 0.152 139.8);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(1 0 0);
+  --sidebar-accent-foreground: oklch(0.271 0.05 228.5);
+  --sidebar-border: oklch(0.889 0.007 88.6);
+  --sidebar-hover: oklch(0.889 0.007 88.6);
+  --sidebar-ring: oklch(0.664 0.025 225);
+}
+
+/* Atlantis's dark theme: navy surfaces (blue 900 page, blue 1000 frame), a
+   lime interactive green under navy text, and the "onSurface" status shades.
+   Two selectors because the attribute sits on <html> (which also carries
+   .dark) and on the shell frame inside it. */
+.dark[data-shell='jobber'],
+.dark [data-shell='jobber'] {
+  --background: oklch(0.269 0.051 229.8);
+  --card: oklch(0.269 0.051 229.8);
+  --card-foreground: oklch(0.955 0.003 219.5);
+  --popover: oklch(0.344 0.038 227.2);
+  --popover-foreground: oklch(0.955 0.003 219.5);
+  --foreground: oklch(0.955 0.003 219.5);
+  --heading: oklch(0.984 0.001 247.8);
+
+  --muted: oklch(0.344 0.038 227.2);
+  --muted-foreground: oklch(0.77 0.017 221.5);
+  --secondary: oklch(0.344 0.038 227.2);
+  --secondary-foreground: oklch(0.984 0.001 247.8);
+  --accent: oklch(0.344 0.038 227.2);
+  --accent-foreground: oklch(0.984 0.001 247.8);
+
+  --border: oklch(0.429 0.032 224.3);
+  --input: oklch(0.486 0.037 224.3);
+
+  --primary: oklch(0.773 0.19 130.6);
+  --primary-foreground: oklch(0.227 0.044 230.3);
+  --ring: oklch(0.663 0.024 225.5);
+  --highlight: oklch(0.773 0.19 130.6);
+
+  /* red 400, not the red 500 Atlantis uses for dark destructive: red 500 on
+     its own 8% tint measures 3.8:1. Red 400 is Atlantis's dark hover red. */
+  --destructive: oklch(0.78 0.085 26.2);
+  --destructive-foreground: oklch(0.227 0.044 230.3);
+  --success: oklch(0.764 0.084 139);
+  --warning: oklch(0.771 0.147 98.6);
+  --info: oklch(0.77 0.112 244.7);
+
+  --sidebar: oklch(0.227 0.044 230.3);
+  --sidebar-foreground: oklch(0.984 0.001 247.8);
+  --sidebar-primary: oklch(0.773 0.19 130.6);
+  --sidebar-primary-foreground: oklch(0.227 0.044 230.3);
+  --sidebar-accent: oklch(0.269 0.051 229.8);
+  --sidebar-accent-foreground: oklch(0.984 0.001 247.8);
+  --sidebar-border: oklch(0.344 0.038 227.2);
+  --sidebar-hover: oklch(0.344 0.038 227.2);
+  --sidebar-ring: oklch(0.663 0.024 225.5);
 }
 
 @layer base {

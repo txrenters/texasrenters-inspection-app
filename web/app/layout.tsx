@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Geist, Geist_Mono, Inter, Poppins } from 'next/font/google';
 import type { ReactNode } from 'react';
 
 import { ErrorReporting } from '@/components/error-reporting';
@@ -37,6 +37,31 @@ const geistMono = Geist_Mono({
   display: 'swap',
 });
 
+/**
+ * The Jobber-style shell's two faces (components/jobber-shell): Inter for the
+ * interface, which is what Jobber itself is set in, and Poppins for page
+ * titles, the open-licence face Jobber's design system falls back to for its
+ * own display type. Both are SIL Open Font Licence.
+ *
+ * `preload: false`: only the Jobber shell uses them, so a classic-console page
+ * must not download them. A face with no preload is fetched the first time
+ * something on the page actually renders in it.
+ */
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+  preload: false,
+});
+
+const poppins = Poppins({
+  subsets: ['latin'],
+  variable: '--font-poppins',
+  weight: ['600', '700', '800'],
+  display: 'swap',
+  preload: false,
+});
+
 export const metadata: Metadata = {
   title: { default: 'TexasRenters Admin', template: '%s | TexasRenters Admin' },
   description: 'TexasRenters inspection operations administrator application',
@@ -47,7 +72,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     // `suppressHydrationWarning` is required by next-themes: it writes the
     // resolved class onto <html> before React hydrates, which is precisely the
     // mismatch this suppresses. Nothing else on the page relies on it.
-    <html className={`${geist.variable} ${geistMono.variable}`} lang="en" suppressHydrationWarning>
+    <html
+      className={`${geist.variable} ${geistMono.variable} ${inter.variable} ${poppins.variable}`}
+      lang="en"
+      suppressHydrationWarning
+    >
       {/*
         `tabular-nums` on the body, not sprinkled per component.
         This console is counts, durations and walkthrough timestamps. With
