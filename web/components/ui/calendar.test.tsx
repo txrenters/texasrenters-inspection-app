@@ -21,3 +21,33 @@ describe('a calendar’s today', () => {
     expect(today?.textContent).toBe('5');
   });
 });
+
+/**
+ * The month arrows (the office, 2026-11-05: "when I click the next to go to the
+ * next month it is not functioning for a few second or a minute"). The month's
+ * caption is positioned and comes after the arrows, so without a stacking order
+ * of their own it was painted over them, and a click on an arrow's middle
+ * landed on the caption. The browser check is the proof; this keeps the order.
+ */
+describe('a calendar’s month arrows', () => {
+  it('sit above the month caption, inside the calendar', () => {
+    const { container, getByRole } = render(<Calendar mode="single" />);
+
+    for (const name of [/previous month/i, /next month/i]) {
+      const arrow = getByRole('button', { name });
+      expect(arrow.className).toMatch(/\babsolute\b/);
+      expect(arrow.className).toMatch(/\bz-10\b/);
+    }
+    expect(container.firstElementChild?.className).toMatch(/\brelative\b/);
+  });
+
+  it('move the month on a click', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-04T18:00:00.000Z'));
+    const { getByRole, findByText } = render(<Calendar mode="single" />);
+
+    getByRole('button', { name: /next month/i }).click();
+    expect(await findByText('December 2026')).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+});
