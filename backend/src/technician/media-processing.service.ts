@@ -176,6 +176,22 @@ export { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE };
  */
 export const PROCESSING_FAILED_EVENT = 'PROCESSING_FAILED';
 
+/** The event every run of transcription and analysis starts with. Counts the runs a restart left unfinished. */
+export const PROCESSING_STARTED_EVENT = 'PROCESSING_STARTED';
+
+/**
+ * Runs of transcription and analysis on one recording before a person has to
+ * look: the first, and two automatic retries. Each run is paid for, and one
+ * that fails the same way three times is not a passing blip. Shared by the
+ * five-minute retry (`InspectionVideoService.retryFailedAnalysis`, counting
+ * failures) and the recovery after a restart (`recoverInterrupted`, counting
+ * starts, because a run the restart cut short leaves no failure behind).
+ */
+export const MAX_ANALYSIS_ATTEMPTS = 3;
+
+/** Recordings a restart picks up again at most. */
+const RECOVERED_PER_RESTART = 25;
+
 // Biases the speech model toward inspection vocabulary; helps with accented
 // and non-native English narration. Language itself is auto-detected.
 const TRANSCRIPTION_DOMAIN_HINT =
@@ -386,33 +402,68 @@ export class MediaProcessingService implements OnModuleInit {
    *  whose processing died with the server (stuck PENDING/PROCESSING). */
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
-    // Cross-organization by design: recordings interrupted by a restart belong
-    // to whichever tenants happened to be mid-upload, and none of them is
-    // "the" organization here.
-    setImmediate(() => {
-      void withSystemTenant(() =>
-        this.prisma.inspectionMedia
-          .findMany({
-            where: {
-              processingStatus: {
-                in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING],
-              },
-            },
-            select: { id: true, organizationId: true },
-            take: 25,
-          })
-          .then((stuck) => {
-            if (!stuck.length) return;
-            this.logger.log(`Recovering ${stuck.length} unprocessed recording(s).`);
-            // Each queued item carries its own organization, so the work that
-            // follows is scoped even though finding it was not.
-            for (const media of stuck) this.queue(media.id, media.organizationId);
-          })
-          .catch((error) => {
-            this.logger.warn(`Startup recovery scan failed: ${String(error)}`);
-          }),
-      );
-    });
+    setImmediate(() => void this.recoverInterrupted());
+  }
+
+  /**
+   * Queue again the recordings a restart left unprocessed, a bounded few.
+   *
+   * Every release restarts the backend, and a run cut short leaves its
+   * recording at PROCESSING with no failure recorded, so nothing else picks it
+   * up. But this used to take any 25 such recordings on every start, with no
+   * count of how often each had been tried: a recording that kept the process
+   * from finishing would be transcribed -- and paid for -- once per restart,
+   * for good. So:
+   *
+   * - **At most `MAX_ANALYSIS_ATTEMPTS` runs**, counted by the runs started.
+   *   Past that a person decides (the technician's Retry, or the office's
+   *   re-analysis), and the log says which recordings are waiting on one.
+   * - **Not a Cloudflare upload still encoding.** Its webhook, or the
+   *   five-minute reconcile, starts its processing once there is a video to
+   *   read; asking before that only fails it.
+   * - **Newest first**, so old recordings past their runs cannot crowd out one
+   *   that has some left.
+   *
+   * Cross-organization by design: the recordings belong to whichever tenants
+   * happened to be mid-upload, and each queued item carries its own
+   * organization, so the work that follows is scoped even though finding it
+   * was not. Never throws.
+   */
+  async recoverInterrupted(): Promise<{ checked: number; queued: number; exhausted: number }> {
+    try {
+      return await withSystemTenant(async () => {
+        const stuck = await this.prisma.inspectionMedia.findMany({
+          where: {
+            processingStatus: { in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING] },
+            OR: [{ streamUid: null }, { readyAt: { not: null } }],
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: RECOVERED_PER_RESTART * 2,
+          select: {
+            id: true,
+            organizationId: true,
+            _count: { select: { processingEvents: { where: { eventType: PROCESSING_STARTED_EVENT } } } },
+          },
+        });
+        const due = stuck.filter((media) => media._count.processingEvents < MAX_ANALYSIS_ATTEMPTS);
+        const exhausted = stuck.length - due.length;
+        const queued = due.slice(0, RECOVERED_PER_RESTART);
+        if (exhausted)
+          this.logger.warn({
+            event: 'media_recovery_attempts_exhausted',
+            mediaIds: stuck
+              .filter((media) => media._count.processingEvents >= MAX_ANALYSIS_ATTEMPTS)
+              .map((media) => media.id),
+            detail: `Left for a person: ${MAX_ANALYSIS_ATTEMPTS} runs each, none finished.`,
+          });
+        if (queued.length) this.logger.log(`Recovering ${queued.length} unprocessed recording(s).`);
+        for (const media of queued) this.queue(media.id, media.organizationId);
+        return { checked: stuck.length, queued: queued.length, exhausted };
+      });
+    } catch (error) {
+      this.logger.warn(`Startup recovery scan failed: ${String(error)}`);
+      return { checked: 0, queued: 0, exhausted: 0 };
+    }
   }
 
   /** Fire-and-forget: uploads must not wait for transcription and analysis. */
@@ -485,14 +536,23 @@ export class MediaProcessingService implements OnModuleInit {
         where: { id: media.id },
         data: { processingStatus: MediaProcessingStatus.PROCESSING },
       });
-      await this.event(media.id, 'PROCESSING_STARTED', {});
+      await this.event(media.id, PROCESSING_STARTED_EVENT, {});
 
       try {
-        const transcript = await this.transcribe(media, organizationId);
+        // A run after one that failed later on -- the analysis, a restart --
+        // reads the narration it already paid for. Every retry used to
+        // transcribe the whole recording again: the five-minute retry up to
+        // three times, the technician's Retry button each press, and every
+        // restart while it sat unfinished, each one a new bill from Deepgram or
+        // OpenAI for the same words. Timed or not: a provider that gave no
+        // timings the first time will not give them the second.
+        const stored = await this.storedTranscript(media.id, media.durationSeconds, { requireTimings: false });
+        const transcript = stored ?? (await this.transcribe(media, organizationId));
         // Full transcripts belong in the protected transcription tables, not
         // operational event payloads or logs.
         await this.event(media.id, 'TRANSCRIPTION_COMPLETED', {
           characters: transcript.text.length,
+          ...(stored ? { reused: true } : {}),
         });
 
         const findingCount = await this.analyze(media, transcript, organizationId);
@@ -621,8 +681,15 @@ export class MediaProcessingService implements OnModuleInit {
     }
   }
 
-  /** The narration already stored for a recording, when it has its timings. */
-  private async storedTranscript(mediaId: string, durationSeconds: number) {
+  /**
+   * The narration already stored for a recording, when it has its timings --
+   * or, with `requireTimings: false`, whenever it was transcribed at all.
+   */
+  private async storedTranscript(
+    mediaId: string,
+    durationSeconds: number,
+    { requireTimings = true }: { requireTimings?: boolean } = {},
+  ) {
     const job = await this.prisma.transcriptionJob.findUnique({
       where: { inspectionMediaId: mediaId },
       select: {
@@ -633,9 +700,12 @@ export class MediaProcessingService implements OnModuleInit {
         },
       },
     });
-    if (job?.status !== TranscriptionStatus.COMPLETED || !job.segments.length) return null;
+    if (job?.status !== TranscriptionStatus.COMPLETED) return null;
+    // Completed with no lines is a recording nobody spoke in: an answer, and
+    // the same answer a second transcription would give.
+    if (!job.segments.length) return requireTimings ? null : transcriptFrom([], durationSeconds);
     const transcript = transcriptFrom(transcriptLines(job.segments, durationSeconds), durationSeconds);
-    return transcript.timed ? transcript : null;
+    return transcript.timed || !requireTimings ? transcript : null;
   }
 
   /**

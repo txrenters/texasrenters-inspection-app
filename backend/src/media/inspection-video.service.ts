@@ -23,6 +23,7 @@ import { isAiFiled } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from '../technician/room-summary';
 import {
+  MAX_ANALYSIS_ATTEMPTS,
   MediaProcessingService,
   PROCESSING_FAILED_EVENT,
 } from '../technician/media-processing.service';
@@ -90,12 +91,9 @@ const STREAM_STATE_TO_PROCESSING: Record<string, MediaProcessingStatus> = {
 export const STREAM_ENCODING_FAILED = 'STREAM_ENCODING_FAILED';
 
 /**
- * Runs of transcription and analysis on one recording before a person has to
- * look: the first, and two automatic retries. Each run is paid for, and one
- * that fails the same way three times is not a passing blip.
+ * How long after a failed run the next one is tried. How many runs there are
+ * at most is `MAX_ANALYSIS_ATTEMPTS`, shared with the recovery after a restart.
  */
-const MAX_ANALYSIS_ATTEMPTS = 3;
-/** How long after a failed run the next one is tried. */
 const ANALYSIS_RETRY_DELAY_MS = 10 * 60_000;
 
 export interface UploadSessionInput {

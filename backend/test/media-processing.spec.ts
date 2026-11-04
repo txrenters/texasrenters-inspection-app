@@ -145,6 +145,8 @@ describe('media processing pipeline', () => {
         ]),
       },
       transcriptionJob: {
+        // Nothing transcribed yet: the first run.
+        findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({ id: 'transcription-1' }),
         update: jest.fn().mockResolvedValue({}),
       },
@@ -299,6 +301,7 @@ describe('media processing pipeline', () => {
         }),
         update: jest.fn().mockResolvedValue({}),
       },
+      transcriptionJob: { findUnique: jest.fn().mockResolvedValue(null) },
       mediaProcessingEvent: { create: jest.fn().mockResolvedValue({}) },
     };
     const aiSettings = {
@@ -1058,5 +1061,226 @@ describe('trying draft house rules on a recording', () => {
       harness.service.previewAnalysis('media-1', ORGANIZATION_ID, 'Scuffs are normal wear.'),
     ).rejects.toMatchObject({ code: 'NO_STORED_NARRATION' });
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What a retry costs (2026-11-04, after October's Mapbox bill: count the paid
+ * calls per action and per repeat).
+ *
+ * A run of transcription and analysis is tried again by the five-minute retry
+ * (up to three runs), by the technician's Retry button (each press) and by
+ * every restart that finds it unfinished. Each used to transcribe the whole
+ * recording again, a new bill from Deepgram or OpenAI for the same words. The
+ * narration is paid for once now; only the step that failed runs again.
+ */
+describe('a retry pays for the narration once', () => {
+  const NARRATION = 'There is a scuff mark on the wall near the window.';
+
+  /** A recording whose analysis keeps failing, with a database that remembers. */
+  function pipeline({ analysisFails = true }: { analysisFails?: boolean } = {}) {
+    let job: { status: string; segments: { startSeconds: number; endSeconds: number; text: string }[] } | null =
+      null;
+    let written: { startSeconds: number; endSeconds: number; text: string }[] = [];
+    const prisma = {
+      inspectionMedia: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'media-1',
+          inspectionId: 'inspection-1',
+          providerMediaId: 'local-key',
+          storageKey: 'inspection-media/org-1/media-1.mp4',
+          streamUid: null,
+          mimeType: 'video/mp4',
+          durationSeconds: 90,
+          processingStatus: 'FAILED',
+          inspectionArea: {
+            propertyArea: { id: 'property-area-1', name: 'Living Room', floor: null, baselineConditions: [] },
+            inspection: { inspectionType: 'MOVE_IN' },
+          },
+        }),
+        findUnique: jest.fn().mockResolvedValue({ inspectionAreaId: 'inspection-area-1' }),
+        update: jest.fn().mockResolvedValue({}),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue([]) },
+      transcriptionJob: {
+        findUnique: jest.fn(async () => job),
+        upsert: jest.fn().mockResolvedValue({ id: 'transcription-1' }),
+        update: jest.fn(async ({ data }: { data: { status: string } }) => {
+          if (data.status === 'COMPLETED') job = { status: 'COMPLETED', segments: written };
+          return {};
+        }),
+      },
+      transcriptSegment: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn(async ({ data }: { data: typeof written }) => {
+          written = data.map(({ startSeconds, endSeconds, text }) => ({ startSeconds, endSeconds, text }));
+          return { count: data.length };
+        }),
+      },
+      aiAnalysisJob: {
+        create: jest.fn().mockResolvedValue({ id: 'job-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      mediaProcessingEvent: { create: jest.fn().mockResolvedValue({}) },
+      inspection: {
+        findUnique: jest.fn().mockResolvedValue({ status: 'PROCESSING' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      $transaction: jest.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    };
+    const aiSettings = {
+      resolve: jest.fn(async (_org: string, provider?: AiProvider) => ({
+        provider: provider ?? AiProvider.OPENAI,
+        modelId: 'gpt-5.6-terra',
+        apiKey: 'test-key',
+      })),
+      recordUsage: jest.fn().mockResolvedValue(undefined),
+    };
+    const fetch = jest.fn(async (url: string) => {
+      if (String(url).includes('/audio/transcriptions'))
+        return { ok: true, status: 200, json: async () => ({ text: NARRATION }) };
+      if (analysisFails) return { ok: false, status: 500, json: async () => ({ error: { message: 'unavailable' } }) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify([FINDING]) }] }],
+          usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 },
+        }),
+      };
+    });
+    global.fetch = fetch as unknown as typeof global.fetch;
+    const service = new MediaProcessingService(
+      prisma as never,
+      { get: jest.fn().mockResolvedValue(Buffer.from([0, 0, 0, 0])) } as never,
+      aiSettings as never,
+    );
+    const transcriptions = () => fetch.mock.calls.filter(([url]) => String(url).includes('/audio/transcriptions')).length;
+    const analyses = () => fetch.mock.calls.filter(([url]) => String(url).includes('/v1/responses')).length;
+    return { service, prisma, transcriptions, analyses, setJob: (next: typeof job) => (job = next) };
+  }
+
+  it('transcribes once however often a failing analysis is tried again', async () => {
+    const harness = pipeline();
+
+    // The first run, two five-minute retries, five presses of Retry and two
+    // restarts: ten runs of one recording whose analysis never succeeds.
+    for (let run = 0; run < 10; run += 1) await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.transcriptions()).toBe(1);
+    // The step that failed is the one tried again.
+    expect(harness.analyses()).toBe(10);
+    const statuses = harness.prisma.inspectionMedia.update.mock.calls.map((call) => call[0].data.processingStatus);
+    expect(statuses.filter((status) => status === 'FAILED')).toHaveLength(10);
+  });
+
+  it('says the narration was reused, and finishes the recording with it', async () => {
+    const harness = pipeline({ analysisFails: false });
+    harness.setJob({ status: 'COMPLETED', segments: [{ startSeconds: 4, endSeconds: 9, text: NARRATION }] });
+
+    await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.transcriptions()).toBe(0);
+    expect(harness.prisma.transcriptionJob.upsert).not.toHaveBeenCalled();
+    expect(harness.prisma.inspectionFinding.createMany).toHaveBeenCalledTimes(1);
+    const completed = harness.prisma.mediaProcessingEvent.create.mock.calls.find(
+      (call) => call[0].data.eventType === 'TRANSCRIPTION_COMPLETED',
+    )?.[0].data.payloadSummary;
+    expect(completed).toEqual({ characters: NARRATION.length, reused: true });
+  });
+
+  /** Nobody spoke: that is the answer, and a second transcription would say it again. */
+  it('reuses a recording nobody spoke in, rather than transcribing silence twice', async () => {
+    const harness = pipeline({ analysisFails: false });
+    harness.setJob({ status: 'COMPLETED', segments: [] });
+
+    await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.transcriptions()).toBe(0);
+  });
+
+  it('transcribes again when the last transcription did not finish', async () => {
+    const harness = pipeline({ analysisFails: false });
+    harness.setJob({ status: 'RUNNING', segments: [] });
+
+    await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.transcriptions()).toBe(1);
+  });
+});
+
+/**
+ * Picking up after a restart. Every release restarts the backend; this used to
+ * queue any 25 unfinished recordings each time, with no count of how often each
+ * had already been tried.
+ */
+describe('recovering what a restart left unfinished', () => {
+  const stuck = (index: number, started: number) => ({
+    id: `media-${index}`,
+    organizationId: ORGANIZATION_ID,
+    _count: { processingEvents: started },
+  });
+
+  function recovery(rows: unknown[] | Error) {
+    const prisma = {
+      inspectionMedia: {
+        findMany: rows instanceof Error ? jest.fn().mockRejectedValue(rows) : jest.fn().mockResolvedValue(rows),
+      },
+    };
+    const service = new MediaProcessingService(prisma as never, {} as never, {} as never);
+    const queue = jest.spyOn(service, 'queue').mockImplementation(() => undefined);
+    return { service, prisma, queue };
+  }
+
+  it('queues only recordings with runs left, and no more than 25 a restart', async () => {
+    // Sixty unfinished: twenty already started three times, forty with runs left.
+    const rows = [
+      ...Array.from({ length: 20 }, (_, index) => stuck(index, 3)),
+      ...Array.from({ length: 40 }, (_, index) => stuck(100 + index, index % 3)),
+    ];
+    const { service, queue } = recovery(rows);
+
+    await expect(service.recoverInterrupted()).resolves.toEqual({ checked: 60, queued: 25, exhausted: 20 });
+
+    expect(queue).toHaveBeenCalledTimes(25);
+    expect(queue.mock.calls.every(([id]) => Number(String(id).split('-')[1]) >= 100)).toBe(true);
+  });
+
+  it('never queues a recording that has used its three runs, however many restarts there are', async () => {
+    const { service, queue } = recovery([stuck(1, 3), stuck(2, 7)]);
+
+    // A day of crash-restarts.
+    for (let restart = 0; restart < 50; restart += 1) await service.recoverInterrupted();
+
+    expect(queue).not.toHaveBeenCalled();
+  });
+
+  it('asks only for recordings with something to read, newest first, counting their runs', async () => {
+    const { service, prisma } = recovery([]);
+
+    await service.recoverInterrupted();
+
+    expect(prisma.inspectionMedia.findMany.mock.calls[0]![0]).toMatchObject({
+      where: {
+        processingStatus: { in: ['PENDING', 'PROCESSING'] },
+        // A Cloudflare upload still encoding is the webhook's to start.
+        OR: [{ streamUid: null }, { readyAt: { not: null } }],
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { _count: { select: { processingEvents: { where: { eventType: 'PROCESSING_STARTED' } } } } },
+    });
+  });
+
+  it('survives the database being unreachable', async () => {
+    const { service, queue } = recovery(new Error('database unreachable'));
+
+    await expect(service.recoverInterrupted()).resolves.toEqual({ checked: 0, queued: 0, exhausted: 0 });
+    expect(queue).not.toHaveBeenCalled();
   });
 });
