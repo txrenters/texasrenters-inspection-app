@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { createMatrixSource, fastestOrder, matrixUrl, parseMatrix, pathSeconds } from './route-order';
+import { createAllowance } from '@/lib/daily-allowance';
+
+import {
+  createMatrixSource,
+  fastestOrder,
+  matrixUrl,
+  parseMatrix,
+  pathSeconds,
+  stopsToTime,
+  straightLineDurations,
+} from './route-order';
 import type { LngLat } from './road-routes';
 
 /**
@@ -119,6 +129,22 @@ describe('the fastest order', () => {
   });
 });
 
+/** A fake Matrix API that answers the rows and columns asked for, and counts what it would bill. */
+function fakeMatrix(urls: string[], billed: { elements: number } = { elements: 0 }) {
+  return async (url: string) => {
+    urls.push(url);
+    const parsed = new URL(url);
+    const count = parsed.pathname.split('/driving/')[1]!.split(';').length;
+    const every = Array.from({ length: count }, (_, index) => index);
+    const pick = (name: string) => parsed.searchParams.get(name)?.split(';').map(Number) ?? every;
+    const sources = pick('sources');
+    const destinations = pick('destinations');
+    billed.elements += sources.length * destinations.length;
+    const durations = sources.map((from) => destinations.map((to) => (from === to ? 0 : 100 + from * 10 + to)));
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ code: 'Ok', durations }) };
+  };
+}
+
 describe('drive times from Mapbox', () => {
   const STOPS: LngLat[] = [
     [-95.37, 29.76],
@@ -151,12 +177,7 @@ describe('drive times from Mapbox', () => {
         waits.push(ms);
         clock += ms;
       },
-      fetch: async (url) => {
-        urls.push(url);
-        const count = new URL(url).pathname.split('/driving/')[1]!.split(';').length;
-        const durations = Array.from({ length: count }, (_, from) => Array.from({ length: count }, (_, to) => (from === to ? 0 : 100 + from * 10 + to)));
-        return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ code: 'Ok', durations }) };
-      },
+      fetch: fakeMatrix(urls),
     });
     const first = await source.durations(STOPS);
     const again = await source.durations([STOPS[2]!, STOPS[0]!, STOPS[1]!]);
@@ -164,11 +185,77 @@ describe('drive times from Mapbox', () => {
     // The same pairs, read from memory in the new order: stop 2 to stop 0 was 120.
     expect(again[0]![1]).toBe(first[2]![0]);
 
+    // A stop added: only its row and its column are asked for, two requests.
     await source.durations([...STOPS, [-95.34, 29.74]]);
     await source.durations([...STOPS, [-95.33, 29.73]]);
-    expect(urls).toHaveLength(3);
+    expect(urls).toHaveLength(5);
+    expect(new URL(urls[1]!).searchParams.get('sources')).toBe('3');
+    expect(new URL(urls[2]!).searchParams.get('destinations')).toBe('3');
     // Sixty a minute at most: the later requests waited their turn.
     expect(waits.filter((ms) => ms > 0).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('asks for one stop’s row and column, not the whole table again, with the sources and destinations named', () => {
+    const url = new URL(matrixUrl(STOPS, 'pk.test', { sources: [2] }));
+    expect(url.searchParams.get('sources')).toBe('2');
+    expect(url.searchParams.get('destinations')).toBeNull();
+    expect(parseMatrix({ code: 'Ok', durations: [[1, 2, 3]] }, 1, 3)).toEqual([[1, 2, 3]]);
+  });
+
+  it('picks the fewest stops whose rows and columns hold every pair not yet timed', () => {
+    const known = (rows: number[][], unknown: [number, number][]) => {
+      const table: (number | undefined)[][] = rows.map((row) => [...row]);
+      for (const [from, to] of unknown) table[from]![to] = undefined;
+      return table;
+    };
+    const square = [
+      [0, 1, 1, 1],
+      [1, 0, 1, 1],
+      [1, 1, 0, 1],
+      [1, 1, 1, 0],
+    ];
+    // The stop just added: nothing known about it.
+    expect(stopsToTime(known(square, [[3, 0], [3, 1], [3, 2], [0, 3], [1, 3], [2, 3]]))).toEqual([3]);
+    expect(stopsToTime(square)).toEqual([]);
+  });
+
+  /**
+   * October's lesson: count the billed calls per action. Building a day by
+   * clicking used to ask the whole table again at each click -- 2² + 3² + ...
+   * + 13² = 818 elements for a 13-stop day. Now each click asks for the new
+   * stop's row and column.
+   */
+  it('builds a 13-stop day, one click at a time, for about a fifth of the elements', async () => {
+    const urls: string[] = [];
+    const billed = { elements: 0 };
+    const source = createMatrixSource({ token: 'pk.test', sleep: async () => undefined, fetch: fakeMatrix(urls, billed) });
+    const day = Array.from({ length: 13 }, (_, index) => [-95.4 + index / 100, 29.7 + index / 200] as LngLat);
+
+    for (let stops = 2; stops <= day.length; stops += 1) await source.durations(day.slice(0, stops));
+
+    expect(billed.elements).toBe(180);
+    expect(billed.elements).toBeLessThan(818 / 4);
+  });
+
+  it('stops asking Mapbox once the day’s allowance is spent, and orders by straight lines instead', async () => {
+    const urls: string[] = [];
+    let told = 0;
+    const source = createMatrixSource({
+      token: 'pk.test',
+      sleep: async () => undefined,
+      fetch: fakeMatrix(urls),
+      allowance: createAllowance('test-matrix', 9, { storage: null }),
+      onAllowanceReached: () => (told += 1),
+    });
+
+    await source.durations(STOPS); // 9 elements: the whole allowance.
+    const estimated = await source.durations([...STOPS, [-95.34, 29.74]]);
+    await source.durations([...STOPS, [-95.33, 29.73]]);
+
+    expect(urls).toHaveLength(1);
+    expect(estimated).toEqual(straightLineDurations([...STOPS, [-95.34, 29.74]]));
+    // Said once, not after every click.
+    expect(told).toBe(1);
   });
 
   it('refuses more than 25 stops without asking', async () => {
