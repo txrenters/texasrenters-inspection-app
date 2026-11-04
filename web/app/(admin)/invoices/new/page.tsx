@@ -126,8 +126,8 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       },
       {
         onSuccess: (invoice) => {
-          toast.success(`Invoice ${invoice.number ? `#${invoice.number}` : ''} created`, {
-            description: `${formatMoney(invoice.totalCents)} to ${invoice.clientName}, in Jobber too.`,
+          toast.success(invoice.number ? `Invoice #${invoice.number} created` : 'Invoice created', {
+            description: `${formatMoney(invoice.totalCents)} to ${invoice.clientName}.`,
           });
           router.push(`/invoices/${invoice.id}`);
         },

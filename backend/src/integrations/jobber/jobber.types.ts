@@ -31,6 +31,11 @@ export interface JobberConfig {
    * `pushEditsEnabled`, which the rest of the console already relies on.
    */
   dayActionsEnabled: boolean;
+  /**
+   * Whether the console may make an invoice or record a payment. Off until the
+   * console sends them to Jobber: before that, either would exist here only.
+   */
+  invoiceWritesEnabled: boolean;
 }
 
 export interface JobberTokenResponse {

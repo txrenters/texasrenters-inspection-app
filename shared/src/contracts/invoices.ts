@@ -307,3 +307,20 @@ export function paymentProblem(
 /** Whether an invoice can still take a payment: sent, and something still owed. */
 export const acceptsPayment = (invoice: Pick<InvoiceSummary, 'status' | 'balanceCents'>) =>
   (invoice.status === 'AWAITING_PAYMENT' || invoice.status === 'PAST_DUE') && invoice.balanceCents > 0;
+
+/**
+ * The status as the office reads it on a day: an invoice awaiting payment
+ * whose due day has gone is past due. Worked out when read, never stored, so
+ * it cannot be a day stale.
+ */
+export function invoiceStatusOn(stored: InvoiceStatus, dueOn: string | null, today: string): InvoiceStatus {
+  if (stored !== 'AWAITING_PAYMENT' && stored !== 'PAST_DUE') return stored;
+  return dueOn !== null && dueOn < today ? 'PAST_DUE' : 'AWAITING_PAYMENT';
+}
+
+/** "Net 30", "Due upon receipt"; null when there are no terms. */
+export function paymentTermsLabel(days: number | null | undefined): string | null {
+  if (days === null || days === undefined) return null;
+  return PAYMENT_TERMS.find((terms) => terms.days === days)?.label ?? `Net ${days}`;
+}
+

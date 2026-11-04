@@ -74,6 +74,11 @@ export function getJobberConfig(env: NodeJS.ProcessEnv = process.env): JobberCon
     // built, so its Send / Cancel / Complete buttons stay hidden until one has
     // been tried on a demo visit. Reading from Jobber is not affected.
     dayActionsEnabled: env.JOBBER_DAY_ACTIONS_ENABLED === 'true',
+    // Off unless exactly "true" (2026-11-05). Jobber is the record of what
+    // the office billed and was paid. Until the console sends an invoice or a
+    // payment to Jobber, one made here would be a second record that Jobber,
+    // and the office working in it, never sees.
+    invoiceWritesEnabled: env.JOBBER_INVOICE_WRITES_ENABLED === 'true',
   };
   if (config.redirectUri) {
     const redirect = new URL(config.redirectUri);

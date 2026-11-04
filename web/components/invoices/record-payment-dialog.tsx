@@ -90,7 +90,7 @@ export function RecordPaymentDialog({
       {
         onSuccess: (saved) => {
           toast.success(`${formatMoney(amountCents)} recorded`, {
-            description: saved.balanceCents > 0 ? `${formatMoney(saved.balanceCents)} still owed.` : 'The invoice is paid, in Jobber too.',
+            description: saved.balanceCents > 0 ? `${formatMoney(saved.balanceCents)} still owed.` : 'The invoice is paid.',
           });
           onClose();
         },
@@ -166,7 +166,7 @@ export function RecordPaymentDialog({
               value={note}
             />
             <FieldDescription aria-live="polite" className={problem ? 'text-destructive' : undefined}>
-              {problem ?? 'Saved in Jobber, and kept here with who recorded it.'}
+              {problem ?? 'Sent to Jobber, and kept here with who recorded it.'}
             </FieldDescription>
           </Field>
         </div>

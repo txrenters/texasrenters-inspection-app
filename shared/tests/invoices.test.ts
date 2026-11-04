@@ -6,10 +6,31 @@ import {
   formatMoney,
   formatMoneyShort,
   invoiceLinesProblem,
+  invoiceStatusOn,
   invoiceTotals,
   parseMoney,
   paymentProblem,
+  paymentTermsLabel,
 } from '../src/contracts/invoices';
+
+/** Past due is worked out on the day it is read, never stored. */
+describe('the status on a day', () => {
+  it('is past due once the due day has gone, and only for an invoice awaiting payment', () => {
+    expect(invoiceStatusOn('AWAITING_PAYMENT', '2026-11-04', '2026-11-05')).toBe('PAST_DUE');
+    // Due today is not past due yet.
+    expect(invoiceStatusOn('AWAITING_PAYMENT', '2026-11-05', '2026-11-05')).toBe('AWAITING_PAYMENT');
+    expect(invoiceStatusOn('AWAITING_PAYMENT', null, '2026-11-05')).toBe('AWAITING_PAYMENT');
+    expect(invoiceStatusOn('PAID', '2026-01-01', '2026-11-05')).toBe('PAID');
+    expect(invoiceStatusOn('DRAFT', '2026-01-01', '2026-11-05')).toBe('DRAFT');
+  });
+
+  it("names the terms as Jobber does", () => {
+    expect(paymentTermsLabel(30)).toBe('Net 30');
+    expect(paymentTermsLabel(0)).toBe('Due upon receipt');
+    expect(paymentTermsLabel(21)).toBe('Net 21');
+    expect(paymentTermsLabel(null)).toBeNull();
+  });
+});
 
 /** Money in the console: whole cents, never floating-point dollars. */
 describe('money', () => {
