@@ -345,6 +345,72 @@ describe('a phone that goes quiet', () => {
     expect(stretches[1]).toMatchObject({ durationSeconds: 2_400, quietSeconds: 2_400 });
   });
 
+  /**
+   * An iPhone standing still records nothing until it has moved 25 m, so the
+   * fix that ends the silence is the technician walking out, just past the
+   * circle. Over 14 days to 2026-11-03 this filed 463 minutes inside houses
+   * as general time.
+   */
+  it('keeps the silence on site when the phone wakes just outside the circle, on the way out', () => {
+    const { stretches } = computeDayLedger(
+      // Ten minutes inside, forty silent, then woken 40 m out and walking on to the van and away.
+      [...standing(0, 600, 5), ...driving(3_000, 300, 40, 600)],
+      [HOME],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home']);
+    // Arrival to the fix that woke the phone: the visit, silence and all.
+    expect(stretches[0]!).toMatchObject({ durationSeconds: 3_000, quietSeconds: 2_400 });
+  });
+
+  it('leaves from the fix that woke the phone, as from any other, once the next ones hold outside', () => {
+    const { stretches } = computeDayLedger(
+      [...standing(0, 600, 5), ...driving(3_000, 300, 45, 1_200), ...standing(3_400, 600, 4_000)],
+      [HOME, SECOND],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:second']);
+    expect(stretches[0]!.endedAt).toBe(START + 3_000 * 1000);
+    expect(stretches[1]!.quietSeconds).toBe(0);
+  });
+
+  it('goes back to the circle without leaving, when the phone wakes outside and they walk back in', () => {
+    const { stretches } = computeDayLedger(
+      [...standing(0, 600, 5), fix(3_000, 42), ...standing(3_030, 600, 5)],
+      [HOME],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home']);
+    expect(stretches[0]!.durationSeconds).toBe(3_630);
+  });
+
+  it('still calls the silence general time when the phone wakes past the margin', () => {
+    const { stretches } = computeDayLedger(
+      // 30 m circle + 30 m margin = 60 m. Woken 80 m out is somewhere else.
+      [...standing(0, 600, 5), ...driving(3_000, 300, 80, 900)],
+      [HOME],
+    );
+
+    expect(shape(stretches)).toEqual(['ONSITE:home']);
+    expect(stretches[0]!).toMatchObject({ durationSeconds: 600, quietSeconds: 0 });
+  });
+
+  it('reaches as far past a property’s own leaving distance', () => {
+    const bigLot: DayFence = { ...HOME, enterRadiusMeters: 80, exitRadiusMeters: 120 };
+    const { stretches } = computeDayLedger([...standing(0, 600, 5), ...driving(3_000, 300, 140, 900)], [bigLot]);
+
+    expect(stretches[0]!).toMatchObject({ durationSeconds: 3_000, quietSeconds: 2_400 });
+  });
+
+  it('never takes a fix at another property for the way out of this one', () => {
+    // The house next door, 50 m away: inside this one's margin, but a visit of its own.
+    const NEXT_DOOR = fence('next-door', 50);
+    const { stretches } = computeDayLedger([...standing(0, 600, 5), ...standing(3_000, 600, 50)], [HOME, NEXT_DOOR]);
+
+    expect(shape(stretches)).toEqual(['ONSITE:home', 'GENERAL:-', 'ONSITE:next-door']);
+    expect(stretches[1]).toMatchObject({ durationSeconds: 2_400, quietSeconds: 2_400 });
+  });
+
   it('throws away a fix too vague to place, and says how many', () => {
     const { discardedFixes, stretches } = computeDayLedger(
       // A tower fix half a kilometre wide, in the middle of a visit.
