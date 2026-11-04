@@ -131,6 +131,18 @@ export class JobberClient {
         `Jobber GraphQL error${correlationId ? ` [${correlationId}]` : ''}: ${codes}`,
       );
       const throttled = body.errors.some((error) => error.extensions?.code === 'THROTTLED');
+      /**
+       * How Jobber says the app lacks a scope: the object is "hidden due to
+       * permissions", with no code of its own. Told apart so a reader can say
+       * which setting is missing instead of failing the same way every tick.
+       * Only matched, never repeated: the provider's text stays out of logs.
+       */
+      if (!throttled && body.errors.some((error) => /hidden due to permissions/i.test(error.message ?? '')))
+        throw new JobberError(
+          'Jobber has not given this app access to that data.',
+          'JOBBER_SCOPE_MISSING',
+          403,
+        );
       throw new JobberError(
         'Jobber rejected the query.',
         'JOBBER_GRAPHQL_ERROR',

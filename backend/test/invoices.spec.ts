@@ -2,7 +2,7 @@ import { MACHINE_FORBIDDEN_PERMISSIONS } from '@texasrenters/shared';
 import { Prisma, UserRole } from '@prisma/client';
 
 import { InvoicesController, PaymentsController } from '../src/admin/invoices.controller';
-import { InvoicesService, draftLines, priceList, servicesDone } from '../src/admin/invoices.service';
+import { InvoicesService, draftLines, jobberRead, priceList, servicesDone } from '../src/admin/invoices.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 /**
@@ -96,6 +96,7 @@ function database() {
       create: jest.fn().mockResolvedValue({ id: 'payment-1' }),
     },
     inspection: { findFirst: jest.fn().mockResolvedValue(finishedVisit()) },
+    jobberConnection: { findUnique: jest.fn().mockResolvedValue(null) },
     auditLog: { create: jest.fn() },
     $transaction: jest.fn(),
   };
@@ -156,6 +157,39 @@ describe('the invoice list', () => {
     const db = database();
     await serviceOver(db).list(office, { pageSize: 5000 });
     expect(db.invoice.findMany.mock.calls[0][0].take).toBe(100);
+  });
+
+  it("says where reading Jobber's invoices stands, for an empty list to explain itself", async () => {
+    const db = database();
+    db.jobberConnection.findUnique.mockResolvedValue({
+      status: 'CONNECTED',
+      invoiceReadProblem: 'NOT_PERMITTED',
+      invoiceReadCheckedAt: new Date('2026-11-05T12:00:00.000Z'),
+      invoiceReadCompletedAt: null,
+    });
+
+    const list = await serviceOver(db).list(office, {});
+
+    expect(db.jobberConnection.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG } }));
+    expect(list.jobberRead).toEqual({ problem: 'NOT_PERMITTED', checkedAt: '2026-11-05T12:00:00.000Z', firstReadDone: false });
+  });
+});
+
+describe("where reading Jobber's invoices stands", () => {
+  const connected = { status: 'CONNECTED' as const, invoiceReadProblem: null, invoiceReadCheckedAt: null, invoiceReadCompletedAt: null };
+
+  it('is "not connected" without a live connection, whatever was read before', () => {
+    expect(jobberRead(null)).toEqual({ problem: 'NOT_CONNECTED', checkedAt: null, firstReadDone: false });
+    expect(jobberRead({ ...connected, status: 'DISCONNECTED', invoiceReadCompletedAt: new Date() })).toMatchObject({
+      problem: 'NOT_CONNECTED',
+      firstReadDone: true,
+    });
+  });
+
+  it('passes on only the problems the page can explain', () => {
+    expect(jobberRead({ ...connected, invoiceReadProblem: 'FAILED' }).problem).toBe('FAILED');
+    expect(jobberRead({ ...connected, invoiceReadProblem: 'SOMETHING_ELSE' }).problem).toBeNull();
+    expect(jobberRead({ ...connected, invoiceReadCompletedAt: new Date() })).toMatchObject({ problem: null, firstReadDone: true });
   });
 });
 

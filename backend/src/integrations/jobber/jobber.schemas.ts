@@ -100,3 +100,74 @@ export const jobberWebhookSchema = z.object({
 });
 
 export type JobberWebhookEvent = z.infer<typeof jobberWebhookSchema>['data']['webHookEvent'];
+
+/**
+ * A Jobber invoice as `invoiceSelection` asks for it (2026-11-05).
+ *
+ * The statuses are Jobber's whole enum on the pinned schema version, so a new
+ * one cannot appear without the pin moving; an unknown one fails the page
+ * rather than being filed under a guess.
+ */
+export const JOBBER_INVOICE_STATUSES = [
+  'draft',
+  'awaiting_payment',
+  'sent_not_due',
+  'past_due',
+  'paid',
+  'bad_debt',
+] as const;
+
+const jobberDateTime = z.string().datetime({ offset: true });
+
+export const jobberInvoiceSchema = z.object({
+  id: z.string().min(1),
+  invoiceNumber: z.union([z.string(), z.number()]).nullish(),
+  subject: z.string().nullish(),
+  invoiceStatus: z.enum(JOBBER_INVOICE_STATUSES),
+  issuedDate: jobberDateTime.nullish(),
+  dueDate: jobberDateTime.nullish(),
+  message: z.string().nullish(),
+  jobberWebUri: z.string().nullish(),
+  updatedAt: jobberDateTime,
+  amounts: z
+    .object({ subtotal: z.number(), taxAmount: z.number(), total: z.number(), invoiceBalance: z.number() })
+    .nullish(),
+  billingAddress: address.nullish(),
+  client: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
+  jobs: z.object({ nodes: z.array(z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish() })) }),
+  visits: z.object({ nodes: z.array(z.object({ id: z.string() })) }),
+  lineItems: z.object({
+    totalCount: z.number().int(),
+    nodes: z.array(
+      z.object({
+        name: z.string(),
+        description: z.string().nullish(),
+        quantity: z.number(),
+        unitPrice: z.number(),
+        totalPrice: z.number(),
+      }),
+    ),
+  }),
+  paymentRecords: z.object({
+    totalCount: z.number().int(),
+    nodes: z.array(
+      z.object({ id: z.string().min(1), amount: z.number(), entryDate: jobberDateTime, adjustmentType: z.string() }),
+    ),
+  }),
+});
+
+export const jobberInvoicesPageSchema = z.object({
+  invoices: z.object({
+    nodes: z.array(jobberInvoiceSchema),
+    pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }),
+  }),
+});
+
+export const jobberInvoiceByIdSchema = z.object({ invoice: jobberInvoiceSchema.nullable() });
+
+export const jobberPaymentRecordInvoiceSchema = z.object({
+  paymentRecord: z.object({ invoice: z.object({ id: z.string() }).nullish() }).nullable(),
+});
+
+export type JobberInvoice = z.infer<typeof jobberInvoiceSchema>;
+export type JobberInvoicesPage = z.infer<typeof jobberInvoicesPageSchema>;

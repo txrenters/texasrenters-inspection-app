@@ -3,6 +3,7 @@ import { CronJob } from 'cron';
 
 import { withTenant } from '../../database/tenant-context';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
+import { JobberInvoiceWorker } from './jobber-invoice.worker';
 import { JobberOutboundWorker } from './jobber-outbound.worker';
 import { JobberSyncWorker } from './jobber-sync.worker';
 
@@ -33,6 +34,7 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(JobberSyncWorker) private readonly worker: JobberSyncWorker,
     @Inject(JobberOutboundWorker) private readonly outbound: JobberOutboundWorker,
+    @Inject(JobberInvoiceWorker) private readonly invoices: JobberInvoiceWorker,
   ) {}
 
   onModuleInit() {
@@ -126,6 +128,21 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error(
         `Jobber push failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+    try {
+      // Last, and bounded: the visits are what technicians drive to, so they
+      // never wait behind the invoices' first read (JobberInvoiceWorker).
+      const invoices = await withTenant(organizationId, () => this.invoices.run(organizationId));
+      if (invoices.pages || (invoices.problem && !invoices.skipped))
+        this.logger.log(
+          `Jobber invoices (${invoices.mode}): ${invoices.pages} pages, ${invoices.created} new, ` +
+            `${invoices.updated} updated, ${invoices.readAlone} read alone` +
+            `${invoices.caughtUp ? ', caught up' : ''}${invoices.problem ? `, stopped: ${invoices.problem}` : ''}.`,
+        );
+    } catch (error) {
+      this.logger.error(
+        `Jobber invoice read failed: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
     } finally {
       this.running = false;

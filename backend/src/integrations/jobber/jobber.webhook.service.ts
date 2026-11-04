@@ -3,6 +3,7 @@ import { WebhookProcessingStatus } from '@prisma/client';
 
 import { PrismaService } from '../../common/prisma.service';
 import { withTenant } from '../../database/tenant-context';
+import { JobberInvoiceWorker } from '../../workers/jobber-sync/jobber-invoice.worker';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
 import { JobberTokenService } from './jobber.tokens.service';
 import { JOBBER_SOURCE_SYSTEM } from './jobber.constants';
@@ -16,6 +17,16 @@ import type { JobberWebhookEvent } from './jobber.schemas';
  */
 const VISIT_TOPICS = new Set(['VISIT_CREATE', 'VISIT_UPDATE', 'VISIT_COMPLETE']);
 
+/**
+ * Invoice and payment topics (2026-11-05), read from Jobber's schema. They fire
+ * only once the app subscribes to them in the Developer Center; until then the
+ * scheduler's invoice read keeps the copy current every few minutes. A payment
+ * reads its invoice again, since the invoice carries both the payment and the
+ * balance it changed.
+ */
+const INVOICE_TOPICS = new Set(['INVOICE_CREATE', 'INVOICE_UPDATE']);
+const PAYMENT_TOPICS = new Set(['PAYMENT_CREATE', 'PAYMENT_UPDATE', 'PAYMENT_DESTROY']);
+
 @Injectable()
 export class JobberWebhookService {
   private readonly logger = new Logger(JobberWebhookService.name);
@@ -24,6 +35,7 @@ export class JobberWebhookService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(JobberSyncWorker) private readonly sync: JobberSyncWorker,
     @Inject(JobberTokenService) private readonly tokens: JobberTokenService,
+    @Inject(JobberInvoiceWorker) private readonly invoices: JobberInvoiceWorker,
   ) {}
 
   /**
@@ -107,6 +119,12 @@ export class JobberWebhookService {
         this.logger.log(`Jobber disconnected ${connection.organizationId} by webhook.`);
       } else if (VISIT_TOPICS.has(event.topic)) {
         await this.sync.syncVisit(connection.organizationId, event.itemId);
+      } else if (INVOICE_TOPICS.has(event.topic)) {
+        await this.invoices.refreshInvoice(connection.organizationId, event.itemId);
+      } else if (event.topic === 'INVOICE_DESTROY') {
+        await this.invoices.removeInvoice(connection.organizationId, event.itemId);
+      } else if (PAYMENT_TOPICS.has(event.topic)) {
+        await this.invoices.refreshForPayment(connection.organizationId, event.itemId);
       } else {
         // Subscribed to something we do not act on. Recorded, not an error.
         await this.finish(providerEventId, WebhookProcessingStatus.IGNORED_DUPLICATE);

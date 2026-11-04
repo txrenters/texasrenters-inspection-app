@@ -162,6 +162,25 @@ export interface InvoiceList {
   filterCounts: Record<InvoiceFilter, number>;
   /** When the copy was last brought up to date from Jobber; null before the first. */
   syncedAt: string | null;
+  /** Where reading Jobber's invoices stands, so an empty list can say why. */
+  jobberRead: InvoiceJobberRead;
+}
+
+/**
+ * Why the copy may be empty or behind (2026-11-05):
+ * - NOT_CONNECTED: Jobber is not connected.
+ * - NOT_PERMITTED: Jobber hides invoices from the app, because its Invoices
+ *   scope is off in Jobber's Developer Center.
+ * - FAILED: the last read failed. It is tried again within the hour.
+ */
+export type InvoiceJobberProblem = 'NOT_CONNECTED' | 'NOT_PERMITTED' | 'FAILED';
+
+export interface InvoiceJobberRead {
+  problem: InvoiceJobberProblem | null;
+  /** When the console last asked Jobber; null before it ever has. */
+  checkedAt: string | null;
+  /** The first read of every invoice has finished. Until then, more appear every few minutes. */
+  firstReadDone: boolean;
 }
 
 /** A recorded payment, with the invoice it paid, as the Payments list shows it. */

@@ -83,6 +83,7 @@ const LIST: InvoiceList = {
   issued: { last30: bucket(198, 1_110_000), previous30: bucket(160, 900_000) },
   filterCounts: { all: 8674, past_due: 206, not_yet_due: 240, awaiting_payment: 446, draft: 100, paid: 8128, bad_debt: 0, voided: 0 },
   syncedAt: '2026-11-05T17:58:00.000Z',
+  jobberRead: { problem: null, checkedAt: '2026-11-05T17:58:00.000Z', firstReadDone: true },
 };
 
 const DRAFT: InvoiceDraft = {
@@ -146,6 +147,34 @@ describe('the invoices list', () => {
 
     expect(screen.getByText('No invoices')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Jobber connection' })).toHaveAttribute('href', '/integrations/jobber');
+  });
+
+  it('names the missing Jobber scope when Jobber hides invoices from the app', () => {
+    hooks.useInvoices.mockReturnValue(
+      ready({
+        ...LIST,
+        items: [],
+        total: 0,
+        totalPages: 0,
+        jobberRead: { problem: 'NOT_PERMITTED', checkedAt: '2026-11-05T17:58:00.000Z', firstReadDone: false },
+      }),
+    );
+    render(<InvoicesPage />);
+
+    expect(screen.getByText(/Add the Invoices read scope to the app in Jobber's Developer Center, then reconnect Jobber/)).toBeInTheDocument();
+  });
+
+  it('says the first read is under way, with or without invoices yet', () => {
+    const reading = { problem: null, checkedAt: '2026-11-05T17:58:00.000Z', firstReadDone: false };
+    hooks.useInvoices.mockReturnValue(ready({ ...LIST, items: [], total: 0, totalPages: 0, jobberRead: reading }));
+    const { unmount } = render(<InvoicesPage />);
+    expect(screen.getByText(/being read for the first time/)).toBeInTheDocument();
+    unmount();
+
+    hooks.useInvoices.mockReturnValue(ready({ ...LIST, jobberRead: reading }));
+    render(<InvoicesPage />);
+    expect(screen.getByText(/Still reading Jobber's invoices for the first time/)).toBeInTheDocument();
+    expect(screen.queryByText(/Up to date with Jobber/)).not.toBeInTheDocument();
   });
 });
 

@@ -2700,6 +2700,20 @@ model JobberConnection {
   /// Sanitized. Never the provider body, which echoes the request.
   lastSyncError          String?
   lastSyncVisitCount     Int?
+  /// Reading Jobber's invoices into the console's copy (2026-11-05). The first
+  /// read pages every invoice by creation with a kept cursor, from
+  /// `invoiceReadStartedAt`; once it finishes (`invoiceReadCompletedAt`), each
+  /// tick reads only what changed after `invoiceReadThrough`, Jobber's latest
+  /// "updated at" applied.
+  invoiceReadCursor      String?
+  invoiceReadStartedAt   DateTime?
+  invoiceReadCompletedAt DateTime?
+  invoiceReadThrough     DateTime?
+  /// When the console last asked, and why the last attempt stopped:
+  /// NOT_PERMITTED (Jobber hides invoices from the app: its Invoices scope is
+  /// off) or FAILED. Null when the last attempt worked.
+  invoiceReadCheckedAt   DateTime?
+  invoiceReadProblem     String?
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
   organization           Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
