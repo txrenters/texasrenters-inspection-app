@@ -19,9 +19,12 @@
  * which is every day the office plans -- and a local search beyond that.
  */
 
+import { haversineMeters } from '@texasrenters/shared';
+import { toast } from 'sonner';
 import { z } from 'zod';
 
 import { MAPBOX_TOKEN } from '@/components/mapbox-token';
+import { BROWSER_MATRIX_ELEMENTS_A_DAY, createAllowance, type Allowance } from '@/lib/daily-allowance';
 
 import type { LngLat } from './road-routes';
 
@@ -169,9 +172,19 @@ const MATRIX = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving';
 /** The most stops Mapbox takes in one driving matrix; past it the answer is a 422. */
 export const MAX_MATRIX_STOPS = 25;
 
-export function matrixUrl(coordinates: readonly LngLat[], token: string): string {
+/**
+ * The Matrix API's address for these stops: every pair, or only the rows and
+ * columns named. Mapbox bills a matrix by element -- rows times columns -- so
+ * asking for one stop's row and column costs 2n, where the whole table is n².
+ */
+export function matrixUrl(
+  coordinates: readonly LngLat[],
+  token: string,
+  only: { sources?: readonly number[]; destinations?: readonly number[] } = {},
+): string {
   const path = coordinates.map(([longitude, latitude]) => `${longitude.toFixed(6)},${latitude.toFixed(6)}`).join(';');
-  return `${MATRIX}/${path}?annotations=duration&access_token=${encodeURIComponent(token)}`;
+  const pick = (name: string, indices?: readonly number[]) => (indices ? `&${name}=${indices.join(';')}` : '');
+  return `${MATRIX}/${path}?annotations=duration${pick('sources', only.sources)}${pick('destinations', only.destinations)}&access_token=${encodeURIComponent(token)}`;
 }
 
 const matrixSchema = z.object({
@@ -180,15 +193,34 @@ const matrixSchema = z.object({
   durations: z.array(z.array(z.number().nullable())).optional(),
 });
 
-/** What Mapbox answered, as drive seconds from each stop to each other -- or why it is not that. */
-export function parseMatrix(body: unknown, count: number): number[][] {
+/**
+ * What Mapbox answered, as drive seconds from each source to each destination
+ * -- or why it is not that. `rows` and `columns` are how many were asked for;
+ * a square table of `count` when given one number.
+ */
+export function parseMatrix(body: unknown, rows: number, columns = rows): number[][] {
   const parsed = matrixSchema.safeParse(body);
   if (!parsed.success) throw new Error('Mapbox sent back something that is not a table of drive times.');
   const { code, message, durations } = parsed.data;
   if (code !== 'Ok' || !durations) throw new Error(message ?? `Mapbox could not time the drives (${code}).`);
-  if (durations.length !== count || durations.some((row) => row.length !== count))
+  if (durations.length !== rows || durations.some((row) => row.length !== columns))
     throw new Error('Mapbox timed a different number of stops.');
-  return durations.map((row, from) => row.map((seconds, to) => (from === to ? 0 : (seconds ?? UNREACHABLE_S))));
+  return durations.map((row) => row.map((seconds) => seconds ?? UNREACHABLE_S));
+}
+
+/** Roughly city driving, for the order of stops when Mapbox is not asked: only the comparison matters. */
+const ESTIMATE_METRES_PER_SECOND = 11;
+
+/** Drive seconds from straight-line distance: the order it gives is the nearest-stop sense of the map. */
+export function straightLineDurations(coordinates: readonly LngLat[]): number[][] {
+  return coordinates.map(([fromLongitude, fromLatitude], from) =>
+    coordinates.map(([toLongitude, toLatitude], to) =>
+      from === to
+        ? 0
+        : haversineMeters({ latitude: fromLatitude, longitude: fromLongitude }, { latitude: toLatitude, longitude: toLongitude }) /
+          ESTIMATE_METRES_PER_SECOND,
+    ),
+  );
 }
 
 type Fetcher = (url: string) => Promise<{
@@ -209,14 +241,50 @@ export interface MatrixSourceOptions {
   gapMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * How many elements this browser may still ask for today. Past it the order
+   * is worked out from straight-line distances instead, and Mapbox is not asked.
+   */
+  allowance?: Allowance;
+  /** Told once a page, the first time the allowance turns a request away. */
+  onAllowanceReached?: () => void;
 }
 
 export interface MatrixSource {
-  /** Drive seconds between every pair of these stops, from memory when every pair is known. */
+  /**
+   * Drive seconds between every pair of these stops: from memory when every
+   * pair is known, from Mapbox for the pairs that are not, or estimated from
+   * straight lines once today's allowance is spent.
+   */
   durations(coordinates: readonly LngLat[]): Promise<number[][]>;
 }
 
 const pointKey = ([longitude, latitude]: LngLat) => `${longitude.toFixed(6)},${latitude.toFixed(6)}`;
+
+/**
+ * The fewest stops whose rows and columns hold every pair not yet timed: the
+ * stop just added, as a rule, when a group grows by a click. Greedy -- the
+ * stop missing the most pairs first -- which is exact for the usual case and
+ * never worse than every stop.
+ */
+export function stopsToTime(table: readonly (readonly (number | undefined)[])[]): number[] {
+  const missing = new Set<string>();
+  table.forEach((row, from) =>
+    row.forEach((seconds, to) => {
+      if (from !== to && seconds === undefined) missing.add(`${from}|${to}`);
+    }),
+  );
+  const chosen: number[] = [];
+  while (missing.size) {
+    const counts = new Map<number, number>();
+    for (const pair of missing)
+      for (const stop of pair.split('|').map(Number)) counts.set(stop, (counts.get(stop) ?? 0) + 1);
+    const [best] = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0] - right[0])[0]!;
+    chosen.push(best);
+    for (const pair of [...missing]) if (pair.split('|').map(Number).includes(best)) missing.delete(pair);
+  }
+  return chosen.sort((left, right) => left - right);
+}
 
 export function createMatrixSource(options: MatrixSourceOptions): MatrixSource {
   const gapMs = options.gapMs ?? 1100;
@@ -227,66 +295,98 @@ export function createMatrixSource(options: MatrixSourceOptions): MatrixSource {
   let nextSlot = 0;
   /** One request at a time, in the order asked. */
   let line: Promise<unknown> = Promise.resolve();
+  let toldOfAllowance = false;
 
-  const known = (coordinates: readonly LngLat[]): number[][] | null => {
-    const keys = coordinates.map(pointKey);
-    const table: number[][] = [];
-    for (const from of keys) {
-      const row: number[] = [];
-      for (const to of keys) {
-        const seconds = from === to ? 0 : pairs.get(`${from}|${to}`);
-        if (seconds === undefined) return null;
-        row.push(seconds);
-      }
-      table.push(row);
-    }
-    return table;
-  };
+  const lookup = (keys: readonly string[]) =>
+    keys.map((from) => keys.map((to) => (from === to ? 0 : pairs.get(`${from}|${to}`))));
 
-  const request = async (coordinates: readonly LngLat[], attempt = 0): Promise<number[][]> => {
+  const request = async (
+    coordinates: readonly LngLat[],
+    only: { sources?: readonly number[]; destinations?: readonly number[] },
+    attempt = 0,
+  ): Promise<number[][]> => {
     const slot = Math.max(now(), nextSlot);
     nextSlot = slot + gapMs;
     if (slot > now()) await sleep(slot - now());
-    const response = await options.fetch(matrixUrl(coordinates, options.token));
+    const response = await options.fetch(matrixUrl(coordinates, options.token, only));
     if (response.status === 429 && attempt < 3) {
       const seconds = Number(response.headers.get('retry-after'));
       await sleep((Number.isFinite(seconds) && seconds > 0 ? seconds : 2 ** attempt) * 1000);
-      return request(coordinates, attempt + 1);
+      return request(coordinates, only, attempt + 1);
     }
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       const message = (body as { message?: unknown } | null)?.message;
       throw new Error(typeof message === 'string' ? message : `Mapbox answered ${response.status}.`);
     }
-    return parseMatrix(body, coordinates.length);
+    return parseMatrix(body, only.sources?.length ?? coordinates.length, only.destinations?.length ?? coordinates.length);
+  };
+
+  /** Files what Mapbox answered under the stops it was asked about. */
+  const remember = (keys: readonly string[], table: number[][], sources: readonly number[], destinations: readonly number[]) =>
+    table.forEach((row, r) =>
+      row.forEach((seconds, c) => {
+        const from = sources[r]!;
+        const to = destinations[c]!;
+        if (from !== to) pairs.set(`${keys[from]}|${keys[to]}`, seconds);
+      }),
+    );
+
+  const fill = async (coordinates: readonly LngLat[]): Promise<number[][]> => {
+    const keys = coordinates.map(pointKey);
+    const every = coordinates.map((_, index) => index);
+    const fresh = stopsToTime(lookup(keys));
+    // Their rows and their columns, two requests billed apart, when that is
+    // fewer elements than the whole table.
+    const partial = fresh.length * coordinates.length * 2;
+    const whole = coordinates.length * coordinates.length;
+    const elements = Math.min(partial, whole);
+
+    if (options.allowance && !options.allowance.fits(elements)) {
+      if (!toldOfAllowance) {
+        toldOfAllowance = true;
+        options.onAllowanceReached?.();
+      }
+      return straightLineDurations(coordinates);
+    }
+    options.allowance?.spend(elements);
+
+    if (partial < whole) {
+      remember(keys, await request(coordinates, { sources: fresh }), fresh, every);
+      remember(keys, await request(coordinates, { destinations: fresh }), every, fresh);
+    } else remember(keys, await request(coordinates, {}), every, every);
+    return lookup(keys).map((row) => row.map((seconds) => seconds ?? UNREACHABLE_S));
   };
 
   return {
     durations(coordinates) {
-      const cached = known(coordinates);
-      if (cached) return Promise.resolve(cached);
+      const known = lookup(coordinates.map(pointKey));
+      if (known.every((row) => row.every((seconds) => seconds !== undefined))) return Promise.resolve(known as number[][]);
       if (!options.token) return Promise.reject(new Error('There is no Mapbox token to time the drives with.'));
       if (coordinates.length > MAX_MATRIX_STOPS)
         return Promise.reject(new Error(`Mapbox times at most ${MAX_MATRIX_STOPS} stops at once.`));
-      const result = line.then(() => request(coordinates));
+      const result = line.then(() => fill(coordinates));
       line = result.catch(() => undefined);
-      return result.then((table) => {
-        const keys = coordinates.map(pointKey);
-        table.forEach((row, from) =>
-          row.forEach((seconds, to) => {
-            if (from !== to) pairs.set(`${keys[from]}|${keys[to]}`, seconds);
-          }),
-        );
-        return table;
-      });
+      return result;
     },
   };
 }
 
 let shared: MatrixSource | null = null;
 
-/** The page's one source, so every group shares one queue and one memory of timed pairs. */
+/**
+ * The page's one source, so every group shares one queue and one memory of
+ * timed pairs -- and one allowance for the day.
+ */
 export function getMatrixSource(): MatrixSource {
-  shared ??= createMatrixSource({ token: MAPBOX_TOKEN, fetch: (url) => fetch(url) });
+  shared ??= createMatrixSource({
+    token: MAPBOX_TOKEN,
+    fetch: (url) => fetch(url),
+    allowance: createAllowance('mapbox-matrix-elements', BROWSER_MATRIX_ELEMENTS_A_DAY),
+    onAllowanceReached: () =>
+      toast.info('Routes are ordered by straight-line distance for the rest of today', {
+        description: 'This browser has used today’s drive-time allowance, which keeps the Mapbox bill down.',
+      }),
+  });
   return shared;
 }

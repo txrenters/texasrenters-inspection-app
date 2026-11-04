@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { createAllowance } from '@/lib/daily-allowance';
+
 import {
   createRouteStore,
+  ROUTES_PAUSED_FOR_TODAY,
   decodePolyline,
   directionsUrl,
   encodePolyline,
@@ -160,6 +163,25 @@ describe('the route cache', () => {
     });
     return { created, calls };
   };
+
+  it('stops asking for road routes once the day’s allowance is spent, and says why', async () => {
+    const { created, calls } = store({ allowance: createAllowance('test-directions', 1, { storage: null }) });
+    const one: LngLat[] = [
+      [-95.37, 29.76],
+      [-95.36, 29.77],
+    ];
+    const two: LngLat[] = [
+      [-95.35, 29.75],
+      [-95.34, 29.74],
+    ];
+
+    await created.ensure(routeKey(one), one);
+    await expect(created.ensure(routeKey(two), two)).rejects.toThrow(ROUTES_PAUSED_FOR_TODAY);
+
+    expect(calls).toHaveLength(1);
+    // The map draws straight lines for it, as for any route Mapbox could not give.
+    expect(created.view(routeKey(two))).toEqual({ status: 'error', message: ROUTES_PAUSED_FOR_TODAY });
+  });
 
   it('asks once for the same stops in the same order, and answers from memory after', async () => {
     const { created, calls } = store();

@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { z } from 'zod';
 
 import { MAPBOX_TOKEN } from '@/components/mapbox-token';
+import { BROWSER_DIRECTIONS_A_DAY, createAllowance, type Allowance } from '@/lib/daily-allowance';
 
 import { hashText } from './manual-grouping';
 
@@ -286,7 +287,17 @@ export interface RouteStoreOptions {
   gapMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * How many Directions requests this browser may still make today. Past it a
+   * route is not asked for, and the map draws its straight lines, as it does
+   * for any route Mapbox could not give.
+   */
+  allowance?: Allowance;
 }
+
+/** Why a route was not asked for: today's allowance is spent. */
+export const ROUTES_PAUSED_FOR_TODAY =
+  'Road routes are paused for the rest of today in this browser, to keep the Mapbox bill down. Straight lines are shown.';
 
 export interface RouteStore {
   /** What is known of a route: cached, being fetched, failed -- or undefined, not yet asked. */
@@ -390,8 +401,12 @@ export function createRouteStore(options: RouteStoreOptions): RouteStore {
   const run = async (job: Job) => {
     try {
       if (!options.token) throw new Error('There is no Mapbox token to ask for routes with.');
+      const chunks = waypointChunks(job.coordinates);
+      // One request per chunk of 25 stops, counted before any is sent.
+      if (options.allowance && !options.allowance.fits(chunks.length)) throw new Error(ROUTES_PAUSED_FOR_TODAY);
+      options.allowance?.spend(chunks.length);
       const parts: RoadRoute[] = [];
-      for (const chunk of waypointChunks(job.coordinates)) parts.push(await request(chunk));
+      for (const chunk of chunks) parts.push(await request(chunk));
       const route = mergeRoutes(parts);
       memory.set(job.key, { view: { status: 'ok', route } });
       stored()[hashText(job.key)] = deflate(route, now());
@@ -455,6 +470,7 @@ export function getRouteStore(): RouteStore {
     token: MAPBOX_TOKEN,
     fetch: (url) => fetch(url),
     storage,
+    allowance: createAllowance('mapbox-directions-requests', BROWSER_DIRECTIONS_A_DAY, { storage }),
   });
   return shared;
 }
