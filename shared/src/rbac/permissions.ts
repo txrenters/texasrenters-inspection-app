@@ -32,6 +32,9 @@ export const PERMISSION_KEYS = [
   'comparisons:review',
   'charges:configure',
   'charges:review',
+  'invoices:read',
+  'invoices:manage',
+  'payments:record',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -242,6 +245,29 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
     ],
   },
   {
+    group: 'Invoices & payments',
+    description: 'The visits billed in Jobber, and the payments recorded against them.',
+    permissions: [
+      {
+        key: 'invoices:read',
+        label: 'View invoices and payments',
+        description: 'Open the Invoices and Payments lists, each invoice, and the invoices on a property or a visit.',
+      },
+      {
+        key: 'invoices:manage',
+        label: 'Create invoices',
+        description:
+          'Make the invoice for a finished visit and send it to Jobber. A person decides every line and price; nothing is invoiced on its own.',
+      },
+      {
+        key: 'payments:record',
+        label: 'Record payments',
+        description:
+          'Record a payment against an invoice -- after the charge has posted in Propertyware -- which marks it paid in Jobber. No card is charged.',
+      },
+    ],
+  },
+  {
     group: 'Reports & integrations',
     description: 'Sharing and external systems.',
     permissions: [
@@ -331,6 +357,9 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'inspections:finalize',
   'planning:publish',
   'charges:review',
+  // Money, sent to Jobber: a person at the screen, never a stored credential.
+  'invoices:manage',
+  'payments:record',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);

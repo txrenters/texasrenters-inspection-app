@@ -1,0 +1,326 @@
+/**
+ * Invoices and the payments recorded against them, in the console (the office,
+ * 2026-11-05: "we will need the invoices and payments to be integrated to our
+ * inspection console too ... we will use that feature").
+ *
+ * Jobber stays the record. The office bills each visit there -- an invoice
+ * made out to the property, its lines the services done ("Filter Change,
+ * 1 × $39.99") -- and records the payment by hand once the charge has posted
+ * to the tenant's ledger in Propertyware; Jobber Payments is not set up, and
+ * no card is ever charged. The console shows the same invoices, makes an
+ * invoice from a finished visit, and records a payment; each goes to Jobber.
+ *
+ * Money is whole cents everywhere. A dollar amount in floating point cannot
+ * say $0.10 exactly, and an invoice that is a cent out is wrong.
+ */
+
+/** Jobber's states, in the order its list sorts them. */
+export const INVOICE_STATUSES = ['DRAFT', 'AWAITING_PAYMENT', 'PAST_DUE', 'PAID', 'BAD_DEBT', 'VOIDED'] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+export const INVOICE_STATUS_LABEL: Record<InvoiceStatus, string> = {
+  DRAFT: 'Draft',
+  AWAITING_PAYMENT: 'Awaiting payment',
+  PAST_DUE: 'Past due',
+  PAID: 'Paid',
+  BAD_DEBT: 'Bad debt',
+  VOIDED: 'Voided',
+};
+
+/** The list's status filter, as Jobber's: "Awaiting payment: past due", ": not yet due", ": all". */
+export const INVOICE_FILTERS = ['all', 'past_due', 'not_yet_due', 'awaiting_payment', 'draft', 'paid', 'bad_debt', 'voided'] as const;
+export type InvoiceFilter = (typeof INVOICE_FILTERS)[number];
+
+export const INVOICE_FILTER_LABEL: Record<InvoiceFilter, string> = {
+  all: 'All',
+  past_due: 'Awaiting payment: past due',
+  not_yet_due: 'Awaiting payment: not yet due',
+  awaiting_payment: 'Awaiting payment: all',
+  draft: 'Draft',
+  paid: 'Paid',
+  bad_debt: 'Bad debt',
+  voided: 'Voided',
+};
+
+/**
+ * How a payment came in. The office's own way first: the charge posted to the
+ * tenant's ledger in Propertyware, then recorded here.
+ */
+export const PAYMENT_METHODS = ['PROPERTYWARE_LEDGER', 'CHECK', 'CASH', 'BANK_TRANSFER', 'CARD', 'OTHER'] as const;
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  PROPERTYWARE_LEDGER: 'Propertyware ledger',
+  CHECK: 'Check',
+  CASH: 'Cash',
+  BANK_TRANSFER: 'Bank transfer',
+  CARD: 'Card (taken elsewhere)',
+  OTHER: 'Other',
+};
+
+/** Jobber's payment terms, in days after the invoice is issued. */
+export const PAYMENT_TERMS = [
+  { days: 0, label: 'Due upon receipt' },
+  { days: 15, label: 'Net 15' },
+  { days: 30, label: 'Net 30' },
+  { days: 45, label: 'Net 45' },
+  { days: 60, label: 'Net 60' },
+] as const;
+
+export interface InvoicePerson {
+  id: string;
+  displayName: string;
+}
+
+/** One line of an invoice: a product or service, how many, at what. */
+export interface InvoiceLineItem {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unitPriceCents: number;
+  totalCents: number;
+}
+
+/** A payment recorded against an invoice. */
+export interface InvoicePayment {
+  id: string;
+  /** The day the money came in, `YYYY-MM-DD` in Texas. */
+  paidOn: string;
+  amountCents: number;
+  method: PaymentMethod;
+  /** A check number, a Propertyware receipt -- whatever finds it again. */
+  reference: string | null;
+  note: string | null;
+  /** Who recorded it; null for one recorded in Jobber. */
+  recordedBy: InvoicePerson | null;
+  recordedAt: string;
+}
+
+/** Where an invoice's property is, as the console knows it. */
+export interface InvoiceProperty {
+  id: string;
+  address: string;
+  city: string | null;
+}
+
+/** An invoice as the list shows it. */
+export interface InvoiceSummary {
+  id: string;
+  /** Jobber's number, "8439". Null for a draft Jobber has not numbered. */
+  number: string | null;
+  subject: string;
+  status: InvoiceStatus;
+  /** Who it is made out to, as Jobber names the client: the property's address. */
+  clientName: string;
+  property: InvoiceProperty | null;
+  /** The visit it bills, when the console can match it. */
+  inspectionId: string | null;
+  /** Jobber's job number, "20625". */
+  jobNumber: string | null;
+  /** `YYYY-MM-DD`; null on a draft. */
+  issuedOn: string | null;
+  dueOn: string | null;
+  totalCents: number;
+  balanceCents: number;
+  /** Jobber's own page for it, for anything only Jobber can do. */
+  jobberUrl: string | null;
+}
+
+/** An invoice in full, as its record page shows it. */
+export interface InvoiceDetail extends InvoiceSummary {
+  /** "Net 30"; null when Jobber has none. */
+  paymentTerms: string | null;
+  billingAddress: string | null;
+  lineItems: InvoiceLineItem[];
+  subtotalCents: number;
+  taxCents: number;
+  payments: InvoicePayment[];
+  /** What the client reads at the foot of the invoice. */
+  clientMessage: string | null;
+  /** Everything else this client owes, as Jobber shows "Account balance". */
+  accountBalanceCents: number | null;
+  createdAt: string;
+}
+
+/** A count and the money in it, for the list's Overview. */
+export interface InvoiceBucket {
+  count: number;
+  amountCents: number;
+}
+
+export interface InvoiceList {
+  items: InvoiceSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  /** Jobber's Overview card: what is owed, and what is not sent yet. */
+  overview: { pastDue: InvoiceBucket; notYetDue: InvoiceBucket; draft: InvoiceBucket };
+  /** Issued in the past 30 days, and the 30 before, for the trend. */
+  issued: { last30: InvoiceBucket; previous30: InvoiceBucket };
+  /** How many invoices each filter holds, for the Status pill. */
+  filterCounts: Record<InvoiceFilter, number>;
+  /** When the copy was last brought up to date from Jobber; null before the first. */
+  syncedAt: string | null;
+}
+
+/** A recorded payment, with the invoice it paid, as the Payments list shows it. */
+export interface PaymentListItem extends InvoicePayment {
+  invoice: { id: string; number: string | null; subject: string; clientName: string };
+  property: InvoiceProperty | null;
+}
+
+export interface PaymentList {
+  items: PaymentListItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  received: { last30: InvoiceBucket; previous30: InvoiceBucket };
+}
+
+/** A line as it is entered: the total is worked out, never typed. */
+export interface InvoiceLineInput {
+  name: string;
+  description?: string | null;
+  quantity: number;
+  unitPriceCents: number;
+}
+
+/**
+ * What a finished visit would be invoiced for, before anybody edits it: one
+ * line per service done, at the price in Jobber's products list.
+ */
+export interface InvoiceDraft {
+  inspection: { id: string; inspectionType: string; scheduledOn: string; status: string };
+  property: InvoiceProperty | null;
+  clientName: string;
+  subject: string;
+  issuedOn: string;
+  paymentTermsDays: number;
+  lineItems: InvoiceLineInput[];
+  clientMessage: string;
+  /** Already invoiced: the invoice, so a second is not made by mistake. */
+  existing: { id: string; number: string | null; status: InvoiceStatus } | null;
+  /** The products the office sells, for a line added by hand. */
+  products: { name: string; unitPriceCents: number }[];
+}
+
+export interface CreateInvoiceInput {
+  inspectionId: string;
+  subject: string;
+  issuedOn: string;
+  paymentTermsDays: number;
+  lineItems: InvoiceLineInput[];
+  clientMessage?: string;
+  /** The browser's key, so a double click or a resend makes one invoice. */
+  clientRequestId: string;
+}
+
+export interface RecordPaymentInput {
+  amountCents: number;
+  paidOn: string;
+  method: PaymentMethod;
+  reference?: string;
+  note?: string;
+  /** The browser's key, so a double click or a resend records one payment. */
+  clientRequestId: string;
+}
+
+/** The most a line or an invoice may come to: a cap on a typo, $100,000. */
+export const MAX_INVOICE_CENTS = 10_000_000;
+export const MAX_INVOICE_LINES = 50;
+
+/** "$1,234.56", "-$39.99": dollars and cents, as the office reads money. */
+export function formatMoney(cents: number): string {
+  const sign = cents < 0 ? '-' : '';
+  const whole = Math.abs(Math.round(cents));
+  const dollars = Math.floor(whole / 100).toLocaleString('en-US');
+  return `${sign}$${dollars}.${String(whole % 100).padStart(2, '0')}`;
+}
+
+/** "$13.6k" past ten thousand, as Jobber's Overview rounds; exact below. */
+export function formatMoneyShort(cents: number): string {
+  if (Math.abs(cents) < 1_000_000) return formatMoney(cents).replace(/\.00$/, '');
+  return `${cents < 0 ? '-' : ''}$${(Math.abs(cents) / 100_000).toFixed(1).replace(/\.0$/, '')}k`;
+}
+
+/**
+ * Dollars as typed -- "39.99", "$1,250", "40" -- in cents, or null when it is
+ * not an amount. Never more than two decimal places: "39.999" is a typo.
+ */
+export function parseMoney(text: string): number | null {
+  const cleaned = text.trim().replace(/[$,\s]/g, '');
+  if (!/^\d+(\.\d{0,2})?$/.test(cleaned)) return null;
+  const [dollars, fraction = ''] = cleaned.split('.');
+  return Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
+}
+
+/** A line's total: quantity times price, in whole cents. */
+export const lineTotalCents = (line: Pick<InvoiceLineInput, 'quantity' | 'unitPriceCents'>) =>
+  Math.round(line.quantity * line.unitPriceCents);
+
+/** The invoice's subtotal and total from its lines. No tax: the office's services carry none. */
+export function invoiceTotals(lines: readonly Pick<InvoiceLineInput, 'quantity' | 'unitPriceCents'>[]) {
+  const subtotalCents = lines.reduce((sum, line) => sum + lineTotalCents(line), 0);
+  return { subtotalCents, totalCents: subtotalCents };
+}
+
+/** The due day: the issue day plus the terms, `YYYY-MM-DD`. */
+export function dueOnFor(issuedOn: string, termsDays: number): string {
+  const day = new Date(`${issuedOn}T12:00:00.000Z`);
+  return new Date(day.getTime() + termsDays * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Why these lines cannot be invoiced, in words, or null when they can. */
+export function invoiceLinesProblem(lines: readonly InvoiceLineInput[]): string | null {
+  if (!lines.length) return 'Add at least one line.';
+  if (lines.length > MAX_INVOICE_LINES) return `An invoice takes at most ${MAX_INVOICE_LINES} lines.`;
+  for (const line of lines) {
+    if (!line.name.trim()) return 'Every line needs a name.';
+    if (!Number.isFinite(line.quantity) || line.quantity <= 0) return `${line.name}: the quantity has to be more than 0.`;
+    if (!Number.isInteger(line.unitPriceCents) || line.unitPriceCents < 0) return `${line.name}: give the price in dollars and cents.`;
+  }
+  const { totalCents } = invoiceTotals(lines);
+  if (totalCents <= 0) return 'The invoice comes to nothing.';
+  if (totalCents > MAX_INVOICE_CENTS) return `The invoice comes to more than ${formatMoney(MAX_INVOICE_CENTS)}. Check the prices.`;
+  return null;
+}
+
+/**
+ * Why this payment cannot be recorded, in words, or null when it can. Never
+ * more than the invoice still owes, never in the future, never nothing.
+ */
+export function paymentProblem(
+  input: Pick<RecordPaymentInput, 'amountCents' | 'paidOn'>,
+  balanceCents: number,
+  today: string,
+): string | null {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) return 'Give the amount paid.';
+  if (input.amountCents > balanceCents)
+    return `That is more than the ${formatMoney(balanceCents)} this invoice still owes.`;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.paidOn)) return 'Give the day it was paid.';
+  if (input.paidOn > today) return 'A payment cannot be recorded for a day still to come.';
+  return null;
+}
+
+/** Whether an invoice can still take a payment: sent, and something still owed. */
+export const acceptsPayment = (invoice: Pick<InvoiceSummary, 'status' | 'balanceCents'>) =>
+  (invoice.status === 'AWAITING_PAYMENT' || invoice.status === 'PAST_DUE') && invoice.balanceCents > 0;
+
+/**
+ * The status as the office reads it on a day: an invoice awaiting payment
+ * whose due day has gone is past due. Worked out when read, never stored, so
+ * it cannot be a day stale.
+ */
+export function invoiceStatusOn(stored: InvoiceStatus, dueOn: string | null, today: string): InvoiceStatus {
+  if (stored !== 'AWAITING_PAYMENT' && stored !== 'PAST_DUE') return stored;
+  return dueOn !== null && dueOn < today ? 'PAST_DUE' : 'AWAITING_PAYMENT';
+}
+
+/** "Net 30", "Due upon receipt"; null when there are no terms. */
+export function paymentTermsLabel(days: number | null | undefined): string | null {
+  if (days === null || days === undefined) return null;
+  return PAYMENT_TERMS.find((terms) => terms.days === days)?.label ?? `Net ${days}`;
+}
+

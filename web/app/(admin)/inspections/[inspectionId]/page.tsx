@@ -22,6 +22,7 @@ import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Panel } from '@/components/panel';
+import { InvoicesCard } from '@/components/invoices/invoice-parts';
 import { InspectionRecordAside, InspectionRecordTop } from '@/components/record/inspection-record';
 import { RecordLayout } from '@/components/record/record-kit';
 import { ReportShareDialog } from '@/components/report-share-dialog';
@@ -318,6 +319,12 @@ function InspectionDetail() {
             technicianName={current?.technician?.displayName ?? null}
           />
         }
+        billing={
+          <InvoicesCard
+            createHref={isFinishedStatus(item.status) ? `/invoices/new?inspection=${encodeURIComponent(id)}` : undefined}
+            inspectionId={id}
+          />
+        }
         jobber={jobber}
       >
       <section aria-label="Review" className="mt-3 space-y-3">
@@ -600,10 +607,36 @@ function InspectionDetail() {
  * -- from 2xl only, as the area workspace needs the width more than the panel
  * does -- and exactly as it was in the classic console.
  */
-function RecordContent({ aside, children, jobber }: { aside: ReactNode; children: ReactNode; jobber: boolean }) {
-  if (!jobber) return <>{children}</>;
+function RecordContent({
+  aside,
+  billing,
+  children,
+  jobber,
+}: {
+  aside: ReactNode;
+  /** The visit's invoices: in the side panel, or under the page in the classic console. */
+  billing?: ReactNode;
+  children: ReactNode;
+  jobber: boolean;
+}) {
+  if (!jobber)
+    return (
+      <>
+        {children}
+        {billing ? <div className="mt-6 max-w-xl">{billing}</div> : null}
+      </>
+    );
   return (
-    <RecordLayout aside={aside} asideLabel="About this inspection" from="2xl">
+    <RecordLayout
+      aside={
+        <>
+          {aside}
+          {billing}
+        </>
+      }
+      asideLabel="About this inspection"
+      from="2xl"
+    >
       {children}
     </RecordLayout>
   );

@@ -21,9 +21,10 @@ import {
  */
 export const JOBBER_SIDEBAR_SECTIONS: readonly (readonly string[])[] = [
   ['/dashboard', '/schedule'],
-  // Jobber's Clients, Requests and Jobs: the properties and the people in them,
-  // the visits asked to be booked again, and the inspections themselves.
-  ['/properties', '/tenants', '/reschedules', '/inspections', '/lease-schedule'],
+  // Jobber's Clients, Requests, Jobs, Invoices and Payments: the properties and
+  // the people in them, the visits asked to be booked again, the inspections
+  // themselves, and what they were billed and paid.
+  ['/properties', '/tenants', '/reschedules', '/inspections', '/invoices', '/payments', '/lease-schedule'],
   // Jobber's tools beside the work: the quarter's plan and its groups, where
   // everybody is, and the hours it came to.
   ['/planning', '/group-maker', '/map', '/timesheet'],

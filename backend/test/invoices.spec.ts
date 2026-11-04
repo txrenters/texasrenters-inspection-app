@@ -1,0 +1,538 @@
+import { MACHINE_FORBIDDEN_PERMISSIONS } from '@texasrenters/shared';
+import { Prisma, UserRole } from '@prisma/client';
+
+import { InvoicesController, PaymentsController } from '../src/admin/invoices.controller';
+import { InvoicesService, draftLines, priceList, servicesDone } from '../src/admin/invoices.service';
+import type { AuthenticatedUser } from '../src/common/auth';
+
+/**
+ * Invoices and payments in the console (2026-11-05): the console's copy of
+ * Jobber's read back, a finished visit's invoice drafted, and the two money
+ * writes -- held off until the console sends them to Jobber, and held to the
+ * office's rules when on. Addresses, people and ids invented.
+ */
+
+const ORG = '20000000-0000-4000-8000-000000000001';
+const VISIT = '20000000-0000-4000-8000-000000000010';
+const INVOICE = '20000000-0000-4000-8000-000000000020';
+const BUILDING = '20000000-0000-4000-8000-000000000030';
+
+const office: AuthenticatedUser = {
+  id: '20000000-0000-4000-8000-000000000009',
+  authUserId: 'auth-office',
+  organizationId: ORG,
+  displayName: 'Office Coordinator',
+  roles: [UserRole.INSPECTION_SUPERVISOR],
+  permissions: ['invoices:read', 'invoices:manage', 'payments:record'],
+  mustChangePassword: false,
+  principalType: 'USER',
+} as AuthenticatedUser;
+
+const PAST = '2020-03-01';
+const AHEAD = '2099-03-01';
+const date = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+const building = { id: BUILDING, name: 'Building 12', addressLine1: '100 Example Way', city: 'Sampletown' };
+
+const invoiceRow = (over: Record<string, unknown> = {}) => ({
+  id: INVOICE,
+  number: '8439',
+  subject: 'For Services Rendered',
+  status: 'AWAITING_PAYMENT',
+  clientName: '100 Example Way',
+  inspectionId: VISIT,
+  jobNumber: '20625',
+  issuedOn: date('2020-02-01'),
+  dueOn: date(AHEAD),
+  totalCents: 3999,
+  balanceCents: 3999,
+  jobberWebUrl: 'https://secure.getjobber.com/invoices/1',
+  propertywareBuilding: building,
+  jobberClientId: 'client-1',
+  propertywareBuildingId: BUILDING,
+  paymentTermsDays: 30,
+  billingAddress: null,
+  subtotalCents: 3999,
+  taxCents: 0,
+  clientMessage: null,
+  createdAt: new Date('2020-02-01T15:00:00.000Z'),
+  lines: [{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999, totalCents: 3999 }],
+  payments: [],
+  ...over,
+});
+
+const finishedVisit = (over: Record<string, unknown> = {}) => ({
+  id: VISIT,
+  inspectionType: 'BENEFIT_PACKAGE',
+  scheduledAt: date('2020-02-01'),
+  status: 'COMPLETED',
+  jobberJobId: 'job-1',
+  servicesReport: {
+    services: { filterChange: { done: true, reason: null, reschedule: false }, pestControl: { done: false, reason: 'Dog', reschedule: true } },
+    filtersInstalled: ['20x25x1'],
+    notes: null,
+  },
+  propertywareBuilding: building,
+  ...over,
+});
+
+function database() {
+  const db = {
+    invoice: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
+      count: jest.fn().mockResolvedValue(0),
+      groupBy: jest.fn().mockResolvedValue([]),
+      aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: {}, _max: { syncedAt: null } }),
+      create: jest.fn().mockResolvedValue({ id: INVOICE }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    invoiceLine: { groupBy: jest.fn().mockResolvedValue([]) },
+    invoicePayment: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
+      count: jest.fn().mockResolvedValue(0),
+      aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: { amountCents: null } }),
+      create: jest.fn().mockResolvedValue({ id: 'payment-1' }),
+    },
+    inspection: { findFirst: jest.fn().mockResolvedValue(finishedVisit()) },
+    auditLog: { create: jest.fn() },
+    $transaction: jest.fn(),
+  };
+  db.$transaction.mockImplementation((work: (tx: typeof db) => unknown) => work(db));
+  return db;
+}
+
+const serviceOver = (db: ReturnType<typeof database>) => new InvoicesService(db as never);
+
+const uniqueViolation = () =>
+  new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' });
+
+describe('the invoice list', () => {
+  it("counts Jobber's Overview and the Status pill from what is stored, past due by the due day", async () => {
+    const db = database();
+    db.invoice.findMany.mockResolvedValue([invoiceRow({ dueOn: date(PAST) }), invoiceRow({ id: 'other', dueOn: date(AHEAD) })]);
+    db.invoice.count.mockResolvedValue(2);
+    db.invoice.groupBy.mockResolvedValue([
+      { status: 'AWAITING_PAYMENT', _count: { _all: 5 }, _sum: { totalCents: 20000, balanceCents: 15000 } },
+      { status: 'DRAFT', _count: { _all: 2 }, _sum: { totalCents: 7998, balanceCents: 7998 } },
+      { status: 'PAID', _count: { _all: 40 }, _sum: { totalCents: 160000, balanceCents: 0 } },
+    ]);
+    db.invoice.aggregate
+      .mockResolvedValueOnce({ _count: { _all: 3 }, _sum: { balanceCents: 9000 } }) // past due
+      .mockResolvedValueOnce({ _count: { _all: 4 }, _sum: { totalCents: 15996 } }) // issued, last 30
+      .mockResolvedValueOnce({ _count: { _all: 6 }, _sum: { totalCents: 23994 } }) // the 30 before
+      .mockResolvedValueOnce({ _max: { syncedAt: new Date('2026-11-05T12:00:00.000Z') } });
+
+    const list = await serviceOver(db).list(office, {});
+
+    expect(list.items.map((item) => item.status)).toEqual(['PAST_DUE', 'AWAITING_PAYMENT']);
+    expect(list.overview).toEqual({
+      pastDue: { count: 3, amountCents: 9000 },
+      notYetDue: { count: 2, amountCents: 6000 },
+      draft: { count: 2, amountCents: 7998 },
+    });
+    expect(list.issued.last30).toEqual({ count: 4, amountCents: 15996 });
+    expect(list.filterCounts).toMatchObject({ all: 47, awaiting_payment: 5, past_due: 3, not_yet_due: 2, draft: 2, paid: 40, voided: 0 });
+    expect(list.syncedAt).toBe('2026-11-05T12:00:00.000Z');
+    expect(list.items[0]).toMatchObject({ property: { id: BUILDING, address: '100 Example Way', city: 'Sampletown' } });
+  });
+
+  it("keeps the office's own organization, and filters past due by a due day already gone", async () => {
+    const db = database();
+
+    await serviceOver(db).list(office, { filter: 'past_due', search: '#8439', propertyId: BUILDING, page: 3, pageSize: 10 });
+
+    const query = db.invoice.findMany.mock.calls[0][0];
+    const [scope, filter, search] = query.where.AND;
+    expect(scope).toEqual({ organizationId: ORG, propertywareBuildingId: BUILDING });
+    expect(filter).toMatchObject({ status: 'AWAITING_PAYMENT', dueOn: { lt: expect.any(Date) } });
+    // "#8439" finds number 8439: the # is how the office writes it.
+    expect(search.OR).toContainEqual({ number: { startsWith: '8439' } });
+    expect(query).toMatchObject({ skip: 20, take: 10 });
+  });
+
+  it('never pages more than a hundred at once', async () => {
+    const db = database();
+    await serviceOver(db).list(office, { pageSize: 5000 });
+    expect(db.invoice.findMany.mock.calls[0][0].take).toBe(100);
+  });
+});
+
+describe('an invoice', () => {
+  it("shows its terms, lines, payments and what the client owes on every invoice", async () => {
+    const db = database();
+    db.invoice.findFirst.mockResolvedValue(
+      invoiceRow({
+        payments: [
+          {
+            id: 'payment-1',
+            paidOn: date('2020-02-20'),
+            amountCents: 1000,
+            method: 'PROPERTYWARE_LEDGER',
+            reference: 'Receipt 77',
+            note: null,
+            createdAt: new Date('2020-02-20T16:00:00.000Z'),
+            recordedBy: { id: office.id, displayName: 'Office Coordinator' },
+          },
+        ],
+      }),
+    );
+    db.invoice.aggregate.mockResolvedValue({ _sum: { balanceCents: 12000 } });
+
+    const invoice = await serviceOver(db).one(office, INVOICE);
+
+    expect(invoice).toMatchObject({
+      paymentTerms: 'Net 30',
+      lineItems: [{ name: 'Filter Change', totalCents: 3999 }],
+      payments: [{ paidOn: '2020-02-20', amountCents: 1000, reference: 'Receipt 77', recordedAt: '2020-02-20T16:00:00.000Z' }],
+      accountBalanceCents: 12000,
+    });
+    expect(db.invoice.findFirst.mock.calls[0][0].where).toEqual({ id: INVOICE, organizationId: ORG });
+    expect(db.invoice.aggregate.mock.calls[0][0].where).toEqual({
+      organizationId: ORG,
+      status: 'AWAITING_PAYMENT',
+      jobberClientId: 'client-1',
+    });
+  });
+
+  it("is not found in another office's organization", async () => {
+    await expect(serviceOver(database()).one(office, INVOICE)).rejects.toMatchObject({ code: 'INVOICE_NOT_FOUND' });
+  });
+});
+
+describe("a finished visit's draft", () => {
+  it('has a line for each service done, at the price the office charges most, in its own wording and terms', async () => {
+    const db = database();
+    db.invoiceLine.groupBy.mockResolvedValue([
+      { name: 'Filter Change', unitPriceCents: 3999, _count: { _all: 900 } },
+      { name: 'Filter Change', unitPriceCents: 2999, _count: { _all: 12 } },
+      { name: 'Pest Control', unitPriceCents: 2500, _count: { _all: 300 } },
+    ]);
+    db.invoice.findFirst
+      .mockResolvedValueOnce({ subject: 'For Services Rendered', clientMessage: 'Thank you.', paymentTermsDays: 15 })
+      .mockResolvedValueOnce(null);
+
+    const draft = await serviceOver(db).draft(office, VISIT);
+
+    // Pest control was not done, so it is not billed.
+    expect(draft.lineItems).toEqual([{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 }]);
+    expect(draft).toMatchObject({
+      clientName: '100 Example Way',
+      subject: 'For Services Rendered',
+      clientMessage: 'Thank you.',
+      paymentTermsDays: 15,
+      existing: null,
+      property: { id: BUILDING },
+    });
+    expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control']);
+  });
+
+  it('says when the visit has an invoice already, so a second is not made by mistake', async () => {
+    const db = database();
+    db.invoice.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: INVOICE, number: '8439', status: 'AWAITING_PAYMENT', dueOn: date(PAST) });
+
+    const draft = await serviceOver(db).draft(office, VISIT);
+
+    expect(draft.existing).toEqual({ id: INVOICE, number: '8439', status: 'PAST_DUE' });
+    // No invoice yet in the copy: Jobber's own defaults.
+    expect(draft).toMatchObject({ subject: 'For Services Rendered', paymentTermsDays: 30, clientMessage: '' });
+  });
+
+  it('is refused for a visit not finished, and for one with no property', async () => {
+    const db = database();
+    db.inspection.findFirst.mockResolvedValueOnce(finishedVisit({ status: 'SCHEDULED' }));
+    await expect(serviceOver(db).draft(office, VISIT)).rejects.toMatchObject({ code: 'INVOICE_VISIT_NOT_FINISHED' });
+
+    db.inspection.findFirst.mockResolvedValueOnce(finishedVisit({ propertywareBuilding: null }));
+    await expect(serviceOver(db).draft(office, VISIT)).rejects.toMatchObject({ code: 'INVOICE_NO_PROPERTY' });
+  });
+});
+
+describe("the office's prices", () => {
+  it('takes the price billed most often, leaves out free lines, and lists the most billed first', () => {
+    expect(
+      priceList([
+        { name: 'Pest Control', unitPriceCents: 2500, _count: { _all: 10 } },
+        { name: 'Filter Change', unitPriceCents: 2999, _count: { _all: 5 } },
+        { name: 'filter change', unitPriceCents: 3999, _count: { _all: 30 } },
+        { name: 'Courtesy visit', unitPriceCents: 0, _count: { _all: 99 } },
+      ]),
+    ).toEqual([
+      { name: 'Filter Change', unitPriceCents: 3999 },
+      { name: 'Pest Control', unitPriceCents: 2500 },
+    ]);
+  });
+
+  it('asks for a price, rather than guessing one, for a service the office has never billed', () => {
+    expect(draftLines(['fleaTreatment'], [{ name: 'Filter Change', unitPriceCents: 3999 }])).toEqual([
+      { name: 'Flea Treatment', description: null, quantity: 1, unitPriceCents: 0 },
+    ]);
+  });
+
+  it('bills only the services reported done', () => {
+    expect(servicesDone(null)).toEqual([]);
+    expect(
+      servicesDone({
+        services: { fleaTreatment: { done: true, reason: null, reschedule: false }, filterChange: { done: true, reason: null, reschedule: false } },
+        filtersInstalled: [],
+        notes: null,
+      }),
+    ).toEqual(['filterChange', 'fleaTreatment']);
+  });
+});
+
+describe('the payments list', () => {
+  it("shows each payment with its invoice, newest first, and what came in over the past 30 days", async () => {
+    const db = database();
+    db.invoicePayment.findMany.mockResolvedValue([
+      {
+        id: 'payment-1',
+        paidOn: date('2020-02-20'),
+        amountCents: 3999,
+        method: 'CHECK',
+        reference: '1042',
+        note: null,
+        createdAt: new Date('2020-02-20T16:00:00.000Z'),
+        recordedBy: null,
+        invoice: { id: INVOICE, number: '8439', subject: 'For Services Rendered', clientName: '100 Example Way', propertywareBuilding: building },
+      },
+    ]);
+    db.invoicePayment.count.mockResolvedValue(1);
+    db.invoicePayment.aggregate
+      .mockResolvedValueOnce({ _count: { _all: 2 }, _sum: { amountCents: 7998 } })
+      .mockResolvedValueOnce({ _count: { _all: 0 }, _sum: { amountCents: null } });
+
+    const list = await serviceOver(db).payments(office, { method: 'CHECK', search: '1042' });
+
+    expect(list.items[0]).toMatchObject({ invoice: { number: '8439' }, property: { address: '100 Example Way' }, recordedBy: null });
+    expect(list.received).toEqual({ last30: { count: 2, amountCents: 7998 }, previous30: { count: 0, amountCents: 0 } });
+    expect(db.invoicePayment.findMany.mock.calls[0][0].where).toMatchObject({ organizationId: ORG, method: 'CHECK' });
+  });
+});
+
+describe('making an invoice and recording a payment', () => {
+  const create = {
+    inspectionId: VISIT,
+    subject: ' For Services Rendered ',
+    issuedOn: '2026-01-05',
+    paymentTermsDays: 30,
+    lineItems: [
+      { name: 'Filter Change', quantity: 2, unitPriceCents: 3999 },
+      { name: 'Pest Control', description: '  ', quantity: 1, unitPriceCents: 2500 },
+    ],
+    clientRequestId: 'web-key-0001',
+  };
+  const pay = { amountCents: 1000, paidOn: '2026-01-10', method: 'PROPERTYWARE_LEDGER' as const, reference: ' R-77 ', clientRequestId: 'web-pay-0001' };
+
+  describe('while the console does not send them to Jobber', () => {
+    it('refuses both, and writes nothing', async () => {
+      delete process.env.JOBBER_INVOICE_WRITES_ENABLED;
+      const db = database();
+
+      await expect(serviceOver(db).create(office, create)).rejects.toMatchObject({ code: 'INVOICE_WRITES_OFF' });
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).rejects.toMatchObject({ code: 'INVOICE_WRITES_OFF' });
+
+      expect(db.invoice.create).not.toHaveBeenCalled();
+      expect(db.invoicePayment.create).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('once they are on', () => {
+    beforeEach(() => {
+      process.env.JOBBER_INVOICE_WRITES_ENABLED = 'true';
+    });
+    afterEach(() => {
+      delete process.env.JOBBER_INVOICE_WRITES_ENABLED;
+    });
+
+    it('makes the invoice with totals worked out here, made out to the property, and puts it on the record', async () => {
+      const db = database();
+      db.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValue(invoiceRow());
+
+      await serviceOver(db).create(office, create);
+
+      const { data } = db.invoice.create.mock.calls[0][0];
+      expect(data).toMatchObject({
+        organizationId: ORG,
+        origin: 'CONSOLE',
+        subject: 'For Services Rendered',
+        status: 'AWAITING_PAYMENT',
+        clientName: '100 Example Way',
+        inspectionId: VISIT,
+        propertywareBuildingId: BUILDING,
+        subtotalCents: 10498,
+        totalCents: 10498,
+        balanceCents: 10498,
+        createdById: office.id,
+        clientRequestId: 'web-key-0001',
+      });
+      expect(data.dueOn).toEqual(date('2026-02-04'));
+      expect(data.lines.create).toEqual([
+        expect.objectContaining({ position: 0, name: 'Filter Change', totalCents: 7998, organizationId: ORG }),
+        expect.objectContaining({ position: 1, name: 'Pest Control', description: null, totalCents: 2500 }),
+      ]);
+      expect(db.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'INVOICE_CREATED',
+          actorUserId: office.id,
+          entityId: INVOICE,
+          metadata: expect.objectContaining({ totalCents: 10498, lineCount: 2 }),
+        }),
+      });
+    });
+
+    it('answers a resend with the invoice already made, and makes no second', async () => {
+      const db = database();
+      db.invoice.findFirst.mockResolvedValueOnce({ id: INVOICE, inspectionId: VISIT }).mockResolvedValue(invoiceRow());
+
+      await expect(serviceOver(db).create(office, create)).resolves.toMatchObject({ id: INVOICE });
+      expect(db.invoice.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses the same key for another visit', async () => {
+      const db = database();
+      db.invoice.findFirst.mockResolvedValueOnce({ id: INVOICE, inspectionId: 'another-visit' });
+      await expect(serviceOver(db).create(office, create)).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
+    });
+
+    it('answers with the invoice the other request made when both arrive at once', async () => {
+      const db = database();
+      db.invoice.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: INVOICE, inspectionId: VISIT })
+        .mockResolvedValue(invoiceRow());
+      db.invoice.create.mockRejectedValue(uniqueViolation());
+
+      await expect(serviceOver(db).create(office, create)).resolves.toMatchObject({ id: INVOICE });
+    });
+
+    it.each([
+      ['no lines', { lineItems: [] }, 'Add at least one line.'],
+      ['a day to come', { issuedOn: AHEAD }, 'An invoice cannot be issued on a day still to come.'],
+      ['terms not on the list', { paymentTermsDays: 7 }, 'Pick the payment terms from the list.'],
+      ['nothing to pay', { lineItems: [{ name: 'Filter Change', quantity: 1, unitPriceCents: 0 }] }, 'The invoice comes to nothing.'],
+      ['no subject', { subject: '   ' }, 'Give the invoice a subject.'],
+    ])('refuses an invoice with %s', async (_, change, message) => {
+      const db = database();
+      await expect(serviceOver(db).create(office, { ...create, ...change })).rejects.toMatchObject({
+        code: 'INVOICE_INVALID',
+        message,
+      });
+      expect(db.invoice.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses a visit that is not finished", async () => {
+      const db = database();
+      db.inspection.findFirst.mockResolvedValue(finishedVisit({ status: 'IN_PROGRESS' }));
+      await expect(serviceOver(db).create(office, create)).rejects.toMatchObject({ code: 'INVOICE_VISIT_NOT_FINISHED' });
+    });
+
+    it('records a payment, lowers the balance only from what was read, and puts it on the record', async () => {
+      const db = database();
+      db.invoice.findFirst
+        .mockResolvedValueOnce({ status: 'AWAITING_PAYMENT', dueOn: date(PAST), balanceCents: 3999 })
+        .mockResolvedValue(invoiceRow({ balanceCents: 2999 }));
+
+      await serviceOver(db).recordPayment(office, INVOICE, pay);
+
+      expect(db.invoice.updateMany).toHaveBeenCalledWith({
+        where: { id: INVOICE, organizationId: ORG, status: 'AWAITING_PAYMENT', balanceCents: 3999 },
+        data: { balanceCents: 2999 },
+      });
+      expect(db.invoicePayment.create.mock.calls[0][0].data).toMatchObject({
+        organizationId: ORG,
+        invoiceId: INVOICE,
+        origin: 'CONSOLE',
+        amountCents: 1000,
+        method: 'PROPERTYWARE_LEDGER',
+        reference: 'R-77',
+        note: null,
+        recordedById: office.id,
+      });
+      expect(db.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'INVOICE_PAYMENT_RECORDED',
+          entityId: INVOICE,
+          metadata: expect.objectContaining({ amountCents: 1000, balanceCents: 2999, paymentId: 'payment-1' }),
+        }),
+      });
+    });
+
+    it('marks an invoice paid in full as paid', async () => {
+      const db = database();
+      db.invoice.findFirst
+        .mockResolvedValueOnce({ status: 'AWAITING_PAYMENT', dueOn: date(AHEAD), balanceCents: 1000 })
+        .mockResolvedValue(invoiceRow());
+
+      await serviceOver(db).recordPayment(office, INVOICE, pay);
+
+      expect(db.invoice.updateMany.mock.calls[0][0].data).toEqual({ balanceCents: 0, status: 'PAID' });
+    });
+
+    it('refuses more than is owed, a day to come, and an invoice not waiting for payment', async () => {
+      const db = database();
+      db.invoice.findFirst.mockResolvedValueOnce({ status: 'AWAITING_PAYMENT', dueOn: null, balanceCents: 500 });
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).rejects.toMatchObject({
+        code: 'PAYMENT_INVALID',
+        message: 'That is more than the $5.00 this invoice still owes.',
+      });
+
+      db.invoice.findFirst.mockResolvedValueOnce({ status: 'AWAITING_PAYMENT', dueOn: null, balanceCents: 5000 });
+      await expect(serviceOver(db).recordPayment(office, INVOICE, { ...pay, paidOn: AHEAD })).rejects.toMatchObject({
+        code: 'PAYMENT_INVALID',
+      });
+
+      db.invoice.findFirst.mockResolvedValueOnce({ status: 'PAID', dueOn: null, balanceCents: 0 });
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).rejects.toMatchObject({ code: 'INVOICE_NOT_PAYABLE' });
+
+      db.invoice.findFirst.mockResolvedValueOnce({ status: 'DRAFT', dueOn: null, balanceCents: 5000 });
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).rejects.toMatchObject({ code: 'INVOICE_NOT_PAYABLE' });
+
+      expect(db.invoicePayment.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the invoice changed under it, so two people cannot take it below nothing', async () => {
+      const db = database();
+      db.invoice.findFirst.mockResolvedValueOnce({ status: 'AWAITING_PAYMENT', dueOn: null, balanceCents: 3999 });
+      db.invoice.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).rejects.toMatchObject({ code: 'INVOICE_CHANGED' });
+      expect(db.invoicePayment.create).not.toHaveBeenCalled();
+    });
+
+    it('answers a resend with the invoice, and records no second payment', async () => {
+      const db = database();
+      db.invoicePayment.findFirst.mockResolvedValue({ invoiceId: INVOICE });
+      db.invoice.findFirst.mockResolvedValue(invoiceRow());
+
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).resolves.toMatchObject({ id: INVOICE });
+      expect(db.$transaction).not.toHaveBeenCalled();
+
+      await expect(serviceOver(db).recordPayment(office, 'another-invoice', pay)).rejects.toMatchObject({
+        code: 'IDEMPOTENCY_KEY_REUSED',
+      });
+    });
+  });
+});
+
+describe('who may do what', () => {
+  const permissionsOf = (controller: { prototype: object }, name: string) =>
+    Reflect.getMetadata('permissions', (controller.prototype as Record<string, object>)[name]!) as string[];
+
+  it('keeps reading, making an invoice and recording a payment as three grants', () => {
+    expect(permissionsOf(InvoicesController, 'list')).toEqual(['invoices:read']);
+    expect(permissionsOf(InvoicesController, 'one')).toEqual(['invoices:read']);
+    expect(permissionsOf(InvoicesController, 'draft')).toEqual(['invoices:read', 'invoices:manage']);
+    expect(permissionsOf(InvoicesController, 'create')).toEqual(['invoices:read', 'invoices:manage']);
+    expect(permissionsOf(InvoicesController, 'recordPayment')).toEqual(['invoices:read', 'payments:record']);
+    expect(permissionsOf(PaymentsController, 'list')).toEqual(['invoices:read']);
+  });
+
+  it('never lets an API key make an invoice or record a payment', () => {
+    expect(MACHINE_FORBIDDEN_PERMISSIONS).toEqual(expect.arrayContaining(['invoices:manage', 'payments:record']));
+  });
+});

@@ -397,6 +397,7 @@ enum ChargeSource {
 }
 
 model Organization {
+  invoices Invoice[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -581,6 +582,8 @@ model AiEvaluationRun {
 }
 
 model UserProfile {
+  invoicesCreated      Invoice[]          @relation("InvoiceCreatedBy")
+  paymentsRecorded     InvoicePayment[]   @relation("InvoicePaymentRecordedBy")
   geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
   managementEndsMarked PropertyServiceStatus[] @relation("ManagementEndedBy")
   tbpOptOutsMarked     PropertyServiceStatus[] @relation("TbpOptedOutBy")
@@ -1311,6 +1314,7 @@ model BaselineMedia {
 }
 
 model Inspection {
+  invoices Invoice[]
   timeSegments TimeSegment[]
   trackingGaps TrackingGap[]
   id                         String                  @id @default(uuid()) @db.Uuid
@@ -1544,6 +1548,7 @@ model PropertywarePortfolioOwner {
 }
 
 model PropertywareBuilding {
+  invoices Invoice[]
   geofence PropertyGeofence?
   serviceStatus PropertyServiceStatus?
   tbpPackageChanges TbpPackageChange[]
@@ -3062,6 +3067,153 @@ model RescheduleRequest {
   @@index([organizationId, status, createdAt])
   @@index([inspectionId])
   @@index([rebookInspectionId])
+}
+
+/// Jobber's states for an invoice (2026-11-05). "Past due" is not one of them
+/// here: it is an invoice awaiting payment after its due day, worked out
+/// against today in Texas when it is read, so it can never be a day stale.
+enum InvoiceStatus {
+  DRAFT
+  AWAITING_PAYMENT
+  PAID
+  BAD_DEBT
+  VOIDED
+}
+
+/// How a payment came in. The office's own way first: the charge posted to the
+/// tenant's ledger in Propertyware, then recorded by hand.
+enum InvoicePaymentMethod {
+  PROPERTYWARE_LEDGER
+  CHECK
+  CASH
+  BANK_TRANSFER
+  CARD
+  OTHER
+}
+
+/// Where a row began: read from Jobber, or made in the console. A console row
+/// with no Jobber id is one Jobber has not been sent yet.
+enum InvoiceOrigin {
+  JOBBER
+  CONSOLE
+}
+
+/// An invoice, as Jobber keeps it (the office, 2026-11-05: "we will need the
+/// invoices and payments to be integrated to our inspection console too").
+///
+/// Jobber is the record. Rows from Jobber are its copy, replaced whole each
+/// time Jobber says the invoice changed; a row made in the console is the
+/// invoice the console asked Jobber to create. Money is whole cents.
+model Invoice {
+  id                     String          @id @default(uuid()) @db.Uuid
+  organizationId         String          @db.Uuid
+  origin                 InvoiceOrigin
+  /// Jobber's id. Required on a row read from Jobber (a CHECK says so).
+  jobberInvoiceId        String?
+  /// Jobber's client: for the office, the property. Groups the account balance.
+  jobberClientId         String?
+  /// Jobber's number, "8439". Null until Jobber numbers it.
+  number                 String?
+  subject                String
+  status                 InvoiceStatus
+  /// Who it is made out to, as Jobber names the client.
+  clientName             String
+  billingAddress         String?
+  /// The visit it bills, when one could be matched: by Jobber visit, or the
+  /// only visit on its Jobber job.
+  inspectionId           String?         @db.Uuid
+  propertywareBuildingId String?         @db.Uuid
+  jobberJobId            String?
+  jobNumber              String?
+  issuedOn               DateTime?       @db.Date
+  dueOn                  DateTime?       @db.Date
+  paymentTermsDays       Int?
+  subtotalCents          Int
+  taxCents               Int             @default(0)
+  totalCents             Int
+  /// What is still owed. Jobber's figure on a row read from it; the console
+  /// lowers it in the same transaction that records a payment.
+  balanceCents           Int
+  clientMessage          String?
+  /// Jobber's page for it.
+  jobberWebUrl           String?
+  /// Jobber's own "updated at": a delivery older than the copy is ignored, as
+  /// Jobber delivers webhooks at least once and in no promised order.
+  jobberUpdatedAt        DateTime?
+  /// When this copy was last brought up to date from Jobber.
+  syncedAt               DateTime?
+  createdById            String?         @db.Uuid
+  /// The browser's key for an invoice made in the console, so a double click
+  /// or a resend makes one invoice.
+  clientRequestId        String?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection           Inspection?           @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+  propertywareBuilding PropertywareBuilding? @relation(fields: [propertywareBuildingId], references: [id], onDelete: SetNull)
+  createdBy            UserProfile?          @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  lines                InvoiceLine[]
+  payments             InvoicePayment[]
+
+  @@unique([organizationId, jobberInvoiceId])
+  @@unique([organizationId, clientRequestId])
+  @@index([organizationId, status, dueOn])
+  @@index([organizationId, issuedOn])
+  @@index([organizationId, jobberClientId])
+  @@index([inspectionId])
+  @@index([propertywareBuildingId])
+}
+
+/// One line of an invoice: a product or service, how many, at what.
+model InvoiceLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  invoiceId      String  @db.Uuid
+  /// The line's place on the invoice, from 0.
+  position       Int
+  name           String
+  description    String?
+  quantity       Float
+  unitPriceCents Int
+  totalCents     Int
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, position])
+  @@index([organizationId, name])
+}
+
+/// A payment recorded against an invoice: by hand in Jobber, or in the console.
+/// Never a charge -- nothing here takes money from anybody.
+model InvoicePayment {
+  id              String               @id @default(uuid()) @db.Uuid
+  organizationId  String               @db.Uuid
+  invoiceId       String               @db.Uuid
+  origin          InvoiceOrigin
+  /// Jobber's id. Required on a row read from Jobber (a CHECK says so).
+  jobberPaymentId String?
+  /// The day the money came in, in Texas.
+  paidOn          DateTime             @db.Date
+  amountCents     Int
+  method          InvoicePaymentMethod
+  /// A check number, a Propertyware receipt -- whatever finds it again.
+  reference       String?
+  note            String?
+  /// Who recorded it in the console; null for one recorded in Jobber.
+  recordedById    String?              @db.Uuid
+  /// The browser's key, so a double click or a resend records one payment.
+  clientRequestId String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  invoice    Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  recordedBy UserProfile? @relation("InvoicePaymentRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, jobberPaymentId])
+  @@unique([organizationId, clientRequestId])
+  @@index([organizationId, paidOn])
+  @@index([invoiceId])
 }
 
 /// An error that happened on somebody's phone or in their browser.

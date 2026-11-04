@@ -1,0 +1,147 @@
+'use client';
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  CreateInvoiceInput,
+  InvoiceDetail,
+  InvoiceDraft,
+  InvoiceFilter,
+  InvoiceList,
+  PaymentList,
+  PaymentMethod,
+  RecordPaymentInput,
+} from '@texasrenters/shared';
+
+import { api } from './api';
+
+/**
+ * Invoices and payments, read from the console's copy of Jobber's and written
+ * through to Jobber (see `shared/src/contracts/invoices.ts`).
+ *
+ * Reads of the console's own database only: the copy is kept up to date by
+ * Jobber's webhooks on the server, so nothing here polls, and no page asks
+ * Jobber anything. The two writes are a person's, each with its own key so a
+ * double click or a resend makes one invoice or one payment.
+ */
+
+const INVOICES = '/api/v1/admin/invoices';
+const PAYMENTS = '/api/v1/admin/payments';
+
+export interface InvoiceQuery {
+  filter?: InvoiceFilter;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  propertyId?: string;
+  inspectionId?: string;
+}
+
+export interface PaymentQuery {
+  search?: string;
+  method?: PaymentMethod;
+  page?: number;
+}
+
+export const invoiceKeys = {
+  all: ['admin', 'invoices'] as const,
+  list: (query: InvoiceQuery) => ['admin', 'invoices', 'list', query] as const,
+  detail: (id: string) => ['admin', 'invoices', 'detail', id] as const,
+  draft: (inspectionId: string) => ['admin', 'invoices', 'draft', inspectionId] as const,
+  payments: (query: PaymentQuery) => ['admin', 'invoices', 'payments', query] as const,
+};
+
+const queryString = (values: Record<string, string | number | undefined>) => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== '') search.set(key, String(value));
+  const text = search.toString();
+  return text ? `?${text}` : '';
+};
+
+export function useInvoices(query: InvoiceQuery, enabled = true) {
+  return useQuery({
+    queryKey: invoiceKeys.list(query),
+    queryFn: ({ signal }) =>
+      api<InvoiceList>(
+        `${INVOICES}${queryString({
+          filter: query.filter && query.filter !== 'all' ? query.filter : undefined,
+          search: query.search?.trim(),
+          page: query.page,
+          pageSize: query.pageSize,
+          propertyId: query.propertyId,
+          inspectionId: query.inspectionId,
+        })}`,
+        { signal },
+      ),
+    enabled,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useInvoice(id: string) {
+  return useQuery({
+    queryKey: invoiceKeys.detail(id),
+    queryFn: ({ signal }) => api<InvoiceDetail>(`${INVOICES}/${encodeURIComponent(id)}`, { signal }),
+    enabled: Boolean(id),
+  });
+}
+
+/** What a finished visit would be invoiced for, before anybody edits it. */
+export function useInvoiceDraft(inspectionId: string) {
+  return useQuery({
+    queryKey: invoiceKeys.draft(inspectionId),
+    queryFn: ({ signal }) =>
+      api<InvoiceDraft>(`${INVOICES}/draft${queryString({ inspectionId })}`, { signal }),
+    enabled: Boolean(inspectionId),
+    // A draft is a starting point: read once, and never refetched under the editor.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function usePayments(query: PaymentQuery) {
+  return useQuery({
+    queryKey: invoiceKeys.payments(query),
+    queryFn: ({ signal }) =>
+      api<PaymentList>(`${PAYMENTS}${queryString({ search: query.search?.trim(), method: query.method, page: query.page })}`, {
+        signal,
+      }),
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** A key for one write, made when the form opens, so a resend is the same write. */
+export function newClientRequestId(): string {
+  const random =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `web-${random}`;
+}
+
+export function useInvoiceActions() {
+  const client = useQueryClient();
+  const refresh = () => void client.invalidateQueries({ queryKey: invoiceKeys.all });
+  return {
+    /** Make the invoice for a finished visit, and send it to Jobber. */
+    create: useMutation({
+      mutationFn: (input: CreateInvoiceInput) =>
+        api<InvoiceDetail>(INVOICES, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: (invoice) => {
+        client.setQueryData(invoiceKeys.detail(invoice.id), invoice);
+        refresh();
+      },
+    }),
+    /** Record a payment against an invoice, which marks it paid in Jobber once it is all paid. */
+    recordPayment: useMutation({
+      mutationFn: ({ invoiceId, input }: { invoiceId: string; input: RecordPaymentInput }) =>
+        api<InvoiceDetail>(`${INVOICES}/${encodeURIComponent(invoiceId)}/payments`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (invoice) => {
+        client.setQueryData(invoiceKeys.detail(invoice.id), invoice);
+        refresh();
+      },
+    }),
+  };
+}
