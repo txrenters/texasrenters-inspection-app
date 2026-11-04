@@ -23,20 +23,27 @@ export function Calendar({ className, classNames, showOutsideDays = true, today,
       // the reader's, and a Manila evening is already tomorrow in Texas.
       today={today ?? fromDateValue(businessToday())}
       showOutsideDays={showOutsideDays}
-      className={cn('p-3', className)}
+      // Relative, so the arrows are placed against the calendar itself rather
+      // than whatever positioned box it happens to sit in.
+      className={cn('relative p-3', className)}
       classNames={{
         months: 'flex flex-col sm:flex-row gap-4',
         month: 'flex flex-col gap-4',
         month_caption: 'flex justify-center pt-1 relative items-center',
         caption_label: 'text-sm font-medium',
         nav: 'flex items-center gap-1',
+        // Above the month's caption (2026-11-05). The caption is positioned
+        // and comes after the arrows, so it was painted over them: a click in
+        // the middle of "next month" landed on the caption and did nothing,
+        // and only the arrow's outer edge answered -- which looked like the
+        // picker waking up after a while.
         button_previous: cn(
           buttonVariants({ variant: 'outline', size: 'icon-sm' }),
-          'absolute left-1 top-1 size-7 p-0 opacity-70 hover:opacity-100',
+          'absolute left-1 top-1 z-10 size-7 p-0 opacity-70 hover:opacity-100',
         ),
         button_next: cn(
           buttonVariants({ variant: 'outline', size: 'icon-sm' }),
-          'absolute right-1 top-1 size-7 p-0 opacity-70 hover:opacity-100',
+          'absolute right-1 top-1 z-10 size-7 p-0 opacity-70 hover:opacity-100',
         ),
         month_grid: 'w-full border-collapse space-y-1',
         weekdays: 'flex',
