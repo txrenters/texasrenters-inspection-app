@@ -203,6 +203,24 @@ export const SEGMENT_DEFAULTS = {
   maxFixGapSeconds: 300,
 
   /**
+   * How far past a property's leaving distance the first fix after a silence
+   * may be, and the silence still belong to the visit.
+   *
+   * 30 m. Standing still, an iPhone records nothing until it has moved 25 m
+   * (the recorder's settled rate, #419, for the battery), so the fix that ends
+   * an hour of silence inside a house is the technician 25 m from where they
+   * worked: walking out to the van, already just past the 30 m circle. Read
+   * as "found somewhere else", that ended the visit at the last fix before the
+   * silence and filed the hour inside as general time. Over 14 days to
+   * 2026-11-03, 39 of 78 visits ended that way -- 463 minutes -- and 36 of
+   * those first fixes were 30 to 51 m from the pin, all inside 30 + 30. (The
+   * other three were 14-20 m from it: properties with circles of their own.)
+   * Past the margin it is somewhere else, as before: of the rest, one was
+   * 60-200 m away and three over 200 m, already driving.
+   */
+  quietReturnMarginMeters: 30,
+
+  /**
    * A stop is this long ...
    *
    * Five minutes, the shortest anybody runs into a store for: past a red light,
@@ -284,6 +302,22 @@ function placeOf(fix: SegmentFix, fences: readonly DayFence[], was: Place): Plac
   return metresFromWas === null ? null : was;
 }
 
+/**
+ * Whether a fix sits just outside the property the technician was at: past its
+ * leaving distance by no more than `quietReturnMarginMeters`. Only asked of
+ * the first fix after a silence.
+ */
+function justOutside(fix: SegmentFix, fences: readonly DayFence[], was: Place, settings: SegmentSettings): boolean {
+  if (was === null) return false;
+  const fence = fences.find((candidate) => candidate.id === was);
+  if (!fence) return false;
+  const metres = haversineMeters(
+    { latitude: fix.latitude, longitude: fix.longitude },
+    { latitude: fence.latitude, longitude: fence.longitude },
+  );
+  return metres <= fence.exitRadiusMeters + settings.quietReturnMarginMeters;
+}
+
 /** A stretch in one place, before it is given a duration. */
 interface Run {
   place: Place;
@@ -312,6 +346,10 @@ interface Run {
  *
  * - found at the same property afterwards, the technician was there the whole
  *   time, and the stretch continues through the silence;
+ * - found just outside it -- within `quietReturnMarginMeters` of its leaving
+ *   distance, and at no other property -- that is the phone waking as they walk
+ *   out: the stretch continues through the silence too, and they leave from
+ *   that fix the way they leave from any other, once it has held;
  * - found anywhere else, they left at some moment nobody recorded. The visit
  *   ends at the last fix that saw them there and the silence is general time.
  *
@@ -342,9 +380,13 @@ export function computeDayLedger(
     if (sinceLast > settings.maxFixGapSeconds) {
       // Whatever was being confirmed, the silence has outlasted it.
       candidate = null;
-      if (at === current.place) {
+      const wokeOnTheWayOut = at === null && justOutside(fix, fences, current.place, settings);
+      if (at === current.place || wokeOnTheWayOut) {
         current.to = fix.at;
         current.quietSeconds += sinceLast;
+        // On the way out, not yet gone: leaving is confirmed from this fix,
+        // as from any other, once the next ones hold outside.
+        if (wokeOnTheWayOut) candidate = { place: at, from: fix.at };
       } else {
         runs.push({ ...current, to: lastAt });
         runs.push({ place: null, from: lastAt, to: fix.at, quietSeconds: sinceLast });
