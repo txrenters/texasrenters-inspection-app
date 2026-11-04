@@ -1,4 +1,5 @@
 import {
+  Banknote,
   Building2,
   CalendarClock,
   CalendarDays,
@@ -11,6 +12,7 @@ import {
   Gauge,
   KeyRound,
   MapPin,
+  ReceiptText,
   RefreshCw,
   Shapes,
   ShieldCheck,
@@ -199,6 +201,15 @@ export const adminNavigation: AdminNavigationGroup[] = [
         // and anyone who may see the property may see who is in it.
         permission: 'properties:read',
       },
+    ],
+  },
+  {
+    // The visits billed in Jobber and the payments recorded against them
+    // (2026-11-05). Their own permission: money is not every reader's.
+    title: 'Billing',
+    items: [
+      { title: 'Invoices', href: '/invoices', icon: ReceiptText, permission: 'invoices:read' },
+      { title: 'Payments', href: '/payments', icon: Banknote, permission: 'invoices:read' },
     ],
   },
   {

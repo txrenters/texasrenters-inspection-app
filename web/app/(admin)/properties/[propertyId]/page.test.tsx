@@ -23,6 +23,7 @@ vi.mock('@/components/floor-plan-manager', () => ({ FloorPlanManager: () => null
 vi.mock('@/components/property-details-panel', () => ({ PropertyDetailsPanel: () => null }));
 vi.mock('@/components/property-geofence-card', () => ({ PropertyGeofenceCard: () => null }));
 vi.mock('@/components/property-service-card', () => ({ PropertyServiceCard: () => null }));
+vi.mock('@/components/invoices/invoice-parts', () => ({ InvoicesCard: () => null }));
 vi.mock('@/components/demo-property-delete-dialog', () => ({ DemoPropertyDeleteDialog: () => null }));
 
 const property = (over: Record<string, unknown> = {}) => ({

@@ -17,6 +17,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel, SECTION_LABEL } from '@/components/panel';
 import { PropertyDetailsPanel } from '@/components/property-details-panel';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
+import { InvoicesCard } from '@/components/invoices/invoice-parts';
 import { PropertyServiceCard } from '@/components/property-service-card';
 import { PropertyCreateMenu, PropertyRecordAside, PropertyWork } from '@/components/record/property-record';
 import { FactTable, RecordLayout } from '@/components/record/record-kit';
@@ -256,6 +257,7 @@ export default function PropertyDetailPage() {
             units={item._count?.units ?? item.units?.length}
           />
         }
+        billing={<InvoicesCard propertyId={id} />}
         jobber={jobber}
       >
 
@@ -458,10 +460,35 @@ export default function PropertyDetailPage() {
  * The page body, with Jobber's side panel beside it from xl in the Jobber-style
  * shell, and exactly as it was in the classic console.
  */
-function RecordContent({ aside, children, jobber }: { aside: ReactNode; children: ReactNode; jobber: boolean }) {
-  if (!jobber) return <>{children}</>;
+function RecordContent({
+  aside,
+  billing,
+  children,
+  jobber,
+}: {
+  aside: ReactNode;
+  /** The property's invoices: in the side panel, or under the page in the classic console. */
+  billing?: ReactNode;
+  children: ReactNode;
+  jobber: boolean;
+}) {
+  if (!jobber)
+    return (
+      <>
+        {children}
+        {billing ? <div className="mt-6 max-w-xl">{billing}</div> : null}
+      </>
+    );
   return (
-    <RecordLayout aside={aside} asideLabel="About this property">
+    <RecordLayout
+      aside={
+        <>
+          {aside}
+          {billing}
+        </>
+      }
+      asideLabel="About this property"
+    >
       {children}
     </RecordLayout>
   );
