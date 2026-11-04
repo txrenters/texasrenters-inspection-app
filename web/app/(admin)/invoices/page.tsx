@@ -17,6 +17,7 @@ import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { formatRelative } from '@/lib/format';
+import { noInvoicesYet } from '@/lib/invoice-read';
 import { useInvoices } from '@/lib/invoice-queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
@@ -27,8 +28,8 @@ import { useUrlState } from '@/lib/url-state';
  * day, subject, status, total and what it still owes, filtered by status and
  * searched by address or number.
  *
- * The console's copy of Jobber's, kept up to date by Jobber's webhooks; reading
- * it asks Jobber nothing.
+ * The console's copy of Jobber's, read from Jobber every few minutes by the
+ * server; opening this page asks Jobber nothing.
  */
 
 const COLUMNS: Array<Column<InvoiceSummary>> = [
@@ -130,7 +131,7 @@ export default function InvoicesPage() {
           description={
             state.q.trim() || filter !== 'all'
               ? 'No invoice matches. Try another status or a shorter search.'
-              : 'Invoices appear here once Jobber is connected and the first copy has been read.'
+              : noInvoicesYet(data?.jobberRead)
           }
           title="No invoices"
         >
@@ -159,7 +160,11 @@ export default function InvoicesPage() {
             total={data.total}
             totalPages={data.totalPages}
           />
-          {data.syncedAt ? (
+          {data.jobberRead && !data.jobberRead.firstReadDone ? (
+            <p className="text-muted-foreground mt-3 text-xs">
+              Still reading Jobber&apos;s invoices for the first time; more appear every few minutes.
+            </p>
+          ) : data.syncedAt ? (
             <p className="text-muted-foreground mt-3 text-xs">Up to date with Jobber {formatRelative(data.syncedAt)}.</p>
           ) : null}
         </>

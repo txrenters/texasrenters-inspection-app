@@ -145,6 +145,15 @@ describe('Jobber GraphQL client', () => {
     await expect(client().fetchAccount('org-1')).rejects.toThrow(/rejected the query/);
   });
 
+  it('tells a missing scope apart, without repeating what Jobber said', async () => {
+    respondWith({ errors: [{ message: 'An object of type Invoice was hidden due to permissions' }] });
+    const error = await client()
+      .request('org-1', '{ invoices(first: 1) { nodes { id } } }')
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'JOBBER_SCOPE_MISSING', retryable: false });
+    expect((error as Error).message).not.toMatch(/hidden/);
+  });
+
   it('marks a throttled query retryable so the sync backs off rather than giving up', async () => {
     respondWith({ errors: [{ message: 'slow down', extensions: { code: 'THROTTLED' } }] });
     await expect(client().fetchAccount('org-1')).rejects.toMatchObject({

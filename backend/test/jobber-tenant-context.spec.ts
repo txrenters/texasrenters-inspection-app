@@ -29,6 +29,10 @@ describe('background Jobber work runs inside a tenant context', () => {
     expect(SCHEDULER).toMatch(/withTenant\(organizationId, \(\) => this\.outbound\.run\(organizationId\)\)/);
   });
 
+  it("wraps the invoice read on the same tick, which writes the organization's own tables", () => {
+    expect(SCHEDULER).toMatch(/withTenant\(organizationId, \(\) => this\.invoices\.run\(organizationId\)\)/);
+  });
+
   it('wraps webhook processing, which also has no request to inherit from', () => {
     expect(WEBHOOK).toMatch(/withTenant\(connection\.organizationId,/);
   });

@@ -438,3 +438,129 @@ function visitsByIdsQuery(first: number) {
   }
 `;
 }
+
+/**
+ * An invoice, as the console's copy needs it (2026-11-05).
+ *
+ * Every field name here was read from Jobber's own schema by introspection on
+ * the pinned version (2025-01-20), and a query using exactly this selection
+ * validated against it -- Jobber refused it only for the missing Invoices
+ * scope, which is how it says "hidden due to permissions". Nothing is selected
+ * that `toInvoiceCopy` does not use.
+ *
+ * `Invoice.paymentRecords` returns Jobber's PaymentRecord object, which has no
+ * payment type: how a payment was made lives only on the top-level
+ * `paymentRecords` interface. So a payment read here is stored as "Other"
+ * until that is read too.
+ */
+function invoiceSelection(lines: number, payments: number) {
+  return `
+        id
+        invoiceNumber
+        subject
+        invoiceStatus
+        issuedDate
+        dueDate
+        message
+        jobberWebUri
+        updatedAt
+        amounts {
+          subtotal
+          taxAmount
+          total
+          invoiceBalance
+        }
+        billingAddress {
+          street1
+          street2
+          city
+          province
+          postalCode
+        }
+        client {
+          id
+          name
+        }
+        jobs(first: 2) {
+          nodes {
+            id
+            jobNumber
+          }
+        }
+        visits(first: 5) {
+          nodes {
+            id
+          }
+        }
+        lineItems(first: ${lines}) {
+          totalCount
+          nodes {
+            name
+            description
+            quantity
+            unitPrice
+            totalPrice
+          }
+        }
+        paymentRecords(first: ${payments}) {
+          totalCount
+          nodes {
+            id
+            amount
+            entryDate
+            adjustmentType
+          }
+        }`;
+}
+
+/** Lines and payments asked for on a page; an invoice with more is read again by itself. */
+export const INVOICE_PAGE_LINES = 10;
+export const INVOICE_PAGE_PAYMENTS = 10;
+
+/**
+ * A page of invoices, oldest first.
+ *
+ * Two orders, one query. The first read pages every invoice by when it was
+ * created, so an invoice edited while the read is under way cannot move behind
+ * the cursor. After that, only what changed: updated after the last one
+ * applied, oldest change first, so a run cut short resumes where it stopped.
+ */
+export const invoicesPageQuery = (mode: 'all' | 'changed') => `
+  query ConsoleInvoices($first: Int!, $after: String${mode === 'changed' ? ', $updatedAfter: ISO8601DateTime' : ''}) {
+    invoices(
+      first: $first
+      after: $after
+      sort: [{ key: ${mode === 'all' ? 'CREATED_AT' : 'UPDATED_AT'}, direction: ASCENDING }]
+      ${mode === 'changed' ? 'filter: { updatedAt: { after: $updatedAfter } }' : ''}
+    ) {
+      nodes {${invoiceSelection(INVOICE_PAGE_LINES, INVOICE_PAGE_PAYMENTS)}
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
+/**
+ * One invoice with all of its lines and payments: for a webhook, and for an
+ * invoice a page cut short. Null when Jobber no longer has it.
+ */
+export const INVOICE_BY_ID_QUERY = `
+  query ConsoleInvoice($id: EncodedId!) {
+    invoice(id: $id) {${invoiceSelection(100, 100)}
+    }
+  }
+`;
+
+/** The invoice a payment belongs to, for a PAYMENT_* webhook about a payment the copy has not seen. */
+export const PAYMENT_RECORD_INVOICE_QUERY = `
+  query ConsoleInvoicePayment($id: EncodedId!) {
+    paymentRecord(id: $id) {
+      invoice {
+        id
+      }
+    }
+  }
+`;

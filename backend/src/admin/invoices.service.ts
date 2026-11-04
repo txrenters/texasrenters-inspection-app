@@ -16,6 +16,7 @@ import {
   type InvoiceDetail,
   type InvoiceDraft,
   type InvoiceFilter,
+  type InvoiceJobberRead,
   type InvoiceLineInput,
   type InvoiceList,
   type InvoicePayment as InvoicePaymentView,
@@ -26,7 +27,7 @@ import {
   type ReportableVisitService,
   type VisitServicesReport,
 } from '@texasrenters/shared';
-import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, JobberConnectionStatus, Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
@@ -169,6 +170,28 @@ const bucket = (count: number | null | undefined, cents: number | null | undefin
   amountCents: cents ?? 0,
 });
 
+/** Where reading Jobber's invoices stands (JobberInvoiceWorker), for the list to say why it is empty. */
+export function jobberRead(
+  connection: {
+    status: JobberConnectionStatus;
+    invoiceReadProblem: string | null;
+    invoiceReadCheckedAt: Date | null;
+    invoiceReadCompletedAt: Date | null;
+  } | null,
+): InvoiceJobberRead {
+  if (!connection || connection.status !== JobberConnectionStatus.CONNECTED)
+    return { problem: 'NOT_CONNECTED', checkedAt: null, firstReadDone: Boolean(connection?.invoiceReadCompletedAt) };
+  const problem =
+    connection.invoiceReadProblem === 'NOT_PERMITTED' || connection.invoiceReadProblem === 'FAILED'
+      ? connection.invoiceReadProblem
+      : null;
+  return {
+    problem,
+    checkedAt: connection.invoiceReadCheckedAt?.toISOString() ?? null,
+    firstReadDone: connection.invoiceReadCompletedAt !== null,
+  };
+}
+
 /** An invoice with its status filter, as Jobber's list filters it. */
 function filterWhere(filter: InvoiceFilter, today: string): Prisma.InvoiceWhereInput {
   const todayDate = dateOf(today);
@@ -303,7 +326,7 @@ export class InvoicesService {
       ],
     });
 
-    const [rows, total, byStatus, pastDue, last30, previous30, synced] = await Promise.all([
+    const [rows, total, byStatus, pastDue, last30, previous30, synced, connection] = await Promise.all([
       this.prisma.invoice.findMany({
         where,
         orderBy: [{ issuedOn: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
@@ -326,6 +349,10 @@ export class InvoicesService {
       this.prisma.invoice.aggregate({ where: issued(0, 29), _count: { _all: true }, _sum: { totalCents: true } }),
       this.prisma.invoice.aggregate({ where: issued(30, 59), _count: { _all: true }, _sum: { totalCents: true } }),
       this.prisma.invoice.aggregate({ where: { organizationId: user.organizationId }, _max: { syncedAt: true } }),
+      this.prisma.jobberConnection.findUnique({
+        where: { organizationId: user.organizationId },
+        select: { status: true, invoiceReadProblem: true, invoiceReadCheckedAt: true, invoiceReadCompletedAt: true },
+      }),
     ]);
 
     const status = (key: InvoiceStatus) => byStatus.find((row) => row.status === key);
@@ -362,6 +389,7 @@ export class InvoicesService {
         voided: count(InvoiceStatus.VOIDED),
       },
       syncedAt: synced._max.syncedAt?.toISOString() ?? null,
+      jobberRead: jobberRead(connection),
     };
   }
 

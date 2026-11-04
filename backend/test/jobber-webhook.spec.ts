@@ -136,6 +136,14 @@ describe('the topics the handler acts on', () => {
       expect(SERVICE).toContain(`'${topic}'`);
   });
 
+  it("acts on the invoice and payment topics by the names Jobber's schema gives them", () => {
+    // Read from Jobber's WebHookTopicEnum by introspection (2026-11-05). A
+    // deleted invoice is dropped from the copy, never fetched.
+    for (const topic of ['INVOICE_CREATE', 'INVOICE_UPDATE', 'INVOICE_DESTROY', 'PAYMENT_CREATE', 'PAYMENT_UPDATE', 'PAYMENT_DESTROY'])
+      expect(SERVICE).toContain(`'${topic}'`);
+    expect(SERVICE).toMatch(/topic === 'INVOICE_DESTROY'\) \{\s*await this\.invoices\.removeInvoice/);
+  });
+
   it('handles VISIT_DESTROY separately from the fetch-and-process topics', () => {
     // A deleted visit and a visit we cannot see both return nothing, so only
     // the topic distinguishes them. Routing destroy through syncVisit would
