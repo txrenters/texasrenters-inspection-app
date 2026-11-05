@@ -206,6 +206,20 @@ export class MailService {
     });
   }
 
+  /**
+   * An invoice to a client (2026-11-06): the content is the invoice's own
+   * (`invoiceEmail`, every value escaped there), in the house layout. One
+   * address a call, so a client never sees who else was sent it.
+   */
+  sendInvoice(input: { to: string; subject: string; title: string; html: string }) {
+    return this.deliver({
+      to: input.to,
+      subject: input.subject,
+      html: this.layout(input.title, input.html),
+      template: 'invoice',
+    });
+  }
+
   private async deliver(input: {
     to: string;
     subject: string;

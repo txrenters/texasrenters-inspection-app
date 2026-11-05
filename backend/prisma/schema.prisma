@@ -584,6 +584,7 @@ model AiEvaluationRun {
 model UserProfile {
   invoicesCreated      Invoice[]          @relation("InvoiceCreatedBy")
   paymentsRecorded     InvoicePayment[]   @relation("InvoicePaymentRecordedBy")
+  invoicesSent         InvoiceDelivery[]  @relation("InvoiceDeliverySentBy")
   geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
   managementEndsMarked PropertyServiceStatus[] @relation("ManagementEndedBy")
   tbpOptOutsMarked     PropertyServiceStatus[] @relation("TbpOptedOutBy")
@@ -3219,6 +3220,7 @@ model Invoice {
   payments             InvoicePayment[]
   notes                InvoiceNote[]
   files                InvoiceFile[]
+  deliveries           InvoiceDelivery[]
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
@@ -3296,6 +3298,35 @@ model InvoiceFile {
 
   @@unique([invoiceId, jobberFileId])
   @@index([organizationId])
+}
+
+/// An invoice sent to the client from the console (2026-11-06, phase 5 of taking
+/// invoicing over from Jobber): to whom, when, by whom, and whether it went.
+/// Made before the email is sent, keyed by the browser, so a double click sends
+/// one; and counted for the office's daily ceiling on email, which is billed.
+model InvoiceDelivery {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  invoiceId       String    @db.Uuid
+  /// EMAIL. Text messages need a provider the console does not have yet.
+  channel         String
+  recipients      String[]
+  /// The note the office wrote above the invoice, if any.
+  message         String?
+  /// PENDING while it is being sent, then SENT or FAILED.
+  status          String
+  failure         String?
+  sentById        String?   @db.Uuid
+  clientRequestId String
+  createdAt       DateTime  @default(now())
+  sentAt          DateTime?
+
+  invoice Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  sentBy  UserProfile? @relation("InvoiceDeliverySentBy", fields: [sentById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, clientRequestId])
+  @@index([organizationId, createdAt])
+  @@index([invoiceId, createdAt])
 }
 
 /// A payment recorded against an invoice: by hand in Jobber, or in the console.

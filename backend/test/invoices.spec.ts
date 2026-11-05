@@ -92,6 +92,7 @@ const invoiceRow = (over: Record<string, unknown> = {}) => ({
   customFields: null,
   notes: [],
   files: [],
+  deliveries: [],
   ...over,
 });
 

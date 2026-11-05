@@ -1,3 +1,5 @@
+import type { InvoiceDeliveryView } from './invoice-delivery.js';
+
 /**
  * Invoices and the payments recorded against them, in the console (the office,
  * 2026-11-05: "we will need the invoices and payments to be integrated to our
@@ -207,6 +209,10 @@ export interface InvoiceDetail extends InvoiceSummary {
    * be undone by the next read of Jobber's copy.
    */
   writesEnabled?: boolean;
+  /** Who the invoice is from, for its PDF, as the inspection reports name the company (2026-11-06). */
+  brand?: ReceiptBrand;
+  /** Each time it was sent to the client from the console, newest first. */
+  deliveries?: InvoiceDeliveryView[];
 }
 
 /** The rest of what Jobber keeps on an invoice. */

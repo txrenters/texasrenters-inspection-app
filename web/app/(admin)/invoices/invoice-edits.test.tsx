@@ -26,6 +26,8 @@ vi.mock('@/lib/invoice-edit-queries', () => ({
   useInvoiceEdits: () => edits,
   useInvoiceHistory: () => ({ isLoading: false, isError: false, data: edits.history.current }),
 }));
+// Sending is phase 5's, tested in invoice-sending.test.tsx.
+vi.mock('@/lib/invoice-delivery-queries', () => ({ useSendInvoice: () => ({ mutate: vi.fn(), isPending: false }) }));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
