@@ -309,6 +309,8 @@ export default function JobScreen() {
               {/* The kind of visit, first: an HVAC job and a move-out share an address and nothing else. */}
               <Text className="text-sm font-semibold text-primary">
                 {INSPECTION_TYPE_LABEL[item.type] ?? item.type.replaceAll('_', ' ')}
+                {/* Jobber's job number, as the office calls the visit on the phone (2026-11-06). */}
+                {item.jobNumber ? <Text className="font-normal text-muted-foreground">{` · Job #${item.jobNumber}`}</Text> : null}
               </Text>
               <Text className="text-sm text-muted-foreground">
                 {item.unitName ?? 'Entire property'} · {item.property.cityStateZip}

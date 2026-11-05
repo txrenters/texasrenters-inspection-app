@@ -205,6 +205,13 @@ describe('the table', () => {
     expect(within(cell as HTMLElement).getByText(/urgent/i)).toBeInTheDocument();
   });
 
+  it("names Jobber's job number under the property, after the unit", () => {
+    mount({}, [row({ propertywareUnit: { id: 'u-1', name: 'Unit 5' }, jobberJobNumber: '20625' })]);
+
+    const cell = screen.getByText('18919 Summer Farm Trl').closest('td, th')!;
+    expect(within(cell as HTMLElement).getByText('Unit 5 · Job #20625')).toBeInTheDocument();
+  });
+
   it('says a quiet day is a quiet day, and offers every date', () => {
     mount({ type: 'MOVE_OUT' }, []);
 

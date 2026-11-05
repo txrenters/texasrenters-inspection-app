@@ -212,6 +212,8 @@ export interface Inspection {
    */
   visitTitle?: string | null;
   visitDetails?: string | null;
+  /** Jobber's number for the job, "20625", as the office calls it. Null before the sync has seen it. */
+  jobNumber?: string | null;
   /**
    * What the office holds on this tenancy, and what the last visit flagged.
    *

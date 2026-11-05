@@ -1010,6 +1010,7 @@ export class JobberSyncWorker {
           source: InspectionSource.JOBBER,
           jobberVisitId: visit.id,
           jobberJobId: visit.job?.id ?? null,
+          jobberJobNumber: visitJobNumber(visit),
           jobberVisitTitle: visit.title ?? null,
           jobberVisitDetails: visitDetailsText(visit.instructions),
           // Only ever set for the recovered move-ins above: work Jobber had
@@ -1096,6 +1097,7 @@ export class JobberSyncWorker {
             source: InspectionSource.JOBBER,
             jobberVisitId: null,
             jobberJobId: visit.job?.id ?? null,
+            jobberJobNumber: visitJobNumber(visit),
             jobberVisitTitle: visit.title ?? null,
             jobberVisitDetails: withoutVisitServices(visitDetailsText(visit.instructions)),
             jobberCompanionOfId: inspection.id,
@@ -1297,12 +1299,24 @@ export class JobberSyncWorker {
         scheduledEndAt: true,
         jobberVisitTitle: true,
         jobberVisitDetails: true,
+        jobberJobNumber: true,
       },
     });
     if (!inspection) {
       result.skipped += 1;
       return;
     }
+
+    // The job's number, kept current on every pass (2026-11-06): no console
+    // edit holds it back, nothing in the console changes it, and a visit the
+    // console booked only learns it from Jobber's copy. A response without one
+    // leaves the stored number alone.
+    const jobNumber = visitJobNumber(visit);
+    if (jobNumber && jobNumber !== inspection.jobberJobNumber)
+      await this.prisma.inspection.updateMany({
+        where: { id: inspection.id, organizationId },
+        data: { jobberJobNumber: jobNumber },
+      });
 
     /**
      * Assignment is reconciled on every pass, not only at import.
@@ -2022,4 +2036,12 @@ export class JobberSyncWorker {
 /** The Details as written, or null when there are none worth keeping. */
 export function visitDetailsText(instructions: string | null | undefined): string | null {
   return instructions && instructions.trim() ? instructions : null;
+}
+
+/** Jobber's number for the visit's job as text, "20625"; null when the visit names none. */
+export function visitJobNumber(visit: Pick<JobberVisit, 'job'>): string | null {
+  const number = visit.job?.jobNumber;
+  if (number === null || number === undefined) return null;
+  const text = String(number).trim();
+  return text || null;
 }

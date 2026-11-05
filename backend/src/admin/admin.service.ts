@@ -1614,6 +1614,8 @@ export class AdminService {
       scheduledAt: true,
       // What says which quarter of the programme a visit belongs to.
       jobberVisitTitle: true,
+      // Jobber's number for the job, as the office calls it (2026-11-06).
+      jobberJobNumber: true,
       tbpPlanStop: { select: { plan: { select: { quarterYear: true, quarterNumber: true } } } },
       createdAt: true,
       updatedAt: true,
@@ -1817,6 +1819,7 @@ export class AdminService {
         // The visit as the coordinator wrote it, for the office. This select
         // sits behind inspections:read; the public report builds its own.
         jobberVisitTitle: true,
+        jobberJobNumber: true,
         jobberVisitDetails: true,
         // What the technician reported about those services at submission.
         servicesReport: true,

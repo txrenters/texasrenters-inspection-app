@@ -165,7 +165,14 @@ export function VisitCard({
           </Fact>
           <Fact label="Date">
             {formatScheduledDate(inspection.scheduledAt)}
-            {zone ? <span className="text-muted-foreground block text-xs font-normal">Zone {zone}</span> : null}
+            {zone || inspection.jobberJobNumber ? (
+              <span className="text-muted-foreground block text-xs font-normal">
+                {/* Jobber's job number, as the office calls the visit (2026-11-06). */}
+                {[zone ? `Zone ${zone}` : null, inspection.jobberJobNumber ? `Job #${inspection.jobberJobNumber}` : null]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            ) : null}
           </Fact>
           {/* The technician's own clock: Start job on the handset to submitting.
               Nothing inferred from photographs or locations. */}

@@ -160,5 +160,14 @@ describe('the inspection’s side panel', () => {
     render(<InspectionRecordAside activity={[]} item={inspection()} onSeeActivity={() => {}} technicianName={null} />);
     expect(screen.getByText('No internal notes yet.')).toBeTruthy();
     expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();
+    // No job number until the sync has seen one.
+    expect(screen.queryByText('Job #')).toBeNull();
+  });
+
+  it("names Jobber's job number in the Overview", () => {
+    render(
+      <InspectionRecordAside activity={[]} item={inspection({ jobberJobNumber: '20625' })} onSeeActivity={() => {}} technicianName={null} />,
+    );
+    expect(screen.getByText('Job #').nextElementSibling?.textContent).toBe('20625');
   });
 });

@@ -70,7 +70,7 @@ const visit = (over: Record<string, unknown> = {}) => ({
   endAt: '2026-10-13T16:00:00Z',
   completedAt: null,
   visitStatus: 'UPCOMING',
-  job: { id: 'job-1' },
+  job: { id: 'job-1', jobNumber: 20625 },
   property: { id: 'jobber-property-1', address: { street1: '9 Example St' } },
   client: { id: 'client-1', name: 'Tenant' },
   ...over,
@@ -133,8 +133,9 @@ describe('importing a visit that books two jobs', () => {
       InspectionType.OCCUPIED,
     ]);
     const [first, second] = (insertInspection as jest.Mock).mock.calls.map((call) => call[2]);
-    expect(first).toMatchObject({ jobberVisitId: 'visit-1', jobberVisitDetails: DETAILS });
-    expect(second).toMatchObject({ jobberVisitId: null, jobberCompanionOfId: 'inspection-hvac', jobberJobId: 'job-1' });
+    expect(first).toMatchObject({ jobberVisitId: 'visit-1', jobberVisitDetails: DETAILS, jobberJobNumber: '20625' });
+    // The second job is on the same Jobber job, so it has the same number.
+    expect(second).toMatchObject({ jobberVisitId: null, jobberCompanionOfId: 'inspection-hvac', jobberJobId: 'job-1', jobberJobNumber: '20625' });
     // The services are answered once, on the HVAC job.
     expect(reportableServices(parseVisitDetails(second.jobberVisitDetails))).toEqual([]);
     expect(second.jobberVisitDetails).toContain('Lockbox code 1234');

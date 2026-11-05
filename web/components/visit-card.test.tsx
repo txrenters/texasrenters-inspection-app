@@ -100,6 +100,15 @@ describe('the visit’s facts', () => {
     expect(screen.getByText('Jobber')).toBeInTheDocument();
   });
 
+  it("names Jobber's job number beside the zone, and alone when the title names none", () => {
+    const { unmount } = show({ jobberJobNumber: '20625' });
+    expect(screen.getByText('Zone 4 · Job #20625')).toBeInTheDocument();
+    unmount();
+
+    show({ jobberJobNumber: '20625', jobberVisitTitle: null });
+    expect(screen.getByText('Job #20625')).toBeInTheDocument();
+  });
+
   it('asks for a technician before the visit, not after it', () => {
     show({}, null);
     expect(screen.getByText('Required before field work can start')).toBeInTheDocument();

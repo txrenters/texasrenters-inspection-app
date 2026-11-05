@@ -129,7 +129,10 @@ const insensitive = (value: string) => ({ contains: value, mode: 'insensitive' a
  */
 function textFieldsContain(word: string): Prisma.InspectionWhereInput[] {
   const match = insensitive(word);
+  // Jobber's job number, whole: "20625" or "#20625", as the office reads it out.
+  const jobNumber = /^#?(\d+)$/.exec(word)?.[1];
   return [
+    ...(jobNumber ? [{ jobberJobNumber: jobNumber }] : []),
     { propertywareBuilding: { name: match } },
     { propertywareBuilding: { addressLine1: match } },
     { propertywareBuilding: { city: match } },

@@ -153,6 +153,24 @@ describe('inspectionPageSchema round trip', () => {
     expect(restored.items[1]?.visitDetails).toBeNull();
   });
 
+  it("keeps Jobber's job number through the parse and the offline cache", () => {
+    // A field the schema does not name is dropped by the parse, and the cache
+    // keeps the parsed copy: the number would never reach the job screen.
+    const withNumbers = {
+      ...serverPage,
+      items: [
+        { ...serverInspection, jobNumber: '20625' },
+        { ...serverInspection, id: 'insp-2', jobNumber: null },
+        // A job cached before the field existed still parses.
+        { ...serverInspection, id: 'insp-3' },
+      ],
+    };
+    const { first, second } = roundTrip(inspectionPageSchema, withNumbers);
+    expect(second).toEqual(first);
+    const restored = inspectionPageSchema.parse(second);
+    expect(restored.items.map((item) => item.jobNumber)).toEqual(['20625', null, undefined]);
+  });
+
   it('keeps the server total instead of the page length', () => {
     // The old schema was `z.object({ items })`, so `total` was parsed away and
     // the header counted rows in hand — permanently "25 total".
