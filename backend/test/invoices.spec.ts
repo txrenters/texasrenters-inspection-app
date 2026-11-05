@@ -56,6 +56,7 @@ const invoiceRow = (over: Record<string, unknown> = {}) => ({
   taxCents: 0,
   clientMessage: null,
   createdAt: new Date('2020-02-01T15:00:00.000Z'),
+  updatedAt: new Date('2020-02-02T15:00:00.000Z'),
   lines: [
     {
       name: 'Filter Change',

@@ -16,6 +16,7 @@ import {
   formatInvoiceDay,
   formatInvoiceMoment,
 } from '@/components/invoices/invoice-parts';
+import { InvoiceEditControls, InvoiceHistorySection } from '@/components/invoices/invoice-edit-controls';
 import { RecordPaymentDialog } from '@/components/invoices/record-payment-dialog';
 import { PageHeader } from '@/components/page-header';
 import { AsideCard, FactTable, PlaceCard, RecordLayout, type Fact } from '@/components/record/record-kit';
@@ -47,6 +48,8 @@ export default function InvoicePage() {
   const details = data.details;
   const payable = acceptsPayment(data) && has('payments:record');
   const visitHref = data.inspectionId ? `/inspections/${data.inspectionId}` : null;
+  // Edited here once the console owns invoicing (2026-11-06); in Jobber until then.
+  const editable = has('invoices:manage') && data.writesEnabled === true;
 
   return (
     <>
@@ -61,6 +64,7 @@ export default function InvoicePage() {
                 </a>
               </Button>
             ) : null}
+            {editable ? <InvoiceEditControls invoice={data} /> : null}
             {payable ? (
               <Button className="jobber:bg-success jobber:hover:bg-success/90" onClick={() => setPaying(true)} size="sm">
                 <BanknoteIcon />
@@ -160,6 +164,8 @@ export default function InvoicePage() {
             ) : null}
           </section>
         ) : null}
+
+        <InvoiceHistorySection invoiceId={data.id} />
       </RecordLayout>
 
       {payable ? <RecordPaymentDialog invoice={data} onClose={() => setPaying(false)} open={paying} /> : null}

@@ -27,6 +27,11 @@ vi.mock('@/lib/invoice-queries', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, ...hooks };
 });
+// Editing has its own tests (invoice-edits.test.tsx); here the invoice page only needs its history to read as empty.
+vi.mock('@/lib/invoice-edit-queries', () => ({
+  useInvoiceHistory: () => ({ isLoading: false, isError: false, data: { items: [], truncated: false } }),
+  useInvoiceEdits: () => ({ edit: { mutate: vi.fn() }, changeStatus: { mutate: vi.fn() }, remove: { mutate: vi.fn() } }),
+}));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
