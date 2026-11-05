@@ -237,6 +237,58 @@ export interface PaymentDetail extends PaymentListItem {
   jobberPaymentType: string | null;
   invoiceTotalCents: number;
   invoiceBalanceCents: number;
+  /** The invoice's state, so a page knows whether it can still take a change. */
+  invoiceStatus: InvoiceStatus;
+  /** When the payment was last changed: sent back with a change, so two people cannot both win. */
+  updatedAt: string;
+  /**
+   * Whether the console changes payments yet (`JOBBER_INVOICE_WRITES_ENABLED`).
+   * Off until the cutover: until then Jobber holds the payments, and a change
+   * made here would be undone by the next read of Jobber's copy.
+   */
+  writesEnabled: boolean;
+  /** Who the receipt is from, as the inspection reports name the company. */
+  brand: ReceiptBrand;
+}
+
+/** The company a receipt is from. */
+export interface ReceiptBrand {
+  name: string;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  phone: string | null;
+  email: string | null;
+}
+
+/**
+ * A payment corrected (2026-11-06, phase 2 of taking invoicing over from
+ * Jobber): the amount, the day, how it was paid, its reference and note. The
+ * balance is worked out again from it, never taken from the browser.
+ */
+export interface ChangePaymentInput {
+  amountCents: number;
+  paidOn: string;
+  method: PaymentMethod;
+  reference?: string | null;
+  note?: string | null;
+  /** `PaymentDetail.updatedAt` as it was read. A payment changed since is refused rather than overwritten. */
+  expectedUpdatedAt: string;
+}
+
+/** What a payment can come to when it is corrected: everything still owed, and what this payment already covers. */
+export const owedBeforePayment = (payment: Pick<PaymentDetail, 'invoiceBalanceCents' | 'amountCents'>) =>
+  payment.invoiceBalanceCents + payment.amountCents;
+
+/**
+ * Why a payment cannot be changed or removed, in words; null when it can.
+ * A refund (money back out) is not a payment to correct, and a voided, bad
+ * debt or draft invoice is closed to payments.
+ */
+export function paymentLockedReason(payment: Pick<PaymentDetail, 'amountCents' | 'invoiceStatus'>): string | null {
+  if (payment.amountCents <= 0) return 'A refund is not changed here.';
+  if (payment.invoiceStatus === 'VOIDED' || payment.invoiceStatus === 'BAD_DEBT' || payment.invoiceStatus === 'DRAFT')
+    return `The invoice is ${INVOICE_STATUS_LABEL[payment.invoiceStatus].toLowerCase()}, so its payments are not changed.`;
+  return null;
 }
 
 /** A count and the money in it, for the list's Overview. */
