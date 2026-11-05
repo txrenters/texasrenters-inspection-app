@@ -197,6 +197,16 @@ export interface InvoiceDetail extends InvoiceSummary {
   createdAt: string;
   /** Every other detail Jobber keeps (2026-11-05), ahead of the cutover. */
   details?: InvoiceExtraDetails;
+  /** When it was last changed: sent back with an edit, so two people cannot both win (2026-11-06). */
+  updatedAt?: string;
+  /** What its payments come to: an edit cannot bring the invoice below it. */
+  paidCents?: number;
+  /**
+   * Whether the console edits invoices yet (`JOBBER_INVOICE_WRITES_ENABLED`).
+   * Off until the cutover: until then Jobber holds them, and an edit here would
+   * be undone by the next read of Jobber's copy.
+   */
+  writesEnabled?: boolean;
 }
 
 /** The rest of what Jobber keeps on an invoice. */

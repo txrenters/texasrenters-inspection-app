@@ -109,6 +109,7 @@ const detailSelect = {
   taxCents: true,
   clientMessage: true,
   createdAt: true,
+  updatedAt: true,
   // Every other detail Jobber keeps (2026-11-05).
   contractDisclaimer: true,
   billingName: true,
@@ -953,6 +954,10 @@ export class InvoicesService {
       accountBalanceCents: account ? (account._sum.balanceCents ?? 0) : null,
       createdAt: row.createdAt.toISOString(),
       details: extraDetails(row),
+      // For editing it (2026-11-06): as it was read, what it has been paid, and whether edits are on.
+      updatedAt: row.updatedAt.toISOString(),
+      paidCents: row.payments.reduce((sum, paid) => sum + paid.amountCents, 0),
+      writesEnabled: getJobberConfig().invoiceWritesEnabled,
     };
   }
 
