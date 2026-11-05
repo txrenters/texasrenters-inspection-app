@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, PermissionsGuard } from '../common/auth';
+import { InvoiceFileStorageService } from '../common/invoice-file-storage.service';
 import { MailModule } from '../mail/mail.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TechnicianModule } from '../technician/technician.module';
@@ -22,6 +23,8 @@ import { ComparisonReportService } from './comparison-report.service';
 import { ComparisonService } from './comparison.service';
 import { InvoiceDeliveryController } from './invoice-delivery.controller';
 import { InvoiceDeliveryService } from './invoice-delivery.service';
+import { InvoiceFilesController } from './invoice-files.controller';
+import { InvoiceFilesService } from './invoice-files.service';
 import { InvoiceSettingsController } from './invoice-settings.controller';
 import { InvoiceSettingsService } from './invoice-settings.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
@@ -67,6 +70,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceEditsController,
     InvoiceDeliveryController,
     InvoiceSettingsController,
+    InvoiceFilesController,
     PaymentsController,
   ],
   providers: [
@@ -95,6 +99,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     ProfileDeletionService,
     InvoiceDeliveryService,
     InvoiceSettingsService,
+    InvoiceFilesService,
+    InvoiceFileStorageService,
     ReportShareService,
     RescheduleRequestsService,
     InvoicesService,

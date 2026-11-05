@@ -146,7 +146,7 @@ const detailSelect = {
   },
   files: {
     orderBy: { uploadedAt: 'asc' },
-    select: { id: true, fileName: true, contentType: true, sizeBytes: true, jobberUrl: true, uploadedAt: true },
+    select: { id: true, fileName: true, contentType: true, sizeBytes: true, jobberUrl: true, uploadedAt: true, storageKey: true, copyProblem: true },
   },
   // Each time it was sent to the client from the console (2026-11-06), newest first.
   deliveries: {
@@ -298,7 +298,7 @@ export function extraDetails(row: DetailRow): InvoiceExtraDetails {
       pinned: note.pinned,
       writtenAt: note.writtenAt.toISOString(),
     })),
-    // Jobber's own address for each, until the console keeps its own copy.
+    // Jobber's own address for each, and whether the console keeps its own copy (phase 7).
     files: row.files.map((file) => ({
       id: file.id,
       fileName: file.fileName,
@@ -306,6 +306,8 @@ export function extraDetails(row: DetailRow): InvoiceExtraDetails {
       sizeBytes: file.sizeBytes,
       url: file.jobberUrl,
       uploadedAt: file.uploadedAt.toISOString(),
+      kept: file.storageKey !== null,
+      copyProblem: file.copyProblem,
     })),
   };
 }

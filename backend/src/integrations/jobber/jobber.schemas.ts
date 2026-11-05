@@ -270,3 +270,22 @@ export const jobberPaymentRecordByIdSchema = z.object({ paymentRecord: jobberPay
 
 export type JobberPaymentRecord = z.infer<typeof jobberPaymentRecordSchema>;
 export type JobberInvoicesPage = z.infer<typeof jobberInvoicesPageSchema>;
+
+/** One invoice's files with fresh addresses (INVOICE_FILES_QUERY); null when Jobber no longer has the invoice. */
+export const jobberInvoiceFilesSchema = z.object({
+  invoice: z
+    .object({
+      id: z.string(),
+      noteAttachments: z.object({
+        nodes: z.array(
+          z.object({
+            id: z.string(),
+            contentType: z.string().nullish(),
+            fileSize: z.number().int().nullish(),
+            url: z.string().nullish(),
+          }),
+        ),
+      }),
+    })
+    .nullable(),
+});

@@ -69,6 +69,8 @@ function database() {
       create: jest.fn().mockResolvedValue({ id: 'invoice-1' }),
     },
     invoiceLine: { groupBy: jest.fn().mockResolvedValue(BILLED) },
+    // The files on Jobber's invoices, none yet (phase 7).
+    invoiceFile: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue({ id: BUILDING, name: 'Building 12', addressLine1: '100 Example Way', city: 'Sampletown' }) },
     auditLog: { create: jest.fn() },
     $queryRaw: jest.fn().mockResolvedValue([{ highest: '8439' }]),

@@ -320,7 +320,9 @@ describe('an invoice', () => {
     expect(table).not.toHaveTextContent('Tips');
 
     expect(screen.getByLabelText('Notes')).toHaveTextContent(/Pinned.*On the job.*Gate sticks/);
-    expect(screen.getByRole('link', { name: /receipt\.pdf\s*2\.4 MB/ })).toHaveAttribute('href', 'https://files.example.com/receipt.pdf');
+    // Opened through the console's own link (phase 7), never Jobber's address straight from the page.
+    expect(screen.getByRole('button', { name: /receipt\.pdf\s*2\.4 MB/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /receipt\.pdf/ })).not.toBeInTheDocument();
     expect(screen.getByText('Payment is due within 30 days.')).toBeInTheDocument();
   });
 

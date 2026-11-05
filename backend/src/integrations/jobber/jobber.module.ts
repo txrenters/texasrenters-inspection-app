@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, PermissionsGuard } from '../../common/auth';
+import { InvoiceFileStorageService } from '../../common/invoice-file-storage.service';
 import { RealtimeModule } from '../../realtime/realtime.module';
+import { JobberInvoiceFileWorker } from '../../workers/jobber-sync/jobber-invoice-files.worker';
 import { JobberInvoiceWorker } from '../../workers/jobber-sync/jobber-invoice.worker';
 import { JobberOutboundWorker } from '../../workers/jobber-sync/jobber-outbound.worker';
 import { JobberSyncScheduler } from '../../workers/jobber-sync/jobber-sync.scheduler';
@@ -35,6 +37,8 @@ import { JobberTokenService } from './jobber.tokens.service';
     JobberSyncWorker,
     JobberOutboundWorker,
     JobberInvoiceWorker,
+    JobberInvoiceFileWorker,
+    InvoiceFileStorageService,
     JobberWebhookService,
     JobberWebhookGuard,
     JobberSyncScheduler,

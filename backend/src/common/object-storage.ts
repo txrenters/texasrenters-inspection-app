@@ -108,12 +108,21 @@ export abstract class ObjectStorage {
    * A short-lived URL the browser can fetch directly, bypassing the API. Returns
    * null for `local`, where callers must fall back to proxying bytes.
    */
-  async signedUrl(storageKey: string, expiresInSeconds = 900): Promise<string | null> {
+  async signedUrl(
+    storageKey: string,
+    expiresInSeconds = 900,
+    /** How the browser should treat it, e.g. `inline; filename=...` (2026-11-06). */
+    contentDisposition?: string,
+  ): Promise<string | null> {
     const provider = this.providerName();
     if (provider === 'r2') {
       return getSignedUrl(
         this.s3(),
-        new GetObjectCommand({ Bucket: this.bucketName(), Key: storageKey }),
+        new GetObjectCommand({
+          Bucket: this.bucketName(),
+          Key: storageKey,
+          ...(contentDisposition ? { ResponseContentDisposition: contentDisposition } : {}),
+        }),
         { expiresIn: expiresInSeconds },
       );
     }

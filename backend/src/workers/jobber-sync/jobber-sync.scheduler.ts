@@ -3,6 +3,7 @@ import { CronJob } from 'cron';
 
 import { withTenant } from '../../database/tenant-context';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
+import { JobberInvoiceFileWorker } from './jobber-invoice-files.worker';
 import { JobberInvoiceWorker } from './jobber-invoice.worker';
 import { JobberOutboundWorker } from './jobber-outbound.worker';
 import { JobberSyncWorker } from './jobber-sync.worker';
@@ -35,6 +36,7 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     @Inject(JobberSyncWorker) private readonly worker: JobberSyncWorker,
     @Inject(JobberOutboundWorker) private readonly outbound: JobberOutboundWorker,
     @Inject(JobberInvoiceWorker) private readonly invoices: JobberInvoiceWorker,
+    @Inject(JobberInvoiceFileWorker) private readonly invoiceFiles: JobberInvoiceFileWorker,
   ) {}
 
   onModuleInit() {
@@ -145,6 +147,20 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
               : '') +
             '.',
         );
+      // Their files, copied into the console's own storage (2026-11-06, phase 7):
+      // only once the first read is done and Jobber answered, a couple of dozen a
+      // run, so the copying never holds up the invoices.
+      if (invoices.mode === 'changed' && !invoices.problem && !invoices.skipped) {
+        try {
+          const files = await withTenant(organizationId, () => this.invoiceFiles.run(organizationId));
+          if (files.copied || files.failed)
+            this.logger.log(`Jobber invoice files: ${files.copied} copied, ${files.failed} not copied.`);
+        } catch (error) {
+          this.logger.error(
+            `Jobber invoice file copy failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+        }
+      }
     } catch (error) {
       this.logger.error(
         `Jobber invoice read failed: ${error instanceof Error ? error.message : 'unknown error'}`,

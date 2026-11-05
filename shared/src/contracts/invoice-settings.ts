@@ -75,6 +75,22 @@ export interface BilledPrice {
   unitPriceCents: number;
 }
 
+/**
+ * The files on Jobber's invoices, and how many the console keeps its own copy
+ * of (2026-11-06, phase 7): every one must be kept before the office leaves
+ * Jobber, whose links stop working then.
+ */
+export interface InvoiceFileCopyStatus {
+  total: number;
+  kept: number;
+  /** Still to copy: the next runs take them, a couple of dozen at a time. */
+  waiting: number;
+  /** Tried too often; copied again only when asked. */
+  failed: number;
+  /** What went wrong with the failed ones, the most common first. */
+  problems: { problem: string; files: number }[];
+}
+
 export interface InvoiceSettingsView {
   values: InvoiceSettingsValues;
   /** What a blank field falls back to, so the page can say so. */
@@ -87,6 +103,8 @@ export interface InvoiceSettingsView {
   updatedAt: string | null;
   products: InvoiceProductView[];
   billed: BilledPrice[];
+  /** The console's copies of the files on Jobber's invoices (phase 7). */
+  files?: InvoiceFileCopyStatus;
 }
 
 export interface SaveInvoiceSettingsInput extends InvoiceSettingsValues {
