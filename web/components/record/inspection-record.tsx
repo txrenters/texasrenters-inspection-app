@@ -132,6 +132,12 @@ export function InspectionRecordAside({
               {item.jobberVisitTitle ?? (item.scheduledInJobber ? 'Booked' : 'Not booked')}
             </dd>
           </div>
+          {item.jobberJobNumber ? (
+            <div className="flex items-center justify-between gap-2">
+              <dt className="text-muted-foreground">Job #</dt>
+              <dd className="text-heading tabular-nums">{item.jobberJobNumber}</dd>
+            </div>
+          ) : null}
         </dl>
       </AsideCard>
 

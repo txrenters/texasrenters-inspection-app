@@ -426,6 +426,8 @@ const technicianInspectionSummarySelect = {
   // receives inspections assigned to them, which is who these are for.
   jobberVisitTitle: true,
   jobberVisitDetails: true,
+  // Jobber's number for the job, what the office calls it on the phone (2026-11-06).
+  jobberJobNumber: true,
   // Tells the app to ask the technician to survey the areas rather than treat
   // an empty list as an error.
   allowTechnicianAreaCapture: true,
@@ -3993,6 +3995,7 @@ export class TechnicianService {
       // from a response built before the field existed.
       visitTitle: record.jobberVisitTitle ?? null,
       visitDetails: record.jobberVisitDetails ?? null,
+      jobNumber: record.jobberJobNumber ?? null,
       property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {
         completed: completedAreas.length,

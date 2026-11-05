@@ -104,6 +104,8 @@ export interface InspectionRecordDetails {
   source?: InspectionSource;
   jobberVisitId?: string | null;
   jobberJobId?: string | null;
+  /** Jobber's number for that job, "20625". */
+  jobberJobNumber?: string | null;
   jobberUpdatedAt?: Date | null;
   /** The visit's title and Details, for an inspection made from a Jobber visit. */
   jobberVisitTitle?: string | null;
@@ -1168,6 +1170,7 @@ export async function insertInspection(
         source: details.source ?? InspectionSource.MANUAL,
         jobberVisitId: details.jobberVisitId,
         jobberJobId: details.jobberJobId,
+        jobberJobNumber: details.jobberJobNumber,
         jobberUpdatedAt: details.jobberUpdatedAt,
         jobberVisitTitle: details.jobberVisitTitle,
         jobberVisitDetails: details.jobberVisitDetails,

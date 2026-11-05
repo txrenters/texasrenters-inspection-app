@@ -589,6 +589,8 @@ export interface AdminInspection {
    */
   jobberVisitTitle?: string | null;
   jobberVisitDetails?: string | null;
+  /** Jobber's number for the visit's job, "20625" (2026-11-06); null for one Jobber has not numbered or the sync has not seen. */
+  jobberJobNumber?: string | null;
   /** What the technician reported at submission about the services the visit booked. */
   servicesReport?: VisitServicesReport | null;
   servicesReportedAt?: string | null;

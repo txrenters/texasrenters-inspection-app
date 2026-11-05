@@ -170,8 +170,11 @@ function columnsFor(type: string, jobber?: Map<string, JobberDayRow>): Array<Col
               </Tooltip>
             ) : null}
           </div>
-          {row.propertywareUnit?.name ? (
-            <div className="text-muted-foreground truncate text-xs">{row.propertywareUnit.name}</div>
+          {row.propertywareUnit?.name || row.jobberJobNumber ? (
+            <div className="text-muted-foreground truncate text-xs">
+              {/* Jobber's job number, as the office calls the visit (2026-11-06). */}
+              {[row.propertywareUnit?.name, row.jobberJobNumber ? `Job #${row.jobberJobNumber}` : null].filter(Boolean).join(' · ')}
+            </div>
           ) : null}
         </div>
       ),

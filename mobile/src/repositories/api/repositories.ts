@@ -265,6 +265,9 @@ const inspectionSchema = z.object({
   // before these existed still parses; nullable, for one booked here.
   visitTitle: z.string().nullable().optional(),
   visitDetails: z.string().nullable().optional(),
+  // Jobber's job number (2026-11-06). Optional like the two above, for a cached
+  // job from before it existed; named here, or the parse would drop it.
+  jobNumber: z.string().nullable().optional(),
   // Only the single job carries these; the list never does, because reading
   // them costs two queries a row. Optional for exactly that reason, as well as
   // for a job cached before they existed.

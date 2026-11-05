@@ -1327,6 +1327,9 @@ model Inspection {
   /// to. Null for anything booked here.
   jobberVisitId              String?
   jobberJobId                String?
+  /// Jobber's number for that job, "20625" (2026-11-06): what the office and the
+  /// technician call it. Copied from the visit on every sync; null until one is seen.
+  jobberJobNumber            String?
   /// The inspection whose Jobber visit also booked this one (2026-10-13): a
   /// visit naming an HVAC and an occupied inspection is two jobs. That one
   /// holds the visit (`jobberVisitId`, unique); this one has none of its own
