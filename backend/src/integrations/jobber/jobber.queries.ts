@@ -492,6 +492,18 @@ function invoiceSelection(lines: number, payments: number) {
             id
           }
         }
+        properties(first: 2) {
+          nodes {
+            id
+            address {
+              street1
+              street2
+              city
+              province
+              postalCode
+            }
+          }
+        }
         lineItems(first: ${lines}) {
           totalCount
           nodes {

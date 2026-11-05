@@ -61,6 +61,24 @@ const AWAITING_MAPPING = [
   JobberVisitImportStatus.UNMATCHED_PROPERTY,
 ];
 
+/**
+ * A Jobber property's invoices that are on no property's page yet, put on the
+ * building it was just linked to (2026-11-05). Only those with none: an invoice
+ * matched through the visit it bills keeps that visit's building.
+ */
+async function linkInvoices(
+  db: Pick<Prisma.TransactionClient, 'invoice'>,
+  organizationId: string,
+  jobberPropertyId: string,
+  propertywareBuildingId: string,
+) {
+  const { count } = await db.invoice.updateMany({
+    where: { organizationId, jobberPropertyId, propertywareBuildingId: null },
+    data: { propertywareBuildingId },
+  });
+  return count;
+}
+
 @Injectable()
 export class JobberMappingService {
   private readonly logger = new Logger(JobberMappingService.name);
@@ -136,7 +154,7 @@ export class JobberMappingService {
       normalizedAddressKey: normalizedAddressKey || null,
       ...resolution,
     };
-    return this.prisma.jobberPropertyLink.upsert({
+    const link = await this.prisma.jobberPropertyLink.upsert({
       where: {
         organizationId_jobberPropertyId: {
           organizationId,
@@ -146,6 +164,10 @@ export class JobberMappingService {
       create: { organizationId, jobberPropertyId: property.jobberPropertyId, ...data },
       update: data,
     });
+    // Linked just now, by the matcher: its invoices read before it was find their page too.
+    if (link.status === JobberLinkStatus.LINKED && link.propertywareBuildingId)
+      await linkInvoices(this.prisma, organizationId, link.jobberPropertyId, link.propertywareBuildingId);
+    return link;
   }
 
   /**
@@ -512,12 +534,14 @@ export class JobberMappingService {
         where: { linkId, status: JobberVisitImportStatus.UNMATCHED_PROPERTY },
         data: { status: JobberVisitImportStatus.PENDING, failureCode: null, failureMessage: null },
       });
+      const invoices = await linkInvoices(tx, user.organizationId, link.jobberPropertyId, building.id);
       await this.audit(tx, user, 'JOBBER_PROPERTY_LINKED', link.id, {
         jobberPropertyId: link.jobberPropertyId,
         propertywareBuildingId: building.id,
         propertywareUnitId: unit?.id ?? null,
         propertywareLeaseId: lease?.id ?? null,
         releasedVisits: released.count,
+        linkedInvoices: invoices,
       });
       return { id: link.id, status: link.status, releasedVisits: released.count };
     });

@@ -25,6 +25,7 @@ const copy = (over: Partial<JobberInvoiceCopy> = {}): JobberInvoiceCopy => ({
   jobberJobId: 'jobber-job-1',
   jobNumber: '20625',
   jobberVisitIds: ['jobber-visit-1'],
+  jobberPropertyId: 'jobber-property-1',
   issuedOn: '2026-10-01',
   dueOn: '2026-10-31',
   paymentTermsDays: 30,
@@ -112,6 +113,25 @@ describe("writing Jobber's invoice into the copy", () => {
     expect(tx.invoicePayment.deleteMany).toHaveBeenCalledWith({
       where: { invoiceId: 'invoice-1', origin: 'JOBBER', jobberPaymentId: { notIn: ['jobber-payment-1'] } },
     });
+  });
+
+  it("puts an invoice that bills no visit the console has on its Jobber property's building", async () => {
+    const tx = transaction();
+    tx.inspection.findFirst.mockResolvedValue(null);
+
+    await applyJobberInvoice(tx as never, ORG, copy({ jobberJobId: null, linkedBuildingId: 'building-9' }), NOW);
+
+    expect(tx.invoice.create.mock.calls[0][0].data).toMatchObject({
+      inspectionId: null,
+      propertywareBuildingId: 'building-9',
+      jobberPropertyId: 'jobber-property-1',
+    });
+  });
+
+  it("keeps the visit's building over the property link's when it bills a visit", async () => {
+    const tx = transaction();
+    await applyJobberInvoice(tx as never, ORG, copy({ linkedBuildingId: 'building-9' }), NOW);
+    expect(tx.invoice.create.mock.calls[0][0].data.propertywareBuildingId).toBe('building-1');
   });
 
   it('ignores a delivery older than the copy it holds', async () => {

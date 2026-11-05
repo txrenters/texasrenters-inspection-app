@@ -25,6 +25,15 @@ export interface JobberInvoiceCopy {
   jobNumber: string | null;
   /** The visits it bills, when Jobber names them: how it is matched to an inspection. */
   jobberVisitIds: string[];
+  /** The one Jobber property it is for; null for none, or a batch over several. */
+  jobberPropertyId: string | null;
+  /**
+   * The building that Jobber property is linked to (JobberPropertyLink), looked
+   * up by the caller: how an invoice that bills no visit the console has -- most
+   * of Jobber's older ones -- is still put on its property's page. The visit's
+   * own building wins when there is one.
+   */
+  linkedBuildingId?: string | null;
   /** `YYYY-MM-DD` */
   issuedOn: string | null;
   dueOn: string | null;
@@ -135,7 +144,8 @@ export async function applyJobberInvoice(
     clientName: copy.clientName,
     billingAddress: copy.billingAddress,
     inspectionId: visit?.id ?? null,
-    propertywareBuildingId: visit?.propertywareBuildingId ?? null,
+    propertywareBuildingId: visit?.propertywareBuildingId ?? copy.linkedBuildingId ?? null,
+    jobberPropertyId: copy.jobberPropertyId,
     jobberJobId: copy.jobberJobId,
     jobNumber: copy.jobNumber,
     issuedOn: dateOrNull(copy.issuedOn),

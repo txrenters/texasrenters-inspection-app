@@ -3126,6 +3126,10 @@ model Invoice {
   jobberInvoiceId        String?
   /// Jobber's client: for the office, the property. Groups the account balance.
   jobberClientId         String?
+  /// The one Jobber property the invoice is for (2026-11-05), and how it is
+  /// put on a property page when it bills no visit the console has: through
+  /// that property's JobberPropertyLink. Null for a batch over several.
+  jobberPropertyId       String?
   /// Jobber's number, "8439". Null until Jobber numbers it.
   number                 String?
   subject                String
@@ -3175,6 +3179,7 @@ model Invoice {
   @@index([organizationId, status, dueOn])
   @@index([organizationId, issuedOn])
   @@index([organizationId, jobberClientId])
+  @@index([organizationId, jobberPropertyId])
   @@index([inspectionId])
   @@index([propertywareBuildingId])
 }
