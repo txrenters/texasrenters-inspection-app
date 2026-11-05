@@ -11,12 +11,13 @@ import {
 } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { InvoiceStatusBadge, formatInvoiceDay } from '@/components/invoices/invoice-parts';
 import { LineItemsEditor, readLines, toEditLine, type EditLine } from '@/components/invoices/line-items-editor';
 import { PageHeader } from '@/components/page-header';
+import { SearchableSelect } from '@/components/searchable-select';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
@@ -25,25 +26,81 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
 import { newClientRequestId, useInvoiceActions, useInvoiceDraft } from '@/lib/invoice-queries';
+import { propertyOptionLabel } from '@/lib/property-label';
+import { usePropertyOptions } from '@/lib/queries';
 
 /**
- * The invoice for a finished visit (the office, 2026-11-05): a line for each
- * service done, at the price in Jobber's products list, made out to the
- * property -- and every bit of it the office's to change before it goes to
- * Jobber. Nothing is invoiced on its own.
+ * A new invoice (the office, 2026-11-05): for a finished visit, a line for each
+ * service done at the office's price for it; or (2026-11-06) for a property no
+ * visit covers, found by its address, with the lines typed. Made out to the
+ * property, every bit of it the office's to change, kept as a draft or made
+ * owed at once and numbered next in the office's sequence.
  */
 export default function NewInvoicePage() {
-  const inspectionId = useSearchParams().get('inspection') ?? '';
+  const search = useSearchParams();
+  const inspectionId = search.get('inspection') ?? '';
+  const [propertyId, setPropertyId] = useState(search.get('property') ?? '');
   const { has } = usePermissions();
-  const draft = useInvoiceDraft(has('invoices:manage') ? inspectionId : '');
+  const mayCreate = has('invoices:manage');
+  const target = inspectionId ? { inspectionId } : propertyId ? { propertyId } : {};
+  const draft = useInvoiceDraft(mayCreate ? target : {});
 
-  if (!has('invoices:manage'))
+  if (!mayCreate)
     return <EmptyState description="Creating invoices is a permission of its own. Ask an administrator." title="You may not create invoices" />;
-  if (!inspectionId)
-    return <EmptyState description="Open a finished visit and choose New invoice there." title="Which visit?" />;
+  if (!inspectionId && !propertyId) return <PropertyStep onChoose={setPropertyId} />;
   if (draft.isLoading) return <PageSkeleton />;
   if (draft.isError || !draft.data) return <ErrorState error={draft.error} retry={() => void draft.refetch()} />;
-  return <InvoiceEditor draft={draft.data} />;
+  return <InvoiceEditor draft={draft.data} key={draft.data.inspection?.id ?? draft.data.property?.id} />;
+}
+
+/** The property an invoice no visit covers is made out to, found by its address or name. */
+function PropertyStep({ onChoose }: { onChoose: (propertyId: string) => void }) {
+  const [query, setQuery] = useState('');
+  const properties = usePropertyOptions('', query);
+  const options = useMemo(
+    () =>
+      (properties.data?.pages.flatMap((page) => page.items) ?? []).map((item) => ({
+        value: item.id,
+        label: propertyOptionLabel(item.name, [item.addressLine1, item.city].filter(Boolean).join(', ')),
+      })),
+    [properties.data?.pages],
+  );
+  return (
+    <>
+      <PageHeader
+        description="For work no visit covers. To invoice a finished visit, open it and choose New invoice there, or make many at once."
+        title="New invoice"
+      />
+      <div className="grid max-w-xl gap-4">
+        <Field>
+          <FieldLabel htmlFor="invoice-property">Property</FieldLabel>
+          <SearchableSelect
+            emptyMessage="No active property matches your search."
+            hasMore={properties.hasNextPage}
+            id="invoice-property"
+            loadingMore={properties.isFetchingNextPage}
+            onChange={(next) => (next ? onChoose(next) : undefined)}
+            onLoadMore={() => void properties.fetchNextPage()}
+            onSearch={setQuery}
+            options={options}
+            optionsLabel="Property options"
+            placeholder={properties.isLoading ? 'Loading properties…' : 'Search by address or name'}
+            searchPlaceholder="Search name, address, or city…"
+            value=""
+          />
+          <FieldDescription>The invoice is made out to the property, as Jobber names the client.</FieldDescription>
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline">
+            <Link href="/invoices/batch">Invoice finished visits in a batch</Link>
+          </Button>
+          <Button asChild variant="secondary">
+            <Link href="/invoices">Cancel</Link>
+          </Button>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
@@ -57,6 +114,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   const [lines, setLines] = useState<EditLine[]>(() => draft.lineItems.map(toEditLine));
   // One key for this form: a double click or a resend makes one invoice.
   const [requestId] = useState(newClientRequestId);
+  const visit = draft.inspection;
 
   const read = readLines(lines);
   // A new invoice's lines are its name, description, quantity and price; the
@@ -69,12 +127,14 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   }));
   const problem = read.problem ?? (!subject.trim() ? 'Give the invoice a subject.' : invoiceLinesProblem(ready));
   const { subtotalCents, totalCents } = invoiceTotals(ready);
+  const cancelHref = visit ? `/inspections/${visit.id}` : '/invoices';
 
-  const create = () => {
+  const create = (asDraft: boolean) => {
     if (problem) return;
     actions.create.mutate(
       {
-        inspectionId: draft.inspection.id,
+        ...(visit ? { inspectionId: visit.id } : { propertyId: draft.property?.id }),
+        ...(asDraft ? { asDraft: true } : {}),
         subject: subject.trim(),
         issuedOn,
         paymentTermsDays: Number(terms),
@@ -84,7 +144,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       },
       {
         onSuccess: (invoice) => {
-          toast.success(invoice.number ? `Invoice #${invoice.number} created` : 'Invoice created', {
+          toast.success(asDraft ? 'Draft saved' : invoice.number ? `Invoice #${invoice.number} created` : 'Invoice created', {
             description: `${formatMoney(invoice.totalCents)} to ${invoice.clientName}.`,
           });
           router.push(`/invoices/${invoice.id}`);
@@ -98,13 +158,27 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
     <>
       <PageHeader
         description={
-          <span>
-            For the visit on {formatInvoiceDay(draft.inspection.scheduledOn)} at{' '}
-            <Link className="underline underline-offset-2" href={`/inspections/${draft.inspection.id}`}>
-              {draft.property?.address ?? draft.clientName}
-            </Link>
-            . Check every line before it goes to Jobber.
-          </span>
+          visit ? (
+            <span>
+              For the visit on {formatInvoiceDay(visit.scheduledOn)} at{' '}
+              <Link className="underline underline-offset-2" href={`/inspections/${visit.id}`}>
+                {draft.property?.address ?? draft.clientName}
+              </Link>
+              . Check every line before it is created.
+            </span>
+          ) : (
+            <span>
+              For{' '}
+              {draft.property ? (
+                <Link className="underline underline-offset-2" href={`/properties/${draft.property.id}`}>
+                  {draft.property.address}
+                </Link>
+              ) : (
+                draft.clientName
+              )}
+              , for work no visit covers. Add a line for each thing it bills.
+            </span>
+          )
         }
         title="New invoice"
       />
@@ -172,12 +246,15 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
         <p aria-live="polite" className={problem ? 'text-destructive mr-auto text-sm' : 'text-muted-foreground mr-auto text-sm'}>
-          {problem ?? `Made out to ${draft.clientName}. It goes to Jobber as it is here.`}
+          {problem ?? `Made out to ${draft.clientName}. A draft is numbered when it is marked sent.`}
         </p>
         <Button asChild variant="secondary">
-          <Link href={`/inspections/${draft.inspection.id}`}>Cancel</Link>
+          <Link href={cancelHref}>Cancel</Link>
         </Button>
-        <Button disabled={Boolean(problem) || actions.create.isPending} onClick={create}>
+        <Button disabled={Boolean(problem) || actions.create.isPending} onClick={() => create(true)} variant="outline">
+          Save as draft
+        </Button>
+        <Button disabled={Boolean(problem) || actions.create.isPending} onClick={() => create(false)}>
           {actions.create.isPending ? 'Creating…' : `Create invoice · ${formatMoney(totalCents)}`}
         </Button>
       </div>

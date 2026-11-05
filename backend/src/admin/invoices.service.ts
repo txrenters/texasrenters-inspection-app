@@ -3,12 +3,9 @@ import {
   PAYMENT_TERMS,
   REPORTABLE_VISIT_SERVICES,
   acceptsPayment,
-  dueOnFor,
   invoiceLinesProblem,
   invoiceStatusOn,
-  invoiceTotals,
   isFinishedStatus,
-  lineTotalCents,
   paymentLockedReason,
   paymentProblem,
   paymentTermsLabel,
@@ -42,6 +39,7 @@ import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
+import { insertConsoleInvoice } from './invoice-insert';
 
 /**
  * Invoices and the payments recorded against them (the office, 2026-11-05).
@@ -537,6 +535,7 @@ export class InvoicesService {
       },
       syncedAt: synced._max.syncedAt?.toISOString() ?? null,
       jobberRead: jobberRead(connection),
+      writesEnabled: getJobberConfig().invoiceWritesEnabled,
     };
   }
 
@@ -549,9 +548,27 @@ export class InvoicesService {
     return this.detail(user, row);
   }
 
-  /** What a finished visit would be invoiced for, before anybody edits it. */
-  async draft(user: AuthenticatedUser, inspectionId: string): Promise<InvoiceDraft> {
-    const inspection = await this.invoiceableVisit(user, inspectionId);
+  /** What a new invoice starts from: the office's prices, and the wording of the latest invoice it issued. */
+  async officeDefaults(user: AuthenticatedUser) {
+    const [products, latest] = await Promise.all([
+      this.products(user, businessDate()),
+      this.prisma.invoice.findFirst({
+        where: { organizationId: user.organizationId, issuedOn: { not: null } },
+        orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
+        select: { subject: true, clientMessage: true },
+      }),
+    ]);
+    return { products, subject: latest?.subject?.trim() || DEFAULT_SUBJECT, clientMessage: latest?.clientMessage ?? null };
+  }
+
+  /**
+   * What a finished visit would be invoiced for, before anybody edits it; or,
+   * for a property no visit covers (2026-11-06), an invoice made out to it with
+   * no lines yet.
+   */
+  async draft(user: AuthenticatedUser, target: { inspectionId?: string; propertyId?: string }): Promise<InvoiceDraft> {
+    const inspection = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
+    const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
     const [products, latest, existing] = await Promise.all([
       this.products(user, today),
@@ -561,26 +578,30 @@ export class InvoicesService {
         orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
         select: { subject: true, clientMessage: true, paymentTermsDays: true },
       }),
-      this.prisma.invoice.findFirst({
-        where: { organizationId: user.organizationId, inspectionId, status: { not: InvoiceStatus.VOIDED } },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true, number: true, status: true, dueOn: true },
-      }),
+      inspection
+        ? this.prisma.invoice.findFirst({
+            where: { organizationId: user.organizationId, inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, number: true, status: true, dueOn: true },
+          })
+        : null,
     ]);
     const terms = latest?.paymentTermsDays;
     return {
-      inspection: {
-        id: inspection.id,
-        inspectionType: inspection.inspectionType,
-        scheduledOn: day(inspection.scheduledAt)!,
-        status: inspection.status,
-      },
-      property: property(inspection.building),
-      clientName: inspection.clientName,
+      inspection: inspection
+        ? {
+            id: inspection.id,
+            inspectionType: inspection.inspectionType,
+            scheduledOn: day(inspection.scheduledAt)!,
+            status: inspection.status,
+          }
+        : null,
+      property: property(place.building),
+      clientName: place.clientName,
       subject: latest?.subject?.trim() || DEFAULT_SUBJECT,
       issuedOn: today,
       paymentTermsDays: PAYMENT_TERMS.some((option) => option.days === terms) ? terms! : DEFAULT_TERMS_DAYS,
-      lineItems: draftLines(servicesDone(inspection.servicesReport), products),
+      lineItems: inspection ? draftLines(servicesDone(inspection.servicesReport), products) : [],
       clientMessage: latest?.clientMessage ?? '',
       existing: existing
         ? { id: existing.id, number: existing.number, status: invoiceStatusOn(existing.status, day(existing.dueOn), today) }
@@ -749,14 +770,19 @@ export class InvoicesService {
   }
 
   /**
-   * An invoice for a finished visit, made out to its property, its lines
-   * priced as entered and its totals worked out here -- never taken from the
-   * browser. One per key: a resend answers with the invoice already made.
+   * An invoice for a finished visit, made out to its property -- or for a
+   * property no visit covers (2026-11-06) -- its lines priced as entered and
+   * its totals worked out here, never taken from the browser. Numbered next in
+   * the office's sequence, unless it is kept as a draft. One per key: a resend
+   * answers with the invoice already made.
    */
   async create(user: AuthenticatedUser, input: CreateInvoiceInput): Promise<InvoiceDetail> {
     this.requireWrites();
+    if (Boolean(input.inspectionId) === Boolean(input.propertyId))
+      throw new ApplicationError(422, 'INVOICE_INVALID', 'Invoice either a finished visit or a property.');
+    const target = { inspectionId: input.inspectionId ?? null, propertyId: input.propertyId ?? null };
     const prior = await this.byInvoiceKey(user, input.clientRequestId);
-    if (prior) return this.answerResend(user, prior, input.inspectionId);
+    if (prior) return this.answerResend(user, prior, target);
 
     const today = businessDate();
     const subject = input.subject.trim();
@@ -776,66 +802,30 @@ export class InvoicesService {
     const problem = invoiceLinesProblem(lines);
     if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', problem);
 
-    const visit = await this.invoiceableVisit(user, input.inspectionId);
-    const { subtotalCents, totalCents } = invoiceTotals(lines);
+    const visit = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
+    const place = visit ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     try {
-      const created = await this.prisma.$transaction(async (tx) => {
-        const invoice = await tx.invoice.create({
-          data: {
-            organizationId: user.organizationId,
-            origin: InvoiceOrigin.CONSOLE,
-            subject,
-            status: InvoiceStatus.AWAITING_PAYMENT,
-            clientName: visit.clientName,
-            inspectionId: visit.id,
-            propertywareBuildingId: visit.building.id,
-            jobberJobId: visit.jobberJobId,
-            issuedOn: dateOf(input.issuedOn),
-            dueOn: dateOf(dueOnFor(input.issuedOn, input.paymentTermsDays)),
-            paymentTermsDays: input.paymentTermsDays,
-            subtotalCents,
-            taxCents: 0,
-            totalCents,
-            balanceCents: totalCents,
-            clientMessage: input.clientMessage?.trim() || null,
-            createdById: user.id,
-            clientRequestId: input.clientRequestId,
-            lines: {
-              create: lines.map((line, position) => ({
-                organizationId: user.organizationId,
-                position,
-                ...line,
-                totalCents: lineTotalCents(line),
-              })),
-            },
-          },
-          select: { id: true },
-        });
-        await tx.auditLog.create({
-          data: {
-            organizationId: user.organizationId,
-            actorUserId: user.id,
-            action: 'INVOICE_CREATED',
-            entityType: 'Invoice',
-            entityId: invoice.id,
-            metadata: {
-              inspectionId: visit.id,
-              totalCents,
-              lineCount: lines.length,
-              issuedOn: input.issuedOn,
-              paymentTermsDays: input.paymentTermsDays,
-              clientRequestId: input.clientRequestId,
-            },
-          },
-        });
-        return invoice;
-      });
+      const created = await this.prisma.$transaction((tx) =>
+        insertConsoleInvoice(tx, user, {
+          subject,
+          clientName: place.clientName,
+          inspectionId: visit?.id ?? null,
+          propertywareBuildingId: place.building.id,
+          jobberJobId: visit?.jobberJobId ?? null,
+          issuedOn: input.issuedOn,
+          paymentTermsDays: input.paymentTermsDays,
+          lines,
+          clientMessage: input.clientMessage?.trim() || null,
+          clientRequestId: input.clientRequestId,
+          asDraft: input.asDraft === true,
+        }),
+      );
       return this.one(user, created.id);
     } catch (error) {
       // The same key, sent twice at once: the other request made it.
       if (isUniqueViolation(error)) {
         const made = await this.byInvoiceKey(user, input.clientRequestId);
-        if (made) return this.answerResend(user, made, input.inspectionId);
+        if (made) return this.answerResend(user, made, target);
       }
       throw error;
     }
@@ -1004,10 +994,20 @@ export class InvoicesService {
     };
   }
 
+  /** An active property of the office, to invoice when no visit covers the work (2026-11-06). */
+  private async invoiceableProperty(user: AuthenticatedUser, propertyId: string) {
+    const building = await this.prisma.propertywareBuilding.findFirst({
+      where: { id: propertyId, organizationId: user.organizationId, isActive: true },
+      select: { id: true, name: true, addressLine1: true, city: true },
+    });
+    if (!building) throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'That property was not found.');
+    return { building, clientName: building.addressLine1 ?? building.name };
+  }
+
   private byInvoiceKey(user: AuthenticatedUser, clientRequestId: string) {
     return this.prisma.invoice.findFirst({
       where: { organizationId: user.organizationId, clientRequestId },
-      select: { id: true, inspectionId: true },
+      select: { id: true, inspectionId: true, propertywareBuildingId: true },
     });
   }
 
@@ -1018,9 +1018,16 @@ export class InvoicesService {
     });
   }
 
-  /** A resend of the same invoice answers with it; the same key for another visit is a mistake. */
-  private answerResend(user: AuthenticatedUser, prior: { id: string; inspectionId: string | null }, inspectionId: string) {
-    if (prior.inspectionId !== inspectionId) throw this.keyReused();
+  /** A resend of the same invoice answers with it; the same key for another visit or property is a mistake. */
+  private answerResend(
+    user: AuthenticatedUser,
+    prior: { id: string; inspectionId: string | null; propertywareBuildingId: string | null },
+    target: { inspectionId: string | null; propertyId: string | null },
+  ) {
+    const same = target.inspectionId
+      ? prior.inspectionId === target.inspectionId
+      : prior.inspectionId === null && prior.propertywareBuildingId === target.propertyId;
+    if (!same) throw this.keyReused();
     return this.one(user, prior.id);
   }
 

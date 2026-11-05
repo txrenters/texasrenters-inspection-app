@@ -16,6 +16,7 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
+import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
 import { noInvoicesYet } from '@/lib/invoice-read';
 import { useInvoices } from '@/lib/invoice-queries';
@@ -72,15 +73,30 @@ export default function InvoicesPage() {
   const pending = state.q.trim() !== search.trim();
   const filter = (INVOICE_FILTERS as readonly string[]).includes(state.filter) ? (state.filter as InvoiceFilter) : 'all';
   const invoices = useInvoices({ filter, search, page: state.page, pageSize: 25 });
+  const { has } = usePermissions();
 
   const data = invoices.data;
   const busy = invoices.isLoading || pending;
+  // Made here once the console owns invoicing (2026-11-06); in Jobber until then.
+  const mayCreate = has('invoices:manage') && data?.writesEnabled === true;
   const total = (data?.total ?? 0).toLocaleString('en-US');
   const resultLabel = busy ? 'Searching invoices…' : `${total} ${filter === 'all' ? 'invoices' : INVOICE_FILTER_LABEL[filter].toLowerCase()}`;
 
   return (
     <>
       <PageHeader
+        actions={
+          mayCreate ? (
+            <>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/invoices/batch">Batch create</Link>
+              </Button>
+              <Button asChild size="sm">
+                <Link href="/invoices/new">New invoice</Link>
+              </Button>
+            </>
+          ) : undefined
+        }
         info={
           <>
             <p>

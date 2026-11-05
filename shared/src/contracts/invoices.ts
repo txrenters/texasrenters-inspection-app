@@ -323,6 +323,8 @@ export interface InvoiceList {
   syncedAt: string | null;
   /** Where reading Jobber's invoices stands, so an empty list can say why. */
   jobberRead: InvoiceJobberRead;
+  /** Whether the console makes invoices yet: off until the cutover (2026-11-06). */
+  writesEnabled?: boolean;
 }
 
 /**
@@ -367,10 +369,12 @@ export interface InvoiceLineInput {
 
 /**
  * What a finished visit would be invoiced for, before anybody edits it: one
- * line per service done, at the price in Jobber's products list.
+ * line per service done, at the price in Jobber's products list. For a
+ * property with no visit (2026-11-06), no lines: the office adds them.
  */
 export interface InvoiceDraft {
-  inspection: { id: string; inspectionType: string; scheduledOn: string; status: string };
+  /** The visit it bills; null for an invoice made out to a property directly. */
+  inspection: { id: string; inspectionType: string; scheduledOn: string; status: string } | null;
   property: InvoiceProperty | null;
   clientName: string;
   subject: string;
@@ -385,7 +389,12 @@ export interface InvoiceDraft {
 }
 
 export interface CreateInvoiceInput {
-  inspectionId: string;
+  /** The finished visit it bills; or `propertyId` for an invoice no visit covers. One of the two. */
+  inspectionId?: string;
+  /** The property (a Propertyware building) it is made out to, when it bills no visit (2026-11-06). */
+  propertyId?: string;
+  /** Kept as a draft, unnumbered and owed by nobody until it is marked sent. */
+  asDraft?: boolean;
   subject: string;
   issuedOn: string;
   paymentTermsDays: number;

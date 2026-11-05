@@ -29,6 +29,7 @@ import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
+import { nextInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
 
 /**
@@ -348,9 +349,11 @@ export class InvoiceEditsService {
           : input.action === 'BAD_DEBT'
             ? { status: InvoiceStatus.BAD_DEBT }
             : await owing();
+      // A draft sent with no number takes the office's next one (2026-11-06, phase 4).
+      const number = input.action === 'MARK_SENT' && before.number === null ? await nextInvoiceNumber(tx, user.organizationId) : null;
       const { count } = await tx.invoice.updateMany({
         where: { id, organizationId: user.organizationId, updatedAt: before.updatedAt },
-        data,
+        data: { ...data, ...(number ? { number } : {}) },
       });
       if (!count) throw this.invoiceChanged();
       await this.audit(tx, user, id, 'INVOICE_STATUS_CHANGED', {
@@ -358,6 +361,7 @@ export class InvoiceEditsService {
         from: before.status,
         to: data.status,
         balanceCents: data.balanceCents ?? before.balanceCents,
+        ...(number ? { number } : {}),
       });
     });
     return this.invoices.one(user, id);
