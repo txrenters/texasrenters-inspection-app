@@ -30,6 +30,7 @@ import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
+import { InvoiceBatchService } from './invoice-batch.service';
 import { InvoiceEditsController } from './invoice-edits.controller';
 import { InvoiceEditsService } from './invoice-edits.service';
 import { InvoicesController, PaymentsController } from './invoices.controller';
@@ -90,6 +91,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     RescheduleRequestsService,
     InvoicesService,
     InvoiceEditsService,
+    InvoiceBatchService,
     TechnicianProvisioningService,
     TechnicianSkillsService,
     // One implementation now that Supabase is gone; the token remains so

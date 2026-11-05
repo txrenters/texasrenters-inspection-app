@@ -88,13 +88,20 @@ export function useInvoice(id: string) {
   });
 }
 
-/** What a finished visit would be invoiced for, before anybody edits it. */
-export function useInvoiceDraft(inspectionId: string) {
+/**
+ * What a finished visit would be invoiced for, before anybody edits it; or a
+ * property's invoice, for work no visit covers (2026-11-06).
+ */
+export function useInvoiceDraft(target: { inspectionId?: string; propertyId?: string }) {
+  const key = target.inspectionId ? `visit:${target.inspectionId}` : target.propertyId ? `property:${target.propertyId}` : '';
   return useQuery({
-    queryKey: invoiceKeys.draft(inspectionId),
+    queryKey: invoiceKeys.draft(key),
     queryFn: ({ signal }) =>
-      api<InvoiceDraft>(`${INVOICES}/draft${queryString({ inspectionId })}`, { signal }),
-    enabled: Boolean(inspectionId),
+      api<InvoiceDraft>(
+        `${INVOICES}/draft${queryString({ inspectionId: target.inspectionId, propertyId: target.propertyId })}`,
+        { signal },
+      ),
+    enabled: Boolean(key),
     // A draft is a starting point: read once, and never refetched under the editor.
     staleTime: Infinity,
     refetchOnWindowFocus: false,

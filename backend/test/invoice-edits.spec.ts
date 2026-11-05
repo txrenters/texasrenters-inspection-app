@@ -84,6 +84,8 @@ function database(row: Record<string, unknown> | null = stored(), paidCents = 0)
     },
     auditLog: { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
     userProfile: { findMany: jest.fn().mockResolvedValue([]) },
+    // The number lock, then the highest number the office has: #8439.
+    $queryRaw: jest.fn().mockResolvedValue([{ highest: '8439' }]),
     $transaction: jest.fn(),
   };
   db.$transaction.mockImplementation((work: (tx: typeof db) => unknown) => work(db));

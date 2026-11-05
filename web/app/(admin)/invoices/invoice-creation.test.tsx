@@ -1,0 +1,209 @@
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import type { InvoiceDraft, InvoiceList, UninvoicedVisitList } from '@texasrenters/shared';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import BatchInvoicesPage from './batch/page';
+import NewInvoicePage from './new/page';
+import InvoicesPage from './page';
+
+/**
+ * Making invoices (2026-11-06, phase 4): for a property no visit covers, as a
+ * draft, and many at once from the finished visits nobody has invoiced.
+ * Everything invented.
+ */
+
+const hooks = vi.hoisted(() => ({
+  useInvoiceDraft: vi.fn(),
+  useInvoices: vi.fn(),
+  useInvoiceActions: vi.fn(),
+}));
+vi.mock('@/lib/invoice-queries', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), ...hooks }));
+const batches = vi.hoisted(() => ({ useUninvoicedVisits: vi.fn(), useBatchInvoices: vi.fn() }));
+vi.mock('@/lib/invoice-batch-queries', () => batches);
+vi.mock('@/lib/queries', () => ({
+  usePropertyOptions: () => ({ data: { pages: [{ items: [] }] }, isLoading: false, hasNextPage: false, fetchNextPage: vi.fn() }),
+}));
+const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
+vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+const params = vi.hoisted(() => ({ search: new URLSearchParams() }));
+vi.mock('next/navigation', () => ({ useRouter: () => router, useSearchParams: () => params.search }));
+vi.mock('@/lib/url-state', () => ({ useUrlState: (defaults: object) => [defaults, vi.fn(), vi.fn()] }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+const NOW = new Date('2026-11-06T18:00:00.000Z');
+const TODAY = '2026-11-06';
+const ready = (data: unknown) => ({ isLoading: false, isError: false, data, refetch: vi.fn() });
+const create = { mutate: vi.fn(), isPending: false };
+const batch = { mutate: vi.fn(), isPending: false };
+
+const PROPERTY_DRAFT: InvoiceDraft = {
+  inspection: null,
+  property: { id: 'b1', address: '100 Example Way', city: 'Sampletown' },
+  clientName: '100 Example Way',
+  subject: 'For Services Rendered',
+  issuedOn: TODAY,
+  paymentTermsDays: 30,
+  lineItems: [],
+  clientMessage: '',
+  existing: null,
+  products: [{ name: 'Filter Change', unitPriceCents: 3999 }],
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(NOW);
+  permissions.granted = new Set(['invoices:read', 'invoices:manage']);
+  params.search = new URLSearchParams();
+  hooks.useInvoiceActions.mockReturnValue({ create });
+  hooks.useInvoiceDraft.mockReturnValue(ready(PROPERTY_DRAFT));
+  batches.useBatchInvoices.mockReturnValue(batch);
+});
+
+describe('a new invoice', () => {
+  it('asks for the property first when it is not for a visit', () => {
+    render(<NewInvoicePage />);
+    expect(screen.getByText('Property')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Invoice finished visits in a batch' })).toHaveAttribute('href', '/invoices/batch');
+    expect(hooks.useInvoiceDraft).toHaveBeenLastCalledWith({});
+  });
+
+  it("makes one out to the property, with the lines typed, kept as a draft when asked", () => {
+    params.search = new URLSearchParams('property=b1');
+    render(<NewInvoicePage />);
+    expect(hooks.useInvoiceDraft).toHaveBeenLastCalledWith({ propertyId: 'b1' });
+    expect(screen.getByText(/for work no visit covers/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add a line' }));
+    fireEvent.change(screen.getByLabelText('Line 1: name'), { target: { value: 'Gate repair' } });
+    fireEvent.change(screen.getByLabelText('Line 1: unit price'), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save as draft' }));
+
+    expect(create.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        propertyId: 'b1',
+        asDraft: true,
+        lineItems: [{ name: 'Gate repair', description: null, quantity: 1, unitPriceCents: 12000 }],
+      }),
+      expect.anything(),
+    );
+    expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('inspectionId');
+  });
+});
+
+describe('the invoices list', () => {
+  const LIST = {
+    items: [],
+    page: 1,
+    pageSize: 25,
+    total: 0,
+    totalPages: 1,
+    overview: { pastDue: { count: 0, amountCents: 0 }, notYetDue: { count: 0, amountCents: 0 }, draft: { count: 0, amountCents: 0 } },
+    issued: { last30: { count: 0, amountCents: 0 }, previous30: { count: 0, amountCents: 0 } },
+    filterCounts: { all: 0, past_due: 0, not_yet_due: 0, awaiting_payment: 0, draft: 0, paid: 0, bad_debt: 0, voided: 0 },
+    syncedAt: null,
+    jobberRead: { problem: null, checkedAt: null, firstReadDone: true },
+  } satisfies InvoiceList;
+
+  it('offers a new invoice and a batch to whoever makes invoices, once the console owns invoicing', () => {
+    hooks.useInvoices.mockReturnValue(ready({ ...LIST, writesEnabled: true }));
+    const { unmount } = render(<InvoicesPage />);
+    expect(screen.getByRole('link', { name: 'New invoice' })).toHaveAttribute('href', '/invoices/new');
+    expect(screen.getByRole('link', { name: 'Batch create' })).toHaveAttribute('href', '/invoices/batch');
+    unmount();
+
+    hooks.useInvoices.mockReturnValue(ready({ ...LIST, writesEnabled: false }));
+    render(<InvoicesPage />);
+    expect(screen.queryByRole('link', { name: 'New invoice' })).not.toBeInTheDocument();
+  });
+});
+
+describe('a batch', () => {
+  const VISITS: UninvoicedVisitList = {
+    items: [
+      {
+        inspectionId: 'v1',
+        inspectionType: 'OCCUPIED',
+        scheduledOn: '2026-11-02',
+        status: 'COMPLETED',
+        property: { id: 'b1', address: '100 Example Way', city: 'Sampletown' },
+        clientName: '100 Example Way',
+        lineItems: [{ name: 'Filter Change', quantity: 1, unitPriceCents: 3999 }],
+        totalCents: 3999,
+        problem: null,
+      },
+      {
+        inspectionId: 'v2',
+        inspectionType: 'OCCUPIED',
+        scheduledOn: '2026-11-03',
+        status: 'COMPLETED',
+        property: { id: 'b2', address: '200 Example Way', city: 'Sampletown' },
+        clientName: '200 Example Way',
+        lineItems: [{ name: 'Pest Control', quantity: 1, unitPriceCents: 2500 }],
+        totalCents: 2500,
+        problem: null,
+      },
+      {
+        inspectionId: 'v3',
+        inspectionType: 'OCCUPIED',
+        scheduledOn: '2026-11-04',
+        status: 'COMPLETED',
+        property: { id: 'b3', address: '300 Example Way', city: 'Sampletown' },
+        clientName: '300 Example Way',
+        lineItems: [],
+        totalCents: 0,
+        problem: 'Nothing was reported done to bill.',
+      },
+    ],
+    truncated: false,
+  };
+
+  it('reads the past week to start with, and ticks every visit that can be billed', () => {
+    batches.useUninvoicedVisits.mockReturnValue(ready(VISITS));
+    render(<BatchInvoicesPage />);
+    expect(batches.useUninvoicedVisits).toHaveBeenLastCalledWith({ from: '2026-10-30', to: TODAY });
+    expect(screen.getByText('2 of 2 chosen')).toBeInTheDocument();
+    expect(screen.getByText('Nothing was reported done to bill.')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /300 Example Way/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create 2 invoices · $64.99' })).toBeEnabled();
+  });
+
+  it('makes only the ones chosen, once asked, and lists what was made and skipped', async () => {
+    batches.useUninvoicedVisits.mockReturnValue(ready(VISITS));
+    batch.mutate.mockImplementation((_input, { onSuccess }) =>
+      onSuccess({ created: [{ inspectionId: 'v1', invoiceId: 'inv-9', number: '8440', totalCents: 3999 }], skipped: [] }),
+    );
+    render(<BatchInvoicesPage />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /200 Example Way/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create 1 invoice · $39.99' }));
+
+    const confirm = await screen.findByRole('alertdialog');
+    expect(confirm).toHaveTextContent('$39.99 in all');
+    expect(batch.mutate).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Create them' }));
+    });
+
+    expect(batch.mutate).toHaveBeenCalledWith(
+      { inspectionIds: ['v1'], issuedOn: TODAY, paymentTermsDays: 30, clientRequestId: expect.stringMatching(/^web-/) },
+      expect.anything(),
+    );
+    // Announced as it appears.
+    const made = screen.getByRole('status', { name: 'What was made' });
+    expect(within(made).getByRole('link', { name: '#8440' })).toHaveAttribute('href', '/invoices/inv-9');
+  });
+
+  it('says plainly when there is nothing to invoice', () => {
+    batches.useUninvoicedVisits.mockReturnValue(ready({ items: [], truncated: false }));
+    render(<BatchInvoicesPage />);
+    expect(screen.getByText('Nothing to invoice')).toBeInTheDocument();
+  });
+
+  it('is for whoever makes invoices', () => {
+    permissions.granted = new Set(['invoices:read']);
+    batches.useUninvoicedVisits.mockReturnValue(ready(VISITS));
+    render(<BatchInvoicesPage />);
+    expect(screen.getByText('You may not create invoices')).toBeInTheDocument();
+  });
+});

@@ -2,6 +2,8 @@ import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Pos
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   INVOICE_FILTERS,
+  InspectionType,
+  MAX_BATCH_INVOICES,
   MAX_INVOICE_CENTS,
   MAX_INVOICE_LINES,
   PAYMENT_METHODS,
@@ -13,6 +15,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsISO8601,
@@ -29,6 +32,7 @@ import {
 } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
+import { InvoiceBatchService } from './invoice-batch.service';
 import { InvoicesService } from './invoices.service';
 
 const trimmed = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -42,8 +46,30 @@ export class InvoiceListQueryDto {
   @IsOptional() @IsUUID() inspectionId?: string;
 }
 
+/** A finished visit's draft, or a property's when no visit covers the work. One of the two. */
 export class InvoiceDraftQueryDto {
-  @IsUUID() inspectionId!: string;
+  @IsOptional() @IsUUID() inspectionId?: string;
+  @IsOptional() @IsUUID() propertyId?: string;
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+export class UninvoicedQueryDto {
+  @Matches(DAY) from!: string;
+  @Matches(DAY) to!: string;
+  @IsOptional() @IsIn(Object.values(InspectionType)) inspectionType?: InspectionType;
+}
+
+export class BatchInvoiceDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_BATCH_INVOICES)
+  @IsUUID(undefined, { each: true })
+  inspectionIds!: string[];
+  @Matches(DAY) issuedOn!: string;
+  @IsInt() @Min(0) @Max(365) paymentTermsDays!: number;
+  @IsOptional() @IsBoolean() asDraft?: boolean;
+  @IsString() @MinLength(8) @MaxLength(80) clientRequestId!: string;
 }
 
 export class PaymentListQueryDto {
@@ -61,7 +87,9 @@ export class InvoiceLineDto {
 }
 
 export class CreateInvoiceDto {
-  @IsUUID() inspectionId!: string;
+  @IsOptional() @IsUUID() inspectionId?: string;
+  @IsOptional() @IsUUID() propertyId?: string;
+  @IsOptional() @IsBoolean() asDraft?: boolean;
   @IsString() @MinLength(1) @MaxLength(200) subject!: string;
   @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedOn!: string;
   @IsInt() @Min(0) @Max(365) paymentTermsDays!: number;
@@ -109,7 +137,10 @@ export class RemovePaymentQueryDto {
 @UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller('admin/invoices')
 export class InvoicesController {
-  constructor(@Inject(InvoicesService) private readonly service: InvoicesService) {}
+  constructor(
+    @Inject(InvoicesService) private readonly service: InvoicesService,
+    @Inject(InvoiceBatchService) private readonly batches: InvoiceBatchService,
+  ) {}
 
   @Get()
   @RequirePermissions('invoices:read')
@@ -121,7 +152,21 @@ export class InvoicesController {
   @Get('draft')
   @RequirePermissions('invoices:read', 'invoices:manage')
   draft(@Req() request: AuthenticatedRequest, @Query() query: InvoiceDraftQueryDto) {
-    return this.service.draft(request.user, query.inspectionId);
+    return this.service.draft(request.user, query);
+  }
+
+  /** The finished visits with no invoice yet, for a batch (2026-11-06). Before `:invoiceId` too. */
+  @Get('uninvoiced')
+  @RequirePermissions('invoices:read', 'invoices:manage')
+  uninvoiced(@Req() request: AuthenticatedRequest, @Query() query: UninvoicedQueryDto) {
+    return this.batches.uninvoiced(request.user, query);
+  }
+
+  /** One invoice for each finished visit chosen, as Jobber's Batch Create (2026-11-06). */
+  @Post('batch')
+  @RequirePermissions('invoices:read', 'invoices:manage')
+  batch(@Req() request: AuthenticatedRequest, @Body() body: BatchInvoiceDto) {
+    return this.batches.batch(request.user, body);
   }
 
   @Get(':invoiceId')

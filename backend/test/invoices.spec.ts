@@ -135,6 +135,8 @@ function database() {
     inspection: { findFirst: jest.fn().mockResolvedValue(finishedVisit()) },
     jobberConnection: { findUnique: jest.fn().mockResolvedValue(null) },
     auditLog: { create: jest.fn() },
+    // The number lock, then the highest number the office has: #8439.
+    $queryRaw: jest.fn().mockResolvedValue([{ highest: '8439' }]),
     $transaction: jest.fn(),
   };
   db.$transaction.mockImplementation((work: (tx: typeof db) => unknown) => work(db));
@@ -337,7 +339,7 @@ describe("a finished visit's draft", () => {
       .mockResolvedValueOnce({ subject: 'For Services Rendered', clientMessage: 'Thank you.', paymentTermsDays: 15 })
       .mockResolvedValueOnce(null);
 
-    const draft = await serviceOver(db).draft(office, VISIT);
+    const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
     // Pest control was not done, so it is not billed.
     expect(draft.lineItems).toEqual([{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 }]);
@@ -358,7 +360,7 @@ describe("a finished visit's draft", () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: INVOICE, number: '8439', status: 'AWAITING_PAYMENT', dueOn: date(PAST) });
 
-    const draft = await serviceOver(db).draft(office, VISIT);
+    const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
     expect(draft.existing).toEqual({ id: INVOICE, number: '8439', status: 'PAST_DUE' });
     // No invoice yet in the copy: Jobber's own defaults.
@@ -368,10 +370,10 @@ describe("a finished visit's draft", () => {
   it('is refused for a visit not finished, and for one with no property', async () => {
     const db = database();
     db.inspection.findFirst.mockResolvedValueOnce(finishedVisit({ status: 'SCHEDULED' }));
-    await expect(serviceOver(db).draft(office, VISIT)).rejects.toMatchObject({ code: 'INVOICE_VISIT_NOT_FINISHED' });
+    await expect(serviceOver(db).draft(office, { inspectionId: VISIT })).rejects.toMatchObject({ code: 'INVOICE_VISIT_NOT_FINISHED' });
 
     db.inspection.findFirst.mockResolvedValueOnce(finishedVisit({ propertywareBuilding: null }));
-    await expect(serviceOver(db).draft(office, VISIT)).rejects.toMatchObject({ code: 'INVOICE_NO_PROPERTY' });
+    await expect(serviceOver(db).draft(office, { inspectionId: VISIT })).rejects.toMatchObject({ code: 'INVOICE_NO_PROPERTY' });
   });
 });
 
