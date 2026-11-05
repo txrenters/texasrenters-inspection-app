@@ -28,7 +28,6 @@ import {
   type PaymentDetail,
   type PaymentList,
   type PaymentMethod,
-  type ReceiptBrand,
   type RecordPaymentInput,
   type ReportableVisitService,
   type VisitServicesReport,
@@ -41,6 +40,10 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { insertConsoleInvoice } from './invoice-insert';
+import { newInvoiceDefaults, officeBrand, officePrices } from './invoice-settings';
+
+// Kept exported from here for the callers that already import them (phase 6 moved them).
+export { priceList, receiptBrand } from './invoice-settings';
 
 /**
  * Invoices and the payments recorded against them (the office, 2026-11-05).
@@ -59,14 +62,6 @@ import { insertConsoleInvoice } from './invoice-insert';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
-
-/** Jobber's own subject for an invoice, until the office's copy says otherwise. */
-const DEFAULT_SUBJECT = 'For Services Rendered';
-const DEFAULT_TERMS_DAYS = 30;
-
-/** How far back the office's prices are read from its own invoices. */
-const PRICE_WINDOW_DAYS = 180;
-const MAX_PRODUCTS = 50;
 
 /** The word that finds a service's product in the office's price list. */
 const SERVICE_PRODUCT_WORD: Record<ReportableVisitService, string> = {
@@ -259,17 +254,6 @@ function paymentRecord(row: {
   };
 }
 
-/** Who a receipt is from: the same settings that name the company on an inspection report. */
-export function receiptBrand(env: NodeJS.ProcessEnv = process.env): ReceiptBrand {
-  return {
-    name: env.REPORT_BRAND_NAME ?? 'TexasRenters.com',
-    addressLine1: env.REPORT_BRAND_ADDRESS_LINE1 ?? null,
-    addressLine2: env.REPORT_BRAND_ADDRESS_LINE2 ?? null,
-    phone: env.REPORT_BRAND_PHONE ?? null,
-    email: env.REPORT_BRAND_EMAIL ?? null,
-  };
-}
-
 function lineItem(row: DetailRow['lines'][number]): InvoiceLineItem {
   return { ...row, serviceOn: day(row.serviceOn) };
 }
@@ -432,33 +416,6 @@ export function draftLines(
   });
 }
 
-/**
- * The office's price list, read from its own invoices: each product or service
- * billed in the past six months, at the price it was billed at most often, the
- * most billed first. Jobber's products list needs a scope of its own; what the
- * office actually charges is already in the copy.
- */
-export function priceList(
-  rows: readonly { name: string; unitPriceCents: number; _count: { _all: number } }[],
-): { name: string; unitPriceCents: number }[] {
-  const byName = new Map<string, { name: string; unitPriceCents: number; best: number; uses: number }>();
-  for (const row of rows) {
-    if (row.unitPriceCents <= 0 || !row.name.trim()) continue;
-    const key = row.name.trim().toLowerCase();
-    const count = row._count._all;
-    const known = byName.get(key);
-    if (!known) byName.set(key, { name: row.name.trim(), unitPriceCents: row.unitPriceCents, best: count, uses: count });
-    else {
-      known.uses += count;
-      if (count > known.best) Object.assign(known, { unitPriceCents: row.unitPriceCents, best: count });
-    }
-  }
-  return [...byName.values()]
-    .sort((a, b) => b.uses - a.uses || a.name.localeCompare(b.name))
-    .slice(0, MAX_PRODUCTS)
-    .map(({ name, unitPriceCents }) => ({ name, unitPriceCents }));
-}
-
 const isUniqueViolation = (error: unknown) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
@@ -564,17 +521,13 @@ export class InvoicesService {
     return this.detail(user, row);
   }
 
-  /** What a new invoice starts from: the office's prices, and the wording of the latest invoice it issued. */
+  /** What a new invoice starts from: the office's prices and settings, else the latest invoice it issued (2026-11-06). */
   async officeDefaults(user: AuthenticatedUser) {
-    const [products, latest] = await Promise.all([
-      this.products(user, businessDate()),
-      this.prisma.invoice.findFirst({
-        where: { organizationId: user.organizationId, issuedOn: { not: null } },
-        orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
-        select: { subject: true, clientMessage: true },
-      }),
+    const [products, defaults] = await Promise.all([
+      officePrices(this.prisma, user.organizationId, businessDate()),
+      newInvoiceDefaults(this.prisma, user.organizationId),
     ]);
-    return { products, subject: latest?.subject?.trim() || DEFAULT_SUBJECT, clientMessage: latest?.clientMessage ?? null };
+    return { products, ...defaults };
   }
 
   /**
@@ -586,14 +539,10 @@ export class InvoicesService {
     const inspection = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
-    const [products, latest, existing] = await Promise.all([
-      this.products(user, today),
-      // The office's own wording and terms, from the latest invoice it issued.
-      this.prisma.invoice.findFirst({
-        where: { organizationId: user.organizationId, issuedOn: { not: null } },
-        orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
-        select: { subject: true, clientMessage: true, paymentTermsDays: true },
-      }),
+    const [products, defaults, existing] = await Promise.all([
+      officePrices(this.prisma, user.organizationId, today),
+      // The office's settings, else its own wording and terms from the latest invoice it issued.
+      newInvoiceDefaults(this.prisma, user.organizationId),
       inspection
         ? this.prisma.invoice.findFirst({
             where: { organizationId: user.organizationId, inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
@@ -602,7 +551,6 @@ export class InvoicesService {
           })
         : null,
     ]);
-    const terms = latest?.paymentTermsDays;
     return {
       inspection: inspection
         ? {
@@ -614,11 +562,11 @@ export class InvoicesService {
         : null,
       property: property(place.building),
       clientName: place.clientName,
-      subject: latest?.subject?.trim() || DEFAULT_SUBJECT,
+      subject: defaults.subject,
       issuedOn: today,
-      paymentTermsDays: PAYMENT_TERMS.some((option) => option.days === terms) ? terms! : DEFAULT_TERMS_DAYS,
+      paymentTermsDays: defaults.termsDays,
       lineItems: inspection ? draftLines(servicesDone(inspection.servicesReport), products) : [],
-      clientMessage: latest?.clientMessage ?? '',
+      clientMessage: defaults.clientMessage ?? '',
       existing: existing
         ? { id: existing.id, number: existing.number, status: invoiceStatusOn(existing.status, day(existing.dueOn), today) }
         : null,
@@ -703,7 +651,7 @@ export class InvoicesService {
       invoiceStatus: invoiceStatusOn(invoice.status, day(invoice.dueOn), businessDate()),
       updatedAt: updatedAt.toISOString(),
       writesEnabled: getJobberConfig().invoiceWritesEnabled,
-      brand: receiptBrand(),
+      brand: await officeBrand(this.prisma, user.organizationId),
     };
   }
 
@@ -821,7 +769,7 @@ export class InvoicesService {
     const visit = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = visit ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     try {
-      const created = await this.prisma.$transaction((tx) =>
+      const created = await this.prisma.$transaction(async (tx) =>
         insertConsoleInvoice(tx, user, {
           subject,
           clientName: place.clientName,
@@ -832,6 +780,7 @@ export class InvoicesService {
           paymentTermsDays: input.paymentTermsDays,
           lines,
           clientMessage: input.clientMessage?.trim() || null,
+          contractDisclaimer: (await newInvoiceDefaults(tx, user.organizationId)).contractDisclaimer,
           clientRequestId: input.clientRequestId,
           asDraft: input.asDraft === true,
         }),
@@ -964,8 +913,8 @@ export class InvoicesService {
       updatedAt: row.updatedAt.toISOString(),
       paidCents: row.payments.reduce((sum, paid) => sum + paid.amountCents, 0),
       writesEnabled: getJobberConfig().invoiceWritesEnabled,
-      // For its PDF and its sending (2026-11-06, phase 5).
-      brand: receiptBrand(),
+      // For its PDF and its sending (2026-11-06, phase 5), from the office's settings (phase 6).
+      brand: await officeBrand(this.prisma, user.organizationId),
       deliveries: row.deliveries.map((delivery) => ({
         id: delivery.id,
         channel: 'EMAIL' as const,
@@ -977,22 +926,6 @@ export class InvoicesService {
         sentAt: delivery.sentAt?.toISOString() ?? null,
       })),
     };
-  }
-
-  /** The office's prices, from what it billed in the past six months. */
-  private async products(user: AuthenticatedUser, today: string) {
-    const rows = await this.prisma.invoiceLine.groupBy({
-      by: ['name', 'unitPriceCents'],
-      where: {
-        organizationId: user.organizationId,
-        invoice: {
-          status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
-          issuedOn: { gte: daysBefore(today, PRICE_WINDOW_DAYS) },
-        },
-      },
-      _count: { _all: true },
-    });
-    return priceList(rows);
   }
 
   /** A finished visit with a property: the only kind an invoice is made for. */

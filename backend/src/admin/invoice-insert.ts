@@ -22,6 +22,8 @@ export interface ConsoleInvoice {
   paymentTermsDays: number;
   lines: InvoiceLineInput[];
   clientMessage: string | null;
+  /** The office's contract / disclaimer text at its foot, from its settings (2026-11-06). */
+  contractDisclaimer?: string | null;
   clientRequestId: string;
   asDraft: boolean;
   /** The batch it was made in, for its record. */
@@ -58,6 +60,7 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
       totalCents,
       balanceCents: totalCents,
       clientMessage: invoice.clientMessage,
+      contractDisclaimer: invoice.contractDisclaimer ?? null,
       createdById: user.id,
       clientRequestId: invoice.clientRequestId,
       lines: {

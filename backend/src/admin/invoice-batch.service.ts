@@ -86,7 +86,7 @@ export class InvoiceBatchService {
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Give the first and the last day, the first one first.');
     if ((dateOf(query.to).getTime() - dateOf(query.from).getTime()) / DAY_MS > MAX_UNINVOICED_RANGE_DAYS)
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', `Look at ${MAX_UNINVOICED_RANGE_DAYS} days at most at a time.`);
-    const [{ products }, rows] = await Promise.all([
+    const [{ products, termsDays }, rows] = await Promise.all([
       this.invoices.officeDefaults(user),
       this.prisma.inspection.findMany({
         where: {
@@ -116,6 +116,7 @@ export class InvoiceBatchService {
         };
       }),
       truncated: rows.length > LIST_LIMIT,
+      paymentTermsDays: termsDays,
     };
   }
 
@@ -193,6 +194,7 @@ export class InvoiceBatchService {
             paymentTermsDays: input.paymentTermsDays,
             lines: lines.lineItems,
             clientMessage: defaults.clientMessage,
+            contractDisclaimer: defaults.contractDisclaimer,
             clientRequestId,
             asDraft: input.asDraft === true,
             batchKey: input.clientRequestId,

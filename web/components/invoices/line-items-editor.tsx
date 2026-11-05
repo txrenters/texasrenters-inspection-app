@@ -78,7 +78,7 @@ export function LineItemsEditor({
   lines: EditLine[];
   onChange: (lines: EditLine[]) => void;
   /** The office's prices, to add a line from. */
-  products?: readonly { name: string; unitPriceCents: number }[];
+  products?: readonly { name: string; unitPriceCents: number; description?: string | null }[];
   showServiceDay?: boolean;
   /** Whether each line says if the tax applies: only when the invoice has a tax. */
   showTaxable?: boolean;
@@ -86,7 +86,7 @@ export function LineItemsEditor({
   const { inputs } = readLines(lines);
   const update = (key: string, patch: Partial<EditLine>) =>
     onChange(lines.map((line) => (line.key === key ? { ...line, ...patch } : line)));
-  const add = (product?: { name: string; unitPriceCents: number }) => {
+  const add = (product?: { name: string; unitPriceCents: number; description?: string | null }) => {
     const used = new Set(lines.map((line) => line.key));
     let next = lines.length;
     while (used.has(`line-${next}`)) next += 1;
@@ -95,7 +95,7 @@ export function LineItemsEditor({
       {
         key: `line-${next}`,
         name: product?.name ?? '',
-        description: '',
+        description: product?.description ?? '',
         quantity: '1',
         price: product ? (product.unitPriceCents / 100).toFixed(2) : '',
         serviceOn: '',

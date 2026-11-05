@@ -398,6 +398,8 @@ enum ChargeSource {
 
 model Organization {
   invoices Invoice[]
+  invoiceSettings InvoiceSettings?
+  invoiceProducts InvoiceProduct[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -3298,6 +3300,49 @@ model InvoiceFile {
 
   @@unique([invoiceId, jobberFileId])
   @@index([organizationId])
+}
+
+/// The office's invoice settings (2026-11-06, phase 6 of taking invoicing over
+/// from Jobber): the company its invoices, receipts and emails are from, and
+/// what a new invoice starts with. One row per office; a blank field falls back
+/// to what the console used before -- the server's REPORT_BRAND_* values, the
+/// latest invoice's wording, Net 30.
+model InvoiceSettings {
+  organizationId            String       @id @db.Uuid
+  companyName               String?
+  addressLine1              String?
+  addressLine2              String?
+  phone                     String?
+  email                     String?
+  defaultSubject            String?
+  /// One of PAYMENT_TERMS (0, 7, 15, 30, 45, 60).
+  defaultTermsDays          Int?
+  defaultClientMessage      String?
+  defaultContractDisclaimer String?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+  organization              Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// A product or service at the office's price (2026-11-06, phase 6), as
+/// Jobber's Products & Services list: a new invoice's lines are priced from
+/// it first, then from what was billed. Never deleted, only set inactive, so
+/// what an old invoice was priced from stays readable.
+model InvoiceProduct {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  name           String
+  /// lower(trim(name)): one entry per name, whatever its case.
+  nameKey        String
+  description    String?
+  unitPriceCents Int
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, nameKey])
+  @@index([organizationId, active])
 }
 
 /// An invoice sent to the client from the console (2026-11-06, phase 5 of taking

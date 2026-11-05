@@ -390,8 +390,8 @@ export interface InvoiceDraft {
   clientMessage: string;
   /** Already invoiced: the invoice, so a second is not made by mistake. */
   existing: { id: string; number: string | null; status: InvoiceStatus } | null;
-  /** The products the office sells, for a line added by hand. */
-  products: { name: string; unitPriceCents: number }[];
+  /** The products the office sells, for a line added by hand: its own list first (2026-11-06), then what it billed. */
+  products: { name: string; unitPriceCents: number; description?: string | null }[];
 }
 
 export interface CreateInvoiceInput {
