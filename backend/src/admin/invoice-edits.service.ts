@@ -28,9 +28,9 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { nextInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
+import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
 
 /**
  * Editing an invoice in the console (2026-11-06, phase 3 of taking invoicing
@@ -240,7 +240,7 @@ export class InvoiceEditsService {
 
   /** The invoice's details, lines, discount, tax and messages, replaced by what was saved. */
   async edit(user: AuthenticatedUser, id: string, input: EditInvoiceInput): Promise<InvoiceDetail> {
-    this.requireWrites();
+    await this.requireWrites(user);
     const today = businessDate();
     const clean: Omit<EditInvoiceInput, 'expectedUpdatedAt'> = {
       subject: input.subject.trim(),
@@ -333,7 +333,7 @@ export class InvoiceEditsService {
 
   /** Marking a draft sent, voiding, closing as bad debt, or reopening. */
   async changeStatus(user: AuthenticatedUser, id: string, input: InvoiceStatusChangeInput): Promise<InvoiceDetail> {
-    this.requireWrites();
+    await this.requireWrites(user);
     const today = businessDate();
     await this.prisma.$transaction(async (tx) => {
       const before = await this.invoiceAsRead(tx, user, id, input.expectedUpdatedAt);
@@ -378,7 +378,7 @@ export class InvoiceEditsService {
 
   /** A draft nobody paid anything on, deleted; the record keeps what it was. Anything sent is voided instead. */
   async remove(user: AuthenticatedUser, id: string, expectedUpdatedAt: string): Promise<{ id: string }> {
-    this.requireWrites();
+    await this.requireWrites(user);
     await this.prisma.$transaction(async (tx) => {
       const before = await this.invoiceAsRead(tx, user, id, expectedUpdatedAt);
       const paidCents = await this.paidCents(tx, id);
@@ -451,13 +451,9 @@ export class InvoiceEditsService {
     });
   }
 
-  private requireWrites() {
-    if (!getJobberConfig().invoiceWritesEnabled)
-      throw new ApplicationError(
-        409,
-        'INVOICE_WRITES_OFF',
-        'Invoices and payments are made and changed in Jobber until the console takes over invoicing.',
-      );
+  /** Refused while Jobber holds the invoices: until the console takes invoicing over (phase 8), or the server says so. */
+  private async requireWrites(user: AuthenticatedUser) {
+    if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
   }
 
   private invoiceChanged() {

@@ -38,9 +38,8 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { insertConsoleInvoice } from './invoice-insert';
-import { newInvoiceDefaults, officeBrand, officePrices } from './invoice-settings';
+import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officePrices } from './invoice-settings';
 
 // Kept exported from here for the callers that already import them (phase 6 moved them).
 export { priceList, receiptBrand } from './invoice-settings';
@@ -510,7 +509,7 @@ export class InvoicesService {
       },
       syncedAt: synced._max.syncedAt?.toISOString() ?? null,
       jobberRead: jobberRead(connection),
-      writesEnabled: getJobberConfig().invoiceWritesEnabled,
+      writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
     };
   }
 
@@ -652,7 +651,7 @@ export class InvoicesService {
       invoiceBalanceCents: invoice.balanceCents,
       invoiceStatus: invoiceStatusOn(invoice.status, day(invoice.dueOn), businessDate()),
       updatedAt: updatedAt.toISOString(),
-      writesEnabled: getJobberConfig().invoiceWritesEnabled,
+      writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
       brand: await officeBrand(this.prisma, user.organizationId),
     };
   }
@@ -667,7 +666,7 @@ export class InvoicesService {
    * payment as it was and as it is.
    */
   async changePayment(user: AuthenticatedUser, id: string, input: ChangePaymentInput): Promise<PaymentDetail> {
-    this.requireWrites();
+    await this.requireWrites(user);
     const today = businessDate();
     const reference = input.reference?.trim() || null;
     const note = input.note?.trim() || null;
@@ -711,7 +710,7 @@ export class InvoicesService {
    * method, reference, note, who recorded it -- stays on the record.
    */
   async removePayment(user: AuthenticatedUser, id: string, expectedUpdatedAt: string): Promise<{ invoiceId: string }> {
-    this.requireWrites();
+    await this.requireWrites(user);
     const found = await this.prisma.$transaction(async (tx) => {
       const payment = await this.paymentToChange(tx, user, id, expectedUpdatedAt);
       const balanceCents = payment.invoice.balanceCents + payment.amountCents;
@@ -743,7 +742,7 @@ export class InvoicesService {
    * answers with the invoice already made.
    */
   async create(user: AuthenticatedUser, input: CreateInvoiceInput): Promise<InvoiceDetail> {
-    this.requireWrites();
+    await this.requireWrites(user);
     if (Boolean(input.inspectionId) === Boolean(input.propertyId))
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Invoice either a finished visit or a property.');
     const target = { inspectionId: input.inspectionId ?? null, propertyId: input.propertyId ?? null };
@@ -805,7 +804,7 @@ export class InvoicesService {
    * once cannot both take it below nothing. Paid in full, it is paid.
    */
   async recordPayment(user: AuthenticatedUser, invoiceId: string, input: RecordPaymentInput): Promise<InvoiceDetail> {
-    this.requireWrites();
+    await this.requireWrites(user);
     const prior = await this.byPaymentKey(user, input.clientRequestId);
     if (prior) return this.answerPaymentResend(user, prior, invoiceId);
 
@@ -914,7 +913,7 @@ export class InvoicesService {
       // For editing it (2026-11-06): as it was read, what it has been paid, and whether edits are on.
       updatedAt: row.updatedAt.toISOString(),
       paidCents: row.payments.reduce((sum, paid) => sum + paid.amountCents, 0),
-      writesEnabled: getJobberConfig().invoiceWritesEnabled,
+      writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
       // For its PDF and its sending (2026-11-06, phase 5), from the office's settings (phase 6).
       brand: await officeBrand(this.prisma, user.organizationId),
       deliveries: row.deliveries.map((delivery) => ({
@@ -1064,13 +1063,9 @@ export class InvoicesService {
     await tx.invoice.update({ where: { id: invoiceId }, data: { paidOn: latest._max.paidOn ?? null } });
   }
 
-  private requireWrites() {
-    if (!getJobberConfig().invoiceWritesEnabled)
-      throw new ApplicationError(
-        409,
-        'INVOICE_WRITES_OFF',
-        'Invoices and payments are made and changed in Jobber until the console takes over invoicing.',
-      );
+  /** Refused while Jobber holds the invoices: until the console takes invoicing over (phase 8), or the server says so. */
+  private async requireWrites(user: AuthenticatedUser) {
+    if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
   }
 
   private paymentNotFound() {

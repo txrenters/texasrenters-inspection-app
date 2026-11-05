@@ -73,6 +73,8 @@ const edit = (over: Record<string, unknown> = {}) => ({
 
 function database(row: Record<string, unknown> | null = stored(), paidCents = 0) {
   const db = {
+    // Jobber still holds the invoices: not taken over (phase 8).
+    invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoice: {
       findFirst: jest.fn().mockResolvedValue(row),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),

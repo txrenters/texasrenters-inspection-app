@@ -8,6 +8,8 @@ import { JobberInvoiceWorker } from '../../workers/jobber-sync/jobber-invoice.wo
 import { JobberOutboundWorker } from '../../workers/jobber-sync/jobber-outbound.worker';
 import { JobberSyncScheduler } from '../../workers/jobber-sync/jobber-sync.scheduler';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
+import { InvoiceTakeoverController } from './invoice-takeover.controller';
+import { InvoiceTakeoverService } from './invoice-takeover.service';
 import { JobberClient } from './jobber.client';
 import { JobberDayActionsService } from './jobber-day-actions.service';
 import { JobberDayService } from './jobber-day.service';
@@ -24,7 +26,7 @@ import { JobberTokenService } from './jobber.tokens.service';
 @Module({
   // The sync tells a technician when a job of theirs is removed (2026-10-07).
   imports: [RealtimeModule],
-  controllers: [JobberIntegrationController, JobberOAuthCallbackController, JobberWebhookController],
+  controllers: [JobberIntegrationController, JobberOAuthCallbackController, JobberWebhookController, InvoiceTakeoverController],
   providers: [
     { provide: JOBBER_CONFIG, useFactory: getJobberConfig },
     JobberTokenService,
@@ -39,6 +41,7 @@ import { JobberTokenService } from './jobber.tokens.service';
     JobberInvoiceWorker,
     JobberInvoiceFileWorker,
     InvoiceFileStorageService,
+    InvoiceTakeoverService,
     JobberWebhookService,
     JobberWebhookGuard,
     JobberSyncScheduler,

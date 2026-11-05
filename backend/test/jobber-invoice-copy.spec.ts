@@ -54,6 +54,8 @@ const copy = (over: Partial<JobberInvoiceCopy> = {}): JobberInvoiceCopy => ({
 
 function transaction() {
   return {
+    // Jobber still holds the invoices: not taken over (phase 8).
+    invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoice: {
       findUnique: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'invoice-1' }),

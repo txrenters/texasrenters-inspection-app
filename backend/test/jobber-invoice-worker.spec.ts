@@ -76,6 +76,8 @@ type ConnectionState = Partial<{
 
 function setup(state: ConnectionState | null = {}) {
   const prisma = {
+    // Jobber still holds the invoices: not taken over (phase 8).
+    invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     jobberConnection: {
       findUnique: jest.fn().mockResolvedValue(
         state === null

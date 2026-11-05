@@ -587,6 +587,7 @@ model UserProfile {
   invoicesCreated      Invoice[]          @relation("InvoiceCreatedBy")
   paymentsRecorded     InvoicePayment[]   @relation("InvoicePaymentRecordedBy")
   invoicesSent         InvoiceDelivery[]  @relation("InvoiceDeliverySentBy")
+  invoicingTakenOver   InvoiceSettings[]  @relation("InvoicingTakenOverBy")
   geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
   managementEndsMarked PropertyServiceStatus[] @relation("ManagementEndedBy")
   tbpOptOutsMarked     PropertyServiceStatus[] @relation("TbpOptedOutBy")
@@ -3328,9 +3329,13 @@ model InvoiceSettings {
   defaultTermsDays          Int?
   defaultClientMessage      String?
   defaultContractDisclaimer String?
+  /// When the console took invoicing over from Jobber (phase 8), and who did it. From then on Jobber's invoices are not read.
+  invoicingTakenOverAt      DateTime?
+  invoicingTakenOverById    String?      @db.Uuid
   createdAt                 DateTime     @default(now())
   updatedAt                 DateTime     @updatedAt
   organization              Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoicingTakenOverBy      UserProfile? @relation("InvoicingTakenOverBy", fields: [invoicingTakenOverById], references: [id], onDelete: SetNull)
 }
 
 /// A product or service at the office's price (2026-11-06, phase 6), as

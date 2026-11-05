@@ -1,6 +1,8 @@
 import type { InvoiceStatus as ShownInvoiceStatus, PaymentMethod } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
+import { invoicingTakenOverAt } from '../../admin/invoice-settings';
+
 /**
  * The console's copy of a Jobber invoice (2026-11-05), written from what Jobber
  * says the invoice is now.
@@ -184,6 +186,8 @@ export async function applyJobberInvoice(
   copy: JobberInvoiceCopy,
   now: Date = new Date(),
 ): Promise<InvoiceCopyResult> {
+  // The console owns invoicing (phase 8): Jobber's copy would overwrite what the office changed here.
+  if (await invoicingTakenOverAt(tx, organizationId)) return 'stale';
   const updatedAt = new Date(copy.updatedAt);
   const existing = await tx.invoice.findUnique({
     where: { organizationId_jobberInvoiceId: { organizationId, jobberInvoiceId: copy.jobberInvoiceId } },
@@ -359,6 +363,7 @@ export async function pairJobberPayment(
   organizationId: string,
   record: JobberPaymentDetails,
 ): Promise<'paired' | 'unmatched'> {
+  if (await invoicingTakenOverAt(tx, organizationId)) return 'unmatched';
   const already = await tx.invoicePayment.findFirst({
     where: { organizationId, jobberRecordId: record.jobberRecordId },
     select: { id: true },
@@ -393,6 +398,8 @@ export async function pairJobberPayment(
 
 /** An invoice Jobber deleted: gone from the copy, with its lines and payments. */
 export async function removeJobberInvoice(tx: Prisma.TransactionClient, organizationId: string, jobberInvoiceId: string) {
+  // Deleted in Jobber after the cutover: the console's invoice is the office's now.
+  if (await invoicingTakenOverAt(tx, organizationId)) return false;
   const { count } = await tx.invoice.deleteMany({ where: { organizationId, jobberInvoiceId } });
   return count > 0;
 }
