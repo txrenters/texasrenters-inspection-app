@@ -728,3 +728,25 @@ export const PAYMENT_RECORD_QUERY = `
     }
   }
 `;
+
+/**
+ * The files on one invoice, with fresh addresses to download them at
+ * (2026-11-06, phase 7): Jobber's file links are not ones to keep, so the
+ * console asks for them right before it copies each file into its own
+ * storage. Ids, addresses and types only -- a few points.
+ */
+export const INVOICE_FILES_QUERY = `
+  query ConsoleInvoiceFiles($id: EncodedId!) {
+    invoice(id: $id) {
+      id
+      noteAttachments(first: 100) {
+        nodes {
+          id
+          contentType
+          fileSize
+          url
+        }
+      }
+    }
+  }
+`;

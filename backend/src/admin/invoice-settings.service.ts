@@ -20,6 +20,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { fileCopyStatus } from './invoice-files.service';
 import {
   billedPrices,
   brandFrom,
@@ -76,11 +77,13 @@ export class InvoiceSettingsService {
 
   async read(user: AuthenticatedUser): Promise<InvoiceSettingsView> {
     const org = user.organizationId;
-    const [settings, fallback, products, billed] = await Promise.all([
+    const [settings, fallback, products, billed, files] = await Promise.all([
       readInvoiceSettings(this.prisma, org),
       fallbackDefaults(this.prisma, org),
       listedProducts(this.prisma, org),
       billedPrices(this.prisma, org, businessDate()),
+      // Before the cutover every file must be kept (phase 7).
+      fileCopyStatus(this.prisma, org),
     ]);
     const listed = new Set(products.map((product) => product.nameKey));
     const serverBrand = receiptBrand();
@@ -92,6 +95,7 @@ export class InvoiceSettingsService {
       updatedAt: settings.updatedAt?.toISOString() ?? null,
       products: products.map(view),
       billed: billed.filter((price) => !listed.has(productNameKey(price.name))),
+      files,
     };
   }
 

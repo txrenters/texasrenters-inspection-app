@@ -3292,14 +3292,23 @@ model InvoiceFile {
   contentType    String
   sizeBytes      Int
   jobberUrl      String?
+  /// The console's own copy in private storage (2026-11-06, phase 7); a re-read of Jobber never clears it.
   storageKey     String?
   uploadedAt     DateTime
   createdAt      DateTime @default(now())
+  /// When the copy was kept; set together with storageKey.
+  copiedAt        DateTime?
+  /// Tries so far, the latest, and what went wrong, in words.
+  copyAttempts    Int       @default(0)
+  copyAttemptedAt DateTime?
+  copyProblem     String?
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@unique([invoiceId, jobberFileId])
   @@index([organizationId])
+  @@index([organizationId, copiedAt])
+  @@index([organizationId, copyAttemptedAt])
 }
 
 /// The office's invoice settings (2026-11-06, phase 6 of taking invoicing over

@@ -132,7 +132,7 @@ export default function InvoicePage() {
             ) : null}
             {details?.files.length ? (
               <AsideCard title="Files">
-                <InvoiceFiles files={details.files} />
+                <InvoiceFiles files={details.files} invoiceId={data.id} />
               </AsideCard>
             ) : null}
           </>

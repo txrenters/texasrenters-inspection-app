@@ -6,6 +6,7 @@ import {
   invoiceProductProblem,
   invoiceSettingsProblem,
   parseMoney,
+  type InvoiceFileCopyStatus,
   type InvoiceProductView,
   type InvoiceSettingsValues,
   type InvoiceSettingsView,
@@ -23,6 +24,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/lib/api';
 import { usePermissions } from '@/lib/auth';
+import { useRetryFileCopies } from '@/lib/invoice-files';
 import { useInvoiceSettings, useInvoiceSettingsEdits } from '@/lib/invoice-settings-queries';
 
 /**
@@ -55,6 +57,7 @@ export default function InvoiceSettingsPage() {
       {/* Started again from what was saved, each time it is saved. */}
       <SettingsForm key={settings.data.updatedAt ?? 'never'} mayChange={mayChange} view={settings.data} />
       <ProductsSection mayChange={mayChange} view={settings.data} />
+      {settings.data.files ? <FileCopiesSection files={settings.data.files} mayChange={mayChange} /> : null}
     </>
   );
 }
@@ -427,5 +430,63 @@ function EditRow({
         </Button>
       </TableCell>
     </TableRow>
+  );
+}
+
+/**
+ * The files on Jobber's invoices, and how many the console keeps its own copy
+ * of (2026-11-06, phase 7). Jobber's links stop working when the office
+ * leaves it, so every one must be kept before the cutover. Copied a couple of
+ * dozen at a time after each read of Jobber; the ones tried too often wait for
+ * somebody to ask again.
+ */
+function FileCopiesSection({ files, mayChange }: { files: InvoiceFileCopyStatus; mayChange: boolean }) {
+  const retry = useRetryFileCopies();
+  const count = (value: number) => value.toLocaleString('en-US');
+  return (
+    <section aria-label="Files from Jobber" className="bg-card mt-6 rounded-lg border p-4">
+      <h2 className="text-heading text-lg font-bold">Files from Jobber</h2>
+      <p className="text-muted-foreground mt-1 text-sm">
+        Jobber&apos;s links to the images and attachments on its invoices stop working when the office leaves it, so the
+        console keeps its own copy of each. Every one should be kept before the cutover.
+      </p>
+      {files.total ? (
+        <>
+          <p className="mt-3 text-sm">
+            <span className="text-heading font-bold tabular-nums">{count(files.kept)}</span> of{' '}
+            <span className="tabular-nums">{count(files.total)}</span> kept
+            {files.waiting ? <> · {count(files.waiting)} still to copy, a couple of dozen after each read of Jobber</> : null}
+            {files.failed ? <> · <span className="text-destructive">{count(files.failed)} could not be copied</span></> : null}
+          </p>
+          {files.problems.length ? (
+            <ul className="text-muted-foreground mt-2 grid gap-0.5 text-xs">
+              {files.problems.map((row) => (
+                <li key={row.problem}>
+                  {row.problem} ({count(row.files)})
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {files.failed && mayChange ? (
+            <Button
+              className="mt-3"
+              disabled={retry.isPending}
+              onClick={() =>
+                retry.mutate(undefined, {
+                  onSuccess: () => toast.success('They will be tried again on the next reads of Jobber'),
+                  onError: (error) => toast.error('Nothing was changed', { description: error.message }),
+                })
+              }
+              size="sm"
+              variant="outline"
+            >
+              Try the {count(files.failed)} again
+            </Button>
+          ) : null}
+        </>
+      ) : (
+        <p className="text-muted-foreground mt-3 text-sm">No invoice from Jobber has a file.</p>
+      )}
+    </section>
   );
 }

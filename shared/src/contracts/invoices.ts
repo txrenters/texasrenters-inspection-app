@@ -131,9 +131,19 @@ export interface InvoiceFileView {
   fileName: string;
   contentType: string;
   sizeBytes: number;
-  /** Where it can be opened: the console's own copy once kept, else Jobber's address. */
+  /** Jobber's address for it. The console opens a file through `InvoiceFileLink`, which prefers its own copy. */
   url: string | null;
   uploadedAt: string;
+  /** The console keeps its own copy (2026-11-06, phase 7), so it opens after the office leaves Jobber. */
+  kept?: boolean;
+  /** Why the copy has not been made yet, in words; null when nothing went wrong. */
+  copyProblem?: string | null;
+}
+
+/** A short-lived address to open one file at (2026-11-06): the console's copy, else Jobber's. */
+export interface InvoiceFileLink {
+  url: string;
+  kept: boolean;
 }
 
 /** A payment recorded against an invoice. */

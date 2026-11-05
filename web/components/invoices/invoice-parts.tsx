@@ -15,6 +15,8 @@ import {
 } from '@texasrenters/shared';
 import { ArrowDownIcon, ArrowUpIcon, BanknoteIcon, ChevronRightIcon, FileIcon, PinIcon, PlusIcon, ReceiptTextIcon } from 'lucide-react';
 import Link from 'next/link';
+import { useState } from 'react';
+import { toast } from 'sonner';
 
 import { AsideCard } from '@/components/record/record-kit';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +25,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { usePermissions } from '@/lib/auth';
 import { BUSINESS_TIME_ZONE } from '@/lib/clock';
+import { openInvoiceFile } from '@/lib/invoice-files';
 import { useInvoices } from '@/lib/invoice-queries';
 import { cn } from '@/lib/utils';
 
@@ -329,30 +332,44 @@ export function InvoiceNotes({ notes }: { notes: readonly InvoiceNoteView[] }) {
 }
 
 /** The invoice's images and attachments: each by name, type and size, opened where it is kept. */
-export function InvoiceFiles({ files }: { files: readonly InvoiceFileView[] }) {
+/**
+ * The files on an invoice, each opened through a short-lived link: the
+ * console's own copy once kept (2026-11-06, phase 7), Jobber's until then --
+ * which stops working when the office leaves Jobber, so each says which.
+ */
+export function InvoiceFiles({ invoiceId, files }: { invoiceId: string; files: readonly InvoiceFileView[] }) {
+  const [opening, setOpening] = useState<string | null>(null);
   if (!files.length) return <p className="text-muted-foreground text-sm">No files.</p>;
+  const open = async (file: InvoiceFileView) => {
+    setOpening(file.id);
+    try {
+      if ((await openInvoiceFile(invoiceId, file.id)) === 'blocked')
+        toast.error('The browser blocked the new tab', { description: 'Allow pop-ups for the console, then open the file again.' });
+    } catch (error) {
+      toast.error('The file could not be opened', { description: error instanceof Error ? error.message : undefined });
+    } finally {
+      setOpening(null);
+    }
+  };
   return (
     <ul aria-label="Files" className="divide-y">
-      {files.map((file) => {
-        const label = (
-          <>
+      {files.map((file) => (
+        <li className="py-2 text-sm" key={file.id}>
+          <button
+            className="flex w-full items-center gap-2 text-left hover:underline disabled:opacity-60"
+            disabled={opening === file.id}
+            onClick={() => void open(file)}
+            type="button"
+          >
             <FileIcon aria-hidden className="text-muted-foreground size-4 shrink-0" />
             <span className="min-w-0 truncate">{file.fileName}</span>
             <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">{formatFileSize(file.sizeBytes)}</span>
-          </>
-        );
-        return (
-          <li className="py-2 text-sm" key={file.id}>
-            {file.url ? (
-              <a className="flex items-center gap-2 hover:underline" href={file.url} rel="noreferrer" target="_blank">
-                {label}
-              </a>
-            ) : (
-              <span className="flex items-center gap-2">{label}</span>
-            )}
-          </li>
-        );
-      })}
+          </button>
+          <p className="text-muted-foreground mt-0.5 pl-6 text-xs">
+            {file.kept ? 'Kept in the console' : file.copyProblem ? `Not copied from Jobber: ${file.copyProblem}` : 'Not copied from Jobber yet'}
+          </p>
+        </li>
+      ))}
     </ul>
   );
 }
