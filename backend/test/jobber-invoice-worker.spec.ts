@@ -34,6 +34,7 @@ const node = (id: string, updatedAt: string, over: Partial<JobberInvoice> = {}):
   client: { id: 'client-1', name: '100 Example Way' },
   jobs: { nodes: [] },
   visits: { nodes: [] },
+  properties: { nodes: [] },
   lineItems: { totalCount: 0, nodes: [] },
   paymentRecords: { totalCount: 0, nodes: [] },
   ...over,
@@ -77,10 +78,14 @@ function setup(state: ConnectionState | null = {}) {
     $transaction: jest.fn((work: (tx: object) => unknown) => work({})),
   };
   const client = { requestDetailed: jest.fn(), request: jest.fn() };
-  const worker = new JobberInvoiceWorker(prisma as never, client as never);
+  const mapping = {
+    buildingIndex: jest.fn().mockResolvedValue({ strict: new Map(), loose: new Map() }),
+    resolveProperty: jest.fn().mockResolvedValue({ status: 'LINKED', propertywareBuildingId: 'building-1' }),
+  };
+  const worker = new JobberInvoiceWorker(prisma as never, client as never, mapping as never);
   const sleep = jest.spyOn(worker as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue();
   const recorded = () => prisma.jobberConnection.update.mock.calls.map(([call]) => call.data);
-  return { prisma, client, worker, sleep, recorded };
+  return { prisma, client, mapping, worker, sleep, recorded };
 }
 
 beforeEach(() => jest.mocked(applyJobberInvoice).mockClear().mockResolvedValue('created'));
@@ -242,6 +247,60 @@ describe('when Jobber will not, or cannot, answer', () => {
 
     // 2,700 for the page and 1,000 to spare, against 1,700 left, refilling at 500 a second.
     expect(sleep).toHaveBeenCalledWith(4_000);
+  });
+});
+
+describe("an invoice's property", () => {
+  const at = (jobberPropertyId: string) => ({
+    properties: { nodes: [{ id: jobberPropertyId, address: { street1: '100 Example Way', postalCode: '77000' } }] },
+  });
+
+  it("puts each invoice on its Jobber property's building, reading the buildings once a run and each property once", async () => {
+    const { client, mapping, worker } = setup();
+    client.requestDetailed.mockResolvedValueOnce(
+      page(
+        [node('a', '2026-11-01T10:00:00Z', at('p-1')), node('b', '2026-11-02T10:00:00Z', at('p-1')), node('c', '2026-11-03T10:00:00Z')],
+        false,
+        'c',
+      ),
+    );
+
+    await worker.run(ORG);
+
+    expect(mapping.buildingIndex).toHaveBeenCalledTimes(1);
+    expect(mapping.resolveProperty).toHaveBeenCalledTimes(1);
+    expect(mapping.resolveProperty).toHaveBeenCalledWith(
+      ORG,
+      expect.objectContaining({ jobberPropertyId: 'p-1', addressLine1: '100 Example Way', postalCode: '77000' }),
+      { strict: expect.any(Map), loose: expect.any(Map) },
+    );
+    const copies = jest.mocked(applyJobberInvoice).mock.calls.map(([, , copy]) => [copy.jobberInvoiceId, copy.jobberPropertyId, copy.linkedBuildingId]);
+    expect(copies).toEqual([
+      ['a', 'p-1', 'building-1'],
+      ['b', 'p-1', 'building-1'],
+      // No property named: nothing to look up.
+      ['c', null, null],
+    ]);
+  });
+
+  it('puts an invoice on no page for a Jobber property the office chose to ignore', async () => {
+    const { client, mapping, worker } = setup();
+    mapping.resolveProperty.mockResolvedValueOnce({ status: 'IGNORED', propertywareBuildingId: 'building-1' });
+    client.requestDetailed.mockResolvedValueOnce(page([node('a', '2026-11-01T10:00:00Z', at('p-9'))], false, 'c'));
+
+    await worker.run(ORG);
+
+    expect(jest.mocked(applyJobberInvoice).mock.calls[0]![2].linkedBuildingId).toBeNull();
+  });
+
+  it('looks the property up for a webhook too', async () => {
+    const { client, mapping, worker } = setup();
+    client.request.mockResolvedValueOnce({ invoice: node('a', '2026-11-05T16:00:00Z', at('p-1')) });
+
+    await worker.refreshInvoice(ORG, 'a');
+
+    expect(mapping.resolveProperty).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(applyJobberInvoice).mock.calls[0]![2].linkedBuildingId).toBe('building-1');
   });
 });
 

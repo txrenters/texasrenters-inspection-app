@@ -2,6 +2,7 @@ import type { InvoiceStatus } from '@texasrenters/shared';
 
 import { businessDate } from '../../common/business-day';
 import type { JobberInvoiceCopy } from './jobber-invoice-copy';
+import type { JobberPropertyDescriptor } from './jobber.mapping.service';
 import type { JobberInvoice } from './jobber.schemas';
 
 /**
@@ -72,6 +73,26 @@ function addressLine(address: JobberInvoice['billingAddress']) {
   return line || null;
 }
 
+/**
+ * The one Jobber property an invoice is for, as the property matcher takes it
+ * (`JobberMappingService.resolveProperty`); null for none, or for a batch over
+ * several, which belongs on no one property's page.
+ */
+export function invoiceProperty(invoice: JobberInvoice): JobberPropertyDescriptor | null {
+  if (invoice.properties.nodes.length !== 1) return null;
+  const property = invoice.properties.nodes[0]!;
+  return {
+    jobberPropertyId: property.id,
+    jobberClientId: invoice.client?.id ?? null,
+    jobberClientName: invoice.client?.name ?? null,
+    addressLine1: property.address?.street1 ?? null,
+    addressLine2: property.address?.street2 ?? null,
+    city: property.address?.city ?? null,
+    state: property.address?.province ?? null,
+    postalCode: property.address?.postalCode ?? null,
+  };
+}
+
 /** Whether a page cut this invoice's lines or payments short, so it must be read again by itself. */
 export function isCutShort(invoice: JobberInvoice) {
   return (
@@ -98,6 +119,7 @@ export function toInvoiceCopy(invoice: JobberInvoice): JobberInvoiceCopy {
     jobberJobId: job?.id ?? null,
     jobNumber: job?.jobNumber === null || job?.jobNumber === undefined ? null : String(job.jobNumber),
     jobberVisitIds: invoice.visits.nodes.map((visit) => visit.id),
+    jobberPropertyId: invoice.properties.nodes.length === 1 ? invoice.properties.nodes[0]!.id : null,
     issuedOn,
     dueOn,
     paymentTermsDays: termsDays(issuedOn, dueOn),

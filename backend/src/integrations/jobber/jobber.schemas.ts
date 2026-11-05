@@ -136,6 +136,8 @@ export const jobberInvoiceSchema = z.object({
   client: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
   jobs: z.object({ nodes: z.array(z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish() })) }),
   visits: z.object({ nodes: z.array(z.object({ id: z.string() })) }),
+  /** The property the invoice is for: how one billing no visit the console has finds its page. */
+  properties: z.object({ nodes: z.array(z.object({ id: z.string(), address: address.nullish() })) }),
   lineItems: z.object({
     totalCount: z.number().int(),
     nodes: z.array(

@@ -1,4 +1,4 @@
-import { isCutShort, jobberDay, toInvoiceCopy } from '../src/integrations/jobber/jobber-invoice-mapping';
+import { invoiceProperty, isCutShort, jobberDay, toInvoiceCopy } from '../src/integrations/jobber/jobber-invoice-mapping';
 import {
   INVOICE_BY_ID_QUERY,
   INVOICE_PAGE_LINES,
@@ -29,6 +29,9 @@ const invoice = (over: Partial<JobberInvoice> = {}): JobberInvoice => ({
   client: { id: 'jobber-client-1', name: ' 100 Example Way ' },
   jobs: { nodes: [{ id: 'jobber-job-1', jobNumber: 20625 }] },
   visits: { nodes: [{ id: 'jobber-visit-1' }] },
+  properties: {
+    nodes: [{ id: 'jobber-property-1', address: { street1: '100 Example Way', street2: 'Unit B', city: 'Sampletown', province: 'TX', postalCode: '77000' } }],
+  },
   lineItems: {
     totalCount: 2,
     nodes: [
@@ -56,6 +59,7 @@ describe("Jobber's invoice as the console's copy", () => {
       jobberJobId: 'jobber-job-1',
       jobNumber: '20625',
       jobberVisitIds: ['jobber-visit-1'],
+      jobberPropertyId: 'jobber-property-1',
       issuedOn: '2026-10-01',
       dueOn: '2026-10-31',
       paymentTermsDays: 30,
@@ -158,6 +162,23 @@ describe("Jobber's invoice as the console's copy", () => {
     });
   });
 
+  it("names the one Jobber property it is for, as the property matcher takes it, and none for a batch", () => {
+    expect(invoiceProperty(invoice())).toEqual({
+      jobberPropertyId: 'jobber-property-1',
+      jobberClientId: 'jobber-client-1',
+      jobberClientName: ' 100 Example Way ',
+      addressLine1: '100 Example Way',
+      addressLine2: 'Unit B',
+      city: 'Sampletown',
+      state: 'TX',
+      postalCode: '77000',
+    });
+    const batch = invoice({ properties: { nodes: [{ id: 'p-1' }, { id: 'p-2' }] } });
+    expect(invoiceProperty(batch)).toBeNull();
+    expect(toInvoiceCopy(batch).jobberPropertyId).toBeNull();
+    expect(invoiceProperty(invoice({ properties: { nodes: [] } }))).toBeNull();
+  });
+
   it('knows when a page cut its lines or payments short', () => {
     expect(isCutShort(invoice())).toBe(false);
     expect(isCutShort(invoice({ lineItems: { totalCount: 12, nodes: invoice().lineItems.nodes } }))).toBe(true);
@@ -180,6 +201,8 @@ describe('the invoice queries', () => {
     'amounts', 'subtotal', 'taxAmount', 'total', 'invoiceBalance',
     'billingAddress', 'street1', 'street2', 'city', 'province', 'postalCode',
     'client', 'name', 'jobs', 'jobNumber', 'visits', 'nodes', 'totalCount', 'pageInfo', 'hasNextPage', 'endCursor',
+    // Invoice.properties: PropertyConnection; Property.address as the visit sync reads it
+    'properties', 'address',
     'lineItems', 'description', 'quantity', 'unitPrice', 'totalPrice',
     'paymentRecords', 'amount', 'entryDate', 'adjustmentType',
   ]);

@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { JobberConnectionStatus, type Prisma } from '@prisma/client';
+import { JobberConnectionStatus, JobberLinkStatus, type Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../common/prisma.service';
 import {
@@ -7,9 +7,10 @@ import {
   removeJobberInvoice,
   type InvoiceCopyResult,
 } from '../../integrations/jobber/jobber-invoice-copy';
-import { isCutShort, toInvoiceCopy } from '../../integrations/jobber/jobber-invoice-mapping';
+import { invoiceProperty, isCutShort, toInvoiceCopy } from '../../integrations/jobber/jobber-invoice-mapping';
 import { JobberClient, type JobberCost } from '../../integrations/jobber/jobber.client';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
+import { JobberMappingService, type BuildingIndex } from '../../integrations/jobber/jobber.mapping.service';
 import {
   INVOICE_BY_ID_QUERY,
   invoicesPageQuery,
@@ -107,7 +108,39 @@ export class JobberInvoiceWorker {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(JobberClient) private readonly client: JobberClient,
+    @Inject(JobberMappingService) private readonly mapping: JobberMappingService,
   ) {}
+
+  /**
+   * Which of the office's buildings an invoice is for, through its Jobber
+   * property (2026-11-05).
+   *
+   * The same matcher the visit sync uses, so an invoice and a visit at one
+   * Jobber property always land on the same building, and a link the office
+   * fixed by hand is never re-decided. A property only ever seen on invoices is
+   * matched by its address once, which adds nothing to the mapping queue: that
+   * lists only links with a visit waiting on them. The buildings are read once a
+   * run and each property resolved once a run, however many invoices it has.
+   */
+  private places(organizationId: string) {
+    let index: Promise<BuildingIndex> | null = null;
+    const known = new Map<string, Promise<string | null>>();
+    return (invoice: JobberInvoice): Promise<string | null> => {
+      const property = invoiceProperty(invoice);
+      if (!property) return Promise.resolve(null);
+      let building = known.get(property.jobberPropertyId);
+      if (!building) {
+        building = (async () => {
+          index ??= this.mapping.buildingIndex(organizationId);
+          const link = await this.mapping.resolveProperty(organizationId, property, await index);
+          // Ignored by the office: not one of theirs to put a page to.
+          return link.status === JobberLinkStatus.IGNORED ? null : (link.propertywareBuildingId ?? null);
+        })();
+        known.set(property.jobberPropertyId, building);
+      }
+      return building;
+    };
+  }
 
   /** One bounded run: the next part of the first read, or what changed since the last. */
   async run(organizationId: string): Promise<InvoiceReadResult> {
@@ -144,6 +177,7 @@ export class JobberInvoiceWorker {
       return { ...result, skipped: 'WAITING', problem: connection.invoiceReadProblem as InvoiceReadProblem };
 
     const started = Date.now();
+    const buildingFor = this.places(organizationId);
     const mode = connection.invoiceReadCompletedAt ? 'changed' : 'all';
     result.mode = mode;
     // When the first read began: kept with its first page, so the weeks an
@@ -169,7 +203,7 @@ export class JobberInvoiceWorker {
         const page = jobberInvoicesPageSchema.parse(data).invoices;
         for (const listed of page.nodes) {
           const invoice = isCutShort(listed) ? await this.readAlone(organizationId, listed.id, result) : listed;
-          if (invoice) result[await this.apply(organizationId, invoice)] += 1;
+          if (invoice) result[await this.apply(organizationId, invoice, buildingFor)] += 1;
           const changedAt = new Date(listed.updatedAt);
           if (!through || changedAt > through) through = changedAt;
         }
@@ -283,8 +317,8 @@ export class JobberInvoiceWorker {
     return this.fetchOne(organizationId, jobberInvoiceId);
   }
 
-  private apply(organizationId: string, invoice: JobberInvoice) {
-    const copy = toInvoiceCopy(invoice);
+  private async apply(organizationId: string, invoice: JobberInvoice, buildingFor = this.places(organizationId)) {
+    const copy = { ...toInvoiceCopy(invoice), linkedBuildingId: await buildingFor(invoice) };
     return this.prisma.$transaction((tx) => applyJobberInvoice(tx, organizationId, copy));
   }
 
