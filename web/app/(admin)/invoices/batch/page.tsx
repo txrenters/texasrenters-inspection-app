@@ -58,7 +58,9 @@ function BatchInvoices() {
   const visits = useUninvoicedVisits({ from, to });
   const batch = useBatchInvoices();
   const [issuedOn, setIssuedOn] = useState(today);
-  const [terms, setTerms] = useState('30');
+  // The office's terms from its settings until somebody picks others.
+  const [pickedTerms, setTerms] = useState<string | null>(null);
+  const terms = pickedTerms ?? String(visits.data?.paymentTermsDays ?? 30);
   const [asDraft, setAsDraft] = useState(false);
   // Unticked by hand; every billable visit is ticked otherwise.
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());

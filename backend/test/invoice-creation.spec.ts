@@ -61,6 +61,9 @@ function database() {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     invoiceLine: { groupBy: jest.fn().mockResolvedValue(PRICES) },
+    // No invoice settings saved, and no price list: the fallbacks (2026-11-06, phase 6).
+    invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
+    invoiceProduct: { findMany: jest.fn().mockResolvedValue([]) },
     invoicePayment: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountCents: 0 }, _max: { paidOn: null } }) },
     inspection: { findFirst: jest.fn().mockResolvedValue(visit()), findMany: jest.fn().mockResolvedValue([]) },
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(building) },
@@ -256,6 +259,8 @@ describe('a batch', () => {
         expect.objectContaining({ inspectionId: VISIT, scheduledOn: '2026-11-02', clientName: '100 Example Way', totalCents: 6499, problem: null }),
       ],
       truncated: false,
+      // The office's terms for the batch: its settings, else the latest invoice's, else Net 30.
+      paymentTermsDays: 30,
     });
   });
 

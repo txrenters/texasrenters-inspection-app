@@ -32,6 +32,8 @@ export interface UninvoicedVisitList {
   items: UninvoicedVisit[];
   /** More visits than are listed; narrow the days. */
   truncated: boolean;
+  /** The office's payment terms for a new invoice, from its settings (2026-11-06). */
+  paymentTermsDays?: number;
 }
 
 export interface BatchInvoiceInput {

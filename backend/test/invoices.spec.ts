@@ -124,6 +124,9 @@ function database() {
       update: jest.fn().mockResolvedValue({}),
     },
     invoiceLine: { groupBy: jest.fn().mockResolvedValue([]) },
+    // No invoice settings saved, and no price list: the fallbacks (2026-11-06, phase 6).
+    invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
+    invoiceProduct: { findMany: jest.fn().mockResolvedValue([]) },
     invoicePayment: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),

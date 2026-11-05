@@ -7,6 +7,7 @@ import {
   type InvoiceFilter,
   type InvoiceSummary,
 } from '@texasrenters/shared';
+import { SettingsIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
@@ -86,16 +87,24 @@ export default function InvoicesPage() {
     <>
       <PageHeader
         actions={
-          mayCreate ? (
-            <>
-              <Button asChild size="sm" variant="outline">
-                <Link href="/invoices/batch">Batch create</Link>
-              </Button>
-              <Button asChild size="sm">
-                <Link href="/invoices/new">New invoice</Link>
-              </Button>
-            </>
-          ) : undefined
+          <>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/invoices/settings">
+                <SettingsIcon />
+                Settings
+              </Link>
+            </Button>
+            {mayCreate ? (
+              <>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/invoices/batch">Batch create</Link>
+                </Button>
+                <Button asChild size="sm">
+                  <Link href="/invoices/new">New invoice</Link>
+                </Button>
+              </>
+            ) : null}
+          </>
         }
         info={
           <>
