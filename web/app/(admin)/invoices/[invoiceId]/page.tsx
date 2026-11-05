@@ -1,10 +1,11 @@
 'use client';
 
 import { acceptsPayment, formatMoney, type InvoiceDetail } from '@texasrenters/shared';
-import { BanknoteIcon, ExternalLinkIcon } from 'lucide-react';
+import { BanknoteIcon, DownloadIcon, ExternalLinkIcon, MailIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
+import { toast } from 'sonner';
 
 import {
   INVOICE_RECORD,
@@ -18,12 +19,14 @@ import {
 } from '@/components/invoices/invoice-parts';
 import { InvoiceEditControls, InvoiceHistorySection } from '@/components/invoices/invoice-edit-controls';
 import { RecordPaymentDialog } from '@/components/invoices/record-payment-dialog';
+import { InvoiceDeliveries, SendInvoiceDialog } from '@/components/invoices/send-invoice-dialog';
 import { PageHeader } from '@/components/page-header';
 import { AsideCard, FactTable, PlaceCard, RecordLayout, type Fact } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
 import { useInvoice } from '@/lib/invoice-queries';
+import { downloadInvoice } from '@/lib/invoice-pdf/download-invoice';
 
 /**
  * One invoice, as Jobber's invoice page lays it out: its status and the one
@@ -39,6 +42,8 @@ export default function InvoicePage() {
   const invoice = useInvoice(invoiceId);
   const { has } = usePermissions();
   const [paying, setPaying] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   if (invoice.isLoading) return <PageSkeleton />;
   if (invoice.isError || !invoice.data)
@@ -50,6 +55,18 @@ export default function InvoicePage() {
   const visitHref = data.inspectionId ? `/inspections/${data.inspectionId}` : null;
   // Edited here once the console owns invoicing (2026-11-06); in Jobber until then.
   const editable = has('invoices:manage') && data.writesEnabled === true;
+  // Emailed from here once the console owns invoicing; a voided invoice is not sent.
+  const sendable = editable && data.status !== 'VOIDED';
+  const download = async () => {
+    setDownloading(true);
+    try {
+      await downloadInvoice(data);
+    } catch {
+      toast.error('The PDF could not be made', { description: 'Try again in a moment.' });
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <>
@@ -64,7 +81,17 @@ export default function InvoicePage() {
                 </a>
               </Button>
             ) : null}
+            <Button disabled={downloading} onClick={() => void download()} size="sm" variant="outline">
+              <DownloadIcon />
+              {downloading ? 'Making the PDF…' : 'Download PDF'}
+            </Button>
             {editable ? <InvoiceEditControls invoice={data} /> : null}
+            {sendable ? (
+              <Button onClick={() => setSending(true)} size="sm" variant="outline">
+                <MailIcon />
+                Send
+              </Button>
+            ) : null}
             {payable ? (
               <Button className="jobber:bg-success jobber:hover:bg-success/90" onClick={() => setPaying(true)} size="sm">
                 <BanknoteIcon />
@@ -93,6 +120,11 @@ export default function InvoicePage() {
                 ) : null}
               </dl>
             </AsideCard>
+            {data.deliveries?.length ? (
+              <AsideCard title="Emailed to the client">
+                <InvoiceDeliveries deliveries={data.deliveries} />
+              </AsideCard>
+            ) : null}
             {details?.notes.length ? (
               <AsideCard title="Internal notes">
                 <InvoiceNotes notes={details.notes} />
@@ -169,6 +201,7 @@ export default function InvoicePage() {
       </RecordLayout>
 
       {payable ? <RecordPaymentDialog invoice={data} onClose={() => setPaying(false)} open={paying} /> : null}
+      {sendable ? <SendInvoiceDialog invoice={data} onClose={() => setSending(false)} open={sending} /> : null}
     </>
   );
 }

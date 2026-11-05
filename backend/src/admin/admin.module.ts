@@ -20,6 +20,8 @@ import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonReportService } from './comparison-report.service';
 import { ComparisonService } from './comparison.service';
+import { InvoiceDeliveryController } from './invoice-delivery.controller';
+import { InvoiceDeliveryService } from './invoice-delivery.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { AreaChecklistAiService } from './area-checklist-ai.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
@@ -61,6 +63,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     RescheduleRequestsController,
     InvoicesController,
     InvoiceEditsController,
+    InvoiceDeliveryController,
     PaymentsController,
   ],
   providers: [
@@ -87,6 +90,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InspectionImportService,
     InspectionMediaStorageService,
     ProfileDeletionService,
+    InvoiceDeliveryService,
     ReportShareService,
     RescheduleRequestsService,
     InvoicesService,

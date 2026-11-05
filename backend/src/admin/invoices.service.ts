@@ -12,6 +12,7 @@ import {
   type CreateInvoiceInput,
   type InvoiceBucket,
   type InvoiceCustomField,
+  type InvoiceDeliveryStatus,
   type InvoiceDetail,
   type InvoiceDraft,
   type InvoiceExtraDetails,
@@ -151,6 +152,21 @@ const detailSelect = {
   files: {
     orderBy: { uploadedAt: 'asc' },
     select: { id: true, fileName: true, contentType: true, sizeBytes: true, jobberUrl: true, uploadedAt: true },
+  },
+  // Each time it was sent to the client from the console (2026-11-06), newest first.
+  deliveries: {
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    select: {
+      id: true,
+      channel: true,
+      recipients: true,
+      status: true,
+      failure: true,
+      createdAt: true,
+      sentAt: true,
+      sentBy: { select: { id: true, displayName: true } },
+    },
   },
 } satisfies Prisma.InvoiceSelect;
 
@@ -948,6 +964,18 @@ export class InvoicesService {
       updatedAt: row.updatedAt.toISOString(),
       paidCents: row.payments.reduce((sum, paid) => sum + paid.amountCents, 0),
       writesEnabled: getJobberConfig().invoiceWritesEnabled,
+      // For its PDF and its sending (2026-11-06, phase 5).
+      brand: receiptBrand(),
+      deliveries: row.deliveries.map((delivery) => ({
+        id: delivery.id,
+        channel: 'EMAIL' as const,
+        recipients: delivery.recipients,
+        status: delivery.status as InvoiceDeliveryStatus,
+        failure: delivery.failure,
+        sentBy: delivery.sentBy,
+        createdAt: delivery.createdAt.toISOString(),
+        sentAt: delivery.sentAt?.toISOString() ?? null,
+      })),
     };
   }
 

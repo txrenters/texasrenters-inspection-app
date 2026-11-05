@@ -217,6 +217,15 @@ export function historyEvent(
         lines: [`${cents(removed.amountCents)} by ${method(removed.method)}, paid ${dayWords(removed.paidOn as string)}`, `Balance ${cents(meta.balanceCents)}`],
       };
     }
+    // Sent from the console by email (2026-11-06, phase 5).
+    case 'INVOICE_SENT': {
+      const to = Array.isArray(meta.to) ? meta.to.map(String) : [];
+      return {
+        ...base,
+        title: meta.status === 'FAILED' ? 'Email not sent' : 'Emailed',
+        lines: [`To ${to.join(', ') || 'nobody'}`, ...(typeof meta.failure === 'string' ? [meta.failure] : [])],
+      };
+    }
     default:
       return { ...base, title: row.action.toLowerCase().replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()), lines: [] };
   }

@@ -101,6 +101,7 @@ export * from './property-service.js';
 export * from './area-sequence.js';
 export * from './technician-trail.js';
 export * from './phone-number.js';
+export * from './invoice-delivery.js';
 export * from './invoices.js';
 export * from './invoice-edits.js';
 export * from './invoice-batch.js';
