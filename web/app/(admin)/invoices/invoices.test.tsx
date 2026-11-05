@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import type { InvoiceDetail, InvoiceDraft, InvoiceList, PaymentList } from '@texasrenters/shared';
+import type { InvoiceDetail, InvoiceDraft, InvoiceList, PaymentDetail, PaymentList } from '@texasrenters/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewInvoicePage from './new/page';
 import InvoicePage from './[invoiceId]/page';
 import InvoicesPage from './page';
 import PaymentsPage from '../payments/page';
+import PaymentPage from '../payments/[paymentId]/page';
 
 /**
  * Invoices and payments in the console, built from Jobber's (the office,
@@ -19,6 +20,7 @@ const hooks = vi.hoisted(() => ({
   useInvoice: vi.fn(),
   useInvoiceDraft: vi.fn(),
   usePayments: vi.fn(),
+  usePayment: vi.fn(),
   useInvoiceActions: vi.fn(),
 }));
 vi.mock('@/lib/invoice-queries', async (importOriginal) => {
@@ -30,7 +32,7 @@ vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => pe
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 const params = vi.hoisted(() => ({ search: new URLSearchParams('inspection=insp-1') }));
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ invoiceId: 'inv-1' }),
+  useParams: () => ({ invoiceId: 'inv-1', paymentId: 'pay-1' }),
   useRouter: () => router,
   useSearchParams: () => params.search,
 }));
@@ -245,6 +247,146 @@ describe('an invoice', () => {
     fireEvent.change(within(dialog).getByLabelText('Amount'), { target: { value: '20.5.0' } });
     expect(dialog).toHaveTextContent('Give the amount in dollars and cents.');
   });
+
+  it('shows every other detail Jobber keeps: contacts, discount, tax, deposit, custom fields, notes and files', () => {
+    hooks.useInvoice.mockReturnValue(
+      ready({
+        ...DETAIL,
+        subtotalCents: 6000,
+        taxCents: 446,
+        totalCents: 5846,
+        lineItems: [{ ...DETAIL.lineItems[0]!, serviceOn: '2026-09-29', taxable: false }],
+        details: {
+          contractDisclaimer: 'Payment is due within 30 days.',
+          billingName: 'Example Owner',
+          propertyAddress: null,
+          billingSameAsProperty: false,
+          clientEmails: ['owner@example.com', 'second@example.com'],
+          clientPhones: ['(555) 010-0100'],
+          paidOn: null,
+          viewedAt: '2026-10-02T20:30:00.000Z',
+          salespersonName: null,
+          jobTitle: 'Quarterly service',
+          discountCents: 600,
+          discountPercent: 10,
+          depositCents: 1000,
+          tipsCents: 0,
+          taxRateName: 'Texas',
+          taxRatePercent: 8.25,
+          taxInclusive: false,
+          customFields: [{ label: 'Gate code', value: '1234' }],
+          notes: [{ id: 'n1', kind: 'JOB', message: 'Gate sticks', pinned: true, writtenAt: '2026-09-29T15:00:00.000Z' }],
+          files: [
+            {
+              id: 'f1',
+              fileName: 'receipt.pdf',
+              contentType: 'application/pdf',
+              sizeBytes: 2_400_000,
+              url: 'https://files.example.com/receipt.pdf',
+              uploadedAt: '2026-09-29T15:00:00.000Z',
+            },
+          ],
+        },
+      }),
+    );
+    render(<InvoicePage />);
+
+    const place = screen.getByRole('region', { name: 'Property 1902 Mockup Dr' });
+    expect(place).toHaveTextContent('Example Owner · 1902 Mockup Dr, Houston, TX 77041');
+    expect(within(place).getByRole('link', { name: 'owner@example.com' })).toHaveAttribute('href', 'mailto:owner@example.com');
+    expect(within(place).getByRole('link', { name: '(555) 010-0100' })).toHaveAttribute('href', 'tel:5550100100');
+
+    const details = screen.getByLabelText('Invoice details');
+    expect(details).toHaveTextContent('Quarterly service');
+    // 20:30 UTC is 3:30 PM in Texas.
+    expect(details).toHaveTextContent('Viewed by the clientOct 2, 2026, 3:30 PM');
+    expect(details).toHaveTextContent('Gate code1234');
+
+    const table = screen.getByRole('table', { name: 'Products and services' });
+    expect(table).toHaveTextContent('Done Sep 29, 2026 · Not taxed');
+    expect(table).toHaveTextContent('Discount (10%)-$6.00');
+    expect(table).toHaveTextContent('Texas (8.25%)$4.46');
+    expect(table).toHaveTextContent('Deposit$10.00');
+    expect(table).not.toHaveTextContent('Tips');
+
+    expect(screen.getByLabelText('Notes')).toHaveTextContent(/Pinned.*On the job.*Gate sticks/);
+    expect(screen.getByRole('link', { name: /receipt\.pdf\s*2\.4 MB/ })).toHaveAttribute('href', 'https://files.example.com/receipt.pdf');
+    expect(screen.getByText('Payment is due within 30 days.')).toBeInTheDocument();
+  });
+
+  it('opens each payment on its own page', () => {
+    hooks.useInvoice.mockReturnValue(
+      ready({
+        ...DETAIL,
+        payments: [
+          {
+            id: 'pay-1',
+            paidOn: '2026-10-20',
+            amountCents: 1000,
+            method: 'BANK_TRANSFER',
+            reference: 'ACH-77',
+            note: null,
+            recordedBy: null,
+            recordedAt: '2026-10-20T16:00:00.000Z',
+            origin: 'JOBBER',
+          },
+        ],
+      }),
+    );
+    render(<InvoicePage />);
+
+    expect(screen.getByRole('link', { name: 'Payment of $10.00 on Oct 20, 2026' })).toHaveAttribute('href', '/payments/pay-1');
+  });
+});
+
+describe('a payment', () => {
+  const PAYMENT: PaymentDetail = {
+    id: 'pay-1',
+    paidOn: '2026-10-20',
+    amountCents: 3999,
+    method: 'BANK_TRANSFER',
+    reference: 'ACH-77',
+    note: 'From the owner ledger',
+    recordedBy: null,
+    recordedAt: '2026-10-20T16:00:00.000Z',
+    origin: 'JOBBER',
+    jobberPaymentType: 'ACH_BANK_PAYMENT',
+    invoice: { id: 'inv-1', number: '8439', subject: 'For Services Rendered', clientName: '1902 Mockup Dr' },
+    property: { id: 'b1', address: '1902 Mockup Dr', city: 'Houston' },
+    invoiceTotalCents: 3999,
+    invoiceBalanceCents: 0,
+  };
+
+  it('shows how much, when and how it was paid, and the invoice it went to', () => {
+    hooks.usePayment.mockReturnValue(ready(PAYMENT));
+    render(<PaymentPage />);
+
+    expect(screen.getByRole('heading', { name: 'Payment for Invoice #8439' })).toBeInTheDocument();
+    const facts = screen.getByLabelText('Payment details');
+    expect(facts).toHaveTextContent('$39.99');
+    expect(facts).toHaveTextContent('Oct 20, 2026');
+    expect(facts).toHaveTextContent('Bank payment');
+    expect(facts).toHaveTextContent('In Jobber: ACH bank payment');
+    expect(facts).toHaveTextContent('ACH-77');
+    expect(facts).toHaveTextContent('RecordedIn Jobber');
+    expect(screen.getByText('From the owner ledger')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '#8439' })).toHaveAttribute('href', '/invoices/inv-1');
+    expect(screen.getByRole('link', { name: 'Open the invoice' })).toHaveAttribute('href', '/invoices/inv-1');
+    expect(screen.getByText(/Paid in full/)).toBeInTheDocument();
+  });
+
+  it('says who recorded one made in the console, and when', () => {
+    hooks.usePayment.mockReturnValue(
+      ready({ ...PAYMENT, origin: 'CONSOLE', jobberPaymentType: null, recordedBy: { id: 'u1', displayName: 'Office' }, invoiceBalanceCents: 1000 }),
+    );
+    render(<PaymentPage />);
+
+    const facts = screen.getByLabelText('Payment details');
+    expect(facts).toHaveTextContent('By Office');
+    expect(facts).toHaveTextContent('Oct 20, 2026, 11:00 AM');
+    expect(facts).not.toHaveTextContent('In Jobber:');
+    expect(screen.queryByText(/Paid in full/)).not.toBeInTheDocument();
+  });
 });
 
 describe('a new invoice for a finished visit', () => {
@@ -342,5 +484,7 @@ describe('the payments list', () => {
     expect(row).toHaveTextContent('Propertyware ledger');
     expect(row).toHaveTextContent('$39.99');
     expect(screen.getByRole('region', { name: 'Payments at a glance' })).toHaveTextContent('$39.99');
+    // The row opens the payment; the invoice number still opens the invoice.
+    expect(within(row).getAllByRole('link').map((link) => link.getAttribute('href'))).toContain('/payments/pay-1');
   });
 });

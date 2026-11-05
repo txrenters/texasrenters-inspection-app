@@ -144,4 +144,10 @@ export class PaymentsController {
   list(@Req() request: AuthenticatedRequest, @Query() query: PaymentListQueryDto) {
     return this.service.payments(request.user, query);
   }
+
+  @Get(':paymentId')
+  @RequirePermissions('invoices:read')
+  one(@Req() request: AuthenticatedRequest, @Param('paymentId', new ParseUUIDPipe()) id: string) {
+    return this.service.onePayment(request.user, id);
+  }
 }

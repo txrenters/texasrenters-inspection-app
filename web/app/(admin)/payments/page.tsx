@@ -147,7 +147,13 @@ export default function PaymentsPage() {
         </EmptyState>
       ) : (
         <>
-          <DataTable columns={COLUMNS} label="Payments" rowKey={(row) => row.id} rows={data.items} />
+          <DataTable
+            columns={COLUMNS}
+            label="Payments"
+            rowHref={(row) => `/payments/${row.id}`}
+            rowKey={(row) => row.id}
+            rows={data.items}
+          />
           <Pagination
             onPage={(page) => setState({ page })}
             page={data.page}

@@ -138,7 +138,12 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Jobber invoices (${invoices.mode}): ${invoices.pages} pages, ${invoices.created} new, ` +
             `${invoices.updated} updated, ${invoices.readAlone} read alone` +
-            `${invoices.caughtUp ? ', caught up' : ''}${invoices.problem ? `, stopped: ${invoices.problem}` : ''}.`,
+            `${invoices.caughtUp ? ', caught up' : ''}${invoices.problem ? `, stopped: ${invoices.problem}` : ''}` +
+            (invoices.paymentPages
+              ? `; payments: ${invoices.paymentPages} pages, ${invoices.paired} paired, ${invoices.unpaired} unpaired` +
+                `${invoices.paymentsCaughtUp ? ', caught up' : ''}`
+              : '') +
+            '.',
         );
     } catch (error) {
       this.logger.error(

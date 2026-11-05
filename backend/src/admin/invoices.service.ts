@@ -13,14 +13,19 @@ import {
   paymentTermsLabel,
   type CreateInvoiceInput,
   type InvoiceBucket,
+  type InvoiceCustomField,
   type InvoiceDetail,
   type InvoiceDraft,
+  type InvoiceExtraDetails,
   type InvoiceFilter,
   type InvoiceJobberRead,
   type InvoiceLineInput,
+  type InvoiceLineItem,
   type InvoiceList,
+  type InvoiceNoteView,
   type InvoicePayment as InvoicePaymentView,
   type InvoiceSummary,
+  type PaymentDetail,
   type PaymentList,
   type PaymentMethod,
   type RecordPaymentInput,
@@ -101,11 +106,50 @@ const detailSelect = {
   taxCents: true,
   clientMessage: true,
   createdAt: true,
+  // Every other detail Jobber keeps (2026-11-05).
+  contractDisclaimer: true,
+  billingName: true,
+  propertyAddress: true,
+  billingSameAsProperty: true,
+  clientEmails: true,
+  clientPhones: true,
+  paidOn: true,
+  viewedAt: true,
+  salespersonName: true,
+  jobTitle: true,
+  discountCents: true,
+  discountRate: true,
+  discountKind: true,
+  depositCents: true,
+  tipsCents: true,
+  taxRateName: true,
+  taxRatePercent: true,
+  taxInclusive: true,
+  customFields: true,
   lines: {
     orderBy: { position: 'asc' },
-    select: { name: true, description: true, quantity: true, unitPriceCents: true, totalCents: true },
+    select: {
+      name: true,
+      description: true,
+      quantity: true,
+      unitPriceCents: true,
+      totalCents: true,
+      taxable: true,
+      serviceOn: true,
+      productName: true,
+      category: true,
+    },
   },
   payments: { orderBy: [{ paidOn: 'asc' }, { createdAt: 'asc' }], select: paymentSelect() },
+  // Pinned first, as Jobber shows them, then newest first.
+  notes: {
+    orderBy: [{ pinned: 'desc' }, { writtenAt: 'desc' }],
+    select: { id: true, kind: true, message: true, pinned: true, writtenAt: true },
+  },
+  files: {
+    orderBy: { uploadedAt: 'asc' },
+    select: { id: true, fileName: true, contentType: true, sizeBytes: true, jobberUrl: true, uploadedAt: true },
+  },
 } satisfies Prisma.InvoiceSelect;
 
 function paymentSelect() {
@@ -116,10 +160,20 @@ function paymentSelect() {
     method: true,
     reference: true,
     note: true,
+    origin: true,
     createdAt: true,
     recordedBy: { select: { id: true, displayName: true } },
   } satisfies Prisma.InvoicePaymentSelect;
 }
+
+/** The invoice a payment paid, as the Payments list and a payment's page show it. */
+const paidInvoiceSelect = {
+  id: true,
+  number: true,
+  subject: true,
+  clientName: true,
+  propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
+} satisfies Prisma.InvoiceSelect;
 
 type SummaryRow = Prisma.InvoiceGetPayload<{ select: typeof summarySelect }>;
 type DetailRow = Prisma.InvoiceGetPayload<{ select: typeof detailSelect }>;
@@ -162,6 +216,63 @@ function payment(row: PaymentRow): InvoicePaymentView {
     note: row.note,
     recordedBy: row.recordedBy,
     recordedAt: row.createdAt.toISOString(),
+    origin: row.origin,
+  };
+}
+
+function lineItem(row: DetailRow['lines'][number]): InvoiceLineItem {
+  return { ...row, serviceOn: day(row.serviceOn) };
+}
+
+const NOTE_KINDS: readonly InvoiceNoteView['kind'][] = ['INVOICE', 'JOB', 'CLIENT', 'QUOTE', 'REQUEST'];
+
+/** The custom fields as stored (`[{ label, value }]`); anything else in the column is not shown. */
+function customFields(value: Prisma.JsonValue | null): InvoiceCustomField[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) =>
+    entry && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.label === 'string' && typeof entry.value === 'string'
+      ? [{ label: entry.label, value: entry.value }]
+      : [],
+  );
+}
+
+/** Everything else Jobber keeps on the invoice, as its page shows it. */
+export function extraDetails(row: DetailRow): InvoiceExtraDetails {
+  return {
+    contractDisclaimer: row.contractDisclaimer,
+    billingName: row.billingName,
+    propertyAddress: row.propertyAddress,
+    billingSameAsProperty: row.billingSameAsProperty,
+    clientEmails: row.clientEmails,
+    clientPhones: row.clientPhones,
+    paidOn: day(row.paidOn),
+    viewedAt: row.viewedAt?.toISOString() ?? null,
+    salespersonName: row.salespersonName,
+    jobTitle: row.jobTitle,
+    discountCents: row.discountCents,
+    discountPercent: row.discountKind === 'PERCENT' ? row.discountRate : null,
+    depositCents: row.depositCents,
+    tipsCents: row.tipsCents,
+    taxRateName: row.taxRateName,
+    taxRatePercent: row.taxRatePercent,
+    taxInclusive: row.taxInclusive,
+    customFields: customFields(row.customFields),
+    notes: row.notes.map((note) => ({
+      id: note.id,
+      kind: NOTE_KINDS.includes(note.kind as InvoiceNoteView['kind']) ? (note.kind as InvoiceNoteView['kind']) : 'INVOICE',
+      message: note.message,
+      pinned: note.pinned,
+      writtenAt: note.writtenAt.toISOString(),
+    })),
+    // Jobber's own address for each, until the console keeps its own copy.
+    files: row.files.map((file) => ({
+      id: file.id,
+      fileName: file.fileName,
+      contentType: file.contentType,
+      sizeBytes: file.sizeBytes,
+      url: file.jobberUrl,
+      uploadedAt: file.uploadedAt.toISOString(),
+    })),
   };
 }
 
@@ -472,18 +583,7 @@ export class InvoicesService {
         orderBy: [{ paidOn: 'desc' }, { createdAt: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
-        select: {
-          ...paymentSelect(),
-          invoice: {
-            select: {
-              id: true,
-              number: true,
-              subject: true,
-              clientName: true,
-              propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
-            },
-          },
-        },
+        select: { ...paymentSelect(), invoice: { select: paidInvoiceSelect } },
       }),
       this.prisma.invoicePayment.count({ where }),
       received(0, 29),
@@ -503,6 +603,29 @@ export class InvoicesService {
         last30: bucket(last30._count._all, last30._sum.amountCents),
         previous30: bucket(previous30._count._all, previous30._sum.amountCents),
       },
+    };
+  }
+
+  /** One payment on its own page, with the invoice it paid and what that invoice still owes. */
+  async onePayment(user: AuthenticatedUser, id: string): Promise<PaymentDetail> {
+    const row = await this.prisma.invoicePayment.findFirst({
+      where: { id, organizationId: user.organizationId },
+      select: {
+        ...paymentSelect(),
+        jobberPaymentType: true,
+        invoice: { select: { ...paidInvoiceSelect, totalCents: true, balanceCents: true } },
+      },
+    });
+    if (!row) throw new ApplicationError(404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+    const { invoice, jobberPaymentType, ...rest } = row;
+    return {
+      ...payment(rest),
+      origin: rest.origin,
+      jobberPaymentType,
+      invoice: { id: invoice.id, number: invoice.number, subject: invoice.subject, clientName: invoice.clientName },
+      property: property(invoice.propertywareBuilding),
+      invoiceTotalCents: invoice.totalCents,
+      invoiceBalanceCents: invoice.balanceCents,
     };
   }
 
@@ -703,13 +826,14 @@ export class InvoicesService {
       ...summary(row, today),
       paymentTerms: paymentTermsLabel(row.paymentTermsDays),
       billingAddress: row.billingAddress,
-      lineItems: row.lines,
+      lineItems: row.lines.map(lineItem),
       subtotalCents: row.subtotalCents,
       taxCents: row.taxCents,
       payments: row.payments.map(payment),
       clientMessage: row.clientMessage,
       accountBalanceCents: account ? (account._sum.balanceCents ?? 0) : null,
       createdAt: row.createdAt.toISOString(),
+      details: extraDetails(row),
     };
   }
 

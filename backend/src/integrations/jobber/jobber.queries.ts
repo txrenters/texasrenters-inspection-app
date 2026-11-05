@@ -440,20 +440,24 @@ function visitsByIdsQuery(first: number) {
 }
 
 /**
- * An invoice, as the console's copy needs it (2026-11-05).
+ * An invoice, as the console's copy needs it: every detail Jobber keeps
+ * (2026-11-05: "make sure we get everything, every details"), ahead of the
+ * cutover, after which the console keeps them itself.
  *
  * Every field name here was read from Jobber's own schema by introspection on
- * the pinned version (2025-01-20), and a query using exactly this selection
- * validated against it -- Jobber refused it only for the missing Invoices
- * scope, which is how it says "hidden due to permissions". Nothing is selected
- * that `toInvoiceCopy` does not use.
+ * the pinned version (2025-01-20) and checked against real invoices; an
+ * unknown name fails the whole query. Nothing is selected that
+ * `toInvoiceCopy` does not use.
  *
- * `Invoice.paymentRecords` returns Jobber's PaymentRecord object, which has no
- * payment type: how a payment was made lives only on the top-level
- * `paymentRecords` interface. So a payment read here is stored as "Other"
- * until that is read too.
+ * `Invoice.paymentRecords` returns Jobber's PaymentRecord object, which says
+ * which payments the invoice has but not how each was paid. That lives on
+ * Jobber's payment list (`PAYMENTS_PAGE_QUERY`), whose ids differ, so the two
+ * are paired by invoice, day and amount.
+ *
+ * Notes and files are capped like lines and payments; an invoice with more is
+ * read again by itself.
  */
-function invoiceSelection(lines: number, payments: number) {
+function invoiceSelection(lines: number, payments: number, notes: number, files: number) {
   return `
         id
         invoiceNumber
@@ -461,16 +465,64 @@ function invoiceSelection(lines: number, payments: number) {
         invoiceStatus
         issuedDate
         dueDate
+        receivedDate
+        dateViewedInClientHub
         message
+        contractDisclaimer
         jobberWebUri
         updatedAt
+        billingIsSameAsPropertyAddress
+        taxCalculationMethod
         amounts {
           subtotal
+          discountAmount
           taxAmount
+          depositAmount
+          tipsTotal
           total
           invoiceBalance
         }
+        discount {
+          rate
+          type
+        }
+        taxRate {
+          name
+          tax
+        }
+        salesperson {
+          name {
+            full
+          }
+        }
+        customFields {
+          __typename
+          ... on CustomFieldText {
+            label
+            valueText
+          }
+          ... on CustomFieldNumeric {
+            label
+            valueNumeric
+            unit
+          }
+          ... on CustomFieldDropdown {
+            label
+            valueDropdown
+          }
+          ... on CustomFieldTrueFalse {
+            label
+            valueTrueFalse
+          }
+          ... on CustomFieldArea {
+            label
+          }
+          ... on CustomFieldLink {
+            label
+          }
+        }
         billingAddress {
+          name
           street1
           street2
           city
@@ -480,11 +532,20 @@ function invoiceSelection(lines: number, payments: number) {
         client {
           id
           name
+          emails {
+            address
+            primary
+          }
+          phones {
+            number
+            primary
+          }
         }
         jobs(first: 2) {
           nodes {
             id
             jobNumber
+            title
           }
         }
         visits(first: 5) {
@@ -512,6 +573,12 @@ function invoiceSelection(lines: number, payments: number) {
             quantity
             unitPrice
             totalPrice
+            taxable
+            date
+            category
+            linkedProductOrService {
+              name
+            }
           }
         }
         paymentRecords(first: ${payments}) {
@@ -522,12 +589,43 @@ function invoiceSelection(lines: number, payments: number) {
             entryDate
             adjustmentType
           }
+        }
+        notes(first: ${notes}) {
+          totalCount
+          nodes {
+            __typename
+            ... on InvoiceNote {
+              id
+              message
+              pinned
+              createdAt
+            }
+            ... on JobNote {
+              id
+              message
+              pinned
+              createdAt
+            }
+          }
+        }
+        noteAttachments(first: ${files}) {
+          totalCount
+          nodes {
+            id
+            fileName
+            contentType
+            fileSize
+            url
+            createdAt
+          }
         }`;
 }
 
-/** Lines and payments asked for on a page; an invoice with more is read again by itself. */
+/** Lines, payments, notes and files asked for on a page; an invoice with more is read again by itself. */
 export const INVOICE_PAGE_LINES = 10;
 export const INVOICE_PAGE_PAYMENTS = 10;
+export const INVOICE_PAGE_NOTES = 5;
+export const INVOICE_PAGE_FILES = 5;
 
 /**
  * A page of invoices, oldest first.
@@ -545,7 +643,7 @@ export const invoicesPageQuery = (mode: 'all' | 'changed') => `
       sort: [{ key: ${mode === 'all' ? 'CREATED_AT' : 'UPDATED_AT'}, direction: ASCENDING }]
       ${mode === 'changed' ? 'filter: { updatedAt: { after: $updatedAfter } }' : ''}
     ) {
-      nodes {${invoiceSelection(INVOICE_PAGE_LINES, INVOICE_PAGE_PAYMENTS)}
+      nodes {${invoiceSelection(INVOICE_PAGE_LINES, INVOICE_PAGE_PAYMENTS, INVOICE_PAGE_NOTES, INVOICE_PAGE_FILES)}
       }
       pageInfo {
         hasNextPage
@@ -556,23 +654,77 @@ export const invoicesPageQuery = (mode: 'all' | 'changed') => `
 `;
 
 /**
- * One invoice with all of its lines and payments: for a webhook, and for an
- * invoice a page cut short. Null when Jobber no longer has it.
+ * One invoice with all of its lines, payments, notes and files: for a webhook,
+ * and for an invoice a page cut short. Null when Jobber no longer has it.
  */
 export const INVOICE_BY_ID_QUERY = `
   query ConsoleInvoice($id: EncodedId!) {
-    invoice(id: $id) {${invoiceSelection(100, 100)}
+    invoice(id: $id) {${invoiceSelection(100, 100, 50, 50)}
     }
   }
 `;
 
-/** The invoice a payment belongs to, for a PAYMENT_* webhook about a payment the copy has not seen. */
-export const PAYMENT_RECORD_INVOICE_QUERY = `
-  query ConsoleInvoicePayment($id: EncodedId!) {
-    paymentRecord(id: $id) {
-      invoice {
+/**
+ * One payment as Jobber's payment list has it (2026-11-05): how it was paid,
+ * its reference and its details -- what the invoice's own view of a payment
+ * leaves out. Every name checked against the schema and real payments, which
+ * are all ACH bank payments naming their invoice.
+ */
+const PAYMENT_RECORD_SELECTION = `
         id
+        amount
+        entryDate
+        paymentType
+        details
+        invoice {
+          id
+        }
+        ... on CheckPaymentRecord {
+          checkNumber
+        }
+        ... on OtherPaymentRecord {
+          confirmationNumber
+        }
+        ... on BankTransferPaymentRecord {
+          confirmationNumber
+        }
+        ... on AchBankPaymentPaymentRecord {
+          confirmationNumber
+        }
+        ... on CreditCardPaymentRecord {
+          ccTransactionNumber
+        }`;
+
+/**
+ * Jobber's payment list, payments only, in the order they were recorded. Read
+ * once from the start, then from the kept cursor, which is where any payment
+ * recorded since appears.
+ */
+export const PAYMENTS_PAGE_QUERY = `
+  query ConsolePayments($first: Int!, $after: String) {
+    paymentRecords(
+      first: $first
+      after: $after
+      filter: { adjustmentType: PAYMENT }
+      sort: { key: CREATED_AT, direction: ASCENDING }
+    ) {
+      nodes {${PAYMENT_RECORD_SELECTION}
       }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
+/**
+ * One payment from Jobber's payment list, for a PAYMENT_* webhook: the invoice
+ * it is on, which is read again, and how it was paid, which is paired with it.
+ */
+export const PAYMENT_RECORD_QUERY = `
+  query ConsolePayment($id: EncodedId!) {
+    paymentRecord(id: $id) {${PAYMENT_RECORD_SELECTION}
     }
   }
 `;

@@ -6,12 +6,14 @@ import {
   formatMoney,
   formatMoneyShort,
   type InvoiceBucket,
+  type InvoiceFileView,
   type InvoiceLineItem,
+  type InvoiceNoteView,
   type InvoicePayment,
   type InvoiceStatus,
   type InvoiceSummary,
 } from '@texasrenters/shared';
-import { ArrowDownIcon, ArrowUpIcon, PlusIcon, ReceiptTextIcon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, BanknoteIcon, ChevronRightIcon, FileIcon, PinIcon, PlusIcon, ReceiptTextIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { AsideCard } from '@/components/record/record-kit';
@@ -20,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { usePermissions } from '@/lib/auth';
+import { BUSINESS_TIME_ZONE } from '@/lib/clock';
 import { useInvoices } from '@/lib/invoice-queries';
 import { cn } from '@/lib/utils';
 
@@ -27,6 +30,30 @@ import { cn } from '@/lib/utils';
 const DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 export const formatInvoiceDay = (day: string | null | undefined) =>
   day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? DAY.format(new Date(`${day}T12:00:00.000Z`)) : '—';
+
+/** "Oct 30, 2026, 3:05 PM": a moment, in Texas time as the whole console shows it. */
+const MOMENT = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZone: BUSINESS_TIME_ZONE,
+});
+export const formatInvoiceMoment = (value: string | null | undefined) => {
+  const at = value ? new Date(value) : null;
+  return at && !Number.isNaN(at.getTime()) ? MOMENT.format(at) : '—';
+};
+
+/** "2.4 MB", "640 KB". */
+export function formatFileSize(bytes: number) {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  if (bytes >= 1_000) return `${Math.round(bytes / 1_000)} KB`;
+  return `${bytes} B`;
+}
+
+/** "10%", "8.25%". */
+const percent = (value: number) => `${Number(value.toFixed(3))}%`;
 
 const STATUS_TONE: Record<InvoiceStatus, 'default' | 'destructive' | 'success' | 'warning' | 'info'> = {
   DRAFT: 'default',
@@ -43,6 +70,7 @@ export function InvoiceStatusBadge({ status }: { status: InvoiceStatus }) {
 
 /** The invoice's record icon and its tone, for the record header. */
 export const INVOICE_RECORD = { icon: ReceiptTextIcon, tone: 'text-primary', label: 'Invoice' };
+export const PAYMENT_RECORD = { icon: BanknoteIcon, tone: 'text-success', label: 'Payment' };
 
 /**
  * Jobber's strip above its invoice list: an Overview of what is owed and what
@@ -145,16 +173,52 @@ function Metric({
   );
 }
 
-/** Jobber's Product / Service table: each line, then the subtotal and the total. */
+/** What the invoice adds to or takes off its subtotal, as Jobber's totals show it. */
+export interface InvoiceAdjustments {
+  discountCents?: number;
+  /** The percent, when the discount was set as one. */
+  discountPercent?: number | null;
+  taxCents?: number;
+  taxRateName?: string | null;
+  taxRatePercent?: number | null;
+  taxInclusive?: boolean | null;
+  depositCents?: number;
+  tipsCents?: number;
+}
+
+/**
+ * Jobber's Product / Service table: each line, with the day it was done when
+ * it names one, then the subtotal, any discount and tax, the total, and a
+ * deposit or tips when there are any.
+ */
 export function LineItemsTable({
   lineItems,
   subtotalCents,
   totalCents,
+  adjustments = {},
 }: {
   lineItems: readonly InvoiceLineItem[];
   subtotalCents: number;
   totalCents: number;
+  adjustments?: InvoiceAdjustments;
 }) {
+  const { discountCents = 0, discountPercent, taxCents = 0, taxRateName, taxRatePercent, taxInclusive, depositCents = 0, tipsCents = 0 } =
+    adjustments;
+  const taxLabel = [
+    taxRateName || 'Tax',
+    taxRatePercent !== null && taxRatePercent !== undefined ? `(${percent(taxRatePercent)})` : null,
+    taxInclusive ? 'included' : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const footerRow = (label: string, value: string, strong = false) => (
+    <TableRow className="hover:bg-transparent" key={label}>
+      <TableCell className={cn('px-4 text-right', strong && 'text-heading text-base font-bold')} colSpan={3}>
+        {label}
+      </TableCell>
+      <TableCell className={cn('px-4 text-right tabular-nums', strong && 'text-heading text-base font-bold')}>{value}</TableCell>
+    </TableRow>
+  );
   return (
     <Table aria-label="Products and services">
       <TableHeader className="lg:static">
@@ -170,7 +234,14 @@ export function LineItemsTable({
           <TableRow className="hover:bg-transparent" key={`${index}:${line.name}`}>
             <TableCell className="px-4">
               <span className="text-heading font-semibold">{line.name}</span>
-              {line.description ? <span className="text-muted-foreground block text-xs">{line.description}</span> : null}
+              {line.description ? <span className="text-muted-foreground block text-xs whitespace-pre-line">{line.description}</span> : null}
+              {line.serviceOn || line.taxable === false ? (
+                <span className="text-muted-foreground block text-xs">
+                  {[line.serviceOn ? `Done ${formatInvoiceDay(line.serviceOn)}` : null, line.taxable === false ? 'Not taxed' : null]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              ) : null}
             </TableCell>
             <TableCell className="px-4 text-right tabular-nums">{line.quantity}</TableCell>
             <TableCell className="px-4 text-right tabular-nums">{formatMoney(line.unitPriceCents)}</TableCell>
@@ -179,40 +250,109 @@ export function LineItemsTable({
         ))}
       </TableBody>
       <TableFooter className="bg-transparent">
-        <TableRow className="hover:bg-transparent">
-          <TableCell className="px-4 text-right" colSpan={3}>
-            Subtotal
-          </TableCell>
-          <TableCell className="px-4 text-right tabular-nums">{formatMoney(subtotalCents)}</TableCell>
-        </TableRow>
-        <TableRow className="hover:bg-transparent">
-          <TableCell className="text-heading px-4 text-right text-base font-bold" colSpan={3}>
-            Total
-          </TableCell>
-          <TableCell className="text-heading px-4 text-right text-base font-bold tabular-nums">{formatMoney(totalCents)}</TableCell>
-        </TableRow>
+        {footerRow('Subtotal', formatMoney(subtotalCents))}
+        {discountCents
+          ? footerRow(
+              discountPercent !== null && discountPercent !== undefined ? `Discount (${percent(discountPercent)})` : 'Discount',
+              `-${formatMoney(discountCents)}`,
+            )
+          : null}
+        {taxCents || taxRateName ? footerRow(taxLabel, formatMoney(taxCents)) : null}
+        {footerRow('Total', formatMoney(totalCents), true)}
+        {depositCents ? footerRow('Deposit', formatMoney(depositCents)) : null}
+        {tipsCents ? footerRow('Tips', formatMoney(tipsCents)) : null}
       </TableFooter>
     </Table>
   );
 }
 
-/** The payments recorded against an invoice, each taking its amount off the balance. */
+/** The payments recorded against an invoice, each taking its amount off the balance, each opening its own page. */
 export function InvoicePayments({ payments }: { payments: readonly InvoicePayment[] }) {
   if (!payments.length) return <p className="text-muted-foreground text-sm">No payment recorded yet.</p>;
   return (
     <ul aria-label="Payments" className="divide-y">
       {payments.map((payment) => (
-        <li className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5 text-sm" key={payment.id}>
-          <span className="text-heading font-semibold">{formatInvoiceDay(payment.paidOn)}</span>
-          <span className="text-muted-foreground">
-            {PAYMENT_METHOD_LABEL[payment.method]}
-            {payment.reference ? ` · ${payment.reference}` : ''}
-            {payment.recordedBy ? ` · recorded by ${payment.recordedBy.displayName}` : ' · recorded in Jobber'}
-          </span>
-          <span className="text-heading ml-auto font-semibold tabular-nums">-{formatMoney(payment.amountCents)}</span>
-          {payment.note ? <span className="text-muted-foreground basis-full text-xs">{payment.note}</span> : null}
+        <li key={payment.id}>
+          <Link
+            aria-label={`Payment of ${formatMoney(payment.amountCents)} on ${formatInvoiceDay(payment.paidOn)}`}
+            className="hover:bg-muted/50 -mx-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-md px-2 py-2.5 text-sm"
+            href={`/payments/${payment.id}`}
+          >
+            <span className="text-heading font-semibold">{formatInvoiceDay(payment.paidOn)}</span>
+            <span className="text-muted-foreground">
+              {PAYMENT_METHOD_LABEL[payment.method]}
+              {payment.reference ? ` · ${payment.reference}` : ''}
+              {payment.recordedBy ? ` · recorded by ${payment.recordedBy.displayName}` : ' · recorded in Jobber'}
+            </span>
+            <span className="text-heading ml-auto inline-flex items-center gap-1 font-semibold tabular-nums">
+              -{formatMoney(payment.amountCents)}
+              <ChevronRightIcon aria-hidden className="text-muted-foreground size-4" />
+            </span>
+            {payment.note ? <span className="text-muted-foreground basis-full text-xs">{payment.note}</span> : null}
+          </Link>
         </li>
       ))}
+    </ul>
+  );
+}
+
+const NOTE_PLACE: Record<InvoiceNoteView['kind'], string | null> = {
+  INVOICE: null,
+  JOB: 'On the job',
+  CLIENT: 'On the client',
+  QUOTE: 'On the quote',
+  REQUEST: 'On the request',
+};
+
+/** The invoice's internal notes, and the job's Jobber shows beside them: pinned first. */
+export function InvoiceNotes({ notes }: { notes: readonly InvoiceNoteView[] }) {
+  if (!notes.length) return <p className="text-muted-foreground text-sm">No notes.</p>;
+  return (
+    <ul aria-label="Notes" className="divide-y">
+      {notes.map((note) => (
+        <li className="py-2.5 text-sm" key={note.id}>
+          <p className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+            {note.pinned ? (
+              <span className="text-heading inline-flex items-center gap-1 font-semibold">
+                <PinIcon aria-hidden className="size-3" />
+                Pinned
+              </span>
+            ) : null}
+            <span>{formatInvoiceMoment(note.writtenAt)}</span>
+            {NOTE_PLACE[note.kind] ? <span>· {NOTE_PLACE[note.kind]}</span> : null}
+          </p>
+          <p className="text-foreground mt-1 whitespace-pre-line">{note.message}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The invoice's images and attachments: each by name, type and size, opened where it is kept. */
+export function InvoiceFiles({ files }: { files: readonly InvoiceFileView[] }) {
+  if (!files.length) return <p className="text-muted-foreground text-sm">No files.</p>;
+  return (
+    <ul aria-label="Files" className="divide-y">
+      {files.map((file) => {
+        const label = (
+          <>
+            <FileIcon aria-hidden className="text-muted-foreground size-4 shrink-0" />
+            <span className="min-w-0 truncate">{file.fileName}</span>
+            <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">{formatFileSize(file.sizeBytes)}</span>
+          </>
+        );
+        return (
+          <li className="py-2 text-sm" key={file.id}>
+            {file.url ? (
+              <a className="flex items-center gap-2 hover:underline" href={file.url} rel="noreferrer" target="_blank">
+                {label}
+              </a>
+            ) : (
+              <span className="flex items-center gap-2">{label}</span>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
