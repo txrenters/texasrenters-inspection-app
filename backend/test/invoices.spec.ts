@@ -119,6 +119,7 @@ function database() {
       aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: {}, _max: { syncedAt: null } }),
       create: jest.fn().mockResolvedValue({ id: INVOICE }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      update: jest.fn().mockResolvedValue({}),
     },
     invoiceLine: { groupBy: jest.fn().mockResolvedValue([]) },
     invoicePayment: {
@@ -127,6 +128,8 @@ function database() {
       count: jest.fn().mockResolvedValue(0),
       aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: { amountCents: null } }),
       create: jest.fn().mockResolvedValue({ id: 'payment-1' }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     inspection: { findFirst: jest.fn().mockResolvedValue(finishedVisit()) },
     jobberConnection: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -455,7 +458,10 @@ describe('a payment on its own page', () => {
         propertywareBuilding: building,
         totalCents: 3999,
         balanceCents: 0,
+        status: 'PAID',
+        dueOn: date('2020-03-01'),
       },
+      updatedAt: new Date('2020-02-20T16:00:00.000Z'),
     });
 
     const shown = await serviceOver(db).onePayment(office, 'payment-1');
@@ -475,12 +481,197 @@ describe('a payment on its own page', () => {
       property: { id: BUILDING, address: '100 Example Way', city: 'Sampletown' },
       invoiceTotalCents: 3999,
       invoiceBalanceCents: 0,
+      invoiceStatus: 'PAID',
+      updatedAt: '2020-02-20T16:00:00.000Z',
+      // Off until the cutover; the receipt names the company as reports do.
+      writesEnabled: false,
+      brand: expect.objectContaining({ name: expect.any(String) }),
     });
     expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG });
   });
 
   it("is not found in another office's organization", async () => {
     await expect(serviceOver(database()).onePayment(office, 'payment-1')).rejects.toMatchObject({ code: 'PAYMENT_NOT_FOUND' });
+  });
+});
+
+describe('correcting and removing a payment', () => {
+  const READ_AT = '2026-01-10T16:00:00.000Z';
+  /** A $40.00 payment on an invoice that still owes $20.00 after it. */
+  const stored = (over: Record<string, unknown> = {}) => ({
+    invoiceId: INVOICE,
+    amountCents: 4000,
+    paidOn: date('2026-01-10'),
+    method: 'CHECK',
+    reference: '1042',
+    note: null,
+    origin: 'CONSOLE',
+    recordedById: office.id,
+    updatedAt: new Date(READ_AT),
+    invoice: { status: 'AWAITING_PAYMENT', balanceCents: 2000 },
+    ...over,
+  });
+  const change = { amountCents: 5000, paidOn: '2026-01-11', method: 'BANK_TRANSFER' as const, reference: ' ACH-9 ', note: '  ', expectedUpdatedAt: READ_AT };
+
+  /** The first read finds the payment to change; the second is the page answered with. */
+  const databaseWith = (row: Record<string, unknown> | null) => {
+    const db = database();
+    db.invoicePayment.findFirst.mockResolvedValueOnce(row);
+    return db;
+  };
+  const answered = (service: InvoicesService) =>
+    jest.spyOn(service, 'onePayment').mockResolvedValue({ id: 'payment-1' } as never);
+
+  it('is refused while Jobber holds the payments, and writes nothing', async () => {
+    delete process.env.JOBBER_INVOICE_WRITES_ENABLED;
+    const db = databaseWith(stored());
+
+    await expect(serviceOver(db).changePayment(office, 'payment-1', change)).rejects.toMatchObject({ code: 'INVOICE_WRITES_OFF' });
+    await expect(serviceOver(db).removePayment(office, 'payment-1', READ_AT)).rejects.toMatchObject({ code: 'INVOICE_WRITES_OFF' });
+
+    expect(db.invoice.updateMany).not.toHaveBeenCalled();
+    expect(db.invoicePayment.updateMany).not.toHaveBeenCalled();
+    expect(db.invoicePayment.deleteMany).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  describe('once the console owns payments', () => {
+    beforeEach(() => {
+      process.env.JOBBER_INVOICE_WRITES_ENABLED = 'true';
+    });
+    afterEach(() => {
+      delete process.env.JOBBER_INVOICE_WRITES_ENABLED;
+    });
+
+    it('takes the old amount back and the new one off, only from what was read, and keeps both on the record', async () => {
+      const db = databaseWith(stored());
+      const service = serviceOver(db);
+      answered(service);
+
+      await service.changePayment(office, 'payment-1', change);
+
+      // $20.00 owed + $40.00 taken back - $50.00 = $10.00.
+      expect(db.invoice.updateMany).toHaveBeenCalledWith({
+        where: { id: INVOICE, organizationId: ORG, status: 'AWAITING_PAYMENT', balanceCents: 2000 },
+        data: { balanceCents: 1000, status: 'AWAITING_PAYMENT', paidOn: null },
+      });
+      expect(db.invoicePayment.updateMany).toHaveBeenCalledWith({
+        where: { id: 'payment-1', organizationId: ORG, updatedAt: new Date(READ_AT) },
+        data: { amountCents: 5000, paidOn: date('2026-01-11'), method: 'BANK_TRANSFER', reference: 'ACH-9', note: null },
+      });
+      expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        action: 'INVOICE_PAYMENT_CHANGED',
+        entityType: 'Invoice',
+        entityId: INVOICE,
+        actorUserId: office.id,
+        metadata: {
+          paymentId: 'payment-1',
+          before: { amountCents: 4000, paidOn: '2026-01-10', method: 'CHECK', reference: '1042', origin: 'CONSOLE' },
+          after: { amountCents: 5000, paidOn: '2026-01-11', method: 'BANK_TRANSFER', reference: 'ACH-9', note: null },
+          balanceCents: 1000,
+        },
+      });
+    });
+
+    it('marks the invoice paid, on the day of its latest payment, when the correction pays it all', async () => {
+      const db = databaseWith(stored());
+      db.invoicePayment.aggregate.mockResolvedValue({ _max: { paidOn: date('2026-01-11') } });
+      const service = serviceOver(db);
+      answered(service);
+
+      await service.changePayment(office, 'payment-1', { ...change, amountCents: 6000 });
+
+      expect(db.invoice.updateMany.mock.calls[0][0].data).toEqual({ balanceCents: 0, status: 'PAID' });
+      expect(db.invoice.update).toHaveBeenCalledWith({ where: { id: INVOICE }, data: { paidOn: date('2026-01-11') } });
+    });
+
+    it('owes again on a paid invoice when the correction is for less', async () => {
+      const db = databaseWith(stored({ invoice: { status: 'PAID', balanceCents: 0 } }));
+      const service = serviceOver(db);
+      answered(service);
+
+      await service.changePayment(office, 'payment-1', { ...change, amountCents: 3000 });
+
+      expect(db.invoice.updateMany).toHaveBeenCalledWith({
+        where: { id: INVOICE, organizationId: ORG, status: 'PAID', balanceCents: 0 },
+        data: { balanceCents: 1000, status: 'AWAITING_PAYMENT', paidOn: null },
+      });
+    });
+
+    it('refuses more than the invoice owed with this payment taken back, and a day to come', async () => {
+      const service = serviceOver(databaseWith(stored()));
+      await expect(service.changePayment(office, 'payment-1', { ...change, amountCents: 6001 })).rejects.toMatchObject({
+        code: 'PAYMENT_INVALID',
+        message: 'That is more than the $60.00 this invoice still owes.',
+      });
+      const ahead = serviceOver(databaseWith(stored()));
+      await expect(ahead.changePayment(office, 'payment-1', { ...change, paidOn: AHEAD })).rejects.toMatchObject({ code: 'PAYMENT_INVALID' });
+    });
+
+    it('refuses a payment changed since it was read, rather than overwrite it', async () => {
+      const db = databaseWith(stored({ updatedAt: new Date('2026-01-10T16:05:00.000Z') }));
+      await expect(serviceOver(db).changePayment(office, 'payment-1', change)).rejects.toMatchObject({ code: 'PAYMENT_CHANGED' });
+      expect(db.invoice.updateMany).not.toHaveBeenCalled();
+
+      // And one changed between the read and the write.
+      const raced = databaseWith(stored());
+      raced.invoicePayment.updateMany.mockResolvedValue({ count: 0 });
+      await expect(serviceOver(raced).changePayment(office, 'payment-1', change)).rejects.toMatchObject({ code: 'PAYMENT_CHANGED' });
+      expect(raced.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the invoice changed under it, so two people cannot both take money off it', async () => {
+      const db = databaseWith(stored());
+      db.invoice.updateMany.mockResolvedValue({ count: 0 });
+      await expect(serviceOver(db).changePayment(office, 'payment-1', change)).rejects.toMatchObject({ code: 'INVOICE_CHANGED' });
+      expect(db.invoicePayment.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('leaves refunds and the payments of a closed invoice alone', async () => {
+      const refund = serviceOver(databaseWith(stored({ amountCents: -1000 })));
+      await expect(refund.changePayment(office, 'payment-1', change)).rejects.toMatchObject({ code: 'PAYMENT_LOCKED' });
+      const voided = serviceOver(databaseWith(stored({ invoice: { status: 'VOIDED', balanceCents: 0 } })));
+      await expect(voided.removePayment(office, 'payment-1', READ_AT)).rejects.toMatchObject({
+        code: 'PAYMENT_LOCKED',
+        message: 'The invoice is voided, so its payments are not changed.',
+      });
+    });
+
+    it('is not found in another office', async () => {
+      await expect(serviceOver(databaseWith(null)).changePayment(office, 'payment-1', change)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_FOUND',
+      });
+    });
+
+    it('removes a payment: the invoice owes it again, and the record keeps what it was', async () => {
+      const db = databaseWith(stored({ invoice: { status: 'PAID', balanceCents: 0 } }));
+
+      await expect(serviceOver(db).removePayment(office, 'payment-1', READ_AT)).resolves.toEqual({ invoiceId: INVOICE });
+
+      expect(db.invoice.updateMany).toHaveBeenCalledWith({
+        where: { id: INVOICE, organizationId: ORG, status: 'PAID', balanceCents: 0 },
+        data: { balanceCents: 4000, status: 'AWAITING_PAYMENT', paidOn: null },
+      });
+      expect(db.invoicePayment.deleteMany).toHaveBeenCalledWith({
+        where: { id: 'payment-1', organizationId: ORG, updatedAt: new Date(READ_AT) },
+      });
+      expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        action: 'INVOICE_PAYMENT_REMOVED',
+        entityId: INVOICE,
+        metadata: {
+          paymentId: 'payment-1',
+          removed: { amountCents: 4000, paidOn: '2026-01-10', method: 'CHECK', reference: '1042', recordedById: office.id },
+          balanceCents: 4000,
+        },
+      });
+    });
+
+    it('removes nothing when the payment changed since it was read', async () => {
+      const db = databaseWith(stored());
+      db.invoicePayment.deleteMany.mockResolvedValue({ count: 0 });
+      await expect(serviceOver(db).removePayment(office, 'payment-1', READ_AT)).rejects.toMatchObject({ code: 'PAYMENT_CHANGED' });
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -633,7 +824,7 @@ describe('making an invoice and recording a payment', () => {
       });
     });
 
-    it('marks an invoice paid in full as paid', async () => {
+    it('marks an invoice paid in full as paid, on the day of the payment that paid it', async () => {
       const db = database();
       db.invoice.findFirst
         .mockResolvedValueOnce({ status: 'AWAITING_PAYMENT', dueOn: date(AHEAD), balanceCents: 1000 })
@@ -641,7 +832,7 @@ describe('making an invoice and recording a payment', () => {
 
       await serviceOver(db).recordPayment(office, INVOICE, pay);
 
-      expect(db.invoice.updateMany.mock.calls[0][0].data).toEqual({ balanceCents: 0, status: 'PAID' });
+      expect(db.invoice.updateMany.mock.calls[0][0].data).toEqual({ balanceCents: 0, status: 'PAID', paidOn: date('2026-01-10') });
     });
 
     it('refuses more than is owed, a day to come, and an invoice not waiting for payment', async () => {
@@ -702,6 +893,9 @@ describe('who may do what', () => {
     expect(permissionsOf(InvoicesController, 'recordPayment')).toEqual(['invoices:read', 'payments:record']);
     expect(permissionsOf(PaymentsController, 'list')).toEqual(['invoices:read']);
     expect(permissionsOf(PaymentsController, 'one')).toEqual(['invoices:read']);
+    // Correcting or removing a payment is recording it again: the same grant.
+    expect(permissionsOf(PaymentsController, 'change')).toEqual(['invoices:read', 'payments:record']);
+    expect(permissionsOf(PaymentsController, 'remove')).toEqual(['invoices:read', 'payments:record']);
   });
 
   it('never lets an API key make an invoice or record a payment', () => {

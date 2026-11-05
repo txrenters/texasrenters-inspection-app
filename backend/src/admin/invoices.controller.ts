@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   INVOICE_FILTERS,
@@ -15,6 +15,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsISO8601,
   IsNumber,
   IsOptional,
   IsString,
@@ -83,6 +84,20 @@ export class RecordPaymentDto {
   @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
 }
 
+/** A payment corrected. `expectedUpdatedAt` is the payment as it was read. */
+export class ChangePaymentDto {
+  @IsInt() @Min(1) @Max(MAX_INVOICE_CENTS) amountCents!: number;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) paidOn!: string;
+  @IsIn(PAYMENT_METHODS) method!: PaymentMethod;
+  @IsOptional() @IsString() @MaxLength(120) reference?: string | null;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string | null;
+  @IsISO8601({ strict: true }) expectedUpdatedAt!: string;
+}
+
+export class RemovePaymentQueryDto {
+  @IsISO8601({ strict: true }) expectedUpdatedAt!: string;
+}
+
 /**
  * The console's invoices (2026-11-05): read with `invoices:read`, made with
  * `invoices:manage`, paid with `payments:record`. The guard requires every
@@ -149,5 +164,26 @@ export class PaymentsController {
   @RequirePermissions('invoices:read')
   one(@Req() request: AuthenticatedRequest, @Param('paymentId', new ParseUUIDPipe()) id: string) {
     return this.service.onePayment(request.user, id);
+  }
+
+  /** Correcting a payment is recording it again: the same grant, and reading to answer with it. */
+  @Patch(':paymentId')
+  @RequirePermissions('invoices:read', 'payments:record')
+  change(
+    @Req() request: AuthenticatedRequest,
+    @Param('paymentId', new ParseUUIDPipe()) id: string,
+    @Body() body: ChangePaymentDto,
+  ) {
+    return this.service.changePayment(request.user, id, body);
+  }
+
+  @Delete(':paymentId')
+  @RequirePermissions('invoices:read', 'payments:record')
+  remove(
+    @Req() request: AuthenticatedRequest,
+    @Param('paymentId', new ParseUUIDPipe()) id: string,
+    @Query() query: RemovePaymentQueryDto,
+  ) {
+    return this.service.removePayment(request.user, id, query.expectedUpdatedAt);
   }
 }

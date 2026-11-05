@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ChangePaymentInput,
   CreateInvoiceInput,
   InvoiceDetail,
   InvoiceDraft,
@@ -142,7 +143,7 @@ export function useInvoiceActions() {
         refresh();
       },
     }),
-    /** Record a payment against an invoice, which marks it paid in Jobber once it is all paid. */
+    /** Record a payment against an invoice, which marks it paid once it is all paid. */
     recordPayment: useMutation({
       mutationFn: ({ invoiceId, input }: { invoiceId: string; input: RecordPaymentInput }) =>
         api<InvoiceDetail>(`${INVOICES}/${encodeURIComponent(invoiceId)}/payments`, {
@@ -153,6 +154,30 @@ export function useInvoiceActions() {
         client.setQueryData(invoiceKeys.detail(invoice.id), invoice);
         refresh();
       },
+    }),
+    /** Correct a payment; its invoice's balance is worked out again on the server. */
+    changePayment: useMutation({
+      mutationFn: ({ paymentId, input }: { paymentId: string; input: ChangePaymentInput }) =>
+        api<PaymentDetail>(`${PAYMENTS}/${encodeURIComponent(paymentId)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+      onSuccess: (payment) => {
+        client.setQueryData(invoiceKeys.payment(payment.id), payment);
+        refresh();
+      },
+    }),
+    /** Take a payment off its invoice, which then owes it again. */
+    removePayment: useMutation({
+      mutationFn: ({ paymentId, expectedUpdatedAt }: { paymentId: string; expectedUpdatedAt: string }) =>
+        api<{ invoiceId: string }>(
+          `${PAYMENTS}/${encodeURIComponent(paymentId)}${queryString({ expectedUpdatedAt })}`,
+          { method: 'DELETE' },
+        ),
+      // Everything read again but the payment itself, which is gone: its page is
+      // left as the caller moves on, rather than asked for and answered "not found".
+      onSuccess: (_removed, { paymentId }) =>
+        void client.invalidateQueries({
+          queryKey: invoiceKeys.all,
+          predicate: (query) => query.queryKey.join('/') !== invoiceKeys.payment(paymentId).join('/'),
+        }),
     }),
   };
 }

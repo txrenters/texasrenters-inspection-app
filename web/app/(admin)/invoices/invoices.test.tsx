@@ -38,9 +38,14 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: (defaults: object) => [defaults, vi.fn(), vi.fn()] }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// The PDF itself is rendered in its own test (lib/receipt-pdf); here, only that the page asks for it.
+const receipts = vi.hoisted(() => ({ downloadReceipt: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@/lib/receipt-pdf/download-receipt', () => receipts);
 
 const create = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };
+const changePayment = { mutate: vi.fn(), isPending: false };
+const removePayment = { mutate: vi.fn(), isPending: false };
 
 const NOW = new Date('2026-11-05T18:00:00.000Z');
 const TODAY = '2026-11-05';
@@ -111,7 +116,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(NOW);
   permissions.granted = new Set(['invoices:read', 'invoices:manage', 'payments:record']);
-  hooks.useInvoiceActions.mockReturnValue({ create, recordPayment });
+  hooks.useInvoiceActions.mockReturnValue({ create, recordPayment, changePayment, removePayment });
   hooks.useInvoices.mockReturnValue(ready(LIST));
   hooks.useInvoice.mockReturnValue(ready(DETAIL));
   hooks.useInvoiceDraft.mockReturnValue(ready(DRAFT));
@@ -355,6 +360,10 @@ describe('a payment', () => {
     property: { id: 'b1', address: '1902 Mockup Dr', city: 'Houston' },
     invoiceTotalCents: 3999,
     invoiceBalanceCents: 0,
+    invoiceStatus: 'PAID',
+    updatedAt: '2026-10-20T16:00:00.000Z',
+    writesEnabled: false,
+    brand: { name: 'Example Company', addressLine1: null, addressLine2: null, phone: null, email: null },
   };
 
   it('shows how much, when and how it was paid, and the invoice it went to', () => {
@@ -386,6 +395,93 @@ describe('a payment', () => {
     expect(facts).toHaveTextContent('Oct 20, 2026, 11:00 AM');
     expect(facts).not.toHaveTextContent('In Jobber:');
     expect(screen.queryByText(/Paid in full/)).not.toBeInTheDocument();
+  });
+
+  it('downloads its receipt, for anybody who may see it', async () => {
+    permissions.granted = new Set(['invoices:read']);
+    hooks.usePayment.mockReturnValue(ready(PAYMENT));
+    render(<PaymentPage />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Download receipt' }));
+    });
+    expect(receipts.downloadReceipt).toHaveBeenCalledWith(PAYMENT);
+  });
+
+  it('is changed in Jobber until the console takes over, and says so to whoever records payments', () => {
+    hooks.usePayment.mockReturnValue(ready(PAYMENT));
+    const { unmount } = render(<PaymentPage />);
+    expect(screen.queryByRole('button', { name: 'Change' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent('Payments are changed in Jobber until the console takes over invoicing.');
+    unmount();
+
+    // Nothing to say to somebody who could not change it anyway.
+    permissions.granted = new Set(['invoices:read']);
+    hooks.usePayment.mockReturnValue(ready({ ...PAYMENT, writesEnabled: true }));
+    render(<PaymentPage />);
+    expect(screen.queryByRole('button', { name: 'Change' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+
+  it('corrects a payment in cents, sending the payment as it was read', () => {
+    // $39.99 paid, $10.00 still owed: up to $49.99 with this payment taken back.
+    hooks.usePayment.mockReturnValue(ready({ ...PAYMENT, writesEnabled: true, invoiceStatus: 'AWAITING_PAYMENT', invoiceBalanceCents: 1000 }));
+    render(<PaymentPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Up to $49.99');
+    expect(within(dialog).getByLabelText('Amount')).toHaveValue('39.99');
+    expect(within(dialog).getByLabelText('Reference (optional)')).toHaveValue('ACH-77');
+
+    fireEvent.change(within(dialog).getByLabelText('Amount'), { target: { value: '50.00' } });
+    expect(dialog).toHaveTextContent('That is more than the $49.99 this invoice still owes.');
+    expect(within(dialog).getByRole('button', { name: 'Save the change' })).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByLabelText('Amount'), { target: { value: '45' } });
+    fireEvent.change(within(dialog).getByLabelText('Reference (optional)'), { target: { value: '  ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the change' }));
+
+    expect(changePayment.mutate).toHaveBeenCalledWith(
+      {
+        paymentId: 'pay-1',
+        input: {
+          amountCents: 4500,
+          paidOn: '2026-10-20',
+          method: 'BANK_TRANSFER',
+          reference: null,
+          note: 'From the owner ledger',
+          expectedUpdatedAt: '2026-10-20T16:00:00.000Z',
+        },
+      },
+      expect.anything(),
+    );
+  });
+
+  it('removes a payment only once asked, then goes back to its invoice', () => {
+    hooks.usePayment.mockReturnValue(ready({ ...PAYMENT, writesEnabled: true }));
+    removePayment.mutate.mockImplementation((_input, { onSuccess }) => onSuccess());
+    render(<PaymentPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('$39.99 comes off invoice #8439, which then owes it again.');
+    expect(removePayment.mutate).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Remove payment' }));
+
+    expect(removePayment.mutate).toHaveBeenCalledWith(
+      { paymentId: 'pay-1', expectedUpdatedAt: '2026-10-20T16:00:00.000Z' },
+      expect.anything(),
+    );
+    expect(router.push).toHaveBeenCalledWith('/invoices/inv-1');
+  });
+
+  it('says why a refund, or a payment on a closed invoice, is not changed', () => {
+    hooks.usePayment.mockReturnValue(ready({ ...PAYMENT, writesEnabled: true, invoiceStatus: 'VOIDED' }));
+    render(<PaymentPage />);
+    expect(screen.queryByRole('button', { name: 'Change' })).not.toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent('The invoice is voided, so its payments are not changed.');
   });
 });
 

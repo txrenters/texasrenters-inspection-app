@@ -9,6 +9,7 @@ import {
   invoiceTotals,
   isFinishedStatus,
   lineTotalCents,
+  paymentLockedReason,
   paymentProblem,
   paymentTermsLabel,
   type CreateInvoiceInput,
@@ -24,10 +25,12 @@ import {
   type InvoiceList,
   type InvoiceNoteView,
   type InvoicePayment as InvoicePaymentView,
+  type ChangePaymentInput,
   type InvoiceSummary,
   type PaymentDetail,
   type PaymentList,
   type PaymentMethod,
+  type ReceiptBrand,
   type RecordPaymentInput,
   type ReportableVisitService,
   type VisitServicesReport,
@@ -217,6 +220,38 @@ function payment(row: PaymentRow): InvoicePaymentView {
     recordedBy: row.recordedBy,
     recordedAt: row.createdAt.toISOString(),
     origin: row.origin,
+  };
+}
+
+/** A payment as the record keeps it, before a change or once removed. */
+function paymentRecord(row: {
+  amountCents: number;
+  paidOn: Date;
+  method: PaymentMethod;
+  reference: string | null;
+  note: string | null;
+  origin: InvoiceOrigin;
+  recordedById: string | null;
+}) {
+  return {
+    amountCents: row.amountCents,
+    paidOn: day(row.paidOn),
+    method: row.method,
+    reference: row.reference,
+    note: row.note,
+    origin: row.origin,
+    recordedById: row.recordedById,
+  };
+}
+
+/** Who a receipt is from: the same settings that name the company on an inspection report. */
+export function receiptBrand(env: NodeJS.ProcessEnv = process.env): ReceiptBrand {
+  return {
+    name: env.REPORT_BRAND_NAME ?? 'TexasRenters.com',
+    addressLine1: env.REPORT_BRAND_ADDRESS_LINE1 ?? null,
+    addressLine2: env.REPORT_BRAND_ADDRESS_LINE2 ?? null,
+    phone: env.REPORT_BRAND_PHONE ?? null,
+    email: env.REPORT_BRAND_EMAIL ?? null,
   };
 }
 
@@ -613,11 +648,12 @@ export class InvoicesService {
       select: {
         ...paymentSelect(),
         jobberPaymentType: true,
-        invoice: { select: { ...paidInvoiceSelect, totalCents: true, balanceCents: true } },
+        updatedAt: true,
+        invoice: { select: { ...paidInvoiceSelect, totalCents: true, balanceCents: true, status: true, dueOn: true } },
       },
     });
-    if (!row) throw new ApplicationError(404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
-    const { invoice, jobberPaymentType, ...rest } = row;
+    if (!row) throw this.paymentNotFound();
+    const { invoice, jobberPaymentType, updatedAt, ...rest } = row;
     return {
       ...payment(rest),
       origin: rest.origin,
@@ -626,7 +662,89 @@ export class InvoicesService {
       property: property(invoice.propertywareBuilding),
       invoiceTotalCents: invoice.totalCents,
       invoiceBalanceCents: invoice.balanceCents,
+      invoiceStatus: invoiceStatusOn(invoice.status, day(invoice.dueOn), businessDate()),
+      updatedAt: updatedAt.toISOString(),
+      writesEnabled: getJobberConfig().invoiceWritesEnabled,
+      brand: receiptBrand(),
     };
+  }
+
+  /**
+   * A payment corrected (2026-11-06): its amount, day, method, reference and
+   * note. The invoice's balance is worked out again in the same transaction --
+   * never more than it owed with this payment taken back, never a day to come
+   * -- and only if neither the payment nor the invoice changed since they were
+   * read, so two people correcting at once cannot both win. Paid in full, it is
+   * paid; owing again, it is awaiting payment. Written to the record with the
+   * payment as it was and as it is.
+   */
+  async changePayment(user: AuthenticatedUser, id: string, input: ChangePaymentInput): Promise<PaymentDetail> {
+    this.requireWrites();
+    const today = businessDate();
+    const reference = input.reference?.trim() || null;
+    const note = input.note?.trim() || null;
+    await this.prisma.$transaction(async (tx) => {
+      const found = await this.paymentToChange(tx, user, id, input.expectedUpdatedAt);
+      const owed = found.invoice.balanceCents + found.amountCents;
+      const problem = paymentProblem(input, owed, today);
+      if (problem) throw new ApplicationError(422, 'PAYMENT_INVALID', problem);
+
+      const balanceCents = owed - input.amountCents;
+      await this.settleInvoice(tx, user, found, balanceCents);
+      const { count } = await tx.invoicePayment.updateMany({
+        where: { id, organizationId: user.organizationId, updatedAt: found.updatedAt },
+        data: { amountCents: input.amountCents, paidOn: dateOf(input.paidOn), method: input.method, reference, note },
+      });
+      if (!count) throw this.paymentChanged();
+      if (balanceCents === 0) await this.stampPaidInFull(tx, found.invoiceId);
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'INVOICE_PAYMENT_CHANGED',
+          entityType: 'Invoice',
+          entityId: found.invoiceId,
+          metadata: {
+            paymentId: id,
+            before: paymentRecord(found),
+            after: { amountCents: input.amountCents, paidOn: input.paidOn, method: input.method, reference, note },
+            balanceCents,
+          },
+        },
+      });
+    });
+    return this.onePayment(user, id);
+  }
+
+  /**
+   * A payment taken off its invoice (2026-11-06): the invoice owes its amount
+   * again, in the same transaction and only if neither changed since they were
+   * read. The payment is gone from the invoice; what it was -- amount, day,
+   * method, reference, note, who recorded it -- stays on the record.
+   */
+  async removePayment(user: AuthenticatedUser, id: string, expectedUpdatedAt: string): Promise<{ invoiceId: string }> {
+    this.requireWrites();
+    const found = await this.prisma.$transaction(async (tx) => {
+      const payment = await this.paymentToChange(tx, user, id, expectedUpdatedAt);
+      const balanceCents = payment.invoice.balanceCents + payment.amountCents;
+      await this.settleInvoice(tx, user, payment, balanceCents);
+      const { count } = await tx.invoicePayment.deleteMany({
+        where: { id, organizationId: user.organizationId, updatedAt: payment.updatedAt },
+      });
+      if (!count) throw this.paymentChanged();
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'INVOICE_PAYMENT_REMOVED',
+          entityType: 'Invoice',
+          entityId: payment.invoiceId,
+          metadata: { paymentId: id, removed: paymentRecord(payment), balanceCents },
+        },
+      });
+      return payment;
+    });
+    return { invoiceId: found.invoiceId };
   }
 
   /**
@@ -757,7 +875,8 @@ export class InvoicesService {
             status: InvoiceStatus.AWAITING_PAYMENT,
             balanceCents: invoice.balanceCents,
           },
-          data: { balanceCents, ...(balanceCents === 0 ? { status: InvoiceStatus.PAID } : {}) },
+          // Paid in full on the day of the payment that paid it, as Jobber keeps it.
+          data: { balanceCents, ...(balanceCents === 0 ? { status: InvoiceStatus.PAID, paidOn: dateOf(input.paidOn) } : {}) },
         });
         if (!count)
           throw new ApplicationError(
@@ -905,13 +1024,90 @@ export class InvoicesService {
     return this.one(user, invoiceId);
   }
 
+  /**
+   * A payment to correct or remove, as it was read: refused when it changed
+   * since (`expectedUpdatedAt`), when it is a refund, or when its invoice is
+   * closed to payments.
+   */
+  private async paymentToChange(tx: Prisma.TransactionClient, user: AuthenticatedUser, id: string, expectedUpdatedAt: string) {
+    const found = await tx.invoicePayment.findFirst({
+      where: { id, organizationId: user.organizationId },
+      select: {
+        invoiceId: true,
+        amountCents: true,
+        paidOn: true,
+        method: true,
+        reference: true,
+        note: true,
+        origin: true,
+        recordedById: true,
+        updatedAt: true,
+        invoice: { select: { status: true, balanceCents: true } },
+      },
+    });
+    if (!found) throw this.paymentNotFound();
+    if (found.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.paymentChanged();
+    const locked = paymentLockedReason({ amountCents: found.amountCents, invoiceStatus: found.invoice.status });
+    if (locked) throw new ApplicationError(409, 'PAYMENT_LOCKED', locked);
+    return found;
+  }
+
+  /**
+   * The invoice's new balance, written only if it is still what was read: paid
+   * when nothing is owed, awaiting payment (and no longer paid in full) when
+   * something is.
+   */
+  private async settleInvoice(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    found: { invoiceId: string; invoice: { status: InvoiceStatus; balanceCents: number } },
+    balanceCents: number,
+  ) {
+    const { count } = await tx.invoice.updateMany({
+      where: {
+        id: found.invoiceId,
+        organizationId: user.organizationId,
+        status: found.invoice.status,
+        balanceCents: found.invoice.balanceCents,
+      },
+      data:
+        balanceCents === 0
+          ? { balanceCents, status: InvoiceStatus.PAID }
+          : { balanceCents, status: InvoiceStatus.AWAITING_PAYMENT, paidOn: null },
+    });
+    if (!count)
+      throw new ApplicationError(
+        409,
+        'INVOICE_CHANGED',
+        'This invoice changed while the payment was being changed. Look at it again, then make the change.',
+      );
+  }
+
+  /** Paid in full on the day of its latest payment, once a correction leaves nothing owed. */
+  private async stampPaidInFull(tx: Prisma.TransactionClient, invoiceId: string) {
+    const latest = await tx.invoicePayment.aggregate({ where: { invoiceId }, _max: { paidOn: true } });
+    await tx.invoice.update({ where: { id: invoiceId }, data: { paidOn: latest._max.paidOn ?? null } });
+  }
+
   private requireWrites() {
     if (!getJobberConfig().invoiceWritesEnabled)
       throw new ApplicationError(
         409,
         'INVOICE_WRITES_OFF',
-        'Invoices are made, and payments recorded, in Jobber for now. The console will do both once it sends them to Jobber.',
+        'Invoices and payments are made and changed in Jobber until the console takes over invoicing.',
       );
+  }
+
+  private paymentNotFound() {
+    return new ApplicationError(404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+  }
+
+  private paymentChanged() {
+    return new ApplicationError(
+      409,
+      'PAYMENT_CHANGED',
+      'This payment changed since it was opened. Look at it again, then make the change.',
+    );
   }
 
   private keyReused() {
