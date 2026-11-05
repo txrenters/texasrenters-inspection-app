@@ -56,8 +56,41 @@ const invoiceRow = (over: Record<string, unknown> = {}) => ({
   taxCents: 0,
   clientMessage: null,
   createdAt: new Date('2020-02-01T15:00:00.000Z'),
-  lines: [{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999, totalCents: 3999 }],
+  lines: [
+    {
+      name: 'Filter Change',
+      description: null,
+      quantity: 1,
+      unitPriceCents: 3999,
+      totalCents: 3999,
+      taxable: null,
+      serviceOn: null,
+      productName: null,
+      category: null,
+    },
+  ],
   payments: [],
+  contractDisclaimer: null,
+  billingName: null,
+  propertyAddress: null,
+  billingSameAsProperty: null,
+  clientEmails: [],
+  clientPhones: [],
+  paidOn: null,
+  viewedAt: null,
+  salespersonName: null,
+  jobTitle: null,
+  discountCents: 0,
+  discountRate: null,
+  discountKind: null,
+  depositCents: 0,
+  tipsCents: 0,
+  taxRateName: null,
+  taxRatePercent: null,
+  taxInclusive: null,
+  customFields: null,
+  notes: [],
+  files: [],
   ...over,
 });
 
@@ -230,6 +263,59 @@ describe('an invoice', () => {
     });
   });
 
+  it("shows every other detail Jobber keeps: contacts, discount, tax, custom fields, notes and files", async () => {
+    const db = database();
+    db.invoice.findFirst.mockResolvedValue(
+      invoiceRow({
+        contractDisclaimer: 'Thank you for your business.',
+        clientEmails: ['owner@example.com'],
+        paidOn: date('2020-02-20'),
+        viewedAt: new Date('2020-02-02T15:30:00.000Z'),
+        discountCents: 400,
+        discountRate: 10,
+        discountKind: 'PERCENT',
+        taxRateName: 'Texas',
+        taxRatePercent: 8.25,
+        // Anything in the column that is not a label and a value is not shown.
+        customFields: [{ label: 'Gate code', value: '1234' }, { label: 7 }, 'junk'],
+        lines: [
+          { ...invoiceRow().lines[0], taxable: true, serviceOn: date('2020-02-01'), productName: 'Filter Change', category: 'SERVICE' },
+        ],
+        notes: [{ id: 'note-1', kind: 'JOB', message: 'Gate sticks', pinned: true, writtenAt: new Date('2020-02-01T12:00:00.000Z') }],
+        files: [
+          {
+            id: 'file-1',
+            fileName: 'receipt.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 2048,
+            jobberUrl: 'https://files.example.com/receipt.pdf',
+            uploadedAt: new Date('2020-02-01T12:00:00.000Z'),
+          },
+        ],
+      }),
+    );
+    db.invoice.aggregate.mockResolvedValue({ _sum: { balanceCents: 0 } });
+
+    const invoice = await serviceOver(db).one(office, INVOICE);
+
+    expect(invoice.lineItems[0]).toMatchObject({ taxable: true, serviceOn: '2020-02-01', category: 'SERVICE' });
+    expect(invoice.details).toMatchObject({
+      contractDisclaimer: 'Thank you for your business.',
+      clientEmails: ['owner@example.com'],
+      paidOn: '2020-02-20',
+      viewedAt: '2020-02-02T15:30:00.000Z',
+      discountCents: 400,
+      discountPercent: 10,
+      taxRatePercent: 8.25,
+      customFields: [{ label: 'Gate code', value: '1234' }],
+      notes: [{ id: 'note-1', kind: 'JOB', message: 'Gate sticks', pinned: true, writtenAt: '2020-02-01T12:00:00.000Z' }],
+      files: [{ id: 'file-1', fileName: 'receipt.pdf', sizeBytes: 2048, url: 'https://files.example.com/receipt.pdf' }],
+    });
+    // An amount off is no percent.
+    db.invoice.findFirst.mockResolvedValue(invoiceRow({ discountCents: 500, discountRate: 5, discountKind: 'AMOUNT' }));
+    expect((await serviceOver(db).one(office, INVOICE)).details).toMatchObject({ discountCents: 500, discountPercent: null, customFields: [] });
+  });
+
   it("is not found in another office's organization", async () => {
     await expect(serviceOver(database()).one(office, INVOICE)).rejects.toMatchObject({ code: 'INVOICE_NOT_FOUND' });
   });
@@ -347,6 +433,57 @@ describe('the payments list', () => {
   });
 });
 
+describe('a payment on its own page', () => {
+  it('shows how it was paid, where it was recorded, and what its invoice still owes', async () => {
+    const db = database();
+    db.invoicePayment.findFirst.mockResolvedValue({
+      id: 'payment-1',
+      paidOn: date('2020-02-20'),
+      amountCents: 3999,
+      method: 'BANK_TRANSFER',
+      reference: 'ACH-77',
+      note: 'From the owner ledger',
+      origin: 'JOBBER',
+      createdAt: new Date('2020-02-20T16:00:00.000Z'),
+      recordedBy: null,
+      jobberPaymentType: 'ACH_BANK_PAYMENT',
+      invoice: {
+        id: INVOICE,
+        number: '8439',
+        subject: 'For Services Rendered',
+        clientName: '100 Example Way',
+        propertywareBuilding: building,
+        totalCents: 3999,
+        balanceCents: 0,
+      },
+    });
+
+    const shown = await serviceOver(db).onePayment(office, 'payment-1');
+
+    expect(shown).toEqual({
+      id: 'payment-1',
+      paidOn: '2020-02-20',
+      amountCents: 3999,
+      method: 'BANK_TRANSFER',
+      reference: 'ACH-77',
+      note: 'From the owner ledger',
+      recordedBy: null,
+      recordedAt: '2020-02-20T16:00:00.000Z',
+      origin: 'JOBBER',
+      jobberPaymentType: 'ACH_BANK_PAYMENT',
+      invoice: { id: INVOICE, number: '8439', subject: 'For Services Rendered', clientName: '100 Example Way' },
+      property: { id: BUILDING, address: '100 Example Way', city: 'Sampletown' },
+      invoiceTotalCents: 3999,
+      invoiceBalanceCents: 0,
+    });
+    expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG });
+  });
+
+  it("is not found in another office's organization", async () => {
+    await expect(serviceOver(database()).onePayment(office, 'payment-1')).rejects.toMatchObject({ code: 'PAYMENT_NOT_FOUND' });
+  });
+});
+
 describe('making an invoice and recording a payment', () => {
   const create = {
     inspectionId: VISIT,
@@ -447,7 +584,7 @@ describe('making an invoice and recording a payment', () => {
     it.each([
       ['no lines', { lineItems: [] }, 'Add at least one line.'],
       ['a day to come', { issuedOn: AHEAD }, 'An invoice cannot be issued on a day still to come.'],
-      ['terms not on the list', { paymentTermsDays: 7 }, 'Pick the payment terms from the list.'],
+      ['terms not on the list', { paymentTermsDays: 12 }, 'Pick the payment terms from the list.'],
       ['nothing to pay', { lineItems: [{ name: 'Filter Change', quantity: 1, unitPriceCents: 0 }] }, 'The invoice comes to nothing.'],
       ['no subject', { subject: '   ' }, 'Give the invoice a subject.'],
     ])('refuses an invoice with %s', async (_, change, message) => {
@@ -564,6 +701,7 @@ describe('who may do what', () => {
     expect(permissionsOf(InvoicesController, 'create')).toEqual(['invoices:read', 'invoices:manage']);
     expect(permissionsOf(InvoicesController, 'recordPayment')).toEqual(['invoices:read', 'payments:record']);
     expect(permissionsOf(PaymentsController, 'list')).toEqual(['invoices:read']);
+    expect(permissionsOf(PaymentsController, 'one')).toEqual(['invoices:read']);
   });
 
   it('never lets an API key make an invoice or record a payment', () => {

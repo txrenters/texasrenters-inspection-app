@@ -1,21 +1,24 @@
 'use client';
 
-import { acceptsPayment, formatMoney } from '@texasrenters/shared';
+import { acceptsPayment, formatMoney, type InvoiceDetail } from '@texasrenters/shared';
 import { BanknoteIcon, ExternalLinkIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import {
   INVOICE_RECORD,
+  InvoiceFiles,
+  InvoiceNotes,
   InvoicePayments,
   InvoiceStatusBadge,
   LineItemsTable,
   formatInvoiceDay,
+  formatInvoiceMoment,
 } from '@/components/invoices/invoice-parts';
 import { RecordPaymentDialog } from '@/components/invoices/record-payment-dialog';
 import { PageHeader } from '@/components/page-header';
-import { AsideCard, FactTable, PlaceCard, RecordLayout } from '@/components/record/record-kit';
+import { AsideCard, FactTable, PlaceCard, RecordLayout, type Fact } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
@@ -23,9 +26,12 @@ import { useInvoice } from '@/lib/invoice-queries';
 
 /**
  * One invoice, as Jobber's invoice page lays it out: its status and the one
- * thing to do next -- record a payment -- at the top; the property beside the
- * invoice's details; its products and services with the total; the payments
- * recorded against it and what it still owes.
+ * thing to do next -- record a payment -- at the top; the property, the
+ * client's contacts and the billing address beside the invoice's details; its
+ * products and services with the discount, tax and total; the payments
+ * recorded against it, each opening its own page, and what it still owes; then
+ * the client message, the contract text, the internal notes and the files
+ * (2026-11-05: "make sure we get everything, every details").
  */
 export default function InvoicePage() {
   const { invoiceId } = useParams<{ invoiceId: string }>();
@@ -38,6 +44,7 @@ export default function InvoicePage() {
     return <ErrorState error={invoice.error} retry={() => void invoice.refetch()} />;
 
   const data = invoice.data;
+  const details = data.details;
   const payable = acceptsPayment(data) && has('payments:record');
   const visitHref = data.inspectionId ? `/inspections/${data.inspectionId}` : null;
 
@@ -82,9 +89,14 @@ export default function InvoicePage() {
                 ) : null}
               </dl>
             </AsideCard>
-            {data.clientMessage ? (
-              <AsideCard title="Client message">
-                <p className="text-muted-foreground whitespace-pre-line">{data.clientMessage}</p>
+            {details?.notes.length ? (
+              <AsideCard title="Internal notes">
+                <InvoiceNotes notes={details.notes} />
+              </AsideCard>
+            ) : null}
+            {details?.files.length ? (
+              <AsideCard title="Files">
+                <InvoiceFiles files={details.files} />
               </AsideCard>
             ) : null}
           </>
@@ -93,37 +105,31 @@ export default function InvoicePage() {
       >
         <div className="grid gap-4 lg:grid-cols-2">
           <PlaceCard
-            address={data.property ? [data.property.address, data.property.city].filter(Boolean).join(', ') : null}
+            address={placeAddress(data)}
             href={data.property ? `/properties/${data.property.id}` : undefined}
-            lines={data.billingAddress ? [{ label: 'Billing address', value: data.billingAddress }] : []}
+            lines={contactLines(data)}
             name={data.clientName}
           />
-          <FactTable
-            facts={[
-              { label: 'Invoice #', value: data.number ?? 'Not numbered yet' },
-              {
-                label: 'Invoice for',
-                value: visitHref ? (
-                  <Link className="underline underline-offset-2" href={visitHref}>
-                    {data.jobNumber ? `Job #${data.jobNumber}` : 'The visit'}
-                  </Link>
-                ) : data.jobNumber ? (
-                  `Job #${data.jobNumber}`
-                ) : (
-                  '—'
-                ),
-              },
-              { label: 'Issued', value: formatInvoiceDay(data.issuedOn) },
-              { label: 'Payment terms', value: data.paymentTerms ?? '—' },
-              { label: 'Due date', value: formatInvoiceDay(data.dueOn) },
-            ]}
-            label="Invoice details"
-          />
+          <FactTable facts={invoiceFacts(data, visitHref)} label="Invoice details" />
         </div>
 
         <section aria-label="Products and services" className="bg-card mt-6 overflow-hidden rounded-lg border">
           <h2 className="text-heading px-4 pt-4 text-lg font-bold">Product / Service</h2>
-          <LineItemsTable lineItems={data.lineItems} subtotalCents={data.subtotalCents} totalCents={data.totalCents} />
+          <LineItemsTable
+            adjustments={{
+              discountCents: details?.discountCents,
+              discountPercent: details?.discountPercent,
+              taxCents: data.taxCents,
+              taxRateName: details?.taxRateName,
+              taxRatePercent: details?.taxRatePercent,
+              taxInclusive: details?.taxInclusive,
+              depositCents: details?.depositCents,
+              tipsCents: details?.tipsCents,
+            }}
+            lineItems={data.lineItems}
+            subtotalCents={data.subtotalCents}
+            totalCents={data.totalCents}
+          />
         </section>
 
         <section aria-label="Payments recorded" className="bg-card mt-6 rounded-lg border p-4">
@@ -137,9 +143,99 @@ export default function InvoicePage() {
             <InvoicePayments payments={data.payments} />
           </div>
         </section>
+
+        {data.clientMessage || details?.contractDisclaimer ? (
+          <section aria-label="What the client reads" className="bg-card mt-6 grid gap-4 rounded-lg border p-4 md:grid-cols-2">
+            {data.clientMessage ? (
+              <div>
+                <h2 className="text-heading text-base font-bold">Client message</h2>
+                <p className="text-muted-foreground mt-2 text-sm whitespace-pre-line">{data.clientMessage}</p>
+              </div>
+            ) : null}
+            {details?.contractDisclaimer ? (
+              <div>
+                <h2 className="text-heading text-base font-bold">Contract / disclaimer</h2>
+                <p className="text-muted-foreground mt-2 text-sm whitespace-pre-line">{details.contractDisclaimer}</p>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
       </RecordLayout>
 
       {payable ? <RecordPaymentDialog invoice={data} onClose={() => setPaying(false)} open={paying} /> : null}
     </>
   );
+}
+
+/** The property's address as the console knows it, else Jobber's address for the invoice's property. */
+function placeAddress(data: InvoiceDetail) {
+  if (data.property) return [data.property.address, data.property.city].filter(Boolean).join(', ');
+  return data.details?.propertyAddress ?? null;
+}
+
+/** Under the property: the billing name and address unless they are the property's, then how to reach the client. */
+function contactLines(data: InvoiceDetail) {
+  const details = data.details;
+  const lines: { label: string; value: ReactNode }[] = [];
+  const billing = [details?.billingName, data.billingAddress].filter(Boolean).join(' · ');
+  if (billing && details?.billingSameAsProperty !== true) lines.push({ label: 'Billing address', value: billing });
+  if (details?.clientEmails.length)
+    lines.push({
+      label: details.clientEmails.length > 1 ? 'Emails' : 'Email',
+      value: (
+        <ul>
+          {details.clientEmails.map((email) => (
+            <li className="break-all" key={email}>
+              <a className="hover:underline" href={`mailto:${email}`}>
+                {email}
+              </a>
+            </li>
+          ))}
+        </ul>
+      ),
+    });
+  if (details?.clientPhones.length)
+    lines.push({
+      label: details.clientPhones.length > 1 ? 'Phones' : 'Phone',
+      value: (
+        <ul>
+          {details.clientPhones.map((phone) => (
+            <li key={phone}>
+              <a className="hover:underline" href={`tel:${phone.replace(/[^\d+]/g, '')}`}>
+                {phone}
+              </a>
+            </li>
+          ))}
+        </ul>
+      ),
+    });
+  return lines;
+}
+
+/** Jobber's details table, with every other detail it keeps where there is one. */
+function invoiceFacts(data: InvoiceDetail, visitHref: string | null): Fact[] {
+  const details = data.details;
+  const job = data.jobNumber ? `Job #${data.jobNumber}` : null;
+  const facts: Fact[] = [
+    { label: 'Invoice #', value: data.number ?? 'Not numbered yet' },
+    {
+      label: 'Invoice for',
+      value: visitHref ? (
+        <Link className="underline underline-offset-2" href={visitHref}>
+          {job ?? 'The visit'}
+        </Link>
+      ) : (
+        (job ?? '—')
+      ),
+      detail: details?.jobTitle ?? undefined,
+    },
+    { label: 'Issued', value: formatInvoiceDay(data.issuedOn) },
+    { label: 'Payment terms', value: data.paymentTerms ?? '—' },
+    { label: 'Due date', value: formatInvoiceDay(data.dueOn) },
+  ];
+  if (details?.paidOn) facts.push({ label: 'Paid in full', value: formatInvoiceDay(details.paidOn) });
+  if (details?.viewedAt) facts.push({ label: 'Viewed by the client', value: formatInvoiceMoment(details.viewedAt) });
+  if (details?.salespersonName) facts.push({ label: 'Salesperson', value: details.salespersonName });
+  for (const field of details?.customFields ?? []) facts.push({ label: field.label, value: field.value });
+  return facts;
 }

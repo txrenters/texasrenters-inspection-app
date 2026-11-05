@@ -2714,6 +2714,10 @@ model JobberConnection {
   /// off) or FAILED. Null when the last attempt worked.
   invoiceReadCheckedAt   DateTime?
   invoiceReadProblem     String?
+  /// The payments pass (2026-11-05): Jobber's payment list read once, in the
+  /// order the payments were made, then whatever was added after the cursor.
+  paymentReadCursor      String?
+  paymentReadCompletedAt DateTime?
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
   organization           Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -3102,6 +3106,11 @@ enum InvoicePaymentMethod {
   CASH
   BANK_TRANSFER
   CARD
+  ZELLE
+  CASH_APP
+  PAYPAL
+  VENMO
+  MONEY_ORDER
   OTHER
 }
 
@@ -3153,6 +3162,38 @@ model Invoice {
   /// lowers it in the same transaction that records a payment.
   balanceCents           Int
   clientMessage          String?
+  /// Jobber's contract / disclaimer, the text at the foot ("Thank you for your
+  /// business..."). Separate from the client message, which Jobber keeps too.
+  contractDisclaimer     String?
+  /// The name on the billing address, when it is not the client's.
+  billingName            String?
+  /// Where the work was, as Jobber has the invoice's property; and whether that
+  /// is the billing address too.
+  propertyAddress        String?
+  billingSameAsProperty  Boolean?
+  /// How to reach the client, primary first, as Jobber holds them.
+  clientEmails           String[]        @default([])
+  clientPhones           String[]        @default([])
+  /// The day Jobber marked it paid in full.
+  paidOn                 DateTime?       @db.Date
+  /// When the client first opened it in Jobber's client hub.
+  viewedAt               DateTime?
+  salespersonName        String?
+  /// The title of the job it bills.
+  jobTitle               String?
+  /// Jobber's discount: what it came to, and how it was set -- a percent of the
+  /// subtotal or an amount.
+  discountCents          Int             @default(0)
+  discountRate           Float?
+  discountKind           String?
+  depositCents           Int             @default(0)
+  tipsCents              Int             @default(0)
+  /// The tax rate applied, as Jobber names it, and whether prices include it.
+  taxRateName            String?
+  taxRatePercent         Float?
+  taxInclusive           Boolean?
+  /// The invoice's custom fields, `[{ label, value }]`, as Jobber shows them.
+  customFields           Json?
   /// Jobber's page for it.
   jobberWebUrl           String?
   /// Jobber's own "updated at": a delivery older than the copy is ignored, as
@@ -3173,6 +3214,8 @@ model Invoice {
   createdBy            UserProfile?          @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   lines                InvoiceLine[]
   payments             InvoicePayment[]
+  notes                InvoiceNote[]
+  files                InvoiceFile[]
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
@@ -3196,11 +3239,60 @@ model InvoiceLine {
   quantity       Float
   unitPriceCents Int
   totalCents     Int
+  /// Whether tax applies to the line; null when Jobber did not say.
+  taxable        Boolean?
+  /// The day the service was done, when the line names one.
+  serviceOn      DateTime? @db.Date
+  /// The product or service it was picked from in Jobber's list, and what kind.
+  productName    String?
+  category       String?
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@unique([invoiceId, position])
   @@index([organizationId, name])
+}
+
+/// A note on an invoice in Jobber, and the job's notes Jobber shows beside it
+/// (2026-11-05). Copied as Jobber has them; after the cutover the console's own.
+model InvoiceNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  invoiceId      String   @db.Uuid
+  jobberNoteId   String
+  /// Where Jobber keeps it: INVOICE, or the JOB / CLIENT / QUOTE / REQUEST it is linked to.
+  kind           String
+  message        String
+  pinned         Boolean  @default(false)
+  writtenAt      DateTime
+  createdAt      DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, jobberNoteId])
+  @@index([organizationId])
+}
+
+/// A file on an invoice in Jobber: its images and attachments (2026-11-05).
+/// The name, type and size, and Jobber's address for it until the console keeps
+/// its own copy (`storageKey`), which it must before the cutover.
+model InvoiceFile {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  invoiceId      String   @db.Uuid
+  jobberFileId   String
+  fileName       String
+  contentType    String
+  sizeBytes      Int
+  jobberUrl      String?
+  storageKey     String?
+  uploadedAt     DateTime
+  createdAt      DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, jobberFileId])
+  @@index([organizationId])
 }
 
 /// A payment recorded against an invoice: by hand in Jobber, or in the console.
@@ -3219,6 +3311,12 @@ model InvoicePayment {
   /// A check number, a Propertyware receipt -- whatever finds it again.
   reference       String?
   note            String?
+  /// Jobber's payment-list record for this payment (2026-11-05). Its id is not
+  /// the invoice's own id for it, so it is paired by invoice, day and amount;
+  /// it carries how it was paid, the reference and the details.
+  jobberRecordId  String?
+  /// Jobber's own payment type, kept as Jobber spells it ("ACH_BANK_PAYMENT").
+  jobberPaymentType String?
   /// Who recorded it in the console; null for one recorded in Jobber.
   recordedById    String?              @db.Uuid
   /// The browser's key, so a double click or a resend records one payment.
@@ -3231,6 +3329,7 @@ model InvoicePayment {
 
   @@unique([organizationId, jobberPaymentId])
   @@unique([organizationId, clientRequestId])
+  @@unique([organizationId, jobberRecordId])
   @@index([organizationId, paidOn])
   @@index([invoiceId])
 }

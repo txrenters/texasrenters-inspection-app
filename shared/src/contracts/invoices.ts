@@ -46,21 +46,41 @@ export const INVOICE_FILTER_LABEL: Record<InvoiceFilter, string> = {
  * How a payment came in. The office's own way first: the charge posted to the
  * tenant's ledger in Propertyware, then recorded here.
  */
-export const PAYMENT_METHODS = ['PROPERTYWARE_LEDGER', 'CHECK', 'CASH', 'BANK_TRANSFER', 'CARD', 'OTHER'] as const;
+export const PAYMENT_METHODS = [
+  'PROPERTYWARE_LEDGER',
+  'CHECK',
+  'CASH',
+  'BANK_TRANSFER',
+  'CARD',
+  // Jobber's own list (2026-11-05), so a payment read from it, or recorded
+  // here after the cutover, says how it was really paid.
+  'ZELLE',
+  'CASH_APP',
+  'PAYPAL',
+  'VENMO',
+  'MONEY_ORDER',
+  'OTHER',
+] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
   PROPERTYWARE_LEDGER: 'Propertyware ledger',
   CHECK: 'Check',
   CASH: 'Cash',
-  BANK_TRANSFER: 'Bank transfer',
-  CARD: 'Card (taken elsewhere)',
+  BANK_TRANSFER: 'Bank payment',
+  CARD: 'Credit/debit card',
+  ZELLE: 'Zelle',
+  CASH_APP: 'Cash App',
+  PAYPAL: 'PayPal',
+  VENMO: 'Venmo',
+  MONEY_ORDER: 'Money order',
   OTHER: 'Other',
 };
 
 /** Jobber's payment terms, in days after the invoice is issued. */
 export const PAYMENT_TERMS = [
   { days: 0, label: 'Due upon receipt' },
+  { days: 7, label: 'Net 7' },
   { days: 15, label: 'Net 15' },
   { days: 30, label: 'Net 30' },
   { days: 45, label: 'Net 45' },
@@ -79,6 +99,39 @@ export interface InvoiceLineItem {
   quantity: number;
   unitPriceCents: number;
   totalCents: number;
+  /** Whether tax applies; null when Jobber did not say. */
+  taxable?: boolean | null;
+  /** `YYYY-MM-DD`, the day the service was done, when the line names one. */
+  serviceOn?: string | null;
+  /** The product or service it was picked from in Jobber's list, and what kind ("SERVICE"). */
+  productName?: string | null;
+  category?: string | null;
+}
+
+/** A custom field on an invoice, as Jobber shows it: its label and its value as text. */
+export interface InvoiceCustomField {
+  label: string;
+  value: string;
+}
+
+/** A note on the invoice, or on the job (client, quote, request) Jobber shows it beside. */
+export interface InvoiceNoteView {
+  id: string;
+  kind: 'INVOICE' | 'JOB' | 'CLIENT' | 'QUOTE' | 'REQUEST';
+  message: string;
+  pinned: boolean;
+  writtenAt: string;
+}
+
+/** An image or attachment on the invoice. */
+export interface InvoiceFileView {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  /** Where it can be opened: the console's own copy once kept, else Jobber's address. */
+  url: string | null;
+  uploadedAt: string;
 }
 
 /** A payment recorded against an invoice. */
@@ -94,6 +147,8 @@ export interface InvoicePayment {
   /** Who recorded it; null for one recorded in Jobber. */
   recordedBy: InvoicePerson | null;
   recordedAt: string;
+  /** Where it was recorded: in Jobber, or in the console. */
+  origin?: 'JOBBER' | 'CONSOLE';
 }
 
 /** Where an invoice's property is, as the console knows it. */
@@ -140,6 +195,48 @@ export interface InvoiceDetail extends InvoiceSummary {
   /** Everything else this client owes, as Jobber shows "Account balance". */
   accountBalanceCents: number | null;
   createdAt: string;
+  /** Every other detail Jobber keeps (2026-11-05), ahead of the cutover. */
+  details?: InvoiceExtraDetails;
+}
+
+/** The rest of what Jobber keeps on an invoice. */
+export interface InvoiceExtraDetails {
+  /** Jobber's contract / disclaimer: the "Thank you for your business" text at the foot. */
+  contractDisclaimer: string | null;
+  billingName: string | null;
+  /** Where the work was, as Jobber has the invoice's property. */
+  propertyAddress: string | null;
+  billingSameAsProperty: boolean | null;
+  /** Primary first. */
+  clientEmails: string[];
+  clientPhones: string[];
+  /** `YYYY-MM-DD`, the day it was paid in full. */
+  paidOn: string | null;
+  /** When the client first opened it. */
+  viewedAt: string | null;
+  salespersonName: string | null;
+  jobTitle: string | null;
+  discountCents: number;
+  /** The percent, when the discount was set as one. */
+  discountPercent: number | null;
+  depositCents: number;
+  tipsCents: number;
+  taxRateName: string | null;
+  taxRatePercent: number | null;
+  /** Prices include the tax, rather than adding it. */
+  taxInclusive: boolean | null;
+  customFields: InvoiceCustomField[];
+  notes: InvoiceNoteView[];
+  files: InvoiceFileView[];
+}
+
+/** One payment on its own page (2026-11-05: "payment items are not clickable"). */
+export interface PaymentDetail extends PaymentListItem {
+  origin: 'JOBBER' | 'CONSOLE';
+  /** Jobber's own word for how it was paid ("ACH_BANK_PAYMENT"), when it came from Jobber. */
+  jobberPaymentType: string | null;
+  invoiceTotalCents: number;
+  invoiceBalanceCents: number;
 }
 
 /** A count and the money in it, for the list's Overview. */

@@ -1,25 +1,35 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { JobberConnectionStatus, JobberLinkStatus, type Prisma } from '@prisma/client';
 
+import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import {
   applyJobberInvoice,
+  pairJobberPayment,
   removeJobberInvoice,
   type InvoiceCopyResult,
+  type JobberPaymentDetails,
 } from '../../integrations/jobber/jobber-invoice-copy';
-import { invoiceProperty, isCutShort, toInvoiceCopy } from '../../integrations/jobber/jobber-invoice-mapping';
+import {
+  invoiceProperty,
+  isCutShort,
+  toInvoiceCopy,
+  toPaymentDetails,
+} from '../../integrations/jobber/jobber-invoice-mapping';
 import { JobberClient, type JobberCost } from '../../integrations/jobber/jobber.client';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { JobberMappingService, type BuildingIndex } from '../../integrations/jobber/jobber.mapping.service';
 import {
   INVOICE_BY_ID_QUERY,
   invoicesPageQuery,
-  PAYMENT_RECORD_INVOICE_QUERY,
+  PAYMENT_RECORD_QUERY,
+  PAYMENTS_PAGE_QUERY,
 } from '../../integrations/jobber/jobber.queries';
 import {
   jobberInvoiceByIdSchema,
   jobberInvoicesPageSchema,
-  jobberPaymentRecordInvoiceSchema,
+  jobberPaymentRecordByIdSchema,
+  jobberPaymentsPageSchema,
   type JobberInvoice,
 } from '../../integrations/jobber/jobber.schemas';
 
@@ -27,11 +37,30 @@ import {
  * Invoices on a page.
  *
  * Jobber prices a connection as `first` times what each node asks for, and an
- * invoice asks for its lines and payments too -- about a hundred and thirty
- * points each. Twenty is under three thousand, a third of the bucket, which
- * leaves the visit sync on the same tick its room.
+ * invoice asks for its lines, payments, notes and files too -- about a hundred
+ * and fifty points each. Twenty is about three thousand, a third of the
+ * bucket, which leaves the visit sync on the same tick its room; and each page
+ * waits on the cost Jobber reports, not on this estimate.
  */
 const PAGE_SIZE = 20;
+
+/**
+ * Payments on a page of Jobber's payment list, and pages a run reads. A
+ * payment is a handful of fields, a few points each; fifty is a few hundred.
+ */
+const PAYMENTS_PAGE_SIZE = 50;
+const MAX_PAYMENT_PAGES_PER_RUN = 15;
+
+/**
+ * How recent an unpaired payment must be for its page to be read again.
+ *
+ * A payment recorded in Jobber in the seconds between the invoice read and the
+ * payment list is in the list but not yet on the invoice's copy. Its page is
+ * read again next tick, by when the invoice is. One older than this that still
+ * pairs with nothing never will -- a payment split over invoices, say -- and
+ * is left for the full pass before the cutover rather than holding the list.
+ */
+const HOLD_UNPAIRED_DAYS = 2;
 
 /**
  * Pages one run reads, and how long it may take.
@@ -81,10 +110,16 @@ export interface InvoiceReadResult {
   created: number;
   updated: number;
   stale: number;
-  /** Invoices with more lines or payments than a page carries, read again by themselves. */
+  /** Invoices with more lines, payments, notes or files than a page carries, read again by themselves. */
   readAlone: number;
   /** The first read reached the last invoice, or "what changed" ran out. */
   caughtUp: boolean;
+  /** Pages of Jobber's payment list read, and its payments paired with an invoice's or not. */
+  paymentPages: number;
+  paired: number;
+  unpaired: number;
+  /** The payment list reached its last payment. */
+  paymentsCaughtUp: boolean;
   problem: InvoiceReadProblem | null;
   skipped: 'NOT_CONNECTED' | 'WAITING' | null;
 }
@@ -152,6 +187,10 @@ export class JobberInvoiceWorker {
       stale: 0,
       readAlone: 0,
       caughtUp: false,
+      paymentPages: 0,
+      paired: 0,
+      unpaired: 0,
+      paymentsCaughtUp: false,
       problem: null,
       skipped: null,
     };
@@ -165,6 +204,8 @@ export class JobberInvoiceWorker {
         invoiceReadThrough: true,
         invoiceReadCheckedAt: true,
         invoiceReadProblem: true,
+        paymentReadCursor: true,
+        paymentReadCompletedAt: true,
       },
     });
     if (!connection || connection.status !== JobberConnectionStatus.CONNECTED)
@@ -244,6 +285,26 @@ export class JobberInvoiceWorker {
         });
       }
       await this.record(organizationId, { invoiceReadCheckedAt: new Date(), invoiceReadProblem: result.problem });
+      return result;
+    }
+
+    // How each payment was paid, from Jobber's payment list: only once the
+    // invoices are current, so every payment in the list is already on its
+    // invoice's copy to pair with. Not on the run that ends the first read:
+    // invoices changed while it paged are read on the next. Its own failure
+    // never stops the invoices; the next tick tries again from the cursor.
+    if (mode === 'changed' && result.caughtUp) {
+      try {
+        await this.readPayments(organizationId, connection, started, result);
+      } catch (error) {
+        if (!(error instanceof JobberError && error.retryable))
+          this.logger.error({
+            event: 'jobber_payment_read_failed',
+            organizationId,
+            code: error instanceof JobberError ? error.code : undefined,
+            message: error instanceof JobberError ? error.message : 'unexpected',
+          });
+      }
     }
     return result;
   }
@@ -265,20 +326,93 @@ export class JobberInvoiceWorker {
 
   /**
    * PAYMENT_CREATE, PAYMENT_UPDATE and PAYMENT_DESTROY: the invoice the payment
-   * is on, read again, which carries the payment or no longer does. A payment
-   * the copy already holds names its invoice; a new one is asked of Jobber.
+   * is on, read again, which carries the payment or no longer does; then how
+   * it was paid, paired with it.
+   *
+   * The webhook names the payment by its payment-list id, which the invoice's
+   * own view does not use, so a payment the copy already paired is found by
+   * that; any other is asked of Jobber. One Jobber no longer has (a delete) is
+   * found by the pairing, and its invoice read again without it.
    */
-  async refreshForPayment(organizationId: string, jobberPaymentId: string) {
-    const known = await this.prisma.invoicePayment.findFirst({
-      where: { organizationId, jobberPaymentId },
-      select: { invoice: { select: { jobberInvoiceId: true } } },
-    });
-    let jobberInvoiceId = known?.invoice.jobberInvoiceId ?? null;
+  async refreshForPayment(organizationId: string, jobberRecordId: string) {
+    const data = await this.client.request(organizationId, PAYMENT_RECORD_QUERY, { id: jobberRecordId });
+    const record = jobberPaymentRecordByIdSchema.parse(data).paymentRecord;
+    const details = record ? toPaymentDetails(record) : null;
+    let jobberInvoiceId = details?.jobberInvoiceId ?? null;
     if (!jobberInvoiceId) {
-      const data = await this.client.request(organizationId, PAYMENT_RECORD_INVOICE_QUERY, { id: jobberPaymentId });
-      jobberInvoiceId = jobberPaymentRecordInvoiceSchema.parse(data).paymentRecord?.invoice?.id ?? null;
+      const known = await this.prisma.invoicePayment.findFirst({
+        where: { organizationId, jobberRecordId },
+        select: { invoice: { select: { jobberInvoiceId: true } } },
+      });
+      jobberInvoiceId = known?.invoice.jobberInvoiceId ?? null;
     }
-    return jobberInvoiceId ? this.refreshInvoice(organizationId, jobberInvoiceId) : 'missing';
+    if (!jobberInvoiceId) return 'missing';
+    const result = await this.refreshInvoice(organizationId, jobberInvoiceId);
+    if (details) await this.pair(organizationId, details);
+    return result;
+  }
+
+  /**
+   * One bounded pass over Jobber's payment list, from where the last stopped.
+   *
+   * Read from the start once, in the order the payments were recorded; after
+   * that, each tick reads only what was recorded since, which appears after
+   * the kept cursor. A payment edited in Jobber after it was paired is not
+   * seen again here -- the invoice keeps its day and amount current, and the
+   * full pass before the cutover reads every payment's method once more.
+   */
+  private async readPayments(
+    organizationId: string,
+    connection: { paymentReadCursor: string | null; paymentReadCompletedAt: Date | null },
+    started: number,
+    result: InvoiceReadResult,
+  ) {
+    let cursor = connection.paymentReadCursor;
+    const holdFrom = businessDate(new Date(Date.now() - HOLD_UNPAIRED_DAYS * 86_400_000));
+    while (result.paymentPages < MAX_PAYMENT_PAGES_PER_RUN && Date.now() - started < RUN_BUDGET_MS) {
+      const { data, cost } = await this.readPage(
+        organizationId,
+        PAYMENTS_PAGE_QUERY,
+        { first: PAYMENTS_PAGE_SIZE, after: cursor },
+        started,
+      );
+      const page = jobberPaymentsPageSchema.parse(data).paymentRecords;
+      let hold = false;
+      for (const record of page.nodes) {
+        const details = toPaymentDetails(record);
+        if (details && (await this.pair(organizationId, details)) === 'paired') result.paired += 1;
+        else {
+          result.unpaired += 1;
+          if (details && details.paidOn >= holdFrom) hold = true;
+        }
+      }
+      result.paymentPages += 1;
+      const caughtUp = !page.pageInfo.hasNextPage;
+      // A fresh payment on the last page that its invoice does not carry yet:
+      // this page again next tick, from the cursor it was read from. Only the
+      // last page, so one that never pairs cannot hold the list: once fifty
+      // more are recorded behind it, the page is no longer the last.
+      if (hold && caughtUp) {
+        result.paymentsCaughtUp = true;
+        break;
+      }
+      // An empty last page names no cursor; the one kept is where the next
+      // payment will appear.
+      cursor = page.pageInfo.endCursor ?? cursor;
+      await this.record(organizationId, {
+        paymentReadCursor: cursor,
+        ...(caughtUp && !connection.paymentReadCompletedAt ? { paymentReadCompletedAt: new Date() } : {}),
+      });
+      if (caughtUp) {
+        result.paymentsCaughtUp = true;
+        break;
+      }
+      if (!(await this.pace(cost, started))) break;
+    }
+  }
+
+  private pair(organizationId: string, details: JobberPaymentDetails) {
+    return this.prisma.$transaction((tx) => pairJobberPayment(tx, organizationId, details));
   }
 
   /**

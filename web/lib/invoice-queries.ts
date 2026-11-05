@@ -7,6 +7,7 @@ import type {
   InvoiceDraft,
   InvoiceFilter,
   InvoiceList,
+  PaymentDetail,
   PaymentList,
   PaymentMethod,
   RecordPaymentInput,
@@ -48,6 +49,7 @@ export const invoiceKeys = {
   detail: (id: string) => ['admin', 'invoices', 'detail', id] as const,
   draft: (inspectionId: string) => ['admin', 'invoices', 'draft', inspectionId] as const,
   payments: (query: PaymentQuery) => ['admin', 'invoices', 'payments', query] as const,
+  payment: (id: string) => ['admin', 'invoices', 'payment', id] as const,
 };
 
 const queryString = (values: Record<string, string | number | undefined>) => {
@@ -106,6 +108,15 @@ export function usePayments(query: PaymentQuery) {
         signal,
       }),
     placeholderData: (previous) => previous,
+  });
+}
+
+/** One payment, for its own page. */
+export function usePayment(id: string) {
+  return useQuery({
+    queryKey: invoiceKeys.payment(id),
+    queryFn: ({ signal }) => api<PaymentDetail>(`${PAYMENTS}/${encodeURIComponent(id)}`, { signal }),
+    enabled: Boolean(id),
   });
 }
 

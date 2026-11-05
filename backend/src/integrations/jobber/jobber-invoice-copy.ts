@@ -1,5 +1,5 @@
 import type { InvoiceStatus as ShownInvoiceStatus, PaymentMethod } from '@texasrenters/shared';
-import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
 /**
  * The console's copy of a Jobber invoice (2026-11-05), written from what Jobber
@@ -46,7 +46,18 @@ export interface JobberInvoiceCopy {
   jobberWebUrl: string | null;
   /** Jobber's "updated at", ISO. */
   updatedAt: string;
-  lines: { name: string; description: string | null; quantity: number; unitPriceCents: number; totalCents: number }[];
+  lines: {
+    name: string;
+    description: string | null;
+    quantity: number;
+    unitPriceCents: number;
+    totalCents: number;
+    taxable?: boolean | null;
+    /** `YYYY-MM-DD` */
+    serviceOn?: string | null;
+    productName?: string | null;
+    category?: string | null;
+  }[];
   payments: {
     jobberPaymentId: string;
     paidOn: string;
@@ -55,6 +66,43 @@ export interface JobberInvoiceCopy {
     reference: string | null;
     note: string | null;
   }[];
+  /** Every other detail Jobber keeps (2026-11-05); left as stored when absent. */
+  details?: JobberInvoiceDetails;
+  /** The invoice's notes, and the job's beside them; replaced whole when present. */
+  notes?: { jobberNoteId: string; kind: string; message: string; pinned: boolean; writtenAt: string }[];
+  /** Its images and attachments; kept to Jobber's list when present, never losing the console's own copy of one. */
+  files?: {
+    jobberFileId: string;
+    fileName: string;
+    contentType: string;
+    sizeBytes: number;
+    jobberUrl: string | null;
+    uploadedAt: string;
+  }[];
+}
+
+export interface JobberInvoiceDetails {
+  contractDisclaimer: string | null;
+  billingName: string | null;
+  propertyAddress: string | null;
+  billingSameAsProperty: boolean | null;
+  clientEmails: string[];
+  clientPhones: string[];
+  /** `YYYY-MM-DD` */
+  paidOn: string | null;
+  /** ISO */
+  viewedAt: string | null;
+  salespersonName: string | null;
+  jobTitle: string | null;
+  discountCents: number;
+  discountRate: number | null;
+  discountKind: 'PERCENT' | 'AMOUNT' | null;
+  depositCents: number;
+  tipsCents: number;
+  taxRateName: string | null;
+  taxRatePercent: number | null;
+  taxInclusive: boolean | null;
+  customFields: { label: string; value: string }[];
 }
 
 export type InvoiceCopyResult = 'created' | 'updated' | 'stale';
@@ -73,6 +121,22 @@ export function jobberPageUrl(value: string | null | undefined): string | null {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
     return url.protocol === 'https:' && (host === 'getjobber.com' || host.endsWith('.getjobber.com')) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A file's address, only when it is an HTTPS one. Jobber keeps files on its
+ * storage, not on getjobber.com, so the page check above does not fit; but a
+ * file is still opened from the console, and a link that is not HTTPS is not
+ * one to follow.
+ */
+export function httpsAddress(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' ? url.toString() : null;
   } catch {
     return null;
   }
@@ -159,6 +223,7 @@ export async function applyJobberInvoice(
     jobberWebUrl: jobberPageUrl(copy.jobberWebUrl),
     jobberUpdatedAt: updatedAt,
     syncedAt: now,
+    ...(copy.details ? detailColumns(copy.details) : {}),
   } satisfies Prisma.InvoiceUncheckedUpdateInput;
 
   const invoiceId = existing
@@ -173,7 +238,13 @@ export async function applyJobberInvoice(
   await tx.invoiceLine.deleteMany({ where: { invoiceId } });
   if (copy.lines.length)
     await tx.invoiceLine.createMany({
-      data: copy.lines.map((line, position) => ({ organizationId, invoiceId, position, ...line })),
+      data: copy.lines.map(({ serviceOn, ...line }, position) => ({
+        organizationId,
+        invoiceId,
+        position,
+        ...line,
+        ...(serviceOn !== undefined ? { serviceOn: dateOrNull(serviceOn) } : {}),
+      })),
     });
 
   const kept = copy.payments.map((paid) => paid.jobberPaymentId);
@@ -181,21 +252,143 @@ export async function applyJobberInvoice(
     where: { invoiceId, origin: InvoiceOrigin.JOBBER, jobberPaymentId: { notIn: kept } },
   });
   for (const paid of copy.payments) {
-    const fields = {
-      invoiceId,
-      paidOn: dateOf(paid.paidOn),
-      amountCents: paid.amountCents,
-      method: paid.method,
-      reference: paid.reference,
-      note: paid.note,
-    };
+    const when = { invoiceId, paidOn: dateOf(paid.paidOn), amountCents: paid.amountCents };
     await tx.invoicePayment.upsert({
       where: { organizationId_jobberPaymentId: { organizationId, jobberPaymentId: paid.jobberPaymentId } },
-      create: { ...fields, organizationId, origin: InvoiceOrigin.JOBBER, jobberPaymentId: paid.jobberPaymentId },
-      update: fields,
+      create: {
+        ...when,
+        method: paid.method,
+        reference: paid.reference,
+        note: paid.note,
+        organizationId,
+        origin: InvoiceOrigin.JOBBER,
+        jobberPaymentId: paid.jobberPaymentId,
+      },
+      // The day and the amount only: how it was paid, its reference and its
+      // details come from Jobber's payment list (`pairJobberPayment`), which
+      // the invoice's own view of a payment does not carry -- writing "Other"
+      // here would undo them on every read.
+      update: when,
     });
   }
+
+  if (copy.notes) {
+    await tx.invoiceNote.deleteMany({ where: { invoiceId } });
+    if (copy.notes.length)
+      await tx.invoiceNote.createMany({
+        data: copy.notes.map((note) => ({ organizationId, invoiceId, ...note, writtenAt: new Date(note.writtenAt) })),
+        skipDuplicates: true,
+      });
+  }
+
+  if (copy.files) {
+    const listed = copy.files.map((file) => file.jobberFileId);
+    await tx.invoiceFile.deleteMany({ where: { invoiceId, jobberFileId: { notIn: listed } } });
+    for (const file of copy.files) {
+      const fields = {
+        fileName: file.fileName,
+        contentType: file.contentType,
+        sizeBytes: file.sizeBytes,
+        jobberUrl: httpsAddress(file.jobberUrl),
+        uploadedAt: new Date(file.uploadedAt),
+      };
+      // `storageKey`, the console's own copy, is never written here: a re-read
+      // must not lose it.
+      await tx.invoiceFile.upsert({
+        where: { invoiceId_jobberFileId: { invoiceId, jobberFileId: file.jobberFileId } },
+        create: { ...fields, organizationId, invoiceId, jobberFileId: file.jobberFileId },
+        update: fields,
+      });
+    }
+  }
   return existing ? 'updated' : 'created';
+}
+
+/** The invoice's other details as columns. */
+function detailColumns(details: JobberInvoiceDetails) {
+  return {
+    contractDisclaimer: details.contractDisclaimer,
+    billingName: details.billingName,
+    propertyAddress: details.propertyAddress,
+    billingSameAsProperty: details.billingSameAsProperty,
+    clientEmails: details.clientEmails,
+    clientPhones: details.clientPhones,
+    paidOn: dateOrNull(details.paidOn),
+    viewedAt: details.viewedAt ? new Date(details.viewedAt) : null,
+    salespersonName: details.salespersonName,
+    jobTitle: details.jobTitle,
+    discountCents: details.discountCents,
+    discountRate: details.discountRate,
+    discountKind: details.discountKind,
+    depositCents: details.depositCents,
+    tipsCents: details.tipsCents,
+    taxRateName: details.taxRateName,
+    taxRatePercent: details.taxRatePercent,
+    taxInclusive: details.taxInclusive,
+    customFields: details.customFields.length ? details.customFields : Prisma.DbNull,
+  };
+}
+
+/** What Jobber's payment list says about one payment (PAYMENTS_PAGE_QUERY). */
+export interface JobberPaymentDetails {
+  jobberRecordId: string;
+  jobberInvoiceId: string;
+  /** `YYYY-MM-DD` */
+  paidOn: string;
+  amountCents: number;
+  method: PaymentMethod;
+  jobberPaymentType: string | null;
+  reference: string | null;
+  note: string | null;
+}
+
+/**
+ * Pairs a payment in Jobber's payment list with the payment its invoice has
+ * (2026-11-05), and writes how it was paid, its reference and its details.
+ *
+ * The two ids differ -- Jobber's payment list and an invoice's own view of a
+ * payment are different objects -- so the pair is made on what both say: the
+ * invoice, the day and the amount. One already paired with this record is
+ * found first, so reading the list again changes nothing; otherwise the
+ * earliest unpaired payment that agrees. 'unmatched' when the invoice is not
+ * in the copy yet, or holds no payment that agrees -- the list is read again
+ * in full before the cutover.
+ */
+export async function pairJobberPayment(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  record: JobberPaymentDetails,
+): Promise<'paired' | 'unmatched'> {
+  const already = await tx.invoicePayment.findFirst({
+    where: { organizationId, jobberRecordId: record.jobberRecordId },
+    select: { id: true },
+  });
+  const target =
+    already ??
+    (await tx.invoicePayment.findFirst({
+      where: {
+        organizationId,
+        origin: InvoiceOrigin.JOBBER,
+        jobberRecordId: null,
+        paidOn: dateOf(record.paidOn),
+        amountCents: record.amountCents,
+        invoice: { jobberInvoiceId: record.jobberInvoiceId },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    }));
+  if (!target) return 'unmatched';
+  await tx.invoicePayment.update({
+    where: { id: target.id },
+    data: {
+      jobberRecordId: record.jobberRecordId,
+      jobberPaymentType: record.jobberPaymentType,
+      method: record.method,
+      reference: record.reference,
+      note: record.note,
+    },
+  });
+  return 'paired';
 }
 
 /** An invoice Jobber deleted: gone from the copy, with its lines and payments. */

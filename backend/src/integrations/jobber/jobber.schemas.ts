@@ -126,15 +126,57 @@ export const jobberInvoiceSchema = z.object({
   invoiceStatus: z.enum(JOBBER_INVOICE_STATUSES),
   issuedDate: jobberDateTime.nullish(),
   dueDate: jobberDateTime.nullish(),
+  receivedDate: jobberDateTime.nullish(),
+  dateViewedInClientHub: jobberDateTime.nullish(),
   message: z.string().nullish(),
+  contractDisclaimer: z.string().nullish(),
   jobberWebUri: z.string().nullish(),
   updatedAt: jobberDateTime,
+  billingIsSameAsPropertyAddress: z.boolean().nullish(),
+  taxCalculationMethod: z.string().nullish(),
   amounts: z
-    .object({ subtotal: z.number(), taxAmount: z.number(), total: z.number(), invoiceBalance: z.number() })
+    .object({
+      subtotal: z.number(),
+      discountAmount: z.number().nullish(),
+      taxAmount: z.number(),
+      depositAmount: z.number().nullish(),
+      tipsTotal: z.number().nullish(),
+      total: z.number(),
+      invoiceBalance: z.number(),
+    })
     .nullish(),
-  billingAddress: address.nullish(),
-  client: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
-  jobs: z.object({ nodes: z.array(z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish() })) }),
+  /** Percent or Unit (an amount), as Jobber names CostModifierTypeEnum. */
+  discount: z.object({ rate: z.number(), type: z.string() }).nullish(),
+  taxRate: z.object({ name: z.string().nullish(), tax: z.number().nullish() }).nullish(),
+  salesperson: z.object({ name: z.object({ full: z.string().nullish() }).nullish() }).nullish(),
+  /** Jobber's six kinds of custom field: each its label and, where it is plain, its value. */
+  customFields: z
+    .array(
+      z.object({
+        __typename: z.string(),
+        label: z.string().nullish(),
+        valueText: z.string().nullish(),
+        valueNumeric: z.number().nullish(),
+        unit: z.string().nullish(),
+        valueDropdown: z.string().nullish(),
+        valueTrueFalse: z.boolean().nullish(),
+      }),
+    )
+    .nullish(),
+  billingAddress: address.extend({ name: z.string().nullish() }).nullish(),
+  client: z
+    .object({
+      id: z.string(),
+      name: z.string().nullish(),
+      emails: z.array(z.object({ address: z.string(), primary: z.boolean().nullish() })).nullish(),
+      phones: z.array(z.object({ number: z.string(), primary: z.boolean().nullish() })).nullish(),
+    })
+    .nullish(),
+  jobs: z.object({
+    nodes: z.array(
+      z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish(), title: z.string().nullish() }),
+    ),
+  }),
   visits: z.object({ nodes: z.array(z.object({ id: z.string() })) }),
   /** The property the invoice is for: how one billing no visit the console has finds its page. */
   properties: z.object({ nodes: z.array(z.object({ id: z.string(), address: address.nullish() })) }),
@@ -147,6 +189,10 @@ export const jobberInvoiceSchema = z.object({
         quantity: z.number(),
         unitPrice: z.number(),
         totalPrice: z.number(),
+        taxable: z.boolean().nullish(),
+        date: jobberDateTime.nullish(),
+        category: z.string().nullish(),
+        linkedProductOrService: z.object({ name: z.string().nullish() }).nullish(),
       }),
     ),
   }),
@@ -156,6 +202,36 @@ export const jobberInvoiceSchema = z.object({
       z.object({ id: z.string().min(1), amount: z.number(), entryDate: jobberDateTime, adjustmentType: z.string() }),
     ),
   }),
+  /** The invoice's notes, and the job's Jobber shows beside them; only those two kinds carry text. */
+  notes: z
+    .object({
+      totalCount: z.number().int(),
+      nodes: z.array(
+        z.object({
+          __typename: z.string(),
+          id: z.string().nullish(),
+          message: z.string().nullish(),
+          pinned: z.boolean().nullish(),
+          createdAt: jobberDateTime.nullish(),
+        }),
+      ),
+    })
+    .nullish(),
+  noteAttachments: z
+    .object({
+      totalCount: z.number().int(),
+      nodes: z.array(
+        z.object({
+          id: z.string(),
+          fileName: z.string(),
+          contentType: z.string(),
+          fileSize: z.number().int(),
+          url: z.string().nullish(),
+          createdAt: jobberDateTime,
+        }),
+      ),
+    })
+    .nullish(),
 });
 
 export const jobberInvoicesPageSchema = z.object({
@@ -167,9 +243,30 @@ export const jobberInvoicesPageSchema = z.object({
 
 export const jobberInvoiceByIdSchema = z.object({ invoice: jobberInvoiceSchema.nullable() });
 
-export const jobberPaymentRecordInvoiceSchema = z.object({
-  paymentRecord: z.object({ invoice: z.object({ id: z.string() }).nullish() }).nullable(),
+export type JobberInvoice = z.infer<typeof jobberInvoiceSchema>;
+
+/** One payment in Jobber's payment list (PAYMENTS_PAGE_QUERY). */
+export const jobberPaymentRecordSchema = z.object({
+  id: z.string().min(1),
+  amount: z.number(),
+  entryDate: jobberDateTime,
+  paymentType: z.string().nullish(),
+  details: z.string().nullish(),
+  invoice: z.object({ id: z.string() }).nullish(),
+  checkNumber: z.string().nullish(),
+  confirmationNumber: z.string().nullish(),
+  ccTransactionNumber: z.string().nullish(),
 });
 
-export type JobberInvoice = z.infer<typeof jobberInvoiceSchema>;
+export const jobberPaymentsPageSchema = z.object({
+  paymentRecords: z.object({
+    nodes: z.array(jobberPaymentRecordSchema),
+    pageInfo: z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullish() }),
+  }),
+});
+
+/** PAYMENT_RECORD_QUERY: null when Jobber no longer has the payment. */
+export const jobberPaymentRecordByIdSchema = z.object({ paymentRecord: jobberPaymentRecordSchema.nullable() });
+
+export type JobberPaymentRecord = z.infer<typeof jobberPaymentRecordSchema>;
 export type JobberInvoicesPage = z.infer<typeof jobberInvoicesPageSchema>;
