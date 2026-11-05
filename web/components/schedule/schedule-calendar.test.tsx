@@ -220,6 +220,58 @@ describe('the toolbar', () => {
   });
 });
 
+/**
+ * With the map on, a day is picked for the map and the calendar stays (the
+ * office, 2026-11-05: "if we click november 2 it won't click it and it can't be
+ * shown in the map cause we can't click it").
+ */
+describe('a day picked for the map', () => {
+  it("shows the week's day on the map from its head, keeping the week", async () => {
+    mount({ view: 'week', map: true });
+    const heads = await screen.findAllByRole('button', { name: /^Show .* on the map$/ });
+    expect(heads.map((head) => head.textContent)).toEqual(['1 Sun', '2 Mon', '3 Tue', '4 Wed', '5 Thu', '6 Fri', '7 Sat']);
+    // The day on the map is the one marked.
+    expect(heads.map((head) => head.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'true', 'false', 'false', 'false']);
+
+    fireEvent.click(heads[1]);
+    expect(onChange).toHaveBeenCalledWith({ anchor: '2026-11-02' });
+    expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ view: 'day' }));
+  });
+
+  it("picks a day from anywhere on its column, but a visit still opens the visit", async () => {
+    mount({ view: 'week', map: true });
+    await screen.findAllByRole('button', { name: /^Show .* on the map$/ });
+    // The Anytime row: its label, then Sunday to Saturday.
+    const anytime = screen.getByText('Anytime').parentElement!;
+    fireEvent.click(anytime.children[2]!);
+    expect(onChange).toHaveBeenCalledWith({ anchor: '2026-11-02' });
+
+    onChange.mockReset();
+    fireEvent.click(await screen.findByRole('button', { name: /12 Elm Ct/ }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("picks the month's day for the map, while +more still opens the whole day", async () => {
+    asked.days['2026-11-18'] = day(
+      '2026-11-18',
+      ['a', 'b', 'c', 'd', 'e'].map((id) => row({ inspectionId: `insp-${id}`, property: `${id} Example Rd` })),
+    );
+    mount({ anchor: '2026-11-04', view: 'month', map: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show Wed 18 on the map' }));
+    expect(onChange).toHaveBeenLastCalledWith({ anchor: '2026-11-18' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '+2 more' }));
+    expect(onChange).toHaveBeenLastCalledWith({ view: 'day', anchor: '2026-11-18' });
+  });
+
+  it('opens the Day view from a head while the map is off, as Jobber does', async () => {
+    mount({ view: 'week', map: false });
+    fireEvent.click((await screen.findAllByRole('button', { name: /^Open .* as a day$/ }))[1]!);
+    expect(onChange).toHaveBeenCalledWith({ view: 'day', anchor: '2026-11-02' });
+  });
+});
+
 describe('the Unassigned drawer', () => {
   it('reads the list only once it is opened, oldest first', async () => {
     mount();

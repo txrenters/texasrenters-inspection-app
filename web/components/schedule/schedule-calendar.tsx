@@ -3,7 +3,7 @@
 import type { JobberDayComparison, JobberDayRow } from '@texasrenters/shared';
 import { useQueries } from '@tanstack/react-query';
 import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, MapIcon } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 
 import { FilterPill, type FilterOption } from '@/components/planning/filter-pill';
 import { ErrorState } from '@/components/states';
@@ -126,7 +126,18 @@ export function ScheduleCalendar({
 
   const options = filterOptions(byDate, nameOf);
   const shownOn = (date: string) => (byDate.get(date)?.rows ?? []).filter((row) => isShown(row, hidden));
-  const openDay = (date: string) => onChange({ view: 'day', anchor: date });
+  /**
+   * A day picked in the Week or Month view. With the map on, it is the map's
+   * day and the calendar stays where it is (the office, 2026-11-05: "if we
+   * click november 2 it won't click it and it can't be shown in the map"):
+   * opening the Day view was the only thing a day did, which took the week
+   * away to show one day on the map. With the map off, it opens the Day view,
+   * as Jobber's does.
+   */
+  const mapOn = map && canMap;
+  const openDayView = (date: string) => onChange({ view: 'day', anchor: date });
+  const openDay = (date: string) => (mapOn ? onChange({ anchor: date }) : openDayView(date));
+  const mapDay = mapOn ? anchor : null;
 
   return (
     <>
@@ -202,7 +213,7 @@ export function ScheduleCalendar({
         </div>
       </div>
 
-      <div className={cn(map && canMap && 'grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,38%)]')}>
+      <div className={cn(mapOn && 'grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,38%)]')}>
         <div className="min-w-0">
           {failed ? (
             <ErrorState error={failed.error} retry={() => results.forEach((result) => void result.refetch())} />
@@ -218,12 +229,20 @@ export function ScheduleCalendar({
               today={today}
             />
           ) : view === 'week' ? (
-            <WeekView days={days} nameOf={nameOf} onOpenDay={openDay} shownOn={shownOn} today={today} />
+            <WeekView days={days} mapDay={mapDay} nameOf={nameOf} onOpenDay={openDay} shownOn={shownOn} today={today} />
           ) : (
-            <MonthView anchor={anchor} nameOf={nameOf} onOpenDay={openDay} shownOn={shownOn} today={today} />
+            <MonthView
+              anchor={anchor}
+              mapDay={mapDay}
+              nameOf={nameOf}
+              onOpenDay={openDay}
+              onOpenDayView={openDayView}
+              shownOn={shownOn}
+              today={today}
+            />
           )}
         </div>
-        {map && canMap ? <ScheduleMap date={anchor} /> : null}
+        {mapOn ? <ScheduleMap date={anchor} /> : null}
       </div>
     </>
   );
@@ -334,12 +353,17 @@ interface GridColumn {
  */
 function TimeGrid({
   columns,
+  mapDay = null,
   nameOf,
+  onPickDay,
   template,
   today,
 }: {
   columns: GridColumn[];
+  /** The Week view's: a click on a day's hours picks it for the map. */
+  mapDay?: string | null;
   nameOf: NameOf;
+  onPickDay?: (date: string) => void;
   template: string;
   today: string;
 }) {
@@ -375,7 +399,16 @@ function TimeGrid({
           .filter((entry): entry is { row: JobberDayRow; start: string } => Boolean(entry.start))
           .sort((a, b) => a.start.localeCompare(b.start));
         return (
-          <div className="relative border-l" key={column.key} style={{ height }}>
+          <div
+            className={cn(
+              'relative border-l',
+              onPickDay && mapDay !== null && 'cursor-pointer',
+              onPickDay && mapDay === column.date && 'bg-primary/10',
+            )}
+            key={column.key}
+            onClick={onPickDay ? pickOnGround(mapDay, column.date, onPickDay) : undefined}
+            style={{ height }}
+          >
             {hours.map((hour) => (
               <span
                 aria-hidden
@@ -485,20 +518,37 @@ function DayView({
   );
 }
 
+/**
+ * A click on a day's own ground -- not on a visit or a button in it -- picks the
+ * day for the map. Only while the map is on; otherwise the ground does nothing,
+ * as Jobber's does.
+ */
+function pickOnGround(mapDay: string | null, date: string, onPick: (date: string) => void) {
+  if (mapDay === null) return undefined;
+  return (event: MouseEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest('button, a, [role="button"], [role="dialog"]')) return;
+    onPick(date);
+  };
+}
+
 /** Jobber's Week view: Sunday to Saturday, a column a day. */
 function WeekView({
   days,
+  mapDay,
   nameOf,
   onOpenDay,
   shownOn,
   today,
 }: {
   days: string[];
+  /** The day on the map beside the calendar; null while the map is off. */
+  mapDay: string | null;
   nameOf: NameOf;
   onOpenDay: (date: string) => void;
   shownOn: (date: string) => JobberDayRow[];
   today: string;
 }) {
+  const onMap = (date: string) => mapDay === date;
   const template = `3.5rem repeat(${days.length}, minmax(9rem, 1fr))`;
   const grid = days.map((date) => ({
     key: date,
@@ -512,13 +562,28 @@ function WeekView({
         <div className="grid border-b" style={{ gridTemplateColumns: template }}>
           <span />
           {grid.map((column) => (
-            <div className="flex flex-col items-center gap-1 border-l px-2 py-2.5" key={column.key}>
-              {/* The day's head opens its Day view, as Jobber's does. */}
+            <div
+              className={cn(
+                'flex flex-col items-center gap-1 border-l px-2 py-2.5',
+                mapDay !== null && 'cursor-pointer',
+                onMap(column.date) && 'bg-primary/10',
+              )}
+              key={column.key}
+              onClick={pickOnGround(mapDay, column.date, onOpenDay)}
+            >
+              {/* The day's head opens its Day view, as Jobber's does -- or, with
+                  the map on, shows the day on the map. */}
               <button
-                aria-label={`Open ${weekdayOf(column.date)} ${dayOfMonth(column.date)} as a day`}
+                aria-label={
+                  mapDay === null
+                    ? `Open ${weekdayOf(column.date)} ${dayOfMonth(column.date)} as a day`
+                    : `Show ${weekdayOf(column.date)} ${dayOfMonth(column.date)} on the map`
+                }
+                aria-pressed={mapDay === null ? undefined : onMap(column.date)}
                 className={cn(
                   'focus-visible:ring-ring/50 rounded-md px-2 py-0.5 text-sm font-semibold outline-none focus-visible:ring-[3px]',
                   column.date === today ? 'bg-primary text-primary-foreground' : 'text-heading hover:bg-accent',
+                  onMap(column.date) && 'ring-primary ring-2 ring-offset-1 ring-offset-card',
                 )}
                 onClick={() => onOpenDay(column.date)}
                 type="button"
@@ -532,7 +597,15 @@ function WeekView({
         <div className="grid" style={{ gridTemplateColumns: template }}>
           <span className="text-muted-foreground px-2 py-2 text-right text-[11px]">Anytime</span>
           {grid.map((column) => (
-            <div className="min-w-0 border-l p-1.5" key={column.key}>
+            <div
+              className={cn(
+                'min-w-0 border-l p-1.5',
+                mapDay !== null && 'cursor-pointer',
+                onMap(column.date) && 'bg-primary/10',
+              )}
+              key={column.key}
+              onClick={pickOnGround(mapDay, column.date, onOpenDay)}
+            >
               <VisitStack
                 date={column.date}
                 nameOf={nameOf}
@@ -543,7 +616,14 @@ function WeekView({
             </div>
           ))}
         </div>
-        <TimeGrid columns={grid} nameOf={nameOf} template={template} today={today} />
+        <TimeGrid
+          columns={grid}
+          mapDay={mapDay}
+          nameOf={nameOf}
+          onPickDay={onOpenDay}
+          template={template}
+          today={today}
+        />
       </div>
     </div>
   );
@@ -552,14 +632,20 @@ function WeekView({
 /** Jobber's Month view: whole weeks, the month's own days filled in. */
 function MonthView({
   anchor,
+  mapDay,
   nameOf,
   onOpenDay,
+  onOpenDayView,
   shownOn,
   today,
 }: {
   anchor: string;
+  /** The day on the map beside the calendar; null while the map is off. */
+  mapDay: string | null;
   nameOf: NameOf;
   onOpenDay: (date: string) => void;
+  /** "+3 more": always the Day view, where the rest of the day's visits are, map on or off. */
+  onOpenDayView: (date: string) => void;
   shownOn: (date: string) => JobberDayRow[];
   today: string;
 }) {
@@ -588,15 +674,24 @@ function MonthView({
                   index % 7 !== 0 && 'border-l',
                   index >= 7 && 'border-t',
                   !own && 'bg-muted/40',
+                  own && mapDay !== null && 'cursor-pointer',
+                  own && mapDay === date && 'bg-primary/10',
                 )}
                 key={date}
+                onClick={own ? pickOnGround(mapDay, date, onOpenDay) : undefined}
               >
                 <div className="flex items-center justify-between gap-1">
                   <button
-                    aria-label={`Open ${weekdayOf(date)} ${dayOfMonth(date)} as a day`}
+                    aria-label={
+                      mapDay === null
+                        ? `Open ${weekdayOf(date)} ${dayOfMonth(date)} as a day`
+                        : `Show ${weekdayOf(date)} ${dayOfMonth(date)} on the map`
+                    }
+                    aria-pressed={mapDay === null || !own ? undefined : mapDay === date}
                     className={cn(
                       'focus-visible:ring-ring/50 inline-flex size-6 items-center justify-center rounded-full text-xs font-semibold outline-none focus-visible:ring-[3px]',
                       date === today ? 'bg-primary text-primary-foreground' : own ? 'text-heading hover:bg-accent' : 'text-muted-foreground',
+                      own && mapDay === date && 'ring-primary ring-2 ring-offset-1 ring-offset-card',
                     )}
                     disabled={!own}
                     onClick={() => onOpenDay(date)}
@@ -616,7 +711,7 @@ function MonthView({
                 {rows.length > MONTH_SHOWN ? (
                   <button
                     className="text-primary self-start px-1 text-[11px] font-semibold hover:underline"
-                    onClick={() => onOpenDay(date)}
+                    onClick={() => onOpenDayView(date)}
                     type="button"
                   >
                     +{rows.length - MONTH_SHOWN} more
