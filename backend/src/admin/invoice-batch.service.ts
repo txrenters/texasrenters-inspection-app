@@ -19,10 +19,10 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { insertConsoleInvoice } from './invoice-insert';
 import { lockInvoiceNumbers } from './invoice-numbers';
 import { InvoicesService, draftLines, servicesDone } from './invoices.service';
+import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
 
 /**
  * Making many invoices at once (2026-11-06, phase 4 of taking invoicing over
@@ -128,12 +128,7 @@ export class InvoiceBatchService {
    * keyed by the batch and its visit.
    */
   async batch(user: AuthenticatedUser, input: BatchInvoiceInput): Promise<BatchInvoiceResult> {
-    if (!getJobberConfig().invoiceWritesEnabled)
-      throw new ApplicationError(
-        409,
-        'INVOICE_WRITES_OFF',
-        'Invoices and payments are made and changed in Jobber until the console takes over invoicing.',
-      );
+    if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
     const today = businessDate();
     const ids = [...new Set(input.inspectionIds)];
     if (!ids.length) throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Choose at least one visit.');

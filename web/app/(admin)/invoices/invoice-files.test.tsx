@@ -36,6 +36,8 @@ const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ invoiceId: 'inv-1' }), useRouter: () => ({ push: vi.fn() }) }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+// The cutover is tested in invoice-takeover.test.tsx.
+vi.mock('@/components/invoices/invoice-takeover-section', () => ({ InvoiceTakeoverSection: () => null }));
 vi.mock('sonner', () => ({ toast }));
 
 const file = (id: string, over: Record<string, unknown> = {}) => ({

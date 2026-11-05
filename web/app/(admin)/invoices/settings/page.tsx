@@ -14,6 +14,7 @@ import {
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
+import { InvoiceTakeoverSection } from '@/components/invoices/invoice-takeover-section';
 import { PageHeader } from '@/components/page-header';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
@@ -58,6 +59,7 @@ export default function InvoiceSettingsPage() {
       <SettingsForm key={settings.data.updatedAt ?? 'never'} mayChange={mayChange} view={settings.data} />
       <ProductsSection mayChange={mayChange} view={settings.data} />
       {settings.data.files ? <FileCopiesSection files={settings.data.files} mayChange={mayChange} /> : null}
+      <InvoiceTakeoverSection />
     </>
   );
 }

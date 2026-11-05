@@ -59,6 +59,8 @@ const INVOICE_DETAIL = {
 
 function setup(detail: Partial<InvoiceDetail> = {}, sentToday: string[][] = []) {
   const db = {
+    // Jobber still holds the invoices: not taken over (phase 8).
+    invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoiceDelivery: {
       findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue(sentToday.map((recipients) => ({ recipients }))),

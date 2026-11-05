@@ -7,10 +7,10 @@ import { businessDayBounds } from '../common/business-day';
 import { ceilingFrom } from '../common/daily-allowance';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { MailService } from '../mail/mail.service';
 import { invoiceEmail } from './invoice-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
+import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
 
 /**
  * Sending an invoice to the client by email (2026-11-06, phase 5 of taking
@@ -44,12 +44,7 @@ export class InvoiceDeliveryService {
   ) {}
 
   async send(user: AuthenticatedUser, invoiceId: string, input: SendInvoiceInput): Promise<InvoiceDetail> {
-    if (!getJobberConfig().invoiceWritesEnabled)
-      throw new ApplicationError(
-        409,
-        'INVOICE_WRITES_OFF',
-        'Invoices and payments are made and changed in Jobber until the console takes over invoicing.',
-      );
+    if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
     const problem = recipientsProblem(input.to);
     if (problem) throw new ApplicationError(422, 'INVOICE_SEND_INVALID', problem);
     const to = input.to.map((address) => address.trim()).filter(Boolean);

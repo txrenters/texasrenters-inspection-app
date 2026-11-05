@@ -10,6 +10,9 @@ import {
 } from '@texasrenters/shared';
 import { InvoiceStatus, type Prisma } from '@prisma/client';
 
+import { ApplicationError } from '../common/errors';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
+
 /**
  * What the office's invoice settings come to (2026-11-06, phase 6): the
  * company an invoice is from, what a new one starts with, and the prices its
@@ -189,3 +192,23 @@ export async function officePrices(
     ...billed.filter((price) => !known.has(productNameKey(price.name))),
   ];
 }
+
+/** When the console took invoicing over from Jobber (2026-11-06, phase 8); null while Jobber holds it. */
+export async function invoicingTakenOverAt(db: Db, organizationId: string): Promise<Date | null> {
+  const row = await db.invoiceSettings.findUnique({ where: { organizationId }, select: { invoicingTakenOverAt: true } });
+  return row?.invoicingTakenOverAt ?? null;
+}
+
+/**
+ * Whether the console makes and changes invoices and payments: once it took
+ * invoicing over, or when the server is told so (`JOBBER_INVOICE_WRITES_ENABLED`,
+ * for trying the writes out before the cutover). Until then Jobber holds them,
+ * and a change here would be undone by the next read of Jobber's copy.
+ */
+export async function invoiceWritesOn(db: Db, organizationId: string): Promise<boolean> {
+  return getJobberConfig().invoiceWritesEnabled || (await invoicingTakenOverAt(db, organizationId)) !== null;
+}
+
+/** The refusal while Jobber holds the invoices. */
+export const invoiceWritesOff = () =>
+  new ApplicationError(409, 'INVOICE_WRITES_OFF', 'Invoices and payments are made and changed in Jobber until the console takes over invoicing.');

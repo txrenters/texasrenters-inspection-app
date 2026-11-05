@@ -19,6 +19,7 @@ import {
 import { JobberClient, type JobberCost } from '../../integrations/jobber/jobber.client';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { JobberMappingService, type BuildingIndex } from '../../integrations/jobber/jobber.mapping.service';
+import { invoicingTakenOverAt } from '../../admin/invoice-settings';
 import {
   INVOICE_BY_ID_QUERY,
   invoicesPageQuery,
@@ -121,7 +122,8 @@ export interface InvoiceReadResult {
   /** The payment list reached its last payment. */
   paymentsCaughtUp: boolean;
   problem: InvoiceReadProblem | null;
-  skipped: 'NOT_CONNECTED' | 'WAITING' | null;
+  /** TAKEN_OVER: the console owns invoicing (phase 8), and Jobber's are no longer read. */
+  skipped: 'NOT_CONNECTED' | 'WAITING' | 'TAKEN_OVER' | null;
 }
 
 /**
@@ -210,6 +212,8 @@ export class JobberInvoiceWorker {
     });
     if (!connection || connection.status !== JobberConnectionStatus.CONNECTED)
       return { ...result, skipped: 'NOT_CONNECTED' };
+    // Nothing is asked of Jobber once the console owns invoicing (phase 8).
+    if (await invoicingTakenOverAt(this.prisma, organizationId)) return { ...result, skipped: 'TAKEN_OVER' };
     if (
       connection.invoiceReadProblem &&
       connection.invoiceReadCheckedAt &&
@@ -311,6 +315,8 @@ export class JobberInvoiceWorker {
 
   /** INVOICE_CREATE and INVOICE_UPDATE: the invoice as Jobber has it now; gone from the copy if Jobber has not. */
   async refreshInvoice(organizationId: string, jobberInvoiceId: string): Promise<InvoiceCopyResult | 'removed'> {
+    // A webhook after the cutover: not even asked of Jobber.
+    if (await invoicingTakenOverAt(this.prisma, organizationId)) return 'stale';
     const invoice = await this.fetchOne(organizationId, jobberInvoiceId);
     if (!invoice) {
       await this.removeInvoice(organizationId, jobberInvoiceId);
@@ -335,6 +341,7 @@ export class JobberInvoiceWorker {
    * found by the pairing, and its invoice read again without it.
    */
   async refreshForPayment(organizationId: string, jobberRecordId: string) {
+    if (await invoicingTakenOverAt(this.prisma, organizationId)) return 'stale';
     const data = await this.client.request(organizationId, PAYMENT_RECORD_QUERY, { id: jobberRecordId });
     const record = jobberPaymentRecordByIdSchema.parse(data).paymentRecord;
     const details = record ? toPaymentDetails(record) : null;

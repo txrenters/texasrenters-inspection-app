@@ -106,3 +106,4 @@ export * from './invoices.js';
 export * from './invoice-edits.js';
 export * from './invoice-batch.js';
 export * from './invoice-settings.js';
+export * from './invoice-takeover.js';
