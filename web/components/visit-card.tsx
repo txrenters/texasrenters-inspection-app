@@ -1,30 +1,25 @@
 'use client';
 
 import {
-  filterLabel,
-  installedFiltersSummary,
   isFinishedStatus,
   parseVisitDetails,
-  REPORTABLE_VISIT_SERVICES,
   servicesToReschedule,
   VISIT_SERVICE_LABEL,
   visitStateLabel,
   visitStateOf,
   type AdminInspection,
   type VisitDetails,
-  type VisitFilterOutcome,
-  type VisitServicesReport,
 } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { Fragment, useMemo, type ReactNode } from 'react';
 
-import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { VisitFoldCard, VisitWork, type VisitAreaCounts } from '@/components/visit-work';
 import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
-import { formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
+import { formatScheduledDate, humanize } from '@/lib/format';
 import { inspectionTime, jobWorked } from '@/lib/job-time';
 import { weekdayOf } from '@/lib/schedule-calendar';
 
@@ -43,15 +38,21 @@ import { weekdayOf } from '@/lib/schedule-calendar';
  *
  * Everything parsed from the Details is a reading of free text, and a reading
  * can be wrong where the text cannot, so the text is always one click away.
+ *
+ * Instructions first, then the work as cards (the office, 2026-11-06): see
+ * `visit-work.tsx`.
  */
 export function VisitCard({
   inspection,
   technicianName,
   action,
+  areas = null,
 }: {
   inspection: AdminInspection;
   /** The technician currently assigned, if anyone is. */
   technicianName?: string | null;
+  /** How far the review of its areas has come, for the inspection's card. */
+  areas?: VisitAreaCounts | null;
   /** A control for the header: "Edit visit", where the viewer may. */
   action?: ReactNode;
 }) {
@@ -93,6 +94,7 @@ export function VisitCard({
     read.tenants.length > 0 || read.accessNotes.length > 0 || read.contactTenantsBeforeArrival;
   const planning =
     services.length || read.services.filterChange || read.plan || tenantOrAccess || read.notes.length;
+  const instructions = tasks.length || planning || read.raw || inspection.jobberVisitTitle;
   // Where the visit stands with Jobber, as words after the visit's state.
   const sync = [
     inJobber ? { key: 'jobber', text: 'Jobber' } : null,
@@ -251,53 +253,53 @@ export function VisitCard({
           </Alert>
         ) : null}
 
-        {report ? (
-          <ServicesDone
-            report={report}
-            reportedAt={inspection.servicesReportedAt ?? null}
-            submittedAt={inspection.submittedAt ?? null}
-          />
+        {/* What to do comes before what was done (the office, 2026-11-06). One card
+            for all of it, open while it is needed and folded once the visit is
+            over, so the areas under review are not a screen below it. */}
+        {instructions ? (
+          <VisitFoldCard open={!planningCollapsed} summary={instructionsLine(read, tasks, tenantOrAccess)} title="Instructions">
+            {tasks.length ? (
+              <section aria-label="Tasks on the visit" className="grid gap-2">
+                <h3 className="text-muted-foreground text-xs">Tasks on the visit</h3>
+                <ul className="grid gap-1.5 text-sm">
+                  {tasks.map((task, index) =>
+                    task.heading ? (
+                      <li className="text-muted-foreground pt-1 text-xs" key={index}>
+                        {task.text}
+                      </li>
+                    ) : (
+                      <li className="flex gap-2" key={index}>
+                        <span aria-hidden className="bg-muted-foreground mt-2 size-1 shrink-0 rounded-full" />
+                        <span>{task.text}</span>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </section>
+            ) : null}
+            {planning ? <Planning read={read} services={services} tenantOrAccess={tenantOrAccess} /> : null}
+            {read.raw || inspection.jobberVisitTitle ? (
+              <details>
+                <summary className="text-muted-foreground cursor-pointer text-sm select-none">
+                  {inJobber ? 'As written in Jobber' : 'As written'}
+                </summary>
+                <div className="bg-muted mt-2 grid gap-2 rounded-lg p-3 text-sm">
+                  {inspection.jobberVisitTitle ? <p className="font-medium">{inspection.jobberVisitTitle}</p> : null}
+                  {read.raw ? <p className="whitespace-pre-wrap">{read.raw}</p> : null}
+                </div>
+              </details>
+            ) : null}
+          </VisitFoldCard>
         ) : null}
 
-        {tasks.length ? (
-          <section aria-label="Tasks on the visit" className="grid gap-2">
-            <h3 className="text-muted-foreground text-xs">Tasks on the visit</h3>
-            <ul className="grid gap-1.5 text-sm">
-              {tasks.map((task, index) =>
-                task.heading ? (
-                  <li className="text-muted-foreground pt-1 text-xs" key={index}>
-                    {task.text}
-                  </li>
-                ) : (
-                  <li className="flex gap-2" key={index}>
-                    <span aria-hidden className="bg-muted-foreground mt-2 size-1 shrink-0 rounded-full" />
-                    <span>{task.text}</span>
-                  </li>
-                ),
-              )}
-            </ul>
-          </section>
-        ) : null}
-
-        {planning ? (
-          <Fold collapsed={planningCollapsed} label="Before the visit">
-            <Planning read={read} services={services} tenantOrAccess={tenantOrAccess} />
-          </Fold>
-        ) : null}
-
-        {read.raw || inspection.jobberVisitTitle ? (
-          <details>
-            <summary className="text-muted-foreground cursor-pointer text-sm select-none">
-              {inJobber ? 'As written in Jobber' : 'As written'}
-            </summary>
-            <div className="bg-muted mt-2 grid gap-2 rounded-lg p-3 text-sm">
-              {inspection.jobberVisitTitle ? (
-                <p className="font-medium">{inspection.jobberVisitTitle}</p>
-              ) : null}
-              {read.raw ? <p className="whitespace-pre-wrap">{read.raw}</p> : null}
-            </div>
-          </details>
-        ) : null}
+        <VisitWork
+          areas={areas}
+          inspection={inspection}
+          report={report}
+          // Nobody got in, so there is no inspection to speak of: the alert above says why.
+          showInspection={(done || Boolean(worked)) && visitStateOf(inspection) !== 'COULD_NOT_GET_IN'}
+          status={state}
+        />
 
         {/* Where the record came from, mostly: "Imported from an Inspect &
             Cloud PDF report", "Booked from Propertyware". Never published.
@@ -369,102 +371,6 @@ function visitTasks(read: VisitDetails): { text: string; heading: boolean }[] {
   });
 }
 
-/**
- * How long after the job was submitted a photograph still missing is called
- * missing rather than uploading. A phone in a cupboard with no signal sends it
- * when the signal returns, which is hours at most; days means it is not coming.
- */
-const PHOTO_OVERDUE_MS = 24 * 60 * 60 * 1000;
-
-/** What the technician reported doing: the part a reviewer reads. */
-function ServicesDone({
-  report,
-  reportedAt,
-  submittedAt,
-}: {
-  report: VisitServicesReport;
-  reportedAt: string | null;
-  submittedAt: string | null;
-}) {
-  // "Still uploading" four days on told the office to wait for a photograph
-  // that was never coming (5706 Micah Ln, 2026-10-02 to 10-06).
-  const overdue = submittedAt ? Date.now() - Date.parse(submittedAt) > PHOTO_OVERDUE_MS : false;
-  return (
-    <section aria-label="Services done" className="grid gap-2">
-      <h3 className="text-muted-foreground text-xs">
-        Services reported by the technician
-        {reportedAt ? ` · ${formatDateTime(reportedAt)}` : ''}
-      </h3>
-      <ul className="grid gap-1.5 text-sm">
-        {REPORTABLE_VISIT_SERVICES.filter((service) => report.services[service]).map((service) => {
-          const outcome = report.services[service]!;
-          return (
-            <li className="flex flex-wrap items-baseline gap-x-2 gap-y-1" key={service}>
-              <Badge variant={outcome.done ? 'success' : 'warning'}>
-                {outcome.done ? 'Done' : 'Not done'}
-              </Badge>
-              <span className="font-medium">{VISIT_SERVICE_LABEL[service]}</span>
-              {outcome.reason ? <span className="text-muted-foreground">{outcome.reason}</span> : null}
-              {outcome.reschedule ? <Badge variant="outline">Reschedule</Badge> : null}
-            </li>
-          );
-        })}
-      </ul>
-      {/* Counted, as the Jobber note says it: the invoice is made from it. */}
-      {installedFiltersSummary(report) ? (
-        <p className="text-sm">
-          Filters installed: <span className="font-mono">{installedFiltersSummary(report)}</span>
-        </p>
-      ) : null}
-      {/* Each register the technician answered for, once the office asked for a
-          photograph of each (2026-09-18). One marked changed whose photograph
-          has not arrived says so, rather than reading as evidenced. */}
-      {report.filters?.length ? (
-        <ul aria-label="Filter registers" className="grid gap-1.5 text-sm">
-          {report.filters.map((filter) => (
-            <li
-              className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
-              key={`${filter.size}-${filter.location ?? ''}-${filter.slot}`}
-            >
-              {filter.removed ? (
-                <Badge variant="outline">Not at the property</Badge>
-              ) : (
-                <Badge variant={filter.changed ? 'success' : 'warning'}>
-                  {filter.changed ? 'Changed' : 'Not changed'}
-                </Badge>
-              )}
-              <span className={filter.removed ? 'font-mono line-through' : 'font-mono'}>
-                {filterLabel(filter.removed ? { ...filter, actualSize: null } : filter)}
-              </span>
-              {filter.booked ? null : <Badge variant="outline">Found on site</Badge>}
-              {/* The listed size the technician corrected: the office's record of
-                  this property is wrong until somebody fixes it. */}
-              {filter.actualSize && !filter.removed ? (
-                <span className="text-muted-foreground text-xs">listed as {filter.size}</span>
-              ) : null}
-              {filter.reason ? <span className="text-muted-foreground">{filter.reason}</span> : null}
-              {/* How it was found, on an HVAC job (Moses, 2026-10-01). */}
-              {filterScore(filter) ? (
-                <span className="text-muted-foreground text-xs">{filterScore(filter)}</span>
-              ) : null}
-              {filter.changed && !filter.photoId && !filter.removed ? (
-                overdue ? (
-                  <span className="text-destructive text-xs">Photograph never arrived</span>
-                ) : (
-                  <span className="text-warning text-xs">Photograph still uploading</span>
-                )
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {/* The photographs themselves, beside the answers they evidence. */}
-      <ServicePhotos areaName="this job" photos={servicePhotos(report)} />
-      {report.notes ? <p className="text-sm whitespace-pre-wrap">{report.notes}</p> : null}
-    </section>
-  );
-}
-
 /** What the visit was booked for, and how to get in: what to know before going. */
 function Planning({
   read,
@@ -499,9 +405,9 @@ function Planning({
                 <ul className="grid gap-1 text-sm">
                   {read.filters.map((filter, index) => (
                     <li className="flex flex-wrap items-baseline gap-x-2" key={`${filter.size}-${index}`}>
-                      <span className="font-mono">{filter.size}</span>
+                      <span>{filter.size}</span>
                       {filter.quantity > 1 ? (
-                        <span className="text-muted-foreground font-mono">× {filter.quantity}</span>
+                        <span className="text-muted-foreground">× {filter.quantity}</span>
                       ) : null}
                       {filter.media ? <Badge variant="outline">Media</Badge> : null}
                       {filter.location ? <span className="text-muted-foreground">{filter.location}</span> : null}
@@ -579,56 +485,6 @@ function Planning({
   );
 }
 
-/** Open as it is, or folded into one closed disclosure. */
-function Fold({ collapsed, label, children }: { collapsed: boolean; label: string; children: ReactNode }) {
-  if (!collapsed) return <>{children}</>;
-  return (
-    <details>
-      <summary className="text-muted-foreground cursor-pointer text-sm select-none">{label}</summary>
-      <div className="mt-3">{children}</div>
-    </details>
-  );
-}
-
-/**
- * How a filter was scored on an HVAC job, as the report's row reads: "Clean Y ·
- * Undamaged N · Working Y · Not present". Empty for a filter nobody scored.
- */
-function filterScore(filter: VisitFilterOutcome): string {
-  const axis = (name: string, value: boolean | null | undefined) =>
-    value == null ? null : `${name} ${value ? 'Y' : 'N'}`;
-  return [
-    axis('Clean', filter.isClean),
-    axis('Undamaged', filter.isUndamaged),
-    axis('Working', filter.isWorking),
-    filter.comment?.trim() || null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-/** Every photograph the technician took for the job's services, labelled by what it shows. */
-function servicePhotos(report: VisitServicesReport): ServicePhoto[] {
-  // One thumbnail per photograph, named for every filter in it: the phone takes
-  // one photograph of all the filters, stacked (the office, 2026-09-29).
-  const byPhoto = new Map<string, string[]>();
-  for (const filter of report.filters ?? []) {
-    if (!filter.photoId) continue;
-    byPhoto.set(filter.photoId, [...(byPhoto.get(filter.photoId) ?? []), filterLabel(filter)]);
-  }
-  const registers = [...byPhoto].map(
-    ([id, labels]): ServicePhoto => ({ id, label: labels.join(', '), captureType: 'SERIAL_OR_LABEL' }),
-  );
-  const services = REPORTABLE_VISIT_SERVICES.filter((service) => report.services[service]?.photoId).map(
-    (service): ServicePhoto => ({
-      id: report.services[service]!.photoId!,
-      label: VISIT_SERVICE_LABEL[service],
-      captureType: 'OTHER',
-    }),
-  );
-  return [...registers, ...services];
-}
-
 /** What each kind of console edit changes, in a sentence: "Sending the new date to Jobber". */
 const PUSH_LABEL: Record<NonNullable<AdminInspection['jobberPushes']>[number]['kind'], string> = {
   VISIT_RESCHEDULE: 'the new date',
@@ -636,6 +492,19 @@ const PUSH_LABEL: Record<NonNullable<AdminInspection['jobberPushes']>[number]['k
   VISIT_EDIT: 'the visit details',
   VISIT_CANCEL: 'the cancellation',
 };
+
+/** A glance at the Instructions card: "3 tasks · 2 filters to bring · tenant and access". */
+function instructionsLine(read: VisitDetails, tasks: { heading: boolean }[], tenantOrAccess: boolean | number) {
+  const count = tasks.filter((task) => !task.heading).length;
+  const filters = read.filters.reduce((sum, filter) => sum + filter.quantity, 0);
+  return [
+    count ? `${count} task${count === 1 ? '' : 's'}` : null,
+    filters ? `${filters} filter${filters === 1 ? '' : 's'} to bring` : null,
+    tenantOrAccess ? 'tenant and access' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 function serviceLabels(read: VisitDetails) {
   return [
