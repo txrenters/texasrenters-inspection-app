@@ -261,8 +261,9 @@ describe('inspection status lifecycle (spec §11)', () => {
       zone: null,
       tbp: null,
       occupancy: null,
-      // No room with anything written on it.
+      // No room with anything written on it, and no note from the office.
       areaNotes: [],
+      officeNotes: [],
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -318,6 +319,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       { id: 'b', name: 'Garage', floorName: null, note: 'Door sticks.', skipReason: null },
     ]);
     expect(detail).not.toHaveProperty('areas');
+    expect(prisma.inspection.findFirst.mock.calls[0][0].select.officeNotes.orderBy).toEqual({ createdAt: 'desc' });
     // Only the rooms with something on them: a house has a dozen, most with nothing.
     expect(prisma.inspection.findFirst.mock.calls[0][0].select.areas.where).toEqual({
       OR: [{ technicianNote: { not: null } }, { skipReason: { not: null } }],

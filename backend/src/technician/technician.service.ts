@@ -30,6 +30,7 @@ import {
   SERVICE_PHOTO_AREA,
   SERVICE_PHOTO_AREA_NAMES,
   servicesToReschedule,
+  technicianJobNotes,
   VISIT_SERVICE_LABEL,
   type BookedFilter,
   type ReportableVisitService,
@@ -412,6 +413,12 @@ const technicianInspectionSummarySelect = {
   status: true,
   priority: true,
   internalNotes: true,
+  // Only what the office ticked "Show to technician" on: the rest stays with it.
+  officeNotes: {
+    where: { visibleToTechnician: true },
+    orderBy: { createdAt: 'asc' },
+    select: { text: true },
+  },
   // The job's clock: started when the technician pressed Start, stopped when
   // they submitted. The app counts from the first, the office reads the pair.
   startedAt: true,
@@ -3988,7 +3995,8 @@ export class TechnicianService {
       // Undefined rather than empty string: the app shows the banner only when
       // there is something to read.
       reopenReason: record.reopenReason ?? undefined,
-      propertyNotes: record.internalNotes ?? '',
+      // Optional-chained for the test doubles that stand in for this read without it.
+      propertyNotes: technicianJobNotes(record.internalNotes, record.officeNotes ?? []),
       // What has been answered so far. Null on a job nobody has ticked yet.
       servicesReport: (record.servicesReport ?? null) as VisitServicesReport | null,
       // Null for anything booked here, so the app can tell "no Jobber visit"

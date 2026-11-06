@@ -1,10 +1,26 @@
-import type { AdminInspection, VisitServicesReport } from '@texasrenters/shared';
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { AdminInspection, OfficeNote, VisitServicesReport } from '@texasrenters/shared';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JobNotes } from './job-notes';
 
 /** The job's Notes section. Everything here is invented. */
+
+const access = vi.hoisted(() => ({ permissions: ['inspections:manage'], userId: 'me' }));
+const mutations = vi.hoisted(() => ({
+  add: { mutate: vi.fn(), isPending: false },
+  edit: { mutate: vi.fn(), isPending: false },
+  remove: { mutate: vi.fn(), isPending: false },
+}));
+
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => ({ profile: { id: access.userId } }),
+  usePermissions: () => ({
+    hasAny: (...keys: string[]) => keys.some((key) => access.permissions.includes(key)),
+  }),
+}));
+vi.mock('@/lib/queries', () => ({ useOfficeNoteMutations: () => mutations }));
 
 const report: VisitServicesReport = {
   services: {
@@ -26,11 +42,34 @@ const report: VisitServicesReport = {
   notes: 'Return air grille was blocked.',
 };
 
-function show(over: Partial<AdminInspection> = {}, action?: React.ReactNode) {
-  render(<JobNotes action={action} inspection={{ internalNotes: null, ...over } as AdminInspection} />);
+const note = (over: Partial<OfficeNote> = {}): OfficeNote => ({
+  id: 'n-1',
+  text: 'Owner called about the fence.',
+  visibleToTechnician: false,
+  createdAt: '2026-11-06T15:00:00.000Z',
+  editedAt: null,
+  author: { id: 'me', displayName: 'Ada Lane' },
+  ...over,
+});
+
+function show(over: Partial<AdminInspection> = {}, bookingNoteAction?: ReactNode) {
+  render(
+    <JobNotes
+      bookingNoteAction={bookingNoteAction}
+      inspection={{ id: 'insp-1', internalNotes: null, ...over } as AdminInspection}
+    />,
+  );
 }
 
 const group = (name: string) => screen.getByRole('region', { name });
+
+beforeEach(() => {
+  access.permissions = ['inspections:manage'];
+  access.userId = 'me';
+  mutations.add.mutate.mockReset();
+  mutations.edit.mutate.mockReset();
+  mutations.remove.mutate.mockReset();
+});
 
 describe('the Notes section', () => {
   it('says so when nobody has written anything, and leaves out a report group with nothing in it', () => {
@@ -76,19 +115,123 @@ describe('the Notes section', () => {
     expect(printed.getByText('Replace the gutter guard.')).toBeInTheDocument();
     expect(within(group('From the technician')).queryByText('Bring a ladder.')).toBeNull();
   });
+});
 
-  it("shows the office's notes as written, with the Edit action beside them", () => {
+describe('the booking note', () => {
+  it('is labelled as what it is, with the Edit action beside it', () => {
     show(
       { internalNotes: 'Imported from an Inspect & Cloud PDF report.\nInspector: Pat Example' },
       <button type="button">Edit</button>,
     );
     const office = within(group('From the office'));
+    expect(office.getByText(/Booking note · on the technician's phone/)).toBeInTheDocument();
     expect(office.getByText(/Imported from an Inspect & Cloud PDF report/)).toBeInTheDocument();
     expect(office.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(office.queryByText('No office notes yet.')).toBeNull();
   });
 
-  it('offers no Edit to somebody who may not', () => {
-    show({ internalNotes: 'Gate code at the office.' });
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+  it('sits below what the office wrote', () => {
+    show({ internalNotes: 'Booked from Propertyware.', officeNotes: [note()] });
+    const text = group('From the office').textContent ?? '';
+    expect(text.indexOf('Owner called about the fence.')).toBeLessThan(text.indexOf('Booked from Propertyware.'));
+  });
+});
+
+describe('office notes', () => {
+  it('says who wrote a note and when, and marks one the technician can read', () => {
+    show({
+      officeNotes: [
+        note(),
+        note({ id: 'n-2', text: 'Use the side gate.', visibleToTechnician: true, author: null }),
+      ],
+    });
+    const office = within(group('From the office'));
+    expect(office.getByText(/^Ada Lane · /)).toBeInTheDocument();
+    expect(office.getByText(/^Former user · /)).toBeInTheDocument();
+    expect(office.getAllByText('Shown to technician')).toHaveLength(1);
+  });
+
+  it('says when a note was changed', () => {
+    show({ officeNotes: [note({ editedAt: '2026-11-06T16:00:00.000Z' })] });
+    expect(screen.getByText(/ · edited /)).toBeInTheDocument();
+  });
+
+  it('adds one, private unless ticked', () => {
+    show();
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeDisabled();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note' }), { target: { value: 'Call the owner.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+
+    expect(mutations.add.mutate.mock.calls[0]?.[0]).toEqual({ text: 'Call the owner.', visibleToTechnician: false });
+  });
+
+  it('shows one to the technician when ticked', () => {
+    show();
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note' }), { target: { value: 'Side gate.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show to technician' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+
+    expect(mutations.add.mutate.mock.calls[0]?.[0]).toEqual({ text: 'Side gate.', visibleToTechnician: true });
+  });
+
+  it('will not save a note that is only spaces', () => {
+    show();
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note' }), { target: { value: '   ' } });
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeDisabled();
+  });
+
+  it('lets somebody who can review, but not manage, write one', () => {
+    access.permissions = ['findings:review'];
+    show();
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument();
+  });
+
+  it('offers nothing to somebody who can do neither', () => {
+    access.permissions = ['inspections:read'];
+    show({ officeNotes: [note()] });
+    expect(screen.queryByRole('button', { name: 'Add note' })).toBeNull();
+  });
+
+  it('edits your own note from what it says now', () => {
+    show({ officeNotes: [note({ visibleToTechnician: true })] });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }));
+    const box = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Note' });
+    expect(box).toHaveValue('Owner called about the fence.');
+    expect(screen.getByRole('checkbox', { name: 'Show to technician' })).toBeChecked();
+    // Ready to carry on writing: words typed now go after the note, not before it.
+    expect(box).toHaveFocus();
+    expect(box.selectionStart).toBe('Owner called about the fence.'.length);
+
+    fireEvent.change(box, { target: { value: 'Owner called twice.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+
+    expect(mutations.edit.mutate.mock.calls[0]?.[0]).toEqual({
+      id: 'n-1',
+      text: 'Owner called twice.',
+      visibleToTechnician: true,
+    });
+  });
+
+  it("leaves somebody else's note alone", () => {
+    access.userId = 'somebody-else';
+    show({ officeNotes: [note()] });
+    expect(screen.queryByRole('button', { name: 'Edit note' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete note' })).toBeNull();
+  });
+
+  it('asks before deleting', () => {
+    show({ officeNotes: [note()] });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    expect(mutations.remove.mutate).not.toHaveBeenCalled();
+
+    const dialog = within(screen.getByRole('alertdialog'));
+    expect(dialog.getByText(/keeps a record of what it said/)).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Delete note' }));
+
+    expect(mutations.remove.mutate.mock.calls[0]?.[0]).toBe('n-1');
   });
 });

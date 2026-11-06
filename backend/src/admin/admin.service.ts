@@ -54,6 +54,7 @@ import { answerByMove, withdrawRescheduleRequests } from '../common/reschedule-r
 import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { inspectedAreaWhere } from '../common/inspected-areas';
+import { OFFICE_NOTE_SELECT, officeNoteView } from './inspection-notes.service';
 import {
   DONE_INSPECTION_STATUSES,
   isDoneInspectionStatus,
@@ -1862,6 +1863,7 @@ export class AdminService {
         generalComments: true,
         // The rooms the technician wrote on, for the job's Notes. Ordered by
         // `jobAreaNotes`, not here: this read uses the join strategy.
+        officeNotes: { orderBy: { createdAt: 'desc' }, select: OFFICE_NOTE_SELECT },
         areas: {
           where: { OR: [{ technicianNote: { not: null } }, { skipReason: { not: null } }] },
           select: {
@@ -1965,7 +1967,8 @@ export class AdminService {
 
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
-    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, areas: roomsWrittenOn, ...detail } = inspection;
+    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, areas: roomsWrittenOn, officeNotes, ...detail } =
+      inspection;
     // Optional-chained for the test doubles that stand in for this read without it.
     const consoleTasks = jobberOutboundTasks ?? [];
     // The inspection itself, read from its evidence rather than from a button
@@ -1991,6 +1994,7 @@ export class AdminService {
       tbp: standing.tbp,
       occupancy: standing.occupancy,
       areaNotes: jobAreaNotes(roomsWrittenOn ?? []),
+      officeNotes: (officeNotes ?? []).map(officeNoteView),
       scheduledInJobber: Boolean(jobberVisitId),
       jobberBooking: booking ? { status: booking.status, attempts: booking.attempts, lastError: booking.lastError, sentAt: booking.sentAt } : null,
       // Edits waiting for, or refused by, Jobber. A sent one is history.

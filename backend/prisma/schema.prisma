@@ -403,6 +403,7 @@ model Organization {
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
+  inspectionNotes    InspectionNote[]
   tbpPackageChanges TbpPackageChange[]
   timeSegments      TimeSegment[]
   timeAdjustments   TimeAdjustment[]
@@ -597,6 +598,7 @@ model UserProfile {
   trackingGapsResolved TrackingGap[]      @relation("TrackingGapResolvedBy")
   rescheduleRequestsMade     RescheduleRequest[] @relation("RescheduleRequestedBy")
   rescheduleRequestsResolved RescheduleRequest[] @relation("RescheduleResolvedBy")
+  inspectionNotesWritten     InspectionNote[]    @relation("InspectionNoteAuthor")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
   email                String                   @unique
@@ -1484,6 +1486,7 @@ model Inspection {
   tbpPlanStop                TbpQuarterPlanStop?     @relation("TbpStopInspection")
   /// This visit asked to be booked again.
   rescheduleRequests         RescheduleRequest[]     @relation("RescheduleRequestInspection")
+  officeNotes                InspectionNote[]
   /// This visit is the booking-again of another's request.
   rebookOf                   RescheduleRequest[]     @relation("RescheduleRequestRebook")
 }
@@ -3092,6 +3095,32 @@ model RescheduleRequest {
   @@index([organizationId, status, createdAt])
   @@index([inspectionId])
   @@index([rebookInspectionId])
+}
+
+/// What the office writes on a job (2026-11-07). Separate from
+/// `Inspection.internalNotes`, which the page calls the booking note: that one
+/// is mostly the system's words, the phone shows it, and it locks with the job.
+/// A note here says who and when, can be written at any time, and stays off the
+/// phone unless `visibleToTechnician`. Never on a report, never sent to Jobber.
+/// Changes are kept on the job's audit trail, old words included.
+model InspectionNote {
+  id                  String    @id @default(uuid()) @db.Uuid
+  organizationId      String    @db.Uuid
+  inspectionId        String    @db.Uuid
+  text                String
+  visibleToTechnician Boolean   @default(false)
+  createdById         String?   @db.Uuid
+  createdAt           DateTime  @default(now())
+  /// When its author last changed it. Null on a note as first written.
+  editedAt            DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection   Inspection   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  createdBy    UserProfile? @relation("InspectionNoteAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([inspectionId, createdAt])
+  @@index([organizationId])
+  @@index([createdById])
 }
 
 /// Jobber's states for an invoice (2026-11-05). "Past due" is not one of them

@@ -415,7 +415,7 @@ function InspectionDetail() {
       />
 
       <JobNotes
-        action={
+        bookingNoteAction={
           canEditOrAssign && permissions.has('inspections:manage') ? (
             <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
               Edit

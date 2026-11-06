@@ -37,6 +37,43 @@ function build() {
   return { service, prisma, list };
 }
 
+describe("the office's notes on the phone", () => {
+  const record = {
+    id: 'job-1',
+    inspectionType: 'OCCUPIED',
+    scheduledAt: new Date('2026-11-06T00:00:00.000Z'),
+    status: 'SCHEDULED',
+    priority: 'STANDARD',
+    areas: [],
+    internalNotes: 'Booked from Propertyware.',
+  };
+
+  it('asks only for what the office ticked "Show to technician", oldest first', async () => {
+    const { prisma, list } = build();
+    await list({});
+    const query = prisma.inspection.findMany.mock.calls.at(-1)![0] as { select: { officeNotes: unknown } };
+    expect(query.select.officeNotes).toEqual({
+      where: { visibleToTechnician: true },
+      orderBy: { createdAt: 'asc' },
+      select: { text: true },
+    });
+  });
+
+  it('reads them after the booking note, in the field the phone already prints', async () => {
+    const { service, prisma } = build();
+    prisma.inspection.findMany.mockResolvedValue([{ ...record, officeNotes: [{ text: 'Use the side gate.' }] }]);
+    const { items } = await service.inspections(user, { page: 1, pageSize: 25 } as never);
+    expect(items[0]?.propertyNotes).toBe('Booked from Propertyware.\n\nUse the side gate.');
+  });
+
+  it('leaves the booking note as it was with nothing shown', async () => {
+    const { service, prisma } = build();
+    prisma.inspection.findMany.mockResolvedValue([{ ...record, officeNotes: [] }]);
+    const { items } = await service.inspections(user, { page: 1, pageSize: 25 } as never);
+    expect(items[0]?.propertyNotes).toBe('Booked from Propertyware.');
+  });
+});
+
 describe('a day on the calendar', () => {
   it('is the day itself, matched on the date column', async () => {
     // Never a pair of instants: the column is a date, and an instant pair once

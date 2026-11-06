@@ -1,6 +1,6 @@
 import type { InspectionType } from '../enums/index.js';
 import type { FindingRejectReason } from './ai-guidance.js';
-import type { JobAreaNote } from './job-notes.js';
+import type { JobAreaNote, OfficeNote } from './job-notes.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
 import type { PropertyServiceStatus } from './property-service.js';
@@ -679,6 +679,8 @@ export interface AdminInspection {
   zone?: string | null;
   /** The rooms the technician wrote something on, in walk order. On the one inspection only. */
   areaNotes?: JobAreaNote[];
+  /** What the office wrote on the job, newest first. On the one inspection only. */
+  officeNotes?: OfficeNote[];
   /**
    * A move-out with no move-in to compare against.
    *

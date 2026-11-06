@@ -151,9 +151,7 @@ export function InspectionEditDialog({
           </Field>
 
           <Field>
-            <FieldLabel htmlFor="edit-inspection-notes">
-              Technician instructions and internal notes
-            </FieldLabel>
+            <FieldLabel htmlFor="edit-inspection-notes">Booking note</FieldLabel>
             <Textarea
               id="edit-inspection-notes"
               maxLength={NOTES_LIMIT}

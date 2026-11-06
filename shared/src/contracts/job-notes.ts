@@ -59,6 +59,45 @@ export function jobAreaNotes(rows: readonly JobAreaNoteRow[]): JobAreaNote[] {
     }));
 }
 
+/** The longest office note: the same room `internalNotes` gives. */
+export const MAX_OFFICE_NOTE = 2000;
+
+/** Who may write one: anyone who can manage inspections or review them (the office, 2026-11-06). */
+export const OFFICE_NOTE_PERMISSIONS = ['inspections:manage', 'findings:review'] as const;
+
+/** A note the office wrote on a job. Its author alone may change it. */
+export interface OfficeNote {
+  id: string;
+  text: string;
+  /** On the technician's phone as well. Private to the office otherwise. */
+  visibleToTechnician: boolean;
+  createdAt: string;
+  /** When its author last changed it. */
+  editedAt: string | null;
+  /** Null once the account is gone: the job's history still says who. */
+  author: { id: string; displayName: string } | null;
+}
+
+export interface OfficeNoteInput {
+  text: string;
+  visibleToTechnician: boolean;
+}
+
+/**
+ * What the phone reads above a job: the booking note, then what the office
+ * chose to show, oldest first. One text, because the phone already prints this
+ * field as it comes, so a note reaches it with no update to the app.
+ */
+export function technicianJobNotes(
+  bookingNote: string | null | undefined,
+  shown: readonly { text: string }[],
+): string {
+  return [bookingNote, ...shown.map((note) => note.text)]
+    .map((text) => text?.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export interface JobNote {
   key: string;
   /** Where it was written: "Pest control", "Kitchen · Upstairs". */
