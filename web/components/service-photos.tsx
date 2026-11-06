@@ -82,6 +82,9 @@ export function ServicePhotos({ photos, areaName }: { photos: ServicePhoto[]; ar
         {photos.map((photo) => (
           <LazyPhoto
             areaName={areaName}
+            // No caption: each sits in the card of what it shows, which says so (2026-11-06).
+            // The label stays in the button's name and over the full image.
+            compact
             key={photo.id}
             onOpen={() => setOpen(photo)}
             photo={{ contentPath: contentPath(photo.id), captureType: photo.captureType, label: photo.label }}

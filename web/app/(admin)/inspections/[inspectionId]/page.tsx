@@ -413,6 +413,9 @@ function InspectionDetail() {
             </Button>
           ) : null
         }
+        areas={
+          areaSummary.data ? { reviewed: areaSummary.data.totals.areasReviewed, total: areaSummary.data.totals.areas } : null
+        }
         inspection={item}
         technicianName={current?.technician?.displayName ?? null}
       />

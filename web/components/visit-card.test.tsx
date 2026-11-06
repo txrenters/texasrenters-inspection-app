@@ -53,6 +53,11 @@ function inspection(overrides: Partial<AdminInspection> = {}): AdminInspection {
 const show = (overrides: Partial<AdminInspection> = {}, technicianName: string | null = 'Sam Tech') =>
   render(<VisitCard inspection={inspection(overrides)} technicianName={technicianName} />);
 
+/** The card holding the instructions. */
+const instructions = () => screen.getByText('Instructions').closest('details');
+/** The card titled so: a dropdown, or a plain row with nothing more to show. */
+const card = (title: string) => within(screen.getByRole('region', { name: 'Work done' })).getByText(title).closest('details');
+
 /**
  * One Jobber visit that booked two jobs (2026-10-13): an HVAC inspection
  * holding the visit and an occupied inspection that follows it.
@@ -95,7 +100,7 @@ describe('the visit’s facts', () => {
     expect(screen.getByText('Sam Tech')).toBeInTheDocument();
     expect(screen.getByText('1 hr 56 min')).toBeInTheDocument();
     // Done when the technician submitted: the office's review is not the visit's.
-    expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.getAllByText('Done').length).toBeGreaterThan(0);
     expect(screen.getByText('Jobber')).toBeInTheDocument();
   });
 
@@ -135,7 +140,6 @@ describe('the tasks on a move-out', () => {
     show({ inspectionType: 'MOVE_OUT', status: 'REVIEW_REQUIRED', jobberVisitDetails: MOVE_OUT_DETAILS });
 
     const tasks = screen.getByRole('region', { name: 'Tasks on the visit' });
-    expect(tasks.closest('details')).toBeNull();
     expect(within(tasks).getByText('Conduct Move out inspection')).toBeInTheDocument();
     expect(within(tasks).getByText('Additional Task')).toBeInTheDocument();
     expect(within(tasks).getByText('Place Sign Supra Lockbox')).toBeInTheDocument();
@@ -195,7 +199,7 @@ describe('the Jobber visit before it is done', () => {
       ),
     ).toBeInTheDocument();
     // Before the visit, all of it is open.
-    expect(screen.queryByText('Before the visit')).toBeNull();
+    expect(instructions()).toHaveAttribute('open');
   });
 
   it('keeps the text as written, title included, one click away', () => {
@@ -276,26 +280,27 @@ describe('what the technician reported', () => {
     show({ servicesReport: report, servicesReportedAt: '2026-09-15T19:14:05.000Z' });
 
     expect(screen.getByText('Pest control to reschedule')).toBeInTheDocument();
-    const reported = screen.getByRole('region', { name: 'Services done' });
+    const reported = screen.getByRole('region', { name: 'Work done' });
     expect(within(reported).getByText('AC filter change')).toBeInTheDocument();
     expect(within(reported).getByText('Done')).toBeInTheDocument();
     expect(within(reported).getByText('Not done')).toBeInTheDocument();
-    expect(within(reported).getByText('Reschedule')).toBeInTheDocument();
-    expect(within(reported).getByText('2 filters: 1 × 20x25x4, 1 × 12x24x1')).toBeInTheDocument();
+    expect(within(reported).getByText('To reschedule')).toBeInTheDocument();
+    expect(within(reported).getByText('2 filters · 20x25x4, 12x24x1')).toBeInTheDocument();
     expect(within(reported).getByText('Return air grille was blocked.')).toBeInTheDocument();
   });
 
-  it('keeps it open once the visit is done, and folds the planning detail away', () => {
+  it('folds the instructions away once the visit is done, leaving the work in view', () => {
     // A reviewer scrolled past a screen of filters to bring and gate codes to
     // reach the areas (the office, 2026-10-02): once submitted, that is history.
     show({ status: 'REVIEW_REQUIRED', servicesReport: report });
 
-    expect(screen.getByRole('region', { name: 'Services done' }).closest('details')).toBeNull();
-    const fold = screen.getByText('Before the visit').closest('details');
+    expect(screen.getByRole('region', { name: 'Work done' }).closest('details')).toBeNull();
+    const fold = instructions();
     expect(fold).not.toBeNull();
     expect(fold).not.toHaveAttribute('open');
-    for (const region of ['Services', 'Filters', 'Tenant', 'Access', 'Notes'])
+    for (const region of ['Tasks on the visit', 'Services', 'Filters', 'Tenant', 'Access', 'Notes'])
       expect(fold).toContainElement(screen.getByRole('region', { name: region }));
+    expect(fold).toContainElement(screen.getByText('As written in Jobber'));
   });
 
   it('shows each filter register the technician answered for', () => {
@@ -320,7 +325,7 @@ describe('what the technician reported', () => {
     expect(within(registers).getByText('Register painted over')).toBeInTheDocument();
     expect(within(registers).getByText('Photograph still uploading')).toBeInTheDocument();
     expect(within(registers).getByText('Found on site')).toBeInTheDocument();
-    expect(screen.getByText('3 filters: 2 × 20x25x1, 1 × 16x20x1')).toBeInTheDocument();
+    expect(screen.getByText('3 filters · 2 × 20x25x1, 16x20x1')).toBeInTheDocument();
   });
 
   // 5706 Micah Ln read "still uploading" for four days after the job was
@@ -373,5 +378,116 @@ describe('what the technician reported', () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Photo of this job - Pest control' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The visit as cards (the office, 2026-11-06): instructions first, then one card
+ * for each thing done, its title and a line for a glance, with the rest in a
+ * dropdown only where there is more to read.
+ */
+describe('the work as cards', () => {
+  const done = { done: true, reason: null, reschedule: false };
+  const filter = (over: Record<string, unknown> = {}) => ({
+    size: '20x30x1',
+    location: null,
+    slot: 1,
+    changed: true,
+    reason: null,
+    photoId: 'photo-1',
+    booked: true,
+    ...over,
+  });
+  const report = (over: Record<string, unknown> = {}) => ({
+    services: { filterChange: done, pestControl: done },
+    filters: [filter()],
+    filtersInstalled: [],
+    notes: null,
+    ...over,
+  });
+  const finished = (servicesReport: unknown, over: Partial<AdminInspection> = {}) =>
+    show({ status: 'REVIEW_REQUIRED', servicesReport: servicesReport as AdminInspection['servicesReport'], ...over });
+
+  it('puts the instructions before the work', () => {
+    finished(report());
+    const order = instructions()!.compareDocumentPosition(screen.getByRole('region', { name: 'Work done' }));
+    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the instructions open during the job too, with a glance at what they hold', () => {
+    show({ status: 'IN_PROGRESS' });
+    expect(instructions()).toHaveAttribute('open');
+    expect(screen.getByText('2 tasks · 3 filters to bring · tenant and access')).toBeInTheDocument();
+  });
+
+  it('shows a title, a line and how it went, with the filters in the card of the filter change', () => {
+    finished(report());
+    const filters = card('AC filter change');
+    expect(filters).not.toHaveAttribute('open');
+    expect(screen.getByText('1 filter · 20x30x1')).toBeInTheDocument();
+    expect(filters).toContainElement(screen.getByRole('list', { name: 'Filter registers' }));
+    // Said once: no count of filters beside the service, and no second line of them.
+    expect(screen.queryByText(/Filters installed/)).toBeNull();
+  });
+
+  it('gives a card with nothing more to show no dropdown', () => {
+    finished(report());
+    expect(card('Pest control')).toBeNull();
+  });
+
+  it.each([
+    ['not changed', filter({ changed: false, photoId: null, reason: 'Register painted over' })],
+    ['a different size', filter({ actualSize: '20x25x1' })],
+    ['not at the property', filter({ removed: true, changed: false, photoId: null })],
+    ['with no photograph', filter({ photoId: null })],
+  ])('opens by itself for a filter %s', (_name, odd) => {
+    finished(report({ filters: [filter({ slot: 2 }), odd] }));
+    expect(card('AC filter change')).toHaveAttribute('open');
+  });
+
+  it('opens by itself for a service not done, with the reason inside', () => {
+    finished(report({ services: { filterChange: done, pestControl: { done: false, reason: 'Tenant refused', reschedule: true } } }));
+    const pest = card('Pest control');
+    expect(pest).toHaveAttribute('open');
+    expect(pest).toContainElement(screen.getByText('Tenant refused', { selector: 'p' }));
+  });
+
+  it('gives any service the standard card, with no change to the page', () => {
+    // Flea treatment says nothing of its own: this is what a new service gets.
+    finished(report({ services: { fleaTreatment: { ...done, photoId: 'photo-flea', photoKey: 'k' } }, filters: [] }));
+    expect(card('Flea treatment')).toContainElement(screen.getByRole('button', { name: 'Open Photo of this job - Flea treatment' }));
+  });
+
+  it('keeps a filter card for a report older than the registers, with the count alone', () => {
+    finished({ services: { filterChange: done }, filtersInstalled: ['20x25x4'], notes: null });
+    expect(screen.getByText('1 filter · 20x25x4')).toBeInTheDocument();
+    expect(card('AC filter change')).toBeNull();
+  });
+
+  it('adds the inspection once the visit has begun, with how far the review has come', () => {
+    render(
+      <VisitCard
+        areas={{ reviewed: 6, total: 7 }}
+        inspection={inspection({ status: 'REVIEW_REQUIRED', servicesReport: report() as AdminInspection['servicesReport'] })}
+      />,
+    );
+    expect(within(screen.getByRole('region', { name: 'Work done' })).getByText('Occupied inspection')).toBeInTheDocument();
+    expect(screen.getByText('6 of 7 areas reviewed')).toBeInTheDocument();
+  });
+
+  it('has no inspection card where nobody got in: the alert says why', () => {
+    show({ status: 'REVIEW_REQUIRED', completionBlockedReason: 'Could not get in: tenant not home' });
+    expect(screen.queryByRole('region', { name: 'Work done' })).toBeNull();
+  });
+
+  it('says nothing of work before anybody has started, and a filter delivery is no inspection', () => {
+    const { unmount } = show();
+    expect(screen.queryByRole('region', { name: 'Work done' })).toBeNull();
+    unmount();
+
+    finished(report(), { inspectionType: 'AC_FILTER_DELIVERY' });
+    const work = screen.getByRole('region', { name: 'Work done' });
+    expect(within(work).getByText('AC filter change')).toBeInTheDocument();
+    expect(within(work).queryByText('AC filter delivery')).toBeNull();
   });
 });
