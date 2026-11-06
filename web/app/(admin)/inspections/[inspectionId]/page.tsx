@@ -20,6 +20,7 @@ import {
 import { InspectionTabs } from '@/components/inspection-tabs';
 import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { JobHeadline } from '@/components/job-headline';
+import { JobNotes } from '@/components/job-notes';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Panel } from '@/components/panel';
@@ -304,13 +305,6 @@ function InspectionDetail() {
           <InspectionRecordAside
             activity={audit.data?.items}
             item={item}
-            notesAction={
-              canEditOrAssign && permissions.has('inspections:manage') ? (
-                <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
-                  Edit
-                </Button>
-              ) : null
-            }
             onSeeActivity={showActivity}
             technicianName={current?.technician?.displayName ?? null}
           />
@@ -418,6 +412,17 @@ function InspectionDetail() {
         }
         inspection={item}
         technicianName={current?.technician?.displayName ?? null}
+      />
+
+      <JobNotes
+        action={
+          canEditOrAssign && permissions.has('inspections:manage') ? (
+            <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
+              Edit
+            </Button>
+          ) : null
+        }
+        inspection={item}
       />
 
       {/* Area-first: recordings, photos, condition summaries and findings are

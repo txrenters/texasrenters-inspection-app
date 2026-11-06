@@ -300,16 +300,6 @@ export function VisitCard({
           showInspection={(done || Boolean(worked)) && visitStateOf(inspection) !== 'COULD_NOT_GET_IN'}
           status={state}
         />
-
-        {/* Where the record came from, mostly: "Imported from an Inspect &
-            Cloud PDF report", "Booked from Propertyware". Never published.
-            Not in the Jobber-style shell, where the notes have the side
-            panel's Notes card, as Jobber keeps them. */}
-        {inspection.internalNotes ? (
-          <p className="text-muted-foreground jobber:hidden border-t pt-3 text-xs whitespace-pre-wrap">
-            {inspection.internalNotes}
-          </p>
-        ) : null}
       </CardContent>
     </Card>
   );

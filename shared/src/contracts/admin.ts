@@ -1,5 +1,6 @@
 import type { InspectionType } from '../enums/index.js';
 import type { FindingRejectReason } from './ai-guidance.js';
+import type { JobAreaNote } from './job-notes.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 import type { PropertyDetailsView, PropertyOwnerView } from './property-details.js';
 import type { PropertyServiceStatus } from './property-service.js';
@@ -676,6 +677,8 @@ export interface AdminInspection {
   occupancy?: 'OCCUPIED' | 'VACANT' | null;
   /** The visit's zone: as its title names it, else the tenancy's. On the one inspection only. */
   zone?: string | null;
+  /** The rooms the technician wrote something on, in walk order. On the one inspection only. */
+  areaNotes?: JobAreaNote[];
   /**
    * A move-out with no move-in to compare against.
    *
