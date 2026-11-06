@@ -104,18 +104,17 @@ const inspection = (over: Partial<AdminInspection> = {}) =>
   }) as AdminInspection;
 
 describe('the inspection’s card and details', () => {
-  it('shows the place, who is on it, and where the review stands', () => {
+  it('shows the place and where the review stands, leaving who and when to the header and the Visit card', () => {
     render(
       <InspectionRecordTop
         figures={{ areasReviewed: '2 of 6', findingsToReview: 3, comparedWith: { id: 'insp-in', scheduledAt: '2025-06-01T00:00:00.000Z' }, comparesToMoveIn: true }}
         item={inspection()}
-        technicianName={null}
       />,
     );
     expect(screen.getByRole('link', { name: '12 Elm Ct' }).getAttribute('href')).toBe('/properties/b-1');
-    expect(screen.getByText('Nobody yet')).toBeTruthy();
     const details = screen.getByLabelText('Inspection details');
-    expect(within(details).getByText('Thu, Nov 12, 2026')).toBeTruthy();
+    expect(within(details).queryByText('Type')).toBeNull();
+    expect(within(details).queryByText('Scheduled')).toBeNull();
     expect(within(details).getByText('2 of 6')).toBeTruthy();
     expect(within(details).getByText('3').className).toContain('text-warning');
     expect(within(details).getByRole('link', { name: /Move-in/ }).getAttribute('href')).toBe('/inspections/insp-in');
@@ -126,7 +125,6 @@ describe('the inspection’s card and details', () => {
       <InspectionRecordTop
         figures={{ areasReviewed: null, findingsToReview: null, comparesToMoveIn: false }}
         item={inspection({ inspectionType: 'HVAC' })}
-        technicianName="Ada Lane"
       />,
     );
     expect(screen.queryByText('Findings to review')).toBeNull();
@@ -160,14 +158,12 @@ describe('the inspection’s side panel', () => {
     render(<InspectionRecordAside activity={[]} item={inspection()} onSeeActivity={() => {}} technicianName={null} />);
     expect(screen.getByText('No internal notes yet.')).toBeTruthy();
     expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();
-    // No job number until the sync has seen one.
-    expect(screen.queryByText('Job #')).toBeNull();
   });
 
-  it("names Jobber's job number in the Overview", () => {
+  it("leaves Jobber's job number to the header, where it is said once", () => {
     render(
       <InspectionRecordAside activity={[]} item={inspection({ jobberJobNumber: '20625' })} onSeeActivity={() => {}} technicianName={null} />,
     );
-    expect(screen.getByText('Job #').nextElementSibling?.textContent).toBe('20625');
+    expect(screen.queryByText('Job #')).toBeNull();
   });
 });

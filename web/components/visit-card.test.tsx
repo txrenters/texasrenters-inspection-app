@@ -85,7 +85,7 @@ describe('a visit booked as two jobs', () => {
 });
 
 describe('the visit’s facts', () => {
-  it('says who, when, how long, and the zone the title names', () => {
+  it('says who, when and how long', () => {
     show({
       status: 'REVIEW_REQUIRED',
       startedAt: '2026-10-01T22:49:00.000Z',
@@ -93,20 +93,16 @@ describe('the visit’s facts', () => {
     });
 
     expect(screen.getByText('Sam Tech')).toBeInTheDocument();
-    expect(screen.getByText('Zone 4')).toBeInTheDocument();
     expect(screen.getByText('1 hr 56 min')).toBeInTheDocument();
     // Done when the technician submitted: the office's review is not the visit's.
     expect(screen.getByText('Done')).toBeInTheDocument();
     expect(screen.getByText('Jobber')).toBeInTheDocument();
   });
 
-  it("names Jobber's job number beside the zone, and alone when the title names none", () => {
-    const { unmount } = show({ jobberJobNumber: '20625' });
-    expect(screen.getByText('Zone 4 · Job #20625')).toBeInTheDocument();
-    unmount();
-
-    show({ jobberJobNumber: '20625', jobberVisitTitle: null });
-    expect(screen.getByText('Job #20625')).toBeInTheDocument();
+  it('leaves the zone and the job number to the header, where they are said once', () => {
+    show({ jobberJobNumber: '20625' });
+    expect(screen.queryByText(/Job #20625/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Zone 4/)).not.toBeInTheDocument();
   });
 
   it('asks for a technician before the visit, not after it', () => {
