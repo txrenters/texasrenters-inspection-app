@@ -7,6 +7,7 @@ import {
 } from '../src/integrations/jobber/jobber-invoice-mapping';
 import {
   INVOICE_BY_ID_QUERY,
+  INVOICE_FILES_QUERY,
   INVOICE_PAGE_FILES,
   INVOICE_PAGE_LINES,
   INVOICE_PAGE_NOTES,
@@ -421,7 +422,7 @@ describe('the invoice queries', () => {
    */
   const SCHEMA_NAMES = new Set([
     // operations, arguments and variables
-    'query', 'ConsoleInvoices', 'ConsoleInvoice', 'ConsolePayments', 'ConsolePayment', 'invoices', 'invoice', 'paymentRecord',
+    'query', 'ConsoleInvoices', 'ConsoleInvoice', 'ConsoleInvoiceFiles', 'ConsolePayments', 'ConsolePayment', 'invoices', 'invoice', 'paymentRecord',
     'first', 'after', 'sort', 'key', 'direction', 'filter', 'updatedAt', 'id', 'updatedAfter',
     'Int', 'String', 'ISO8601DateTime', 'EncodedId', 'CREATED_AT', 'UPDATED_AT', 'ASCENDING', 'on', '__typename',
     // Invoice
@@ -442,7 +443,7 @@ describe('the invoice queries', () => {
     'paymentRecords', 'amount', 'entryDate', 'adjustmentType',
     // Invoice.notes: InvoiceNotesUnion; Invoice.noteAttachments: InvoiceNoteFile
     'notes', 'InvoiceNote', 'JobNote', 'pinned', 'createdAt',
-    'noteAttachments', 'fileName', 'contentType', 'fileSize', 'url',
+    'noteAttachments', 'fileName', 'contentType', 'fileSize', 'url', 'downloadUrl', 'downloadContentType',
     // Query.paymentRecords: PaymentRecordInterface and its kinds
     'PAYMENT', 'paymentType', 'details', 'CheckPaymentRecord', 'checkNumber', 'OtherPaymentRecord', 'confirmationNumber',
     'BankTransferPaymentRecord', 'AchBankPaymentPaymentRecord', 'CreditCardPaymentRecord', 'ccTransactionNumber',
@@ -456,6 +457,7 @@ describe('the invoice queries', () => {
     ['one invoice', INVOICE_BY_ID_QUERY],
     ['the payment list', PAYMENTS_PAGE_QUERY],
     ['one payment', PAYMENT_RECORD_QUERY],
+    ["one invoice's files", INVOICE_FILES_QUERY],
   ])('%s names only what Jobber has', (_label, document) => {
     expect(names(document).filter((name) => !SCHEMA_NAMES.has(name))).toEqual([]);
   });

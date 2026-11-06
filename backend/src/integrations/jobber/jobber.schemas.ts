@@ -283,6 +283,8 @@ export const jobberInvoiceFilesSchema = z.object({
             contentType: z.string().nullish(),
             fileSize: z.number().int().nullish(),
             url: z.string().nullish(),
+            downloadUrl: z.string().nullish(),
+            downloadContentType: z.string().nullish(),
           }),
         ),
       }),
