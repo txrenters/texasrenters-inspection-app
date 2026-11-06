@@ -5,6 +5,7 @@ import {
   MAX_LOCATION_BATCH,
   MAX_RESCHEDULE_REASON,
   MAX_SERVICE_REASON,
+  MAX_VISIT_NOTE,
 } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import { JOB_DAY_PATTERN } from './technician-job-list';
@@ -629,7 +630,7 @@ export class TechnicianServicesReportDto {
   @IsString({ each: true })
   @Matches(FILTER_SIZE_WITH_WORDS_PATTERN, { each: true })
   filtersInstalled!: string[];
-  @IsOptional() @IsString() @MaxLength(1000) notes?: string | null;
+  @IsOptional() @IsString() @MaxLength(MAX_VISIT_NOTE) notes?: string | null;
 }
 
 /**

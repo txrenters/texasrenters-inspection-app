@@ -70,6 +70,18 @@ describe('the services note', () => {
     expect(note).toContain('Notes: Hallway filter was 16x25x1, not the size listed.');
   });
 
+  it('carries a note from a job that booked no services, without saying none were done', () => {
+    const note = jobberServicesNote({
+      report: { services: {}, filtersInstalled: [], notes: 'Tenant left the keys in the mailbox.' },
+      details: 'Move out inspection',
+      inspectionDone: true,
+      technicianName: 'Pat Field',
+      recordedAt: RECORDED,
+    });
+    expect(note).toContain('Notes: Tenant left the keys in the mailbox.');
+    expect(note).not.toContain('Services completed');
+  });
+
   it('lists an unnumbered service by name, and an inspection nobody could walk as not done', () => {
     const note = jobberServicesNote({
       report: report({

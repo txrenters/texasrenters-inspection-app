@@ -50,6 +50,7 @@ import {
   jobTasks,
   toggledService,
   withServiceAnswer,
+  withJobNote,
   withUntickedNotDone,
   type JobTask,
 } from '@/src/utils/job-tasks';
@@ -132,6 +133,8 @@ export default function JobScreen() {
   /** The report End job is about to submit, while the technician confirms it. */
   const [ending, setEnding] = useState<{ report: VisitServicesReport | null } | null>(null);
   const [closingComments, setClosingComments] = useState<ClosingComments>(EMPTY_CLOSING_COMMENTS);
+  /** Null until written: the sheet starts from the note a job sent back already holds. */
+  const [jobNote, setJobNote] = useState<string | null>(null);
   const [endError, setEndError] = useState<string | null>(null);
   // Up here with the other hooks, above the early return below.
   const running = inspection.data?.status === 'IN_PROGRESS' && !inspection.data.submittedAt;
@@ -256,18 +259,21 @@ export default function JobScreen() {
     );
   };
 
+  const noteDraft = jobNote ?? item.servicesReport?.notes ?? '';
+
   const submit = () => {
     if (!ending) return;
     setEndError(null);
     actions.complete.mutate(
       {
-        servicesReport: ending.report ?? undefined,
+        servicesReport: withJobNote(ending.report, noteDraft) ?? undefined,
         closingComments: asksClosingComments(item.type) ? closingCommentsToSend(closingComments) : undefined,
       },
       {
         onSuccess: () => {
           setEnding(null);
           setClosingComments(EMPTY_CLOSING_COMMENTS);
+          setJobNote(null);
           Alert.alert('Job ended', 'It is with the office. Any photos still sending keep uploading.', [
             { text: 'Done', onPress: () => router.replace('/(app)/(tabs)/(jobs)/inspections') },
           ]);
@@ -471,6 +477,7 @@ export default function JobScreen() {
         busy={actions.complete.isPending}
         comments={asksClosingComments(item.type) ? { draft: closingComments, onChange: setClosingComments } : undefined}
         error={endError}
+        note={{ draft: noteDraft, onChange: setJobNote }}
         onClose={() => setEnding(null)}
         onEnd={submit}
         tasks={endingTasks}

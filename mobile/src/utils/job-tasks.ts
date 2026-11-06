@@ -798,6 +798,21 @@ export function withUntickedNotDone(
 }
 
 /**
+ * The report End job sends, with the technician's note for the office.
+ *
+ * Always the note as it now reads: a job sent back already holds one, and the
+ * sheet starts from it, so a note left blank is a note taken away.
+ */
+export function withJobNote(
+  report: VisitServicesReport | null | undefined,
+  note: string,
+): VisitServicesReport | null {
+  const notes = note.trim() || null;
+  if (!report) return notes ? { ...EMPTY_REPORT, notes } : null;
+  return { ...report, notes };
+}
+
+/**
  * Pest control's checkbox (the office, 2026-09-18: "Pest control just a check
  * box"). Ticking it marks the service done; unticking takes the answer away,
  * and a service answered not done is ticked done when it is tapped.

@@ -11,6 +11,7 @@ import {
   withServicePhoto,
   withoutFilter,
   withoutServiceAnswer,
+  withJobNote,
 } from '../src/utils/job-tasks';
 
 /**
@@ -384,6 +385,37 @@ describe('writing an answer into the checklist', () => {
 });
 
 /** The office (2026-09-18): "Pest control just a check box". */
+describe('the note for the office at End job', () => {
+  const answered: VisitServicesReport = {
+    services: { pestControl: { done: true, reason: null, reschedule: false } },
+    filters: [],
+    filtersInstalled: [],
+    notes: null,
+  };
+
+  it('goes in the report, tidied, and leaves the answers alone', () => {
+    expect(withJobNote(answered, '  Gate was left open.  ')).toEqual({ ...answered, notes: 'Gate was left open.' });
+  });
+
+  it('makes a report on a job with nothing else to answer', () => {
+    expect(withJobNote(null, 'Keys in the mailbox.')).toEqual({
+      services: {},
+      filters: [],
+      filtersInstalled: [],
+      notes: 'Keys in the mailbox.',
+    });
+  });
+
+  it('makes nothing up when nothing was written', () => {
+    expect(withJobNote(null, '   ')).toBeNull();
+    expect(withJobNote(answered, '')).toEqual(answered);
+  });
+
+  it('takes a note away on a job sent back, when it was cleared', () => {
+    expect(withJobNote({ ...answered, notes: 'Written the first time.' }, '  ')?.notes).toBeNull();
+  });
+});
+
 describe('pest control as a checkbox', () => {
   it('ticks it done, and unticks it back to unanswered', () => {
     const ticked = toggledService(null, 'pestControl');
