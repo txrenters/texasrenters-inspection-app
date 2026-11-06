@@ -36,11 +36,22 @@ import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { humanize } from '@/lib/format';
+import { visitCanBeEdited } from '@/lib/job-page';
 import { useAdminMutations } from '@/lib/queries';
 
 const NOTES_LIMIT = 2000;
 const REASON_LIMIT = 500;
 
+/**
+ * One Edit for the job (2026-11-07): the date, priority and booking note, and
+ * the visit's title and Details where they can be changed. There were two
+ * dialogs under three buttons.
+ *
+ * The title and Details are plain text rather than the booking form: this edits
+ * visits the office wrote in Jobber as well as ones booked here, in whatever
+ * shape they are. Sent to Jobber; for a visit booked here and not yet sent, the
+ * booking carries them.
+ */
 export function InspectionEditDialog({
   inspection,
   onClose,
@@ -54,17 +65,29 @@ export function InspectionEditDialog({
   const [scheduledAt, setScheduledAt] = useState(() => inspection.scheduledAt.slice(0, 10));
   const [priority, setPriority] = useState(inspection.priority);
   const [internalNotes, setInternalNotes] = useState(inspection.internalNotes ?? '');
-  const mutation = useAdminMutations().updateInspection;
+  const [title, setTitle] = useState(inspection.jobberVisitTitle ?? '');
+  const [details, setDetails] = useState(inspection.jobberVisitDetails ?? '');
+  const { updateInspection, updateJobberVisit } = useAdminMutations();
+  const visitEditable = visitCanBeEdited(inspection);
+  const busy = updateInspection.isPending || updateJobberVisit.isPending;
+  const failure = updateInspection.error ?? updateJobberVisit.error;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     try {
-      await mutation.mutateAsync({
+      await updateInspection.mutateAsync({
         id: inspection.id,
         scheduledAt: new Date(scheduledAt).toISOString(),
         priority,
         internalNotes: internalNotes.trim(),
       });
+      // Only when changed: an unchanged save must not send Jobber an edit. If it
+      // fails the dialog stays open, and saving again repeats the first part
+      // harmlessly.
+      const visitChanged =
+        title.trim() !== (inspection.jobberVisitTitle ?? '') || details !== (inspection.jobberVisitDetails ?? '');
+      if (visitEditable && visitChanged)
+        await updateJobberVisit.mutateAsync({ id: inspection.id, title: title.trim() || undefined, details });
       onClose();
     } catch {
       // The mutation surfaces the sanitized API error inline.
@@ -73,10 +96,10 @@ export function InspectionEditDialog({
 
   return (
     <Dialog onOpenChange={(next) => (next ? undefined : onClose())} open>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-2xl">
         <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
-            <DialogTitle>Edit inspection</DialogTitle>
+            <DialogTitle>Edit job</DialogTitle>
             <DialogDescription>
               Update operational details without changing the inspection&rsquo;s audited identity.
             </DialogDescription>
@@ -164,6 +187,38 @@ export function InspectionEditDialog({
             </FieldDescription>
           </Field>
 
+          {visitEditable ? (
+            <>
+              <Field>
+                <FieldLabel htmlFor="jobber-visit-title-input">Visit title</FieldLabel>
+                <Input
+                  id="jobber-visit-title-input"
+                  maxLength={300}
+                  onChange={(event) => setTitle(event.target.value)}
+                  value={title}
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="jobber-visit-details-input">Details</FieldLabel>
+                <Textarea
+                  className="min-h-48 font-mono text-xs leading-relaxed"
+                  id="jobber-visit-details-input"
+                  maxLength={10000}
+                  onChange={(event) => setDetails(event.target.value)}
+                  value={details}
+                />
+                <FieldDescription>
+                  {inspection.scheduledInJobber
+                    ? 'The title and Details are saved here and sent to the visit in Jobber.'
+                    : 'The title and Details are saved here and sent with the booking, which has not reached Jobber yet.'}{' '}
+                  Keep the services line and the completion steps as they are: the app reads the
+                  services from them, and the sync reads the kind of inspection.
+                </FieldDescription>
+              </Field>
+            </>
+          ) : null}
+
           <Alert>
             <AlertDescription>
               The property, lease and type are snapshotted when the inspection is created and
@@ -172,9 +227,9 @@ export function InspectionEditDialog({
             </AlertDescription>
           </Alert>
 
-          {mutation.error ? (
+          {failure ? (
             <Alert variant="destructive">
-              <AlertDescription>{mutation.error.message}</AlertDescription>
+              <AlertDescription>{failure.message}</AlertDescription>
             </Alert>
           ) : null}
 
@@ -182,96 +237,9 @@ export function InspectionEditDialog({
             <Button onClick={onClose} type="button" variant="outline">
               Cancel
             </Button>
-            <Button disabled={!scheduledAt || mutation.isPending} type="submit">
-              {mutation.isPending ? <Spinner /> : null}
-              {mutation.isPending ? 'Saving…' : 'Save changes'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * The visit's title and Details, as the technician and Jobber read them.
- *
- * Plain text rather than the booking form: this edits visits the office wrote
- * in Jobber as well as ones booked here, in whatever shape they are. Sent to
- * Jobber; for a visit booked here and not yet sent, the booking carries it.
- */
-export function JobberVisitEditDialog({
-  inspection,
-  onClose,
-}: {
-  inspection: AdminInspection;
-  onClose: () => void;
-}) {
-  const [title, setTitle] = useState(inspection.jobberVisitTitle ?? '');
-  const [details, setDetails] = useState(inspection.jobberVisitDetails ?? '');
-  const mutation = useAdminMutations().updateJobberVisit;
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    try {
-      await mutation.mutateAsync({ id: inspection.id, title: title.trim() || undefined, details });
-      onClose();
-    } catch {
-      // The mutation surfaces the sanitized API error inline.
-    }
-  }
-
-  return (
-    <Dialog onOpenChange={(next) => (next ? undefined : onClose())} open>
-      <DialogContent className="sm:max-w-2xl">
-        <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
-          <DialogHeader>
-            <DialogTitle>Edit Jobber visit</DialogTitle>
-            <DialogDescription>
-              {inspection.scheduledInJobber
-                ? 'Saved here and sent to the visit in Jobber.'
-                : 'Saved here and sent with the booking, which has not reached Jobber yet.'}
-            </DialogDescription>
-          </DialogHeader>
-
-          <Field>
-            <FieldLabel htmlFor="jobber-visit-title-input">Visit title</FieldLabel>
-            <Input
-              id="jobber-visit-title-input"
-              maxLength={300}
-              onChange={(event) => setTitle(event.target.value)}
-              value={title}
-            />
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor="jobber-visit-details-input">Details</FieldLabel>
-            <Textarea
-              className="min-h-72 font-mono text-xs leading-relaxed"
-              id="jobber-visit-details-input"
-              maxLength={10000}
-              onChange={(event) => setDetails(event.target.value)}
-              value={details}
-            />
-            <FieldDescription>
-              Keep the services line and the completion steps as they are: the app reads the
-              services from them, and the sync reads the kind of inspection.
-            </FieldDescription>
-          </Field>
-
-          {mutation.error ? (
-            <Alert variant="destructive">
-              <AlertDescription>{mutation.error.message}</AlertDescription>
-            </Alert>
-          ) : null}
-
-          <DialogFooter>
-            <Button onClick={onClose} type="button" variant="outline">
-              Cancel
-            </Button>
-            <Button disabled={mutation.isPending} type="submit">
-              {mutation.isPending ? <Spinner /> : null}
-              {mutation.isPending ? 'Saving…' : 'Save and send'}
+            <Button disabled={!scheduledAt || busy} type="submit">
+              {busy ? <Spinner /> : null}
+              {busy ? 'Saving…' : 'Save changes'}
             </Button>
           </DialogFooter>
         </form>

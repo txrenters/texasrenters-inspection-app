@@ -1,6 +1,5 @@
 import type { AdminInspection, OfficeNote, VisitServicesReport } from '@texasrenters/shared';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JobNotes } from './job-notes';
@@ -52,13 +51,8 @@ const note = (over: Partial<OfficeNote> = {}): OfficeNote => ({
   ...over,
 });
 
-function show(over: Partial<AdminInspection> = {}, bookingNoteAction?: ReactNode) {
-  render(
-    <JobNotes
-      bookingNoteAction={bookingNoteAction}
-      inspection={{ id: 'insp-1', internalNotes: null, ...over } as AdminInspection}
-    />,
-  );
+function show(over: Partial<AdminInspection> = {}) {
+  render(<JobNotes inspection={{ id: 'insp-1', internalNotes: null, ...over } as AdminInspection} />);
 }
 
 const group = (name: string) => screen.getByRole('region', { name });
@@ -118,15 +112,12 @@ describe('the Notes section', () => {
 });
 
 describe('the booking note', () => {
-  it('is labelled as what it is, with the Edit action beside it', () => {
-    show(
-      { internalNotes: 'Imported from an Inspect & Cloud PDF report.\nInspector: Pat Example' },
-      <button type="button">Edit</button>,
-    );
+  it('is labelled as what it is, and edited with the job', () => {
+    show({ internalNotes: 'Imported from an Inspect & Cloud PDF report.\nInspector: Pat Example' });
     const office = within(group('From the office'));
     expect(office.getByText(/Booking note · on the technician's phone/)).toBeInTheDocument();
     expect(office.getByText(/Imported from an Inspect & Cloud PDF report/)).toBeInTheDocument();
-    expect(office.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(office.queryByRole('button', { name: 'Edit' })).toBeNull();
     expect(office.queryByText('No office notes yet.')).toBeNull();
   });
 

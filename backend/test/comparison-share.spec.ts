@@ -119,7 +119,7 @@ describe('issuing a comparison link', () => {
 
     expect(prisma.inspectionReportShare.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { inspectionId: 'move-out-1', organizationId: admin.organizationId, kind: 'COMPARISON' },
+        where: { inspectionId: 'move-out-1', organizationId: admin.organizationId, preview: false, kind: 'COMPARISON' },
       }),
     );
   });

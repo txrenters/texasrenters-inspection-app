@@ -1,10 +1,10 @@
 'use client';
 
 import { isFinishedStatus } from '@texasrenters/shared';
-import { ClipboardCheckIcon, HistoryIcon, MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
+import { ClipboardCheckIcon, MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { Suspense, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useState, type ReactNode } from 'react';
 
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
 import { AssignmentDialog } from '@/components/assignment-dialog';
@@ -14,13 +14,13 @@ import { InspectionDeleteDialog } from '@/components/inspection-delete-dialog';
 import {
   InspectionCancelDialog,
   InspectionEditDialog,
-  JobberVisitEditDialog,
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
 import { InspectionTabs } from '@/components/inspection-tabs';
 import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { JobHeadline } from '@/components/job-headline';
 import { JobNotes } from '@/components/job-notes';
+import { OpenReportButton } from '@/components/open-report-button';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Panel } from '@/components/panel';
@@ -101,7 +101,6 @@ function InspectionDetail() {
   const audit = useInspectionAudit(id, state.auditPage);
   const [assigning, setAssigning] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editingVisit, setEditingVisit] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [unassigning, setUnassigning] = useState(false);
   const [markingComplete, setMarkingComplete] = useState(false);
@@ -109,13 +108,6 @@ function InspectionDetail() {
   const [deleting, setDeleting] = useState(false);
   /** Jobber's record layout, in the Jobber-style shell only. */
   const jobber = useConsoleShell() === 'jobber';
-  /** The assignment history and activity, opened from the header. */
-  const moreInfo = useRef<HTMLDetailsElement>(null);
-  const showActivity = () => {
-    if (!moreInfo.current) return;
-    moreInfo.current.open = true;
-    moreInfo.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
   // Defects only: room condition summaries are context, never a decision.
   const pendingFindings = useInspectionFindings(
     id,
@@ -198,6 +190,7 @@ function InspectionDetail() {
     (item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS') &&
     permissions.has('inspections:finalize');
   const canUseMenu = canDelete || canEditOrAssign || canMarkComplete;
+  const canEditJob = !visitOver && permissions.has('inspections:manage');
 
   /** Nothing to review until it has been walked; see `reviewComesFirst`. */
   const reviewing = reviewComesFirst(item);
@@ -205,33 +198,19 @@ function InspectionDetail() {
       <VisitCard
         key="visit"
         action={
-          // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
-          !visitOver &&
-          permissions.has('inspections:manage') &&
-          (item.scheduledInJobber
-            ? item.jobberEditsPushed
-            : item.jobberBooking?.status === 'PENDING' || item.jobberBooking?.status === 'FAILED') ? (
-            <Button onClick={() => setEditingVisit(true)} size="sm" variant="outline">
-              Edit visit
+          canEditJob ? (
+            <Button onClick={() => setEditing(true)} size="sm" variant="outline">
+              Edit job
             </Button>
           ) : null
         }
         inspection={item}
+        rescheduleHref={permissions.hasAny('inspections:manage', 'planning:publish') ? '/reschedules' : undefined}
         technicianName={current?.technician?.displayName ?? null}
       />
   );
   const notes = (
-      <JobNotes
-        key="notes"
-        bookingNoteAction={
-          canEditOrAssign && permissions.has('inspections:manage') ? (
-            <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
-              Edit
-            </Button>
-          ) : null
-        }
-        inspection={item}
-      />
+      <JobNotes key="notes" inspection={item} />
   );
   /*
    * Area-first: recordings, photos, condition summaries and findings are read
@@ -245,8 +224,8 @@ function InspectionDetail() {
    * technician writes them in the app) and "Finalization & follow-up" with its
    * sticky "Finalize inspection" bar -- the office does not finalize, and its
    * reopen and request-more-evidence both sent the job back to the technician,
-   * marking the Jobber visit incomplete and restarting their paid time. "Mark
-   * complete" survives in the More menu.
+   * marking the Jobber visit incomplete and restarting their paid time. Marking
+   * a job done survives in the More menu.
    */
   const areas = (
     <div className="mt-4" key="areas">
@@ -259,23 +238,17 @@ function InspectionDetail() {
       <PageHeader
         actions={
           <>
-            {jobber ? (
-              <Button aria-label="View activity" onClick={showActivity} size="icon" title="View activity" variant="ghost">
-                <HistoryIcon />
-              </Button>
-            ) : null}
-            {/* In the Jobber-style shell the one thing to do next is the green
-                button, as Jobber's "Show Late Visit": assigning while nobody is
-                on a visit to come, sharing once the visit is over. */}
+            {/* The one thing to do next is the main button, as Jobber's "Show
+                Late Visit": assigning while nobody is on a visit to come, sharing
+                once it has been walked. Before that there is no report to share. */}
             {!visitOver && permissions.has('inspections:assign') ? (
-              <Button onClick={() => setAssigning(true)} variant={jobber && !current ? 'default' : 'outline'}>
+              <Button onClick={() => setAssigning(true)} variant={current ? 'outline' : 'default'}>
                 {current ? 'Reassign' : 'Assign technician'}
               </Button>
             ) : null}
-            {permissions.has('reports:share') ? (
-              <Button onClick={() => setSharing(true)} variant={jobber && visitOver ? 'default' : 'outline'}>
-                Share report
-              </Button>
+            {reviewing ? <OpenReportButton inspectionId={id} /> : null}
+            {reviewing && permissions.has('reports:share') ? (
+              <Button onClick={() => setSharing(true)}>Share report</Button>
             ) : null}
             {canUseMenu ? (
               <DropdownMenu>
@@ -285,11 +258,6 @@ function InspectionDetail() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  {canEditOrAssign && permissions.has('inspections:manage') ? (
-                    <DropdownMenuItem onSelect={() => setEditing(true)}>
-                      Edit details
-                    </DropdownMenuItem>
-                  ) : null}
                   {canEditOrAssign && current && permissions.has('inspections:assign') ? (
                     <DropdownMenuItem onSelect={() => setUnassigning(true)}>
                       Unassign technician
@@ -297,7 +265,7 @@ function InspectionDetail() {
                   ) : null}
                   {canMarkComplete ? (
                     <DropdownMenuItem onSelect={() => setMarkingComplete(true)}>
-                      Mark complete…
+                      Mark done outside the app…
                     </DropdownMenuItem>
                   ) : null}
                   {canEditOrAssign && permissions.has('inspections:manage') ? (
@@ -441,7 +409,7 @@ function InspectionDetail() {
           for attention; `open` on a details element keeps them one click away
           and keyboard-reachable without any custom disclosure logic. */}
       <div className="mt-4">
-        <details className="group" ref={moreInfo}>
+        <details className="group">
           <summary className="bg-card hover:bg-accent flex cursor-pointer items-center gap-2 rounded-xl border p-3 text-sm font-medium select-none">
             History
             <span className="text-muted-foreground font-normal">Assignments and activity</span>
@@ -554,9 +522,6 @@ function InspectionDetail() {
       ) : null}
       {editing ? (
         <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} />
-      ) : null}
-      {editingVisit ? (
-        <JobberVisitEditDialog inspection={item} onClose={() => setEditingVisit(false)} />
       ) : null}
       {cancelling ? (
         <InspectionCancelDialog inspectionId={id} onClose={() => setCancelling(false)} />

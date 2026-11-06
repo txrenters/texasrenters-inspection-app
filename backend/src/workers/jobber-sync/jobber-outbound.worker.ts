@@ -1238,6 +1238,8 @@ export class JobberOutboundWorker {
       where: {
         inspectionId,
         organizationId,
+        // Somebody's hour with the report, never the link Jobber is given.
+        preview: false,
         revokedAt: null,
         expiresAt: { gt: new Date(Date.now() + 24 * 60 * 60 * 1_000) },
       },

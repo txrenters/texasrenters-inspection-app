@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { reviewComesFirst } from './job-page';
+import { reviewComesFirst, visitCanBeEdited } from './job-page';
+
+describe("a visit's title and Details", () => {
+  it('can be changed on a Jobber visit only when edits reach Jobber', () => {
+    expect(visitCanBeEdited({ scheduledInJobber: true, jobberEditsPushed: true })).toBe(true);
+    expect(visitCanBeEdited({ scheduledInJobber: true, jobberEditsPushed: false })).toBe(false);
+  });
+
+  it('can be changed on a booking that has not reached Jobber yet', () => {
+    expect(visitCanBeEdited({ jobberBooking: { status: 'PENDING' } })).toBe(true);
+    expect(visitCanBeEdited({ jobberBooking: { status: 'FAILED' } })).toBe(true);
+  });
+
+  it('has nothing to change on a job with no visit, or a booking already sent', () => {
+    expect(visitCanBeEdited({})).toBe(false);
+    expect(visitCanBeEdited({ jobberBooking: { status: 'SENT' } })).toBe(false);
+  });
+});
 
 describe('a job page leading with its review', () => {
   it.each(['TECHNICIAN_SUBMITTED', 'PROCESSING', 'REVIEW_REQUIRED', 'UNDER_REVIEW', 'TBD', 'COMPLETED'])(

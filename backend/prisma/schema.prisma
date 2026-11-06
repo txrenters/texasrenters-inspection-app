@@ -2248,6 +2248,9 @@ model InspectionReportShare {
   /// comparison links existed keeps serving the inspection report it was
   /// created for.
   kind           ReportShareKind @default(INSPECTION)
+  /// The job page's Open report: an hour's link for the person who pressed it,
+  /// nobody's to send, so it is kept out of the links listed for sharing.
+  preview        Boolean     @default(false)
   recipientEmail String?
   expiresAt      DateTime
   revokedAt      DateTime?

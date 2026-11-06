@@ -2479,6 +2479,11 @@ export function useAdminMutations() {
       },
     }),
     /** The visit's title and Details, edited in the console and pushed to Jobber. */
+    /** The job's report in a tab; see `ReportShareService.openReport`. */
+    openReport: useMutation({
+      mutationFn: (id: string) =>
+        api<{ sharePath: string }>(`/api/v1/admin/inspections/${id}/report-preview`, { method: 'POST' }),
+    }),
     updateJobberVisit: useMutation({
       mutationFn: ({ id, ...input }: { id: string; title?: string; details: string }) =>
         api<AdminInspection>(`/api/v1/admin/inspections/${id}/jobber-visit`, {

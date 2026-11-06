@@ -1,6 +1,6 @@
 import type { AdminInspection } from '@texasrenters/shared';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { InspectionEditDialog } from './inspection-actions-dialogs';
 
@@ -14,11 +14,19 @@ import { InspectionEditDialog } from './inspection-actions-dialogs';
  * offering it.
  */
 
-vi.mock('@/lib/queries', () => ({
-  useAdminMutations: () => ({
-    updateInspection: { mutateAsync: vi.fn(), isPending: false, error: null },
-  }),
+const mutations = vi.hoisted(() => ({
+  updateInspection: { mutateAsync: vi.fn(), isPending: false, error: null as Error | null },
+  updateJobberVisit: { mutateAsync: vi.fn(), isPending: false, error: null as Error | null },
 }));
+
+vi.mock('@/lib/queries', () => ({ useAdminMutations: () => mutations }));
+
+beforeEach(() => {
+  mutations.updateInspection.mutateAsync.mockReset().mockResolvedValue({});
+  mutations.updateJobberVisit.mutateAsync.mockReset().mockResolvedValue({});
+  mutations.updateInspection.error = null;
+  mutations.updateJobberVisit.error = null;
+});
 
 const inspection = (overrides: Partial<AdminInspection> = {}): AdminInspection => ({
   id: 'inspection-1',
@@ -31,6 +39,67 @@ const inspection = (overrides: Partial<AdminInspection> = {}): AdminInspection =
   internalNotes: null,
   assignments: [],
   ...overrides,
+});
+
+describe('the one edit for a job', () => {
+  const inJobber = {
+    scheduledInJobber: true,
+    jobberEditsPushed: true,
+    jobberVisitTitle: 'Q4 visit',
+    jobberVisitDetails: 'Filter Change: 20x25x1',
+  };
+  const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+  it('offers the visit where it can be changed, and says where it goes', () => {
+    render(<InspectionEditDialog inspection={inspection(inJobber)} onClose={() => {}} />);
+    expect(screen.getByLabelText('Visit title')).toHaveValue('Q4 visit');
+    expect(screen.getByLabelText('Details')).toHaveValue('Filter Change: 20x25x1');
+    expect(screen.getByText(/sent to the visit in Jobber/)).toBeTruthy();
+  });
+
+  it('leaves it out where it cannot', () => {
+    render(<InspectionEditDialog inspection={inspection({ scheduledInJobber: true })} onClose={() => {}} />);
+    expect(screen.queryByLabelText('Visit title')).toBeNull();
+    expect(screen.getByLabelText('Booking note')).toBeTruthy();
+  });
+
+  it('sends Jobber nothing when the visit was not changed', async () => {
+    const onClose = vi.fn();
+    render(<InspectionEditDialog inspection={inspection(inJobber)} onClose={onClose} />);
+    save();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mutations.updateInspection.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(mutations.updateJobberVisit.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('saves the job, then the visit, when both changed', async () => {
+    const onClose = vi.fn();
+    render(<InspectionEditDialog inspection={inspection(inJobber)} onClose={onClose} />);
+    fireEvent.change(screen.getByLabelText('Details'), { target: { value: 'Filter Change: 16x25x1' } });
+    save();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mutations.updateJobberVisit.mutateAsync).toHaveBeenCalledWith({
+      id: 'inspection-1',
+      title: 'Q4 visit',
+      details: 'Filter Change: 16x25x1',
+    });
+  });
+
+  it('stays open when Jobber refuses, so nothing typed is lost', async () => {
+    const onClose = vi.fn();
+    mutations.updateJobberVisit.mutateAsync.mockRejectedValue(new Error('Refused'));
+    render(<InspectionEditDialog inspection={inspection(inJobber)} onClose={onClose} />);
+    fireEvent.change(screen.getByLabelText('Visit title'), { target: { value: 'Q4 visit, moved' } });
+    save();
+    await waitFor(() => expect(mutations.updateJobberVisit.mutateAsync).toHaveBeenCalled());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows why the visit was refused', () => {
+    mutations.updateJobberVisit.error = new Error('Jobber refused the change.');
+    render(<InspectionEditDialog inspection={inspection(inJobber)} onClose={() => {}} />);
+    expect(screen.getByText('Jobber refused the change.')).toBeTruthy();
+  });
 });
 
 describe('the scheduled date in the edit form', () => {

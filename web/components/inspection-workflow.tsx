@@ -85,7 +85,7 @@ export function MarkCompleteDialog({
       <DialogContent>
         <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
-            <DialogTitle>Mark inspection complete</DialogTitle>
+            <DialogTitle>Mark done outside the app</DialogTitle>
             <DialogDescription>
               For a walkthrough done outside this app, with nothing here to submit. Its evidence
               can still be reviewed afterwards.
@@ -114,7 +114,7 @@ export function MarkCompleteDialog({
             </Button>
             <Button disabled={mutation.isPending || blocked} type="submit">
               {mutation.isPending ? <Spinner /> : null}
-              {mutation.isPending ? 'Saving…' : 'Mark complete'}
+              {mutation.isPending ? 'Saving…' : 'Mark done'}
             </Button>
           </DialogFooter>
         </form>
