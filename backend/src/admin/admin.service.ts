@@ -38,6 +38,7 @@ import {
   type JobberBookingInput,
   type VisitServicesBooking,
   isTbpVisit,
+  jobAreaNotes,
   visitZone,
   zoneNumberOf,
 } from '@texasrenters/shared';
@@ -1859,6 +1860,20 @@ export class AdminService {
         nextInspectionAlert: true,
         maintenanceComments: true,
         generalComments: true,
+        // The rooms the technician wrote on, for the job's Notes. Ordered by
+        // `jobAreaNotes`, not here: this read uses the join strategy.
+        areas: {
+          where: { OR: [{ technicianNote: { not: null } }, { skipReason: { not: null } }] },
+          select: {
+            id: true,
+            completionStatus: true,
+            technicianNote: true,
+            skipReason: true,
+            propertyArea: {
+              select: { name: true, inspectionOrder: true, floor: { select: { name: true } } },
+            },
+          },
+        },
         propertywareBuilding: {
           select: { id: true, name: true, addressLine1: true, city: true, state: true },
         },
@@ -1950,7 +1965,7 @@ export class AdminService {
 
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
-    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, ...detail } = inspection;
+    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, areas: roomsWrittenOn, ...detail } = inspection;
     // Optional-chained for the test doubles that stand in for this read without it.
     const consoleTasks = jobberOutboundTasks ?? [];
     // The inspection itself, read from its evidence rather than from a button
@@ -1975,6 +1990,7 @@ export class AdminService {
       zone: visitZone(inspection.jobberVisitTitle) ?? standing.zone,
       tbp: standing.tbp,
       occupancy: standing.occupancy,
+      areaNotes: jobAreaNotes(roomsWrittenOn ?? []),
       scheduledInJobber: Boolean(jobberVisitId),
       jobberBooking: booking ? { status: booking.status, attempts: booking.attempts, lastError: booking.lastError, sentAt: booking.sentAt } : null,
       // Edits waiting for, or refused by, Jobber. A sent one is history.

@@ -148,15 +148,15 @@ describe('the inspection’s side panel', () => {
         technicianName="Ada Lane"
       />,
     );
-    expect(screen.getByText('Gate code at the office.')).toBeTruthy();
+    // The notes have their own section, in both layouts.
+    expect(screen.queryByText('Gate code at the office.')).toBeNull();
     expect(screen.getAllByText('Finding approved')).toHaveLength(5);
     fireEvent.click(screen.getByRole('button', { name: 'See all' }));
     expect(onSeeActivity).toHaveBeenCalledTimes(1);
   });
 
-  it('says plainly when there are no notes', () => {
+  it('says plainly when nothing has happened', () => {
     render(<InspectionRecordAside activity={[]} item={inspection()} onSeeActivity={() => {}} technicianName={null} />);
-    expect(screen.getByText('No internal notes yet.')).toBeTruthy();
     expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();
   });
 

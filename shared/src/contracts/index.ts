@@ -77,6 +77,7 @@ export * from './photo-capture-time.js';
 export * from './visit-details.js';
 export * from './visit-details-writer.js';
 export * from './visit-services.js';
+export * from './job-notes.js';
 export * from './job-summary.js';
 export * from './area-classification.js';
 export * from './inspection-scope.js';

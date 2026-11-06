@@ -261,6 +261,8 @@ describe('inspection status lifecycle (spec §11)', () => {
       zone: null,
       tbp: null,
       occupancy: null,
+      // No room with anything written on it.
+      areaNotes: [],
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -285,6 +287,41 @@ describe('inspection status lifecycle (spec §11)', () => {
         }),
       }),
     );
+  });
+
+  it('serves the rooms the technician wrote on, in walk order, and not the rows they came from', async () => {
+    const room = (id: string, order: number, name: string, technicianNote: string) => ({
+      id,
+      completionStatus: 'COMPLETE',
+      technicianNote,
+      // Left behind by a room resumed after it was skipped.
+      skipReason: 'Locked',
+      propertyArea: { name, inspectionOrder: order, floor: null },
+    });
+    const prisma = {
+      ...ZERO_EVIDENCE,
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'insp-1',
+          status: InspectionStatus.COMPLETED,
+          areas: [room('b', 2, 'Garage', 'Door sticks.'), room('a', 1, 'Kitchen', 'Sink drips.')],
+        }),
+      },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+    };
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    const detail = await service.inspection(admin, 'insp-1');
+
+    expect(detail.areaNotes).toEqual([
+      { id: 'a', name: 'Kitchen', floorName: null, note: 'Sink drips.', skipReason: null },
+      { id: 'b', name: 'Garage', floorName: null, note: 'Door sticks.', skipReason: null },
+    ]);
+    expect(detail).not.toHaveProperty('areas');
+    // Only the rooms with something on them: a house has a dozen, most with nothing.
+    expect(prisma.inspection.findFirst.mock.calls[0][0].select.areas.where).toEqual({
+      OR: [{ technicianNote: { not: null } }, { skipReason: { not: null } }],
+    });
   });
 
   it('queues the Jobber completion in the same transaction as the sign-off', async () => {

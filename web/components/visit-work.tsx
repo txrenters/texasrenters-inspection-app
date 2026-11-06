@@ -288,7 +288,6 @@ export function VisitWork({
           {card.details}
         </VisitFoldCard>
       ))}
-      {report?.notes ? <p className="text-sm whitespace-pre-wrap">{report.notes}</p> : null}
     </section>
   );
 }

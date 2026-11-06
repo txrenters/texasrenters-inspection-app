@@ -2,7 +2,6 @@
 
 import type { AdminInspection } from '@texasrenters/shared';
 import Link from 'next/link';
-import type { ReactNode } from 'react';
 
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -84,19 +83,16 @@ interface AuditEvent {
   createdAt: string;
 }
 
-/** Jobber's side panel, for an inspection: where it stands, its notes, and what happened to it last. */
+/** Jobber's side panel, for an inspection: where it stands, and what happened to it last. */
 export function InspectionRecordAside({
   activity,
   item,
-  notesAction,
   onSeeActivity,
   technicianName,
 }: {
   /** The page's own audit page, already loaded; the first few are shown. */
   activity: readonly AuditEvent[] | undefined;
   item: AdminInspection;
-  /** "Edit", where the viewer may edit the inspection's details. */
-  notesAction?: ReactNode;
   /** Opens the full activity, further down the page. */
   onSeeActivity: () => void;
   technicianName: string | null;
@@ -122,16 +118,6 @@ export function InspectionRecordAside({
             </dd>
           </div>
         </dl>
-      </AsideCard>
-
-      <AsideCard action={notesAction} title="Notes">
-        {item.internalNotes ? (
-          <p className="text-foreground whitespace-pre-wrap">{item.internalNotes}</p>
-        ) : (
-          <p className="text-muted-foreground border-border rounded-lg border border-dashed px-3 py-4 text-center">
-            No internal notes yet.
-          </p>
-        )}
       </AsideCard>
 
       <AsideCard

@@ -121,14 +121,14 @@ describe('the visit’s facts', () => {
     expect(screen.getByText('Could not get in: tenant not home')).toBeInTheDocument();
   });
 
-  it('shows where an imported record came from', () => {
+  it('leaves an imported record with no Jobber text, and its notes to the Notes section', () => {
     show({
       jobberVisitTitle: null,
       jobberVisitDetails: null,
       scheduledInJobber: false,
       internalNotes: 'Imported from an Inspect & Cloud PDF report. Inspector: Pat Example',
     });
-    expect(screen.getByText(/Imported from an Inspect & Cloud PDF report/)).toBeInTheDocument();
+    expect(screen.queryByText(/Imported from an Inspect & Cloud PDF report/)).toBeNull();
     expect(screen.queryByText('As written in Jobber')).toBeNull();
   });
 });
@@ -286,7 +286,8 @@ describe('what the technician reported', () => {
     expect(within(reported).getByText('Not done')).toBeInTheDocument();
     expect(within(reported).getByText('To reschedule')).toBeInTheDocument();
     expect(within(reported).getByText('2 filters · 20x25x4, 12x24x1')).toBeInTheDocument();
-    expect(within(reported).getByText('Return air grille was blocked.')).toBeInTheDocument();
+    // Once, in the Notes section.
+    expect(within(reported).queryByText('Return air grille was blocked.')).toBeNull();
   });
 
   it('folds the instructions away once the visit is done, leaving the work in view', () => {
