@@ -170,6 +170,9 @@ export const FILTER_SIZE_WITH_WORDS_PATTERN = new RegExp(
 
 export const MAX_SERVICE_REASON = 500;
 
+/** The longest note for the office a technician can leave at End job. */
+export const MAX_VISIT_NOTE = 1000;
+
 /**
  * "20 X 25 x 1" becomes "20x25x1", so the office reads one spelling.
  *

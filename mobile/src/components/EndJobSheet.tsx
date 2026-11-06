@@ -1,10 +1,12 @@
+import { MAX_VISIT_NOTE } from '@texasrenters/shared';
 import { CheckCircle2Icon, XCircleIcon } from 'lucide-react-native';
-import { ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { ClosingCommentsCard } from '@/src/components/ClosingCommentsCard';
 import { Button } from '@/src/components/ui';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
 import type { ClosingComments } from '@/src/utils/closing-comments';
 import type { JobTask } from '@/src/utils/job-tasks';
 
@@ -24,12 +26,18 @@ function outcome(task: JobTask) {
  * and how long it took -- because this is the submission: once ended, the job
  * is the office's. An HVAC report's closing comments are written here too; they
  * are optional, and the office can edit them afterwards.
+ *
+ * So is a note for the office, on every job (the office, 2026-11-06). Until now
+ * a technician could only write a reason for something not done, or a note on a
+ * room: anything else about the visit had nowhere to go. It goes to the job page
+ * and the Jobber note, never on the report a tenant and an owner read.
  */
 export function EndJobSheet({
   visible,
   busy = false,
   tasks,
   took,
+  note,
   comments,
   error,
   onClose,
@@ -40,6 +48,8 @@ export function EndJobSheet({
   tasks: JobTask[];
   /** "42 min". */
   took: string;
+  /** The note for the office. */
+  note: { draft: string; onChange: (next: string) => void };
   /** An HVAC job's closing comments; absent for every other kind. */
   comments?: { draft: ClosingComments; onChange: (next: ClosingComments) => void };
   /** Why the last try did not go through. */
@@ -47,6 +57,7 @@ export function EndJobSheet({
   onClose: () => void;
   onEnd: () => void;
 }) {
+  const theme = useThemeColors();
   return (
     <BottomSheet accessibilityRole="alert" className="max-h-[92%]" onClose={onClose} visible={visible}>
       <ScrollView contentContainerStyle={{ gap: 16 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -78,6 +89,28 @@ export function EndJobSheet({
               </View>
             );
           })}
+        </View>
+
+        <View className="gap-1">
+          <Text
+            className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+            nativeID="job-note"
+          >
+            Note for the office
+          </Text>
+          <TextInput
+            accessibilityLabel="Note for the office, optional"
+            accessibilityLabelledBy="job-note"
+            className="min-h-20 rounded-xl border border-border bg-background px-4 py-3 text-foreground"
+            maxLength={MAX_VISIT_NOTE}
+            multiline
+            onChangeText={note.onChange}
+            placeholder="Anything else they should know…"
+            placeholderTextColor={theme.mutedForeground}
+            textAlignVertical="top"
+            value={note.draft}
+          />
+          <Text className="text-xs text-muted-foreground">Optional. Not printed on the report.</Text>
         </View>
 
         {comments ? <ClosingCommentsCard draft={comments.draft} onChange={comments.onChange} /> : null}

@@ -290,6 +290,16 @@ describe('what the technician reported', () => {
     expect(within(reported).queryByText('Return air grille was blocked.')).toBeNull();
   });
 
+  it('has no Work done heading over nothing: a note alone belongs to the Notes section', () => {
+    show({
+      status: 'SCHEDULED',
+      jobberVisitDetails: null,
+      servicesReport: { services: {}, filtersInstalled: [], notes: 'Keys in the mailbox.' },
+    });
+    expect(screen.queryByRole('region', { name: 'Work done' })).toBeNull();
+    expect(screen.queryByText('Keys in the mailbox.')).toBeNull();
+  });
+
   it('folds the instructions away once the visit is done, leaving the work in view', () => {
     // A reviewer scrolled past a screen of filters to bring and gate codes to
     // reach the areas (the office, 2026-10-02): once submitted, that is history.

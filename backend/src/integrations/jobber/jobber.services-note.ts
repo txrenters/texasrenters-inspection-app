@@ -127,7 +127,11 @@ export function jobberServicesNote(input: {
   if (!lines.length && !input.report.notes) return null;
   const recorded = formatPhotoStamp(input.recordedAt, 'DEVICE_CLOCK');
   return [
-    `Services completed: ${completed.length ? completed.sort((a, b) => a - b).join(', ') : 'none'}`,
+    // A job that booked no services can still carry a note, and "none" would
+    // read as services missed.
+    lines.length
+      ? `Services completed: ${completed.length ? completed.sort((a, b) => a - b).join(', ') : 'none'}`
+      : null,
     ...lines.sort((a, b) => a.order - b.order).map((line) => line.text),
     input.report.notes ? `Notes: ${input.report.notes}` : null,
     `Recorded${input.technicianName ? ` by ${input.technicianName}` : ''} in the Texas Renters inspection app${

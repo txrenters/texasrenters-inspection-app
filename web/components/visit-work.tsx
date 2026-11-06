@@ -275,7 +275,7 @@ export function VisitWork({
     ...(report ? serviceCards(report, overdue) : []),
     ...(showInspection ? [inspectionCard(inspection, status, areas)].filter((card): card is WorkCard => card !== null) : []),
   ];
-  if (!cards.length && !report?.notes) return null;
+  if (!cards.length) return null;
   const reportedAt = inspection.servicesReportedAt ?? null;
   return (
     <section aria-label="Work done" className="grid gap-2">
