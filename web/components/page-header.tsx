@@ -1,6 +1,7 @@
 'use client';
 
 import { InfoIcon, type LucideIcon } from 'lucide-react';
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { useConsoleShell } from '@/components/console-shell-context';
@@ -22,6 +23,7 @@ import { cn } from '@/lib/utils';
  */
 export function PageHeader({
   title,
+  titleHref,
   description,
   badges,
   actions,
@@ -31,6 +33,8 @@ export function PageHeader({
   className,
 }: {
   title: string;
+  /** Where the title leads, when it names something with a page of its own. */
+  titleHref?: string;
   /**
    * The rules behind the page, one click away rather than above the work
    * (console-development): a paragraph of booking rules over every visit to a
@@ -60,6 +64,13 @@ export function PageHeader({
   className?: string;
 }) {
   const jobber = useConsoleShell() === 'jobber';
+  const heading = titleHref ? (
+    <Link className="underline-offset-4 hover:underline" href={titleHref}>
+      {title}
+    </Link>
+  ) : (
+    title
+  );
 
   if (record && jobber) {
     const Icon = record.icon;
@@ -81,7 +92,7 @@ export function PageHeader({
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="font-display text-heading text-[1.75rem] leading-tight font-extrabold sm:text-[2.25rem]">
-              {title}
+              {heading}
             </h1>
             {info ? <InfoButton info={info} infoLabel={infoLabel} /> : null}
           </div>
@@ -104,7 +115,7 @@ export function PageHeader({
           {/* In the Jobber-style shell, Jobber's page title: large, heavy,
               in the display face, and allowed to wrap as Jobber's do. */}
           <h1 className="jobber:font-display jobber:text-heading jobber:text-[1.75rem] sm:jobber:text-[2rem] jobber:leading-tight jobber:font-extrabold jobber:tracking-normal jobber:whitespace-normal truncate text-lg font-semibold tracking-tight">
-            {title}
+            {heading}
           </h1>
           {info ? <InfoButton info={info} infoLabel={infoLabel} /> : null}
           {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}

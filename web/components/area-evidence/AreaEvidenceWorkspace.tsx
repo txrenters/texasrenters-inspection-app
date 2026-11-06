@@ -282,17 +282,11 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
     <Card aria-labelledby="area-evidence-heading" className="scroll-mt-20" id="evidence">
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
         <div className="space-y-1.5">
-          {/* A section name, not a heading (console-development); the reviewed
-              count sits beside it as a panel's count does, rather than as a
-              badge restating the page's "Areas reviewed" figure. */}
-          <div className="flex items-center gap-3">
-            <CardTitle id="area-evidence-heading" tabIndex={-1} variant="label">
-              Areas
-            </CardTitle>
-            <span className="text-muted-foreground font-mono text-xs tabular-nums">
-              {totals.areasReviewed} of {totals.areas} reviewed
-            </span>
-          </div>
+          {/* A section name, not a heading (console-development). The reviewed
+              count is the "Areas reviewed" figure directly above. */}
+          <CardTitle id="area-evidence-heading" tabIndex={-1} variant="label">
+            Areas
+          </CardTitle>
           <CardDescription>
             {countLabel(totals.areas, 'area')} · {countLabel(totals.recordings, 'recording')} ·{' '}
             {countLabel(totals.photos, 'photo')} · {countLabel(totals.findings, 'finding')}

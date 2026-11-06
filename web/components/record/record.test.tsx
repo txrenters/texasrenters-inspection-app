@@ -1,12 +1,10 @@
-import type { AdminInspection } from '@texasrenters/shared';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { ClipboardCheckIcon } from 'lucide-react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { ConsoleShellProvider } from '@/components/console-shell-context';
 import { PageHeader } from '@/components/page-header';
 
-import { InspectionRecordAside, InspectionRecordTop } from './inspection-record';
 import { FactTable, RecordLayout } from './record-kit';
 
 /**
@@ -43,6 +41,30 @@ describe('the record header', () => {
     header('classic');
     expect(screen.queryByText('Move-out inspection', { selector: '.sr-only' })).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: '12 Elm Ct' })).toBeTruthy();
+  });
+});
+
+describe('a title that leads somewhere', () => {
+  const titled = (shell: 'classic' | 'jobber', titleHref?: string) =>
+    render(
+      <ConsoleShellProvider shell={shell}>
+        <PageHeader
+          record={{ icon: ClipboardCheckIcon, tone: 'text-chart-3', label: 'Move-out inspection' }}
+          title="12 Elm Ct"
+          titleHref={titleHref}
+        />
+      </ConsoleShellProvider>,
+    );
+
+  it.each(['classic', 'jobber'] as const)('links in the %s layout', (shell) => {
+    titled(shell, '/properties/b-1');
+    expect(screen.getByRole('link', { name: '12 Elm Ct' }).getAttribute('href')).toBe('/properties/b-1');
+    expect(screen.getByRole('heading', { level: 1, name: '12 Elm Ct' })).toBeTruthy();
+  });
+
+  it('stays plain words without one', () => {
+    titled('jobber');
+    expect(screen.queryByRole('link')).toBeNull();
   });
 });
 
@@ -86,84 +108,5 @@ describe('the side panel', () => {
       </RecordLayout>,
     );
     expect(screen.getByText('The record').parentElement!.parentElement!.className).toContain('2xl:grid-cols-');
-  });
-});
-
-const inspection = (over: Partial<AdminInspection> = {}) =>
-  ({
-    id: 'insp-1',
-    status: 'SCHEDULED',
-    inspectionType: 'MOVE_OUT',
-    priority: 'STANDARD',
-    scheduledAt: '2026-11-12T00:00:00.000Z',
-    propertywareBuilding: { id: 'b-1', name: '12 Elm Ct', addressLine1: '12 Elm Ct', city: 'Testville', state: 'TX' },
-    propertywareUnit: null,
-    internalNotes: null,
-    jobberVisitTitle: '12 Elm Ct - Zone 2 - Move out',
-    ...over,
-  }) as AdminInspection;
-
-describe('the inspection’s card and details', () => {
-  it('shows the place and where the review stands, leaving who and when to the header and the Visit card', () => {
-    render(
-      <InspectionRecordTop
-        figures={{ areasReviewed: '2 of 6', findingsToReview: 3, comparedWith: { id: 'insp-in', scheduledAt: '2025-06-01T00:00:00.000Z' }, comparesToMoveIn: true }}
-        item={inspection()}
-      />,
-    );
-    expect(screen.getByRole('link', { name: '12 Elm Ct' }).getAttribute('href')).toBe('/properties/b-1');
-    const details = screen.getByLabelText('Inspection details');
-    expect(within(details).queryByText('Type')).toBeNull();
-    expect(within(details).queryByText('Scheduled')).toBeNull();
-    expect(within(details).getByText('2 of 6')).toBeTruthy();
-    expect(within(details).getByText('3').className).toContain('text-warning');
-    expect(within(details).getByRole('link', { name: /Move-in/ }).getAttribute('href')).toBe('/inspections/insp-in');
-  });
-
-  it('leaves out the findings row for an account that may not read findings', () => {
-    render(
-      <InspectionRecordTop
-        figures={{ areasReviewed: null, findingsToReview: null, comparesToMoveIn: false }}
-        item={inspection({ inspectionType: 'HVAC' })}
-      />,
-    );
-    expect(screen.queryByText('Findings to review')).toBeNull();
-    expect(screen.queryByText('Compared with')).toBeNull();
-  });
-});
-
-describe('the inspection’s side panel', () => {
-  it('shows the notes, the last five things that happened, and the way to the rest', () => {
-    const onSeeActivity = vi.fn();
-    render(
-      <InspectionRecordAside
-        activity={Array.from({ length: 7 }, (_, index) => ({
-          id: `e-${index}`,
-          action: 'FINDING_APPROVED',
-          actorName: 'Ada Lane',
-          createdAt: '2026-11-03T15:00:00.000Z',
-        }))}
-        item={inspection({ internalNotes: 'Gate code at the office.' })}
-        onSeeActivity={onSeeActivity}
-        technicianName="Ada Lane"
-      />,
-    );
-    // The notes have their own section, in both layouts.
-    expect(screen.queryByText('Gate code at the office.')).toBeNull();
-    expect(screen.getAllByText('Finding approved')).toHaveLength(5);
-    fireEvent.click(screen.getByRole('button', { name: 'See all' }));
-    expect(onSeeActivity).toHaveBeenCalledTimes(1);
-  });
-
-  it('says plainly when nothing has happened', () => {
-    render(<InspectionRecordAside activity={[]} item={inspection()} onSeeActivity={() => {}} technicianName={null} />);
-    expect(screen.getByText('Nothing recorded yet.')).toBeTruthy();
-  });
-
-  it("leaves Jobber's job number to the header, where it is said once", () => {
-    render(
-      <InspectionRecordAside activity={[]} item={inspection({ jobberJobNumber: '20625' })} onSeeActivity={() => {}} technicianName={null} />,
-    );
-    expect(screen.queryByText('Job #')).toBeNull();
   });
 });

@@ -7,7 +7,7 @@ import { Fragment } from 'react';
  * include all the necessary details, like the job type, occupied or not, TBP
  * or not"):
  *
- *   TBP · Occupied · Q4 2026 · Zone 1 · Job #20636
+ *   Katy, TX · TBP · Occupied · Q4 2026 · Zone 1 · Job #20636
  *   AC filter change + Pest control + Occupied inspection
  *
  * Plain words, not badges: the status beside the title is the page's one badge,
@@ -15,6 +15,7 @@ import { Fragment } from 'react';
  */
 export function jobFacts(item: AdminInspection): string[] {
   return [
+    jobPlace(item),
     item.tbpVisit ? 'TBP' : 'Not TBP',
     item.occupancy === 'OCCUPIED' ? 'Occupied' : item.occupancy === 'VACANT' ? 'Vacant' : null,
     item.tbpVisit && item.quarter ? item.quarter : null,
@@ -22,6 +23,19 @@ export function jobFacts(item: AdminInspection): string[] {
     item.jobberJobNumber ? `Job #${item.jobberJobNumber}` : null,
     item.propertywareUnit?.name ?? null,
   ].filter((fact): fact is string => Boolean(fact));
+}
+
+/**
+ * Where it is, beyond what the title says. The title is the building's name,
+ * usually its street, so this is the town; a name that isn't the street leaves
+ * the whole address to say.
+ */
+function jobPlace(item: AdminInspection): string | null {
+  const building = item.propertywareBuilding;
+  if (!building) return null;
+  const street = building.addressLine1?.trim().toLowerCase();
+  const named = Boolean(street) && building.name.toLowerCase().includes(street ?? '');
+  return [named ? null : building.addressLine1, building.city, building.state].filter(Boolean).join(', ') || null;
 }
 
 export function JobHeadline({ item }: { item: AdminInspection }) {
@@ -35,7 +49,7 @@ export function JobHeadline({ item }: { item: AdminInspection }) {
             {index ? <span aria-hidden>·</span> : null}
             {/* Today's, from Propertyware: a done job may have been lived in on the day. */}
             <span
-              className={index === 0 && item.tbpVisit ? 'text-foreground font-medium' : undefined}
+              className={fact === 'TBP' ? 'text-foreground font-medium' : undefined}
               title={fact === 'Occupied' || fact === 'Vacant' ? 'Today, from Propertyware' : undefined}
             >
               {fact}

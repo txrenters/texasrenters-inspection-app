@@ -43,6 +43,28 @@ describe("a job's headline", () => {
     expect(jobFacts(job({ occupancy: null, propertywareUnit: unit }))).toEqual(['TBP', 'Q4 2026', 'Zone 1', 'Job #20636', 'Unit 2']);
   });
 
+  const building = (over: Partial<NonNullable<AdminInspection['propertywareBuilding']>> = {}) =>
+    ({ id: 'b-1', name: '12 Elm Ct', addressLine1: '12 Elm Ct', city: 'Katy', state: 'TX', ...over }) as AdminInspection['propertywareBuilding'];
+
+  it('adds the town the title leaves out', () => {
+    expect(jobFacts(job({ propertywareBuilding: building() }))[0]).toBe('Katy, TX');
+  });
+
+  it('gives the whole address when the title is a name, not the street', () => {
+    expect(jobFacts(job({ propertywareBuilding: building({ name: 'Oak Villas' }) }))[0]).toBe('12 Elm Ct, Katy, TX');
+  });
+
+  it('says nothing of a place it does not know', () => {
+    const none = building({ addressLine1: null, city: null, state: null });
+    expect(jobFacts(job({ propertywareBuilding: none }))[0]).toBe('TBP');
+  });
+
+  it('leaves TBP as the fact that stands out, wherever it falls', () => {
+    render(<JobHeadline item={job({ propertywareBuilding: building() })} />);
+    expect(screen.getByText('TBP').className).toContain('font-medium');
+    expect(screen.getByText('Katy, TX').className).not.toContain('font-medium');
+  });
+
   it('says occupancy is as of today, since a done job may have been lived in on the day', () => {
     render(<JobHeadline item={job()} />);
     expect(screen.getByText('Occupied')).toHaveAttribute('title', 'Today, from Propertyware');

@@ -17,7 +17,7 @@ import { Fragment, useMemo, type ReactNode } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { VisitFoldCard, VisitWork, type VisitAreaCounts } from '@/components/visit-work';
+import { VisitFoldCard, VisitWork } from '@/components/visit-work';
 import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { formatScheduledDate, humanize } from '@/lib/format';
 import { inspectionTime, jobWorked } from '@/lib/job-time';
@@ -46,13 +46,10 @@ export function VisitCard({
   inspection,
   technicianName,
   action,
-  areas = null,
 }: {
   inspection: AdminInspection;
   /** The technician currently assigned, if anyone is. */
   technicianName?: string | null;
-  /** How far the review of its areas has come, for the inspection's card. */
-  areas?: VisitAreaCounts | null;
   /** A control for the header: "Edit visit", where the viewer may. */
   action?: ReactNode;
 }) {
@@ -70,8 +67,7 @@ export function VisitCard({
   const done = isFinishedStatus(inspection.status);
   const cancelled = inspection.status === 'CANCELLED';
   // Planning detail -- what to bring, who to call -- matters before the visit.
-  // Once it is done it folds away, so the areas under review are not a screen
-  // below it; what was done, and any alert, stays open.
+  // Once it is done it folds away; what was done, and any alert, stays open.
   const planningCollapsed = inspection.status !== 'SCHEDULED' && inspection.status !== 'IN_PROGRESS';
   const state = visitState(inspection);
   const worked = jobWorked(inspection);
@@ -120,7 +116,10 @@ export function VisitCard({
             Visit
           </CardTitle>
           <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-            <Badge variant={state.variant}>{state.label}</Badge>
+            {/* Words, not a badge: the page's status beside the title is the
+                one badge, and "Done" next to "Review required" as two badges
+                read as a contradiction. They answer different questions. */}
+            <span className="text-foreground font-medium">{state.label}</span>
             {sync.map((part) => (
               <Fragment key={part.key}>
                 <span aria-hidden>·</span>
@@ -255,7 +254,7 @@ export function VisitCard({
 
         {/* What to do comes before what was done (the office, 2026-11-06). One card
             for all of it, open while it is needed and folded once the visit is
-            over, so the areas under review are not a screen below it. */}
+            over. */}
         {instructions ? (
           <VisitFoldCard open={!planningCollapsed} summary={instructionsLine(read, tasks, tenantOrAccess)} title="Instructions">
             {tasks.length ? (
@@ -293,7 +292,6 @@ export function VisitCard({
         ) : null}
 
         <VisitWork
-          areas={areas}
           inspection={inspection}
           report={report}
           // Nobody got in, so there is no inspection to speak of: the alert above says why.
