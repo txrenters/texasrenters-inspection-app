@@ -733,7 +733,10 @@ export const PAYMENT_RECORD_QUERY = `
  * The files on one invoice, with fresh addresses to download them at
  * (2026-11-06, phase 7): Jobber's file links are not ones to keep, so the
  * console asks for them right before it copies each file into its own
- * storage. Ids, addresses and types only -- a few points.
+ * storage. Ids, addresses and types only -- a few points. Both addresses and
+ * both types: an iPhone photo's `url` and `contentType` are a JPEG conversion
+ * the console cannot open, and `downloadUrl` and `downloadContentType` are the
+ * original.
  */
 export const INVOICE_FILES_QUERY = `
   query ConsoleInvoiceFiles($id: EncodedId!) {
@@ -745,6 +748,8 @@ export const INVOICE_FILES_QUERY = `
           contentType
           fileSize
           url
+          downloadUrl
+          downloadContentType
         }
       }
     }

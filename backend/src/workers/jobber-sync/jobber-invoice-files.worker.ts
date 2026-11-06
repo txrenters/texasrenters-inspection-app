@@ -30,6 +30,12 @@ import { jobberInvoiceFilesSchema } from '../../integrations/jobber/jobber.schem
  * Jobber's own links are not kept to download from: they are asked for again,
  * one small query per invoice, right before its files are copied. Jobber's
  * API is not billed; it is paced like the invoice read.
+ *
+ * An iPhone photo's `url` is not the file: it is a JPEG conversion on Jobber's
+ * web app, which answers the console 403, with its API token too. Its
+ * `downloadUrl` is the HEIC original in Jobber's storage, so that is what is
+ * kept, under its own type. A file with no link in storage stops at once rather
+ * than spending five tries.
  */
 
 const FILES_PER_RUN = 25;
@@ -43,11 +49,22 @@ const DOWNLOAD_TIMEOUT_MS = 60_000;
 const RETRY_AFTER_MS = [1, 4, 12, 24].map((hours) => hours * 3_600_000);
 /** Files read to choose a run's from, so the ones waiting out a retry do not crowd out the rest. */
 const CANDIDATES = 300;
+/** Jobber's web app: on 2026-11-06 all 286 files linked here answered 403, and every file copied came from storage. */
+const JOBBER_APP_HOST = 'secure.getjobber.com';
+export const APP_LINK_PROBLEM = "This file's links go to Jobber's web app; download it from Jobber by hand.";
 
 export interface InvoiceFileCopyResult {
   copied: number;
   failed: number;
   skipped: 'OFF' | 'NOT_CONFIGURED' | 'CEILING' | 'NOTHING' | null;
+}
+
+/** A file's addresses and types as Jobber gave them just now. */
+interface FreshLink {
+  url: string | null;
+  contentType: string | null;
+  downloadUrl: string | null;
+  downloadContentType: string | null;
 }
 
 /** Why a copy did not happen; `final` when trying again cannot help. */
@@ -73,6 +90,19 @@ export function downloadAddress(value: string): URL {
   if (isIP(host) || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal'))
     throw new FileCopyError('Jobber gave an address the console does not download from.', true);
   return url;
+}
+
+function onJobberApp(address: string) {
+  return URL.canParse(address) && new URL(address).hostname === JOBBER_APP_HOST;
+}
+
+/** Where to download a file from, and its type: `url`, which copied thousands, unless that is on Jobber's web app. */
+export function sourceToCopy(link: FreshLink) {
+  if (link.url && !onJobberApp(link.url)) return { address: link.url, contentType: link.contentType };
+  if (link.downloadUrl && !onJobberApp(link.downloadUrl))
+    return { address: link.downloadUrl, contentType: link.downloadContentType ?? link.contentType };
+  if (link.url || link.downloadUrl) throw new FileCopyError(APP_LINK_PROBLEM, true);
+  throw new FileCopyError('Jobber gave no address for this file.');
 }
 
 /** The file's bytes, never more than `maxBytes`, within the time allowed. */
@@ -174,7 +204,7 @@ export class JobberInvoiceFileWorker {
     for (const [invoiceId, files] of byInvoice) {
       if (clock() - started > RUN_BUDGET_MS) break;
       const jobberInvoiceId = files[0]!.invoice.jobberInvoiceId;
-      let fresh: Map<string, { url: string | null; contentType: string | null }> | null;
+      let fresh: Map<string, FreshLink> | null;
       try {
         fresh = jobberInvoiceId ? await this.freshLinks(organizationId, jobberInvoiceId) : null;
       } catch (error) {
@@ -200,8 +230,16 @@ export class JobberInvoiceFileWorker {
     const data = await this.client.request(organizationId, INVOICE_FILES_QUERY, { id: jobberInvoiceId });
     const invoice = jobberInvoiceFilesSchema.parse(data).invoice;
     if (!invoice) return null;
-    return new Map(
-      invoice.noteAttachments.nodes.map((node) => [node.id, { url: node.url ?? null, contentType: node.contentType ?? null }]),
+    return new Map<string, FreshLink>(
+      invoice.noteAttachments.nodes.map((node) => [
+        node.id,
+        {
+          url: node.url ?? null,
+          contentType: node.contentType ?? null,
+          downloadUrl: node.downloadUrl ?? null,
+          downloadContentType: node.downloadContentType ?? null,
+        },
+      ]),
     );
   }
 
@@ -209,7 +247,7 @@ export class JobberInvoiceFileWorker {
   private async copy(
     organizationId: string,
     file: { id: string; invoiceId: string; jobberFileId: string; contentType: string; copyAttempts: number },
-    fresh: Map<string, { url: string | null; contentType: string | null }> | null,
+    fresh: Map<string, FreshLink> | null,
   ) {
     const attempt = await this.prisma.invoiceFile.updateMany({
       where: { id: file.id, organizationId, storageKey: null, copyAttempts: file.copyAttempts },
@@ -221,10 +259,10 @@ export class JobberInvoiceFileWorker {
       if (!fresh) throw new FileCopyError('Jobber no longer has this invoice.', true);
       const link = fresh.get(file.jobberFileId);
       if (!link) throw new FileCopyError('Jobber no longer has this file.', true);
-      if (!link.url) throw new FileCopyError('Jobber gave no address for this file.');
-      const bytes = await downloadFile(link.url);
+      const source = sourceToCopy(link);
+      const bytes = await downloadFile(source.address);
       const storageKey = invoiceFileKey(organizationId, file.invoiceId, file.id);
-      await this.storage.put(storageKey, bytes, link.contentType || file.contentType || 'application/octet-stream');
+      await this.storage.put(storageKey, bytes, source.contentType || file.contentType || 'application/octet-stream');
       await this.prisma.invoiceFile.update({
         where: { id: file.id },
         data: { storageKey, copiedAt: new Date(), copyProblem: null },

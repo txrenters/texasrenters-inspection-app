@@ -8,10 +8,12 @@ import { JobberError } from '../src/integrations/jobber/jobber.errors';
 import {
   FileCopyError,
   JobberInvoiceFileWorker,
+  APP_LINK_PROBLEM,
   MAX_COPY_ATTEMPTS,
   downloadAddress,
   downloadFile,
   dueForCopy,
+  sourceToCopy,
 } from '../src/workers/jobber-sync/jobber-invoice-files.worker';
 
 /**
@@ -49,12 +51,18 @@ const pending = (index: number, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const freshFiles = (ids: string[]) => ({
+const freshFiles = (ids: string[], over: Record<string, unknown> = {}) => ({
   invoice: {
     id: 'jobber-invoice-1',
-    noteAttachments: { nodes: ids.map((id) => ({ id, contentType: 'image/jpeg', fileSize: 3, url: `https://files.example.com/${id}?signed=1` })) },
+    noteAttachments: {
+      nodes: ids.map((id) => ({ id, contentType: 'image/jpeg', fileSize: 3, url: `https://files.example.com/${id}?signed=1`, ...over })),
+    },
   },
 });
+
+/** An iPhone photo's `url`: a JPEG conversion on Jobber's web app, which answers the console 403. */
+const APP_LINK = 'https://secure.getjobber.com/rails/active_storage/representations/redirect/a/b/photo.heic';
+const ORIGINAL = 'https://files.example.com/original?signed=1';
 
 function setup(files: ReturnType<typeof pending>[] = [pending(1)], triedToday = 0) {
   const db = {
@@ -160,6 +168,32 @@ describe('copying the files', () => {
     expect(db.invoiceFile.update.mock.calls[0][0].data).toEqual({ copyProblem: 'Jobber no longer has this invoice.', copyAttempts: MAX_COPY_ATTEMPTS });
   });
 
+  it("keeps an iPhone photo's HEIC original, under its own type, not the JPEG Jobber calls it", async () => {
+    const { db, client, storage, worker } = setup([pending(1)]);
+    client.request.mockResolvedValue(
+      freshFiles(['jobber-file-1'], { url: APP_LINK, contentType: 'image/jpeg', downloadUrl: ORIGINAL, downloadContentType: 'image/heic' }),
+    );
+
+    expect(await worker.run(ORG)).toEqual({ copied: 1, failed: 0, skipped: null });
+    expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([ORIGINAL]);
+    expect(storage.put).toHaveBeenCalledWith(invoiceFileKey(ORG, INVOICE, 'file-1'), Buffer.from([1, 2, 3]), 'image/heic');
+    expect(db.invoiceFile.update.mock.calls[0][0].data).toMatchObject({ copyProblem: null });
+  });
+
+  it('stops at once when no link is in storage: one try, no download, and the reason in words', async () => {
+    for (const links of [{ url: APP_LINK }, { url: APP_LINK, downloadUrl: `${APP_LINK}/download` }]) {
+      fetchSpy.mockClear();
+      const { db, client, storage, worker } = setup([pending(1)]);
+      client.request.mockResolvedValue(freshFiles(['jobber-file-1'], links));
+
+      expect(await worker.run(ORG)).toEqual({ copied: 0, failed: 1, skipped: null });
+      expect(db.invoiceFile.updateMany).toHaveBeenCalledTimes(1);
+      expect(db.invoiceFile.update.mock.calls[0][0].data).toEqual({ copyProblem: APP_LINK_PROBLEM, copyAttempts: MAX_COPY_ATTEMPTS });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(storage.put).not.toHaveBeenCalled();
+    }
+  });
+
   it('tries again later when the download fails, and counts nothing when Jobber does not answer', async () => {
     const failing = setup([pending(1)]);
     fetchSpy.mockResolvedValue(new Response('no', { status: 503 }));
@@ -181,6 +215,37 @@ describe('copying the files', () => {
     expect(dueForCopy({ copyAttempts: 2, copyAttemptedAt: ago(3) }, now)).toBe(false);
     expect(dueForCopy({ copyAttempts: 4, copyAttemptedAt: ago(25) }, now)).toBe(true);
     expect(dueForCopy({ copyAttempts: MAX_COPY_ATTEMPTS, copyAttemptedAt: ago(1_000) }, now)).toBe(false);
+  });
+});
+
+describe('choosing the link', () => {
+  const inStorage = 'https://files.example.com/a?signed=1';
+  const link = (over: Partial<Parameters<typeof sourceToCopy>[0]>) => ({
+    url: inStorage,
+    contentType: 'image/jpeg',
+    downloadUrl: ORIGINAL,
+    downloadContentType: 'image/jpeg',
+    ...over,
+  });
+
+  it('keeps to the link that has copied thousands, under its type, and takes the other only when it must', () => {
+    expect(sourceToCopy(link({ downloadContentType: 'image/heic' }))).toEqual({ address: inStorage, contentType: 'image/jpeg' });
+    expect(sourceToCopy(link({ url: APP_LINK, downloadContentType: 'image/heic' }))).toEqual({ address: ORIGINAL, contentType: 'image/heic' });
+    expect(sourceToCopy(link({ url: null, downloadContentType: 'image/heic' }))).toEqual({ address: ORIGINAL, contentType: 'image/heic' });
+  });
+
+  it("knows Jobber's web app by its host, in any case, and nothing else by it", () => {
+    expect(() => sourceToCopy(link({ url: 'https://SECURE.getjobber.com/a', downloadUrl: null }))).toThrow(APP_LINK_PROBLEM);
+    const lookalike = 'https://files.example.com/secure.getjobber.com/a';
+    expect(sourceToCopy(link({ url: lookalike, downloadUrl: null })).address).toBe(lookalike);
+  });
+
+  it('tries again later when Jobber gave no link at all', () => {
+    expect(() => sourceToCopy(link({ url: null, downloadUrl: null }))).toThrow(expect.objectContaining({ final: false }));
+  });
+
+  it('leaves an address that is not one for the download to refuse', () => {
+    expect(sourceToCopy(link({ url: 'not a url' })).address).toBe('not a url');
   });
 });
 
