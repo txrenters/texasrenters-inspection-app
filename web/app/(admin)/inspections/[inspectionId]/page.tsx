@@ -25,7 +25,6 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Panel } from '@/components/panel';
 import { InvoicesCard } from '@/components/invoices/invoice-parts';
-import { InspectionRecordAside, InspectionRecordTop } from '@/components/record/inspection-record';
 import { RecordLayout } from '@/components/record/record-kit';
 import { ReportShareDialog } from '@/components/report-share-dialog';
 import { Stat, StatGroup } from '@/components/stat-card';
@@ -44,6 +43,7 @@ import { VisitCard } from '@/components/visit-card';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
 import { typeTitle, typeTone } from '@/lib/inspection-type-tone';
+import { reviewComesFirst } from '@/lib/job-page';
 import {
   useAreaEvidenceSummary,
   useAssignments,
@@ -109,7 +109,7 @@ function InspectionDetail() {
   const [deleting, setDeleting] = useState(false);
   /** Jobber's record layout, in the Jobber-style shell only. */
   const jobber = useConsoleShell() === 'jobber';
-  /** The assignment history and activity, opened from the header or the side panel. */
+  /** The assignment history and activity, opened from the header. */
   const moreInfo = useRef<HTMLDetailsElement>(null);
   const showActivity = () => {
     if (!moreInfo.current) return;
@@ -199,6 +199,61 @@ function InspectionDetail() {
     permissions.has('inspections:finalize');
   const canUseMenu = canDelete || canEditOrAssign || canMarkComplete;
 
+  /** Nothing to review until it has been walked; see `reviewComesFirst`. */
+  const reviewing = reviewComesFirst(item);
+  const visit = (
+      <VisitCard
+        key="visit"
+        action={
+          // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
+          !visitOver &&
+          permissions.has('inspections:manage') &&
+          (item.scheduledInJobber
+            ? item.jobberEditsPushed
+            : item.jobberBooking?.status === 'PENDING' || item.jobberBooking?.status === 'FAILED') ? (
+            <Button onClick={() => setEditingVisit(true)} size="sm" variant="outline">
+              Edit visit
+            </Button>
+          ) : null
+        }
+        inspection={item}
+        technicianName={current?.technician?.displayName ?? null}
+      />
+  );
+  const notes = (
+      <JobNotes
+        key="notes"
+        bookingNoteAction={
+          canEditOrAssign && permissions.has('inspections:manage') ? (
+            <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
+              Edit
+            </Button>
+          ) : null
+        }
+        inspection={item}
+      />
+  );
+  /*
+   * Area-first: recordings, photos, condition summaries and findings are read
+   * through the area they belong to rather than through four page-wide,
+   * media-type-first sections.
+   *
+   * The comparison has its own page: the "Move-in comparison" tab. Three cards
+   * used to follow the areas, and are gone (the office, 2026-10-05): "Charges &
+   * pet review" (no charge had ever been recorded on any of 326 inspections with
+   * evidence), "Report closing notes" (filled on 8 of 1,615, all HVAC, where the
+   * technician writes them in the app) and "Finalization & follow-up" with its
+   * sticky "Finalize inspection" bar -- the office does not finalize, and its
+   * reopen and request-more-evidence both sent the job back to the technician,
+   * marking the Jobber visit incomplete and restarting their paid time. "Mark
+   * complete" survives in the More menu.
+   */
+  const areas = (
+    <div className="mt-4" key="areas">
+      <AreaEvidenceWorkspace inspectionId={id} />
+    </div>
+  );
+
   return (
     <>
       <PageHeader
@@ -284,12 +339,14 @@ function InspectionDetail() {
           label: `${typeTitle(item.inspectionType)} inspection`,
         }}
         title={item.propertywareBuilding?.name ?? 'Inspection'}
+        titleHref={item.propertywareBuilding ? `/properties/${item.propertywareBuilding.id}` : undefined}
       />
 
       <InspectionTabs active="overview" inspectionId={id} inspectionType={item.inspectionType} />
 
       {/*
-        Where the review stands, in three figures -- what this page is for.
+        Where the review stands, in three figures -- what this page is for, once
+        there is something to review.
 
         This was a four-step stepper (Capture, Technician submission, Admin
         review, Finalized), a strip of facts and a banner saying findings "must
@@ -301,14 +358,6 @@ function InspectionDetail() {
         long are the visit's facts and moved into its card below.
       */}
       <RecordContent
-        aside={
-          <InspectionRecordAside
-            activity={audit.data?.items}
-            item={item}
-            onSeeActivity={showActivity}
-            technicianName={current?.technician?.displayName ?? null}
-          />
-        }
         billing={
           <InvoicesCard
             createHref={isFinishedStatus(item.status) ? `/invoices/new?inspection=${encodeURIComponent(id)}` : undefined}
@@ -317,153 +366,85 @@ function InspectionDetail() {
         }
         jobber={jobber}
       >
-      <section aria-label="Review" className="mt-3 space-y-3">
-        {jobber ? (
-          <InspectionRecordTop
-            figures={{
-              areasReviewed: areaSummary.data
-                ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
-                : null,
-              findingsToReview: showsFindings ? (pendingFindings.data ? pending : undefined) : null,
-              comparedWith: baseline,
-              comparesToMoveIn,
-            }}
-            item={item}
-          />
-        ) : (
-        /* One instrument, as the dashboard's figures (console-development):
-            three separate bordered tiles left an empty third of the row on
-            every inspection not compared with a move-in. */
-        <StatGroup columns={figureColumns}>
-          <Stat
-            label="Areas reviewed"
-            value={
-              areaSummary.data
-                ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
-                : '—'
-            }
-          />
-          {showsFindings ? (
-            <Stat
-              label="Findings to review"
-              tone={pending ? 'warning' : 'default'}
-              value={pendingFindings.data ? (pending ? pending : 'None') : '—'}
-            />
-          ) : null}
-          {comparesToMoveIn ? (
-            <Stat
-              label="Compared with"
-              value={
-                // A record, not a figure: in the body size, so a date does not
-                // wrap in a narrow cell at the figures' size.
-                baseline ? (
-                  <Link
-                    className="font-sans text-base hover:underline"
-                    href={`/inspections/${baseline.id}`}
-                  >
-                    Move-in · {formatScheduledDate(baseline.scheduledAt)}
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground font-sans text-base">No move-in</span>
-                )
-              }
-            />
-          ) : null}
-        </StatGroup>
-        )}
+        {reviewing || item.baselineMissing ? (
+          <section aria-label="Review" className="mt-3 space-y-3">
+            {reviewing ? (
+              /* One instrument, as the dashboard's figures (console-development):
+                 three separate bordered tiles left an empty third of the row on
+                 every inspection not compared with a move-in. */
+              <StatGroup columns={figureColumns}>
+                <Stat
+                  label="Areas reviewed"
+                  value={
+                    areaSummary.data
+                      ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
+                      : '—'
+                  }
+                />
+                {showsFindings ? (
+                  <Stat
+                    label="Findings to review"
+                    tone={pending ? 'warning' : 'default'}
+                    value={pendingFindings.data ? (pending ? pending : 'None') : '—'}
+                  />
+                ) : null}
+                {comparesToMoveIn ? (
+                  <Stat
+                    label="Compared with"
+                    value={
+                      // A record, not a figure: in the body size, so a date does not
+                      // wrap in a narrow cell at the figures' size.
+                      baseline ? (
+                        <Link
+                          className="font-sans text-base hover:underline"
+                          href={`/inspections/${baseline.id}`}
+                        >
+                          Move-in · {formatScheduledDate(baseline.scheduledAt)}
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground font-sans text-base">No move-in</span>
+                      )
+                    }
+                  />
+                ) : null}
+              </StatGroup>
+            ) : null}
 
-        {/*
-          A move-out with nothing to compare against.
+          {/*
+            A move-out with nothing to compare against.
 
-          `ComparisonService.generate` refuses this outright with
-          MOVE_IN_BASELINE_NOT_FOUND, so the report this inspection exists to
-          produce cannot be written. Said here, on the record somebody opens to
-          work it -- true of a scheduled move-out as much as a walked one, and it
-          is the scheduled ones that are still fixable.
-        */}
-        {item.baselineMissing ? (
-          <Alert variant="warning">
-            <TriangleAlertIcon />
-            <AlertTitle>No move-in to compare against</AlertTitle>
-            <AlertDescription>
-              This property has no move-in inspection before this date for the same unit and
-              lease, so the move-in comparison cannot be generated. Import the move-in report if
-              the walkthrough was done outside this app, or record the move-in first.
-            </AlertDescription>
-          </Alert>
+            `ComparisonService.generate` refuses this outright with
+            MOVE_IN_BASELINE_NOT_FOUND, so the report this inspection exists to
+            produce cannot be written. Said here, on the record somebody opens to
+            work it -- true of a scheduled move-out as much as a walked one, and it
+            is the scheduled ones that are still fixable.
+          */}
+          {item.baselineMissing ? (
+            <Alert variant="warning">
+              <TriangleAlertIcon />
+              <AlertTitle>No move-in to compare against</AlertTitle>
+              <AlertDescription>
+                This property has no move-in inspection before this date for the same unit and
+                lease, so the move-in comparison cannot be generated. Import the move-in report if
+                the walkthrough was done outside this app, or record the move-in first.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          </section>
         ) : null}
-      </section>
 
-      <VisitCard
-        action={
-          // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
-          !visitOver &&
-          permissions.has('inspections:manage') &&
-          (item.scheduledInJobber
-            ? item.jobberEditsPushed
-            : item.jobberBooking?.status === 'PENDING' || item.jobberBooking?.status === 'FAILED') ? (
-            <Button onClick={() => setEditingVisit(true)} size="sm" variant="outline">
-              Edit visit
-            </Button>
-          ) : null
-        }
-        areas={
-          areaSummary.data ? { reviewed: areaSummary.data.totals.areasReviewed, total: areaSummary.data.totals.areas } : null
-        }
-        inspection={item}
-        technicianName={current?.technician?.displayName ?? null}
-      />
+        {reviewing ? [areas, notes, visit] : [visit, notes, areas]}
+      </RecordContent>
 
-      <JobNotes
-        bookingNoteAction={
-          canEditOrAssign && permissions.has('inspections:manage') ? (
-            <Button className="h-7 px-2 text-xs" onClick={() => setEditing(true)} size="sm" variant="ghost">
-              Edit
-            </Button>
-          ) : null
-        }
-        inspection={item}
-      />
-
-      {/* Area-first: recordings, photos, condition summaries and findings are
-          read through the area they belong to rather than through four
-          page-wide, media-type-first sections.
-
-          First thing after the summary. Reviewing evidence is what an
-          administrator opens this page to do; finalization used to sit above it
-          even while the technician was still capturing, which put an action
-          nobody could take yet ahead of the work everybody came for. */}
-      <div className="mt-4 space-y-4">
-        {/* "Import a report" is in the Areas card's header now, beside Add area.
-            It used to sit here in a paragraph of amber warning on every
-            inspection holding evidence -- above the areas, for an action taken
-            rarely, while the dialog itself says the same before anything
-            happens. */}
-        <AreaEvidenceWorkspace inspectionId={id} />
-
-        {/* The comparison has its own page: the "Move-in comparison" tab.
-
-            Three cards used to follow the areas, and are gone (the office,
-            2026-10-05): "Charges & pet review" (no charge had ever been
-            recorded on any of 326 inspections with evidence), "Report closing
-            notes" (filled on 8 of 1,615, all HVAC, where the technician writes
-            them in the app) and "Finalization & follow-up" with its sticky
-            "Finalize inspection" bar -- the office does not finalize, and its
-            reopen and request-more-evidence both sent the job back to the
-            technician, marking the Jobber visit incomplete and restarting their
-            paid time. "Mark complete" survives in the More menu. */}
-
-        {/* Assignment history and activity are reference material, not the task.
-            Collapsed by default so they stop competing with the review
-            workspace for attention; `open` on a details element keeps them one
-            click away and keyboard-reachable without any custom disclosure
-            logic. */}
+      {/* Assignment history and activity are reference material, not the task.
+          Collapsed by default so they stop competing with the review workspace
+          for attention; `open` on a details element keeps them one click away
+          and keyboard-reachable without any custom disclosure logic. */}
+      <div className="mt-4">
         <details className="group" ref={moreInfo}>
           <summary className="bg-card hover:bg-accent flex cursor-pointer items-center gap-2 rounded-xl border p-3 text-sm font-medium select-none">
-            Additional information
-            <span className="text-muted-foreground font-normal">
-              Assignment history and activity
-            </span>
+            History
+            <span className="text-muted-foreground font-normal">Assignments and activity</span>
           </summary>
 
           {/* Panels, each one surface: the Card around a table and an empty
@@ -567,7 +548,6 @@ function InspectionDetail() {
           </div>
         </details>
       </div>
-      </RecordContent>
 
       {assigning ? (
         <AssignmentDialog current={current} inspectionId={id} onClose={() => setAssigning(false)} />
@@ -611,14 +591,12 @@ function InspectionDetail() {
  * does -- and exactly as it was in the classic console.
  */
 function RecordContent({
-  aside,
   billing,
   children,
   jobber,
 }: {
-  aside: ReactNode;
   /** The visit's invoices: in the side panel, or under the page in the classic console. */
-  billing?: ReactNode;
+  billing: ReactNode;
   children: ReactNode;
   jobber: boolean;
 }) {
@@ -626,17 +604,12 @@ function RecordContent({
     return (
       <>
         {children}
-        {billing ? <div className="mt-6 max-w-xl">{billing}</div> : null}
+        <div className="mt-6 max-w-xl">{billing}</div>
       </>
     );
   return (
     <RecordLayout
-      aside={
-        <>
-          {aside}
-          {billing}
-        </>
-      }
+      aside={billing}
       asideLabel="About this inspection"
       from="2xl"
     >

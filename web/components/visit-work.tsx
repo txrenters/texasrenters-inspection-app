@@ -234,21 +234,16 @@ export function serviceCards(report: VisitServicesReport, overdue: boolean): Wor
 }
 
 /** The inspection, once it is under way: the areas are read further down the page. */
-function inspectionCard(inspection: AdminInspection, status: CardStatus, areas: VisitAreaCounts | null): WorkCard | null {
+function inspectionCard(inspection: AdminInspection, status: CardStatus): WorkCard | null {
   if (inspection.inspectionType === 'AC_FILTER_DELIVERY') return null;
   return {
     key: 'inspection',
     title: inspectionWords(inspection.inspectionType),
-    summary: areas ? `${areas.reviewed} of ${areas.total} areas reviewed` : null,
+    summary: null,
     status,
     attention: false,
     details: null,
   };
-}
-
-export interface VisitAreaCounts {
-  reviewed: number;
-  total: number;
 }
 
 /** The visit's work: every card, its services then the inspection, and anything else the technician wrote. */
@@ -256,14 +251,12 @@ export function VisitWork({
   inspection,
   report,
   status,
-  areas,
   showInspection,
 }: {
   inspection: AdminInspection;
   report: VisitServicesReport | null;
   /** How the visit stands, which is how its inspection stands. */
   status: CardStatus;
-  areas: VisitAreaCounts | null;
   /** The inspection has begun, so there is something of it to speak of. */
   showInspection: boolean;
 }) {
@@ -273,7 +266,7 @@ export function VisitWork({
   const overdue = submittedAt ? Date.now() - Date.parse(submittedAt) > PHOTO_OVERDUE_MS : false;
   const cards = [
     ...(report ? serviceCards(report, overdue) : []),
-    ...(showInspection ? [inspectionCard(inspection, status, areas)].filter((card): card is WorkCard => card !== null) : []),
+    ...(showInspection ? [inspectionCard(inspection, status)].filter((card): card is WorkCard => card !== null) : []),
   ];
   if (!cards.length) return null;
   const reportedAt = inspection.servicesReportedAt ?? null;

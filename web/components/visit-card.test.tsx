@@ -475,15 +475,14 @@ describe('the work as cards', () => {
     expect(card('AC filter change')).toBeNull();
   });
 
-  it('adds the inspection once the visit has begun, with how far the review has come', () => {
+  it('adds the inspection once the visit has begun, and leaves its count to the review figures', () => {
     render(
       <VisitCard
-        areas={{ reviewed: 6, total: 7 }}
         inspection={inspection({ status: 'REVIEW_REQUIRED', servicesReport: report() as AdminInspection['servicesReport'] })}
       />,
     );
     expect(within(screen.getByRole('region', { name: 'Work done' })).getByText('Occupied inspection')).toBeInTheDocument();
-    expect(screen.getByText('6 of 7 areas reviewed')).toBeInTheDocument();
+    expect(screen.queryByText(/areas reviewed/)).toBeNull();
   });
 
   it('has no inspection card where nobody got in: the alert says why', () => {
