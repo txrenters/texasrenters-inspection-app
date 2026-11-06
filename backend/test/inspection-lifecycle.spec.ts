@@ -256,6 +256,11 @@ describe('inspection status lifecycle (spec §11)', () => {
       jobberEditsPushed: false,
       // Nothing photographed or recorded, so no span to time the inspection by.
       inspectionWorked: null,
+      // The job's header: not a benefit-package visit, and no property to ask about.
+      tbpVisit: false,
+      zone: null,
+      tbp: null,
+      occupancy: null,
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({

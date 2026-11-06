@@ -26,6 +26,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
 import { inspectionTime, jobWorked } from '@/lib/job-time';
+import { weekdayOf } from '@/lib/schedule-calendar';
 
 /**
  * The visit: when, who, how long, what it was for, and what the technician
@@ -74,7 +75,6 @@ export function VisitCard({
   const state = visitState(inspection);
   const worked = jobWorked(inspection);
   const inspected = inspectionTime(inspection.inspectionWorked);
-  const zone = /\bzone\s*(\d+)\b/i.exec(inspection.jobberVisitTitle ?? '')?.[1] ?? null;
   const services = serviceLabels(read);
   const tasks = visitTasks(read);
   const report = inspection.servicesReport ?? null;
@@ -164,15 +164,7 @@ export function VisitCard({
             ) : null}
           </Fact>
           <Fact label="Date">
-            {formatScheduledDate(inspection.scheduledAt)}
-            {zone || inspection.jobberJobNumber ? (
-              <span className="text-muted-foreground block text-xs font-normal">
-                {/* Jobber's job number, as the office calls the visit (2026-11-06). */}
-                {[zone ? `Zone ${zone}` : null, inspection.jobberJobNumber ? `Job #${inspection.jobberJobNumber}` : null]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </span>
-            ) : null}
+            {weekdayOf(inspection.scheduledAt.slice(0, 10))}, {formatScheduledDate(inspection.scheduledAt)}
           </Fact>
           {/* The technician's own clock: Start job on the handset to submitting.
               Nothing inferred from photographs or locations. */}

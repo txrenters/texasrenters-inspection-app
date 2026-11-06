@@ -19,6 +19,7 @@ import {
 } from '@/components/inspection-actions-dialogs';
 import { InspectionTabs } from '@/components/inspection-tabs';
 import { MarkCompleteDialog } from '@/components/inspection-workflow';
+import { JobHeadline } from '@/components/job-headline';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Panel } from '@/components/panel';
@@ -40,7 +41,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { VisitCard } from '@/components/visit-card';
 import { usePermissions } from '@/lib/auth';
-import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
 import { typeTitle, typeTone } from '@/lib/inspection-type-tone';
 import {
@@ -271,16 +271,12 @@ function InspectionDetail() {
         badges={
           <>
             <StatusBadge value={item.status} />
-            {/* The type is not a status: plain words. Priority only when it is
-                an exception, as on the list (console-development). */}
-            <span className="text-muted-foreground text-sm">
-              {INSPECTION_TYPE_CHILDREN.find((child) => child.type === item.inspectionType)?.title ??
-                humanize(item.inspectionType)}
-            </span>
+            {/* Priority only when it is an exception, as on the list
+                (console-development). What the job is reads under the address. */}
             {item.priority && item.priority !== 'STANDARD' ? <StatusBadge value={item.priority} /> : null}
           </>
         }
-        description={`${item.propertywareUnit?.name ?? 'Entire property'} · ${formatScheduledDate(item.scheduledAt)}`}
+        description={<JobHeadline item={item} />}
         record={{
           icon: ClipboardCheckIcon,
           tone: typeTone(item.inspectionType).text,
@@ -339,7 +335,6 @@ function InspectionDetail() {
               comparesToMoveIn,
             }}
             item={item}
-            technicianName={current?.technician?.displayName ?? null}
           />
         ) : (
         /* One instrument, as the dashboard's figures (console-development):

@@ -662,6 +662,21 @@ export interface AdminInspection {
    */
   tbp?: 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED' | 'MIXED' | null;
   /**
+   * Whether this job is a benefit-package visit (2026-11-06): on a quarter's plan,
+   * or booked as one in Jobber. The visit decides; `tbp` above is the tenant's
+   * enrolment today, which can differ. On the one inspection only.
+   */
+  tbpVisit?: boolean;
+  /**
+   * Whether somebody lives there today, by the rule the property page uses for
+   * a vacant unit: an active lease, or an active tenancy on a whole-property
+   * job. Today, not on the day of the visit. Null with no property to ask about.
+   * On the one inspection only.
+   */
+  occupancy?: 'OCCUPIED' | 'VACANT' | null;
+  /** The visit's zone: as its title names it, else the tenancy's. On the one inspection only. */
+  zone?: string | null;
+  /**
    * A move-out with no move-in to compare against.
    *
    * Only ever present on a MOVE_OUT — on any other type the question is

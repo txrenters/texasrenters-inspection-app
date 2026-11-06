@@ -7,8 +7,6 @@ import type { ReactNode } from 'react';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { formatAddress, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
-import { typeTitle } from '@/lib/inspection-type-tone';
-import { weekdayOf } from '@/lib/schedule-calendar';
 
 import { AsideCard, FactTable, PlaceCard, type Fact } from './record-kit';
 
@@ -32,20 +30,14 @@ interface ReviewFigures {
 export function InspectionRecordTop({
   figures,
   item,
-  technicianName,
 }: {
   figures: ReviewFigures;
   item: AdminInspection;
-  technicianName: string | null;
 }) {
   const building = item.propertywareBuilding;
-  const day = item.scheduledAt.slice(0, 10);
 
-  const facts: Fact[] = [
-    { label: 'Type', value: typeTitle(item.inspectionType) },
-    { label: 'Scheduled', value: `${weekdayOf(day)}, ${formatScheduledDate(item.scheduledAt)}` },
-    { label: 'Areas reviewed', value: figures.areasReviewed ?? '…' },
-  ];
+  // What the job is and when are the header's and the Visit card's; these are the review's.
+  const facts: Fact[] = [{ label: 'Areas reviewed', value: figures.areasReviewed ?? '…' }];
   if (figures.findingsToReview !== null)
     facts.push({
       label: 'Findings to review',
@@ -76,10 +68,7 @@ export function InspectionRecordTop({
       <PlaceCard
         address={building ? formatAddress(building) : null}
         href={building ? `/properties/${building.id}` : undefined}
-        lines={[
-          { label: 'Unit', value: item.propertywareUnit?.name ?? 'Entire property' },
-          { label: 'Technician', value: technicianName ?? <span className="text-warning">Nobody yet</span> },
-        ]}
+        lines={[{ label: 'Unit', value: item.propertywareUnit?.name ?? 'Entire property' }]}
         name={building?.name ?? 'Property snapshot'}
       />
       <FactTable className="lg:-mt-2.5" facts={facts} label="Inspection details" />
@@ -132,12 +121,6 @@ export function InspectionRecordAside({
               {item.jobberVisitTitle ?? (item.scheduledInJobber ? 'Booked' : 'Not booked')}
             </dd>
           </div>
-          {item.jobberJobNumber ? (
-            <div className="flex items-center justify-between gap-2">
-              <dt className="text-muted-foreground">Job #</dt>
-              <dd className="text-heading tabular-nums">{item.jobberJobNumber}</dd>
-            </div>
-          ) : null}
         </dl>
       </AsideCard>
 

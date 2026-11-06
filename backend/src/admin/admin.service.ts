@@ -37,6 +37,9 @@ import {
   type JobberBookingContext,
   type JobberBookingInput,
   type VisitServicesBooking,
+  isTbpVisit,
+  visitZone,
+  zoneNumberOf,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -1816,6 +1819,8 @@ export class AdminService {
         // (2026-10-13): the office sees the two belong together.
         jobberCompanionOf: { select: { id: true, inspectionType: true, status: true } },
         jobberCompanions: { select: { id: true, inspectionType: true, status: true } },
+        // Its quarter's plan, if it has one: the job's header says TBP and which quarter.
+        tbpPlanStop: { select: { plan: { select: { quarterYear: true, quarterNumber: true } } } },
         // The visit as the coordinator wrote it, for the office. This select
         // sits behind inspections:read; the public report builds its own.
         jobberVisitTitle: true,
@@ -1945,18 +1950,31 @@ export class AdminService {
 
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
-    const { jobberVisitId, jobberOutboundTasks, ...detail } = inspection;
+    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, ...detail } = inspection;
     // Optional-chained for the test doubles that stand in for this read without it.
     const consoleTasks = jobberOutboundTasks ?? [];
     // The inspection itself, read from its evidence rather than from a button
     // nobody presses: see inspection-timing.ts.
     const span = inspectionSpan(await inspectionEvidenceTimes(this.prisma, user.organizationId, id));
     const booking = consoleTasks.find((task) => task.kind === JobberOutboundKind.VISIT_CREATE);
+    const tbpVisit = isTbpVisit({ onPlan: Boolean(tbpPlanStop), jobberVisitTitle: inspection.jobberVisitTitle });
+    const standing = await this.jobStanding(
+      user.organizationId,
+      inspection.propertywareBuilding?.id ?? null,
+      inspection.propertywareUnit?.id ?? null,
+    );
     return {
       ...detail,
       evidence,
       baselineMissing,
       comparisonBaseline,
+      // The job's header (2026-11-06): what the office reads first.
+      tbpVisit,
+      // The programme's quarter: on any other job the quarter its day falls in says nothing.
+      quarter: tbpVisit ? visitQuarter({ scheduledAt: inspection.scheduledAt, jobberVisitTitle: inspection.jobberVisitTitle, tbpPlanStop }) : undefined,
+      zone: visitZone(inspection.jobberVisitTitle) ?? standing.zone,
+      tbp: standing.tbp,
+      occupancy: standing.occupancy,
       scheduledInJobber: Boolean(jobberVisitId),
       jobberBooking: booking ? { status: booking.status, attempts: booking.attempts, lastError: booking.lastError, sentAt: booking.sentAt } : null,
       // Edits waiting for, or refused by, Jobber. A sent one is history.
@@ -1968,6 +1986,36 @@ export class AdminService {
       inspectionWorked: span
         ? { from: span.from.toISOString(), to: span.to.toISOString(), clock: span.clock }
         : null,
+    };
+  }
+
+  /**
+   * Who lives at a job's place today, and its tenant's place in the benefit
+   * package, read as the list and the property page read them. A vacancy is
+   * derived, as `leaseSummary` derives it: no active lease. A tenancy has no
+   * unit, so it answers only for a job on the whole property.
+   */
+  private async jobStanding(organizationId: string, buildingId: string | null, unitId: string | null) {
+    if (!buildingId) return { tbp: null, occupancy: null, zone: null };
+    const [tenancies, leases] = await Promise.all([
+      this.prisma.propertywareTenant.findMany({
+        where: { organizationId, isActive: true, propertywareBuildingId: buildingId },
+        select: { tbpEnrollment: true, zone: true },
+      }),
+      this.prisma.propertywareLease.count({
+        where: {
+          organizationId,
+          isActive: true,
+          buildingId,
+          // A report-sourced lease has no unit, and stands for the building.
+          ...(unitId ? { OR: [{ unitId }, { unitId: null }] } : {}),
+        },
+      }),
+    ]);
+    return {
+      tbp: tenancies.length ? (rollUpTbp(new Set(tenancies.map((tenancy) => tbpState(tenancy.tbpEnrollment)))) ?? null) : null,
+      occupancy: leases > 0 || (!unitId && tenancies.length > 0) ? ('OCCUPIED' as const) : ('VACANT' as const),
+      zone: zoneNumberOf(tenancies.find((tenancy) => tenancy.zone)?.zone),
     };
   }
 
