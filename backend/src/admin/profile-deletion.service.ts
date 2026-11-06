@@ -57,7 +57,9 @@ const BLOCKERS: {
     kind: 'REPORTS_SHARED',
     noun: ['shared report', 'shared reports'],
     count: (prisma, createdById, organizationId) =>
-      prisma.inspectionReportShare.count({ where: { createdById, organizationId } }),
+      // Links sent out. Reading a report leaves one of its own, which says
+      // nothing about this account's work and goes with it.
+      prisma.inspectionReportShare.count({ where: { createdById, organizationId, preview: false } }),
   },
   {
     // Assignments this account handed to *other* people. Deleting the account
@@ -170,6 +172,9 @@ export class ProfileDeletionService {
       // assignment screen offers for reassignment.
       const released = await tx.inspectionAssignment.deleteMany({
         where: { technicianId: profile.id, inspection: { organizationId } },
+      });
+      await tx.inspectionReportShare.deleteMany({
+        where: { createdById: profile.id, organizationId, preview: true },
       });
       await tx.userRoleAssignment.deleteMany({
         where: { userProfileId: profile.id, organizationId },

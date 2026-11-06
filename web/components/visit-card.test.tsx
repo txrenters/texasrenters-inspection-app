@@ -250,7 +250,7 @@ describe('the Jobber visit before it is done', () => {
   it('says which console changes are still on their way to Jobber, and which it refused', () => {
     render(
       <VisitCard
-        action={<button type="button">Edit visit</button>}
+        action={<button type="button">Edit job</button>}
         inspection={inspection({
           jobberPushes: [
             { kind: 'VISIT_RESCHEDULE', status: 'PENDING', attempts: 0, lastError: null },
@@ -262,7 +262,7 @@ describe('the Jobber visit before it is done', () => {
 
     expect(screen.getByText('Sending the new date to Jobber')).toBeInTheDocument();
     expect(screen.getByText('Jobber did not take the technician')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit visit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit job' })).toBeInTheDocument();
   });
 });
 
@@ -288,6 +288,22 @@ describe('what the technician reported', () => {
     expect(within(reported).getByText('2 filters · 20x25x4, 12x24x1')).toBeInTheDocument();
     // Once, in the Notes section.
     expect(within(reported).queryByText('Return air grille was blocked.')).toBeNull();
+  });
+
+  it('leads to the Reschedules queue, for somebody who can answer it', () => {
+    render(
+      <VisitCard
+        inspection={inspection({ servicesReport: report as AdminInspection['servicesReport'] })}
+        rescheduleHref="/reschedules"
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Open Reschedules' })).toHaveAttribute('href', '/reschedules');
+  });
+
+  it('offers no way there to somebody who cannot', () => {
+    show({ servicesReport: report });
+    expect(screen.getByText('Pest control to reschedule')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Reschedules' })).toBeNull();
   });
 
   it('has no Work done heading over nothing: a note alone belongs to the Notes section', () => {

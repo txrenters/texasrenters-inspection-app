@@ -22,7 +22,7 @@ import {
 } from '@texasrenters/shared';
 import { readStoredSummary } from '../technician/recording-summary';
 
-import type { AuthenticatedUser } from '../common/auth';
+import { isMachinePrincipal, type AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { withSystemTenant, withTenant } from '../database/tenant-context';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
@@ -36,6 +36,10 @@ import { ComparisonReportService } from './comparison-report.service';
 import { ComparisonService } from './comparison.service';
 
 const SHARE_LIFETIME_DAYS = 30;
+/** Open report's link: long enough to read and print, too short to pass around. */
+const PREVIEW_LIFETIME_MS = 60 * 60 * 1000;
+/** A link this near its end is not handed out again: the tab stays open a while. */
+const PREVIEW_LEAST_LEFT_MS = 15 * 60 * 1000;
 
 /** Where each kind of link lives in the web app. */
 function sharePathFor(kind: ReportShareKind, token: string) {
@@ -347,10 +351,72 @@ export class ReportShareService {
     };
   }
 
+  /**
+   * The job's report for the person reading the job (2026-11-07: Open report).
+   *
+   * The same document a link serves, PDF included, so what the office reads is
+   * what goes out. Through a link of its own: it lasts an hour, it is never
+   * listed for sharing, and pressing the button again inside the hour answers
+   * with the same one rather than leaving a trail of them.
+   */
+  async openReport(user: AuthenticatedUser, inspectionId: string) {
+    // A link needs a person behind it, and a machine's id is no UserProfile.
+    if (isMachinePrincipal(user))
+      throw new ApplicationError(403, 'REPORT_PREVIEW_NOT_PERMITTED', 'Only a person can open a report here.');
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { id: inspectionId, organizationId: user.organizationId },
+      select: { id: true },
+    });
+    if (!inspection)
+      throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
+    const opened = (token: string) => ({ sharePath: sharePathFor(ReportShareKind.INSPECTION, token) });
+
+    const live = await this.prisma.inspectionReportShare.findFirst({
+      where: {
+        inspectionId,
+        organizationId: user.organizationId,
+        createdById: user.id,
+        preview: true,
+        revokedAt: null,
+        expiresAt: { gt: new Date(Date.now() + PREVIEW_LEAST_LEFT_MS) },
+      },
+      orderBy: { expiresAt: 'desc' },
+      select: { token: true },
+    });
+    if (live) return opened(live.token);
+
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + PREVIEW_LIFETIME_MS);
+    await this.prisma.$transaction(async (tx) => {
+      const created = await tx.inspectionReportShare.create({
+        data: {
+          organizationId: user.organizationId,
+          inspectionId,
+          createdById: user.id,
+          token,
+          kind: ReportShareKind.INSPECTION,
+          preview: true,
+          expiresAt,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'REPORT_PREVIEW_OPENED',
+          entityType: 'Inspection',
+          entityId: inspectionId,
+          metadata: { shareId: created.id, expiresAt: expiresAt.toISOString() },
+        },
+      });
+    });
+    return opened(token);
+  }
+
   /** The links issued for an inspection, of one kind when asked for one. */
   async listShares(user: AuthenticatedUser, inspectionId: string, kind?: ReportShareKind) {
     const shares = await this.prisma.inspectionReportShare.findMany({
-      where: { inspectionId, organizationId: user.organizationId, ...(kind ? { kind } : {}) },
+      where: { inspectionId, organizationId: user.organizationId, preview: false, ...(kind ? { kind } : {}) },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });

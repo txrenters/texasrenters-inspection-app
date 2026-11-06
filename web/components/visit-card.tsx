@@ -46,12 +46,15 @@ export function VisitCard({
   inspection,
   technicianName,
   action,
+  rescheduleHref,
 }: {
   inspection: AdminInspection;
   /** The technician currently assigned, if anyone is. */
   technicianName?: string | null;
-  /** A control for the header: "Edit visit", where the viewer may. */
+  /** A control for the header: "Edit job", where the viewer may. */
   action?: ReactNode;
+  /** Where the visits to book again are answered, for a viewer who may. */
+  rescheduleHref?: string;
 }) {
   const read = useMemo(
     () => parseVisitDetails(inspection.jobberVisitDetails),
@@ -238,6 +241,11 @@ export function VisitCard({
               {toReschedule
                 .map((service) => `${VISIT_SERVICE_LABEL[service]}: ${report?.services[service]?.reason ?? ''}`)
                 .join(' ')}
+              {rescheduleHref ? (
+                <Link className="text-foreground mt-1 block font-medium underline underline-offset-4" href={rescheduleHref}>
+                  Open Reschedules
+                </Link>
+              ) : null}
             </AlertDescription>
           </Alert>
         ) : null}

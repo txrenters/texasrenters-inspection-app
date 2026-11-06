@@ -172,13 +172,7 @@ function OfficeNoteRow({
   );
 }
 
-function OfficeNotes({
-  bookingNoteAction,
-  inspection,
-}: {
-  bookingNoteAction?: ReactNode;
-  inspection: AdminInspection;
-}) {
+function OfficeNotes({ inspection }: { inspection: AdminInspection }) {
   const { hasAny } = usePermissions();
   const { profile } = useAuth();
   const { add, edit, remove } = useOfficeNoteMutations(inspection.id);
@@ -244,10 +238,7 @@ function OfficeNotes({
 
       {inspection.internalNotes ? (
         <div className="grid gap-1 border-t pt-2">
-          <div className="flex min-h-7 items-center justify-between gap-2">
-            <h4 className="text-muted-foreground text-xs">Booking note · on the technician&apos;s phone</h4>
-            {bookingNoteAction}
-          </div>
+          <h4 className="text-muted-foreground text-xs">Booking note · on the technician&apos;s phone</h4>
           <p className="text-sm break-words whitespace-pre-wrap">{inspection.internalNotes}</p>
         </div>
       ) : null}
@@ -290,14 +281,7 @@ function OfficeNotes({
   );
 }
 
-export function JobNotes({
-  bookingNoteAction,
-  inspection,
-}: {
-  /** "Edit", where the viewer may edit the inspection's details. */
-  bookingNoteAction?: ReactNode;
-  inspection: AdminInspection;
-}) {
+export function JobNotes({ inspection }: { inspection: AdminInspection }) {
   const fromTechnician = technicianNotes(inspection);
   const onTheReport = reportComments(inspection);
   return (
@@ -320,7 +304,7 @@ export function JobNotes({
             <NoteList notes={onTheReport} />
           </NoteGroup>
         ) : null}
-        <OfficeNotes bookingNoteAction={bookingNoteAction} inspection={inspection} />
+        <OfficeNotes inspection={inspection} />
       </CardContent>
     </Card>
   );

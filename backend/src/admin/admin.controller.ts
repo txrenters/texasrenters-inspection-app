@@ -746,6 +746,15 @@ export class AdminController {
       body.kind === 'COMPARISON' ? ReportShareKind.COMPARISON : ReportShareKind.INSPECTION,
     );
   }
+  /**
+   * The job's report, for whoever can read the job. Same permission as reading
+   * the comparison report: it is the same record, laid out for a person.
+   */
+  @Post('inspections/:inspectionId/report-preview')
+  @RequirePermissions('inspections:read')
+  openReport(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.reportShares.openReport(request.user, id);
+  }
   /** `kind` narrows the list to one document's links; absent, every link. */
   @Get('inspections/:inspectionId/report-shares')
   @RequirePermissions('reports:share')

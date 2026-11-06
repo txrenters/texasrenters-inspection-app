@@ -51,6 +51,7 @@ function prismaFor(counts: Counts, profile: unknown = profileRecord()) {
     inspectionAssignment: {
       deleteMany: jest.fn().mockResolvedValue({ count: counts.totalAssignments ?? 0 }),
     },
+    inspectionReportShare: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     userRoleAssignment: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     organizationMember: {
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -136,6 +137,19 @@ describe('account deletion', () => {
     expect(tx.inspectionAssignment.deleteMany).toHaveBeenCalled();
     expect(tx.userProfile.delete).toHaveBeenCalledWith({ where: { id: TARGET_ID } });
     expect(identities.deleteIdentity).toHaveBeenCalledWith('auth-tech');
+  });
+
+  it('takes the links its owner only read reports through, and counts only those sent out', async () => {
+    const { service, prisma, tx } = serviceFor({});
+
+    await service.remove(actor, TARGET_ID, 'TECHNICIAN');
+
+    expect(prisma.inspectionReportShare.count).toHaveBeenCalledWith({
+      where: { createdById: TARGET_ID, organizationId: ORG, preview: false },
+    });
+    expect(tx.inspectionReportShare.deleteMany).toHaveBeenCalledWith({
+      where: { createdById: TARGET_ID, organizationId: ORG, preview: true },
+    });
   });
 
   it('refuses an account that captured evidence, and destroys nothing', async () => {

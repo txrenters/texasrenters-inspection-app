@@ -175,6 +175,8 @@ describe('Jobber outbound worker', () => {
     expect(request.mock.calls[1][2]).toMatchObject({
       input: { message: expect.stringContaining('existing-token') },
     });
+    // Somebody's hour with the report is never the link Jobber is given.
+    expect(prisma.inspectionReportShare.findFirst.mock.calls[0][0].where).toMatchObject({ preview: false });
   });
 
   it('fails the task when Jobber rejects the mutation inside a 200', async () => {

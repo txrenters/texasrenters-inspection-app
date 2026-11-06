@@ -13,3 +13,16 @@ export const reviewComesFirst = (inspection: {
   status: string;
   completionBlockedReason?: string | null;
 }) => visitStateOf(inspection) === 'DONE';
+
+/**
+ * Whether the visit's title and Details can be changed from here: one Jobber
+ * has, when edits reach it, or one booked here and not sent yet.
+ */
+export const visitCanBeEdited = (inspection: {
+  scheduledInJobber?: boolean;
+  jobberEditsPushed?: boolean;
+  jobberBooking?: { status: string } | null;
+}) =>
+  inspection.scheduledInJobber
+    ? Boolean(inspection.jobberEditsPushed)
+    : inspection.jobberBooking?.status === 'PENDING' || inspection.jobberBooking?.status === 'FAILED';
