@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   jobAreaNotes,
   reportComments,
+  technicianJobNotes,
   technicianNotes,
   type JobAreaNoteRow,
   type VisitServicesReport,
@@ -150,6 +151,23 @@ describe('jobAreaNotes', () => {
       { ...row({ technicianNote: 'x' }), propertyArea: { name: 'Bath', inspectionOrder: 1, floor: { name: 'Upstairs' } } },
     ]);
     expect(note).toMatchObject({ name: 'Bath', floorName: 'Upstairs' });
+  });
+});
+
+describe('technicianJobNotes', () => {
+  it('is the booking note, then what the office showed, as one text', () => {
+    expect(technicianJobNotes('Booked from Propertyware.', [{ text: 'Use the side gate.' }, { text: 'Dog in yard.' }])).toBe(
+      'Booked from Propertyware.\n\nUse the side gate.\n\nDog in yard.',
+    );
+  });
+
+  it('is what it always was with no note shown', () => {
+    expect(technicianJobNotes('Booked from Propertyware.', [])).toBe('Booked from Propertyware.');
+    expect(technicianJobNotes(null, [])).toBe('');
+  });
+
+  it('starts with the note when there is no booking note', () => {
+    expect(technicianJobNotes(null, [{ text: 'Use the side gate.' }])).toBe('Use the side gate.');
   });
 });
 

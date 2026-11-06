@@ -42,6 +42,8 @@ import { InvoiceEditsController } from './invoice-edits.controller';
 import { InvoiceEditsService } from './invoice-edits.service';
 import { InvoicesController, PaymentsController } from './invoices.controller';
 import { InvoicesService } from './invoices.service';
+import { InspectionNotesController } from './inspection-notes.controller';
+import { InspectionNotesService } from './inspection-notes.service';
 import { RescheduleRequestsController } from './reschedule-requests.controller';
 import { RescheduleRequestsService } from './reschedule-requests.service';
 import { AuthModule } from '../auth/auth.module';
@@ -66,6 +68,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     AccessController,
     ReportsController,
     RescheduleRequestsController,
+    InspectionNotesController,
     InvoicesController,
     InvoiceEditsController,
     InvoiceDeliveryController,
@@ -75,6 +78,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
   ],
   providers: [
     AdminService,
+    InspectionNotesService,
     PropertyGeocodingService,
     TechnicianTimelineService,
     PropertyGeocodeScheduler,

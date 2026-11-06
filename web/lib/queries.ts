@@ -26,6 +26,8 @@ import type {
   AdminFloorPlanExtractionJob,
   AdminFloorPlanExtractionStarted,
   AdminInspection,
+  OfficeNote,
+  OfficeNoteInput,
   AdminInspectionArea,
   AdminInspectionComparison,
   AdminInspectionFinding,
@@ -1807,6 +1809,34 @@ export function useAccessMutations() {
         if (context) failEntityOperation(id, context.operationId);
         void verifyAffectedQueries(client, [keys.usersRoot, keys.user(id)]);
       },
+    }),
+  };
+}
+
+/** The office's notes on one job. Each change shows on the job and on its history. */
+export function useOfficeNoteMutations(inspectionId: string) {
+  const client = useQueryClient();
+  const refresh = () => {
+    void verifyAffectedQueries(client, [
+      keys.inspection(inspectionId),
+      ['admin', 'inspection', inspectionId, 'audit'],
+    ]);
+  };
+  const path = `/api/v1/admin/inspections/${inspectionId}/notes`;
+  return {
+    add: useMutation({
+      mutationFn: (input: OfficeNoteInput) =>
+        api<OfficeNote>(path, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: refresh,
+    }),
+    edit: useMutation({
+      mutationFn: ({ id, ...input }: OfficeNoteInput & { id: string }) =>
+        api<OfficeNote>(`${path}/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
+      onSuccess: refresh,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api<{ deleted: boolean }>(`${path}/${id}`, { method: 'DELETE' }),
+      onSuccess: refresh,
     }),
   };
 }
