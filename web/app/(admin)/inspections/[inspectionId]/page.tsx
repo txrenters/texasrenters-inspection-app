@@ -577,6 +577,7 @@ function RecordContent({
       aside={billing}
       asideLabel="About this inspection"
       from="2xl"
+      panelLabel="Invoices"
     >
       {children}
     </RecordLayout>

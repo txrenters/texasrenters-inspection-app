@@ -131,6 +131,7 @@ export default function PaymentPage() {
           </AsideCard>
         }
         asideLabel="About this payment"
+        panelLabel="Applied to"
       >
         <div className="grid gap-4 lg:grid-cols-2">
           <PlaceCard
