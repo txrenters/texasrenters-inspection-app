@@ -67,3 +67,16 @@ export async function previewInvoice(invoice: InvoiceDetail) {
     throw error;
   }
 }
+
+/**
+ * Many invoices as one PDF to print and mail (2026-11-09, Batch Deliver), as
+ * Jobber's "Print": each invoice on its own pages, from its own company
+ * details. Made in the browser from the invoices' pages; nothing billed.
+ */
+export async function downloadInvoices(invoices: readonly InvoiceDetail[], fileName: string) {
+  if (!invoices.length) return;
+  const [{ pdf }, { InvoicesDocument }] = await Promise.all([import('@react-pdf/renderer'), import('./invoice-document')]);
+  const brand = invoices[0]!.brand ?? FALLBACK_BRAND;
+  const pages = invoices.map((invoice) => ({ invoice, brand: invoice.brand ?? FALLBACK_BRAND }));
+  save(await pdf(createElement(InvoicesDocument, { invoices: pages, brand }) as Parameters<typeof pdf>[0]).toBlob(), fileName);
+}

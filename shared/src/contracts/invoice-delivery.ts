@@ -7,6 +7,7 @@
  * the console does not have yet.
  */
 
+import type { InvoiceDeliveryKind } from './invoice-reminders.js';
 import { formatMoney, type InvoiceDetail } from './invoices.js';
 
 /** The most people one send reaches. */
@@ -27,6 +28,10 @@ export type InvoiceDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED';
 export interface InvoiceDeliveryView {
   id: string;
   channel: 'EMAIL';
+  /** The invoice sent by somebody, a follow-up the console sent on its own, or a receipt. */
+  kind: InvoiceDeliveryKind;
+  /** A follow-up's day after the due date: 0 is the due date. */
+  followUpDay: number | null;
   recipients: string[];
   status: InvoiceDeliveryStatus;
   /** Why it did not go, in words. */

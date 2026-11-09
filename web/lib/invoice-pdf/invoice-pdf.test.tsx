@@ -9,7 +9,7 @@ import { invoiceTotalLines, type InvoiceDetail, type InvoiceExtraDetails } from 
 import { describe, expect, it } from 'vitest';
 
 import { invoiceFileName } from './download-invoice';
-import { InvoiceDocument, billTo, invoiceFacts } from './invoice-document';
+import { InvoiceDocument, InvoicesDocument, billTo, invoiceFacts } from './invoice-document';
 
 const BRAND = { name: 'Example Company', addressLine1: '1 Example Plaza', addressLine2: null, phone: '555-0100', email: null };
 
@@ -89,5 +89,23 @@ describe('an invoice PDF', () => {
 
     const many = Array.from({ length: 60 }, (_, index) => ({ ...INVOICE.lineItems[1]!, name: `Service ${index + 1}` }));
     expect(await pages({ ...INVOICE, lineItems: many })).toBeGreaterThan(1);
+  });
+
+  it('prints many invoices in one file, each on pages of its own (Batch Deliver)', async () => {
+    const { renderToBuffer } = await import('@react-pdf/renderer');
+    const pagesOf = async (invoices: InvoiceDetail[]) =>
+      (
+        await renderToBuffer(<InvoicesDocument brand={BRAND} invoices={invoices.map((invoice) => ({ invoice, brand: BRAND }))} />)
+      )
+        .toString('latin1')
+        .match(/\/Type \/Page\b/g)?.length ?? 0;
+    const many = Array.from({ length: 60 }, (_, index) => ({ ...INVOICE.lineItems[1]!, name: `Service ${index + 1}` }));
+    const long = { ...INVOICE, id: 'inv-2', number: '8440', lineItems: many };
+
+    expect(await pagesOf([INVOICE, { ...INVOICE, id: 'inv-3' }])).toBe(2);
+    const longAlone = await pagesOf([long]);
+    expect(longAlone).toBeGreaterThan(1);
+    // Each starts a page of its own: the long one's pages, plus one each for the others.
+    expect(await pagesOf([INVOICE, long, { ...INVOICE, id: 'inv-3' }])).toBe(longAlone + 2);
   });
 });
