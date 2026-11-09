@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { paymentAccounts, revenueAccounts, type XeroAccount } from '../src/contracts/xero';
+import { paymentAccounts, revenueAccounts, xeroChecks, xeroSettingsProblem, type XeroAccount } from '../src/contracts/xero';
 
 const account = (over: Partial<XeroAccount>): XeroAccount => ({
   accountId: 'a',
@@ -33,5 +33,27 @@ describe('Xero accounts', () => {
       account({ accountId: 'sales' }),
     ];
     expect(paymentAccounts(accounts).map((item) => item.accountId)).toEqual(['bank', 'clearing']);
+  });
+});
+
+describe('Xero choices', () => {
+  const catalog = {
+    accounts: [account({ accountId: 'sales' }), account({ accountId: 'bank', type: 'BANK', class: 'ASSET', code: null, takesPayments: true })],
+    taxRates: [{ name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true }],
+  };
+  const values = { sendFrom: '2026-12-01', salesAccountId: 'sales', salesTaxType: 'NONE', salesAccounts: {}, paymentAccounts: { CHECK: 'bank' } };
+
+  it('take a real day, at most a year ahead', () => {
+    expect(xeroSettingsProblem(values, catalog, '2026-11-20')).toBeNull();
+    expect(xeroSettingsProblem({ ...values, sendFrom: '2026-02-29' }, catalog, '2026-11-20')).toBe('The start date is not a date.');
+    expect(xeroSettingsProblem({ ...values, sendFrom: '2027-11-21' }, catalog, '2026-11-20')).toBeNull();
+    expect(xeroSettingsProblem({ ...values, sendFrom: '2027-11-22' }, catalog, '2026-11-20')).toBe('The start date is more than a year away.');
+  });
+
+  it('ask for an account only for the payment methods in use', () => {
+    const checks = xeroChecks({ connected: true, readAt: '2026-11-20T15:00:00.000Z', values, catalog, paymentsByMethod: { CHECK: 3, CASH: 0 } });
+    expect(checks.every((check) => check.ok)).toBe(true);
+    const missing = xeroChecks({ connected: true, readAt: '2026-11-20T15:00:00.000Z', values, catalog, paymentsByMethod: { CASH: 1 } });
+    expect(missing.find((check) => check.key === 'payments')?.detail).toBe('None yet for Cash.');
   });
 });

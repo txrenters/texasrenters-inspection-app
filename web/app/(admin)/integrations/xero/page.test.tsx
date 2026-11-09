@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { XeroConnectionView } from '@texasrenters/shared';
+import type { XeroConnectionView, XeroSettingsView } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import XeroPage from './page';
@@ -12,6 +12,8 @@ import XeroPage from './page';
 
 const xero = vi.hoisted(() => ({
   view: null as unknown,
+  settings: null as unknown,
+  save: { mutate: vi.fn(), isPending: false },
   authorize: { mutateAsync: vi.fn(), isPending: false },
   read: { mutate: vi.fn(), isPending: false },
   disconnect: { mutate: vi.fn(), isPending: false },
@@ -19,6 +21,8 @@ const xero = vi.hoisted(() => ({
 vi.mock('@/lib/xero-queries', () => ({
   useXeroConnection: () => ({ isLoading: false, isError: false, data: xero.view, refetch: vi.fn() }),
   useXeroActions: () => ({ authorize: xero.authorize, read: xero.read, disconnect: xero.disconnect }),
+  useXeroSettings: () => ({ isLoading: false, isError: false, data: xero.settings, refetch: vi.fn() }),
+  useSaveXeroSettings: () => xero.save,
 }));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
@@ -57,8 +61,19 @@ const CONNECTED: XeroConnectionView = {
   callsToday: 4,
 };
 
+const SETTINGS: XeroSettingsView = {
+  values: { sendFrom: null, salesAccountId: null, salesTaxType: null, salesAccounts: {}, paymentAccounts: {} },
+  products: [{ nameKey: 'move-out inspection', name: 'Move-out inspection', listed: true, active: true, accountId: null }],
+  payments: [{ method: 'PROPERTYWARE_LEDGER', accountId: null, payments: 3 }],
+  invoicesToSend: 5,
+  checks: [{ key: 'sendFrom', label: 'A start date', ok: false, detail: 'Choose the first day whose invoices go to Xero.' }],
+  ready: false,
+  updatedAt: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  xero.settings = SETTINGS;
   permissions.granted = new Set(['integrations:read', 'integrations:manage']);
   xero.view = DISCONNECTED;
 });
@@ -79,16 +94,15 @@ describe('the Xero page', () => {
     expect(screen.queryByRole('button', { name: 'Connect Xero' })).not.toBeInTheDocument();
   });
 
-  it('shows what was read: the organisation, where sales and payments can go, and its tax rates', () => {
+  it('shows what was read, and what goes where: each product or service, each payment method', () => {
     xero.view = CONNECTED;
     render(<XeroPage />);
     expect(screen.getByText('4 of 300')).toBeInTheDocument();
+    expect(screen.getByText('Choose the first day whose invoices go to Xero.')).toBeInTheDocument();
     const sales = screen.getByRole('heading', { name: /Where sales go/ }).closest('section')!;
-    expect(within(sales).getByText('Service revenue')).toBeInTheDocument();
-    // An archived account is not offered.
-    expect(within(sales).queryByText('Old revenue')).not.toBeInTheDocument();
+    expect(within(sales).getByRole('combobox', { name: 'Account for Move-out inspection' })).toHaveTextContent('The default');
     const payments = screen.getByRole('heading', { name: /Where payments land/ }).closest('section')!;
-    expect(within(payments).getByText('Operating checking')).toBeInTheDocument();
+    expect(within(payments).getByRole('combobox', { name: 'Account for Propertyware ledger' })).toHaveTextContent('Not chosen');
     const taxes = screen.getByRole('heading', { name: /Tax rates/ }).closest('section')!;
     expect(within(taxes).getByText('NONE')).toBeInTheDocument();
     expect(within(taxes).getByText('Tax Exempt')).toBeInTheDocument();
@@ -118,5 +132,12 @@ describe('the Xero page', () => {
     render(<XeroPage />);
     expect(screen.getByText('Xero refused the stored sign-in. Connect again.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect again' })).toBeInTheDocument();
+  });
+});
+
+describe('choosing what goes where', () => {
+  it('is not offered until Xero is connected', () => {
+    render(<XeroPage />);
+    expect(screen.queryByRole('heading', { name: /Where sales go/ })).not.toBeInTheDocument();
   });
 });

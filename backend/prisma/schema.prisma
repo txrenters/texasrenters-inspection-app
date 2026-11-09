@@ -452,6 +452,7 @@ model Organization {
   aiGuidanceVersions              AiGuidanceVersion[]
   aiEvaluationRuns                AiEvaluationRun[]
   xeroConnection XeroConnection?
+  xeroSettings   XeroSettings?
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -4771,6 +4772,30 @@ model XeroConnection {
   callsUsed              Int       @default(0)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// The office's choices for sending to Xero (2026-11-10, phase 2 of the Xero
+/// plan): from which day invoices go, the account each product or service's
+/// sales are posted to -- keyed by its name, the way lines are priced -- the
+/// account each payment method lands in, and the tax type on a line. Account
+/// ids are Xero's, checked against the last read of its chart of accounts.
+/// Nothing is sent to Xero yet.
+model XeroSettings {
+  organizationId  String    @id @db.Uuid
+  /// Invoices issued on or after this day (Texas) are the ones sent.
+  sendFrom        DateTime? @db.Date
+  /// The account a line goes to when its name has none of its own.
+  salesAccountId  String?
+  /// Xero's tax type on every line, e.g. "NONE".
+  salesTaxType    String?
+  /// { "<product name key>": "<Xero account id>" }.
+  salesAccounts   Json      @default("{}")
+  /// { "<payment method>": "<Xero account id>" }.
+  paymentAccounts Json      @default("{}")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
