@@ -45,6 +45,8 @@ export class InvoiceListQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize?: number;
   @IsOptional() @IsUUID() propertyId?: string;
   @IsOptional() @IsUUID() inspectionId?: string;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedFrom?: string;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedTo?: string;
 }
 
 /** A finished visit's draft, or a property's when no visit covers the work. One of the two. */
@@ -78,6 +80,8 @@ export class PaymentListQueryDto {
   @IsOptional() @IsIn(PAYMENT_METHODS) method?: PaymentMethod;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize?: number;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) paidFrom?: string;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) paidTo?: string;
 }
 
 export class InvoiceLineDto {

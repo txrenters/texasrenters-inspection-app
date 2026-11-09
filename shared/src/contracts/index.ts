@@ -108,6 +108,7 @@ export * from './invoice-delivery.js';
 export * from './invoices.js';
 export * from './invoice-templates.js';
 export * from './property-account.js';
+export * from './invoice-reports.js';
 export * from './invoice-edits.js';
 export * from './invoice-batch.js';
 export * from './invoice-settings.js';
