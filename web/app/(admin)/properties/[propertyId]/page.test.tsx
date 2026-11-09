@@ -24,6 +24,8 @@ vi.mock('@/components/property-details-panel', () => ({ PropertyDetailsPanel: ()
 vi.mock('@/components/property-geofence-card', () => ({ PropertyGeofenceCard: () => null }));
 vi.mock('@/components/property-service-card', () => ({ PropertyServiceCard: () => null }));
 vi.mock('@/components/invoices/invoice-parts', () => ({ InvoicesCard: () => null }));
+// The billing history has its own tests (billing-card.test.tsx).
+vi.mock('@/components/invoices/billing-card', () => ({ BillingCard: () => null }));
 vi.mock('@/components/demo-property-delete-dialog', () => ({ DemoPropertyDeleteDialog: () => null }));
 
 const property = (over: Record<string, unknown> = {}) => ({

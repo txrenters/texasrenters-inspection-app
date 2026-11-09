@@ -5,6 +5,7 @@ import {
   PAYMENT_METHOD_LABEL,
   formatMoney,
   formatMoneyShort,
+  shareWords,
   type PaymentListItem,
   type PaymentMethod,
 } from '@texasrenters/shared';
@@ -12,12 +13,14 @@ import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { formatInvoiceDay } from '@/components/invoices/invoice-parts';
+import { RangePicker, chosenRange } from '@/components/invoices/report-range';
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { usePayments } from '@/lib/invoice-queries';
+import { usePaymentInsights } from '@/lib/invoice-report-queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
 
@@ -71,13 +74,18 @@ const COLUMNS: Array<Column<PaymentListItem>> = [
 ];
 
 export default function PaymentsPage() {
-  const [state, setState, reset] = useUrlState({ page: 1, q: '', method: '' });
+  const [state, setState, reset] = useUrlState({ page: 1, q: '', method: '', paid: '', from: '', to: '' });
   const search = useDebouncedValue(state.q);
   const pending = state.q.trim() !== search.trim();
   const method = (PAYMENT_METHODS as readonly string[]).includes(state.method) ? (state.method as PaymentMethod) : undefined;
-  const payments = usePayments({ search, method, page: state.page });
+  // Paid in the days chosen (2026-11-09).
+  const paidChoice = { range: state.paid, from: state.from, to: state.to };
+  const paid = chosenRange(paidChoice);
+  const payments = usePayments({ search, method, page: state.page, paidFrom: paid?.from, paidTo: paid?.to });
+  const insights = usePaymentInsights();
   const data = payments.data;
   const busy = payments.isLoading || pending;
+  const filtered = Boolean(state.q.trim()) || Boolean(method) || Boolean(state.paid);
 
   return (
     <>
@@ -102,19 +110,43 @@ export default function PaymentsPage() {
               title="Received before"
               value={data.received.previous30.amountCents}
             />
+            {insights.data ? (
+              <>
+                <Insight
+                  caption="Past 30 days"
+                  detail={`${insights.data.paymentDays.invoices.toLocaleString('en-US')} ${insights.data.paymentDays.invoices === 1 ? 'invoice' : 'invoices'} paid in full`}
+                  title="Invoice payment time"
+                  value={insights.data.paymentDays.days === null ? '—' : `${insights.data.paymentDays.days} ${insights.data.paymentDays.days === 1 ? 'day' : 'days'}`}
+                />
+                <Insight
+                  caption="Last 60 days"
+                  detail={`${insights.data.paidOnTime.onTime.toLocaleString('en-US')} of ${insights.data.paidOnTime.invoices.toLocaleString('en-US')} by their due date`}
+                  title="Invoices paid on time"
+                  value={shareWords(insights.data.paidOnTime.onTime, insights.data.paidOnTime.invoices)}
+                />
+              </>
+            ) : null}
           </div>
         </section>
       ) : null}
 
       <ListToolbar
         filters={
-          <SelectFilter
-            allLabel="All"
-            label="Method"
-            onChange={(next) => setState({ method: next, page: 1 })}
-            options={PAYMENT_METHODS.map((value) => ({ value, label: PAYMENT_METHOD_LABEL[value] }))}
-            value={method ?? ''}
-          />
+          <>
+            <SelectFilter
+              allLabel="All"
+              label="Method"
+              onChange={(next) => setState({ method: next, page: 1 })}
+              options={PAYMENT_METHODS.map((value) => ({ value, label: PAYMENT_METHOD_LABEL[value] }))}
+              value={method ?? ''}
+            />
+            <RangePicker
+              allowAllDates
+              choice={paidChoice}
+              label="Paid"
+              onChange={(next) => setState({ paid: next.range, from: next.from, to: next.to, page: 1 })}
+            />
+          </>
         }
         heading="All payments"
         onClear={reset}
@@ -133,13 +165,13 @@ export default function PaymentsPage() {
       ) : !data?.items.length ? (
         <EmptyState
           description={
-            state.q.trim() || method
-              ? 'No payment matches. Try another method or a shorter search.'
+            filtered
+              ? 'No payment matches. Try another method, other days or a shorter search.'
               : 'Payments appear here as they are recorded against an invoice.'
           }
           title="No payments"
         >
-          {state.q.trim() || method ? (
+          {filtered ? (
             <Button onClick={reset} variant="outline">
               Clear filters
             </Button>
@@ -163,6 +195,18 @@ export default function PaymentsPage() {
         </>
       )}
     </>
+  );
+}
+
+/** One of Jobber's two cards on its payments page (2026-11-09). */
+function Insight({ title, caption, value, detail }: { title: string; caption: string; value: string; detail: string }) {
+  return (
+    <div className="bg-card flex min-w-52 flex-1 flex-col rounded-lg border p-4">
+      <h2 className="text-heading text-base font-bold">{title}</h2>
+      <p className="text-muted-foreground text-xs">{caption}</p>
+      <span className="font-display text-heading mt-auto pt-4 text-3xl leading-none font-extrabold tabular-nums">{value}</span>
+      <p className="text-muted-foreground mt-1 text-sm">{detail}</p>
+    </div>
   );
 }
 
