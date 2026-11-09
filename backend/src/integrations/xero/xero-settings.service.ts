@@ -181,6 +181,8 @@ export class XeroSettingsService {
         await tx.auditLog.create({
           data: { organizationId: org, actorUserId: user.id, action: 'XERO_SETTINGS_CHANGED', entityType: 'XeroSettings', entityId: org, metadata: { changes } },
         });
+        // Phase 3: an invoice held back for its account, or refused for it, is worth another go with the new choices.
+        await tx.xeroInvoiceSync.updateMany({ where: { organizationId: org, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
       });
     } catch (error) {
       // Two first saves at once: the other one made the row.

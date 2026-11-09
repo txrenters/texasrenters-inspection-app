@@ -7,7 +7,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { PERMISSIONS_METADATA_KEY } from '../src/common/auth';
 import { XeroAuthService, authEventOf } from '../src/integrations/xero/xero-auth.service';
 import { XeroClient } from '../src/integrations/xero/xero.client';
-import { XERO_READ_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.config';
+import { XERO_READ_SCOPES, XERO_SEND_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.config';
 import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroService, accountsFrom, taxRatesFrom } from '../src/integrations/xero/xero.service';
 
@@ -103,11 +103,12 @@ const connected = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('the Xero app’s settings', () => {
-  it('pins every Xero host, and asks only to read in this phase', () => {
+  it('pins every Xero host, and asks to read settings and -- since phase 3 -- to write contacts, invoices and payments', () => {
     expect(() => getXeroConfig({ XERO_OAUTH_TOKEN_URL: 'https://identity.example.com/connect/token' })).toThrow('must be an HTTPS URL');
     expect(() => getXeroConfig({ XERO_API_URL: 'http://api.xero.com/api.xro/2.0' })).toThrow('must be an HTTPS URL');
-    expect(getXeroConfig({}).scopes).toBe(XERO_READ_SCOPES);
+    expect(getXeroConfig({}).scopes).toBe(XERO_SEND_SCOPES);
     expect(XERO_READ_SCOPES).toBe('offline_access accounting.settings.read');
+    expect(getXeroConfig({ XERO_SCOPES: XERO_READ_SCOPES }).scopes).toBe(XERO_READ_SCOPES);
   });
 
   it('never lets the daily ceiling pass Xero’s own 1,000', () => {
@@ -125,7 +126,7 @@ describe('signing in to Xero', () => {
     expect(Object.fromEntries(url.searchParams)).toMatchObject({
       response_type: 'code',
       client_id: 'client-123',
-      scope: XERO_READ_SCOPES,
+      scope: XERO_SEND_SCOPES,
       code_challenge_method: 'S256',
       redirect_uri: process.env.XERO_OAUTH_REDIRECT_URI,
     });

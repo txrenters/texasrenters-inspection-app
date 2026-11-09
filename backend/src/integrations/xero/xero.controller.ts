@@ -1,9 +1,10 @@
 import { Body, Controller, Get, Header, HttpCode, Inject, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
-import { IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
+import { XeroSenderService } from './xero-sender.service';
 import { XeroSettingsService } from './xero-settings.service';
 import { XeroError } from './xero.errors';
 import { XeroService } from './xero.service';
@@ -20,10 +21,16 @@ export class SaveXeroSettingsDto {
   @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
 }
 
+/** Sending on or off. */
+export class SetXeroSendingDto {
+  @IsBoolean() enabled!: boolean;
+}
+
 /**
- * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan): seen
- * with `integrations:read`; connected, read again and disconnected with
- * `integrations:manage`, as Jobber is. Nothing here writes to Xero.
+ * The office's Xero organisation (2026-11-10, phases 1-3 of the Xero plan):
+ * seen with `integrations:read`; connected, read again, its accounts chosen,
+ * sending turned on or off and disconnected with `integrations:manage`, as
+ * Jobber is. Only sending writes to Xero, and only while it is on.
  */
 @ApiTags('Xero integration')
 @ApiBearerAuth()
@@ -34,6 +41,7 @@ export class XeroController {
     @Inject(XeroService) private readonly xero: XeroService,
     @Inject(XeroAuthService) private readonly auth: XeroAuthService,
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
+    @Inject(XeroSenderService) private readonly sender: XeroSenderService,
   ) {}
 
   /** What the page shows. Never a token. */
@@ -51,7 +59,7 @@ export class XeroController {
     return { authorizationUrl: this.auth.authorizationUrl({ organizationId: request.user.organizationId, userId: request.user.id }) };
   }
 
-  /** Reads the organisation, its accounts and tax rates again: three calls, at most every five minutes. */
+  /** Reads the organisation, its accounts, tax rates and invoice reminders again: four calls, at most every five minutes. */
   @Post('read')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
@@ -77,6 +85,36 @@ export class XeroController {
   @RequirePermissions('integrations:manage')
   saveSettings(@Req() request: AuthenticatedRequest, @Body() body: SaveXeroSettingsDto) {
     return this.settings.save(request.user, body as Parameters<XeroSettingsService['save']>[1]);
+  }
+
+  /** Sending invoices (phase 3): what was sent, what was refused and why. No call to Xero. */
+  @Get('sending')
+  @RequirePermissions('integrations:read')
+  sending(@Req() request: AuthenticatedRequest) {
+    return this.sender.view(request.user.organizationId);
+  }
+
+  /** On only when nothing blocks it. */
+  @Put('sending')
+  @RequirePermissions('integrations:manage')
+  setSending(@Req() request: AuthenticatedRequest, @Body() body: SetXeroSendingDto) {
+    return this.sender.setEnabled(request.user, body.enabled);
+  }
+
+  /** "Send now": one run at once, at most once a minute; only changed invoices reach Xero. */
+  @Post('sending/run')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  runSending(@Req() request: AuthenticatedRequest) {
+    return this.sender.runNow(request.user);
+  }
+
+  /** "Try again": every refused invoice is due on the next run. */
+  @Post('sending/retry')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  retrySending(@Req() request: AuthenticatedRequest) {
+    return this.sender.retryFailed(request.user);
   }
 }
 
