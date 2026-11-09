@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+    # The default three, plus `ready_for_review`: a draft runs nothing (see the
+    # job's `if`), so marking it ready has to start the run it skipped.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'mobile/**'
       - 'backend/**'
@@ -29,8 +32,24 @@ on:
       - 'package-lock.json'
       - '.github/workflows/ci.yml'
 
+# A run is about 21 minutes of a private repository's Actions allowance. On
+# 2026-11-09 GitHub stopped starting jobs at all, main's included ("your
+# spending limit needs to be increased"). Two kinds of run were spent for
+# nothing:
+# - A pull request pushed again while its run was going on. Only the newest
+#   push's result is ever read, so a newer push cancels the run it replaces.
+# - A draft, pushed to over and over while it waits on the pull request it is
+#   stacked on. It runs once it is marked ready.
+# Pushes to main are never cancelled: each has a group of its own (its commit),
+# and `cancel-in-progress` is only true for pull requests. Publishing images is
+# a separate workflow, run on a release, and waits on nothing here.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     services:
       postgres:
