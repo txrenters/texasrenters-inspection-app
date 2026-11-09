@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { InvoiceDetail, InvoiceExtraDetails } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,12 +29,29 @@ vi.mock('@/lib/invoice-edit-queries', () => ({
 }));
 const sending = vi.hoisted(() => ({ mutate: vi.fn(), isPending: false }));
 vi.mock('@/lib/invoice-delivery-queries', () => ({ useSendInvoice: () => sending }));
-const pdfs = vi.hoisted(() => ({ downloadInvoice: vi.fn().mockResolvedValue(undefined), previewInvoice: vi.fn().mockResolvedValue(undefined) }));
+const pdfs = vi.hoisted(() => ({
+  downloadInvoice: vi.fn().mockResolvedValue(undefined),
+  previewInvoice: vi.fn().mockResolvedValue(undefined),
+  // A PDF's first bytes, as the browser would make them.
+  invoicePdf: vi.fn().mockResolvedValue({ size: 8, arrayBuffer: async () => new TextEncoder().encode('%PDF-1.4').buffer }),
+  invoiceFileName: vi.fn(() => '100 Example Way_Invoice 8439.pdf'),
+}));
 vi.mock('@/lib/invoice-pdf/download-invoice', () => pdfs);
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ invoiceId: 'inv-1' }), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// Notes, files and the office's email words have their own tests (invoice-records.test.tsx).
+vi.mock('@/lib/invoice-record-queries', () => ({
+  useInvoiceRecords: () => ({
+    addNote: { mutate: vi.fn(), isPending: false },
+    removeNote: { mutate: vi.fn(), isPending: false },
+    addFile: { mutate: vi.fn(), isPending: false },
+    removeFile: { mutate: vi.fn(), isPending: false },
+  }),
+  useEmailTemplates: () => ({ isLoading: false, data: undefined }),
+  useSaveEmailTemplates: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const READ_AT = '2026-11-01T15:00:00.000Z';
 
@@ -80,6 +97,8 @@ const openSend = () => {
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   return screen.getByRole('dialog');
 };
+/** Sent without the PDF: these tests are about the addresses, the note and the key. */
+const withoutPdf = (dialog: HTMLElement) => fireEvent.click(within(dialog).getByLabelText('Attach the invoice as a PDF'));
 
 describe('the PDF', () => {
   it('downloads for anybody who reads invoices, Jobber holding them or not', async () => {
@@ -106,6 +125,7 @@ describe('sending an invoice', () => {
   it('goes to the primary address and any typed in, with the note, on the press only', () => {
     render(<InvoicePage />);
     const dialog = openSend();
+    withoutPdf(dialog);
     expect(sending.mutate).not.toHaveBeenCalled();
     expect(within(dialog).getByRole('checkbox', { name: /owner@example\.com/ })).toBeChecked();
     expect(within(dialog).getByRole('checkbox', { name: /manager@example\.com/ })).not.toBeChecked();
@@ -121,6 +141,26 @@ describe('sending an invoice', () => {
     expect(id).toBe('inv-1');
     expect(input).toMatchObject({ to: ['owner@example.com', 'tenant@example.com'], message: expect.stringContaining('invoice #8439') });
     expect(input.clientRequestId).toEqual(expect.any(String));
+  });
+
+  it('attaches the invoice as a PDF, made from it on the press (2026-11-10)', async () => {
+    render(<InvoicePage />);
+    const dialog = openSend();
+    expect(within(dialog).getByLabelText('Attach the invoice as a PDF')).toBeChecked();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send email' }));
+
+    await waitFor(() => expect(sending.mutate).toHaveBeenCalledTimes(1));
+    expect(pdfs.invoicePdf).toHaveBeenCalledWith(expect.objectContaining({ id: 'inv-1' }));
+    const [{ input }] = sending.mutate.mock.calls[0]!;
+    expect(input.attachment).toEqual({ fileName: '100 Example Way_Invoice 8439.pdf', contentBase64: btoa('%PDF-1.4') });
+  });
+
+  it('sends nothing when the PDF cannot be made', async () => {
+    pdfs.invoicePdf.mockRejectedValueOnce(new Error('The PDF is too large to attach. Send it without.'));
+    render(<InvoicePage />);
+    fireEvent.click(within(openSend()).getByRole('button', { name: 'Send email' }));
+    await waitFor(() => expect(pdfs.invoicePdf).toHaveBeenCalled());
+    expect(sending.mutate).not.toHaveBeenCalled();
   });
 
   it('says what is wrong with the addresses, and sends nothing until it is right', () => {
@@ -151,6 +191,7 @@ describe('sending an invoice', () => {
     edits.changeStatus.mutate.mockImplementation((_input, { onSuccess }) => onSuccess(marked));
     render(<InvoicePage />);
     const dialog = openSend();
+    withoutPdf(dialog);
     expect(dialog).toHaveTextContent('The draft is marked sent first.');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Mark sent and email' }));
 
@@ -167,6 +208,7 @@ describe('sending an invoice', () => {
   it('keeps its key when the request got no answer, and takes a new one once the server has answered', () => {
     render(<InvoicePage />);
     const dialog = openSend();
+    withoutPdf(dialog);
     const press = () => fireEvent.click(within(dialog).getByRole('button', { name: 'Send email' }));
 
     sending.mutate.mockImplementationOnce((_input, { onError }) => onError(new ApiError(0, 'NETWORK_ERROR', 'The API could not be reached.')));

@@ -14,6 +14,7 @@ import {
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
+import { EmailTemplatesSection } from '@/components/invoices/email-templates-section';
 import { InvoiceEmailsSection } from '@/components/invoices/invoice-emails-section';
 import { StatementSettingsSection } from '@/components/invoices/statement-settings-section';
 import { InvoiceTakeoverSection } from '@/components/invoices/invoice-takeover-section';
@@ -61,6 +62,7 @@ export default function InvoiceSettingsPage() {
       <SettingsForm key={settings.data.updatedAt ?? 'never'} mayChange={mayChange} view={settings.data} />
       <ProductsSection mayChange={mayChange} view={settings.data} />
       <InvoiceEmailsSection mayChange={mayChange} />
+      <EmailTemplatesSection mayChange={mayChange} />
       <StatementSettingsSection mayChange={mayChange} />
       {settings.data.files ? <FileCopiesSection files={settings.data.files} mayChange={mayChange} /> : null}
       <InvoiceTakeoverSection />

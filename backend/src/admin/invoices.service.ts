@@ -144,12 +144,27 @@ const detailSelect = {
   // Pinned first, as Jobber shows them, then newest first.
   notes: {
     orderBy: [{ pinned: 'desc' }, { writtenAt: 'desc' }],
-    select: { id: true, kind: true, message: true, pinned: true, writtenAt: true },
+    select: { id: true, kind: true, message: true, pinned: true, writtenAt: true, origin: true, createdBy: { select: { displayName: true } } },
   },
   files: {
     orderBy: { uploadedAt: 'asc' },
-    select: { id: true, fileName: true, contentType: true, sizeBytes: true, jobberUrl: true, uploadedAt: true, storageKey: true, copyProblem: true },
+    select: {
+      id: true,
+      fileName: true,
+      contentType: true,
+      sizeBytes: true,
+      jobberUrl: true,
+      uploadedAt: true,
+      storageKey: true,
+      copyProblem: true,
+      origin: true,
+    },
   },
+  showQuantities: true,
+  showUnitPrices: true,
+  showLineTotals: true,
+  showAccountBalance: true,
+  showLateStamp: true,
   // Each time it was sent to the client from the console (2026-11-06), newest first.
   deliveries: {
     orderBy: { createdAt: 'desc' },
@@ -341,6 +356,8 @@ export function extraDetails(row: DetailRow): InvoiceExtraDetails {
       message: note.message,
       pinned: note.pinned,
       writtenAt: note.writtenAt.toISOString(),
+      origin: note.origin === 'CONSOLE' ? ('CONSOLE' as const) : ('JOBBER' as const),
+      author: note.createdBy?.displayName ?? null,
     })),
     // Jobber's own address for each, and whether the console keeps its own copy (phase 7).
     files: row.files.map((file) => ({
@@ -352,6 +369,7 @@ export function extraDetails(row: DetailRow): InvoiceExtraDetails {
       uploadedAt: file.uploadedAt.toISOString(),
       kept: file.storageKey !== null,
       copyProblem: file.copyProblem,
+      origin: file.origin === 'CONSOLE' ? ('CONSOLE' as const) : ('JOBBER' as const),
     })),
   };
 }

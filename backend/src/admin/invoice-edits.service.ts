@@ -21,6 +21,8 @@ import {
   type InvoiceStatusChangeInput,
   type InvoiceTaxInput,
   type PaymentMethod,
+  CLIENT_VIEW_LABEL,
+  type InvoiceClientView,
 } from '@texasrenters/shared';
 import { InvoiceStatus, type Prisma } from '@prisma/client';
 
@@ -77,6 +79,11 @@ const editSelect = {
   taxRatePercent: true,
   clientMessage: true,
   contractDisclaimer: true,
+  showQuantities: true,
+  showUnitPrices: true,
+  showLineTotals: true,
+  showAccountBalance: true,
+  showLateStamp: true,
   updatedAt: true,
   lines: {
     orderBy: { position: 'asc' },
@@ -152,6 +159,9 @@ export function invoiceChanges(
   compare('Total', formatMoney(before.totalCents), formatMoney(amounts.totalCents));
   compare('Client message', shown(before.clientMessage), shown(after.clientMessage ?? null));
   compare('Contract / disclaimer', shown(before.contractDisclaimer), shown(after.contractDisclaimer ?? null));
+  if (after.clientView)
+    for (const key of Object.keys(CLIENT_VIEW_LABEL) as (keyof InvoiceClientView)[])
+      compare(`Client view: ${CLIENT_VIEW_LABEL[key]}`, before[key] ? 'shown' : 'hidden', after.clientView[key] ? 'shown' : 'hidden');
   return changes;
 }
 
@@ -259,6 +269,7 @@ export class InvoiceEditsService {
       tax: input.tax ? { name: input.tax.name.trim(), percent: input.tax.percent } : null,
       clientMessage: text(input.clientMessage),
       contractDisclaimer: text(input.contractDisclaimer),
+      ...(input.clientView ? { clientView: input.clientView } : {}),
     };
 
     await this.prisma.$transaction(async (tx) => {
@@ -304,6 +315,7 @@ export class InvoiceEditsService {
           paidOn: paid ? (before.paidOn ?? (await this.latestPaymentDay(tx, id))) : null,
           clientMessage: clean.clientMessage,
           contractDisclaimer: clean.contractDisclaimer,
+          ...(clean.clientView ?? {}),
         },
       });
       if (!count) throw this.invoiceChanged();

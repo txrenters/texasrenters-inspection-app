@@ -7,6 +7,7 @@
  * The totals are worked out here and again on the server from the lines,
  * never typed. Money is whole cents, as everywhere.
  */
+import type { InvoiceClientView } from './invoice-templates.js';
 import {
   INVOICE_STATUS_LABEL,
   MAX_INVOICE_CENTS,
@@ -46,6 +47,8 @@ export interface EditInvoiceInput {
   tax: InvoiceTaxInput | null;
   clientMessage?: string | null;
   contractDisclaimer?: string | null;
+  /** What the client sees (2026-11-10); left out, it stays as it is. */
+  clientView?: InvoiceClientView;
   /** The invoice as it was read (`InvoiceDetail.updatedAt`): one changed since is refused rather than overwritten. */
   expectedUpdatedAt: string;
 }

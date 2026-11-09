@@ -27,7 +27,19 @@ vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => pe
 vi.mock('@/components/invoices/invoice-takeover-section', () => ({ InvoiceTakeoverSection: () => null }));
 vi.mock('@/components/invoices/invoice-emails-section', () => ({ InvoiceEmailsSection: () => null }));
 vi.mock('@/components/invoices/statement-settings-section', () => ({ StatementSettingsSection: () => null }));
+vi.mock('@/components/invoices/email-templates-section', () => ({ EmailTemplatesSection: () => null }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// Notes, files and the office's email words have their own tests (invoice-records.test.tsx).
+vi.mock('@/lib/invoice-record-queries', () => ({
+  useInvoiceRecords: () => ({
+    addNote: { mutate: vi.fn(), isPending: false },
+    removeNote: { mutate: vi.fn(), isPending: false },
+    addFile: { mutate: vi.fn(), isPending: false },
+    removeFile: { mutate: vi.fn(), isPending: false },
+  }),
+  useEmailTemplates: () => ({ isLoading: false, data: undefined }),
+  useSaveEmailTemplates: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const SAVED_AT = '2026-11-06T15:00:00.000Z';
 const BRAND = { name: 'Server Co', addressLine1: '1 Server Plaza', addressLine2: null, phone: '555-0100', email: null };

@@ -6,6 +6,9 @@ import {
   invoiceTotalLines,
   type InvoiceDetail,
   type ReceiptBrand,
+  accountBalanceLine,
+  clientViewOf,
+  showsLateStamp,
 } from '@texasrenters/shared';
 
 /**
@@ -45,6 +48,7 @@ const styles = StyleSheet.create({
   totalLine: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
   due: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: C.text, marginTop: 4, paddingTop: 6 },
   dueText: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: C.brandDark },
+  late: { marginTop: 6, color: '#b42318', fontFamily: 'Helvetica-Bold', textAlign: 'right', letterSpacing: 1 },
   note: { paddingTop: 18 },
   footer: { position: 'absolute', bottom: 28, left: 48, right: 48, color: C.muted, fontSize: 8, flexDirection: 'row', justifyContent: 'space-between' },
 });
@@ -114,6 +118,11 @@ function InvoicePages({ invoice, brand }: { invoice: InvoiceDetail; brand: Recei
   const totals = invoiceTotalLines(invoice);
   const due = totals[totals.length - 1]!;
   const where = place(invoice);
+  // Jobber's "Client view" (2026-11-10): the columns shown, the account balance, the late stamp.
+  const view = clientViewOf(invoice);
+  // The service column takes whatever the hidden ones leave.
+  const service = { width: `${100 - (view.showQuantities ? 12 : 0) - (view.showUnitPrices ? 18 : 0) - (view.showLineTotals ? 18 : 0)}%`, paddingRight: 8 };
+  const balance = accountBalanceLine(invoice);
   return (
     <>
       <Page size="LETTER" style={styles.page}>
@@ -131,6 +140,7 @@ function InvoicePages({ invoice, brand }: { invoice: InvoiceDetail; brand: Recei
           <View>
             <Text style={styles.title}>Invoice</Text>
             <Text style={styles.subtitle}>{invoice.number ? `#${invoice.number}` : invoice.subject}</Text>
+            {showsLateStamp(invoice) ? <Text style={styles.late}>PAST DUE</Text> : null}
           </View>
         </View>
 
@@ -165,21 +175,21 @@ function InvoicePages({ invoice, brand }: { invoice: InvoiceDetail; brand: Recei
         </View>
 
         <View fixed style={styles.tableHead}>
-          <Text style={[styles.service, styles.head]}>Product / Service</Text>
-          <Text style={[styles.qty, styles.head]}>Qty</Text>
-          <Text style={[styles.money, styles.head]}>Unit price</Text>
-          <Text style={[styles.money, styles.head]}>Total</Text>
+          <Text style={[service, styles.head]}>Product / Service</Text>
+          {view.showQuantities ? <Text style={[styles.qty, styles.head]}>Qty</Text> : null}
+          {view.showUnitPrices ? <Text style={[styles.money, styles.head]}>Unit price</Text> : null}
+          {view.showLineTotals ? <Text style={[styles.money, styles.head]}>Total</Text> : null}
         </View>
         {invoice.lineItems.map((line, index) => (
           <View key={`${index}:${line.name}`} style={styles.row} wrap={false}>
-            <View style={styles.service}>
+            <View style={service}>
               <Text style={styles.strong}>{line.name}</Text>
               {line.description ? <Text style={styles.muted}>{line.description}</Text> : null}
               {line.serviceOn ? <Text style={styles.muted}>Done {invoiceDay(line.serviceOn)}</Text> : null}
             </View>
-            <Text style={styles.qty}>{quantity(line.quantity)}</Text>
-            <Text style={styles.money}>{formatMoney(line.unitPriceCents)}</Text>
-            <Text style={styles.money}>{formatMoney(line.totalCents)}</Text>
+            {view.showQuantities ? <Text style={styles.qty}>{quantity(line.quantity)}</Text> : null}
+            {view.showUnitPrices ? <Text style={styles.money}>{formatMoney(line.unitPriceCents)}</Text> : null}
+            {view.showLineTotals ? <Text style={styles.money}>{formatMoney(line.totalCents)}</Text> : null}
           </View>
         ))}
 
@@ -194,6 +204,12 @@ function InvoicePages({ invoice, brand }: { invoice: InvoiceDetail; brand: Recei
             <Text style={styles.dueText}>{due.label}</Text>
             <Text style={styles.dueText}>{due.value}</Text>
           </View>
+          {balance ? (
+            <View style={[styles.totalLine, { paddingTop: 6 }]}>
+              <Text style={{ color: C.muted }}>{balance.label}</Text>
+              <Text>{balance.value}</Text>
+            </View>
+          ) : null}
         </View>
 
         {invoice.clientMessage ? (

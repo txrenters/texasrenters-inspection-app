@@ -33,6 +33,17 @@ vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => pe
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useParams: () => ({ invoiceId: 'inv-1' }), useRouter: () => router }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// Notes, files and the office's email words have their own tests (invoice-records.test.tsx).
+vi.mock('@/lib/invoice-record-queries', () => ({
+  useInvoiceRecords: () => ({
+    addNote: { mutate: vi.fn(), isPending: false },
+    removeNote: { mutate: vi.fn(), isPending: false },
+    addFile: { mutate: vi.fn(), isPending: false },
+    removeFile: { mutate: vi.fn(), isPending: false },
+  }),
+  useEmailTemplates: () => ({ isLoading: false, data: undefined }),
+  useSaveEmailTemplates: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const READ_AT = '2026-11-01T15:00:00.000Z';
 
@@ -98,7 +109,7 @@ describe("an invoice's page", () => {
     render(<InvoicePage />);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false });
     const menu = await screen.findByRole('menu');
-    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Void invoice', 'Close as bad debt']);
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Create similar', 'Void invoice', 'Close as bad debt']);
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Void invoice' }));
 
     const confirm = await screen.findByRole('alertdialog');
@@ -210,6 +221,8 @@ describe('the edit page', () => {
           tax: null,
           clientMessage: 'Thank you.',
           contractDisclaimer: null,
+          // Jobber's "Client view", as the invoice had it: all of it shown (2026-11-10).
+          clientView: { showQuantities: true, showUnitPrices: true, showLineTotals: true, showAccountBalance: true, showLateStamp: true },
           expectedUpdatedAt: READ_AT,
         },
       },
