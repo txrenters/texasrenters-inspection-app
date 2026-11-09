@@ -1,10 +1,24 @@
-import { Controller, Get, Header, HttpCode, Inject, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
+import { IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
+import { XeroSettingsService } from './xero-settings.service';
 import { XeroError } from './xero.errors';
 import { XeroService } from './xero.service';
+
+/** The office's choices for sending to Xero; each account is checked against the last read of Xero's. */
+export class SaveXeroSettingsDto {
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) sendFrom!: string | null;
+  @IsOptional() @IsString() @MaxLength(64) salesAccountId!: string | null;
+  @IsOptional() @IsString() @MaxLength(64) salesTaxType!: string | null;
+  /** Product or service name key to Xero account id. */
+  @IsObject() salesAccounts!: Record<string, string>;
+  /** Payment method to Xero account id. */
+  @IsObject() paymentAccounts!: Record<string, string>;
+  @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
+}
 
 /**
  * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan): seen
@@ -19,6 +33,7 @@ export class XeroController {
   constructor(
     @Inject(XeroService) private readonly xero: XeroService,
     @Inject(XeroAuthService) private readonly auth: XeroAuthService,
+    @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
   ) {}
 
   /** What the page shows. Never a token. */
@@ -49,6 +64,19 @@ export class XeroController {
   @RequirePermissions('integrations:manage')
   disconnect(@Req() request: AuthenticatedRequest) {
     return this.xero.disconnect(request.user);
+  }
+
+  /** What goes where (phase 2): read from the console's own copy, never from Xero. */
+  @Get('settings')
+  @RequirePermissions('integrations:read')
+  readSettings(@Req() request: AuthenticatedRequest) {
+    return this.settings.read(request.user.organizationId);
+  }
+
+  @Put('settings')
+  @RequirePermissions('integrations:manage')
+  saveSettings(@Req() request: AuthenticatedRequest, @Body() body: SaveXeroSettingsDto) {
+    return this.settings.save(request.user, body as Parameters<XeroSettingsService['save']>[1]);
   }
 }
 

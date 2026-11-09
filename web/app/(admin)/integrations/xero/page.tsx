@@ -1,6 +1,5 @@
 'use client';
 
-import { paymentAccounts, revenueAccounts, type XeroAccount } from '@texasrenters/shared';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -9,6 +8,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { XeroSettingsForm } from '@/components/xero/xero-settings-form';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -24,27 +24,27 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
-import { useXeroActions, useXeroConnection } from '@/lib/xero-queries';
+import { useXeroActions, useXeroConnection, useXeroSettings } from '@/lib/xero-queries';
 
 /**
- * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan):
- * connect it, then see what the console read from it -- its details, the
- * accounts a sale and a payment can be posted to, and its tax rates. The
- * next phase maps the console's products and payment methods onto these.
- * Nothing is written to Xero yet.
+ * The office's Xero organisation (2026-11-10, phases 1-2 of the Xero plan):
+ * connect it, see what the console read from it, and choose what goes where
+ * -- the start date, the account each product or service and each payment
+ * method goes to, the tax type. Nothing is written to Xero yet.
  */
 export default function XeroPage() {
   const { has } = usePermissions();
   const canRead = has('integrations:read');
   const canManage = has('integrations:manage');
   const connection = useXeroConnection(canRead);
+  const connected = connection.data?.status === 'CONNECTED';
+  const settings = useXeroSettings(canRead && connected);
   const actions = useXeroActions();
   const [disconnecting, setDisconnecting] = useState(false);
 
   if (connection.isLoading) return <PageSkeleton />;
   if (connection.isError || !connection.data) return <ErrorState error={connection.error} retry={() => void connection.refetch()} />;
   const xero = connection.data;
-  const connected = xero.status === 'CONNECTED';
 
   // Sign-in happens at Xero, in a tab of its own opened from the click, so the browser does not take it for a pop-up.
   const connect = async () => {
@@ -71,9 +71,6 @@ export default function XeroPage() {
       onError: (error) => toast.error('Xero was not disconnected', { description: error.message }),
     });
 
-  const revenue = revenueAccounts(xero.accounts);
-  const payable = paymentAccounts(xero.accounts);
-
   return (
     <div className="space-y-6">
       <PageHeader
@@ -96,7 +93,7 @@ export default function XeroPage() {
           ) : undefined
         }
         badges={<StatusBadge value={xero.status} />}
-        description="The office's books. The console reads them for now; sending invoices and payments comes next."
+        description="The office's books. Choose what goes where; sending invoices and payments comes next."
         info={
           <>
             <p>
@@ -105,7 +102,7 @@ export default function XeroPage() {
             </p>
             <p>
               Each read is three calls to Xero. The console makes at most {xero.dailyCeiling} a day, below the 1,000 Xero
-              allows on its free plan.
+              allows on its free plan. Choosing accounts uses the last read and calls Xero not at all.
             </p>
           </>
         }
@@ -149,9 +146,6 @@ export default function XeroPage() {
             />
           </Panel>
 
-          <AccountsPanel accounts={revenue} empty="No active revenue account with a code." title="Where sales go" />
-          <AccountsPanel accounts={payable} empty="No bank account, or account taking payments." title="Where payments land" />
-
           <Panel count={xero.taxRates.length} title="Tax rates">
             {xero.taxRates.length ? (
               <Table>
@@ -178,6 +172,21 @@ export default function XeroPage() {
               <p className="text-muted-foreground px-4 py-3 text-sm">None read yet.</p>
             )}
           </Panel>
+
+          {settings.data ? (
+            // Keyed by the save it shows, so a save -- the office's or somebody else's -- starts it afresh.
+            <XeroSettingsForm
+              accounts={xero.accounts}
+              canManage={canManage}
+              key={settings.data.updatedAt ?? 'new'}
+              taxRates={xero.taxRates}
+              view={settings.data}
+            />
+          ) : settings.isError ? (
+            <ErrorState error={settings.error} retry={() => void settings.refetch()} />
+          ) : (
+            <PageSkeleton />
+          )}
         </>
       ) : (
         <Panel bodyClassName="p-4" title="Not connected">
@@ -212,34 +221,5 @@ export default function XeroPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
-}
-
-function AccountsPanel({ title, accounts, empty }: { title: string; accounts: readonly XeroAccount[]; empty: string }) {
-  return (
-    <Panel count={accounts.length} title={title}>
-      {accounts.length ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Code</TableHead>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {accounts.map((account) => (
-              <TableRow key={account.accountId}>
-                <TableCell className="font-mono text-xs">{account.code ?? '—'}</TableCell>
-                <TableCell>{account.name}</TableCell>
-                <TableCell className="text-muted-foreground">{account.type.toLowerCase()}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      ) : (
-        <p className="text-muted-foreground px-4 py-3 text-sm">{empty}</p>
-      )}
-    </Panel>
   );
 }
