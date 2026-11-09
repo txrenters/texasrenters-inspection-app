@@ -115,31 +115,34 @@ export function InvoiceEditControls({ invoice }: { invoice: InvoiceDetail }) {
           </Link>
         </Button>
       ) : null}
-      {actions.length || deletable ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button aria-label="More" size="sm" variant="outline">
-              <EllipsisIcon />
-              More
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {actions.map((action) => (
-              <DropdownMenuItem key={action} onSelect={() => setAsking(action)}>
-                {INVOICE_STATUS_ACTION_LABEL[action]}
+      {/* Create similar (2026-11-10) is always on offer, so More always is. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button aria-label="More" size="sm" variant="outline">
+            <EllipsisIcon />
+            More
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem asChild>
+            <Link href={`/invoices/new?similar=${encodeURIComponent(invoice.id)}`}>Create similar</Link>
+          </DropdownMenuItem>
+          {actions.length || deletable ? <DropdownMenuSeparator /> : null}
+          {actions.map((action) => (
+            <DropdownMenuItem key={action} onSelect={() => setAsking(action)}>
+              {INVOICE_STATUS_ACTION_LABEL[action]}
+            </DropdownMenuItem>
+          ))}
+          {deletable ? (
+            <>
+              {actions.length ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuItem className="text-destructive" onSelect={() => setAsking('DELETE')}>
+                Delete draft
               </DropdownMenuItem>
-            ))}
-            {deletable ? (
-              <>
-                {actions.length ? <DropdownMenuSeparator /> : null}
-                <DropdownMenuItem className="text-destructive" onSelect={() => setAsking('DELETE')}>
-                  Delete draft
-                </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <AlertDialog onOpenChange={(open) => (open ? undefined : setAsking(null))} open={asking !== null}>
         <AlertDialogContent>

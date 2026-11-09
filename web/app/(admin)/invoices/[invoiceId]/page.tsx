@@ -9,8 +9,6 @@ import { toast } from 'sonner';
 
 import {
   INVOICE_RECORD,
-  InvoiceFiles,
-  InvoiceNotes,
   InvoicePayments,
   InvoiceStatusBadge,
   LineItemsTable,
@@ -18,6 +16,7 @@ import {
   formatInvoiceMoment,
 } from '@/components/invoices/invoice-parts';
 import { InvoiceEditControls, InvoiceHistorySection } from '@/components/invoices/invoice-edit-controls';
+import { InvoiceFilesCard, InvoiceNotesCard } from '@/components/invoices/invoice-records';
 import { RecordPaymentDialog } from '@/components/invoices/record-payment-dialog';
 import { InvoiceDeliveries, SendInvoiceDialog } from '@/components/invoices/send-invoice-dialog';
 import { PageHeader } from '@/components/page-header';
@@ -125,16 +124,9 @@ export default function InvoicePage() {
                 <InvoiceDeliveries deliveries={data.deliveries} />
               </AsideCard>
             ) : null}
-            {details?.notes.length ? (
-              <AsideCard title="Internal notes">
-                <InvoiceNotes notes={details.notes} />
-              </AsideCard>
-            ) : null}
-            {details?.files.length ? (
-              <AsideCard title="Files">
-                <InvoiceFiles files={details.files} invoiceId={data.id} />
-              </AsideCard>
-            ) : null}
+            {/* Jobber's notes and files, and the office's own (2026-11-10). */}
+            <InvoiceNotesCard invoice={data} mayWrite={has('invoices:manage')} />
+            <InvoiceFilesCard invoice={data} mayWrite={has('invoices:manage')} />
           </>
         }
         asideLabel="About this invoice"

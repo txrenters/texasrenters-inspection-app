@@ -51,6 +51,17 @@ vi.mock('@/lib/invoice-delivery-queries', () => ({
   useSendInvoice: () => ({ mutate: vi.fn(), isPending: false }),
   useSendReceipt: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+// Notes, files and the office's email words have their own tests (invoice-records.test.tsx).
+vi.mock('@/lib/invoice-record-queries', () => ({
+  useInvoiceRecords: () => ({
+    addNote: { mutate: vi.fn(), isPending: false },
+    removeNote: { mutate: vi.fn(), isPending: false },
+    addFile: { mutate: vi.fn(), isPending: false },
+    removeFile: { mutate: vi.fn(), isPending: false },
+  }),
+  useEmailTemplates: () => ({ isLoading: false, data: undefined }),
+  useSaveEmailTemplates: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const create = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };

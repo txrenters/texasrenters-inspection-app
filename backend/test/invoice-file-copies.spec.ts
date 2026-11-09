@@ -123,6 +123,8 @@ describe('copying the files', () => {
     await worker.run(ORG);
     expect(db.invoiceFile.findMany.mock.calls[0][0].where).toEqual({
       organizationId: ORG,
+      // Only Jobber's: a file added in the console (2026-11-10) is kept from the start.
+      origin: 'JOBBER',
       storageKey: null,
       copyAttempts: { lt: MAX_COPY_ATTEMPTS },
     });

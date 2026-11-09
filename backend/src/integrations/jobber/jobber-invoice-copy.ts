@@ -277,7 +277,8 @@ export async function applyJobberInvoice(
   }
 
   if (copy.notes) {
-    await tx.invoiceNote.deleteMany({ where: { invoiceId } });
+    // Jobber's notes only: one written in the console (2026-11-10) is never touched by a read.
+    await tx.invoiceNote.deleteMany({ where: { invoiceId, origin: 'JOBBER' } });
     if (copy.notes.length)
       await tx.invoiceNote.createMany({
         data: copy.notes.map((note) => ({ organizationId, invoiceId, ...note, writtenAt: new Date(note.writtenAt) })),
@@ -287,7 +288,7 @@ export async function applyJobberInvoice(
 
   if (copy.files) {
     const listed = copy.files.map((file) => file.jobberFileId);
-    await tx.invoiceFile.deleteMany({ where: { invoiceId, jobberFileId: { notIn: listed } } });
+    await tx.invoiceFile.deleteMany({ where: { invoiceId, origin: 'JOBBER', jobberFileId: { notIn: listed } } });
     for (const file of copy.files) {
       const fields = {
         fileName: file.fileName,

@@ -12,6 +12,8 @@ import {
   type InvoiceDetail,
   type InvoiceDiscountInput,
   type InvoiceTaxInput,
+  DEFAULT_CLIENT_VIEW,
+  type InvoiceClientView,
 } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -19,6 +21,7 @@ import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
 import { INVOICE_RECORD } from '@/components/invoices/invoice-parts';
+import { ClientViewFields } from '@/components/invoices/invoice-records';
 import { LineItemsEditor, readLines, toEditLine, type EditLine } from '@/components/invoices/line-items-editor';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
@@ -110,6 +113,7 @@ function InvoiceEditForm({ invoice }: { invoice: InvoiceDetail }) {
   const [taxPercent, setTaxPercent] = useState(details?.taxRatePercent ? String(details.taxRatePercent) : '');
   const [message, setMessage] = useState(invoice.clientMessage ?? '');
   const [disclaimer, setDisclaimer] = useState(details?.contractDisclaimer ?? '');
+  const [clientView, setClientView] = useState<InvoiceClientView>(invoice.clientView ?? DEFAULT_CLIENT_VIEW);
 
   const dueOn = terms === CUSTOM ? customDue : issuedOn ? dueOnFor(issuedOn, Number(terms)) : '';
   const read = readLines(lines);
@@ -143,6 +147,7 @@ function InvoiceEditForm({ invoice }: { invoice: InvoiceDetail }) {
           ...input,
           clientMessage: message.trim() || null,
           contractDisclaimer: disclaimer.trim() || null,
+          clientView,
           expectedUpdatedAt: invoice.updatedAt,
         },
       },
@@ -306,6 +311,10 @@ function InvoiceEditForm({ invoice }: { invoice: InvoiceDetail }) {
           />
           <FieldDescription>Printed at the foot of the invoice.</FieldDescription>
         </Field>
+      </div>
+
+      <div className="mt-6 max-w-md">
+        <ClientViewFields onChange={setClientView} value={clientView} />
       </div>
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">

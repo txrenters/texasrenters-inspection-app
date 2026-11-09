@@ -6,6 +6,9 @@ export interface GraphMailMessage {
   to: string;
   subject: string;
   html: string;
+  /** Where the client's reply goes (2026-11-10): the office, not the sending mailbox. */
+  replyTo?: string | null;
+  attachments?: { name: string; contentType: string; contentBase64: string }[];
 }
 
 export interface MailTransport {
@@ -46,6 +49,17 @@ export class MicrosoftGraphMailClient implements MailTransport {
             subject: message.subject,
             body: { contentType: 'HTML', content: message.html },
             toRecipients: [{ emailAddress: { address: message.to } }],
+            ...(message.replyTo ? { replyTo: [{ emailAddress: { address: message.replyTo } }] } : {}),
+            ...(message.attachments?.length
+              ? {
+                  attachments: message.attachments.map((file) => ({
+                    '@odata.type': '#microsoft.graph.fileAttachment',
+                    name: file.name,
+                    contentType: file.contentType,
+                    contentBytes: file.contentBase64,
+                  })),
+                }
+              : {}),
           },
           saveToSentItems: true,
         }),

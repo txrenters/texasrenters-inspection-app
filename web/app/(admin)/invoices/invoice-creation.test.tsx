@@ -18,6 +18,8 @@ const hooks = vi.hoisted(() => ({
   useInvoiceDraft: vi.fn(),
   useInvoices: vi.fn(),
   useInvoiceActions: vi.fn(),
+  // The invoice a new one is like (Create similar, 2026-11-10); none unless asked.
+  useInvoice: vi.fn((): { isLoading: boolean; isError: boolean; data: unknown } => ({ isLoading: false, isError: false, data: undefined })),
 }));
 vi.mock('@/lib/invoice-queries', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), ...hooks }));
 const batches = vi.hoisted(() => ({ useUninvoicedVisits: vi.fn(), useBatchInvoices: vi.fn() }));
@@ -32,6 +34,17 @@ const params = vi.hoisted(() => ({ search: new URLSearchParams() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router, useSearchParams: () => params.search }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: (defaults: object) => [defaults, vi.fn(), vi.fn()] }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// Notes, files and the office's email words have their own tests (invoice-records.test.tsx).
+vi.mock('@/lib/invoice-record-queries', () => ({
+  useInvoiceRecords: () => ({
+    addNote: { mutate: vi.fn(), isPending: false },
+    removeNote: { mutate: vi.fn(), isPending: false },
+    addFile: { mutate: vi.fn(), isPending: false },
+    removeFile: { mutate: vi.fn(), isPending: false },
+  }),
+  useEmailTemplates: () => ({ isLoading: false, data: undefined }),
+  useSaveEmailTemplates: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const NOW = new Date('2026-11-06T18:00:00.000Z');
 const TODAY = '2026-11-06';
@@ -91,6 +104,28 @@ describe('a new invoice', () => {
       expect.anything(),
     );
     expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('inspectionId');
+  });
+
+  it("starts like another invoice when asked to (Jobber's Create similar): its property, subject, lines and message", () => {
+    params.search = new URLSearchParams('similar=inv-9');
+    hooks.useInvoice.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        id: 'inv-9',
+        subject: 'Quarterly service',
+        property: { id: 'b1', address: '100 Example Way', city: 'Sampletown' },
+        lineItems: [{ name: 'Filter Change', description: '2 filters', quantity: 2, unitPriceCents: 3999, totalCents: 7998 }],
+        clientMessage: 'Thank you, as always.',
+      },
+    });
+    render(<NewInvoicePage />);
+
+    expect(hooks.useInvoice).toHaveBeenCalledWith('inv-9');
+    expect(hooks.useInvoiceDraft).toHaveBeenLastCalledWith({ propertyId: 'b1' });
+    expect(screen.getByDisplayValue('Quarterly service')).toBeInTheDocument();
+    expect(screen.getByLabelText('Line 1: name')).toHaveValue('Filter Change');
+    expect(screen.getByDisplayValue('Thank you, as always.')).toBeInTheDocument();
   });
 });
 
