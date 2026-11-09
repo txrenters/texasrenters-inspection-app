@@ -192,6 +192,8 @@ export class XeroSettingsService {
             metadata: { organisation: catalog.name, tenantId, changes },
           },
         });
+        // An invoice this organisation held back for its account, or refused for it, is worth another go with the new choices.
+        await tx.xeroInvoiceSync.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
       });
     } catch (error) {
       // Two first saves at once: the other one made the row.

@@ -454,6 +454,8 @@ model Organization {
   xeroConnection XeroConnection?
   xeroOrganisations XeroOrganisation[]
   xeroSettings   XeroSettings[]
+  xeroContactLinks XeroContactLink[]
+  xeroInvoiceSyncs XeroInvoiceSync[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -3268,6 +3270,7 @@ model Invoice {
   notes                InvoiceNote[]
   files                InvoiceFile[]
   deliveries           InvoiceDelivery[]
+  xeroSync             XeroInvoiceSync?
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
@@ -4762,6 +4765,8 @@ model XeroOrganisation {
   taxRates         Json?
   catalogReadAt    DateTime?
   catalogReadError String?
+  /// Whether Xero's own invoice reminders are on in this organisation, as last read; null when Xero did not say.
+  invoiceRemindersOn Boolean?
   /// Calls to this organisation on one Texas day (YYYY-MM-DD), against the console's own ceiling.
   callsDay         String?
   callsUsed        Int       @default(0)
@@ -4820,6 +4825,13 @@ model XeroSettings {
   salesAccounts   Json      @default("{}")
   /// { "<payment method>": "<Xero account id>" }.
   paymentAccounts Json      @default("{}")
+  /// Phase 3: invoices go to Xero only while this is on.
+  sendingEnabled      Boolean   @default(false)
+  sendingChangedAt    DateTime?
+  /// A run's claim on the office, so two never send at once.
+  sendingClaimedUntil DateTime?
+  lastRunAt           DateTime?
+  lastRunProblem      String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -4827,4 +4839,50 @@ model XeroSettings {
   xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: Cascade)
 
   @@id([organizationId, xeroTenantId])
+}
+
+/// The Xero contact a client's invoices are sent under (2026-11-10, phase 3 of
+/// the Xero plan). The client is the property, as in Jobber. Per Xero
+/// organisation, so connecting another one starts afresh.
+model XeroContactLink {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  xeroTenantId   String
+  /// "jobber:<client id>", or "name:<client name, lower-cased>".
+  clientKey      String
+  xeroContactId  String
+  name           String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, xeroTenantId, clientKey])
+}
+
+/// An invoice's state in Xero (2026-11-10, phase 3 of the Xero plan): what was
+/// last sent -- a fingerprint of the invoice's own content -- Xero's id for it,
+/// and, when Xero refused it, why, how many tries, and when to try again.
+model XeroInvoiceSync {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  invoiceId       String    @unique @db.Uuid
+  xeroTenantId    String
+  xeroInvoiceId   String?
+  /// SENT or FAILED (checked).
+  status          String
+  sentFingerprint String?
+  /// The invoice's updatedAt when last looked at: it is looked at again only once that moves.
+  seenUpdatedAt   DateTime?
+  attempts        Int       @default(0)
+  lastAttemptAt   DateTime?
+  nextAttemptAt   DateTime?
+  problem         String?
+  sentAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
 }

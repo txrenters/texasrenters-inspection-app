@@ -1,6 +1,6 @@
 'use client';
 
-import { connectedOrganisations, type XeroOrganisationView } from '@texasrenters/shared';
+import { connectedOrganisations, xeroCanWrite, type XeroOrganisationView } from '@texasrenters/shared';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { XeroSendingPanel } from '@/components/xero/xero-sending-panel';
 import { XeroSettingsForm } from '@/components/xero/xero-settings-form';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -26,14 +27,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { formatDate, formatRelative } from '@/lib/format';
-import { useXeroActions, useXeroConnection, useXeroSettings } from '@/lib/xero-queries';
+import { useXeroActions, useXeroConnection, useXeroSending, useXeroSettings } from '@/lib/xero-queries';
 
 /**
  * The office's Xero organisations (2026-11-10): the companies -- THMP, Crystal
  * Creek Pest, Crystal Creek Air and the like -- each keep their own books, and
  * one sign-in reaches whichever of them were ticked at Xero. A tab for each:
  * what the console read from it -- its details, Xero's id for it, its tax rates
- * -- and its own choices of what goes where. Nothing is written to Xero yet.
+ * -- its own choices of what goes where, and sending its invoices once that is
+ * all in place.
  */
 export default function XeroPage() {
   const { has } = usePermissions();
@@ -88,6 +90,12 @@ export default function XeroPage() {
           canManage && xero.configured ? (
             connected ? (
               <>
+                {/* Connected before sending, to read only: Xero must be asked again before anything can be written. */}
+                {!xeroCanWrite(xero.scopes) ? (
+                  <Button disabled={actions.authorize.isPending} onClick={() => void connect()}>
+                    Allow sending
+                  </Button>
+                ) : null}
                 {/* Xero's own screen is where organisations are ticked or unticked: the same sign-in again. */}
                 <Button disabled={actions.authorize.isPending} onClick={() => void connect()} variant="outline">
                   Add or remove organisations
@@ -104,7 +112,7 @@ export default function XeroPage() {
           ) : undefined
         }
         badges={<StatusBadge value={xero.status} />}
-        description="Each company's books, an organisation of its own. Choose what goes where in each; sending invoices and payments comes next."
+        description="Each company's books, an organisation of its own. Choose what goes where in each, then send its invoices; payments come next."
         info={
           <>
             <p>
@@ -113,8 +121,9 @@ export default function XeroPage() {
               details, accounts and tax rates. Signing in again adds or removes organisations.
             </p>
             <p>
-              Each read is three calls to that organisation. Xero allows each organisation 1,000 a day on its free plan; the
-              console stops at {xero.dailyCeiling}. Choosing accounts uses the last read and calls Xero not at all.
+              Each read is four calls to that organisation, and sending makes calls only for invoices that changed, up to 50 to
+              a call. Xero allows each organisation 1,000 a day on its free plan; the console stops at {xero.dailyCeiling}.
+              Choosing accounts uses the last read and calls Xero not at all.
             </p>
           </>
         }
@@ -239,6 +248,7 @@ function OrganisationTab({
   onDisconnect: () => void;
 }) {
   const settings = useXeroSettings(organisation.tenantId, canRead);
+  const sending = useXeroSending(organisation.tenantId, canRead);
   const details = organisation.organisation;
   return (
     <div className="space-y-6">
@@ -320,6 +330,12 @@ function OrganisationTab({
       ) : (
         <PageSkeleton />
       )}
+
+      {sending.data ? (
+        <XeroSendingPanel canManage={canManage} sendFrom={settings.data?.values.sendFrom ?? null} view={sending.data} />
+      ) : sending.isError ? (
+        <ErrorState error={sending.error} retry={() => void sending.refetch()} />
+      ) : null}
     </div>
   );
 }

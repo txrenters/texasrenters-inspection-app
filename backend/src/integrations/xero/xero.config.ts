@@ -9,7 +9,7 @@ export interface XeroConfig {
   clientId?: string;
   clientSecret?: string;
   redirectUri?: string;
-  /** Space-separated. Read-only for phase 1: refresh tokens, and the organisation's settings. */
+  /** Space-separated: `XERO_SEND_SCOPES` unless `XERO_SCOPES` says otherwise. */
   scopes: string;
   authorizeUrl: string;
   tokenUrl: string;
@@ -35,15 +35,22 @@ const integer = (value: string | undefined, fallback: number, max: number) => {
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
 };
 
-/** Phase 1 reads only. A later phase that writes asks the office to connect again with more. */
+/** Phase 1 read only: refresh tokens, and the organisation's settings. */
 export const XERO_READ_SCOPES = 'offline_access accounting.settings.read';
+
+/**
+ * Phase 3 sends invoices, so it writes contacts and invoices; payments are
+ * asked for now too, so phase 4 needs no second "Connect again". A connection
+ * made with only the read scopes keeps reading and is asked to connect again.
+ */
+export const XERO_SEND_SCOPES = `${XERO_READ_SCOPES} accounting.contacts accounting.invoices accounting.payments`;
 
 export function getXeroConfig(env: NodeJS.ProcessEnv = process.env): XeroConfig {
   return {
     clientId: env.XERO_CLIENT_ID?.trim() || undefined,
     clientSecret: env.XERO_CLIENT_SECRET?.trim() || undefined,
     redirectUri: env.XERO_OAUTH_REDIRECT_URI?.trim() || undefined,
-    scopes: env.XERO_SCOPES?.trim() || XERO_READ_SCOPES,
+    scopes: env.XERO_SCOPES?.trim() || XERO_SEND_SCOPES,
     authorizeUrl: pinned(env.XERO_OAUTH_AUTHORIZE_URL?.trim() || 'https://login.xero.com/identity/connect/authorize', 'XERO_OAUTH_AUTHORIZE_URL'),
     tokenUrl: pinned(env.XERO_OAUTH_TOKEN_URL?.trim() || 'https://identity.xero.com/connect/token', 'XERO_OAUTH_TOKEN_URL'),
     revocationUrl: pinned(env.XERO_OAUTH_REVOCATION_URL?.trim() || 'https://identity.xero.com/connect/revocation', 'XERO_OAUTH_REVOCATION_URL'),

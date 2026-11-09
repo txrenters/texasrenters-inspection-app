@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { XeroConnectionView, XeroOrganisationView, XeroSettingsView } from '@texasrenters/shared';
+import type { XeroConnectionView, XeroOrganisationView, XeroSendingView, XeroSettingsView } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import XeroPage from './page';
@@ -22,6 +22,8 @@ const xero = vi.hoisted(() => ({
   read: { mutate: vi.fn(), isPending: false, variables: undefined as string | undefined },
   disconnect: { mutate: vi.fn(), isPending: false },
   disconnectOrganisation: { mutate: vi.fn(), isPending: false },
+  sendingAsked: [] as string[],
+  sendingActions: { setEnabled: { mutate: vi.fn(), isPending: false }, run: { mutate: vi.fn(), isPending: false }, retry: { mutate: vi.fn(), isPending: false } },
 }));
 vi.mock('@/lib/xero-queries', () => ({
   useXeroConnection: () => ({ isLoading: false, isError: false, data: xero.view, refetch: vi.fn() }),
@@ -31,6 +33,11 @@ vi.mock('@/lib/xero-queries', () => ({
     return { isLoading: false, isError: false, data: xero.settings[tenantId], refetch: vi.fn() };
   },
   useSaveXeroSettings: () => xero.save,
+  useXeroSending: (tenantId: string) => {
+    xero.sendingAsked.push(tenantId);
+    return { isLoading: false, isError: false, data: sending(tenantId), refetch: vi.fn() };
+  },
+  useXeroSendingActions: () => xero.sendingActions,
 }));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
@@ -59,6 +66,7 @@ const organisation = (over: Partial<XeroOrganisationView>): XeroOrganisationView
   readAt: '2026-11-20T15:00:05.000Z',
   readProblem: null,
   callsToday: 4,
+  invoiceRemindersOn: false,
   ...over,
 });
 
@@ -66,6 +74,7 @@ const CONNECTED: XeroConnectionView = {
   ...DISCONNECTED,
   status: 'CONNECTED',
   connectedAt: '2026-11-20T15:00:00.000Z',
+  scopes: ['offline_access', 'accounting.settings.read', 'accounting.contacts', 'accounting.invoices', 'accounting.payments'],
   organisations: [
     organisation({}),
     organisation({ tenantId: PEST, name: 'Example Pest Co', callsToday: 9, organisation: null, taxRates: [] }),
@@ -84,8 +93,23 @@ const settings = (tenantId: string): XeroSettingsView => ({
   updatedAt: null,
 });
 
+function sending(tenantId: string): XeroSendingView {
+  return {
+    tenantId,
+    enabled: false,
+    changedAt: null,
+    canWrite: true,
+    blockers: ['Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.'],
+    counts: { sent: 0, failed: 0, notYet: 5 },
+    lastRunAt: null,
+    lastRunProblem: null,
+    failures: [],
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  xero.sendingAsked = [];
   xero.settings = { [HOMES]: settings(HOMES), [PEST]: settings(PEST) };
   xero.settingsAsked = [];
   xero.read.variables = undefined;
@@ -177,5 +201,31 @@ describe('the Xero page', () => {
     render(<XeroPage />);
     expect(screen.getByText('Xero refused the stored sign-in. Connect again.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect again' })).toBeInTheDocument();
+  });
+});
+
+describe('sending invoices', () => {
+  it('belongs to each organisation’s tab, and waits while several are connected', () => {
+    xero.view = CONNECTED;
+    render(<XeroPage />);
+    const panel = screen.getByRole('heading', { name: /Sending to Xero/ }).closest('section')!;
+    expect(within(panel).getByText(/Several organisations are connected/)).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Turn on' })).toBeDisabled();
+    expect(new Set(xero.sendingAsked)).toEqual(new Set([HOMES]));
+  });
+
+  it('asks Xero again for a sign-in made to read only', async () => {
+    xero.view = { ...CONNECTED, scopes: ['offline_access', 'accounting.settings.read'] };
+    xero.authorize.mutateAsync.mockResolvedValue({ authorizationUrl: 'https://login.xero.com/identity/connect/authorize?x=3' });
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<XeroPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Allow sending' }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith('https://login.xero.com/identity/connect/authorize?x=3', '_blank', 'noopener,noreferrer'));
+  });
+
+  it('does not ask again once it may write', () => {
+    xero.view = CONNECTED;
+    render(<XeroPage />);
+    expect(screen.queryByRole('button', { name: 'Allow sending' })).not.toBeInTheDocument();
   });
 });

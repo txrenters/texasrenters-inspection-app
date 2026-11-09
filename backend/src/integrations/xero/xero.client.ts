@@ -17,6 +17,27 @@ const connectionSchema = z.object({
 export type XeroTenantConnection = z.infer<typeof connectionSchema>;
 
 /**
+ * What Xero objected to, from a refusal's validation errors: about the data
+ * sent, never the sign-in (token errors are not read here). Trimmed, as it is
+ * shown and stored.
+ */
+export function xeroValidationMessages(body: unknown): string | null {
+  const found = new Set<string>();
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 6 || !value || typeof value !== 'object') return;
+    if (Array.isArray(value)) return value.forEach((item) => visit(item, depth + 1));
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.ValidationErrors))
+      for (const error of record.ValidationErrors)
+        if (error && typeof (error as { Message?: unknown }).Message === 'string') found.add((error as { Message: string }).Message.trim());
+    for (const key of ['Elements', 'Invoices', 'Contacts', 'Payments']) visit(record[key], depth + 1);
+  };
+  visit(body, 0);
+  const text = [...found].filter(Boolean).join(' ');
+  return text ? text.slice(0, 500) : null;
+}
+
+/**
  * Every call to Xero's API (2026-11-10), for one of the office's organisations.
  *
  * Xero allows each organisation 60 calls a minute and, on its free tier, 1,000
@@ -45,15 +66,43 @@ export class XeroClient {
 
   /** One read of an organisation's data, counted against it, with the token refreshed once if Xero says it is stale. */
   async get<T>(organizationId: string, tenantId: string, path: string, schema: z.ZodType<T>): Promise<T> {
+    return this.call(organizationId, tenantId, path, schema, { method: 'GET' });
+  }
+
+  /**
+   * One write to an organisation, counted against it. Xero creates or updates
+   * what it is sent. The idempotency key makes a retry of the same body --
+   * after a timeout that hid Xero's answer -- return the first answer instead
+   * of making a second copy. A refused request says what Xero objected to.
+   */
+  async post<T>(organizationId: string, tenantId: string, path: string, body: unknown, schema: z.ZodType<T>, idempotencyKey: string): Promise<T> {
+    return this.call(organizationId, tenantId, path, schema, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+    });
+  }
+
+  private async call<T>(
+    organizationId: string,
+    tenantId: string,
+    path: string,
+    schema: z.ZodType<T>,
+    init: { method: string; body?: string; headers?: Record<string, string> },
+  ): Promise<T> {
     const organisation = await this.prisma.xeroOrganisation.findUnique({
       where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
       select: { status: true },
     });
     if (organisation?.status !== 'CONNECTED') throw new XeroError('That Xero organisation is not connected.', 'XERO_NOT_CONNECTED', 409);
     const url = `${getXeroConfig().apiUrl}${path}`;
-    let response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.accessToken(organizationId), tenantId));
+    let response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.accessToken(organizationId), tenantId, init));
     if (response.status === 401)
-      response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.refresh(organizationId), tenantId));
+      response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.refresh(organizationId), tenantId, init));
+    if (response.status === 400 && init.method !== 'GET') {
+      const said = xeroValidationMessages(await response.json().catch(() => null));
+      throw new XeroError(said ? `Xero refused it: ${said}` : 'Xero refused the request.', 'XERO_VALIDATION', 422, 400);
+    }
     if (!response.ok) throw this.failure(response);
     const parsed = schema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new XeroError('Xero did not answer as expected.', 'XERO_UNEXPECTED_RESPONSE', 502);
@@ -89,8 +138,12 @@ export class XeroClient {
     return call();
   }
 
-  private request(url: string, token: string, tenantId: string) {
-    return this.fetch(url, { headers: { authorization: `Bearer ${token}`, 'xero-tenant-id': tenantId, accept: 'application/json' } });
+  private request(url: string, token: string, tenantId: string, init: { method: string; body?: string; headers?: Record<string, string> }) {
+    return this.fetch(url, {
+      method: init.method,
+      body: init.body,
+      headers: { ...init.headers, authorization: `Bearer ${token}`, 'xero-tenant-id': tenantId, accept: 'application/json' },
+    });
   }
 
   private async fetch(url: string, init: RequestInit) {

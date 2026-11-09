@@ -20,6 +20,8 @@ CREATE TABLE "XeroOrganisation" (
     "taxRates" JSONB,
     "catalogReadAt" TIMESTAMP(3),
     "catalogReadError" TEXT,
+    -- Whether Xero's own invoice reminders are on in this organisation (202611100005 kept it on the sign-in).
+    "invoiceRemindersOn" BOOLEAN,
     "callsDay" TEXT,
     "callsUsed" INTEGER NOT NULL DEFAULT 0,
     "connectedAt" TIMESTAMP(3),
@@ -46,12 +48,12 @@ CREATE POLICY "tenant_isolation" ON "XeroOrganisation"
 -- The one organisation an office may already have connected becomes the first of its rows.
 INSERT INTO "XeroOrganisation" (
     "id", "organizationId", "xeroTenantId", "xeroConnectionId", "name", "status",
-    "organisation", "accounts", "taxRates", "catalogReadAt", "catalogReadError",
+    "organisation", "accounts", "taxRates", "catalogReadAt", "catalogReadError", "invoiceRemindersOn",
     "callsDay", "callsUsed", "connectedAt", "removedAt", "createdAt", "updatedAt"
 )
 SELECT gen_random_uuid(), "organizationId", "xeroTenantId", "xeroConnectionId", COALESCE("xeroTenantName", 'Xero organisation'),
        CASE WHEN "status" = 'CONNECTED' THEN 'CONNECTED' ELSE 'REMOVED' END,
-       "organisation", "accounts", "taxRates", "catalogReadAt", "catalogReadError",
+       "organisation", "accounts", "taxRates", "catalogReadAt", "catalogReadError", "invoiceRemindersOn",
        "callsDay", "callsUsed", "connectedAt", CASE WHEN "status" = 'CONNECTED' THEN NULL ELSE "disconnectedAt" END,
        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
   FROM "XeroConnection"
@@ -81,5 +83,6 @@ ALTER TABLE "XeroConnection"
   DROP COLUMN "taxRates",
   DROP COLUMN "catalogReadAt",
   DROP COLUMN "catalogReadError",
+  DROP COLUMN "invoiceRemindersOn",
   DROP COLUMN "callsDay",
   DROP COLUMN "callsUsed";

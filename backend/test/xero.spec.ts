@@ -7,7 +7,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { PERMISSIONS_METADATA_KEY } from '../src/common/auth';
 import { XeroAuthService, authEventOf } from '../src/integrations/xero/xero-auth.service';
 import { XeroClient } from '../src/integrations/xero/xero.client';
-import { XERO_READ_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.config';
+import { XERO_READ_SCOPES, XERO_SEND_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.config';
 import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroService, accountsFrom, taxRatesFrom } from '../src/integrations/xero/xero.service';
 
@@ -139,11 +139,12 @@ const signedIn = (over: Row = {}) => ({
 });
 
 describe('the Xero app’s settings', () => {
-  it('pins every Xero host, and asks only to read in this phase', () => {
+  it('pins every Xero host, and asks to read settings and -- since phase 3 -- to write contacts, invoices and payments', () => {
     expect(() => getXeroConfig({ XERO_OAUTH_TOKEN_URL: 'https://identity.example.com/connect/token' })).toThrow('must be an HTTPS URL');
     expect(() => getXeroConfig({ XERO_API_URL: 'http://api.xero.com/api.xro/2.0' })).toThrow('must be an HTTPS URL');
-    expect(getXeroConfig({}).scopes).toBe(XERO_READ_SCOPES);
+    expect(getXeroConfig({}).scopes).toBe(XERO_SEND_SCOPES);
     expect(XERO_READ_SCOPES).toBe('offline_access accounting.settings.read');
+    expect(getXeroConfig({ XERO_SCOPES: XERO_READ_SCOPES }).scopes).toBe(XERO_READ_SCOPES);
   });
 
   it('never lets the daily ceiling pass Xero’s own 1,000', () => {
@@ -161,7 +162,7 @@ describe('signing in to Xero', () => {
     expect(Object.fromEntries(url.searchParams)).toMatchObject({
       response_type: 'code',
       client_id: 'client-123',
-      scope: XERO_READ_SCOPES,
+      scope: XERO_SEND_SCOPES,
       code_challenge_method: 'S256',
       redirect_uri: process.env.XERO_OAUTH_REDIRECT_URI,
     });
@@ -283,6 +284,7 @@ describe('connecting the office’s organisations', () => {
       if (url.endsWith('/Organisation')) return json({ Organisations: [{ Name: `Read ${tenant?.slice(0, 2)}`, BaseCurrency: 'USD', CountryCode: 'US', SalesTaxBasis: 'NONE' }] });
       if (url.endsWith('/Accounts')) return json({ Accounts: [] });
       if (url.endsWith('/TaxRates')) return json({ TaxRates: [] });
+      if (url.endsWith('/InvoiceReminders/Settings')) return json({ InvoiceReminders: [{ Enabled: tenant === PEST }] });
       return json({}, 404);
     });
     return { db, fetch, xero: new XeroService(db as never, auth, client) };
@@ -301,9 +303,11 @@ describe('connecting the office’s organisations', () => {
       [PEST, 'CONNECTED', 'conn-a2'],
       [AIR, 'CONNECTED', 'conn-a3'],
     ]);
-    // Three calls to each organisation, each counted against it.
-    for (const id of [HOMES, PEST, AIR]) expect(db.organisation(id)).toMatchObject({ callsUsed: 3, organisation: expect.objectContaining({ baseCurrency: 'USD' }) });
-    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/api.xro/'))).toHaveLength(9);
+    // Four calls to each organisation, each counted against it -- and each one's own invoice reminders.
+    for (const id of [HOMES, PEST, AIR]) expect(db.organisation(id)).toMatchObject({ callsUsed: 4, organisation: expect.objectContaining({ baseCurrency: 'USD' }) });
+    expect(db.organisation(PEST)).toMatchObject({ invoiceRemindersOn: true });
+    expect(db.organisation(HOMES)).toMatchObject({ invoiceRemindersOn: false });
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/api.xro/'))).toHaveLength(12);
     expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
       action: 'XERO_CONNECTED',
       metadata: { organisations: ['Example Home Services', 'Example Pest Co', 'Example Air Co'], noLongerReached: 0 },
@@ -421,7 +425,7 @@ describe('who may do what', () => {
   });
 
   it('names an organisation only by Xero’s own id', async () => {
-    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never);
+    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never);
     expect(() => controller.read({ user: office } as never, '../connections')).toThrow('not one of the office’s Xero organisations');
   });
 });

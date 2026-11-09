@@ -91,6 +91,7 @@ function database(options: { settings?: Record<string, unknown> | null; organisa
       ]),
     },
     auditLog: { create: jest.fn() },
+    xeroInvoiceSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
     $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(db)),
     settings: () => settings,
   };
@@ -244,6 +245,8 @@ describe('saving the choices', () => {
       }),
     });
     expect(view.ready).toBe(true);
+    // Phase 3: an invoice held back for its account gets another go with the new choices.
+    expect(db.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date) } });
   });
 
   it('changes only the row it read: a save in between is refused', async () => {

@@ -1,9 +1,10 @@
 import { Body, Controller, Get, Header, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
-import { IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
+import { XeroSenderService } from './xero-sender.service';
 import { XeroSettingsService } from './xero-settings.service';
 import { XeroError } from './xero.errors';
 import { XeroService } from './xero.service';
@@ -27,11 +28,17 @@ const tenantOf = (value: string) => {
   return value;
 };
 
+/** Sending on or off. */
+export class SetXeroSendingDto {
+  @IsBoolean() enabled!: boolean;
+}
+
 /**
  * The office's Xero organisations (2026-11-10): seen with `integrations:read`;
- * connected, read again, their accounts chosen and disconnected -- one at a
- * time, or the whole sign-in -- with `integrations:manage`, as Jobber is.
- * Nothing here writes to Xero.
+ * connected, read again, their accounts chosen, sending turned on or off and
+ * disconnected -- one at a time, or the whole sign-in -- with
+ * `integrations:manage`, as Jobber is. Only sending writes to Xero, and only
+ * while it is on for that organisation.
  */
 @ApiTags('Xero integration')
 @ApiBearerAuth()
@@ -42,6 +49,7 @@ export class XeroController {
     @Inject(XeroService) private readonly xero: XeroService,
     @Inject(XeroAuthService) private readonly auth: XeroAuthService,
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
+    @Inject(XeroSenderService) private readonly sender: XeroSenderService,
   ) {}
 
   /** What the page shows. Never a token. */
@@ -59,7 +67,7 @@ export class XeroController {
     return { authorizationUrl: this.auth.authorizationUrl({ organizationId: request.user.organizationId, userId: request.user.id }) };
   }
 
-  /** Reads one organisation, its accounts and tax rates again: three calls to it, at most every five minutes. */
+  /** Reads one organisation, its accounts, tax rates and invoice reminders again: four calls to it, at most every five minutes. */
   @Post('organisations/:tenantId/read')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
@@ -94,6 +102,36 @@ export class XeroController {
   @RequirePermissions('integrations:manage')
   saveSettings(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: SaveXeroSettingsDto) {
     return this.settings.save(request.user, tenantOf(tenantId), body as Parameters<XeroSettingsService['save']>[2]);
+  }
+
+  /** Sending invoices to one organisation: what was sent, what was refused and why. No call to Xero. */
+  @Get('organisations/:tenantId/sending')
+  @RequirePermissions('integrations:read')
+  sending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.sender.view(request.user.organizationId, tenantOf(tenantId));
+  }
+
+  /** On only when nothing blocks it. */
+  @Put('organisations/:tenantId/sending')
+  @RequirePermissions('integrations:manage')
+  setSending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: SetXeroSendingDto) {
+    return this.sender.setEnabled(request.user, tenantOf(tenantId), body.enabled);
+  }
+
+  /** "Send now": one run at once, at most once a minute; only changed invoices reach Xero. */
+  @Post('organisations/:tenantId/sending/run')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  runSending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.sender.runNow(request.user, tenantOf(tenantId));
+  }
+
+  /** "Try again": every invoice this organisation refused is due on the next run. */
+  @Post('organisations/:tenantId/sending/retry')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  retrySending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.sender.retryFailed(request.user, tenantOf(tenantId));
   }
 }
 

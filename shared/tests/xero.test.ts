@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { connectedOrganisations, paymentAccounts, revenueAccounts, xeroChecks, xeroSettingsProblem, type XeroAccount, type XeroOrganisationView } from '../src/contracts/xero';
+import {
+  connectedOrganisations,
+  paymentAccounts,
+  revenueAccounts,
+  xeroCanWrite,
+  xeroChecks,
+  xeroSendingBlockers,
+  xeroSettingsProblem,
+  type XeroAccount,
+  type XeroOrganisationView,
+} from '../src/contracts/xero';
 
 describe('the office’s organisations', () => {
   const organisation = (tenantId: string, status: XeroOrganisationView['status']) => ({ tenantId, status }) as XeroOrganisationView;
@@ -9,6 +19,30 @@ describe('the office’s organisations', () => {
     const organisations = [organisation('homes', 'CONNECTED'), organisation('old', 'REMOVED'), organisation('pest', 'CONNECTED')];
     expect(connectedOrganisations({ status: 'CONNECTED', organisations }).map((item) => item.tenantId)).toEqual(['homes', 'pest']);
     expect(connectedOrganisations({ status: 'REAUTHORIZATION_REQUIRED', organisations })).toEqual([]);
+  });
+});
+
+describe('sending to Xero', () => {
+  const writes = ['offline_access', 'accounting.settings.read', 'accounting.contacts', 'accounting.invoices'];
+  const ready = { connected: true, scopes: writes, settingsReady: true, invoiceRemindersOn: false, organisationsConnected: 1 };
+
+  it('may write only with the contacts and invoices scopes', () => {
+    expect(xeroCanWrite(writes)).toBe(true);
+    expect(xeroCanWrite(['offline_access', 'accounting.settings.read'])).toBe(false);
+  });
+
+  it('is blocked until connected, allowed to write, ready, and Xero’s reminders are off', () => {
+    expect(xeroSendingBlockers({ ...ready, connected: false })).toEqual(['Connect Xero.']);
+    expect(xeroSendingBlockers(ready)).toEqual([]);
+    // Not knowing whether Xero's reminders are on does not block; knowing they are does.
+    expect(xeroSendingBlockers({ ...ready, invoiceRemindersOn: null })).toEqual([]);
+    expect(xeroSendingBlockers({ ...ready, scopes: ['offline_access'], settingsReady: false, invoiceRemindersOn: true })).toHaveLength(3);
+  });
+
+  it('waits while several organisations are connected: invoices do not yet say whose they are', () => {
+    expect(xeroSendingBlockers({ ...ready, organisationsConnected: 3 })).toEqual([
+      'Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.',
+    ]);
   });
 });
 
