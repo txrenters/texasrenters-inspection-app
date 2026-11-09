@@ -333,6 +333,7 @@ function InspectionDetail() {
           />
         }
         jobber={jobber}
+        notes={<JobNotes className="" inspection={item} />}
       >
         {reviewing || item.baselineMissing ? (
           <section aria-label="Review" className="mt-3 space-y-3">
@@ -401,7 +402,15 @@ function InspectionDetail() {
           </section>
         ) : null}
 
-        {reviewing ? [areas, notes, visit] : [visit, notes, areas]}
+        {/* The Jobber-style layout keeps the notes in the side panel, beside the
+            work, where they used to be a scroll below it (the office, 2026-11-09). */}
+        {jobber
+          ? reviewing
+            ? [areas, visit]
+            : [visit, areas]
+          : reviewing
+            ? [areas, notes, visit]
+            : [visit, notes, areas]}
       </RecordContent>
 
       {/* Assignment history and activity are reference material, not the task.
@@ -559,11 +568,14 @@ function RecordContent({
   billing,
   children,
   jobber,
+  notes,
 }: {
   /** The visit's invoices: in the side panel, or under the page in the classic console. */
   billing: ReactNode;
   children: ReactNode;
   jobber: boolean;
+  /** The job's notes, for the side panel. The classic console has them in the page. */
+  notes: ReactNode;
 }) {
   if (!jobber)
     return (
@@ -574,10 +586,17 @@ function RecordContent({
     );
   return (
     <RecordLayout
-      aside={billing}
+      aside={
+        // Invoices first: a short card, so a long run of notes never pushes it
+        // out of view.
+        <>
+          {billing}
+          {notes}
+        </>
+      }
       asideLabel="About this inspection"
       from="2xl"
-      panelLabel="Invoices"
+      panelLabel="Invoices and notes"
     >
       {children}
     </RecordLayout>
