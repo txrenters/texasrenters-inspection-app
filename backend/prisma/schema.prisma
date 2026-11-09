@@ -1561,6 +1561,7 @@ model PropertywarePortfolioOwner {
 
 model PropertywareBuilding {
   invoices Invoice[]
+  statements InvoiceDelivery[]
   geofence PropertyGeofence?
   serviceStatus PropertyServiceStatus?
   tbpPackageChanges TbpPackageChange[]
@@ -3374,6 +3375,11 @@ model InvoiceSettings {
   receiptsAutomatic         Boolean      @default(false)
   /// When those were last saved: separate from `updatedAt`, which the invoice settings form keys on.
   emailSettingsUpdatedAt    DateTime?
+  /// Jobber's statement settings (2026-11-10): the billing history newest first,
+  /// or oldest; and the text at the foot of every statement.
+  statementNewestFirst       Boolean   @default(true)
+  statementDisclaimer        String?
+  statementSettingsUpdatedAt DateTime?
   createdAt                 DateTime     @default(now())
   updatedAt                 DateTime     @updatedAt
   organization              Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -3408,7 +3414,10 @@ model InvoiceProduct {
 model InvoiceDelivery {
   id              String    @id @default(uuid()) @db.Uuid
   organizationId  String    @db.Uuid
-  invoiceId       String    @db.Uuid
+  /// The invoice it is about; null only for a STATEMENT, which is about a property (2026-11-10).
+  invoiceId       String?   @db.Uuid
+  /// A statement's property.
+  propertywareBuildingId String? @db.Uuid
   /// EMAIL. Text messages need a provider the console does not have yet.
   channel         String
   /// INVOICE (sent by somebody), FOLLOW_UP (about an unpaid invoice, on its own)
@@ -3429,14 +3438,16 @@ model InvoiceDelivery {
   createdAt       DateTime  @default(now())
   sentAt          DateTime?
 
-  invoice Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   payment InvoicePayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  propertywareBuilding PropertywareBuilding? @relation(fields: [propertywareBuildingId], references: [id], onDelete: Cascade)
   sentBy  UserProfile? @relation("InvoiceDeliverySentBy", fields: [sentById], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, clientRequestId])
   @@index([organizationId, createdAt])
   @@index([invoiceId, createdAt])
   @@index([paymentId])
+  @@index([propertywareBuildingId, createdAt])
 }
 
 /// A payment recorded against an invoice: by hand in Jobber, or in the console.

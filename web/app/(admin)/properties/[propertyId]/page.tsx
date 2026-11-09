@@ -17,6 +17,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel, SECTION_LABEL } from '@/components/panel';
 import { PropertyDetailsPanel } from '@/components/property-details-panel';
 import { PropertyGeofenceCard } from '@/components/property-geofence-card';
+import { BillingCard } from '@/components/invoices/billing-card';
 import { InvoicesCard } from '@/components/invoices/invoice-parts';
 import { PropertyServiceCard } from '@/components/property-service-card';
 import { PropertyCreateMenu, PropertyRecordAside, PropertyWork } from '@/components/record/property-record';
@@ -257,7 +258,12 @@ export default function PropertyDetailPage() {
             units={item._count?.units ?? item.units?.length}
           />
         }
-        billing={<InvoicesCard propertyId={id} />}
+        billing={
+          <div className="grid gap-4">
+            <InvoicesCard propertyId={id} />
+            <BillingCard propertyId={id} />
+          </div>
+        }
         jobber={jobber}
       >
 

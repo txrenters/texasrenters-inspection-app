@@ -114,6 +114,10 @@ describe('the invoices list', () => {
     const { unmount } = render(<InvoicesPage />);
     expect(screen.getByRole('link', { name: 'New invoice' })).toHaveAttribute('href', '/invoices/new');
     expect(screen.getByRole('link', { name: 'Batch create' })).toHaveAttribute('href', '/invoices/batch');
+    // Jobber's reports, and its date filter on the list (2026-11-09).
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute('href', '/invoices/reports');
+    expect(screen.getByRole('group', { name: 'Issued' })).toBeInTheDocument();
+    expect(hooks.useInvoices).toHaveBeenLastCalledWith(expect.objectContaining({ issuedFrom: undefined, issuedTo: undefined }));
     expect(screen.getByRole('link', { name: 'Batch deliver' })).toHaveAttribute('href', '/invoices/deliver');
     unmount();
 

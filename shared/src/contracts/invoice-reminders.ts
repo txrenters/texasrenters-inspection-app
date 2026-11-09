@@ -90,8 +90,8 @@ export function followUpDueToday(
   return days.includes(late) ? late : null;
 }
 
-/** What an email from the console was for. */
-export type InvoiceDeliveryKind = 'INVOICE' | 'FOLLOW_UP' | 'RECEIPT';
+/** What an email from the console was for; a statement (2026-11-10) is about a property, not one invoice. */
+export type InvoiceDeliveryKind = 'INVOICE' | 'FOLLOW_UP' | 'RECEIPT' | 'STATEMENT';
 
 export interface SendReceiptInput {
   /** Email addresses, at most `MAX_INVOICE_RECIPIENTS`. */
