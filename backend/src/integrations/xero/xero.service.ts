@@ -11,8 +11,16 @@ import { XeroClient } from './xero.client';
 import { getXeroConfig, xeroConfigured } from './xero.config';
 import { XeroError } from './xero.errors';
 
-/** At most one read of the organisation's settings this often: each costs three calls. */
+/** At most one read of the organisation's settings this often: each costs four calls. */
 const READ_GAP_MS = 5 * 60_000;
+
+/** About the connection, not the reminders: these stop the read rather than leave the reminders unknown. */
+const READ_STOPPERS = new Set(['XERO_DAILY_CEILING', 'XERO_RATE_LIMITED', 'XERO_REAUTHORIZATION_REQUIRED', 'XERO_UNREACHABLE']);
+
+const remindersSchema = z.object({ InvoiceReminders: z.array(z.object({ Enabled: z.boolean().nullish() })).nullish() });
+
+/** Whether Xero's own invoice reminders are on; null when it did not say. */
+export const remindersFrom = (data: z.infer<typeof remindersSchema>) => data.InvoiceReminders?.[0]?.Enabled ?? null;
 
 const organisationsSchema = z.object({
   Organisations: z.array(
@@ -131,6 +139,7 @@ export class XeroService {
           taxRates: true,
           catalogReadAt: true,
           catalogReadError: true,
+          invoiceRemindersOn: true,
         },
       }),
       this.client.allowance(organizationId),
@@ -151,6 +160,7 @@ export class XeroService {
       readProblem: connected ? (row?.catalogReadError ?? null) : null,
       callsToday: allowance.used,
       dailyCeiling: allowance.ceiling,
+      invoiceRemindersOn: connected ? (row?.invoiceRemindersOn ?? null) : null,
     };
   }
 
@@ -201,7 +211,10 @@ export class XeroService {
     });
   }
 
-  /** Reads the organisation, its accounts and its tax rates again: three calls, at most every five minutes. */
+  /**
+   * Reads the organisation, its accounts, its tax rates and whether its own
+   * invoice reminders are on again: four calls, at most every five minutes.
+   */
   async read(organizationId: string, force = false): Promise<XeroConnectionView> {
     const row = await this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, catalogReadAt: true } });
     if (row?.status !== 'CONNECTED') throw new XeroError('Xero is not connected.', 'XERO_NOT_CONNECTED', 409);
@@ -211,12 +224,21 @@ export class XeroService {
       const organisation = organisationFrom(await this.client.get(organizationId, '/Organisation', organisationsSchema));
       const accounts = accountsFrom(await this.client.get(organizationId, '/Accounts', accountsSchema));
       const taxRates = taxRatesFrom(await this.client.get(organizationId, '/TaxRates', taxRatesSchema));
+      // Phase 3: on, Xero would email the office's clients beside the console. Not saying is not a reason to fail the read.
+      const invoiceRemindersOn = await this.client
+        .get(organizationId, '/InvoiceReminders/Settings', remindersSchema)
+        .then(remindersFrom)
+        .catch((error: unknown) => {
+          if (error instanceof XeroError && READ_STOPPERS.has(error.code)) throw error;
+          return null;
+        });
       await this.prisma.xeroConnection.update({
         where: { organizationId },
         data: {
           organisation: organisation as unknown as Prisma.InputJsonValue,
           accounts: accounts as unknown as Prisma.InputJsonValue,
           taxRates: taxRates as unknown as Prisma.InputJsonValue,
+          invoiceRemindersOn,
           catalogReadAt: new Date(),
           catalogReadError: null,
         },

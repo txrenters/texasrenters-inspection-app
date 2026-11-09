@@ -66,7 +66,15 @@ export interface XeroConnectionView {
   /** Calls to Xero today (Texas), and the console's own ceiling on them. */
   callsToday: number;
   dailyCeiling: number;
+  /** Whether Xero's own invoice reminders are on, as last read (phase 3); null when Xero did not say. */
+  invoiceRemindersOn: boolean | null;
 }
+
+/** What sending invoices needs Xero to allow (phase 3). Payments are asked for at the same time, for phase 4. */
+export const XERO_WRITE_SCOPES = ['accounting.contacts', 'accounting.invoices'] as const;
+
+/** Whether a connection may write invoices: made with the scopes phase 3 asks for. */
+export const xeroCanWrite = (scopes: readonly string[]) => XERO_WRITE_SCOPES.every((scope) => scopes.includes(scope));
 
 /** The accounts a sale is posted to: active revenue accounts with a code. */
 export const revenueAccounts = (accounts: readonly XeroAccount[]) =>
@@ -245,4 +253,57 @@ export function xeroChecks(input: {
       detail: gone.size ? `Choose again for ${goneNames.join(', ')}.` : null,
     },
   ];
+}
+
+/**
+ * Sending invoices to Xero (2026-11-10, phase 3 of the Xero plan): approved,
+ * under each client's contact, only what changed, only while it is turned on.
+ * Xero emails nobody: the console sends the office's emails.
+ */
+export interface XeroSendingFailure {
+  invoiceId: string;
+  number: string | null;
+  clientName: string;
+  problem: string;
+  attempts: number;
+  lastAttemptAt: string | null;
+  /** When it is tried again on its own; null until the invoice changes or somebody presses "Try again". */
+  nextAttemptAt: string | null;
+}
+
+export interface XeroSendingView {
+  enabled: boolean;
+  changedAt: string | null;
+  /** The connection was made with the scopes sending needs. */
+  canWrite: boolean;
+  /** Why it cannot run now, in words; empty when it can. */
+  blockers: string[];
+  counts: {
+    /** In Xero, as the console last sent them. */
+    sent: number;
+    /** Refused by Xero, or held back by the console, with a reason. */
+    failed: number;
+    /** From the start date, not drafts or voided, never sent yet. */
+    notYet: number;
+  };
+  lastRunAt: string | null;
+  lastRunProblem: string | null;
+  /** The latest refusals, newest first; at most 50. */
+  failures: XeroSendingFailure[];
+}
+
+/** Why sending cannot run, in the order to fix them. */
+export function xeroSendingBlockers(input: {
+  connected: boolean;
+  scopes: readonly string[];
+  settingsReady: boolean;
+  invoiceRemindersOn: boolean | null;
+}): string[] {
+  if (!input.connected) return ['Connect Xero.'];
+  const blockers: string[] = [];
+  if (!xeroCanWrite(input.scopes)) blockers.push('Connect again, so Xero lets the console write contacts and invoices.');
+  if (!input.settingsReady) blockers.push('Finish “Before anything is sent”.');
+  if (input.invoiceRemindersOn === true)
+    blockers.push('Turn off Xero’s own invoice reminders, then read from Xero again: the console already sends follow-ups, and clients would get both.');
+  return blockers;
 }

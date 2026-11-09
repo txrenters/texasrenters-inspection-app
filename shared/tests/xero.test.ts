@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { paymentAccounts, revenueAccounts, xeroChecks, xeroSettingsProblem, type XeroAccount } from '../src/contracts/xero';
+import { paymentAccounts, revenueAccounts, xeroCanWrite, xeroChecks, xeroSendingBlockers, xeroSettingsProblem, type XeroAccount } from '../src/contracts/xero';
+
+describe('sending to Xero', () => {
+  const writes = ['offline_access', 'accounting.settings.read', 'accounting.contacts', 'accounting.invoices'];
+
+  it('may write only with the contacts and invoices scopes', () => {
+    expect(xeroCanWrite(writes)).toBe(true);
+    expect(xeroCanWrite(['offline_access', 'accounting.settings.read'])).toBe(false);
+  });
+
+  it('is blocked until connected, allowed to write, ready, and Xero’s reminders are off', () => {
+    expect(xeroSendingBlockers({ connected: false, scopes: writes, settingsReady: true, invoiceRemindersOn: false })).toEqual(['Connect Xero.']);
+    expect(xeroSendingBlockers({ connected: true, scopes: writes, settingsReady: true, invoiceRemindersOn: false })).toEqual([]);
+    // Not knowing whether Xero's reminders are on does not block; knowing they are does.
+    expect(xeroSendingBlockers({ connected: true, scopes: writes, settingsReady: true, invoiceRemindersOn: null })).toEqual([]);
+    expect(xeroSendingBlockers({ connected: true, scopes: ['offline_access'], settingsReady: false, invoiceRemindersOn: true })).toHaveLength(3);
+  });
+});
 
 const account = (over: Partial<XeroAccount>): XeroAccount => ({
   accountId: 'a',

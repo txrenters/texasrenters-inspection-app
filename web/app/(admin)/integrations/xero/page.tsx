@@ -1,5 +1,6 @@
 'use client';
 
+import { xeroCanWrite } from '@texasrenters/shared';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -8,6 +9,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { XeroSendingPanel } from '@/components/xero/xero-sending-panel';
 import { XeroSettingsForm } from '@/components/xero/xero-settings-form';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -24,13 +26,13 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
-import { useXeroActions, useXeroConnection, useXeroSettings } from '@/lib/xero-queries';
+import { useXeroActions, useXeroConnection, useXeroSending, useXeroSettings } from '@/lib/xero-queries';
 
 /**
- * The office's Xero organisation (2026-11-10, phases 1-2 of the Xero plan):
- * connect it, see what the console read from it, and choose what goes where
- * -- the start date, the account each product or service and each payment
- * method goes to, the tax type. Nothing is written to Xero yet.
+ * The office's Xero organisation (2026-11-10, phases 1-3 of the Xero plan):
+ * connect it, see what the console read from it, choose what goes where --
+ * the start date, the account each product or service and each payment method
+ * goes to, the tax type -- and send its invoices once that is all in place.
  */
 export default function XeroPage() {
   const { has } = usePermissions();
@@ -39,6 +41,7 @@ export default function XeroPage() {
   const connection = useXeroConnection(canRead);
   const connected = connection.data?.status === 'CONNECTED';
   const settings = useXeroSettings(canRead && connected);
+  const sending = useXeroSending(canRead && connected);
   const actions = useXeroActions();
   const [disconnecting, setDisconnecting] = useState(false);
 
@@ -78,6 +81,12 @@ export default function XeroPage() {
           canManage && xero.configured ? (
             connected ? (
               <>
+                {/* Connected before phase 3, to read only: Xero must be asked again before anything can be written. */}
+                {!xeroCanWrite(xero.scopes) ? (
+                  <Button disabled={actions.authorize.isPending} onClick={() => void connect()}>
+                    Allow sending
+                  </Button>
+                ) : null}
                 <Button disabled={actions.read.isPending} onClick={read} variant="outline">
                   {actions.read.isPending ? 'Reading…' : 'Read from Xero'}
                 </Button>
@@ -93,16 +102,18 @@ export default function XeroPage() {
           ) : undefined
         }
         badges={<StatusBadge value={xero.status} />}
-        description="The office's books. Choose what goes where; sending invoices and payments comes next."
+        description="The office's books. Choose what goes where, then send its invoices; payments come next."
         info={
           <>
             <p>
               Somebody who can sign in to the office&apos;s Xero connects it once, choosing the one organisation. The console
-              keeps the sign-in encrypted and reads the organisation&apos;s details, accounts and tax rates.
+              keeps the sign-in encrypted and reads the organisation&apos;s details, accounts, tax rates and whether Xero&apos;s
+              own invoice reminders are on.
             </p>
             <p>
-              Each read is three calls to Xero. The console makes at most {xero.dailyCeiling} a day, below the 1,000 Xero
-              allows on its free plan. Choosing accounts uses the last read and calls Xero not at all.
+              Each read is four calls to Xero. Sending makes calls only for invoices that changed, up to 50 to a call. The
+              console makes at most {xero.dailyCeiling} a day, below the 1,000 Xero allows on its free plan. Choosing
+              accounts uses the last read and calls Xero not at all.
             </p>
           </>
         }
@@ -187,6 +198,12 @@ export default function XeroPage() {
           ) : (
             <PageSkeleton />
           )}
+
+          {sending.data ? (
+            <XeroSendingPanel canManage={canManage} sendFrom={settings.data?.values.sendFrom ?? null} view={sending.data} />
+          ) : sending.isError ? (
+            <ErrorState error={sending.error} retry={() => void sending.refetch()} />
+          ) : null}
         </>
       ) : (
         <Panel bodyClassName="p-4" title="Not connected">
