@@ -17,6 +17,7 @@ import { GatewayModule } from './gateway/gateway.module';
 import { TenantScopeInterceptor } from './database/tenant-scope.interceptor';
 import { HealthController } from './health/health.controller';
 import { JobberModule } from './integrations/jobber/jobber.module';
+import { XeroModule } from './integrations/xero/xero.module';
 import { PropertywareModule } from './integrations/propertyware/propertyware.module';
 import { MediaModule } from './media/media.module';
 import { OpenApiModule } from './openapi/openapi.module';
@@ -48,6 +49,7 @@ import { TimeTrackingModule } from './time-tracking/time-tracking.module';
     AuthModule,
     PropertywareModule,
     JobberModule,
+    XeroModule,
     TechnicianModule,
     MediaModule,
     RealtimeModule,

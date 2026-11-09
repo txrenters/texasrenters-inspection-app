@@ -35,7 +35,7 @@ export const JOBBER_SETTINGS_SECTIONS: readonly { title: string; hrefs: readonly
   { title: 'Team', hrefs: ['/technicians', '/users', '/roles'] },
   {
     title: 'Integrations',
-    hrefs: ['/integrations/propertyware', '/integrations/jobber', '/integrations/providers'],
+    hrefs: ['/integrations/propertyware', '/integrations/jobber', '/integrations/xero', '/integrations/providers'],
   },
   { title: 'IT tools', hrefs: ['/it-tools/api', '/it-tools/api-clients', '/it-tools/logs'] },
 ];
