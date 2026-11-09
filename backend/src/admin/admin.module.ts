@@ -31,6 +31,8 @@ import { InvoiceDeliveryService } from './invoice-delivery.service';
 import { InvoiceFilesController } from './invoice-files.controller';
 import { InvoiceFilesService } from './invoice-files.service';
 import { InvoiceSettingsController } from './invoice-settings.controller';
+import { InvoiceReportsController } from './invoice-reports.controller';
+import { InvoiceReportsService } from './invoice-reports.service';
 import { InvoiceSettingsService } from './invoice-settings.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { AreaChecklistAiService } from './area-checklist-ai.service';
@@ -83,6 +85,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     PropertyAccountController,
     StatementSettingsController,
     InvoiceSettingsController,
+    InvoiceReportsController,
     InvoiceFilesController,
     PaymentsController,
   ],
@@ -123,6 +126,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoicesService,
     InvoiceEditsService,
     InvoiceBatchService,
+    InvoiceReportsService,
     TechnicianProvisioningService,
     TechnicianSkillsService,
     // One implementation now that Supabase is gone; the token remains so
