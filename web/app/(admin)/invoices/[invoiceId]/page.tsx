@@ -138,6 +138,7 @@ export default function InvoicePage() {
           </>
         }
         asideLabel="About this invoice"
+        panelLabel="Balance and notes"
       >
         <div className="grid gap-4 lg:grid-cols-2">
           <PlaceCard

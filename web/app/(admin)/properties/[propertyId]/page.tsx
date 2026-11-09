@@ -494,6 +494,7 @@ function RecordContent({
         </>
       }
       asideLabel="About this property"
+      panelLabel="Overview and invoices"
     >
       {children}
     </RecordLayout>

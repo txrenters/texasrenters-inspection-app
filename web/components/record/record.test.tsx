@@ -83,22 +83,51 @@ describe('the side panel', () => {
 
   it('can be put away, and is remembered', () => {
     const { unmount } = render(
-      <RecordLayout aside={<p>Overview card</p>} asideLabel="About this inspection">
+      <RecordLayout aside={<p>Overview card</p>} asideLabel="About this inspection" panelLabel="Overview">
         <p>The record</p>
       </RecordLayout>,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Hide panel' }));
-    expect(screen.getByRole('complementary', { name: 'About this inspection' }).className).toContain('xl:hidden');
+    expect(screen.getByRole('complementary', { name: 'About this inspection' }).className).not.toContain('xl:flex');
     expect(screen.getByRole('button', { name: /Show panel/ })).toBeTruthy();
     expect(window.localStorage.getItem('console-record-panel')).toBe('hidden');
 
     unmount();
     render(
-      <RecordLayout aside={<p>Overview card</p>} asideLabel="About this inspection">
+      <RecordLayout aside={<p>Overview card</p>} asideLabel="About this inspection" panelLabel="Overview">
         <p>The record</p>
       </RecordLayout>,
     );
-    expect(screen.getByRole('complementary', { name: 'About this inspection' }).className).toContain('xl:hidden');
+    expect(screen.getByRole('complementary', { name: 'About this inspection' }).className).not.toContain('xl:flex');
+  });
+
+  it('opens over a narrower page from a button at the top, rather than waiting under the whole record', () => {
+    render(
+      <RecordLayout aside={<p>Invoices card</p>} asideLabel="About this inspection" from="2xl" panelLabel="Invoices">
+        <p>The record</p>
+      </RecordLayout>,
+    );
+    // Beside the record from 2xl only; the button is for every width below it.
+    expect(screen.getByRole('complementary', { name: 'About this inspection' }).className).toMatch(/^hidden | 2xl:flex/);
+    const button = screen.getByRole('button', { name: 'Invoices' });
+    expect(button.parentElement!.className).toContain('2xl:hidden');
+    // Before the record, not after it.
+    expect(Boolean(button.compareDocumentPosition(screen.getByText('The record')) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+
+    fireEvent.click(button);
+    const sheet = screen.getByRole('dialog', { name: 'About this inspection' });
+    expect(within(sheet).getByText('Invoices card')).toBeTruthy();
+  });
+
+  it('opens its sheet whether or not the panel was put away beside the record', () => {
+    window.localStorage.setItem('console-record-panel', 'hidden');
+    render(
+      <RecordLayout aside={<p>Invoices card</p>} asideLabel="About this inspection" from="2xl" panelLabel="Invoices">
+        <p>The record</p>
+      </RecordLayout>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Invoices' }));
+    expect(within(screen.getByRole('dialog', { name: 'About this inspection' })).getByText('Invoices card')).toBeTruthy();
   });
 
   it('sits beside the record from 2xl when asked, for a page that needs the width', () => {
