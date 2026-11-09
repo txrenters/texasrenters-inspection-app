@@ -13,6 +13,7 @@ import {
   type XeroTaxRate,
 } from '@texasrenters/shared';
 import { CircleAlertIcon, CircleCheckIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -242,8 +243,24 @@ export function XeroSettingsForm({
             </TableBody>
           </Table>
         ) : (
-          <p className="text-muted-foreground px-4 py-3 text-sm">No products or services yet: every line goes to the default account.</p>
+          <p className="text-muted-foreground px-4 py-3 text-sm">
+            No product or service goes to this organisation yet. Choose each one&apos;s organisation on{' '}
+            <Link className="underline underline-offset-2" href="/invoices/settings">
+              Invoices → Settings
+            </Link>
+            .
+          </p>
         )}
+        {view.withoutOrganisation ? (
+          <p className="text-muted-foreground border-t px-4 py-3 text-sm">
+            {view.withoutOrganisation === 1 ? '1 product or service goes' : `${view.withoutOrganisation} products and services go`} to no
+            organisation yet. Choose on{' '}
+            <Link className="underline underline-offset-2" href="/invoices/settings">
+              Invoices → Settings
+            </Link>
+            .
+          </p>
+        ) : null}
       </Panel>
 
       <Panel title="Where payments land">

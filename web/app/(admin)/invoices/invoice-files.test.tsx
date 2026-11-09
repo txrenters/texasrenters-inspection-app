@@ -136,6 +136,7 @@ describe('the copies before the cutover', () => {
     updatedAt: null,
     products: [],
     billed: [],
+    organisations: [],
     files: status,
   });
 

@@ -204,6 +204,9 @@ function SettingsForm({ view, mayChange }: { view: InvoiceSettingsView; mayChang
   );
 }
 
+/** A Select cannot hold an empty value: this stands for "no organisation". */
+const NO_ORGANISATION = '__none';
+
 /** A price as typed, in cents; null when it is not one. */
 const cents = (text: string) => parseMoney(text);
 
@@ -216,6 +219,10 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
   const [editing, setEditing] = useState<string | null>(null);
 
   const offered = view.products.filter((product) => product.active);
+  // Which company's books each goes to: shown once Xero has an organisation (2026-11-10, phase 2 of the multi-company plan).
+  const organisations = view.organisations;
+  const connected = organisations.filter((organisation) => organisation.connected);
+  const organisationName = (tenantId: string | null) => (tenantId ? (organisations.find((item) => item.tenantId === tenantId)?.name ?? 'Unknown') : null);
   const setAside = view.products.filter((product) => !product.active);
   const priceCents = cents(price);
   const problem = !name.trim() && !price.trim() ? null : priceCents === null ? 'Give the price in dollars and cents.' : invoiceProductProblem({ name, unitPriceCents: priceCents });
@@ -233,7 +240,11 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
       },
     );
 
-  const change = (product: InvoiceProductView, input: { name?: string; description?: string | null; unitPriceCents?: number; active?: boolean }, done: string) =>
+  const change = (
+    product: InvoiceProductView,
+    input: { name?: string; description?: string | null; unitPriceCents?: number; active?: boolean; xeroTenantId?: string | null },
+    done: string,
+  ) =>
     edits.changeProduct.mutate(
       { id: product.id, input: { ...input, expectedUpdatedAt: product.updatedAt } },
       {
@@ -250,6 +261,7 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
       <h2 className="text-heading text-lg font-bold">Products &amp; services</h2>
       <p className="text-muted-foreground mt-1 text-sm">
         A new invoice&apos;s lines are priced from this list first, then from what was billed in the past six months.
+        {organisations.length ? " Each goes to the Xero organisation chosen for it: that company's books." : ''}
       </p>
 
       {offered.length ? (
@@ -259,6 +271,7 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
               <TableHead>Name</TableHead>
               <TableHead>Description</TableHead>
               <TableHead className="text-right">Price</TableHead>
+              {organisations.length ? <TableHead>Xero organisation</TableHead> : null}
               {mayChange ? <TableHead className="w-0" /> : null}
             </TableRow>
           </TableHeader>
@@ -271,6 +284,38 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
                   <TableCell className="font-medium">{product.name}</TableCell>
                   <TableCell className="text-muted-foreground">{product.description ?? '—'}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatMoney(product.unitPriceCents)}</TableCell>
+                  {organisations.length ? (
+                    <TableCell>
+                      {mayChange ? (
+                        <Select
+                          disabled={busy}
+                          onValueChange={(value) => {
+                            const tenantId = value === NO_ORGANISATION ? null : value;
+                            change(product, { xeroTenantId: tenantId }, tenantId ? `${product.name} goes to ${organisationName(tenantId)}` : `${product.name} goes to no organisation`);
+                          }}
+                          value={product.xeroTenantId ?? NO_ORGANISATION}
+                        >
+                          <SelectTrigger aria-label={`Xero organisation for ${product.name}`} className="w-full min-w-44">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={NO_ORGANISATION}>Not chosen</SelectItem>
+                            {connected.map((organisation) => (
+                              <SelectItem key={organisation.tenantId} value={organisation.tenantId}>
+                                {organisation.name}
+                              </SelectItem>
+                            ))}
+                            {/* One since disconnected still shows, so the choice can be seen and changed. */}
+                            {product.xeroTenantId && !connected.some((organisation) => organisation.tenantId === product.xeroTenantId) ? (
+                              <SelectItem value={product.xeroTenantId}>{organisationName(product.xeroTenantId)} (not connected)</SelectItem>
+                            ) : null}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className={product.xeroTenantId ? undefined : 'text-muted-foreground'}>{organisationName(product.xeroTenantId) ?? 'Not chosen'}</span>
+                      )}
+                    </TableCell>
+                  ) : null}
                   {mayChange ? (
                     <TableCell className="whitespace-nowrap text-right">
                       <Button aria-label={`Change ${product.name}`} disabled={busy} onClick={() => setEditing(product.id)} size="sm" variant="ghost">

@@ -153,7 +153,10 @@ export interface XeroSettingsView {
   /** The organisation these choices are for. */
   tenantId: string;
   values: XeroSettingsValues;
+  /** The products and services the office sends to this organisation, from its products list. */
   products: XeroSalesItem[];
+  /** Products and services offered that go to no organisation yet: chosen on the products list. */
+  withoutOrganisation: number;
   /** Every payment method, in the console's order. */
   payments: XeroPaymentItem[];
   /** Invoices issued on or after the start date, not drafts or voided; with no start date, the past year's. */

@@ -66,6 +66,7 @@ const view = (row: Awaited<ReturnType<typeof listedProducts>>[number]): InvoiceP
   description: row.description,
   unitPriceCents: row.unitPriceCents,
   active: row.active,
+  xeroTenantId: row.xeroTenantId,
   updatedAt: row.updatedAt.toISOString(),
 });
 
@@ -77,13 +78,19 @@ export class InvoiceSettingsService {
 
   async read(user: AuthenticatedUser): Promise<InvoiceSettingsView> {
     const org = user.organizationId;
-    const [settings, fallback, products, billed, files] = await Promise.all([
+    const [settings, fallback, products, billed, files, organisations] = await Promise.all([
       readInvoiceSettings(this.prisma, org),
       fallbackDefaults(this.prisma, org),
       listedProducts(this.prisma, org),
       billedPrices(this.prisma, org, businessDate()),
       // Before the cutover every file must be kept (phase 7).
       fileCopyStatus(this.prisma, org),
+      // The companies' books a product or service can go to. CONNECTED sorts before REMOVED.
+      this.prisma.xeroOrganisation.findMany({
+        where: { organizationId: org },
+        orderBy: [{ status: 'asc' }, { name: 'asc' }],
+        select: { xeroTenantId: true, name: true, status: true },
+      }),
     ]);
     const listed = new Set(products.map((product) => product.nameKey));
     const serverBrand = receiptBrand();
@@ -95,6 +102,7 @@ export class InvoiceSettingsService {
       updatedAt: settings.updatedAt?.toISOString() ?? null,
       products: products.map(view),
       billed: billed.filter((price) => !listed.has(productNameKey(price.name))),
+      organisations: organisations.map((row) => ({ tenantId: row.xeroTenantId, name: row.name, connected: row.status === 'CONNECTED' })),
       files,
     };
   }
@@ -194,9 +202,15 @@ export class InvoiceSettingsService {
           description: input.description !== undefined ? settingText(input.description) : before.description,
           unitPriceCents: input.unitPriceCents ?? before.unitPriceCents,
           active: input.active ?? before.active,
+          xeroTenantId: input.xeroTenantId !== undefined ? input.xeroTenantId || null : before.xeroTenantId,
         };
         const problem = invoiceProductProblem(after);
         if (problem) throw new ApplicationError(422, 'INVOICE_PRODUCT_INVALID', problem);
+        // Which company's books it goes to: one of the office's organisations, connected now -- or none.
+        const organisations = await this.organisationNames(tx, org, [before.xeroTenantId, after.xeroTenantId]);
+        if (after.xeroTenantId !== before.xeroTenantId && after.xeroTenantId && !organisations.get(after.xeroTenantId)?.connected)
+          throw new ApplicationError(422, 'INVOICE_PRODUCT_INVALID', 'That Xero organisation is not connected. Choose one that is.');
+        const orgName = (tenantId: string | null) => (tenantId ? (organisations.get(tenantId)?.name ?? 'an organisation no longer known') : 'none');
         const changes = [
           after.name !== before.name ? `Name: ${before.name} → ${after.name}` : null,
           after.description !== before.description ? `Description: ${shown(before.description)} → ${shown(after.description)}` : null,
@@ -204,6 +218,7 @@ export class InvoiceSettingsService {
             ? `Price: ${formatMoney(before.unitPriceCents)} → ${formatMoney(after.unitPriceCents)}`
             : null,
           after.active !== before.active ? (after.active ? 'Offered again' : 'Set aside') : null,
+          after.xeroTenantId !== before.xeroTenantId ? `Xero organisation: ${orgName(before.xeroTenantId)} → ${orgName(after.xeroTenantId)}` : null,
         ].filter((change): change is string => change !== null);
         if (!changes.length) return;
         const { count } = await tx.invoiceProduct.updateMany({
@@ -222,6 +237,15 @@ export class InvoiceSettingsService {
 
   private changed() {
     return new ApplicationError(409, 'INVOICE_SETTINGS_CHANGED', 'Somebody changed these settings since they were opened. Look again, then save.');
+  }
+
+  /** The office's organisations among these ids: their names, and whether each is connected. */
+  private async organisationNames(tx: Prisma.TransactionClient, organizationId: string, tenantIds: (string | null)[]) {
+    const wanted = [...new Set(tenantIds.filter((id): id is string => Boolean(id)))];
+    const rows = wanted.length
+      ? await tx.xeroOrganisation.findMany({ where: { organizationId, xeroTenantId: { in: wanted } }, select: { xeroTenantId: true, name: true, status: true } })
+      : [];
+    return new Map(rows.map((row) => [row.xeroTenantId, { name: row.name, connected: row.status === 'CONNECTED' }]));
   }
 
   private exists(name: string | null, active: boolean) {

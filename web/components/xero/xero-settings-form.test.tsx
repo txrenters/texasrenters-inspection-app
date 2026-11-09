@@ -30,6 +30,7 @@ const VIEW: XeroSettingsView = {
     { nameKey: 'move-out inspection', name: 'Move-out inspection', listed: true, active: true, accountId: null },
     { nameKey: 'filter change', name: 'Filter change', listed: false, active: true, accountId: null },
   ],
+  withoutOrganisation: 0,
   payments: [
     { method: 'PROPERTYWARE_LEDGER', accountId: null, payments: 10 },
     { method: 'CHECK', accountId: null, payments: 2 },
@@ -125,5 +126,18 @@ describe('choosing what goes where', () => {
     mount(VIEW, false);
     expect(screen.getByRole('combobox', { name: 'Account for Check' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+});
+
+describe('the services this organisation is sent', () => {
+  it('says how many go to no organisation yet, and where to choose', () => {
+    mount({ ...VIEW, withoutOrganisation: 3 });
+    const note = screen.getByText(/3 products and services go to no/);
+    expect(within(note).getByRole('link', { name: 'Invoices → Settings' })).toHaveAttribute('href', '/invoices/settings');
+  });
+
+  it('says so when none goes to it', () => {
+    mount({ ...VIEW, products: [] });
+    expect(screen.getByText(/No product or service goes to this organisation yet/)).toBeInTheDocument();
   });
 });

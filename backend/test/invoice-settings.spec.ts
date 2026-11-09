@@ -41,9 +41,19 @@ const product = (over: Record<string, unknown> = {}) => ({
   description: 'One filter, any size',
   unitPriceCents: 4500,
   active: true,
+  xeroTenantId: null,
   updatedAt: SAVED_AT,
   ...over,
 });
+/** The companies' books in Xero: two connected, one no longer. */
+const HOMES = 'a1000000-0000-4000-8000-000000000001';
+const PEST = 'a2000000-0000-4000-8000-000000000002';
+const OLD = 'a3000000-0000-4000-8000-000000000003';
+const ORGANISATIONS = [
+  { xeroTenantId: HOMES, name: 'Example Home Services', status: 'CONNECTED' },
+  { xeroTenantId: PEST, name: 'Example Pest Co', status: 'CONNECTED' },
+  { xeroTenantId: OLD, name: 'Old Books LLC', status: 'REMOVED' },
+];
 /** What the office billed in the past six months. */
 const BILLED = [
   { name: 'Filter Change', unitPriceCents: 3999, _count: { _all: 40 } },
@@ -69,6 +79,11 @@ function database() {
       create: jest.fn().mockResolvedValue({ id: 'invoice-1' }),
     },
     invoiceLine: { groupBy: jest.fn().mockResolvedValue(BILLED) },
+    xeroOrganisation: {
+      findMany: jest.fn(async (args?: { where?: { xeroTenantId?: { in: string[] } } }) =>
+        ORGANISATIONS.filter((row) => !args?.where?.xeroTenantId || args.where.xeroTenantId.in.includes(row.xeroTenantId)),
+      ),
+    },
     // The files on Jobber's invoices, none yet (phase 7).
     invoiceFile: { count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue({ id: BUILDING, name: 'Building 12', addressLine1: '100 Example Way', city: 'Sampletown' }) },
@@ -264,7 +279,7 @@ describe('the products and services list', () => {
     await service.changeProduct(office, PRODUCT, { unitPriceCents: 4999, active: false, expectedUpdatedAt: SAVED_AT.toISOString() });
     expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith({
       where: { id: PRODUCT, organizationId: ORG, updatedAt: SAVED_AT },
-      data: { name: 'Filter Change', nameKey: 'filter change', description: 'One filter, any size', unitPriceCents: 4999, active: false },
+      data: { name: 'Filter Change', nameKey: 'filter change', description: 'One filter, any size', unitPriceCents: 4999, active: false, xeroTenantId: null },
     });
     expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
       action: 'INVOICE_PRODUCT_CHANGED',
@@ -279,6 +294,49 @@ describe('the products and services list', () => {
     await expect(service.changeProduct(office, PRODUCT, { unitPriceCents: 1, expectedUpdatedAt: SAVED_AT.toISOString() })).rejects.toMatchObject({
       code: 'INVOICE_PRODUCT_NOT_FOUND',
     });
+  });
+
+  it('sends one to one of the office’s Xero organisations -- connected ones only -- on the record', async () => {
+    const db = database();
+    const service = new InvoiceSettingsService(db as never);
+    db.invoiceProduct.findFirst.mockResolvedValue(product());
+
+    await service.changeProduct(office, PRODUCT, { xeroTenantId: PEST, expectedUpdatedAt: SAVED_AT.toISOString() });
+    expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ xeroTenantId: PEST }) }));
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ metadata: { changes: ['Xero organisation: none → Example Pest Co'] } });
+
+    // One no longer connected is not offered, and one that is not the office's is not either.
+    for (const tenantId of [OLD, 'b9000000-0000-4000-8000-000000000009'])
+      await expect(service.changeProduct(office, PRODUCT, { xeroTenantId: tenantId, expectedUpdatedAt: SAVED_AT.toISOString() })).rejects.toMatchObject({
+        code: 'INVOICE_PRODUCT_INVALID',
+        message: 'That Xero organisation is not connected. Choose one that is.',
+      });
+
+    // Back to none.
+    db.invoiceProduct.findFirst.mockResolvedValue(product({ xeroTenantId: PEST }));
+    db.auditLog.create.mockClear();
+    await service.changeProduct(office, PRODUCT, { xeroTenantId: null, expectedUpdatedAt: SAVED_AT.toISOString() });
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ metadata: { changes: ['Xero organisation: Example Pest Co → none'] } });
+  });
+
+  it('keeps a product with an organisation since disconnected, and names it', async () => {
+    const db = database();
+    db.invoiceProduct.findFirst.mockResolvedValue(product({ xeroTenantId: OLD }));
+    // A price change leaves the organisation as it was: no check on it.
+    await new InvoiceSettingsService(db as never).changeProduct(office, PRODUCT, { unitPriceCents: 5000, expectedUpdatedAt: SAVED_AT.toISOString() });
+    expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ xeroTenantId: OLD }) }));
+  });
+
+  it('offers the office’s organisations, connected first, with each product’s choice', async () => {
+    const db = database();
+    db.invoiceProduct.findMany.mockResolvedValue([product({ xeroTenantId: HOMES })]);
+    const view = await new InvoiceSettingsService(db as never).read(office);
+    expect(view.organisations).toEqual([
+      { tenantId: HOMES, name: 'Example Home Services', connected: true },
+      { tenantId: PEST, name: 'Example Pest Co', connected: true },
+      { tenantId: OLD, name: 'Old Books LLC', connected: false },
+    ]);
+    expect(view.products[0]!.xeroTenantId).toBe(HOMES);
   });
 
   it('refuses a rename to a name already on the list', async () => {

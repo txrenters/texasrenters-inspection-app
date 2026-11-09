@@ -52,14 +52,23 @@ const VIEW: InvoiceSettingsView = {
   defaults: FALLBACK,
   updatedAt: SAVED_AT,
   products: [
-    { id: 'p1', name: 'Filter Change', description: 'One filter, any size', unitPriceCents: 4500, active: true, updatedAt: SAVED_AT },
-    { id: 'p2', name: 'Lockbox Install', description: null, unitPriceCents: 3000, active: false, updatedAt: SAVED_AT },
+    { id: 'p1', name: 'Filter Change', description: 'One filter, any size', unitPriceCents: 4500, active: true, xeroTenantId: null, updatedAt: SAVED_AT },
+    { id: 'p2', name: 'Lockbox Install', description: null, unitPriceCents: 3000, active: false, xeroTenantId: null, updatedAt: SAVED_AT },
   ],
   billed: [
     { name: 'Pest Control', unitPriceCents: 2500 },
     { name: 'Gate Repair', unitPriceCents: 12000 },
   ],
+  // No Xero organisation yet: the column is not shown.
+  organisations: [],
 };
+
+/** The companies' books in Xero: two connected, one no longer. */
+const ORGANISATIONS: InvoiceSettingsView['organisations'] = [
+  { tenantId: 'a1000000-0000-4000-8000-000000000001', name: 'Example Home Services', connected: true },
+  { tenantId: 'a2000000-0000-4000-8000-000000000002', name: 'Example Pest Co', connected: true },
+  { tenantId: 'a3000000-0000-4000-8000-000000000003', name: 'Old Books LLC', connected: false },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -160,5 +169,65 @@ describe('the products and services list', () => {
     expect(hooks.addProducts.mutate).toHaveBeenCalledWith({ products: [{ name: 'Pest Control', unitPriceCents: 2500 }] }, expect.anything());
     fireEvent.click(screen.getByRole('button', { name: 'Add all 2' }));
     expect(hooks.addProducts.mutate).toHaveBeenLastCalledWith({ products: VIEW.billed }, expect.anything());
+  });
+});
+
+describe('which company each goes to', () => {
+  const pick = (combobox: string, option: string) => {
+    // Radix opens a select on pointer-down, as it does a menu.
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: combobox }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  };
+
+  it('is not asked until Xero has an organisation', () => {
+    render(<InvoiceSettingsPage />);
+    expect(screen.queryByRole('columnheader', { name: 'Xero organisation' })).not.toBeInTheDocument();
+  });
+
+  it('is chosen from the connected organisations, against the product as it was read', () => {
+    hooks.view.current = { ...VIEW, organisations: ORGANISATIONS };
+    render(<InvoiceSettingsPage />);
+    expect(screen.getByRole('columnheader', { name: 'Xero organisation' })).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Xero organisation for Filter Change' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    // One no longer connected is not offered.
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Not chosen', 'Example Home Services', 'Example Pest Co']);
+    fireEvent.click(screen.getByRole('option', { name: 'Example Pest Co' }));
+    expect(hooks.changeProduct.mutate).toHaveBeenCalledWith(
+      { id: 'p1', input: { xeroTenantId: 'a2000000-0000-4000-8000-000000000002', expectedUpdatedAt: SAVED_AT } },
+      expect.anything(),
+    );
+  });
+
+  it('goes back to none', () => {
+    hooks.view.current = {
+      ...VIEW,
+      organisations: ORGANISATIONS,
+      products: [{ ...VIEW.products[0]!, xeroTenantId: 'a1000000-0000-4000-8000-000000000001' }],
+    };
+    render(<InvoiceSettingsPage />);
+    pick('Xero organisation for Filter Change', 'Not chosen');
+    expect(hooks.changeProduct.mutate).toHaveBeenCalledWith({ id: 'p1', input: { xeroTenantId: null, expectedUpdatedAt: SAVED_AT } }, expect.anything());
+  });
+
+  it('still shows an organisation since disconnected, so it can be changed', () => {
+    hooks.view.current = {
+      ...VIEW,
+      organisations: ORGANISATIONS,
+      products: [{ ...VIEW.products[0]!, xeroTenantId: 'a3000000-0000-4000-8000-000000000003' }],
+    };
+    render(<InvoiceSettingsPage />);
+    expect(screen.getByRole('combobox', { name: 'Xero organisation for Filter Change' })).toHaveTextContent('Old Books LLC (not connected)');
+  });
+
+  it('is read, not changed, by whoever does not make invoices', () => {
+    permissions.granted = new Set(['invoices:read']);
+    hooks.view.current = {
+      ...VIEW,
+      organisations: ORGANISATIONS,
+      products: [{ ...VIEW.products[0]!, xeroTenantId: 'a2000000-0000-4000-8000-000000000002' }],
+    };
+    render(<InvoiceSettingsPage />);
+    expect(screen.queryByRole('combobox', { name: 'Xero organisation for Filter Change' })).not.toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'Example Pest Co' })).toBeInTheDocument();
   });
 });

@@ -169,7 +169,7 @@ export function listedProducts(db: Db, organizationId: string) {
   return db.invoiceProduct.findMany({
     where: { organizationId },
     orderBy: [{ active: 'desc' }, { name: 'asc' }],
-    select: { id: true, name: true, nameKey: true, description: true, unitPriceCents: true, active: true, updatedAt: true },
+    select: { id: true, name: true, nameKey: true, description: true, unitPriceCents: true, active: true, xeroTenantId: true, updatedAt: true },
   });
 }
 

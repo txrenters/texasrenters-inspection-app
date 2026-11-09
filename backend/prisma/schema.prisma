@@ -3425,12 +3425,16 @@ model InvoiceProduct {
   description    String?
   unitPriceCents Int
   active         Boolean      @default(true)
+  /// The Xero organisation -- the company's books -- it goes to (2026-11-10, phase 2 of the multi-company plan). Null until the office chooses.
+  xeroTenantId   String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation? @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
 
   @@unique([organizationId, nameKey])
   @@index([organizationId, active])
+  @@index([organizationId, xeroTenantId])
 }
 
 /// An invoice sent to the client from the console (2026-11-06, phase 5 of taking
@@ -4777,6 +4781,8 @@ model XeroOrganisation {
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   settings     XeroSettings?
+  /// The products and services the office sends to this organisation.
+  products     InvoiceProduct[]
 
   @@unique([organizationId, xeroTenantId])
 }

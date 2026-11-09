@@ -116,23 +116,22 @@ export class XeroSettingsService {
     ]);
     const paymentsByMethod = Object.fromEntries(byMethod.map((group) => [group.method, group._count._all])) as Partial<Record<PaymentMethod, number>>;
 
-    const products: XeroSalesItem[] = listed.map((product) => ({
-      nameKey: product.nameKey,
-      name: product.name,
-      listed: true,
-      active: product.active,
-      accountId: values.salesAccounts[product.nameKey] ?? null,
-    }));
-    const seen = new Set(products.map((item) => item.nameKey));
-    for (const price of billed) {
-      const nameKey = productNameKey(price.name);
-      if (seen.has(nameKey)) continue;
-      seen.add(nameKey);
-      products.push({ nameKey, name: price.name, listed: false, active: true, accountId: values.salesAccounts[nameKey] ?? null });
-    }
-    // A name given an account that is on neither list now (no longer billed) keeps showing, so its choice is never hidden.
+    // The services the office sends to this organisation, as its products list says (phase 2 of the multi-company plan).
+    const products: XeroSalesItem[] = listed
+      .filter((product) => product.xeroTenantId === tenantId)
+      .map((product) => ({
+        nameKey: product.nameKey,
+        name: product.name,
+        listed: true,
+        active: product.active,
+        accountId: values.salesAccounts[product.nameKey] ?? null,
+      }));
+    // Names on the list or billed lately are someone's: a name given an account here that is neither (no longer
+    // billed, or deleted) keeps showing, so its choice is never hidden.
+    const known = new Set([...listed.map((product) => product.nameKey), ...billed.map((price) => productNameKey(price.name))]);
     for (const [nameKey, accountId] of Object.entries(values.salesAccounts))
-      if (!seen.has(nameKey)) products.push({ nameKey, name: nameKey, listed: false, active: false, accountId });
+      if (!known.has(nameKey)) products.push({ nameKey, name: nameKey, listed: false, active: false, accountId });
+    const withoutOrganisation = listed.filter((product) => product.active && !product.xeroTenantId).length;
 
     const checks = xeroChecks({
       connected: connection.connected,
@@ -145,6 +144,7 @@ export class XeroSettingsService {
       tenantId,
       values,
       products,
+      withoutOrganisation,
       payments: PAYMENT_METHODS.map((method) => ({ method, accountId: values.paymentAccounts[method] ?? null, payments: paymentsByMethod[method] ?? 0 })),
       invoicesToSend,
       checks,
