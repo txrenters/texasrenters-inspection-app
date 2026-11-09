@@ -46,6 +46,9 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // The PDF itself is rendered in its own test (lib/receipt-pdf); here, only that the page asks for it.
 const receipts = vi.hoisted(() => ({ downloadReceipt: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/receipt-pdf/download-receipt', () => receipts);
+// Jobber's two cards on the payments page (2026-11-09).
+const insights = vi.hoisted(() => ({ usePaymentInsights: vi.fn() }));
+vi.mock('@/lib/invoice-report-queries', () => insights);
 
 const create = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };
@@ -576,6 +579,7 @@ describe('the payments list', () => {
   };
 
   it('lists each payment with its invoice, method and amount', async () => {
+    insights.usePaymentInsights.mockReturnValue(ready({ paymentDays: { days: 12, invoices: 40 }, paidOnTime: { onTime: 30, invoices: 40 } }));
     hooks.usePayments.mockReturnValue(ready(PAYMENTS));
     render(<PaymentsPage />);
     await act(async () => undefined);
@@ -589,5 +593,21 @@ describe('the payments list', () => {
     expect(screen.getByRole('region', { name: 'Payments at a glance' })).toHaveTextContent('$39.99');
     // The row opens the payment; the invoice number still opens the invoice.
     expect(within(row).getAllByRole('link').map((link) => link.getAttribute('href'))).toContain('/payments/pay-1');
+    // How long invoices take to be paid, and how many are paid on time, as Jobber's cards say.
+    const glance = screen.getByRole('region', { name: 'Payments at a glance' });
+    expect(glance).toHaveTextContent('Invoice payment timePast 30 days12 days40 invoices paid in full');
+    expect(glance).toHaveTextContent('Invoices paid on timeLast 60 days75%30 of 40 by their due date');
+  });
+
+  it('reads the payments made within the days chosen', async () => {
+    insights.usePaymentInsights.mockReturnValue(ready({ paymentDays: { days: null, invoices: 0 }, paidOnTime: { onTime: 0, invoices: 0 } }));
+    hooks.usePayments.mockReturnValue(ready(PAYMENTS));
+    render(<PaymentsPage />);
+    await act(async () => undefined);
+    // Nothing paid in full yet: no average to give.
+    expect(screen.getByRole('region', { name: 'Payments at a glance' })).toHaveTextContent('Invoice payment timePast 30 days—');
+    // Every date until a span is chosen.
+    expect(hooks.usePayments).toHaveBeenLastCalledWith(expect.objectContaining({ paidFrom: undefined, paidTo: undefined }));
+    expect(screen.getByRole('group', { name: 'Paid' })).toBeInTheDocument();
   });
 });
