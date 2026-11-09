@@ -3365,6 +3365,14 @@ model InvoiceSettings {
   /// When the console took invoicing over from Jobber (phase 8), and who did it. From then on Jobber's invoices are not read.
   invoicingTakenOverAt      DateTime?
   invoicingTakenOverById    String?      @db.Uuid
+  /// What Jobber did on its own and stops at Take over (2026-11-09): follow-up
+  /// emails about unpaid invoices, on these days after the due date (0 = the due
+  /// date), and receipt emails when a payment is recorded. Jobber's by default.
+  followUpsEnabled          Boolean      @default(true)
+  followUpDays              Int[]        @default([0, 4])
+  receiptsAutomatic         Boolean      @default(false)
+  /// When those were last saved: separate from `updatedAt`, which the invoice settings form keys on.
+  emailSettingsUpdatedAt    DateTime?
   createdAt                 DateTime     @default(now())
   updatedAt                 DateTime     @updatedAt
   organization              Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -3402,6 +3410,13 @@ model InvoiceDelivery {
   invoiceId       String    @db.Uuid
   /// EMAIL. Text messages need a provider the console does not have yet.
   channel         String
+  /// INVOICE (sent by somebody), FOLLOW_UP (about an unpaid invoice, on its own)
+  /// or RECEIPT (for a payment). 2026-11-09.
+  kind            String    @default("INVOICE")
+  /// A follow-up's day after the due date.
+  followUpDay     Int?
+  /// A receipt's payment.
+  paymentId       String?   @db.Uuid
   recipients      String[]
   /// The note the office wrote above the invoice, if any.
   message         String?
@@ -3414,11 +3429,13 @@ model InvoiceDelivery {
   sentAt          DateTime?
 
   invoice Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment InvoicePayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
   sentBy  UserProfile? @relation("InvoiceDeliverySentBy", fields: [sentById], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, clientRequestId])
   @@index([organizationId, createdAt])
   @@index([invoiceId, createdAt])
+  @@index([paymentId])
 }
 
 /// A payment recorded against an invoice: by hand in Jobber, or in the console.
@@ -3451,6 +3468,7 @@ model InvoicePayment {
   updatedAt       DateTime             @updatedAt
 
   invoice    Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  receipts   InvoiceDelivery[]
   recordedBy UserProfile? @relation("InvoicePaymentRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, jobberPaymentId])

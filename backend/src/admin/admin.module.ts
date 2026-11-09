@@ -22,6 +22,9 @@ import { ChargeService } from './charge.service';
 import { ComparisonReportService } from './comparison-report.service';
 import { ComparisonService } from './comparison.service';
 import { InvoiceDeliveryController } from './invoice-delivery.controller';
+import { InvoiceBatchDeliveryController, InvoiceEmailSettingsController, PaymentReceiptsController } from './invoice-emails.controller';
+import { InvoiceFollowUpsScheduler } from './invoice-follow-ups.scheduler';
+import { InvoiceFollowUpsService } from './invoice-follow-ups.service';
 import { InvoiceDeliveryService } from './invoice-delivery.service';
 import { InvoiceFilesController } from './invoice-files.controller';
 import { InvoiceFilesService } from './invoice-files.service';
@@ -72,6 +75,9 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoicesController,
     InvoiceEditsController,
     InvoiceDeliveryController,
+    InvoiceEmailSettingsController,
+    InvoiceBatchDeliveryController,
+    PaymentReceiptsController,
     InvoiceSettingsController,
     InvoiceFilesController,
     PaymentsController,
@@ -102,6 +108,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InspectionMediaStorageService,
     ProfileDeletionService,
     InvoiceDeliveryService,
+    InvoiceFollowUpsService,
+    InvoiceFollowUpsScheduler,
     InvoiceSettingsService,
     InvoiceFilesService,
     InvoiceFileStorageService,

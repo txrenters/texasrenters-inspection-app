@@ -467,8 +467,24 @@ describe('a payment on its own page', () => {
         balanceCents: 0,
         status: 'PAID',
         dueOn: date('2020-03-01'),
+        clientEmails: ['owner@example.com', 'not an address'],
+        deliveries: [],
       },
       updatedAt: new Date('2020-02-20T16:00:00.000Z'),
+      receipts: [
+        {
+          id: 'delivery-1',
+          channel: 'EMAIL',
+          kind: 'RECEIPT',
+          followUpDay: null,
+          recipients: ['owner@example.com'],
+          status: 'SENT',
+          failure: null,
+          createdAt: new Date('2020-02-21T16:00:00.000Z'),
+          sentAt: new Date('2020-02-21T16:00:01.000Z'),
+          sentBy: { id: 'user-1', displayName: 'Ada Lane' },
+        },
+      ],
     });
 
     const shown = await serviceOver(db).onePayment(office, 'payment-1');
@@ -493,6 +509,22 @@ describe('a payment on its own page', () => {
       // Off until the cutover; the receipt names the company as reports do.
       writesEnabled: false,
       brand: expect.objectContaining({ name: expect.any(String) }),
+      // Its receipts, and who the next would go to: never sent, so the client's real addresses.
+      receipts: [
+        {
+          id: 'delivery-1',
+          channel: 'EMAIL',
+          kind: 'RECEIPT',
+          followUpDay: null,
+          recipients: ['owner@example.com'],
+          status: 'SENT',
+          failure: null,
+          sentBy: { id: 'user-1', displayName: 'Ada Lane' },
+          createdAt: '2020-02-21T16:00:00.000Z',
+          sentAt: '2020-02-21T16:00:01.000Z',
+        },
+      ],
+      receiptTo: ['owner@example.com'],
     });
     expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG });
   });

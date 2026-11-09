@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { InvoiceDraft, InvoiceList, UninvoicedVisitList } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { businessToday, shiftDay } from '@/lib/clock';
+
 import BatchInvoicesPage from './batch/page';
 import NewInvoicePage from './new/page';
 import InvoicesPage from './page';
@@ -107,15 +109,35 @@ describe('the invoices list', () => {
   } satisfies InvoiceList;
 
   it('offers a new invoice and a batch to whoever makes invoices, once the console owns invoicing', () => {
+    batches.useUninvoicedVisits.mockReturnValue(ready({ items: [], truncated: false }));
     hooks.useInvoices.mockReturnValue(ready({ ...LIST, writesEnabled: true }));
     const { unmount } = render(<InvoicesPage />);
     expect(screen.getByRole('link', { name: 'New invoice' })).toHaveAttribute('href', '/invoices/new');
     expect(screen.getByRole('link', { name: 'Batch create' })).toHaveAttribute('href', '/invoices/batch');
+    expect(screen.getByRole('link', { name: 'Batch deliver' })).toHaveAttribute('href', '/invoices/deliver');
     unmount();
 
     hooks.useInvoices.mockReturnValue(ready({ ...LIST, writesEnabled: false }));
     render(<InvoicesPage />);
     expect(screen.queryByRole('link', { name: 'New invoice' })).not.toBeInTheDocument();
+    // Printing many at once needs no Take over.
+    expect(screen.getByRole('link', { name: 'Batch deliver' })).toBeInTheDocument();
+  });
+
+  it("says how many finished visits have no invoice, as Jobber's \"requires invoicing\"", () => {
+    hooks.useInvoices.mockReturnValue(ready({ ...LIST, writesEnabled: true }));
+    batches.useUninvoicedVisits.mockReturnValue(ready({ items: [{ inspectionId: 'v1' }, { inspectionId: 'v2' }], truncated: false }));
+    const { unmount } = render(<InvoicesPage />);
+    const nudge = screen.getByRole('status');
+    expect(nudge).toHaveTextContent('2 finished visits have no invoice yet, in the last 30 days.');
+    expect(within(nudge).getByRole('link', { name: 'Invoice them' })).toHaveAttribute('href', '/invoices/batch');
+    // The last month, ending today.
+    expect(batches.useUninvoicedVisits).toHaveBeenLastCalledWith({ from: shiftDay(businessToday(), -30), to: businessToday() });
+    unmount();
+
+    batches.useUninvoicedVisits.mockReturnValue(ready({ items: [], truncated: false }));
+    render(<InvoicesPage />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
 
