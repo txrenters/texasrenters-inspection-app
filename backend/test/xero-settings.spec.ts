@@ -73,8 +73,12 @@ function database(options: { settings?: Record<string, unknown> | null; organisa
     xeroOrganisation: { findUnique: jest.fn(async () => organisation) },
     invoiceProduct: {
       findMany: jest.fn(async () => [
-        { id: 'p1', name: 'Move-out inspection', nameKey: 'move-out inspection', description: null, unitPriceCents: 15000, active: true, updatedAt: UPDATED },
-        { id: 'p2', name: 'Retired service', nameKey: 'retired service', description: null, unitPriceCents: 5000, active: false, updatedAt: UPDATED },
+        { id: 'p1', name: 'Move-out inspection', nameKey: 'move-out inspection', description: null, unitPriceCents: 15000, active: true, xeroTenantId: TENANT, updatedAt: UPDATED },
+        { id: 'p2', name: 'Retired service', nameKey: 'retired service', description: null, unitPriceCents: 5000, active: false, xeroTenantId: TENANT, updatedAt: UPDATED },
+        // Another company's books.
+        { id: 'p3', name: 'Pest control', nameKey: 'pest control', description: null, unitPriceCents: 6500, active: true, xeroTenantId: 'a2000000-0000-4000-8000-000000000002', updatedAt: UPDATED },
+        // Not chosen yet.
+        { id: 'p4', name: 'Gate repair', nameKey: 'gate repair', description: null, unitPriceCents: 12000, active: true, xeroTenantId: null, updatedAt: UPDATED },
       ]),
     },
     invoiceLine: {
@@ -119,7 +123,7 @@ beforeEach(() => {
 afterEach(() => jest.useRealTimers());
 
 describe('reading the choices', () => {
-  it('lists every name a line can carry -- the products list, then what was billed -- and every payment method with its use', async () => {
+  it('lists the services the office sends to this organisation, and every payment method with its use', async () => {
     const db = database({
       settings: {
         sendFrom: new Date('2026-12-01T00:00:00.000Z'),
@@ -135,11 +139,12 @@ describe('reading the choices', () => {
     expect(view.products.map((item) => [item.name, item.listed, item.active, item.accountId])).toEqual([
       ['Move-out inspection', true, true, null],
       ['Retired service', true, false, null],
-      // Billed but not on the list.
-      ['Filter change', false, true, 'a-410'],
-      // On neither any more: its choice still shows.
+      // Pest control goes to another organisation, and Filter change is only billed: neither is this one's.
+      // On neither list any more: its choice still shows.
       ['gutter cleaning', false, false, 'a-410'],
     ]);
+    // Gate repair is offered and goes nowhere yet.
+    expect(view.withoutOrganisation).toBe(1);
     expect(view.payments).toHaveLength(11);
     expect(view.payments[0]).toEqual({ method: 'PROPERTYWARE_LEDGER', accountId: 'a-815', payments: 10 });
     expect(view.payments.find((item) => item.method === 'CHECK')).toEqual({ method: 'CHECK', accountId: null, payments: 2 });

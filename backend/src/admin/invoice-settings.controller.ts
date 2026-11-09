@@ -55,6 +55,8 @@ export class ChangeInvoiceProductDto {
   @IsOptional() @IsString() @MaxLength(2000) description?: string | null;
   @IsOptional() @IsInt() @Min(0) @Max(MAX_PRODUCT_PRICE_CENTS) unitPriceCents?: number;
   @IsOptional() @IsBoolean() active?: boolean;
+  /** The Xero organisation it goes to; null for none. */
+  @IsOptional() @IsString() @MaxLength(64) xeroTenantId?: string | null;
   @IsISO8601() expectedUpdatedAt!: string;
 }
 

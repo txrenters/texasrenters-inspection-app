@@ -65,8 +65,18 @@ export interface InvoiceProductView {
   unitPriceCents: number;
   /** Set aside: no longer offered, kept so what it priced stays readable. */
   active: boolean;
+  /** The Xero organisation -- the company's books -- it goes to; null until the office chooses. */
+  xeroTenantId: string | null;
   /** ISO; sent back with a change. */
   updatedAt: string;
+}
+
+/** A Xero organisation a product or service can go to (2026-11-10): one company's books. */
+export interface InvoiceProductOrganisation {
+  tenantId: string;
+  name: string;
+  /** Offered only while connected; one no longer connected still names the products that chose it. */
+  connected: boolean;
 }
 
 /** A product or service billed in the past six months that is not on the list, at the price billed most often. */
@@ -103,6 +113,8 @@ export interface InvoiceSettingsView {
   updatedAt: string | null;
   products: InvoiceProductView[];
   billed: BilledPrice[];
+  /** The office's Xero organisations, connected ones first: what each product or service can go to. Empty until Xero is connected. */
+  organisations: InvoiceProductOrganisation[];
   /** The console's copies of the files on Jobber's invoices (phase 7). */
   files?: InvoiceFileCopyStatus;
 }
@@ -127,6 +139,8 @@ export interface ChangeInvoiceProductInput {
   description?: string | null;
   unitPriceCents?: number;
   active?: boolean;
+  /** The Xero organisation it goes to: one connected now, or null for none. Left out, unchanged. */
+  xeroTenantId?: string | null;
   expectedUpdatedAt: string;
 }
 

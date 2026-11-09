@@ -87,6 +87,7 @@ const settings = (tenantId: string): XeroSettingsView => ({
   values: { sendFrom: null, salesAccountId: null, salesTaxType: null, salesAccounts: {}, paymentAccounts: {} },
   products: [{ nameKey: 'move-out inspection', name: 'Move-out inspection', listed: true, active: true, accountId: null }],
   payments: [{ method: 'PROPERTYWARE_LEDGER', accountId: null, payments: 3 }],
+  withoutOrganisation: 0,
   invoicesToSend: 5,
   checks: [{ key: 'sendFrom', label: 'A start date', ok: false, detail: 'Choose the first day whose invoices go to Xero.' }],
   ready: false,
