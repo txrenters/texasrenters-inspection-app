@@ -7,6 +7,7 @@
  * the console does not have yet.
  */
 
+import { DEFAULT_CLIENT_VIEW, type InvoiceClientView, type InvoiceEmailAttachment } from './invoice-templates.js';
 import type { InvoiceDeliveryKind } from './invoice-reminders.js';
 import { formatMoney, type InvoiceDetail } from './invoices.js';
 
@@ -20,6 +21,8 @@ export interface SendInvoiceInput {
   message?: string | null;
   /** The browser's key: a resend or a double click sends one email. */
   clientRequestId: string;
+  /** The invoice's PDF, made in the browser, attached to the email (2026-11-10). */
+  attachment?: InvoiceEmailAttachment | null;
 }
 
 export type InvoiceDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED';
@@ -73,6 +76,40 @@ export interface InvoiceTotalLine {
  * subtotal, any discount and tax, the total, what has been paid, and the
  * balance due last. One list, so the two never disagree.
  */
+const TEMPLATE_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+/** "Dec 1, 2026", or "—" for none: a day as a template says it. */
+export const templateDay = (value: string | null | undefined) => (value ? TEMPLATE_DAY.format(new Date(`${value}T12:00:00.000Z`)) : '—');
+
+/** An invoice email's placeholders, filled (2026-11-10). */
+export function invoiceTemplateValues(
+  invoice: Pick<InvoiceDetail, 'clientName' | 'number' | 'subject' | 'totalCents' | 'balanceCents' | 'issuedOn' | 'dueOn'>,
+  companyName: string,
+): Record<string, string> {
+  return {
+    client_name: invoice.clientName,
+    company_name: companyName,
+    invoice_number: invoice.number ?? '',
+    invoice_subject: invoice.subject,
+    invoice_total: formatMoney(invoice.totalCents),
+    balance_due: formatMoney(invoice.balanceCents),
+    issued_date: templateDay(invoice.issuedOn),
+    due_date: templateDay(invoice.dueOn),
+  };
+}
+
+/** What the client sees, the console's own until the office says otherwise (2026-11-10). */
+export const clientViewOf = (invoice: { clientView?: InvoiceClientView }): InvoiceClientView => invoice.clientView ?? DEFAULT_CLIENT_VIEW;
+
+/** The client's whole account under the invoice's balance, as Jobber prints it when "Account balance" is on. */
+export function accountBalanceLine(invoice: Pick<InvoiceDetail, 'accountBalanceCents' | 'clientView'>): InvoiceTotalLine | null {
+  if (!clientViewOf(invoice).showAccountBalance || invoice.accountBalanceCents === null) return null;
+  return { label: 'Account balance', value: formatMoney(invoice.accountBalanceCents) };
+}
+
+/** Jobber's late stamp: past its due date, still owed, and the office has not turned it off. */
+export const showsLateStamp = (invoice: Pick<InvoiceDetail, 'status' | 'clientView'>) =>
+  invoice.status === 'PAST_DUE' && clientViewOf(invoice).showLateStamp;
+
 export function invoiceTotalLines(
   invoice: Pick<InvoiceDetail, 'subtotalCents' | 'taxCents' | 'totalCents' | 'balanceCents' | 'paidCents' | 'details'>,
 ): InvoiceTotalLine[] {

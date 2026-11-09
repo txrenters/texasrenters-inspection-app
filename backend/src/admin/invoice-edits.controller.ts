@@ -47,6 +47,15 @@ export class InvoiceTaxDto {
   @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 3 }) @Min(0) @Max(100) percent!: number;
 }
 
+/** Jobber's "Client view" (2026-11-10). */
+export class InvoiceClientViewDto {
+  @IsBoolean() showQuantities!: boolean;
+  @IsBoolean() showUnitPrices!: boolean;
+  @IsBoolean() showLineTotals!: boolean;
+  @IsBoolean() showAccountBalance!: boolean;
+  @IsBoolean() showLateStamp!: boolean;
+}
+
 export class EditInvoiceDto {
   @IsString() @MinLength(1) @MaxLength(200) subject!: string;
   @IsOptional() @IsString() @MaxLength(30) number!: string | null;
@@ -62,6 +71,7 @@ export class EditInvoiceDto {
   @IsOptional() @ValidateNested() @Type(() => InvoiceTaxDto) tax!: InvoiceTaxDto | null;
   @IsOptional() @IsString() @MaxLength(2000) clientMessage?: string | null;
   @IsOptional() @IsString() @MaxLength(4000) contractDisclaimer?: string | null;
+  @IsOptional() @ValidateNested() @Type(() => InvoiceClientViewDto) clientView?: InvoiceClientViewDto;
   @IsISO8601({ strict: true }) expectedUpdatedAt!: string;
 }
 

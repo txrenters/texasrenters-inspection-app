@@ -91,6 +91,14 @@ describe('an invoice PDF', () => {
     expect(await pages({ ...INVOICE, lineItems: many })).toBeGreaterThan(1);
   });
 
+  it("renders with only what the client view shows, and the late stamp (2026-11-10)", async () => {
+    const { renderToBuffer } = await import('@react-pdf/renderer');
+    const hidden = { showQuantities: false, showUnitPrices: false, showLineTotals: true, showAccountBalance: true, showLateStamp: true };
+    const late = { ...INVOICE, status: 'PAST_DUE' as const, accountBalanceCents: 10498, clientView: hidden };
+    const buffer = await renderToBuffer(<InvoiceDocument brand={BRAND} invoice={late} />);
+    expect(buffer.toString('latin1').startsWith('%PDF-')).toBe(true);
+  });
+
   it('prints many invoices in one file, each on pages of its own (Batch Deliver)', async () => {
     const { renderToBuffer } = await import('@react-pdf/renderer');
     const pagesOf = async (invoices: InvoiceDetail[]) =>

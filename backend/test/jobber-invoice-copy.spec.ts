@@ -276,7 +276,8 @@ describe('every other detail Jobber keeps', () => {
     const tx = transaction();
     const note = { jobberNoteId: 'note-1', kind: 'INVOICE', message: 'Paid by the owner', pinned: true, writtenAt: '2026-10-03T12:00:00.000Z' };
     await applyJobberInvoice(tx as never, ORG, copy({ notes: [note] }), NOW);
-    expect(tx.invoiceNote.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: 'invoice-1' } });
+    // Jobber's own only: a note written in the console (2026-11-10) is never replaced.
+    expect(tx.invoiceNote.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: 'invoice-1', origin: 'JOBBER' } });
     expect(tx.invoiceNote.createMany).toHaveBeenCalledWith({
       data: [{ ...note, organizationId: ORG, invoiceId: 'invoice-1', writtenAt: new Date('2026-10-03T12:00:00.000Z') }],
       skipDuplicates: true,
@@ -303,7 +304,7 @@ describe('every other detail Jobber keeps', () => {
       uploadedAt: '2026-10-03T12:00:00.000Z',
     };
     await applyJobberInvoice(tx as never, ORG, copy({ files: [file] }), NOW);
-    expect(tx.invoiceFile.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: 'invoice-1', jobberFileId: { notIn: ['file-1'] } } });
+    expect(tx.invoiceFile.deleteMany).toHaveBeenCalledWith({ where: { invoiceId: 'invoice-1', origin: 'JOBBER', jobberFileId: { notIn: ['file-1'] } } });
     const [{ where, create, update }] = tx.invoiceFile.upsert.mock.calls[0];
     expect(where).toEqual({ invoiceId_jobberFileId: { invoiceId: 'invoice-1', jobberFileId: 'file-1' } });
     // An address that is not HTTPS is not one to open.
