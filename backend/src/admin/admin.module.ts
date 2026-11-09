@@ -27,6 +27,9 @@ import { InvoiceFollowUpsScheduler } from './invoice-follow-ups.scheduler';
 import { InvoiceFollowUpsService } from './invoice-follow-ups.service';
 import { PropertyAccountController, StatementSettingsController } from './property-account.controller';
 import { PropertyAccountService } from './property-account.service';
+import { InvoiceRecordsController, InvoiceTemplatesController } from './invoice-records.controller';
+import { InvoiceRecordsService } from './invoice-records.service';
+import { InvoiceTemplatesService } from './invoice-templates.service';
 import { InvoiceDeliveryService } from './invoice-delivery.service';
 import { InvoiceFilesController } from './invoice-files.controller';
 import { InvoiceFilesService } from './invoice-files.service';
@@ -84,6 +87,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     PaymentReceiptsController,
     PropertyAccountController,
     StatementSettingsController,
+    InvoiceRecordsController,
+    InvoiceTemplatesController,
     InvoiceSettingsController,
     InvoiceReportsController,
     InvoiceFilesController,
@@ -118,6 +123,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceFollowUpsService,
     InvoiceFollowUpsScheduler,
     PropertyAccountService,
+    InvoiceRecordsService,
+    InvoiceTemplatesService,
     InvoiceSettingsService,
     InvoiceFilesService,
     InvoiceFileStorageService,

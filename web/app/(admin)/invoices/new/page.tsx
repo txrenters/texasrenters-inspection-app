@@ -8,6 +8,7 @@ import {
   invoiceTotals,
   type InvoiceDraft,
   type InvoiceLineInput,
+  type InvoiceDetail,
 } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -25,7 +26,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
-import { newClientRequestId, useInvoiceActions, useInvoiceDraft } from '@/lib/invoice-queries';
+import { newClientRequestId, useInvoice, useInvoiceActions, useInvoiceDraft } from '@/lib/invoice-queries';
 import { propertyOptionLabel } from '@/lib/property-label';
 import { usePropertyOptions } from '@/lib/queries';
 
@@ -39,7 +40,11 @@ import { usePropertyOptions } from '@/lib/queries';
 export default function NewInvoicePage() {
   const search = useSearchParams();
   const inspectionId = search.get('inspection') ?? '';
-  const [propertyId, setPropertyId] = useState(search.get('property') ?? '');
+  // Jobber's "Create similar" (2026-11-10): the invoice it is like.
+  const similarId = search.get('similar') ?? '';
+  const similar = useInvoice(similarId);
+  const [chosenProperty, setPropertyId] = useState(search.get('property') ?? '');
+  const propertyId = chosenProperty || similar.data?.property?.id || '';
   const { has } = usePermissions();
   const mayCreate = has('invoices:manage');
   const target = inspectionId ? { inspectionId } : propertyId ? { propertyId } : {};
@@ -47,10 +52,27 @@ export default function NewInvoicePage() {
 
   if (!mayCreate)
     return <EmptyState description="Creating invoices is a permission of its own. Ask an administrator." title="You may not create invoices" />;
+  if (similarId && similar.isLoading) return <PageSkeleton />;
   if (!inspectionId && !propertyId) return <PropertyStep onChoose={setPropertyId} />;
   if (draft.isLoading) return <PageSkeleton />;
   if (draft.isError || !draft.data) return <ErrorState error={draft.error} retry={() => void draft.refetch()} />;
-  return <InvoiceEditor draft={draft.data} key={draft.data.inspection?.id ?? draft.data.property?.id} />;
+  const start = similar.data && !inspectionId ? likeInvoice(draft.data, similar.data) : draft.data;
+  return <InvoiceEditor draft={start} key={`${draft.data.inspection?.id ?? draft.data.property?.id}:${similarId}`} />;
+}
+
+/** A draft that starts as another invoice did: its subject, its lines at their prices, and its message. */
+function likeInvoice(draft: InvoiceDraft, invoice: InvoiceDetail): InvoiceDraft {
+  return {
+    ...draft,
+    subject: invoice.subject,
+    lineItems: invoice.lineItems.map((line) => ({
+      name: line.name,
+      description: line.description,
+      quantity: line.quantity,
+      unitPriceCents: line.unitPriceCents,
+    })),
+    clientMessage: invoice.clientMessage ?? draft.clientMessage,
+  };
 }
 
 /** The property an invoice no visit covers is made out to, found by its address or name. */

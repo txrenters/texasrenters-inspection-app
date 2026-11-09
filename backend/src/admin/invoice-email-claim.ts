@@ -101,7 +101,13 @@ export async function sendClaimedEmail(
   mail: MailService,
   deliveryId: string,
   to: readonly string[],
-  email: { subject: string; title: string; html: string },
+  email: {
+    subject: string;
+    title: string;
+    html: string;
+    replyTo?: string | null;
+    attachments?: { name: string; contentType: string; contentBase64: string }[];
+  },
 ): Promise<{ status: 'SENT' | 'FAILED'; failure: string | null; failed: number }> {
   const failed: string[] = [];
   let reason: string | null = null;

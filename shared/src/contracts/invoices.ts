@@ -1,3 +1,4 @@
+import type { InvoiceClientView } from './invoice-templates.js';
 import type { InvoiceDeliveryView } from './invoice-delivery.js';
 
 /**
@@ -123,6 +124,9 @@ export interface InvoiceNoteView {
   message: string;
   pinned: boolean;
   writtenAt: string;
+  /** Read from Jobber, or written in the console (2026-11-10), and by whom. */
+  origin?: 'JOBBER' | 'CONSOLE';
+  author?: string | null;
 }
 
 /** An image or attachment on the invoice. */
@@ -138,6 +142,8 @@ export interface InvoiceFileView {
   kept?: boolean;
   /** Why the copy has not been made yet, in words; null when nothing went wrong. */
   copyProblem?: string | null;
+  /** Read from Jobber, or added in the console (2026-11-10). */
+  origin?: 'JOBBER' | 'CONSOLE';
 }
 
 /** A short-lived address to open one file at (2026-11-06): the console's copy, else Jobber's. */
@@ -223,6 +229,8 @@ export interface InvoiceDetail extends InvoiceSummary {
   brand?: ReceiptBrand;
   /** Each time it was sent to the client from the console, newest first. */
   deliveries?: InvoiceDeliveryView[];
+  /** Jobber's "Client view" (2026-11-10): what the client sees on the PDF and the email. */
+  clientView?: InvoiceClientView;
 }
 
 /** The rest of what Jobber keeps on an invoice. */

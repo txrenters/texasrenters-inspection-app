@@ -211,12 +211,21 @@ export class MailService {
    * (`invoiceEmail`, every value escaped there), in the house layout. One
    * address a call, so a client never sees who else was sent it.
    */
-  sendInvoice(input: { to: string; subject: string; title: string; html: string }) {
+  sendInvoice(input: {
+    to: string;
+    subject: string;
+    title: string;
+    html: string;
+    replyTo?: string | null;
+    attachments?: { name: string; contentType: string; contentBase64: string }[];
+  }) {
     return this.deliver({
       to: input.to,
       subject: input.subject,
       html: this.layout(input.title, input.html),
       template: 'invoice',
+      replyTo: input.replyTo,
+      attachments: input.attachments,
     });
   }
 
@@ -225,6 +234,8 @@ export class MailService {
     subject: string;
     html: string;
     template: string;
+    replyTo?: string | null;
+    attachments?: { name: string; contentType: string; contentBase64: string }[];
   }): Promise<MailDeliveryResult> {
     if (!this.transport || !this.config.senderAddress) return this.notConfigured();
     try {
@@ -232,6 +243,8 @@ export class MailService {
         to: input.to,
         subject: input.subject,
         html: input.html,
+        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       });
       return { status: 'SENT', message: 'Email sent successfully.' };
     } catch {
