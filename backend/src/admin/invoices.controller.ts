@@ -33,6 +33,7 @@ import {
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { InvoiceBatchService } from './invoice-batch.service';
+import { InvoiceDeliveryService } from './invoice-delivery.service';
 import { InvoicesService } from './invoices.service';
 
 const trimmed = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -140,6 +141,7 @@ export class InvoicesController {
   constructor(
     @Inject(InvoicesService) private readonly service: InvoicesService,
     @Inject(InvoiceBatchService) private readonly batches: InvoiceBatchService,
+    @Inject(InvoiceDeliveryService) private readonly deliveries: InvoiceDeliveryService,
   ) {}
 
   @Get()
@@ -183,12 +185,16 @@ export class InvoicesController {
 
   @Post(':invoiceId/payments')
   @RequirePermissions('invoices:read', 'payments:record')
-  recordPayment(
+  async recordPayment(
     @Req() request: AuthenticatedRequest,
     @Param('invoiceId', new ParseUUIDPipe()) id: string,
     @Body() body: RecordPaymentDto,
   ) {
-    return this.service.recordPayment(request.user, id, body);
+    const invoice = await this.service.recordPayment(request.user, id, body);
+    // Its receipt, when the office sends them by themselves. Not awaited: the
+    // payment is recorded whatever the mail provider does, and never waits on it.
+    void this.deliveries.receiptAfterPayment(request.user, id, body.clientRequestId);
+    return invoice;
   }
 }
 

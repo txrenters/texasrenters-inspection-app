@@ -275,6 +275,10 @@ export interface PaymentDetail extends PaymentListItem {
   writesEnabled: boolean;
   /** Who the receipt is from, as the inspection reports name the company. */
   brand: ReceiptBrand;
+  /** Each receipt emailed for it, newest first. */
+  receipts?: InvoiceDeliveryView[];
+  /** Who a receipt would go to: whoever the invoice was last sent to, else the client's addresses. */
+  receiptTo?: string[];
 }
 
 /** The company a receipt is from. */

@@ -1,7 +1,7 @@
 'use client';
 
 import { INVOICE_STATUS_LABEL, PAYMENT_METHOD_LABEL, formatMoney, paymentLockedReason } from '@texasrenters/shared';
-import { DownloadIcon, PencilIcon, ReceiptTextIcon, Trash2Icon } from 'lucide-react';
+import { DownloadIcon, MailIcon, PencilIcon, ReceiptTextIcon, Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 
 import { ChangePaymentDialog, RemovePaymentDialog } from '@/components/invoices/change-payment-dialog';
 import { PAYMENT_RECORD, formatInvoiceDay, formatInvoiceMoment } from '@/components/invoices/invoice-parts';
+import { InvoiceDeliveries } from '@/components/invoices/send-invoice-dialog';
+import { SendReceiptDialog } from '@/components/invoices/send-receipt-dialog';
 import { PageHeader } from '@/components/page-header';
 import { AsideCard, FactTable, PlaceCard, RecordLayout, type Fact } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -34,6 +36,7 @@ export default function PaymentPage() {
   const [changing, setChanging] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [emailing, setEmailing] = useState(false);
 
   if (payment.isLoading) return <PageSkeleton />;
   if (payment.isError || !payment.data)
@@ -43,6 +46,8 @@ export default function PaymentPage() {
   const mayRecord = has('payments:record');
   const locked = paymentLockedReason(data);
   const changeable = mayRecord && data.writesEnabled && !locked;
+  // Emailed from here once the console owns invoicing (2026-11-09); Jobber sends its own until then.
+  const mayEmail = mayRecord && data.writesEnabled;
   const receipt = async () => {
     setDownloading(true);
     try {
@@ -86,6 +91,12 @@ export default function PaymentPage() {
               <DownloadIcon />
               {downloading ? 'Making the receipt…' : 'Download receipt'}
             </Button>
+            {mayEmail ? (
+              <Button onClick={() => setEmailing(true)} size="sm" variant="outline">
+                <MailIcon />
+                Email receipt
+              </Button>
+            ) : null}
             {changeable ? (
               <>
                 <Button onClick={() => setChanging(true)} size="sm" variant="outline">
@@ -112,23 +123,30 @@ export default function PaymentPage() {
 
       <RecordLayout
         aside={
-          <AsideCard title="Applied to">
-            <dl className="grid grid-cols-[1fr_auto] gap-y-1.5">
-              <dt className="text-muted-foreground">Invoice</dt>
-              <dd className="text-right">
-                <Link className="underline underline-offset-2" href={`/invoices/${data.invoice.id}`}>
-                  {data.invoice.number ? `#${data.invoice.number}` : data.invoice.subject}
-                </Link>
-              </dd>
-              <dt className="text-muted-foreground">Invoice total</dt>
-              <dd className="text-right tabular-nums">{formatMoney(data.invoiceTotalCents)}</dd>
-              <dt className="text-muted-foreground">Still owed</dt>
-              <dd className="text-heading text-right font-bold tabular-nums">{formatMoney(data.invoiceBalanceCents)}</dd>
-            </dl>
-            {data.invoiceBalanceCents === 0 ? (
-              <p className="text-muted-foreground mt-2 text-xs">{INVOICE_STATUS_LABEL.PAID} in full.</p>
+          <>
+            <AsideCard title="Applied to">
+              <dl className="grid grid-cols-[1fr_auto] gap-y-1.5">
+                <dt className="text-muted-foreground">Invoice</dt>
+                <dd className="text-right">
+                  <Link className="underline underline-offset-2" href={`/invoices/${data.invoice.id}`}>
+                    {data.invoice.number ? `#${data.invoice.number}` : data.invoice.subject}
+                  </Link>
+                </dd>
+                <dt className="text-muted-foreground">Invoice total</dt>
+                <dd className="text-right tabular-nums">{formatMoney(data.invoiceTotalCents)}</dd>
+                <dt className="text-muted-foreground">Still owed</dt>
+                <dd className="text-heading text-right font-bold tabular-nums">{formatMoney(data.invoiceBalanceCents)}</dd>
+              </dl>
+              {data.invoiceBalanceCents === 0 ? (
+                <p className="text-muted-foreground mt-2 text-xs">{INVOICE_STATUS_LABEL.PAID} in full.</p>
+              ) : null}
+            </AsideCard>
+            {data.receipts?.length ? (
+              <AsideCard title="Receipts emailed">
+                <InvoiceDeliveries deliveries={data.receipts} />
+              </AsideCard>
             ) : null}
-          </AsideCard>
+          </>
         }
         asideLabel="About this payment"
       >
@@ -158,6 +176,7 @@ export default function PaymentPage() {
         ) : null}
       </RecordLayout>
 
+      {mayEmail ? <SendReceiptDialog onClose={() => setEmailing(false)} open={emailing} payment={data} /> : null}
       {changeable ? (
         <>
           <ChangePaymentDialog onClose={() => setChanging(false)} open={changing} payment={data} />

@@ -3,7 +3,9 @@
 import {
   MAX_INVOICE_RECIPIENTS,
   formatMoney,
+  overdueWords,
   recipientsProblem,
+  type InvoiceDeliveryKind,
   type InvoiceDeliveryView,
   type InvoiceDetail,
 } from '@texasrenters/shared';
@@ -207,13 +209,24 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
   );
 }
 
-const DELIVERY_STATUS: Record<InvoiceDeliveryView['status'], string> = {
-  PENDING: 'Sending',
-  SENT: 'Emailed',
-  FAILED: 'Not sent',
+const DELIVERY_STATUS: Record<InvoiceDeliveryKind, Record<InvoiceDeliveryView['status'], string>> = {
+  INVOICE: { PENDING: 'Sending', SENT: 'Emailed', FAILED: 'Not sent' },
+  FOLLOW_UP: { PENDING: 'Sending a follow-up', SENT: 'Follow-up emailed', FAILED: 'Follow-up not sent' },
+  RECEIPT: { PENDING: 'Sending a receipt', SENT: 'Receipt emailed', FAILED: 'Receipt not sent' },
 };
 
-/** Each time it was emailed from the console, newest first: to whom, when, by whom, and why one did not go. */
+/** What it was and who sent it: "Office", or for a follow-up "4 days overdue · sent by itself". */
+function deliveryBy(delivery: InvoiceDeliveryView) {
+  const who = delivery.sentBy?.displayName ?? (delivery.kind === 'INVOICE' ? null : 'sent by itself');
+  const late = delivery.kind === 'FOLLOW_UP' && delivery.followUpDay !== null ? overdueWords(delivery.followUpDay) : null;
+  return [late, who].filter(Boolean).join(' · ');
+}
+
+/**
+ * Each email from the console about it, newest first: the invoice itself, a
+ * follow-up about paying it, or a receipt (2026-11-09) -- to whom, when, by
+ * whom, and why one did not go.
+ */
 export function InvoiceDeliveries({ deliveries }: { deliveries: readonly InvoiceDeliveryView[] }) {
   return (
     <ol className="grid gap-2.5 text-sm">
@@ -221,11 +234,11 @@ export function InvoiceDeliveries({ deliveries }: { deliveries: readonly Invoice
         <li key={delivery.id}>
           <p className="flex flex-wrap items-baseline gap-x-2">
             <span className={delivery.status === 'FAILED' ? 'text-destructive font-semibold' : 'text-heading font-semibold'}>
-              {DELIVERY_STATUS[delivery.status]}
+              {DELIVERY_STATUS[delivery.kind ?? 'INVOICE'][delivery.status]}
             </span>
             <span className="text-muted-foreground text-xs">
               {formatInvoiceMoment(delivery.sentAt ?? delivery.createdAt)}
-              {delivery.sentBy ? ` · ${delivery.sentBy.displayName}` : ''}
+              {deliveryBy(delivery) ? ` · ${deliveryBy(delivery)}` : ''}
             </span>
           </p>
           <p className="text-muted-foreground text-xs break-all">{delivery.recipients.join(', ')}</p>

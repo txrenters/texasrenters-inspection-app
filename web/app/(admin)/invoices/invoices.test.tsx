@@ -46,6 +46,11 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // The PDF itself is rendered in its own test (lib/receipt-pdf); here, only that the page asks for it.
 const receipts = vi.hoisted(() => ({ downloadReceipt: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/receipt-pdf/download-receipt', () => receipts);
+// Emailing a receipt has its own tests (invoice-emails.test.tsx).
+vi.mock('@/lib/invoice-delivery-queries', () => ({
+  useSendInvoice: () => ({ mutate: vi.fn(), isPending: false }),
+  useSendReceipt: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const create = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };

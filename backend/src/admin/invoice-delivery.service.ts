@@ -1,37 +1,53 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { recipientsProblem, type InvoiceDetail, type SendInvoiceInput } from '@texasrenters/shared';
-import { Prisma } from '@prisma/client';
+import {
+  daysBetween,
+  invoiceStatusOn,
+  MAX_BATCH_DELIVERY,
+  recipientsProblem,
+  type DeliverableInvoice,
+  type DeliverableQuery,
+  type DeliverInvoicesInput,
+  type DeliverInvoicesResult,
+  type InvoiceDetail,
+  type PaymentDetail,
+  type SendInvoiceInput,
+  type SendReceiptInput,
+} from '@texasrenters/shared';
+import { InvoiceStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
-import { businessDayBounds } from '../common/business-day';
-import { ceilingFrom } from '../common/daily-allowance';
+import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { claimInvoiceEmail, isEmailCeiling, sendClaimedEmail } from './invoice-email-claim';
+import { defaultRecipients, readEmailSettings } from './invoice-email-settings';
 import { invoiceEmail } from './invoice-email';
+import { receiptEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
 
+export { DEFAULT_INVOICE_EMAIL_CEILING } from './invoice-email-claim';
+
 /**
- * Sending an invoice to the client by email (2026-11-06, phase 5 of taking
- * invoicing over from Jobber).
+ * Emailing the client about an invoice: the invoice itself (2026-11-06, phase 5
+ * of taking invoicing over from Jobber), its receipt, and many invoices at once
+ * (2026-11-09, phase 1 of the invoice gap review).
  *
- * Every email is a billed call to the mail provider, so:
- * - one happens only when somebody presses Send, never from a page load, a
- *   poll or a loop;
- * - one send reaches at most five people, one email each;
- * - the office sends at most `INVOICE_EMAIL_DAILY_CEILING` (200) a Texas
- *   day, counted from what it sent rather than held in memory, so a restart
- *   does not reset it;
- * - the delivery is written before anything is sent, keyed by the browser, so
- *   a double click or a resend sends nothing twice.
+ * Every email is a billed call to the mail provider, so one happens only when
+ * somebody presses a button -- or, for a receipt, records a payment with
+ * automatic receipts on -- never from a page load, a poll or a loop. Each is
+ * claimed under a key and the office's daily ceiling (`invoice-email-claim`).
  *
  * Off until the cutover, as every invoice write is: until then the office
  * sends from Jobber. A draft is marked sent first; a voided invoice is not sent.
  */
 
-/** Emails one office sends a Texas day, at most. */
-export const DEFAULT_INVOICE_EMAIL_CEILING = 200;
+/** The longest stretch Batch Deliver lists at once, as Batch create does. */
+const MAX_DELIVERABLE_DAYS = 92;
+const MAX_DELIVERABLE_ROWS = 200;
+
+const isoDay = (value: Date | null) => (value ? value.toISOString().slice(0, 10) : null);
 
 @Injectable()
 export class InvoiceDeliveryService {
@@ -57,87 +73,178 @@ export class InvoiceDeliveryService {
     if (invoice.status === 'DRAFT') throw new ApplicationError(409, 'INVOICE_NOT_SENDABLE', 'Mark the draft sent before it is emailed.');
     if (invoice.status === 'VOIDED') throw new ApplicationError(409, 'INVOICE_NOT_SENDABLE', 'A voided invoice is not sent.');
 
-    const ceiling = ceilingFrom('INVOICE_EMAIL_DAILY_CEILING', DEFAULT_INVOICE_EMAIL_CEILING);
-    let deliveryId: string;
-    try {
-      deliveryId = await this.prisma.$transaction(async (tx) => {
-        // Counted and claimed under one lock, so two sends at once cannot both fit under the ceiling.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`invoice-email:${user.organizationId}`}, 0))::text AS locked`;
-        const sent = await tx.invoiceDelivery.findMany({
-          where: {
-            organizationId: user.organizationId,
-            createdAt: { gte: businessDayBounds().start },
-            status: { in: ['PENDING', 'SENT'] },
-          },
-          select: { recipients: true },
-        });
-        const used = sent.reduce((sum, delivery) => sum + delivery.recipients.length, 0);
-        if (used + to.length > ceiling)
-          throw new ApplicationError(
-            429,
-            'INVOICE_EMAIL_CEILING',
-            `The office has sent ${used} of its ${ceiling} invoice emails today. More can go tomorrow.`,
-          );
-        const delivery = await tx.invoiceDelivery.create({
-          data: {
-            organizationId: user.organizationId,
-            invoiceId,
-            channel: 'EMAIL',
-            recipients: to,
-            message,
-            status: 'PENDING',
-            sentById: user.id,
-            clientRequestId: input.clientRequestId,
-          },
-          select: { id: true },
-        });
-        return delivery.id;
-      });
-    } catch (error) {
-      // The same press, sent twice at once: the other request is sending it.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const other = await this.byKey(user, input.clientRequestId);
-        if (other) return this.answerResend(user, other, invoiceId);
-      }
-      throw error;
-    }
-
-    // Outside the transaction: nothing waits on a lock while the provider answers.
-    const email = invoiceEmail(invoice, invoice.brand ?? receiptBrand(), message);
-    const failed: string[] = [];
-    let reason: string | null = null;
-    for (const address of to) {
-      const result = await this.mail.sendInvoice({ to: address, ...email });
-      if (result.status !== 'SENT') {
-        failed.push(address);
-        reason = result.status === 'NOT_CONFIGURED' ? 'Email is not set up for the console yet.' : 'The mail provider did not take it.';
-      }
-    }
-    const status = failed.length === to.length ? 'FAILED' : 'SENT';
-    const failure = failed.length ? `${reason} Not sent to ${failed.join(', ')}.` : null;
-    await this.prisma.invoiceDelivery.update({
-      where: { id: deliveryId },
-      data: { status, failure, sentAt: status === 'SENT' ? new Date() : null },
+    const deliveryId = await claimInvoiceEmail(this.prisma, {
+      organizationId: user.organizationId,
+      invoiceId,
+      recipients: to,
+      message,
+      kind: 'INVOICE',
+      sentById: user.id,
+      clientRequestId: input.clientRequestId,
     });
-    await this.prisma.auditLog.create({
-      data: {
+    // The same press, sent twice at once: the other request is sending it.
+    if (!deliveryId) return this.answerResend(user, await this.byKey(user, input.clientRequestId), invoiceId);
+
+    const result = await sendClaimedEmail(
+      this.prisma,
+      this.mail,
+      deliveryId,
+      to,
+      invoiceEmail(invoice, invoice.brand ?? receiptBrand(), message),
+    );
+    await this.audit(user, 'INVOICE_SENT', invoiceId, { deliveryId, channel: 'EMAIL', to, status: result.status, ...(result.failure ? { failure: result.failure } : {}) });
+    if (result.failed) this.logger.warn({ event: 'invoice_email_not_sent', invoiceId, failed: result.failed, of: to.length });
+    if (result.status === 'FAILED') throw new ApplicationError(502, 'INVOICE_EMAIL_FAILED', result.failure ?? 'The invoice was not sent.');
+    return this.invoices.one(user, invoiceId);
+  }
+
+  /** A payment's receipt, emailed by somebody pressing Send receipt. */
+  async sendReceipt(user: AuthenticatedUser, paymentId: string, input: SendReceiptInput): Promise<PaymentDetail> {
+    if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
+    const problem = recipientsProblem(input.to);
+    if (problem) throw new ApplicationError(422, 'RECEIPT_SEND_INVALID', problem);
+    const to = input.to.map((address) => address.trim()).filter(Boolean);
+
+    const prior = await this.byKey(user, input.clientRequestId);
+    if (prior) return this.answerReceiptResend(user, prior, paymentId);
+
+    const payment = await this.invoices.onePayment(user, paymentId);
+    const deliveryId = await claimInvoiceEmail(this.prisma, {
+      organizationId: user.organizationId,
+      invoiceId: payment.invoice.id,
+      recipients: to,
+      message: null,
+      kind: 'RECEIPT',
+      paymentId,
+      sentById: user.id,
+      clientRequestId: input.clientRequestId,
+    });
+    if (!deliveryId) return this.answerReceiptResend(user, await this.byKey(user, input.clientRequestId), paymentId);
+
+    const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, receiptEmail(payment, payment.brand));
+    await this.audit(user, 'PAYMENT_RECEIPT_SENT', payment.invoice.id, { deliveryId, paymentId, to, status: result.status, ...(result.failure ? { failure: result.failure } : {}) });
+    if (result.status === 'FAILED') throw new ApplicationError(502, 'RECEIPT_EMAIL_FAILED', result.failure ?? 'The receipt was not sent.');
+    return this.invoices.onePayment(user, paymentId);
+  }
+
+  /**
+   * The receipt for a payment just recorded here, when the office emails them
+   * by themselves (Jobber's "automatic receipts"). Never throws: the payment
+   * stands whatever the email does, and a receipt can still be sent by hand.
+   */
+  async receiptAfterPayment(user: AuthenticatedUser, invoiceId: string, clientRequestId: string): Promise<void> {
+    try {
+      if (!(await readEmailSettings(this.prisma, user.organizationId)).values.receiptsAutomatic) return;
+      const recorded = await this.prisma.invoicePayment.findFirst({
+        where: { organizationId: user.organizationId, invoiceId, clientRequestId },
+        select: { id: true },
+      });
+      if (!recorded) return;
+      const payment = await this.invoices.onePayment(user, recorded.id);
+      const to = payment.receiptTo ?? [];
+      if (!to.length) return;
+      // One automatic receipt a payment, however often the press is repeated.
+      const deliveryId = await claimInvoiceEmail(this.prisma, {
         organizationId: user.organizationId,
-        actorUserId: user.id,
-        action: 'INVOICE_SENT',
-        entityType: 'Invoice',
-        entityId: invoiceId,
-        metadata: { deliveryId, channel: 'EMAIL', to, status, ...(failure ? { failure } : {}) },
+        invoiceId,
+        recipients: to,
+        message: null,
+        kind: 'RECEIPT',
+        paymentId: recorded.id,
+        sentById: user.id,
+        clientRequestId: `receipt:${recorded.id}`,
+      });
+      if (!deliveryId) return;
+      const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, receiptEmail(payment, payment.brand));
+      await this.audit(user, 'PAYMENT_RECEIPT_SENT', invoiceId, { deliveryId, paymentId: recorded.id, to, status: result.status, automatic: true, ...(result.failure ? { failure: result.failure } : {}) });
+    } catch (error) {
+      this.logger.warn({ event: 'automatic_receipt_not_sent', invoiceId, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /**
+   * What Batch Deliver offers: invoices awaiting payment, issued in the days
+   * asked for, that nobody has emailed yet, with who each would go to.
+   */
+  async deliverable(user: AuthenticatedUser, query: DeliverableQuery): Promise<DeliverableInvoice[]> {
+    const span = daysBetween(query.from, query.to);
+    if (span < 0) throw new ApplicationError(422, 'DELIVERABLE_RANGE_INVALID', 'The first day comes after the last.');
+    if (span > MAX_DELIVERABLE_DAYS)
+      throw new ApplicationError(422, 'DELIVERABLE_RANGE_INVALID', `Choose at most ${MAX_DELIVERABLE_DAYS} days at a time.`);
+    const rows = await this.prisma.invoice.findMany({
+      where: {
+        organizationId: user.organizationId,
+        status: InvoiceStatus.AWAITING_PAYMENT,
+        balanceCents: { gt: 0 },
+        issuedOn: { gte: new Date(`${query.from}T00:00:00.000Z`), lte: new Date(`${query.to}T00:00:00.000Z`) },
+        deliveries: { none: { kind: 'INVOICE', status: 'SENT' } },
+      },
+      orderBy: [{ issuedOn: 'asc' }, { number: 'asc' }],
+      take: MAX_DELIVERABLE_ROWS,
+      select: {
+        id: true,
+        number: true,
+        clientName: true,
+        status: true,
+        issuedOn: true,
+        dueOn: true,
+        totalCents: true,
+        balanceCents: true,
+        clientEmails: true,
       },
     });
-    if (failed.length) this.logger.warn({ event: 'invoice_email_not_sent', invoiceId, failed: failed.length, of: to.length });
-    if (status === 'FAILED') throw new ApplicationError(502, 'INVOICE_EMAIL_FAILED', failure ?? 'The invoice was not sent.');
-    return this.invoices.one(user, invoiceId);
+    const today = businessDate();
+    return rows.map((row) => ({
+      id: row.id,
+      number: row.number,
+      clientName: row.clientName,
+      status: invoiceStatusOn(row.status, isoDay(row.dueOn), today),
+      issuedOn: isoDay(row.issuedOn),
+      dueOn: isoDay(row.dueOn),
+      totalCents: row.totalCents,
+      balanceCents: row.balanceCents,
+      to: defaultRecipients(null, row.clientEmails),
+    }));
+  }
+
+  /**
+   * Batch Deliver: each invoice emailed as Send emails it, one after another,
+   * each under its own key within the press's, so pressing again sends nothing
+   * twice. Stops at the day's ceiling, saying so for the rest.
+   */
+  async deliverMany(user: AuthenticatedUser, input: DeliverInvoicesInput): Promise<DeliverInvoicesResult> {
+    if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
+    if (!input.invoices.length) throw new ApplicationError(422, 'DELIVERY_EMPTY', 'Choose the invoices to send.');
+    if (input.invoices.length > MAX_BATCH_DELIVERY)
+      throw new ApplicationError(422, 'DELIVERY_TOO_MANY', `Send at most ${MAX_BATCH_DELIVERY} invoices at a time.`);
+    if (new Set(input.invoices.map((item) => item.invoiceId)).size !== input.invoices.length)
+      throw new ApplicationError(422, 'DELIVERY_REPEATED', 'An invoice is listed twice.');
+
+    const results: DeliverInvoicesResult['results'] = [];
+    for (const [index, item] of input.invoices.entries()) {
+      try {
+        await this.send(user, item.invoiceId, {
+          to: item.to,
+          message: input.message ?? null,
+          clientRequestId: `${input.batchKey}:${item.invoiceId}`,
+        });
+        results.push({ invoiceId: item.invoiceId, status: 'SENT', problem: null });
+      } catch (error) {
+        const problem = error instanceof ApplicationError ? error.message : 'It was not sent.';
+        results.push({ invoiceId: item.invoiceId, status: 'FAILED', problem });
+        if (isEmailCeiling(error)) {
+          for (const rest of input.invoices.slice(index + 1)) results.push({ invoiceId: rest.invoiceId, status: 'FAILED', problem });
+          break;
+        }
+      }
+    }
+    return { results };
   }
 
   private byKey(user: AuthenticatedUser, clientRequestId: string) {
     return this.prisma.invoiceDelivery.findFirst({
       where: { organizationId: user.organizationId, clientRequestId },
-      select: { invoiceId: true, status: true, failure: true },
+      select: { invoiceId: true, paymentId: true, status: true, failure: true },
     });
   }
 
@@ -146,10 +253,34 @@ export class InvoiceDeliveryService {
    * it went or is going, the same failure when it did not -- never a second
    * email. The same key for another invoice is a mistake.
    */
-  private answerResend(user: AuthenticatedUser, prior: { invoiceId: string; status: string; failure: string | null }, invoiceId: string) {
-    if (prior.invoiceId !== invoiceId)
+  private answerResend(user: AuthenticatedUser, prior: { invoiceId: string; status: string; failure: string | null } | null, invoiceId: string) {
+    if (!prior || prior.invoiceId !== invoiceId)
       throw new ApplicationError(409, 'IDEMPOTENCY_KEY_REUSED', 'That request key was already used for something else.');
     if (prior.status === 'FAILED') throw new ApplicationError(502, 'INVOICE_EMAIL_FAILED', prior.failure ?? 'The invoice was not sent.');
     return this.invoices.one(user, invoiceId);
+  }
+
+  private answerReceiptResend(
+    user: AuthenticatedUser,
+    prior: { paymentId: string | null; status: string; failure: string | null } | null,
+    paymentId: string,
+  ) {
+    if (!prior || prior.paymentId !== paymentId)
+      throw new ApplicationError(409, 'IDEMPOTENCY_KEY_REUSED', 'That request key was already used for something else.');
+    if (prior.status === 'FAILED') throw new ApplicationError(502, 'RECEIPT_EMAIL_FAILED', prior.failure ?? 'The receipt was not sent.');
+    return this.invoices.onePayment(user, paymentId);
+  }
+
+  private audit(user: AuthenticatedUser, action: string, invoiceId: string, metadata: Record<string, unknown>) {
+    return this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action,
+        entityType: 'Invoice',
+        entityId: invoiceId,
+        metadata: metadata as object,
+      },
+    });
   }
 }
