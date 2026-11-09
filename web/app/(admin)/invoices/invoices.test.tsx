@@ -49,6 +49,11 @@ vi.mock('@/lib/receipt-pdf/download-receipt', () => receipts);
 // Jobber's two cards on the payments page (2026-11-09).
 const insights = vi.hoisted(() => ({ usePaymentInsights: vi.fn() }));
 vi.mock('@/lib/invoice-report-queries', () => insights);
+// Emailing a receipt has its own tests (invoice-emails.test.tsx).
+vi.mock('@/lib/invoice-delivery-queries', () => ({
+  useSendInvoice: () => ({ mutate: vi.fn(), isPending: false }),
+  useSendReceipt: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 const create = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };

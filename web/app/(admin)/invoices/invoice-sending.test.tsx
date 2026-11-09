@@ -187,8 +187,34 @@ describe('sending an invoice', () => {
         ...DETAIL,
         deliveries: [
           {
+            id: 'd4',
+            channel: 'EMAIL',
+            kind: 'RECEIPT',
+            followUpDay: null,
+            recipients: ['owner@example.com'],
+            status: 'SENT',
+            failure: null,
+            sentBy: { id: 'u1', displayName: 'Office' },
+            createdAt: '2026-11-12T16:00:00.000Z',
+            sentAt: '2026-11-12T16:00:01.000Z',
+          },
+          {
+            id: 'd3',
+            channel: 'EMAIL',
+            kind: 'FOLLOW_UP',
+            followUpDay: 4,
+            recipients: ['owner@example.com'],
+            status: 'SENT',
+            failure: null,
+            sentBy: null,
+            createdAt: '2026-11-10T19:30:00.000Z',
+            sentAt: '2026-11-10T19:30:01.000Z',
+          },
+          {
             id: 'd2',
             channel: 'EMAIL',
+            kind: 'INVOICE',
+            followUpDay: null,
             recipients: ['owner@example.com'],
             status: 'FAILED',
             failure: 'Email is not set up for the console yet. Not sent to owner@example.com.',
@@ -199,6 +225,8 @@ describe('sending an invoice', () => {
           {
             id: 'd1',
             channel: 'EMAIL',
+            kind: 'INVOICE',
+            followUpDay: null,
             recipients: ['owner@example.com', 'manager@example.com'],
             status: 'SENT',
             failure: null,
@@ -216,5 +244,8 @@ describe('sending an invoice', () => {
     // 20:30 UTC is 2:30 PM in Texas.
     expect(sends).toHaveTextContent('Nov 5, 2026, 2:30 PM · Office');
     expect(sends).toHaveTextContent('owner@example.com, manager@example.com');
+    // A follow-up the console sent by itself, and a receipt (2026-11-09).
+    expect(sends).toHaveTextContent('Follow-up emailedNov 10, 2026, 1:30 PM · 4 days overdue · sent by itself');
+    expect(sends).toHaveTextContent('Receipt emailedNov 12, 2026, 10:00 AM · Office');
   });
 });

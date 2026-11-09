@@ -19,7 +19,9 @@ import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
+import { businessToday, shiftDay } from '@/lib/clock';
 import { formatRelative } from '@/lib/format';
+import { useUninvoicedVisits } from '@/lib/invoice-batch-queries';
 import { noInvoicesYet } from '@/lib/invoice-read';
 import { useInvoices } from '@/lib/invoice-queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -105,6 +107,11 @@ export default function InvoicesPage() {
                 Reports
               </Link>
             </Button>
+            {has('invoices:manage') ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href="/invoices/deliver">Batch deliver</Link>
+              </Button>
+            ) : null}
             {mayCreate ? (
               <>
                 <Button asChild size="sm" variant="outline">
@@ -134,6 +141,7 @@ export default function InvoicesPage() {
       />
 
       {data ? <InvoicesOverview issued={data.issued} overview={data.overview} /> : null}
+      {mayCreate ? <VisitsToInvoice /> : null}
 
       <ListToolbar
         filters={
@@ -214,5 +222,34 @@ export default function InvoicesPage() {
         </>
       )}
     </>
+  );
+}
+
+/** How far back the nudge looks: Jobber's "requires invoicing" has no end, but a month is what the office still bills. */
+const NUDGE_DAYS = 30;
+
+/**
+ * Jobber's "jobs requiring invoicing" (2026-11-09): the finished visits of the
+ * past month with no invoice yet, once the console makes invoices. A read of
+ * the console's own database, made when the list opens; nothing billed.
+ */
+function VisitsToInvoice() {
+  const today = businessToday();
+  const visits = useUninvoicedVisits({ from: shiftDay(today, -NUDGE_DAYS), to: today });
+  const count = visits.data?.items.length ?? 0;
+  if (!count) return null;
+  return (
+    <p className="bg-card mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-3 text-sm" role="status">
+      <span>
+        <span className="text-heading font-semibold tabular-nums">
+          {count}
+          {visits.data?.truncated ? '+' : ''}
+        </span>{' '}
+        finished {count === 1 ? 'visit has' : 'visits have'} no invoice yet, in the last {NUDGE_DAYS} days.
+      </span>
+      <Button asChild size="sm" variant="outline">
+        <Link href="/invoices/batch">Invoice them</Link>
+      </Button>
+    </p>
   );
 }

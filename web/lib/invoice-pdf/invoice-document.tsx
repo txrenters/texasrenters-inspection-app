@@ -80,12 +80,42 @@ const place = (invoice: InvoiceDetail) =>
 const quantity = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, ''));
 
 export function InvoiceDocument({ invoice, brand }: { invoice: InvoiceDetail; brand: ReceiptBrand }) {
+  return (
+    <Document author={brand.name} creator={brand.name} producer={brand.name} title={invoiceDocumentName(invoice)}>
+      <InvoicePages brand={brand} invoice={invoice} />
+    </Document>
+  );
+}
+
+/**
+ * Many invoices in one file to print and mail (2026-11-09, Batch Deliver),
+ * each starting on a page of its own and numbered on its own: "Page 2 of 3"
+ * is that invoice's second page, not the file's.
+ */
+export function InvoicesDocument({
+  invoices,
+  brand,
+}: {
+  invoices: readonly { invoice: InvoiceDetail; brand: ReceiptBrand }[];
+  brand: ReceiptBrand;
+}) {
+  return (
+    <Document author={brand.name} creator={brand.name} producer={brand.name} title={`${invoices.length} invoices`}>
+      {invoices.map((one) => (
+        <InvoicePages brand={one.brand} invoice={one.invoice} key={one.invoice.id} />
+      ))}
+    </Document>
+  );
+}
+
+/** One invoice: a single `Page` that runs onto as many pages as its lines need. */
+function InvoicePages({ invoice, brand }: { invoice: InvoiceDetail; brand: ReceiptBrand }) {
   const name = invoiceDocumentName(invoice);
   const totals = invoiceTotalLines(invoice);
   const due = totals[totals.length - 1]!;
   const where = place(invoice);
   return (
-    <Document author={brand.name} creator={brand.name} producer={brand.name} title={name}>
+    <>
       <Page size="LETTER" style={styles.page}>
         <View style={styles.header}>
           <View>
@@ -181,9 +211,13 @@ export function InvoiceDocument({ invoice, brand }: { invoice: InvoiceDetail; br
           <Text>
             {brand.name} · {name}
           </Text>
-          <Text render={({ pageNumber, totalPages }) => (totalPages > 1 ? `Page ${pageNumber} of ${totalPages}` : '')} />
+          <Text
+            render={({ subPageNumber, subPageTotalPages }) =>
+              subPageTotalPages > 1 ? `Page ${subPageNumber} of ${subPageTotalPages}` : ''
+            }
+          />
         </View>
       </Page>
-    </Document>
+    </>
   );
 }

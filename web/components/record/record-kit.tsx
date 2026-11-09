@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 
 /**
@@ -127,8 +128,14 @@ const SIDE_BY_SIDE = {
 
 /**
  * The record and its side panel. Beside it from `from` up, where the record
- * still has room; under it below that, as Jobber's narrow layout puts its
- * panel last. "Hide panel" gives the record the whole width and is remembered.
+ * still has room. "Hide panel" gives the record the whole width and is
+ * remembered.
+ *
+ * Narrower than that, the panel opens over the page from a button at the top.
+ * It used to wait under the whole record, as Jobber's narrow layout puts it:
+ * on a 1366-wide laptop the inspection page's invoices were nearly three
+ * screens down, under every room, and read as missing (the office,
+ * 2026-11-09: "only accessible on bigger screen").
  *
  * The inspection page asks for `2xl`: its area workspace needs the width more
  * than its panel does.
@@ -138,13 +145,17 @@ export function RecordLayout({
   asideLabel,
   children,
   from = 'xl',
+  panelLabel = 'Show panel',
 }: {
   aside: ReactNode;
   asideLabel: string;
   children: ReactNode;
   from?: keyof typeof SIDE_BY_SIDE;
+  /** What the panel holds, on its button when it is not beside the record: "Invoices". */
+  panelLabel?: string;
 }) {
   const [hidden, setHidden] = useState(false);
+  const [opened, setOpened] = useState(false);
   // After mount, so the server's first paint and the browser's agree.
   useEffect(() => setHidden(readHidden()), []);
   const layout = SIDE_BY_SIDE[from];
@@ -156,6 +167,12 @@ export function RecordLayout({
   return (
     <div className={cn('grid items-start gap-6', !hidden && layout.grid)}>
       <div className="min-w-0">
+        <div className={cn('mb-3 flex justify-end', layout.hide)}>
+          <Button onClick={() => setOpened(true)} size="sm" variant="outline">
+            <PanelRightOpenIcon />
+            {panelLabel}
+          </Button>
+        </div>
         {hidden ? (
           <div className={cn('mb-3 hidden justify-end', layout.show)}>
             <Button onClick={() => toggle(false)} size="sm" variant="ghost">
@@ -166,7 +183,8 @@ export function RecordLayout({
         ) : null}
         {children}
       </div>
-      <aside aria-label={asideLabel} className={cn('flex min-w-0 flex-col gap-4', hidden && layout.hide)}>
+      {/* Only where it sits beside the record; narrower, it is the sheet below. */}
+      <aside aria-label={asideLabel} className={cn('hidden min-w-0 flex-col gap-4', !hidden && layout.show)}>
         <div className={cn('hidden justify-end', layout.show)}>
           <Button aria-label="Hide panel" onClick={() => toggle(true)} size="sm" variant="ghost">
             <PanelRightCloseIcon />
@@ -175,6 +193,14 @@ export function RecordLayout({
         </div>
         {aside}
       </aside>
+      <Sheet onOpenChange={setOpened} open={opened}>
+        <SheetContent aria-describedby={undefined} className="w-full sm:max-w-sm" side="right">
+          <SheetHeader>
+            <SheetTitle>{asideLabel}</SheetTitle>
+          </SheetHeader>
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">{aside}</div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

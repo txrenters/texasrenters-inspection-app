@@ -12,7 +12,9 @@ import {
   type CreateInvoiceInput,
   type InvoiceBucket,
   type InvoiceCustomField,
+  type InvoiceDeliveryKind,
   type InvoiceDeliveryStatus,
+  type InvoiceDeliveryView,
   type InvoiceDetail,
   type InvoiceDraft,
   type InvoiceExtraDetails,
@@ -38,6 +40,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { defaultRecipients } from './invoice-email-settings';
 import { insertConsoleInvoice } from './invoice-insert';
 import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officePrices } from './invoice-settings';
 
@@ -154,6 +157,8 @@ const detailSelect = {
     select: {
       id: true,
       channel: true,
+      kind: true,
+      followUpDay: true,
       recipients: true,
       status: true,
       failure: true,
@@ -179,6 +184,46 @@ function paymentSelect() {
 }
 
 /** The invoice a payment paid, as the Payments list and a payment's page show it. */
+/** An email about an invoice, as its page lists it. */
+const DELIVERY_SELECT = {
+  id: true,
+  channel: true,
+  kind: true,
+  followUpDay: true,
+  recipients: true,
+  status: true,
+  failure: true,
+  createdAt: true,
+  sentAt: true,
+  sentBy: { select: { id: true, displayName: true } },
+} satisfies Prisma.InvoiceDeliverySelect;
+
+export function deliveryView(delivery: Prisma.InvoiceDeliveryGetPayload<{ select: typeof DELIVERY_SELECT }>): InvoiceDeliveryView {
+  return {
+    id: delivery.id,
+    channel: 'EMAIL',
+    kind: delivery.kind as InvoiceDeliveryKind,
+    followUpDay: delivery.followUpDay,
+    recipients: delivery.recipients,
+    status: delivery.status as InvoiceDeliveryStatus,
+    failure: delivery.failure,
+    sentBy: delivery.sentBy,
+    createdAt: delivery.createdAt.toISOString(),
+    sentAt: delivery.sentAt?.toISOString() ?? null,
+  };
+}
+
+/** Who a receipt goes to: whoever the invoice was last sent to, else the client's addresses. */
+const RECEIPT_TO_SELECT = {
+  clientEmails: true,
+  deliveries: {
+    where: { kind: 'INVOICE', status: 'SENT' },
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+    select: { recipients: true },
+  },
+} satisfies Prisma.InvoiceSelect;
+
 const paidInvoiceSelect = {
   id: true,
   number: true,
@@ -653,11 +698,13 @@ export class InvoicesService {
         ...paymentSelect(),
         jobberPaymentType: true,
         updatedAt: true,
-        invoice: { select: { ...paidInvoiceSelect, totalCents: true, balanceCents: true, status: true, dueOn: true } },
+        // Each receipt emailed for it (2026-11-09), and who one would go to.
+        receipts: { orderBy: { createdAt: 'desc' }, take: 10, select: DELIVERY_SELECT },
+        invoice: { select: { ...paidInvoiceSelect, ...RECEIPT_TO_SELECT, totalCents: true, balanceCents: true, status: true, dueOn: true } },
       },
     });
     if (!row) throw this.paymentNotFound();
-    const { invoice, jobberPaymentType, updatedAt, ...rest } = row;
+    const { invoice, jobberPaymentType, updatedAt, receipts, ...rest } = row;
     return {
       ...payment(rest),
       origin: rest.origin,
@@ -670,6 +717,8 @@ export class InvoicesService {
       updatedAt: updatedAt.toISOString(),
       writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
       brand: await officeBrand(this.prisma, user.organizationId),
+      receipts: receipts.map(deliveryView),
+      receiptTo: defaultRecipients(invoice.deliveries[0]?.recipients, invoice.clientEmails),
     };
   }
 
@@ -933,16 +982,7 @@ export class InvoicesService {
       writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
       // For its PDF and its sending (2026-11-06, phase 5), from the office's settings (phase 6).
       brand: await officeBrand(this.prisma, user.organizationId),
-      deliveries: row.deliveries.map((delivery) => ({
-        id: delivery.id,
-        channel: 'EMAIL' as const,
-        recipients: delivery.recipients,
-        status: delivery.status as InvoiceDeliveryStatus,
-        failure: delivery.failure,
-        sentBy: delivery.sentBy,
-        createdAt: delivery.createdAt.toISOString(),
-        sentAt: delivery.sentAt?.toISOString() ?? null,
-      })),
+      deliveries: row.deliveries.map(deliveryView),
     };
   }
 
