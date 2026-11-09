@@ -451,6 +451,7 @@ model Organization {
   findingFrameSuggestions         FindingFrameSuggestion[]
   aiGuidanceVersions              AiGuidanceVersion[]
   aiEvaluationRuns                AiEvaluationRun[]
+  xeroConnection XeroConnection?
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -4681,4 +4682,44 @@ model TrackingGap {
   resolvedBy   UserProfile? @relation("TrackingGapResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
 
   @@index([organizationId, resolvedAt, startedAt])
+}
+
+/// The office's Xero organisation (2026-11-10, phase 1 of the Xero plan).
+/// Tokens are AES-256-GCM envelopes under XERO_TOKEN_ENCRYPTION_KEY, never the
+/// raw values. What was last read from Xero is kept here so the console shows
+/// it without asking again; each call to Xero is counted against a daily
+/// ceiling, as Xero allows an organisation 1,000 a day on its free tier.
+model XeroConnection {
+  id                     String    @id @default(uuid()) @db.Uuid
+  organizationId         String    @unique @db.Uuid
+  /// DISCONNECTED, CONNECTED or REAUTHORIZATION_REQUIRED (checked).
+  status                 String    @default("DISCONNECTED")
+  xeroTenantId           String?
+  xeroTenantName         String?
+  /// Xero's id for this app's link to the organisation, which a disconnect removes.
+  xeroConnectionId       String?
+  accessTokenCiphertext  String?
+  accessTokenExpiresAt   DateTime?
+  /// Xero rotates refresh tokens on every use; an unused one dies after 60 days.
+  refreshTokenCiphertext String?
+  lastRefreshedAt        DateTime?
+  /// Sanitized; never Xero's body, which can echo the request.
+  lastRefreshError       String?
+  scopes                 String[]  @default([])
+  connectedByUserId      String?   @db.Uuid
+  connectedAt            DateTime?
+  disconnectedAt         DateTime?
+  /// What was last read: the organisation's details, its chart of accounts and its tax rates.
+  organisation           Json?
+  accounts               Json?
+  taxRates               Json?
+  catalogReadAt          DateTime?
+  catalogReadError       String?
+  /// Calls to Xero on one Texas day (YYYY-MM-DD), against the console's own ceiling.
+  callsDay               String?
+  callsUsed              Int       @default(0)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }

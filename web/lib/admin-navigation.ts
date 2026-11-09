@@ -2,6 +2,7 @@ import {
   Banknote,
   Building2,
   CalendarClock,
+  Landmark,
   CalendarDays,
   CalendarRange,
   CalendarSync,
@@ -266,6 +267,12 @@ export const adminNavigation: AdminNavigationGroup[] = [
         title: 'Jobber',
         href: '/integrations/jobber',
         icon: CalendarClock,
+        permission: 'integrations:read',
+      },
+      {
+        title: 'Xero',
+        href: '/integrations/xero',
+        icon: Landmark,
         permission: 'integrations:read',
       },
       {
