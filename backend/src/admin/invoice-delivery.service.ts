@@ -253,7 +253,7 @@ export class InvoiceDeliveryService {
    * it went or is going, the same failure when it did not -- never a second
    * email. The same key for another invoice is a mistake.
    */
-  private answerResend(user: AuthenticatedUser, prior: { invoiceId: string; status: string; failure: string | null } | null, invoiceId: string) {
+  private answerResend(user: AuthenticatedUser, prior: { invoiceId: string | null; status: string; failure: string | null } | null, invoiceId: string) {
     if (!prior || prior.invoiceId !== invoiceId)
       throw new ApplicationError(409, 'IDEMPOTENCY_KEY_REUSED', 'That request key was already used for something else.');
     if (prior.status === 'FAILED') throw new ApplicationError(502, 'INVOICE_EMAIL_FAILED', prior.failure ?? 'The invoice was not sent.');
