@@ -7,11 +7,12 @@ import {
   type InvoiceFilter,
   type InvoiceSummary,
 } from '@texasrenters/shared';
-import { SettingsIcon } from 'lucide-react';
+import { ChartColumnIcon, SettingsIcon } from 'lucide-react';
 import Link from 'next/link';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InvoiceStatusBadge, InvoicesOverview, formatInvoiceDay } from '@/components/invoices/invoice-parts';
+import { RangePicker, chosenRange } from '@/components/invoices/report-range';
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
@@ -71,11 +72,15 @@ const COLUMNS: Array<Column<InvoiceSummary>> = [
 ];
 
 export default function InvoicesPage() {
-  const [state, setState, reset] = useUrlState({ page: 1, q: '', filter: '' });
+  const [state, setState, reset] = useUrlState({ page: 1, q: '', filter: '', issued: '', from: '', to: '' });
   const search = useDebouncedValue(state.q);
   const pending = state.q.trim() !== search.trim();
   const filter = (INVOICE_FILTERS as readonly string[]).includes(state.filter) ? (state.filter as InvoiceFilter) : 'all';
-  const invoices = useInvoices({ filter, search, page: state.page, pageSize: 25 });
+  // Issued in the days chosen, as Jobber's list filters by date (2026-11-09).
+  const issuedChoice = { range: state.issued, from: state.from, to: state.to };
+  const issued = chosenRange(issuedChoice);
+  const invoices = useInvoices({ filter, search, page: state.page, pageSize: 25, issuedFrom: issued?.from, issuedTo: issued?.to });
+  const filtered = Boolean(state.q.trim()) || filter !== 'all' || Boolean(state.issued);
   const { has } = usePermissions();
 
   const data = invoices.data;
@@ -94,6 +99,12 @@ export default function InvoicesPage() {
               <Link href="/invoices/settings">
                 <SettingsIcon />
                 Settings
+              </Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/invoices/reports">
+                <ChartColumnIcon />
+                Reports
               </Link>
             </Button>
             {has('invoices:manage') ? (
@@ -134,16 +145,24 @@ export default function InvoicesPage() {
 
       <ListToolbar
         filters={
-          <SelectFilter
-            allLabel="All"
-            label="Status"
-            onChange={(next) => setState({ filter: next, page: 1 })}
-            options={INVOICE_FILTERS.filter((key) => key !== 'all').map((key) => ({
-              value: key,
-              label: `${INVOICE_FILTER_LABEL[key]}${data ? ` (${data.filterCounts[key].toLocaleString('en-US')})` : ''}`,
-            }))}
-            value={filter === 'all' ? '' : filter}
-          />
+          <>
+            <SelectFilter
+              allLabel="All"
+              label="Status"
+              onChange={(next) => setState({ filter: next, page: 1 })}
+              options={INVOICE_FILTERS.filter((key) => key !== 'all').map((key) => ({
+                value: key,
+                label: `${INVOICE_FILTER_LABEL[key]}${data ? ` (${data.filterCounts[key].toLocaleString('en-US')})` : ''}`,
+              }))}
+              value={filter === 'all' ? '' : filter}
+            />
+            <RangePicker
+              allowAllDates
+              choice={issuedChoice}
+              label="Issued"
+              onChange={(next) => setState({ issued: next.range, from: next.from, to: next.to, page: 1 })}
+            />
+          </>
         }
         heading="All invoices"
         onClear={reset}
@@ -162,13 +181,13 @@ export default function InvoicesPage() {
       ) : !data?.items.length ? (
         <EmptyState
           description={
-            state.q.trim() || filter !== 'all'
-              ? 'No invoice matches. Try another status or a shorter search.'
+            filtered
+              ? 'No invoice matches. Try another status, other days or a shorter search.'
               : noInvoicesYet(data?.jobberRead)
           }
           title="No invoices"
         >
-          {state.q.trim() || filter !== 'all' ? (
+          {filtered ? (
             <Button onClick={reset} variant="outline">
               Clear filters
             </Button>

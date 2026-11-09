@@ -427,6 +427,9 @@ export interface InvoiceListQuery {
   pageSize?: number;
   propertyId?: string;
   inspectionId?: string;
+  /** Issued on or after, and on or before (2026-11-09): Jobber's date filter. */
+  issuedFrom?: string;
+  issuedTo?: string;
 }
 
 export interface PaymentListQuery {
@@ -434,6 +437,15 @@ export interface PaymentListQuery {
   method?: PaymentMethod;
   page?: number;
   pageSize?: number;
+  /** Paid on or after, and on or before (2026-11-09). */
+  paidFrom?: string;
+  paidTo?: string;
+}
+
+/** A span of days as a where clause on a date column; empty when neither end is given. */
+function daysWhere(from: string | undefined, to: string | undefined) {
+  if (!from && !to) return null;
+  return { ...(from ? { gte: dateOf(from) } : {}), ...(to ? { lte: dateOf(to) } : {}) };
 }
 
 /** The services the technician reported done, in the order the report lists them. */
@@ -481,7 +493,10 @@ export class InvoicesService {
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.inspectionId ? { inspectionId: query.inspectionId } : {}),
     };
-    const where: Prisma.InvoiceWhereInput = { AND: [scope, filterWhere(filter, today), searchWhere(query.search)] };
+    const issuedWithin = daysWhere(query.issuedFrom, query.issuedTo);
+    const where: Prisma.InvoiceWhereInput = {
+      AND: [scope, filterWhere(filter, today), searchWhere(query.search), ...(issuedWithin ? [{ issuedOn: issuedWithin }] : [])],
+    };
     const issued = (from: number, to: number): Prisma.InvoiceWhereInput => ({
       AND: [
         scope,
@@ -625,9 +640,11 @@ export class InvoicesService {
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 25));
     const term = query.search?.trim().replace(/^#/, '') ?? '';
+    const paidWithin = daysWhere(query.paidFrom, query.paidTo);
     const where: Prisma.InvoicePaymentWhereInput = {
       organizationId: user.organizationId,
       ...(query.method ? { method: query.method } : {}),
+      ...(paidWithin ? { paidOn: paidWithin } : {}),
       ...(term
         ? {
             OR: [

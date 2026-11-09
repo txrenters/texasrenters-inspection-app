@@ -36,12 +36,18 @@ export interface InvoiceQuery {
   pageSize?: number;
   propertyId?: string;
   inspectionId?: string;
+  /** Issued on or after, and on or before (2026-11-09). */
+  issuedFrom?: string;
+  issuedTo?: string;
 }
 
 export interface PaymentQuery {
   search?: string;
   method?: PaymentMethod;
   page?: number;
+  /** Paid on or after, and on or before (2026-11-09). */
+  paidFrom?: string;
+  paidTo?: string;
 }
 
 export const invoiceKeys = {
@@ -72,6 +78,8 @@ export function useInvoices(query: InvoiceQuery, enabled = true) {
           pageSize: query.pageSize,
           propertyId: query.propertyId,
           inspectionId: query.inspectionId,
+          issuedFrom: query.issuedFrom,
+          issuedTo: query.issuedTo,
         })}`,
         { signal },
       ),
@@ -112,9 +120,16 @@ export function usePayments(query: PaymentQuery) {
   return useQuery({
     queryKey: invoiceKeys.payments(query),
     queryFn: ({ signal }) =>
-      api<PaymentList>(`${PAYMENTS}${queryString({ search: query.search?.trim(), method: query.method, page: query.page })}`, {
-        signal,
-      }),
+      api<PaymentList>(
+        `${PAYMENTS}${queryString({
+          search: query.search?.trim(),
+          method: query.method,
+          page: query.page,
+          paidFrom: query.paidFrom,
+          paidTo: query.paidTo,
+        })}`,
+        { signal },
+      ),
     placeholderData: (previous) => previous,
   });
 }
