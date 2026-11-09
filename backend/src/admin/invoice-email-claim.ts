@@ -9,7 +9,7 @@ import type { MailService } from '../mail/mail.service';
 
 /**
  * Every email the console sends about an invoice -- the invoice itself, a
- * follow-up, a receipt -- goes through here, because each is a billed call to
+ * follow-up, a receipt, a property's statement -- goes through here, because each is a billed call to
  * the mail provider:
  *
  * - it is written down before it is sent, under a key, so the same press, the
@@ -25,7 +25,9 @@ export const DEFAULT_INVOICE_EMAIL_CEILING = 200;
 
 export interface InvoiceEmailClaim {
   organizationId: string;
-  invoiceId: string;
+  /** Null only for a statement, which is about a property (2026-11-10). */
+  invoiceId: string | null;
+  propertywareBuildingId?: string | null;
   recipients: string[];
   message: string | null;
   kind: InvoiceDeliveryKind;
@@ -69,6 +71,7 @@ export async function claimInvoiceEmail(prisma: PrismaService, claim: InvoiceEma
         data: {
           organizationId: claim.organizationId,
           invoiceId: claim.invoiceId,
+          propertywareBuildingId: claim.propertywareBuildingId ?? null,
           channel: 'EMAIL',
           kind: claim.kind,
           followUpDay: claim.followUpDay ?? null,

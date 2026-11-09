@@ -213,6 +213,7 @@ const DELIVERY_STATUS: Record<InvoiceDeliveryKind, Record<InvoiceDeliveryView['s
   INVOICE: { PENDING: 'Sending', SENT: 'Emailed', FAILED: 'Not sent' },
   FOLLOW_UP: { PENDING: 'Sending a follow-up', SENT: 'Follow-up emailed', FAILED: 'Follow-up not sent' },
   RECEIPT: { PENDING: 'Sending a receipt', SENT: 'Receipt emailed', FAILED: 'Receipt not sent' },
+  STATEMENT: { PENDING: 'Sending a statement', SENT: 'Statement emailed', FAILED: 'Statement not sent' },
 };
 
 /** What it was and who sent it: "Office", or for a follow-up "4 days overdue · sent by itself". */

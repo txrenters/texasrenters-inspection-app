@@ -26,6 +26,7 @@ vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => pe
 // The cutover is tested in invoice-takeover.test.tsx.
 vi.mock('@/components/invoices/invoice-takeover-section', () => ({ InvoiceTakeoverSection: () => null }));
 vi.mock('@/components/invoices/invoice-emails-section', () => ({ InvoiceEmailsSection: () => null }));
+vi.mock('@/components/invoices/statement-settings-section', () => ({ StatementSettingsSection: () => null }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const SAVED_AT = '2026-11-06T15:00:00.000Z';

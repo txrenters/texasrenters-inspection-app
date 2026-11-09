@@ -39,6 +39,7 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 // The cutover is tested in invoice-takeover.test.tsx.
 vi.mock('@/components/invoices/invoice-takeover-section', () => ({ InvoiceTakeoverSection: () => null }));
 vi.mock('@/components/invoices/invoice-emails-section', () => ({ InvoiceEmailsSection: () => null }));
+vi.mock('@/components/invoices/statement-settings-section', () => ({ StatementSettingsSection: () => null }));
 vi.mock('sonner', () => ({ toast }));
 
 const file = (id: string, over: Record<string, unknown> = {}) => ({
