@@ -92,8 +92,8 @@ export class XeroSenderService {
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
   ) {}
 
-  async view(organizationId: string): Promise<XeroSendingView> {
-    const state = await this.state(organizationId);
+  async view(organizationId: string, tenantId: string): Promise<XeroSendingView> {
+    const state = await this.state(organizationId, tenantId);
     const tenant = state.tenantId;
     const [sent, failed, notYet, failures] = await Promise.all([
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'SENT' } }) : 0,
@@ -125,6 +125,7 @@ export class XeroSenderService {
         : [],
     ]);
     return {
+      tenantId,
       enabled: state.row?.sendingEnabled ?? false,
       changedAt: state.row?.sendingChangedAt?.toISOString() ?? null,
       canWrite: state.canWrite,
@@ -145,13 +146,13 @@ export class XeroSenderService {
   }
 
   /** On only when nothing blocks it; off at any time. Audited both ways. */
-  async setEnabled(user: AuthenticatedUser, enabled: boolean): Promise<XeroSendingView> {
+  async setEnabled(user: AuthenticatedUser, tenantId: string, enabled: boolean): Promise<XeroSendingView> {
     const organizationId = user.organizationId;
-    const state = await this.state(organizationId);
+    const state = await this.state(organizationId, tenantId);
     if (enabled && state.blockers.length) throw new XeroError(state.blockers[0]!, 'XERO_SENDING_BLOCKED', 409);
     if (!state.row) throw new XeroError('Choose what goes where in Xero first.', 'XERO_SENDING_BLOCKED', 409);
     if (state.row.sendingEnabled !== enabled) {
-      await this.prisma.xeroSettings.update({ where: { organizationId }, data: { sendingEnabled: enabled, sendingChangedAt: new Date() } });
+      await this.prisma.xeroSettings.update({ where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } }, data: { sendingEnabled: enabled, sendingChangedAt: new Date() } });
       await this.prisma.auditLog.create({
         data: {
           organizationId,
@@ -159,56 +160,56 @@ export class XeroSenderService {
           action: enabled ? 'XERO_SENDING_TURNED_ON' : 'XERO_SENDING_TURNED_OFF',
           entityType: 'XeroSettings',
           entityId: organizationId,
-          metadata: { sendFrom: state.sendFrom },
+          metadata: { organisation: state.name, tenantId, sendFrom: state.sendFrom },
         },
       });
     }
-    return this.view(organizationId);
+    return this.view(organizationId, tenantId);
   }
 
   /** "Send now": a run at once, at most once a minute. */
-  async runNow(user: AuthenticatedUser): Promise<XeroSendingView> {
+  async runNow(user: AuthenticatedUser, tenantId: string): Promise<XeroSendingView> {
     const organizationId = user.organizationId;
-    const row = await this.prisma.xeroSettings.findUnique({ where: { organizationId }, select: { sendingEnabled: true, lastRunAt: true } });
+    const row = await this.prisma.xeroSettings.findUnique({ where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } }, select: { sendingEnabled: true, lastRunAt: true } });
     if (!row?.sendingEnabled) throw new XeroError('Turn sending on first.', 'XERO_SENDING_OFF', 409);
     if (row.lastRunAt && Date.now() - row.lastRunAt.getTime() < MANUAL_GAP_MS)
       throw new XeroError('It ran a moment ago. Try again in a minute.', 'XERO_RUN_TOO_SOON', 429);
-    await this.run(organizationId);
-    return this.view(organizationId);
+    await this.run(organizationId, tenantId);
+    return this.view(organizationId, tenantId);
   }
 
-  /** "Try again": every refused invoice is due now, whether or not it changed. */
-  async retryFailed(user: AuthenticatedUser): Promise<XeroSendingView> {
+  /** "Try again": every invoice this organisation refused is due now, whether or not it changed. */
+  async retryFailed(user: AuthenticatedUser, tenantId: string): Promise<XeroSendingView> {
     const organizationId = user.organizationId;
     const { count } = await this.prisma.xeroInvoiceSync.updateMany({
-      where: { organizationId, status: 'FAILED' },
+      where: { organizationId, xeroTenantId: tenantId, status: 'FAILED' },
       data: { nextAttemptAt: new Date(), seenUpdatedAt: null },
     });
     if (count)
       await this.prisma.auditLog.create({
-        data: { organizationId, actorUserId: user.id, action: 'XERO_SENDING_RETRIED', entityType: 'XeroSettings', entityId: organizationId, metadata: { invoices: count } },
+        data: { organizationId, actorUserId: user.id, action: 'XERO_SENDING_RETRIED', entityType: 'XeroSettings', entityId: organizationId, metadata: { tenantId, invoices: count } },
       });
-    return this.view(organizationId);
+    return this.view(organizationId, tenantId);
   }
 
   /**
-   * One run for one office: the scheduler's, or "Send now". Claims the office
-   * first, so two runs never send at once; whatever stops it (the daily
-   * ceiling, Xero asking to slow down, the sign-in) leaves the rest for the
-   * next run and says why.
+   * One run for one of the office's organisations: the scheduler's, or "Send
+   * now". Claims it first, so two runs never send to it at once; whatever
+   * stops it (the daily ceiling, Xero asking to slow down, the sign-in) leaves
+   * the rest for the next run and says why.
    */
-  async run(organizationId: string): Promise<XeroRunResult> {
+  async run(organizationId: string, tenantId: string): Promise<XeroRunResult> {
     const result: XeroRunResult = { sent: 0, failed: 0, unchanged: 0, problem: null };
-    const state = await this.state(organizationId);
+    const state = await this.state(organizationId, tenantId);
     if (!state.row?.sendingEnabled) return { ...result, problem: 'Sending is off.' };
     if (state.blockers.length || !state.tenantId || !state.sendFrom) {
       const problem = state.blockers[0] ?? 'Xero is not ready.';
-      await this.prisma.xeroSettings.update({ where: { organizationId }, data: { lastRunAt: new Date(), lastRunProblem: problem } });
+      await this.prisma.xeroSettings.update({ where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } }, data: { lastRunAt: new Date(), lastRunProblem: problem } });
       return { ...result, problem };
     }
     const now = new Date();
     const claimed = await this.prisma.xeroSettings.updateMany({
-      where: { organizationId, sendingEnabled: true, OR: [{ sendingClaimedUntil: null }, { sendingClaimedUntil: { lt: now } }] },
+      where: { organizationId, xeroTenantId: tenantId, sendingEnabled: true, OR: [{ sendingClaimedUntil: null }, { sendingClaimedUntil: { lt: now } }] },
       data: { sendingClaimedUntil: new Date(now.getTime() + CLAIM_MS) },
     });
     if (!claimed.count) return { ...result, problem: 'Another run is sending.' };
@@ -222,7 +223,7 @@ export class XeroSenderService {
       if (!(error instanceof XeroError)) this.logger.error({ event: 'xero_sending_failed', organizationId, message: error instanceof Error ? error.message : String(error) });
     } finally {
       await this.prisma.xeroSettings.update({
-        where: { organizationId },
+        where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
         data: { sendingClaimedUntil: null, lastRunAt: new Date(), lastRunProblem: result.problem },
       });
     }
@@ -234,7 +235,7 @@ export class XeroSenderService {
           action: 'XERO_INVOICES_SENT',
           entityType: 'XeroSettings',
           entityId: organizationId,
-          metadata: { sent: result.sent, failed: result.failed, numbers: sentNumbers.slice(0, 100), problem: result.problem },
+          metadata: { organisation: state.name, tenantId, sent: result.sent, failed: result.failed, numbers: sentNumbers.slice(0, 100), problem: result.problem },
         },
       });
     return result;
@@ -244,7 +245,7 @@ export class XeroSenderService {
     const ids = await this.candidates(organizationId, tenantId, sendFrom);
     if (!ids.length) return;
     const invoices = await this.prisma.invoice.findMany({ where: { organizationId, id: { in: ids } }, select: INVOICE_FIELDS });
-    const values = (await this.settings.read(organizationId)).values;
+    const values = (await this.settings.read(organizationId, tenantId)).values;
 
     // Unchanged since it was sent: only noted as seen, no call.
     const due: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }[] = [];
@@ -302,7 +303,7 @@ export class XeroSenderService {
       const path = '/Invoices?summarizeErrors=false';
       let answers: XeroAnswer[];
       try {
-        answers = (await this.client.post(organizationId, path, body, invoicesSchema, keyOf(organizationId, path, body))).Invoices;
+        answers = (await this.client.post(organizationId, tenantId, path, body, invoicesSchema, keyOf(`${organizationId}:${tenantId}`, path, body))).Invoices;
       } catch (error) {
         if (error instanceof XeroError && error.code === 'XERO_VALIDATION') {
           // The whole call refused: each of its invoices keeps the reason and is tried again later.
@@ -349,7 +350,7 @@ export class XeroSenderService {
       const path = '/Contacts?summarizeErrors=false';
       let answers: XeroAnswer[];
       try {
-        answers = (await this.client.post(organizationId, path, body, contactsSchema, keyOf(organizationId, path, body))).Contacts;
+        answers = (await this.client.post(organizationId, tenantId, path, body, contactsSchema, keyOf(`${organizationId}:${tenantId}`, path, body))).Contacts;
       } catch (error) {
         if (error instanceof XeroError && error.code === 'XERO_VALIDATION') {
           for (const [key] of batch) found.set(key, { problem: error.message });
@@ -367,7 +368,7 @@ export class XeroSenderService {
         const reason = answer ? said(answer) : 'Xero did not answer for it.';
         if (/already (assigned|exists|in use)/i.test(reason) && lookups < MAX_LOOKUPS_PER_RUN) {
           lookups++;
-          const same = (await this.client.get(organizationId, `/Contacts?where=${encodeURIComponent(nameFilter(name))}`, contactsSchema)).Contacts.filter(
+          const same = (await this.client.get(organizationId, tenantId, `/Contacts?where=${encodeURIComponent(nameFilter(name))}`, contactsSchema)).Contacts.filter(
             (contact) => contact.ContactID,
           );
           if (same.length === 1) {
@@ -464,32 +465,36 @@ export class XeroSenderService {
     return (rows as { id: string }[]).map((row) => row.id);
   }
 
-  /** Everything a run and the page need: the switch, the connection, the choices. No call to Xero. */
-  private async state(organizationId: string) {
-    const [row, connection, settings] = await Promise.all([
+  /** Everything a run and the page need: the organisation's switch and choices, the sign-in, the others connected. No call to Xero. */
+  private async state(organizationId: string, tenantId: string) {
+    const [row, connection, organisation, connectedCount, settings] = await Promise.all([
       this.prisma.xeroSettings.findUnique({
-        where: { organizationId },
+        where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
         select: { sendingEnabled: true, sendingChangedAt: true, lastRunAt: true, lastRunProblem: true, sendFrom: true },
       }),
-      this.prisma.xeroConnection.findUnique({
-        where: { organizationId },
-        select: { status: true, xeroTenantId: true, scopes: true, invoiceRemindersOn: true, accounts: true },
+      this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, scopes: true } }),
+      this.prisma.xeroOrganisation.findUnique({
+        where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
+        select: { name: true, status: true, invoiceRemindersOn: true, accounts: true },
       }),
-      this.settings.read(organizationId),
+      this.prisma.xeroOrganisation.count({ where: { organizationId, status: 'CONNECTED' } }),
+      this.settings.read(organizationId, tenantId),
     ]);
-    const connected = connection?.status === 'CONNECTED';
+    const connected = connection?.status === 'CONNECTED' && organisation?.status === 'CONNECTED';
     const scopes = connected ? (connection?.scopes ?? []) : [];
     return {
       row,
-      tenantId: connected ? (connection?.xeroTenantId ?? null) : null,
+      name: organisation?.name ?? null,
+      tenantId: connected ? tenantId : null,
       sendFrom: row?.sendFrom ? row.sendFrom.toISOString().slice(0, 10) : null,
-      accounts: connected ? ((connection?.accounts as XeroAccount[] | null) ?? []) : [],
+      accounts: connected ? ((organisation?.accounts as XeroAccount[] | null) ?? []) : [],
       canWrite: xeroCanWrite(scopes),
       blockers: xeroSendingBlockers({
         connected,
         scopes,
         settingsReady: settings.ready,
-        invoiceRemindersOn: connected ? (connection?.invoiceRemindersOn ?? null) : null,
+        invoiceRemindersOn: connected ? (organisation?.invoiceRemindersOn ?? null) : null,
+        organisationsConnected: connectedCount,
       }),
     };
   }

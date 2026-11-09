@@ -83,25 +83,27 @@ export function settingsChanges(before: XeroSettingsValues, after: XeroSettingsV
 }
 
 /**
- * The office's choices for sending to Xero (2026-11-10, phase 2 of the Xero
- * plan): from which day, to which accounts, with which tax type. Checked
- * against the console's last read of Xero, so neither showing nor saving them
- * calls Xero. Nothing is sent to Xero yet.
+ * The office's choices for sending to Xero (2026-11-10), one set for each of
+ * its organisations -- each has its own chart of accounts: from which day, to
+ * which accounts, with which tax type. Checked against the console's last read
+ * of that organisation, so neither showing nor saving them calls Xero. Nothing
+ * is sent to Xero yet.
  */
 @Injectable()
 export class XeroSettingsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  async read(organizationId: string): Promise<XeroSettingsView> {
+  async read(organizationId: string, tenantId: string): Promise<XeroSettingsView> {
     const today = businessDate();
     const [row, connection, listed, billed] = await Promise.all([
-      this.prisma.xeroSettings.findUnique({ where: { organizationId } }),
-      this.catalog(organizationId),
+      this.prisma.xeroSettings.findUnique({ where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } } }),
+      this.catalog(organizationId, tenantId),
       listedProducts(this.prisma, organizationId),
       billedPrices(this.prisma, organizationId, today),
     ]);
     const values = valuesFrom(row);
-    // The invoices phase 3 would send: from the start date, or -- before one is chosen -- the past year, to show what is in use.
+    // The invoices that would be sent: from the start date, or -- before one is chosen -- the past year, to show what is in use.
+    // Every organisation's for now: which invoices are whose comes with the services (the next phase).
     const since = values.sendFrom ?? new Date(Date.parse(`${today}T00:00:00.000Z`) - 365 * DAY_MS).toISOString().slice(0, 10);
     const invoices: Prisma.InvoiceWhereInput = {
       organizationId,
@@ -140,6 +142,7 @@ export class XeroSettingsService {
       paymentsByMethod,
     });
     return {
+      tenantId,
       values,
       products,
       payments: PAYMENT_METHODS.map((method) => ({ method, accountId: values.paymentAccounts[method] ?? null, payments: paymentsByMethod[method] ?? 0 })),
@@ -150,11 +153,12 @@ export class XeroSettingsService {
     };
   }
 
-  async save(user: AuthenticatedUser, input: SaveXeroSettingsInput): Promise<XeroSettingsView> {
+  async save(user: AuthenticatedUser, tenantId: string, input: SaveXeroSettingsInput): Promise<XeroSettingsView> {
     const org = user.organizationId;
-    const catalog = await this.catalog(org);
+    const catalog = await this.catalog(org, tenantId);
     if (!catalog.connected || !catalog.readAt)
-      throw new XeroError('Connect Xero and read it before choosing its accounts.', 'XERO_NOT_READ', 409);
+      throw new XeroError('Connect this organisation and read it before choosing its accounts.', 'XERO_NOT_READ', 409);
+    const where = { organizationId_xeroTenantId: { organizationId: org, xeroTenantId: tenantId } };
     const after = valuesFromInput(input);
     const problem = xeroSettingsProblem(after, catalog, businessDate());
     if (problem) throw new XeroError(problem, 'XERO_SETTINGS_INVALID', 422);
@@ -168,42 +172,54 @@ export class XeroSettingsService {
     };
     try {
       await this.prisma.$transaction(async (tx) => {
-        const row = await tx.xeroSettings.findUnique({ where: { organizationId: org } });
+        const row = await tx.xeroSettings.findUnique({ where });
         const expected = input.expectedUpdatedAt ? new Date(input.expectedUpdatedAt).toISOString() : null;
         if ((row?.updatedAt.toISOString() ?? null) !== expected) throw changed();
         const changes = settingsChanges(valuesFrom(row), after, catalog.accounts);
         if (!changes.length) return;
         if (row) {
           // Only over the row as it was read: a save in between makes this one change nothing.
-          const { count } = await tx.xeroSettings.updateMany({ where: { organizationId: org, updatedAt: row.updatedAt }, data });
+          const { count } = await tx.xeroSettings.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, updatedAt: row.updatedAt }, data });
           if (count !== 1) throw changed();
-        } else await tx.xeroSettings.create({ data: { organizationId: org, ...data } });
+        } else await tx.xeroSettings.create({ data: { organizationId: org, xeroTenantId: tenantId, ...data } });
         await tx.auditLog.create({
-          data: { organizationId: org, actorUserId: user.id, action: 'XERO_SETTINGS_CHANGED', entityType: 'XeroSettings', entityId: org, metadata: { changes } },
+          data: {
+            organizationId: org,
+            actorUserId: user.id,
+            action: 'XERO_SETTINGS_CHANGED',
+            entityType: 'XeroSettings',
+            entityId: org,
+            metadata: { organisation: catalog.name, tenantId, changes },
+          },
         });
-        // Phase 3: an invoice held back for its account, or refused for it, is worth another go with the new choices.
-        await tx.xeroInvoiceSync.updateMany({ where: { organizationId: org, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
+        // An invoice this organisation held back for its account, or refused for it, is worth another go with the new choices.
+        await tx.xeroInvoiceSync.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
       });
     } catch (error) {
       // Two first saves at once: the other one made the row.
       if (isUniqueViolation(error)) throw changed();
       throw error;
     }
-    return this.read(org);
+    return this.read(org, tenantId);
   }
 
-  /** The console's last read of Xero: no call to Xero. */
-  private async catalog(organizationId: string) {
-    const row = await this.prisma.xeroConnection.findUnique({
-      where: { organizationId },
-      select: { status: true, accounts: true, taxRates: true, catalogReadAt: true },
-    });
-    const connected = row?.status === 'CONNECTED';
+  /** The console's last read of one organisation: no call to Xero. Connected only while the sign-in and the organisation both are. */
+  private async catalog(organizationId: string, tenantId: string) {
+    const [connection, row] = await Promise.all([
+      this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+      this.prisma.xeroOrganisation.findUnique({
+        where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
+        select: { name: true, status: true, accounts: true, taxRates: true, catalogReadAt: true },
+      }),
+    ]);
+    if (!row) throw new XeroError('That is not one of the office’s Xero organisations.', 'XERO_ORGANISATION_UNKNOWN', 404);
+    const connected = connection?.status === 'CONNECTED' && row.status === 'CONNECTED';
     return {
+      name: row.name,
       connected,
-      readAt: connected ? (row?.catalogReadAt?.toISOString() ?? null) : null,
-      accounts: connected ? ((row?.accounts as XeroAccount[] | null) ?? []) : [],
-      taxRates: connected ? ((row?.taxRates as XeroTaxRate[] | null) ?? []) : [],
+      readAt: connected ? (row.catalogReadAt?.toISOString() ?? null) : null,
+      accounts: connected ? ((row.accounts as XeroAccount[] | null) ?? []) : [],
+      taxRates: connected ? ((row.taxRates as XeroTaxRate[] | null) ?? []) : [],
     };
   }
 }

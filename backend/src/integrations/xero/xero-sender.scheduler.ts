@@ -46,18 +46,18 @@ export class XeroSenderScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
-      // Which offices send: a question across organizations.
-      const offices = await withSystemTenant(() =>
-        this.prisma.xeroSettings.findMany({ where: { sendingEnabled: true }, select: { organizationId: true } }),
+      // Which offices send, to which of their organisations: a question across organizations.
+      const sending = await withSystemTenant(() =>
+        this.prisma.xeroSettings.findMany({ where: { sendingEnabled: true }, select: { organizationId: true, xeroTenantId: true } }),
       );
-      for (const { organizationId } of offices) {
+      for (const { organizationId, xeroTenantId } of sending) {
         try {
-          const result = await withTenant(organizationId, () => this.sender.run(organizationId));
+          const result = await withTenant(organizationId, () => this.sender.run(organizationId, xeroTenantId));
           if (result.sent || result.failed || result.problem)
-            this.logger.log({ event: 'xero_sending_ran', organizationId, sent: result.sent, failed: result.failed, problem: result.problem });
+            this.logger.log({ event: 'xero_sending_ran', organizationId, xeroTenantId, sent: result.sent, failed: result.failed, problem: result.problem });
         } catch (error) {
-          // One office's trouble never stops another's.
-          this.logger.error({ event: 'xero_sending_failed', organizationId, message: error instanceof Error ? error.message : String(error) });
+          // One organisation's trouble never stops another's.
+          this.logger.error({ event: 'xero_sending_failed', organizationId, xeroTenantId, message: error instanceof Error ? error.message : String(error) });
         }
       }
     } catch (error) {

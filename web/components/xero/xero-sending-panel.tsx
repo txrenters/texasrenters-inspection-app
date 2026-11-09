@@ -28,7 +28,7 @@ import { useXeroSendingActions } from '@/lib/xero-queries';
  * as a contact; Xero emails nobody. Nothing is sent while it is off.
  */
 export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSendingView; sendFrom: string | null; canManage: boolean }) {
-  const actions = useXeroSendingActions();
+  const actions = useXeroSendingActions(view.tenantId);
   const [asking, setAsking] = useState<'on' | 'off' | null>(null);
   const busy = actions.setEnabled.isPending || actions.run.isPending || actions.retry.isPending;
 

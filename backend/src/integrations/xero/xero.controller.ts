@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, HttpCode, Inject, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
@@ -21,16 +21,24 @@ export class SaveXeroSettingsDto {
   @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
 }
 
+/** Xero's ids for organisations are GUIDs; anything else names none of the office's. */
+const tenantOf = (value: string) => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+    throw new XeroError('That is not one of the office’s Xero organisations.', 'XERO_ORGANISATION_UNKNOWN', 404);
+  return value;
+};
+
 /** Sending on or off. */
 export class SetXeroSendingDto {
   @IsBoolean() enabled!: boolean;
 }
 
 /**
- * The office's Xero organisation (2026-11-10, phases 1-3 of the Xero plan):
- * seen with `integrations:read`; connected, read again, its accounts chosen,
- * sending turned on or off and disconnected with `integrations:manage`, as
- * Jobber is. Only sending writes to Xero, and only while it is on.
+ * The office's Xero organisations (2026-11-10): seen with `integrations:read`;
+ * connected, read again, their accounts chosen, sending turned on or off and
+ * disconnected -- one at a time, or the whole sign-in -- with
+ * `integrations:manage`, as Jobber is. Only sending writes to Xero, and only
+ * while it is on for that organisation.
  */
 @ApiTags('Xero integration')
 @ApiBearerAuth()
@@ -59,14 +67,23 @@ export class XeroController {
     return { authorizationUrl: this.auth.authorizationUrl({ organizationId: request.user.organizationId, userId: request.user.id }) };
   }
 
-  /** Reads the organisation, its accounts, tax rates and invoice reminders again: four calls, at most every five minutes. */
-  @Post('read')
+  /** Reads one organisation, its accounts, tax rates and invoice reminders again: four calls to it, at most every five minutes. */
+  @Post('organisations/:tenantId/read')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
-  read(@Req() request: AuthenticatedRequest) {
-    return this.xero.read(request.user.organizationId);
+  read(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.xero.read(request.user.organizationId, tenantOf(tenantId));
   }
 
+  /** Ends the link to one organisation; the others stay connected. */
+  @Post('organisations/:tenantId/disconnect')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  disconnectOrganisation(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.xero.disconnectOrganisation(request.user, tenantOf(tenantId));
+  }
+
+  /** Ends the whole sign-in, and every organisation's link with it. */
   @Post('disconnect')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
@@ -74,47 +91,47 @@ export class XeroController {
     return this.xero.disconnect(request.user);
   }
 
-  /** What goes where (phase 2): read from the console's own copy, never from Xero. */
-  @Get('settings')
+  /** What goes where in one organisation: read from the console's own copy, never from Xero. */
+  @Get('organisations/:tenantId/settings')
   @RequirePermissions('integrations:read')
-  readSettings(@Req() request: AuthenticatedRequest) {
-    return this.settings.read(request.user.organizationId);
+  readSettings(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.settings.read(request.user.organizationId, tenantOf(tenantId));
   }
 
-  @Put('settings')
+  @Put('organisations/:tenantId/settings')
   @RequirePermissions('integrations:manage')
-  saveSettings(@Req() request: AuthenticatedRequest, @Body() body: SaveXeroSettingsDto) {
-    return this.settings.save(request.user, body as Parameters<XeroSettingsService['save']>[1]);
+  saveSettings(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: SaveXeroSettingsDto) {
+    return this.settings.save(request.user, tenantOf(tenantId), body as Parameters<XeroSettingsService['save']>[2]);
   }
 
-  /** Sending invoices (phase 3): what was sent, what was refused and why. No call to Xero. */
-  @Get('sending')
+  /** Sending invoices to one organisation: what was sent, what was refused and why. No call to Xero. */
+  @Get('organisations/:tenantId/sending')
   @RequirePermissions('integrations:read')
-  sending(@Req() request: AuthenticatedRequest) {
-    return this.sender.view(request.user.organizationId);
+  sending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.sender.view(request.user.organizationId, tenantOf(tenantId));
   }
 
   /** On only when nothing blocks it. */
-  @Put('sending')
+  @Put('organisations/:tenantId/sending')
   @RequirePermissions('integrations:manage')
-  setSending(@Req() request: AuthenticatedRequest, @Body() body: SetXeroSendingDto) {
-    return this.sender.setEnabled(request.user, body.enabled);
+  setSending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: SetXeroSendingDto) {
+    return this.sender.setEnabled(request.user, tenantOf(tenantId), body.enabled);
   }
 
   /** "Send now": one run at once, at most once a minute; only changed invoices reach Xero. */
-  @Post('sending/run')
+  @Post('organisations/:tenantId/sending/run')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
-  runSending(@Req() request: AuthenticatedRequest) {
-    return this.sender.runNow(request.user);
+  runSending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.sender.runNow(request.user, tenantOf(tenantId));
   }
 
-  /** "Try again": every refused invoice is due on the next run. */
-  @Post('sending/retry')
+  /** "Try again": every invoice this organisation refused is due on the next run. */
+  @Post('organisations/:tenantId/sending/retry')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
-  retrySending(@Req() request: AuthenticatedRequest) {
-    return this.sender.retryFailed(request.user);
+  retrySending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.sender.retryFailed(request.user, tenantOf(tenantId));
   }
 }
 
@@ -138,8 +155,11 @@ export class XeroOAuthCallbackController {
     if (error) return page('Xero was not connected.', 'The sign-in was cancelled. You can close this tab.');
     if (!code) return page('Xero did not send a sign-in code.', 'Start again from the console.');
     try {
-      const organisation = await this.xero.completeAuthorization({ code, state });
-      return page('Xero is connected.', `The console now reads ${escapeHtml(organisation.name)}. You can close this tab.`);
+      const { names } = await this.xero.completeAuthorization({ code, state });
+      return page(
+        'Xero is connected.',
+        `The console now reads ${escapeHtml(names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]!)}. You can close this tab.`,
+      );
     } catch (caught) {
       return page('Xero was not connected.', escapeHtml(caught instanceof XeroError ? caught.message : 'The connection could not be completed.'));
     }

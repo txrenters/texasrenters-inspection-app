@@ -452,7 +452,8 @@ model Organization {
   aiGuidanceVersions              AiGuidanceVersion[]
   aiEvaluationRuns                AiEvaluationRun[]
   xeroConnection XeroConnection?
-  xeroSettings   XeroSettings?
+  xeroOrganisations XeroOrganisation[]
+  xeroSettings   XeroSettings[]
   xeroContactLinks XeroContactLink[]
   xeroInvoiceSyncs XeroInvoiceSync[]
 }
@@ -4744,15 +4745,49 @@ model TrackingGap {
 /// raw values. What was last read from Xero is kept here so the console shows
 /// it without asking again; each call to Xero is counted against a daily
 /// ceiling, as Xero allows an organisation 1,000 a day on its free tier.
+/// One Xero organisation the office's sign-in reaches (2026-11-10, phase 1 of
+/// the multi-company plan): THMP, Crystal Creek Pest, Crystal Creek Air and the
+/// like each keep their own books. Its details, chart of accounts and tax rates
+/// as last read, and its own count of calls -- Xero limits each organisation
+/// separately. Never deleted: one the sign-in no longer reaches is REMOVED, so
+/// what was chosen for it stays readable.
+model XeroOrganisation {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @db.Uuid
+  xeroTenantId     String
+  /// Xero's id for this app's link to the organisation, which a disconnect removes.
+  xeroConnectionId String?
+  name             String
+  /// CONNECTED or REMOVED (checked).
+  status           String    @default("CONNECTED")
+  organisation     Json?
+  accounts         Json?
+  taxRates         Json?
+  catalogReadAt    DateTime?
+  catalogReadError String?
+  /// Whether Xero's own invoice reminders are on in this organisation, as last read; null when Xero did not say.
+  invoiceRemindersOn Boolean?
+  /// Calls to this organisation on one Texas day (YYYY-MM-DD), against the console's own ceiling.
+  callsDay         String?
+  callsUsed        Int       @default(0)
+  connectedAt      DateTime?
+  removedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  settings     XeroSettings?
+
+  @@unique([organizationId, xeroTenantId])
+}
+
+/// The office's sign-in to Xero (2026-11-10): one per office, whichever
+/// organisations it reaches (`XeroOrganisation`).
 model XeroConnection {
   id                     String    @id @default(uuid()) @db.Uuid
   organizationId         String    @unique @db.Uuid
   /// DISCONNECTED, CONNECTED or REAUTHORIZATION_REQUIRED (checked).
   status                 String    @default("DISCONNECTED")
-  xeroTenantId           String?
-  xeroTenantName         String?
-  /// Xero's id for this app's link to the organisation, which a disconnect removes.
-  xeroConnectionId       String?
   accessTokenCiphertext  String?
   accessTokenExpiresAt   DateTime?
   /// Xero rotates refresh tokens on every use; an unused one dies after 60 days.
@@ -4764,17 +4799,6 @@ model XeroConnection {
   connectedByUserId      String?   @db.Uuid
   connectedAt            DateTime?
   disconnectedAt         DateTime?
-  /// What was last read: the organisation's details, its chart of accounts and its tax rates.
-  organisation           Json?
-  accounts               Json?
-  taxRates               Json?
-  catalogReadAt          DateTime?
-  catalogReadError       String?
-  /// Whether Xero's own invoice reminders are on, as last read; null when Xero did not say.
-  invoiceRemindersOn     Boolean?
-  /// Calls to Xero on one Texas day (YYYY-MM-DD), against the console's own ceiling.
-  callsDay               String?
-  callsUsed              Int       @default(0)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -4788,7 +4812,9 @@ model XeroConnection {
 /// ids are Xero's, checked against the last read of its chart of accounts.
 /// Nothing is sent to Xero yet.
 model XeroSettings {
-  organizationId  String    @id @db.Uuid
+  organizationId  String    @db.Uuid
+  /// The organisation these choices are for: its own chart of accounts.
+  xeroTenantId    String
   /// Invoices issued on or after this day (Texas) are the ones sent.
   sendFrom        DateTime? @db.Date
   /// The account a line goes to when its name has none of its own.
@@ -4809,7 +4835,10 @@ model XeroSettings {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: Cascade)
+
+  @@id([organizationId, xeroTenantId])
 }
 
 /// The Xero contact a client's invoices are sent under (2026-11-10, phase 3 of

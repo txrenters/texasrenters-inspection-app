@@ -19,6 +19,7 @@ vi.mock('@/lib/xero-queries', () => ({ useXeroSendingActions: () => actions }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const OFF: XeroSendingView = {
+  tenantId: 'a1000000-0000-4000-8000-000000000001',
   enabled: false,
   changedAt: null,
   canWrite: true,

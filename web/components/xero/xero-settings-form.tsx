@@ -66,7 +66,7 @@ export function XeroSettingsForm({
   canManage: boolean;
 }) {
   const id = useId();
-  const save = useSaveXeroSettings();
+  const save = useSaveXeroSettings(view.tenantId);
   const [values, setValues] = useState<XeroSettingsValues>(view.values);
   const dirty = !sameValues(values, view.values);
   const locked = !canManage || save.isPending;

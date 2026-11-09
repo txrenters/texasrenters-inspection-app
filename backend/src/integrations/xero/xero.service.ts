@@ -1,17 +1,18 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { XeroAccount, XeroConnectionView, XeroOrganisation, XeroTaxRate } from '@texasrenters/shared';
+import type { XeroAccount, XeroConnectionView, XeroOrganisation, XeroOrganisationStatus, XeroTaxRate } from '@texasrenters/shared';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../../common/auth';
+import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { withTenant } from '../../database/tenant-context';
-import { XeroAuthService, authEventOf } from './xero-auth.service';
+import { XeroAuthService } from './xero-auth.service';
 import { XeroClient } from './xero.client';
 import { getXeroConfig, xeroConfigured } from './xero.config';
 import { XeroError } from './xero.errors';
 
-/** At most one read of the organisation's settings this often: each costs four calls. */
+/** At most one read of an organisation's settings this often: each costs it four calls. */
 const READ_GAP_MS = 5 * 60_000;
 
 /** About the connection, not the reminders: these stop the read rather than leave the reminders unknown. */
@@ -108,10 +109,12 @@ export function taxRatesFrom(data: z.infer<typeof taxRatesSchema>): XeroTaxRate[
 }
 
 /**
- * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan):
- * connected by somebody who runs the integrations, then read -- its details,
+ * The office's Xero organisations (2026-11-10). The companies -- THMP, Crystal
+ * Creek Pest, Crystal Creek Air and the like -- each keep their own books; one
+ * sign-in by somebody who runs the integrations reaches whichever of them they
+ * tick at Xero, and the console keeps a row for each: read -- its details,
  * chart of accounts and tax rates -- and kept, so the console shows them
- * without asking Xero again. Nothing is written to Xero in this phase.
+ * without asking Xero again. Nothing is written to Xero here.
  */
 @Injectable()
 export class XeroService {
@@ -124,117 +127,108 @@ export class XeroService {
   ) {}
 
   async describe(organizationId: string): Promise<XeroConnectionView> {
-    const [row, allowance] = await Promise.all([
+    const [row, organisations] = await Promise.all([
       this.prisma.xeroConnection.findUnique({
         where: { organizationId },
-        select: {
-          status: true,
-          xeroTenantName: true,
-          connectedAt: true,
-          disconnectedAt: true,
-          lastRefreshError: true,
-          scopes: true,
-          organisation: true,
-          accounts: true,
-          taxRates: true,
-          catalogReadAt: true,
-          catalogReadError: true,
-          invoiceRemindersOn: true,
-        },
+        select: { status: true, connectedAt: true, disconnectedAt: true, lastRefreshError: true, scopes: true },
       }),
-      this.client.allowance(organizationId),
+      // CONNECTED sorts before REMOVED.
+      this.prisma.xeroOrganisation.findMany({ where: { organizationId }, orderBy: [{ status: 'asc' }, { name: 'asc' }] }),
     ]);
-    const connected = row?.status === 'CONNECTED';
+    const today = businessDate();
     return {
       configured: xeroConfigured(getXeroConfig()),
       status: (row?.status as XeroConnectionView['status']) ?? 'DISCONNECTED',
-      tenantName: row?.xeroTenantName ?? null,
       connectedAt: row?.connectedAt?.toISOString() ?? null,
       disconnectedAt: row?.disconnectedAt?.toISOString() ?? null,
       problem: row?.status === 'REAUTHORIZATION_REQUIRED' ? (row.lastRefreshError ?? 'Xero must be connected again.') : null,
       scopes: row?.scopes ?? [],
-      organisation: connected ? ((row?.organisation as XeroOrganisation | null) ?? null) : null,
-      accounts: connected ? ((row?.accounts as XeroAccount[] | null) ?? []) : [],
-      taxRates: connected ? ((row?.taxRates as XeroTaxRate[] | null) ?? []) : [],
-      readAt: connected ? (row?.catalogReadAt?.toISOString() ?? null) : null,
-      readProblem: connected ? (row?.catalogReadError ?? null) : null,
-      callsToday: allowance.used,
-      dailyCeiling: allowance.ceiling,
-      invoiceRemindersOn: connected ? (row?.invoiceRemindersOn ?? null) : null,
+      organisations: organisations.map((organisation) => ({
+        tenantId: organisation.xeroTenantId,
+        name: organisation.name,
+        status: organisation.status as XeroOrganisationStatus,
+        connectedAt: organisation.connectedAt?.toISOString() ?? null,
+        removedAt: organisation.removedAt?.toISOString() ?? null,
+        organisation: (organisation.organisation as XeroOrganisation | null) ?? null,
+        accounts: (organisation.accounts as XeroAccount[] | null) ?? [],
+        taxRates: (organisation.taxRates as XeroTaxRate[] | null) ?? [],
+        readAt: organisation.catalogReadAt?.toISOString() ?? null,
+        readProblem: organisation.catalogReadError ?? null,
+        callsToday: organisation.callsDay === today ? organisation.callsUsed : 0,
+        invoiceRemindersOn: organisation.invoiceRemindersOn ?? null,
+      })),
+      dailyCeiling: getXeroConfig().dailyCallCeiling,
     };
   }
 
   /**
-   * Finishes a sign-in: the tokens for the code, then which organisation was
-   * chosen. Exactly one, and -- while one is connected -- the same one: a
-   * sign-in that lands on another organisation would point the office's books
-   * somewhere else without anything looking wrong, so it is refused and
-   * nothing is stored. Then the organisation is read once.
+   * Finishes a sign-in: the tokens for the code, then every organisation they
+   * reach -- what somebody ticked at Xero, this time or before. Each is kept
+   * connected, under the name Xero gives it now; one the sign-in no longer
+   * reaches is marked removed, never deleted, so what was chosen for it stays
+   * readable. Then each is read once.
    */
   async completeAuthorization(input: { code: string; state?: string }) {
     const state = this.auth.readState(input.state);
     return withTenant(state.organizationId, async () => {
+      const organizationId = state.organizationId;
       const tokens = await this.auth.exchange(input.code, state.codeVerifier);
-      const event = authEventOf(tokens.access_token);
-      const reached = (await this.client.connections(tokens.access_token)).filter(
-        (tenant) => tenant.tenantType === 'ORGANISATION' && (!event || !tenant.authEventId || tenant.authEventId === event),
-      );
-      if (reached.length !== 1)
-        throw new XeroError(
-          reached.length ? 'Choose just one Xero organisation when connecting.' : 'No Xero organisation was chosen.',
-          'XERO_ORGANISATION_CHOICE',
-          409,
-        );
-      const tenant = reached[0]!;
-      const previous = await this.prisma.xeroConnection.findUnique({
-        where: { organizationId: state.organizationId },
-        select: { status: true, xeroTenantId: true },
+      const reached = (await this.client.connections(tokens.access_token)).filter((tenant) => tenant.tenantType === 'ORGANISATION');
+      if (!reached.length) throw new XeroError('No Xero organisation was chosen. Tick at least one when connecting.', 'XERO_ORGANISATION_CHOICE', 409);
+      await this.auth.store(organizationId, tokens, { connectedByUserId: state.userId, connectedAt: new Date(), disconnectedAt: null });
+      const now = new Date();
+      for (const tenant of reached) {
+        const name = tenant.tenantName?.trim() || 'Xero organisation';
+        await this.prisma.xeroOrganisation.upsert({
+          where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenant.tenantId } },
+          create: { organizationId, xeroTenantId: tenant.tenantId, xeroConnectionId: tenant.id, name, status: 'CONNECTED', connectedAt: now },
+          update: { xeroConnectionId: tenant.id, name, status: 'CONNECTED', removedAt: null },
+        });
+      }
+      const { count: removed } = await this.prisma.xeroOrganisation.updateMany({
+        where: { organizationId, status: 'CONNECTED', xeroTenantId: { notIn: reached.map((tenant) => tenant.tenantId) } },
+        data: { status: 'REMOVED', removedAt: now, xeroConnectionId: null },
       });
-      if (previous?.status === 'CONNECTED' && previous.xeroTenantId && previous.xeroTenantId !== tenant.tenantId)
-        throw new XeroError(
-          'That is a different Xero organisation from the one connected. Disconnect it first.',
-          'XERO_ORGANISATION_MISMATCH',
-          409,
-        );
-      await this.auth.store(state.organizationId, tokens, {
-        xeroTenantId: tenant.tenantId,
-        xeroTenantName: tenant.tenantName ?? null,
-        xeroConnectionId: tenant.id,
-        connectedByUserId: state.userId,
-        connectedAt: new Date(),
-        disconnectedAt: null,
-      });
-      await this.audit(state.organizationId, state.userId, 'XERO_CONNECTED', { tenantName: tenant.tenantName ?? null });
-      // Read now, so the page has it; a failure here leaves it connected and says why.
-      await this.read(state.organizationId, true).catch(() => undefined);
-      return { name: tenant.tenantName ?? 'your Xero organisation' };
+      const names = reached.map((tenant) => tenant.tenantName?.trim() || 'Xero organisation');
+      await this.audit(organizationId, state.userId, 'XERO_CONNECTED', { organisations: names, noLongerReached: removed });
+      // Read each now, so the page has them; a failure leaves it connected and says why.
+      for (const tenant of reached) await this.read(organizationId, tenant.tenantId, true).catch(() => undefined);
+      return { names };
     });
   }
 
   /**
-   * Reads the organisation, its accounts, its tax rates and whether its own
-   * invoice reminders are on again: four calls, at most every five minutes.
+   * Reads one organisation, its accounts, its tax rates and whether its own
+   * invoice reminders are on again: four calls to it, at most every five minutes.
    */
-  async read(organizationId: string, force = false): Promise<XeroConnectionView> {
-    const row = await this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, catalogReadAt: true } });
-    if (row?.status !== 'CONNECTED') throw new XeroError('Xero is not connected.', 'XERO_NOT_CONNECTED', 409);
+  async read(organizationId: string, tenantId: string, force = false): Promise<XeroConnectionView> {
+    const where = { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } };
+    const [connection, row] = await Promise.all([
+      this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+      this.prisma.xeroOrganisation.findUnique({ where, select: { status: true, catalogReadAt: true } }),
+    ]);
+    if (connection?.status !== 'CONNECTED') throw new XeroError('Xero is not connected.', 'XERO_NOT_CONNECTED', 409);
+    if (!row) throw new XeroError('That is not one of the office’s Xero organisations.', 'XERO_ORGANISATION_UNKNOWN', 404);
+    if (row.status !== 'CONNECTED') throw new XeroError('That Xero organisation is not connected.', 'XERO_NOT_CONNECTED', 409);
     if (!force && row.catalogReadAt && Date.now() - row.catalogReadAt.getTime() < READ_GAP_MS)
-      throw new XeroError('Xero was read a moment ago. Try again in a few minutes.', 'XERO_READ_TOO_SOON', 429);
+      throw new XeroError('It was read a moment ago. Try again in a few minutes.', 'XERO_READ_TOO_SOON', 429);
     try {
-      const organisation = organisationFrom(await this.client.get(organizationId, '/Organisation', organisationsSchema));
-      const accounts = accountsFrom(await this.client.get(organizationId, '/Accounts', accountsSchema));
-      const taxRates = taxRatesFrom(await this.client.get(organizationId, '/TaxRates', taxRatesSchema));
-      // Phase 3: on, Xero would email the office's clients beside the console. Not saying is not a reason to fail the read.
+      const organisation = organisationFrom(await this.client.get(organizationId, tenantId, '/Organisation', organisationsSchema));
+      const accounts = accountsFrom(await this.client.get(organizationId, tenantId, '/Accounts', accountsSchema));
+      const taxRates = taxRatesFrom(await this.client.get(organizationId, tenantId, '/TaxRates', taxRatesSchema));
+      // On, Xero would email the organisation's clients beside the console. Not saying is not a reason to fail the read.
       const invoiceRemindersOn = await this.client
-        .get(organizationId, '/InvoiceReminders/Settings', remindersSchema)
+        .get(organizationId, tenantId, '/InvoiceReminders/Settings', remindersSchema)
         .then(remindersFrom)
         .catch((error: unknown) => {
           if (error instanceof XeroError && READ_STOPPERS.has(error.code)) throw error;
           return null;
         });
-      await this.prisma.xeroConnection.update({
-        where: { organizationId },
+      await this.prisma.xeroOrganisation.update({
+        where,
         data: {
+          // Xero's own name for it, as it is now.
+          ...(organisation?.name ? { name: organisation.name } : {}),
           organisation: organisation as unknown as Prisma.InputJsonValue,
           accounts: accounts as unknown as Prisma.InputJsonValue,
           taxRates: taxRates as unknown as Prisma.InputJsonValue,
@@ -245,39 +239,64 @@ export class XeroService {
       });
     } catch (error) {
       const message = error instanceof XeroError ? error.message : 'Xero could not be read.';
-      await this.prisma.xeroConnection.updateMany({ where: { organizationId }, data: { catalogReadError: message } });
+      await this.prisma.xeroOrganisation.updateMany({ where: { organizationId, xeroTenantId: tenantId }, data: { catalogReadError: message } });
       if (error instanceof XeroError && error.code === 'XERO_REAUTHORIZATION_REQUIRED') await this.auth.requireReconnect(organizationId, message);
       throw error;
     }
     return this.describe(organizationId);
   }
 
-  /** Ends the link at Xero, gives back the refresh token, and forgets the credentials here. */
+  /** Ends the link to one organisation at Xero and marks it removed here; the others stay connected. */
+  async disconnectOrganisation(user: AuthenticatedUser, tenantId: string): Promise<XeroConnectionView & { removedAtXero: boolean }> {
+    const organizationId = user.organizationId;
+    const row = await this.prisma.xeroOrganisation.findUnique({
+      where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
+      select: { status: true, name: true, xeroConnectionId: true },
+    });
+    if (!row) throw new XeroError('That is not one of the office’s Xero organisations.', 'XERO_ORGANISATION_UNKNOWN', 404);
+    let removedAtXero = row.status !== 'CONNECTED';
+    if (row.status === 'CONNECTED' && row.xeroConnectionId) removedAtXero = await this.removeAtXero(organizationId, row.xeroConnectionId);
+    await this.prisma.xeroOrganisation.updateMany({
+      where: { organizationId, xeroTenantId: tenantId },
+      data: { status: 'REMOVED', removedAt: new Date(), xeroConnectionId: null },
+    });
+    await this.audit(organizationId, user.id, 'XERO_ORGANISATION_DISCONNECTED', { name: row.name, removedAtXero });
+    return { ...(await this.describe(organizationId)), removedAtXero };
+  }
+
+  /** Ends every link at Xero, gives back the refresh token, and forgets the credentials here. */
   async disconnect(user: AuthenticatedUser): Promise<XeroConnectionView & { removedAtXero: boolean }> {
     const organizationId = user.organizationId;
-    const row = await this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, xeroConnectionId: true } });
-    let removedAtXero = false;
-    if (row?.status === 'CONNECTED' && row.xeroConnectionId) {
-      try {
-        removedAtXero = await this.client.removeConnection(await this.auth.accessToken(organizationId), row.xeroConnectionId);
-      } catch (error) {
-        this.logger.warn({ event: 'xero_disconnect_remote_failed', organizationId, code: error instanceof XeroError ? error.code : undefined });
-      }
+    const [row, organisations] = await Promise.all([
+      this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+      this.prisma.xeroOrganisation.findMany({ where: { organizationId, status: 'CONNECTED' }, select: { xeroConnectionId: true } }),
+    ]);
+    let removedAtXero = true;
+    if (row?.status === 'CONNECTED') {
+      for (const organisation of organisations)
+        if (organisation.xeroConnectionId) removedAtXero = (await this.removeAtXero(organizationId, organisation.xeroConnectionId)) && removedAtXero;
       await this.auth.revoke(organizationId);
     }
     await this.prisma.xeroConnection.updateMany({
       where: { organizationId },
-      data: {
-        status: 'DISCONNECTED',
-        accessTokenCiphertext: null,
-        accessTokenExpiresAt: null,
-        refreshTokenCiphertext: null,
-        xeroConnectionId: null,
-        disconnectedAt: new Date(),
-      },
+      data: { status: 'DISCONNECTED', accessTokenCiphertext: null, accessTokenExpiresAt: null, refreshTokenCiphertext: null, disconnectedAt: new Date() },
     });
-    await this.audit(organizationId, user.id, 'XERO_DISCONNECTED', { removedAtXero });
+    await this.prisma.xeroOrganisation.updateMany({
+      where: { organizationId, status: 'CONNECTED' },
+      data: { status: 'REMOVED', removedAt: new Date(), xeroConnectionId: null },
+    });
+    await this.audit(organizationId, user.id, 'XERO_DISCONNECTED', { removedAtXero, organisations: organisations.length });
     return { ...(await this.describe(organizationId)), removedAtXero };
+  }
+
+  /** Best effort: Xero saying no, or not answering, still lets the office end it here. */
+  private async removeAtXero(organizationId: string, connectionId: string) {
+    try {
+      return await this.client.removeConnection(await this.auth.accessToken(organizationId), connectionId);
+    } catch (error) {
+      this.logger.warn({ event: 'xero_disconnect_remote_failed', organizationId, code: error instanceof XeroError ? error.code : undefined });
+      return false;
+    }
   }
 
   private audit(organizationId: string, actorUserId: string | null, action: string, metadata: Record<string, unknown>) {

@@ -182,8 +182,8 @@ describe('the client’s writes', () => {
   it('posts JSON with an idempotency key, counted, and turns a refusal into Xero’s words', async () => {
     process.env.XERO_API_URL = 'https://api.xero.com/api.xro/2.0';
     const prisma = {
-      xeroConnection: {
-        findUnique: jest.fn(async () => ({ xeroTenantId: TENANT })),
+      xeroOrganisation: {
+        findUnique: jest.fn(async () => ({ status: 'CONNECTED' })),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
     };
@@ -193,13 +193,13 @@ describe('the client’s writes', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ Invoices: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ Elements: [{ ValidationErrors: [{ Message: 'Invoice # must be unique.' }] }] }), { status: 400 }));
     const { z } = await import('zod');
-    await client.post(ORG, '/Invoices?summarizeErrors=false', { Invoices: [] }, z.object({ Invoices: z.array(z.unknown()) }), 'key-1');
+    await client.post(ORG, TENANT, '/Invoices?summarizeErrors=false', { Invoices: [] }, z.object({ Invoices: z.array(z.unknown()) }), 'key-1');
     const [url, init] = fetch.mock.calls[0]!;
     expect(url).toBe('https://api.xero.com/api.xro/2.0/Invoices?summarizeErrors=false');
     expect(init).toMatchObject({ method: 'POST', body: '{"Invoices":[]}' });
     expect((init as RequestInit).headers).toMatchObject({ 'idempotency-key': 'key-1', 'xero-tenant-id': TENANT, 'content-type': 'application/json' });
-    expect(prisma.xeroConnection.updateMany).toHaveBeenCalled();
-    await expect(client.post(ORG, '/Invoices', {}, z.object({}), 'key-2')).rejects.toMatchObject({
+    expect(prisma.xeroOrganisation.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ organizationId: ORG, xeroTenantId: TENANT }) }));
+    await expect(client.post(ORG, TENANT, '/Invoices', {}, z.object({}), 'key-2')).rejects.toMatchObject({
       code: 'XERO_VALIDATION',
       message: 'Xero refused it: Invoice # must be unique.',
     });
@@ -225,6 +225,8 @@ function harness(options: {
   connection?: Record<string, unknown> | null;
   ready?: boolean;
   candidates?: string[];
+  /** Organisations connected, this one included. */
+  organisations?: number;
 } = {}) {
   const invoices = options.invoices ?? [invoice()];
   let settingsRow =
@@ -251,7 +253,13 @@ function harness(options: {
         return { count: 1 };
       }),
     },
-    xeroConnection: { findUnique: jest.fn(async () => connection) },
+    xeroConnection: { findUnique: jest.fn(async () => (connection ? { status: connection.status, scopes: connection.scopes } : null)) },
+    xeroOrganisation: {
+      findUnique: jest.fn(async () =>
+        connection ? { name: 'Example Home Services', status: 'CONNECTED', invoiceRemindersOn: connection.invoiceRemindersOn, accounts: connection.accounts } : null,
+      ),
+      count: jest.fn(async () => options.organisations ?? 1),
+    },
     invoice: {
       findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => invoices.filter((item) => where.id.in.includes(item.id))),
       count: jest.fn(async () => 0),
@@ -280,7 +288,7 @@ function harness(options: {
     $transaction: jest.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
   };
   const client = {
-    post: jest.fn(async (_org: string, path: string, body: { Contacts?: { Name: string }[]; Invoices?: { InvoiceNumber?: string }[] }): Promise<unknown> => {
+    post: jest.fn(async (_org: string, _tenant: string, path: string, body: { Contacts?: { Name: string }[]; Invoices?: { InvoiceNumber?: string }[] }): Promise<unknown> => {
       if (path.startsWith('/Contacts')) return { Contacts: body.Contacts!.map((contact, index) => ({ ContactID: `contact-${index}-${contact.Name}`, StatusAttributeString: 'OK' })) };
       return { Invoices: body.Invoices!.map((item, index) => ({ InvoiceID: `xero-${item.InvoiceNumber ?? index}`, StatusAttributeString: 'OK' })) };
     }),
@@ -292,16 +300,16 @@ function harness(options: {
   return { sender, prisma, client, auth, syncs, settingsRow: () => settingsRow };
 }
 
-const calls = (client: { post: jest.Mock }, prefix: string) => client.post.mock.calls.filter(([, path]) => (path as string).startsWith(prefix));
+const calls = (client: { post: jest.Mock }, prefix: string) => client.post.mock.calls.filter(([, , path]) => (path as string).startsWith(prefix));
 
 describe('a run', () => {
   it('makes the contact, sends the invoice approved with an idempotency key, and keeps what Xero answered', async () => {
     const { sender, client, prisma, syncs, settingsRow } = harness();
-    expect(await sender.run(ORG)).toEqual({ sent: 1, failed: 0, unchanged: 0, problem: null });
+    expect(await sender.run(ORG, TENANT)).toEqual({ sent: 1, failed: 0, unchanged: 0, problem: null });
     expect(calls(client, '/Contacts')).toHaveLength(1);
-    expect(calls(client, '/Contacts')[0]![2]).toEqual({ Contacts: [{ Name: '12 Example Lane' }] });
-    const [org, path, body, , key] = calls(client, '/Invoices')[0]!;
-    expect([org, path]).toEqual([ORG, '/Invoices?summarizeErrors=false']);
+    expect(calls(client, '/Contacts')[0]![3]).toEqual({ Contacts: [{ Name: '12 Example Lane' }] });
+    const [org, tenant, path, body, , key] = calls(client, '/Invoices')[0]!;
+    expect([org, tenant, path]).toEqual([ORG, TENANT, '/Invoices?summarizeErrors=false']);
     expect((body as { Invoices: { Status: string; Contact: unknown }[] }).Invoices[0]).toMatchObject({ Status: 'AUTHORISED', Contact: { ContactID: 'contact-0-12 Example Lane' } });
     expect(key).toMatch(/^[0-9a-f]{64}$/);
     expect(prisma.xeroContactLink.createMany).toHaveBeenCalledWith({
@@ -318,23 +326,23 @@ describe('a run', () => {
 
   it('calls Xero not at all when nothing changed', async () => {
     const quiet = harness({ candidates: [] });
-    await quiet.sender.run(ORG);
+    await quiet.sender.run(ORG, TENANT);
     expect(quiet.client.post).not.toHaveBeenCalled();
     // Looked at again (its row moved) but what it says is what Xero has: noted as seen, no call.
     const sent = invoice({
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const same = harness({ invoices: [sent] });
-    expect(await same.sender.run(ORG)).toMatchObject({ sent: 0, unchanged: 1 });
+    expect(await same.sender.run(ORG, TENANT)).toMatchObject({ sent: 0, unchanged: 1 });
     expect(same.client.post).not.toHaveBeenCalled();
     expect(same.prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({ where: { invoiceId: 'inv-1' }, data: { seenUpdatedAt: UPDATED } });
   });
 
   it('uses the contact it already has', async () => {
     const { sender, client } = harness({ links: [{ clientKey: 'jobber:client-1', xeroContactId: 'contact-known' }] });
-    await sender.run(ORG);
+    await sender.run(ORG, TENANT);
     expect(calls(client, '/Contacts')).toHaveLength(0);
-    expect((calls(client, '/Invoices')[0]![2] as { Invoices: { Contact: unknown }[] }).Invoices[0]!.Contact).toEqual({ ContactID: 'contact-known' });
+    expect((calls(client, '/Invoices')[0]![3] as { Invoices: { Contact: unknown }[] }).Invoices[0]!.Contact).toEqual({ ContactID: 'contact-known' });
   });
 
   it('finds a contact the office made by hand when Xero says the name is taken', async () => {
@@ -343,14 +351,14 @@ describe('a run', () => {
       Contacts: [{ ContactID: null, StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'The contact name 12 Example Lane is already assigned to another contact.' }] }],
     }));
     client.get.mockResolvedValueOnce({ Contacts: [{ ContactID: 'contact-by-hand', Name: '12 Example Lane' }] });
-    expect(await sender.run(ORG)).toMatchObject({ sent: 1 });
-    expect(client.get).toHaveBeenCalledWith(ORG, `/Contacts?where=${encodeURIComponent('Name=="12 Example Lane"')}`, expect.anything());
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1 });
+    expect(client.get).toHaveBeenCalledWith(ORG, TENANT, `/Contacts?where=${encodeURIComponent('Name=="12 Example Lane"')}`, expect.anything());
     expect(prisma.xeroContactLink.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({ xeroContactId: 'contact-by-hand' })], skipDuplicates: true });
   });
 
   it('keeps Xero’s reason for an invoice it refused, tries it again in an hour, and sends the rest', async () => {
     const { sender, client, syncs } = harness({ invoices: [invoice(), invoice({ id: 'inv-2', number: '8441', jobberClientId: 'client-2', clientName: '14 Example Lane' })] });
-    client.post.mockImplementation(async (_org: string, path: string, body: { Contacts?: { Name: string }[] }) =>
+    client.post.mockImplementation(async (_org: string, _tenant: string, path: string, body: { Contacts?: { Name: string }[] }) =>
       path.startsWith('/Contacts')
         ? { Contacts: body.Contacts!.map((_, index) => ({ ContactID: `contact-${index}` })) }
         : {
@@ -360,7 +368,7 @@ describe('a run', () => {
             ],
           },
     );
-    expect(await sender.run(ORG)).toMatchObject({ sent: 1, failed: 1 });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, failed: 1 });
     expect(syncs.get('inv-1')).toMatchObject({
       status: 'FAILED',
       problem: 'Invoice # must be unique.',
@@ -372,7 +380,7 @@ describe('a run', () => {
 
   it('holds back an invoice that does not add up, without calling Xero for it, until it changes', async () => {
     const { sender, client, syncs } = harness({ invoices: [invoice({ totalCents: 18000 })] });
-    expect(await sender.run(ORG)).toMatchObject({ sent: 0, failed: 1 });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
     expect(calls(client, '/Invoices')).toHaveLength(0);
     expect(syncs.get('inv-1')).toMatchObject({ status: 'FAILED', nextAttemptAt: null, problem: expect.stringContaining('Its lines come to $175.00') });
   });
@@ -380,7 +388,7 @@ describe('a run', () => {
   it('stops at the daily ceiling, says so, and leaves the rest for the next run', async () => {
     const { sender, client, settingsRow, syncs } = harness();
     client.post.mockRejectedValue(new XeroError('The console has used its 300 calls to Xero today. More can go tomorrow.', 'XERO_DAILY_CEILING', 429));
-    expect(await sender.run(ORG)).toMatchObject({ sent: 0, problem: 'The console has used its 300 calls to Xero today. More can go tomorrow.' });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, problem: 'The console has used its 300 calls to Xero today. More can go tomorrow.' });
     // Nothing marked: it is still a candidate tomorrow.
     expect(syncs.size).toBe(0);
     expect(settingsRow()).toMatchObject({ sendingClaimedUntil: null, lastRunProblem: expect.stringContaining('300 calls') });
@@ -389,7 +397,7 @@ describe('a run', () => {
   it('asks for the sign-in again when Xero refuses it', async () => {
     const { sender, client, auth } = harness();
     client.post.mockRejectedValue(new XeroError('Xero refused the stored sign-in. Connect again.', 'XERO_REAUTHORIZATION_REQUIRED', 409));
-    await sender.run(ORG);
+    await sender.run(ORG, TENANT);
     expect(auth.requireReconnect).toHaveBeenCalledWith(ORG, 'Xero refused the stored sign-in. Connect again.');
   });
 
@@ -399,23 +407,31 @@ describe('a run', () => {
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const { sender, client } = harness({ invoices: [voided] });
-    await sender.run(ORG);
+    await sender.run(ORG, TENANT);
     expect(calls(client, '/Contacts')).toHaveLength(0);
-    expect(calls(client, '/Invoices')[0]![2]).toEqual({ Invoices: [{ InvoiceID: 'xero-8440', Status: 'VOIDED' }] });
+    expect(calls(client, '/Invoices')[0]![3]).toEqual({ Invoices: [{ InvoiceID: 'xero-8440', Status: 'VOIDED' }] });
   });
 
   it('does nothing while off, blocked, or already running elsewhere', async () => {
     const off = harness({ settingsRow: { sendingEnabled: false } });
-    expect(await off.sender.run(ORG)).toMatchObject({ problem: 'Sending is off.' });
+    expect(await off.sender.run(ORG, TENANT)).toMatchObject({ problem: 'Sending is off.' });
     const readOnly = harness({ connection: { status: 'CONNECTED', xeroTenantId: TENANT, scopes: ['offline_access', 'accounting.settings.read'], invoiceRemindersOn: false, accounts: ACCOUNTS } });
-    expect(await readOnly.sender.run(ORG)).toMatchObject({ problem: 'Connect again, so Xero lets the console write contacts and invoices.' });
+    expect(await readOnly.sender.run(ORG, TENANT)).toMatchObject({ problem: 'Connect again, so Xero lets the console write contacts and invoices.' });
     const reminders = harness({ connection: { status: 'CONNECTED', xeroTenantId: TENANT, scopes: XERO_SEND_SCOPES.split(' '), invoiceRemindersOn: true, accounts: ACCOUNTS } });
-    expect((await reminders.sender.run(ORG)).problem).toMatch(/invoice reminders/);
+    expect((await reminders.sender.run(ORG, TENANT)).problem).toMatch(/invoice reminders/);
     const busy = harness({
       settingsRow: { sendingEnabled: true, sendFrom: new Date('2026-12-01T00:00:00.000Z'), sendingClaimedUntil: new Date('2026-12-02T18:10:00.000Z') },
     });
-    expect(await busy.sender.run(ORG)).toMatchObject({ problem: 'Another run is sending.' });
+    expect(await busy.sender.run(ORG, TENANT)).toMatchObject({ problem: 'Another run is sending.' });
     for (const run of [off, readOnly, reminders, busy]) expect(run.client.post).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing while several organisations are connected: invoices do not yet say whose they are', async () => {
+    const { sender, client } = harness({ organisations: 3 });
+    expect((await sender.run(ORG, TENANT)).problem).toBe(
+      'Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.',
+    );
+    expect(client.post).not.toHaveBeenCalled();
   });
 
   it('sends a busy day -- 200 changed invoices for 200 clients -- in eight calls, 50 a call', async () => {
@@ -423,22 +439,25 @@ describe('a run', () => {
       invoice({ id: `inv-${index}`, number: String(9000 + index), jobberClientId: `client-${index}`, clientName: `${index} Example Lane` }),
     );
     const { sender, client } = harness({ invoices: many });
-    expect(await sender.run(ORG)).toMatchObject({ sent: 200, failed: 0 });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 200, failed: 0 });
     expect(calls(client, '/Contacts')).toHaveLength(4);
     expect(calls(client, '/Invoices')).toHaveLength(4);
-    for (const [, , body] of client.post.mock.calls) expect(((body as { Contacts?: unknown[]; Invoices?: unknown[] }).Contacts ?? (body as { Invoices: unknown[] }).Invoices).length).toBeLessThanOrEqual(50);
+    for (const [, , , body] of client.post.mock.calls) expect(((body as { Contacts?: unknown[]; Invoices?: unknown[] }).Contacts ?? (body as { Invoices: unknown[] }).Invoices).length).toBeLessThanOrEqual(50);
   });
 });
 
 describe('turning it on, and the office’s buttons', () => {
   it('turns on only when nothing blocks it, and says who turned it on or off', async () => {
     const blocked = harness({ ready: false, settingsRow: { sendingEnabled: false, sendFrom: new Date('2026-12-01T00:00:00.000Z') } });
-    await expect(blocked.sender.setEnabled(office, true)).rejects.toMatchObject({ code: 'XERO_SENDING_BLOCKED', message: 'Finish “Before anything is sent”.' });
+    await expect(blocked.sender.setEnabled(office, TENANT, true)).rejects.toMatchObject({ code: 'XERO_SENDING_BLOCKED', message: 'Finish “Before anything is sent”.' });
     const ready = harness({ settingsRow: { sendingEnabled: false, sendFrom: new Date('2026-12-01T00:00:00.000Z') } });
-    await ready.sender.setEnabled(office, true);
-    expect(ready.prisma.xeroSettings.update).toHaveBeenCalledWith({ where: { organizationId: ORG }, data: { sendingEnabled: true, sendingChangedAt: expect.any(Date) } });
+    await ready.sender.setEnabled(office, TENANT, true);
+    expect(ready.prisma.xeroSettings.update).toHaveBeenCalledWith({
+      where: { organizationId_xeroTenantId: { organizationId: ORG, xeroTenantId: TENANT } },
+      data: { sendingEnabled: true, sendingChangedAt: expect.any(Date) },
+    });
     expect(ready.prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_TURNED_ON', actorUserId: office.id }) });
-    await ready.sender.setEnabled(office, false);
+    await ready.sender.setEnabled(office, TENANT, false);
     expect(ready.prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_TURNED_OFF' }) });
   });
 
@@ -446,14 +465,14 @@ describe('turning it on, and the office’s buttons', () => {
     const { sender } = harness({
       settingsRow: { sendingEnabled: true, lastRunAt: new Date('2026-12-02T17:59:30.000Z'), sendFrom: new Date('2026-12-01T00:00:00.000Z') },
     });
-    await expect(sender.runNow(office)).rejects.toMatchObject({ code: 'XERO_RUN_TOO_SOON' });
+    await expect(sender.runNow(office, TENANT)).rejects.toMatchObject({ code: 'XERO_RUN_TOO_SOON' });
   });
 
   it('tries every refused invoice again on the next run', async () => {
     const { sender, prisma } = harness();
-    await sender.retryFailed(office);
-    expect(prisma.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
-    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { invoices: 2 } }) });
+    await sender.retryFailed(office, TENANT);
+    expect(prisma.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2 } }) });
   });
 
   it('is seen with integrations:read and run with integrations:manage', () => {

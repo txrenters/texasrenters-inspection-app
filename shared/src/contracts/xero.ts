@@ -1,14 +1,17 @@
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethod } from './invoices.js';
 
 /**
- * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan):
- * connected once by somebody who runs the integrations, then read -- its
- * details, its chart of accounts and its tax rates -- so the next phases can
- * map the console's products and payment methods onto it. Nothing is written
- * to Xero yet.
+ * The office's Xero organisations (2026-11-10). The companies -- THMP, Crystal
+ * Creek Pest, Crystal Creek Air and the like -- each keep their own books in
+ * Xero; one sign-in by somebody who runs the integrations reaches all of them,
+ * and each is read -- its details, chart of accounts and tax rates -- so its
+ * own choices can be made against it. Nothing is written to Xero yet.
  */
 
 export type XeroConnectionStatus = 'DISCONNECTED' | 'CONNECTED' | 'REAUTHORIZATION_REQUIRED';
+
+/** CONNECTED, or REMOVED once the sign-in no longer reaches it, or it was disconnected. */
+export type XeroOrganisationStatus = 'CONNECTED' | 'REMOVED';
 
 export interface XeroOrganisation {
   name: string;
@@ -48,27 +51,43 @@ export interface XeroTaxRate {
   appliesToRevenue: boolean;
 }
 
-export interface XeroConnectionView {
-  /** Whether this server has a Xero app's credentials at all. */
-  configured: boolean;
-  status: XeroConnectionStatus;
-  tenantName: string | null;
+/** One organisation the sign-in reaches, as last read. */
+export interface XeroOrganisationView {
+  /** Xero's id for the organisation: what every call to it names. */
+  tenantId: string;
+  name: string;
+  status: XeroOrganisationStatus;
   connectedAt: string | null;
-  disconnectedAt: string | null;
-  /** Why it needs connecting again, in words. */
-  problem: string | null;
-  scopes: string[];
+  removedAt: string | null;
   organisation: XeroOrganisation | null;
   accounts: XeroAccount[];
   taxRates: XeroTaxRate[];
   readAt: string | null;
   readProblem: string | null;
-  /** Calls to Xero today (Texas), and the console's own ceiling on them. */
+  /** Calls to this organisation today (Texas): Xero limits each organisation on its own. */
   callsToday: number;
-  dailyCeiling: number;
-  /** Whether Xero's own invoice reminders are on, as last read (phase 3); null when Xero did not say. */
+  /** Whether Xero's own invoice reminders are on in this organisation, as last read; null when Xero did not say. */
   invoiceRemindersOn: boolean | null;
 }
+
+export interface XeroConnectionView {
+  /** Whether this server has a Xero app's credentials at all. */
+  configured: boolean;
+  status: XeroConnectionStatus;
+  connectedAt: string | null;
+  disconnectedAt: string | null;
+  /** Why it needs connecting again, in words. */
+  problem: string | null;
+  scopes: string[];
+  /** Connected ones first, by name; then any the sign-in no longer reaches. */
+  organisations: XeroOrganisationView[];
+  /** The console's own ceiling on calls a Texas day, for each organisation. */
+  dailyCeiling: number;
+}
+
+/** The organisations the console can work with now. */
+export const connectedOrganisations = (view: Pick<XeroConnectionView, 'status' | 'organisations'>) =>
+  view.status === 'CONNECTED' ? view.organisations.filter((organisation) => organisation.status === 'CONNECTED') : [];
 
 /** What sending invoices needs Xero to allow (phase 3). Payments are asked for at the same time, for phase 4. */
 export const XERO_WRITE_SCOPES = ['accounting.contacts', 'accounting.invoices'] as const;
@@ -131,6 +150,8 @@ export interface XeroCheck {
 }
 
 export interface XeroSettingsView {
+  /** The organisation these choices are for. */
+  tenantId: string;
   values: XeroSettingsValues;
   products: XeroSalesItem[];
   /** Every payment method, in the console's order. */
@@ -272,6 +293,8 @@ export interface XeroSendingFailure {
 }
 
 export interface XeroSendingView {
+  /** The organisation sending is for: each has its own switch. */
+  tenantId: string;
   enabled: boolean;
   changedAt: string | null;
   /** The connection was made with the scopes sending needs. */
@@ -298,9 +321,14 @@ export function xeroSendingBlockers(input: {
   scopes: readonly string[];
   settingsReady: boolean;
   invoiceRemindersOn: boolean | null;
+  /** Organisations connected now, this one included. */
+  organisationsConnected: number;
 }): string[] {
   if (!input.connected) return ['Connect Xero.'];
   const blockers: string[] = [];
+  // Until an invoice says which company it is for (the next phases), every one would go to every organisation.
+  if (input.organisationsConnected > 1)
+    blockers.push('Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.');
   if (!xeroCanWrite(input.scopes)) blockers.push('Connect again, so Xero lets the console write contacts and invoices.');
   if (!input.settingsReady) blockers.push('Finish “Before anything is sent”.');
   if (input.invoiceRemindersOn === true)
