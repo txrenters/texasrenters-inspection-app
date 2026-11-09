@@ -66,10 +66,12 @@ function NoteGroup({
 }
 
 function NoteList({ notes }: { notes: readonly JobNote[] }) {
+  // By the room it has, not the screen: in the side panel a label column would
+  // leave the note a word a line.
   return (
-    <dl className="grid gap-3 text-sm">
+    <dl className="@container grid gap-3 text-sm">
       {notes.map((note) => (
-        <div className="grid gap-0.5 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] sm:gap-4" key={note.key}>
+        <div className="grid gap-0.5 @md:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] @md:gap-4" key={note.key}>
           <dt className="text-muted-foreground break-words">{note.source}</dt>
           <dd className="break-words whitespace-pre-wrap">{note.text}</dd>
         </div>
@@ -281,11 +283,18 @@ function OfficeNotes({ inspection }: { inspection: AdminInspection }) {
   );
 }
 
-export function JobNotes({ inspection }: { inspection: AdminInspection }) {
+export function JobNotes({
+  className = 'mt-4',
+  inspection,
+}: {
+  /** Its place in the page; the side panel spaces its own cards. */
+  className?: string;
+  inspection: AdminInspection;
+}) {
   const fromTechnician = technicianNotes(inspection);
   const onTheReport = reportComments(inspection);
   return (
-    <Card aria-labelledby="notes-title" className="mt-4">
+    <Card aria-labelledby="notes-title" className={className}>
       <CardHeader>
         <CardTitle id="notes-title" variant="label">
           Notes
