@@ -12,6 +12,10 @@ import {
   type PaymentDetail,
   type SendInvoiceInput,
   type SendReceiptInput,
+  MAX_ATTACHED_PDF_BYTES,
+  fillTemplate,
+  invoiceTemplateValues,
+  type InvoiceEmailAttachment,
 } from '@texasrenters/shared';
 import { InvoiceStatus } from '@prisma/client';
 
@@ -21,7 +25,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { claimInvoiceEmail, isEmailCeiling, sendClaimedEmail } from './invoice-email-claim';
-import { defaultRecipients, readEmailSettings } from './invoice-email-settings';
+import { defaultRecipients, readEmailSettings, readEmailTemplates } from './invoice-email-settings';
 import { invoiceEmail } from './invoice-email';
 import { receiptEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
@@ -49,6 +53,27 @@ const MAX_DELIVERABLE_ROWS = 200;
 
 const isoDay = (value: Date | null) => (value ? value.toISOString().slice(0, 10) : null);
 
+/**
+ * The invoice's PDF as the browser made it (2026-11-10): checked to be a PDF,
+ * and small -- an invoice has no images -- before it rides on the email.
+ */
+export function attachedPdf(input: InvoiceEmailAttachment) {
+  const bytes = Buffer.from(input.contentBase64, 'base64');
+  if (bytes.length > MAX_ATTACHED_PDF_BYTES)
+    throw new ApplicationError(422, 'INVOICE_SEND_INVALID', 'The PDF is too large to attach. Send it without.');
+  if (bytes.subarray(0, 5).toString('latin1') !== '%PDF-') throw new ApplicationError(422, 'INVOICE_SEND_INVALID', 'The attachment is not a PDF.');
+  const stem =
+    input.fileName
+      .replace(/\.pdf$/i, '')
+      .replace(/[^\w .,()#&'-]+/g, ' ')
+      .replace(/\.{2,}/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s.]+/, '')
+      .trim()
+      .slice(0, 100) || 'Invoice';
+  return { name: `${stem}.pdf`, contentType: 'application/pdf', contentBase64: bytes.toString('base64') };
+}
+
 @Injectable()
 export class InvoiceDeliveryService {
   private readonly logger = new Logger(InvoiceDeliveryService.name);
@@ -64,7 +89,7 @@ export class InvoiceDeliveryService {
     const problem = recipientsProblem(input.to);
     if (problem) throw new ApplicationError(422, 'INVOICE_SEND_INVALID', problem);
     const to = input.to.map((address) => address.trim()).filter(Boolean);
-    const message = input.message?.trim() || null;
+    const attachment = input.attachment ? attachedPdf(input.attachment) : null;
 
     const prior = await this.byKey(user, input.clientRequestId);
     if (prior) return this.answerResend(user, prior, invoiceId);
@@ -72,6 +97,16 @@ export class InvoiceDeliveryService {
     const invoice = await this.invoices.one(user, invoiceId);
     if (invoice.status === 'DRAFT') throw new ApplicationError(409, 'INVOICE_NOT_SENDABLE', 'Mark the draft sent before it is emailed.');
     if (invoice.status === 'VOIDED') throw new ApplicationError(409, 'INVOICE_NOT_SENDABLE', 'A voided invoice is not sent.');
+    // The office's words (2026-11-10): the note somebody wrote on the press, else the template's -- a
+    // Batch Deliver writes none. An empty note is somebody choosing none.
+    const brand = invoice.brand ?? receiptBrand();
+    const words = await readEmailTemplates(this.prisma, user.organizationId);
+    const values = invoiceTemplateValues(invoice, brand.name);
+    const message =
+      input.message === undefined || input.message === null
+        ? fillTemplate(words.templates.invoice.message, values).trim() || null
+        : input.message.trim() || null;
+    const replyTo = words.replyTo ?? brand.email ?? null;
 
     const deliveryId = await claimInvoiceEmail(this.prisma, {
       organizationId: user.organizationId,
@@ -90,7 +125,11 @@ export class InvoiceDeliveryService {
       this.mail,
       deliveryId,
       to,
-      invoiceEmail(invoice, invoice.brand ?? receiptBrand(), message),
+      {
+        ...invoiceEmail(invoice, brand, message, fillTemplate(words.templates.invoice.subject, values)),
+        replyTo,
+        ...(attachment ? { attachments: [attachment] } : {}),
+      },
     );
     await this.audit(user, 'INVOICE_SENT', invoiceId, { deliveryId, channel: 'EMAIL', to, status: result.status, ...(result.failure ? { failure: result.failure } : {}) });
     if (result.failed) this.logger.warn({ event: 'invoice_email_not_sent', invoiceId, failed: result.failed, of: to.length });
@@ -121,7 +160,7 @@ export class InvoiceDeliveryService {
     });
     if (!deliveryId) return this.answerReceiptResend(user, await this.byKey(user, input.clientRequestId), paymentId);
 
-    const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, receiptEmail(payment, payment.brand));
+    const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, await this.receipt(user, payment));
     await this.audit(user, 'PAYMENT_RECEIPT_SENT', payment.invoice.id, { deliveryId, paymentId, to, status: result.status, ...(result.failure ? { failure: result.failure } : {}) });
     if (result.status === 'FAILED') throw new ApplicationError(502, 'RECEIPT_EMAIL_FAILED', result.failure ?? 'The receipt was not sent.');
     return this.invoices.onePayment(user, paymentId);
@@ -155,7 +194,7 @@ export class InvoiceDeliveryService {
         clientRequestId: `receipt:${recorded.id}`,
       });
       if (!deliveryId) return;
-      const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, receiptEmail(payment, payment.brand));
+      const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, await this.receipt(user, payment));
       await this.audit(user, 'PAYMENT_RECEIPT_SENT', invoiceId, { deliveryId, paymentId: recorded.id, to, status: result.status, automatic: true, ...(result.failure ? { failure: result.failure } : {}) });
     } catch (error) {
       this.logger.warn({ event: 'automatic_receipt_not_sent', invoiceId, message: error instanceof Error ? error.message : String(error) });
@@ -253,6 +292,12 @@ export class InvoiceDeliveryService {
    * it went or is going, the same failure when it did not -- never a second
    * email. The same key for another invoice is a mistake.
    */
+  /** A receipt in the office's words, replies going where it said. */
+  private async receipt(user: AuthenticatedUser, payment: PaymentDetail) {
+    const words = await readEmailTemplates(this.prisma, user.organizationId);
+    return { ...receiptEmail(payment, payment.brand, words.templates.receipt), replyTo: words.replyTo ?? payment.brand.email ?? null };
+  }
+
   private answerResend(user: AuthenticatedUser, prior: { invoiceId: string | null; status: string; failure: string | null } | null, invoiceId: string) {
     if (!prior || prior.invoiceId !== invoiceId)
       throw new ApplicationError(409, 'IDEMPOTENCY_KEY_REUSED', 'That request key was already used for something else.');

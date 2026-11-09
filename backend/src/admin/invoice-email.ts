@@ -5,6 +5,9 @@ import {
   type InvoiceDetail,
   type InvoiceTotalLine,
   type ReceiptBrand,
+  accountBalanceLine,
+  clientViewOf,
+  showsLateStamp,
 } from '@texasrenters/shared';
 
 /**
@@ -28,7 +31,7 @@ export function escapeHtml(value: string) {
 }
 
 /** Text as paragraphs, its line breaks kept. */
-const paragraphs = (text: string) =>
+export const paragraphs = (text: string) =>
   text
     .split(/\n{2,}/)
     .map((part) => `<p style="margin:0 0 12px">${escapeHtml(part).replaceAll('\n', '<br>')}</p>`)
@@ -44,11 +47,19 @@ function totalRow({ label, value, strong }: InvoiceTotalLine) {
   return `<tr><td style="padding:${top}px 12px 3px 0;${look}">${escapeHtml(label)}</td><td style="padding:${top}px 0 3px;text-align:right${strong ? ';font-weight:700' : ''}">${escapeHtml(value)}</td></tr>`;
 }
 
-export function invoiceEmail(invoice: InvoiceDetail, brand: ReceiptBrand, message: string | null) {
+export function invoiceEmail(invoice: InvoiceDetail, brand: ReceiptBrand, message: string | null, subject?: string) {
   const name = invoiceDocumentName(invoice);
   const details = invoice.details;
   const place = invoice.property ? [invoice.property.address, invoice.property.city].filter(Boolean).join(', ') : null;
   const totals = invoiceTotalLines(invoice);
+  const balance = accountBalanceLine(invoice);
+  // Jobber's "Client view" (2026-11-10): only the columns the office shows.
+  const view = clientViewOf(invoice);
+  const columns = [
+    view.showQuantities ? { head: 'Qty', of: (line: InvoiceDetail['lineItems'][number]) => String(line.quantity) } : null,
+    view.showUnitPrices ? { head: 'Unit price', of: (line: InvoiceDetail['lineItems'][number]) => formatMoney(line.unitPriceCents) } : null,
+    view.showLineTotals ? { head: 'Total', of: (line: InvoiceDetail['lineItems'][number]) => formatMoney(line.totalCents) } : null,
+  ].filter((column): column is NonNullable<typeof column> => column !== null);
 
   const lines = invoice.lineItems
     .map(
@@ -56,9 +67,7 @@ export function invoiceEmail(invoice: InvoiceDetail, brand: ReceiptBrand, messag
         <td style="${cell}"><strong>${escapeHtml(line.name)}</strong>${
           line.description ? `<br><span style="color:#5b6b87;font-size:13px">${escapeHtml(line.description)}</span>` : ''
         }</td>
-        <td style="${money}">${escapeHtml(String(line.quantity))}</td>
-        <td style="${money}">${escapeHtml(formatMoney(line.unitPriceCents))}</td>
-        <td style="${money}">${escapeHtml(formatMoney(line.totalCents))}</td>
+        ${columns.map((column) => `<td style="${money}">${escapeHtml(column.of(line))}</td>`).join('')}
       </tr>`,
     )
     .join('');
@@ -68,14 +77,15 @@ export function invoiceEmail(invoice: InvoiceDetail, brand: ReceiptBrand, messag
       place && place !== invoice.clientName ? ` (${escapeHtml(place)})` : ''
     }</p>
     <p style="margin:0 0 16px;color:#5b6b87">Issued ${escapeHtml(day(invoice.issuedOn))} · Due ${escapeHtml(day(invoice.dueOn))}</p>
+    ${showsLateStamp(invoice) ? '<p style="margin:0 0 16px;color:#b42318;font-weight:700;letter-spacing:1px">PAST DUE</p>' : ''}
     <table style="width:100%;border-collapse:collapse;font-size:14px" role="presentation">
       <thead><tr>
-        <th style="${cell}">Product / Service</th><th style="${money}">Qty</th><th style="${money}">Unit price</th><th style="${money}">Total</th>
+        <th style="${cell}">Product / Service</th>${columns.map((column) => `<th style="${money}">${column.head}</th>`).join('')}
       </tr></thead>
       <tbody>${lines}</tbody>
     </table>
     <table style="margin:12px 0 0 auto;border-collapse:collapse;font-size:14px" role="presentation">
-      ${totals.map(totalRow).join('')}
+      ${totals.map(totalRow).join('')}${balance ? totalRow(balance) : ''}
     </table>
     ${invoice.clientMessage ? `<div style="margin-top:20px">${paragraphs(invoice.clientMessage)}</div>` : ''}
     ${details?.contractDisclaimer ? `<div style="margin-top:12px;color:#5b6b87;font-size:13px">${paragraphs(details.contractDisclaimer)}</div>` : ''}
@@ -84,5 +94,5 @@ export function invoiceEmail(invoice: InvoiceDetail, brand: ReceiptBrand, messag
       .map(escapeHtml)
       .join(' · ')}</p>`;
 
-  return { subject: `${name} from ${brand.name}`, title: `${name}: ${formatMoney(invoice.balanceCents)} due ${day(invoice.dueOn)}`, html };
+  return { subject: subject ?? `${name} from ${brand.name}`, title: `${name}: ${formatMoney(invoice.balanceCents)} due ${day(invoice.dueOn)}`, html };
 }

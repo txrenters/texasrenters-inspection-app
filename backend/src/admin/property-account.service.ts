@@ -26,7 +26,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { claimInvoiceEmail, sendClaimedEmail } from './invoice-email-claim';
-import { defaultRecipients } from './invoice-email-settings';
+import { defaultRecipients, readEmailTemplates } from './invoice-email-settings';
 import { invoiceWritesOff, invoiceWritesOn, officeBrand } from './invoice-settings';
 import { deliveryView } from './invoices.service';
 import { statementEmail } from './statement-email';
@@ -175,7 +175,11 @@ export class PropertyAccountService {
     });
     // The same press again: it was sent, or tried, already.
     if (!deliveryId) return this.account(user, propertyId);
-    const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, statementEmail(view));
+    const words = await readEmailTemplates(this.prisma, user.organizationId);
+    const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, {
+      ...statementEmail(view, words.templates.statement),
+      replyTo: words.replyTo ?? view.brand.email ?? null,
+    });
     await this.prisma.auditLog.create({
       data: {
         organizationId: user.organizationId,

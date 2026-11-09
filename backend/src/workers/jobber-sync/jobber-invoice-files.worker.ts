@@ -181,7 +181,8 @@ export class JobberInvoiceFileWorker {
     if (room <= 0) return { ...result, skipped: 'CEILING' };
 
     const candidates = await this.prisma.invoiceFile.findMany({
-      where: { organizationId, storageKey: null, copyAttempts: { lt: MAX_COPY_ATTEMPTS } },
+      // Only files read from Jobber: one added in the console is kept from the start.
+      where: { organizationId, origin: 'JOBBER', storageKey: null, copyAttempts: { lt: MAX_COPY_ATTEMPTS } },
       // Never tried first, then the longest waiting; the newest invoices' files before the oldest.
       orderBy: [{ copyAttemptedAt: { sort: 'asc', nulls: 'first' } }, { uploadedAt: 'desc' }],
       take: CANDIDATES,
@@ -195,7 +196,9 @@ export class JobberInvoiceFileWorker {
         invoice: { select: { jobberInvoiceId: true } },
       },
     });
-    const due = candidates.filter((file) => dueForCopy(file, started)).slice(0, room);
+    const due = candidates
+      .filter((file): file is (typeof candidates)[number] & { jobberFileId: string } => file.jobberFileId !== null && dueForCopy(file, started))
+      .slice(0, room);
     if (!due.length) return { ...result, skipped: 'NOTHING' };
 
     const byInvoice = new Map<string, typeof due>();

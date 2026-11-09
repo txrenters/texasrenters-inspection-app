@@ -14,7 +14,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { claimInvoiceEmail, isEmailCeiling, sendClaimedEmail } from './invoice-email-claim';
-import { defaultRecipients, readEmailSettings } from './invoice-email-settings';
+import { defaultRecipients, readEmailSettings, readEmailTemplates } from './invoice-email-settings';
 import { followUpEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
 import { invoiceWritesOn } from './invoice-settings';
@@ -124,6 +124,8 @@ export class InvoiceFollowUpsService {
     if (!(await invoiceWritesOn(this.prisma, organizationId))) return { ...run, skipped: 'NOT_TAKEN_OVER' };
     const settings = (await readEmailSettings(this.prisma, organizationId)).values;
     if (!settings.followUpsEnabled || !settings.followUpDays.length) return { ...run, skipped: 'OFF' };
+    // Where a client's reply goes (2026-11-10). Follow-ups keep Jobber's own words.
+    const { replyTo } = await readEmailTemplates(this.prisma, organizationId);
 
     const due = settings.followUpDays.map((days) => toDate(daysBefore(today, days)));
     const owed = await this.prisma.invoice.findMany({
@@ -183,7 +185,8 @@ export class InvoiceFollowUpsService {
         continue;
       }
       const invoice = await this.invoices.one(office, row.id);
-      const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, followUpEmail(invoice, invoice.brand ?? receiptBrand(), day));
+      const brand = invoice.brand ?? receiptBrand();
+      const result = await sendClaimedEmail(this.prisma, this.mail, deliveryId, to, { ...followUpEmail(invoice, brand, day), replyTo: replyTo ?? brand.email ?? null });
       await this.prisma.auditLog.create({
         data: {
           organizationId,

@@ -588,6 +588,8 @@ model UserProfile {
   invoicesCreated      Invoice[]          @relation("InvoiceCreatedBy")
   paymentsRecorded     InvoicePayment[]   @relation("InvoicePaymentRecordedBy")
   invoicesSent         InvoiceDelivery[]  @relation("InvoiceDeliverySentBy")
+  invoiceNotesWritten  InvoiceNote[]      @relation("InvoiceNoteCreatedBy")
+  invoiceFilesUploaded InvoiceFile[]      @relation("InvoiceFileUploadedBy")
   invoicingTakenOver   InvoiceSettings[]  @relation("InvoicingTakenOverBy")
   geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
   managementEndsMarked PropertyServiceStatus[] @relation("ManagementEndedBy")
@@ -3234,6 +3236,12 @@ model Invoice {
   taxInclusive           Boolean?
   /// The invoice's custom fields, `[{ label, value }]`, as Jobber shows them.
   customFields           Json?
+  /// Jobber's "Client view" (2026-11-10): what the client sees on the PDF and the email.
+  showQuantities         Boolean         @default(true)
+  showUnitPrices         Boolean         @default(true)
+  showLineTotals         Boolean         @default(true)
+  showAccountBalance     Boolean         @default(true)
+  showLateStamp          Boolean         @default(true)
   /// Jobber's page for it.
   jobberWebUrl           String?
   /// Jobber's own "updated at": a delivery older than the copy is ignored, as
@@ -3300,7 +3308,11 @@ model InvoiceNote {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String   @db.Uuid
   invoiceId      String   @db.Uuid
-  jobberNoteId   String
+  /// Jobber's id; null for a note written in the console (2026-11-10).
+  jobberNoteId   String?
+  /// JOBBER, read from it and replaced on each read; or CONSOLE, written here and never touched by a read.
+  origin         String   @default("JOBBER")
+  createdById    String?  @db.Uuid
   /// Where Jobber keeps it: INVOICE, or the JOB / CLIENT / QUOTE / REQUEST it is linked to.
   kind           String
   message        String
@@ -3308,7 +3320,8 @@ model InvoiceNote {
   writtenAt      DateTime
   createdAt      DateTime @default(now())
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice   Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  createdBy UserProfile? @relation("InvoiceNoteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@unique([invoiceId, jobberNoteId])
   @@index([organizationId])
@@ -3321,7 +3334,10 @@ model InvoiceFile {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String   @db.Uuid
   invoiceId      String   @db.Uuid
-  jobberFileId   String
+  /// Jobber's id; null for a file added in the console (2026-11-10), kept in its storage from the start.
+  jobberFileId   String?
+  origin         String   @default("JOBBER")
+  uploadedById   String?  @db.Uuid
   fileName       String
   contentType    String
   sizeBytes      Int
@@ -3337,7 +3353,8 @@ model InvoiceFile {
   copyAttemptedAt DateTime?
   copyProblem     String?
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice    Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  uploadedBy UserProfile? @relation("InvoiceFileUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
 
   @@unique([invoiceId, jobberFileId])
   @@index([organizationId])
@@ -3378,6 +3395,11 @@ model InvoiceSettings {
   statementNewestFirst       Boolean   @default(true)
   statementDisclaimer        String?
   statementSettingsUpdatedAt DateTime?
+  /// The office's words for the invoice, receipt and statement emails (2026-11-10), `{ invoice, receipt, statement }`
+  /// each `{ subject, message }`; null keeps the console's own. And where a client's reply goes.
+  emailTemplates             Json?
+  replyToEmail               String?
+  templatesUpdatedAt         DateTime?
   createdAt                 DateTime     @default(now())
   updatedAt                 DateTime     @updatedAt
   organization              Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

@@ -8,6 +8,10 @@ import {
   type InvoiceDeliveryKind,
   type InvoiceDeliveryView,
   type InvoiceDetail,
+  MAX_ATTACHED_PDF_BYTES,
+  fillTemplate,
+  invoiceTemplateValues,
+  type InvoiceEmailAttachment,
 } from '@texasrenters/shared';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
@@ -31,7 +35,8 @@ import { ApiError } from '@/lib/api';
 import { useInvoiceEdits } from '@/lib/invoice-edit-queries';
 import { newClientRequestId } from '@/lib/invoice-queries';
 import { useSendInvoice } from '@/lib/invoice-delivery-queries';
-import { previewInvoice } from '@/lib/invoice-pdf/download-invoice';
+import { invoiceFileName, invoicePdf, previewInvoice } from '@/lib/invoice-pdf/download-invoice';
+import { useEmailTemplates } from '@/lib/invoice-record-queries';
 
 /**
  * Emailing an invoice to the client (2026-11-06, phase 5), as Jobber's "Send
@@ -61,6 +66,22 @@ export function defaultInvoiceNote(invoice: InvoiceDetail) {
   return `Hello,\n\nHere is ${whichInvoice(invoice)} for ${invoice.clientName}: ${formatMoney(invoice.balanceCents)} is due${due}.\n\nThank you.`;
 }
 
+/** The office's invoice note filled for this invoice; the console's own while there is none, or no number yet. */
+export function templateNote(invoice: InvoiceDetail, template: string | undefined) {
+  if (!template || !invoice.number) return defaultInvoiceNote(invoice);
+  return fillTemplate(template, invoiceTemplateValues(invoice, invoice.brand?.name ?? 'TexasRenters.com'));
+}
+
+/** The invoice's PDF as an attachment: base64, refused when too large to ride on an email. */
+export async function invoiceAttachment(invoice: InvoiceDetail): Promise<InvoiceEmailAttachment> {
+  const blob = await invoicePdf(invoice);
+  if (blob.size > MAX_ATTACHED_PDF_BYTES) throw new Error('The PDF is too large to attach. Send it without.');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let start = 0; start < bytes.length; start += 0x8000) binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  return { fileName: invoiceFileName(invoice), contentBase64: btoa(binary) };
+}
+
 export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: InvoiceDetail; open: boolean; onClose: () => void }) {
   const id = useId();
   const send = useSendInvoice();
@@ -68,9 +89,14 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
   const known = invoice.details?.clientEmails ?? [];
   const [chosen, setChosen] = useState<string[]>([]);
   const [others, setOthers] = useState('');
-  const [message, setMessage] = useState('');
+  // The office's words (2026-11-10), until somebody types their own.
+  const words = useEmailTemplates(open);
+  const [typed, setTyped] = useState<string | null>(null);
+  const message = typed ?? templateNote(invoice, words.data?.templates.invoice.message);
+  const [attach, setAttach] = useState(true);
   const [key, setKey] = useState(newClientRequestId);
   const [previewing, setPreviewing] = useState(false);
+  const [making, setMaking] = useState(false);
 
   // Filled each time it opens: the client's first address ticked, the usual note, a new key.
   const [openedFor, setOpenedFor] = useState<string | null>(null);
@@ -78,7 +104,8 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
     setOpenedFor(invoice.id);
     setChosen(known.slice(0, 1));
     setOthers('');
-    setMessage(defaultInvoiceNote(invoice));
+    setTyped(null);
+    setAttach(true);
     setKey(newClientRequestId());
   }
   if (!open && openedFor) setOpenedFor(null);
@@ -86,11 +113,26 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
   const to = [...chosen, ...typedAddresses(others)];
   const problem = recipientsProblem(to);
   const draft = invoice.status === 'DRAFT';
-  const busy = send.isPending || edits.changeStatus.isPending;
+  const busy = send.isPending || edits.changeStatus.isPending || making;
 
-  const sendNow = (current: InvoiceDetail) =>
+  const sendNow = async (current: InvoiceDetail) => {
+    // The PDF the client gets, made from the invoice as it now stands (numbered, for a draft just sent).
+    let attachment: InvoiceEmailAttachment | null = null;
+    if (attach) {
+      setMaking(true);
+      try {
+        attachment = await invoiceAttachment(current);
+      } catch (error) {
+        setMaking(false);
+        return void toast.error('The PDF could not be attached, and nothing was emailed', {
+          description: error instanceof Error ? error.message : 'Try again, or send it without the PDF.',
+        });
+      }
+      setMaking(false);
+    }
+    // An empty note is somebody choosing none: sent as written, never filled in by the server.
     send.mutate(
-      { id: current.id, input: { to, message: message.trim() || null, clientRequestId: key } },
+      { id: current.id, input: { to, message, clientRequestId: key, attachment } },
       {
         onSuccess: (sent) => {
           const delivery = sent.deliveries?.[0];
@@ -106,15 +148,16 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
         },
       },
     );
+  };
 
   const submit = () => {
     if (problem || busy) return;
-    if (!draft) return sendNow(invoice);
+    if (!draft) return void sendNow(invoice);
     if (!invoice.updatedAt) return;
     edits.changeStatus.mutate(
       { id: invoice.id, input: { action: 'MARK_SENT', expectedUpdatedAt: invoice.updatedAt } },
       {
-        onSuccess: sendNow,
+        onSuccess: (sent) => void sendNow(sent),
         onError: (error) => toast.error('The draft was not marked sent, and nothing was emailed', { description: error.message }),
       },
     );
@@ -183,13 +226,20 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
             className="min-h-28"
             id={`${id}-message`}
             maxLength={2000}
-            onChange={(event) => setMessage(event.target.value)}
+            onChange={(event) => setTyped(event.target.value)}
             value={message}
           />
           <FieldDescription aria-live="polite" className={problem && to.length ? 'text-destructive' : undefined}>
             {problem && to.length ? problem : `Above the invoice. Up to ${MAX_INVOICE_RECIPIENTS} people at a time.`}
           </FieldDescription>
         </Field>
+
+        <div className="flex items-center gap-2">
+          <Checkbox checked={attach} id={`${id}-attach`} onCheckedChange={(value) => setAttach(value === true)} />
+          <Label className="font-normal" htmlFor={`${id}-attach`}>
+            Attach the invoice as a PDF
+          </Label>
+        </div>
 
         <DialogFooter className="sm:justify-between">
           <Button disabled={previewing} onClick={() => void preview()} variant="ghost">
@@ -200,7 +250,7 @@ export function SendInvoiceDialog({ invoice, open, onClose }: { invoice: Invoice
               Cancel
             </Button>
             <Button disabled={Boolean(problem) || busy} onClick={submit}>
-              {busy ? 'Sending…' : draft ? 'Mark sent and email' : to.length > 1 ? `Email ${to.length} people` : 'Send email'}
+              {making ? 'Making the PDF…' : busy ? 'Sending…' : draft ? 'Mark sent and email' : to.length > 1 ? `Email ${to.length} people` : 'Send email'}
             </Button>
           </div>
         </DialogFooter>

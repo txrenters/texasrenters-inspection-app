@@ -13,7 +13,7 @@ import {
   type InvoiceStatus,
   type InvoiceSummary,
 } from '@texasrenters/shared';
-import { ArrowDownIcon, ArrowUpIcon, BanknoteIcon, ChevronRightIcon, FileIcon, PinIcon, PlusIcon, ReceiptTextIcon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, BanknoteIcon, ChevronRightIcon, FileIcon, PinIcon, PlusIcon, ReceiptTextIcon, Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -308,7 +308,16 @@ const NOTE_PLACE: Record<InvoiceNoteView['kind'], string | null> = {
 };
 
 /** The invoice's internal notes, and the job's Jobber shows beside them: pinned first. */
-export function InvoiceNotes({ notes }: { notes: readonly InvoiceNoteView[] }) {
+export function InvoiceNotes({
+  notes,
+  onRemove,
+  removing,
+}: {
+  notes: readonly InvoiceNoteView[];
+  /** Takes off a note written in the console (2026-11-10); Jobber's stay. */
+  onRemove?: (noteId: string) => void;
+  removing?: boolean;
+}) {
   if (!notes.length) return <p className="text-muted-foreground text-sm">No notes.</p>;
   return (
     <ul aria-label="Notes" className="divide-y">
@@ -322,7 +331,19 @@ export function InvoiceNotes({ notes }: { notes: readonly InvoiceNoteView[] }) {
               </span>
             ) : null}
             <span>{formatInvoiceMoment(note.writtenAt)}</span>
-            {NOTE_PLACE[note.kind] ? <span>· {NOTE_PLACE[note.kind]}</span> : null}
+            {note.origin === 'CONSOLE' ? <span>· {note.author ?? 'The console'}</span> : NOTE_PLACE[note.kind] ? <span>· {NOTE_PLACE[note.kind]}</span> : null}
+            {onRemove && note.origin === 'CONSOLE' ? (
+              <Button
+                aria-label="Take the note off"
+                className="text-muted-foreground ml-auto size-7"
+                disabled={removing}
+                onClick={() => onRemove(note.id)}
+                size="icon"
+                variant="ghost"
+              >
+                <Trash2Icon />
+              </Button>
+            ) : null}
           </p>
           <p className="text-foreground mt-1 whitespace-pre-line">{note.message}</p>
         </li>
@@ -337,7 +358,18 @@ export function InvoiceNotes({ notes }: { notes: readonly InvoiceNoteView[] }) {
  * console's own copy once kept (2026-11-06, phase 7), Jobber's until then --
  * which stops working when the office leaves Jobber, so each says which.
  */
-export function InvoiceFiles({ invoiceId, files }: { invoiceId: string; files: readonly InvoiceFileView[] }) {
+export function InvoiceFiles({
+  invoiceId,
+  files,
+  onRemove,
+  removing,
+}: {
+  invoiceId: string;
+  files: readonly InvoiceFileView[];
+  /** Takes off a file added in the console (2026-11-10); Jobber's stay. */
+  onRemove?: (fileId: string) => void;
+  removing?: boolean;
+}) {
   const [opening, setOpening] = useState<string | null>(null);
   if (!files.length) return <p className="text-muted-foreground text-sm">No files.</p>;
   const open = async (file: InvoiceFileView) => {
@@ -365,8 +397,28 @@ export function InvoiceFiles({ invoiceId, files }: { invoiceId: string; files: r
             <span className="min-w-0 truncate">{file.fileName}</span>
             <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">{formatFileSize(file.sizeBytes)}</span>
           </button>
-          <p className="text-muted-foreground mt-0.5 pl-6 text-xs">
-            {file.kept ? 'Kept in the console' : file.copyProblem ? `Not copied from Jobber: ${file.copyProblem}` : 'Not copied from Jobber yet'}
+          <p className="text-muted-foreground mt-0.5 flex items-center gap-2 pl-6 text-xs">
+            <span>
+              {file.origin === 'CONSOLE'
+                ? 'Added in the console'
+                : file.kept
+                  ? 'Kept in the console'
+                  : file.copyProblem
+                    ? `Not copied from Jobber: ${file.copyProblem}`
+                    : 'Not copied from Jobber yet'}
+            </span>
+            {onRemove && file.origin === 'CONSOLE' ? (
+              <Button
+                aria-label={`Take ${file.fileName} off`}
+                className="text-muted-foreground ml-auto size-7"
+                disabled={removing}
+                onClick={() => onRemove(file.id)}
+                size="icon"
+                variant="ghost"
+              >
+                <Trash2Icon />
+              </Button>
+            ) : null}
           </p>
         </li>
       ))}

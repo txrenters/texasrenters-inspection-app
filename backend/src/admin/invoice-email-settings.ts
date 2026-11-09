@@ -1,4 +1,5 @@
 import {
+  templatesFrom,
   DEFAULT_INVOICE_EMAIL_SETTINGS,
   isEmailAddress,
   MAX_INVOICE_RECIPIENTS,
@@ -27,6 +28,30 @@ export async function readEmailSettings(db: Db, organizationId: string) {
     values: { ...values, followUpDays: sortedFollowUpDays(values.followUpDays) } as InvoiceEmailSettings,
     updatedAt: emailSettingsUpdatedAt,
   };
+}
+
+/**
+ * The office's words for the invoice, receipt and statement emails over the
+ * console's own (2026-11-10), and where a client's reply goes: the address it
+ * chose, else the company email on the invoices, else nowhere in particular.
+ */
+export async function readEmailTemplates(db: Db, organizationId: string) {
+  const row = await db.invoiceSettings.findUnique({
+    where: { organizationId },
+    select: { emailTemplates: true, replyToEmail: true, templatesUpdatedAt: true, email: true },
+  });
+  return {
+    templates: templatesFrom(row?.emailTemplates ?? null),
+    replyTo: row?.replyToEmail?.trim() || null,
+    companyEmail: row?.email?.trim() || null,
+    updatedAt: row?.templatesUpdatedAt ?? null,
+  };
+}
+
+/** Where a reply to an invoice email goes. */
+export async function replyToFor(db: Db, organizationId: string, brandEmail: string | null) {
+  const { replyTo } = await readEmailTemplates(db, organizationId);
+  return replyTo ?? brandEmail ?? null;
 }
 
 /**

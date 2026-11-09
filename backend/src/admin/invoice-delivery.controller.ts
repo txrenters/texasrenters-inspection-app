@@ -1,10 +1,17 @@
 import { Body, Controller, Inject, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MAX_INVOICE_RECIPIENTS } from '@texasrenters/shared';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { MAX_ATTACHED_PDF_BYTES, MAX_INVOICE_RECIPIENTS } from '@texasrenters/shared';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { InvoiceDeliveryService } from './invoice-delivery.service';
+
+/** The invoice's PDF, made in the browser (2026-11-10): small, as an invoice has no images. */
+export class InvoiceAttachmentDto {
+  @IsString() @MinLength(5) @MaxLength(120) fileName!: string;
+  @IsString() @MaxLength(Math.ceil((MAX_ATTACHED_PDF_BYTES * 4) / 3) + 4) @Matches(/^[A-Za-z0-9+/]+={0,2}$/) contentBase64!: string;
+}
 
 export class SendInvoiceDto {
   @IsArray()
@@ -15,6 +22,7 @@ export class SendInvoiceDto {
   to!: string[];
   @IsOptional() @IsString() @MaxLength(2000) message?: string | null;
   @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
+  @IsOptional() @ValidateNested() @Type(() => InvoiceAttachmentDto) attachment?: InvoiceAttachmentDto | null;
 }
 
 /**
