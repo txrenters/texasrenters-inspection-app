@@ -24,6 +24,7 @@ const ACCOUNTS: XeroAccount[] = [
 const TAX_RATES: XeroTaxRate[] = [{ name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true }];
 
 const VIEW: XeroSettingsView = {
+  tenantId: 'a1000000-0000-4000-8000-000000000001',
   values: { sendFrom: '2026-12-01', salesAccountId: 'a-400', salesTaxType: 'NONE', salesAccounts: {}, paymentAccounts: {} },
   products: [
     { nameKey: 'move-out inspection', name: 'Move-out inspection', listed: true, active: true, accountId: null },

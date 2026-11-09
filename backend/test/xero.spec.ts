@@ -12,13 +12,16 @@ import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroService, accountsFrom, taxRatesFrom } from '../src/integrations/xero/xero.service';
 
 /**
- * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan):
- * connected once, read, never written. Every Xero host pinned, tokens sealed,
- * calls counted under a daily ceiling. Everything invented.
+ * The office's Xero organisations (2026-11-10): one sign-in reaching each of
+ * the companies' books, each read and counted on its own, never written. Every
+ * Xero host pinned, tokens sealed. Everything invented.
  */
 
 const ORG = '90000000-0000-4000-8000-000000000001';
 const ME = '90000000-0000-4000-8000-000000000030';
+const HOMES = 'a1000000-0000-4000-8000-000000000001';
+const PEST = 'a2000000-0000-4000-8000-000000000002';
+const AIR = 'a3000000-0000-4000-8000-000000000003';
 const office: AuthenticatedUser = {
   id: ME,
   authUserId: 'auth-office',
@@ -56,49 +59,82 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-function database(row: Record<string, unknown> | null = null) {
-  let stored = row ? { ...row } : null;
+type Row = Record<string, unknown>;
+
+/** Enough of Prisma's `where` for these tests: equals, not, notIn, lt and OR. */
+function matches(row: Row, where: Row): boolean {
+  return Object.entries(where).every(([field, wanted]) => {
+    if (field === 'OR') return (wanted as Row[]).some((branch) => matches(row, branch));
+    const value = row[field] ?? null;
+    if (wanted && typeof wanted === 'object' && !(wanted instanceof Date)) {
+      const test = wanted as { not?: unknown; notIn?: unknown[]; lt?: number };
+      if ('not' in test) return value !== test.not;
+      if ('notIn' in test) return !test.notIn!.includes(value);
+      if ('lt' in test) return typeof value === 'number' && value < test.lt!;
+    }
+    return value === wanted;
+  });
+}
+
+function database(connection: Row | null = null, organisations: Row[] = []) {
+  let stored = connection ? { ...connection } : null;
+  const rows: Row[] = organisations.map((row) => ({ organizationId: ORG, status: 'CONNECTED', callsDay: null, callsUsed: 0, catalogReadAt: null, ...row }));
+  const find = (key: { organizationId: string; xeroTenantId: string }) =>
+    rows.find((row) => row.organizationId === key.organizationId && row.xeroTenantId === key.xeroTenantId);
+  const apply = (row: Row, data: Row) => {
+    for (const [field, value] of Object.entries(data))
+      row[field] = value && typeof value === 'object' && 'increment' in value ? (row[field] as number) + (value as { increment: number }).increment : value;
+  };
   const db = {
     xeroConnection: {
       findUnique: jest.fn(async () => stored),
-      upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
+      upsert: jest.fn(async ({ create, update }: { create: Row; update: Row }) => {
         stored = stored ? { ...stored, ...update } : { ...create };
         return stored;
       }),
-      update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        stored = { ...stored, ...data };
-        return stored;
-      }),
-      updateMany: jest.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      updateMany: jest.fn(async ({ data }: { data: Row }) => {
         if (!stored) return { count: 0 };
-        // The daily count: a new day, or one more under the ceiling.
-        if ('OR' in where && stored.callsDay === '2026-11-20') return { count: 0 };
-        const under = where.callsUsed as { lt?: number } | undefined;
-        if (under?.lt !== undefined && !((stored.callsUsed as number) < under.lt)) return { count: 0 };
-        const next = { ...data };
-        if (typeof (data.callsUsed as { increment?: number })?.increment === 'number')
-          next.callsUsed = (stored.callsUsed as number) + (data.callsUsed as { increment: number }).increment;
-        stored = { ...stored, ...next };
+        stored = { ...stored, ...data };
         return { count: 1 };
       }),
     },
+    xeroOrganisation: {
+      findUnique: jest.fn(async ({ where }: { where: { organizationId_xeroTenantId: { organizationId: string; xeroTenantId: string } } }) =>
+        find(where.organizationId_xeroTenantId) ?? null,
+      ),
+      findMany: jest.fn(async ({ where }: { where: Row }) =>
+        rows.filter((row) => matches(row, where)).sort((a, b) => String(a.status).localeCompare(String(b.status)) || String(a.name).localeCompare(String(b.name))),
+      ),
+      upsert: jest.fn(async ({ where, create, update }: { where: { organizationId_xeroTenantId: { organizationId: string; xeroTenantId: string } }; create: Row; update: Row }) => {
+        const row = find(where.organizationId_xeroTenantId);
+        if (row) apply(row, update);
+        else rows.push({ callsDay: null, callsUsed: 0, catalogReadAt: null, ...create });
+        return row;
+      }),
+      update: jest.fn(async ({ where, data }: { where: { organizationId_xeroTenantId: { organizationId: string; xeroTenantId: string } }; data: Row }) => {
+        const row = find(where.organizationId_xeroTenantId)!;
+        apply(row, data);
+        return row;
+      }),
+      updateMany: jest.fn(async ({ where, data }: { where: Row; data: Row }) => {
+        const hit = rows.filter((row) => matches(row, where));
+        for (const row of hit) apply(row, data);
+        return { count: hit.length };
+      }),
+    },
     auditLog: { create: jest.fn() },
-    row: () => stored,
+    connection: () => stored,
+    organisation: (tenantId: string) => find({ organizationId: ORG, xeroTenantId: tenantId }),
+    organisations: () => rows,
   };
   return db;
 }
 
-const connected = (over: Record<string, unknown> = {}) => ({
+const signedIn = (over: Row = {}) => ({
   status: 'CONNECTED',
-  xeroTenantId: 'tenant-1',
-  xeroTenantName: 'Example Homes LLC',
-  xeroConnectionId: 'conn-1',
   accessTokenCiphertext: sealSecret('access-1', key()),
   accessTokenExpiresAt: new Date('2026-11-20T18:20:00.000Z'),
   refreshTokenCiphertext: sealSecret('refresh-1', key()),
-  callsDay: '2026-11-19',
-  callsUsed: 0,
-  catalogReadAt: null,
   ...over,
 });
 
@@ -168,111 +204,191 @@ describe('signing in to Xero', () => {
 
 describe('the stored sign-in', () => {
   it('refreshes once for two callers at once: Xero spends a refresh token on its first use', async () => {
-    const db = database(connected({ accessTokenExpiresAt: new Date('2026-11-20T17:00:00.000Z') }));
+    const db = database(signedIn({ accessTokenExpiresAt: new Date('2026-11-20T17:00:00.000Z') }));
     const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({ access_token: 'access-2', refresh_token: 'refresh-2', expires_in: 1800 }));
     const auth = new XeroAuthService(db as never);
     const [first, second] = await Promise.all([auth.accessToken(ORG), auth.accessToken(ORG)]);
     expect([first, second]).toEqual(['access-2', 'access-2']);
     expect(fetch).toHaveBeenCalledTimes(1);
     // Kept sealed, never as it came.
-    expect(db.row()!.refreshTokenCiphertext).not.toContain('refresh-2');
+    expect(db.connection()!.refreshTokenCiphertext).not.toContain('refresh-2');
   });
 
   it('asks for a new sign-in when Xero refuses the refresh token', async () => {
-    const db = database(connected({ accessTokenExpiresAt: new Date('2026-11-20T17:00:00.000Z') }));
+    const db = database(signedIn({ accessTokenExpiresAt: new Date('2026-11-20T17:00:00.000Z') }));
     jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({ error: 'invalid_grant' }, 400));
     await expect(new XeroAuthService(db as never).accessToken(ORG)).rejects.toMatchObject({ code: 'XERO_TOKEN_REFUSED' });
-    expect(db.row()).toMatchObject({ status: 'REAUTHORIZATION_REQUIRED', accessTokenCiphertext: null });
+    expect(db.connection()).toMatchObject({ status: 'REAUTHORIZATION_REQUIRED', accessTokenCiphertext: null });
   });
 });
 
 describe('calls to Xero', () => {
   const schema = { safeParse: (value: unknown) => ({ success: true as const, data: value }) };
+  const two = () =>
+    database(signedIn(), [
+      { xeroTenantId: HOMES, name: 'Example Home Services', callsDay: '2026-11-19', callsUsed: 0 },
+      { xeroTenantId: PEST, name: 'Example Pest Co', callsDay: '2026-11-20', callsUsed: 300 },
+    ]);
 
-  it('sends the organisation with each call, and counts it', async () => {
-    const db = database(connected());
+  it('names the organisation on each call, and counts it against that organisation alone', async () => {
+    const db = two();
     const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({ Organisations: [] }));
     const client = new XeroClient(db as never, new XeroAuthService(db as never));
-    await client.get(ORG, '/Organisation', schema as never);
+    await client.get(ORG, HOMES, '/Organisation', schema as never);
     const [url, init] = fetch.mock.calls[0]!;
     expect(url).toBe('https://api.xero.com/api.xro/2.0/Organisation');
-    expect((init!.headers as Record<string, string>)['xero-tenant-id']).toBe('tenant-1');
-    expect(db.row()).toMatchObject({ callsDay: '2026-11-20', callsUsed: 1 });
+    expect((init!.headers as Record<string, string>)['xero-tenant-id']).toBe(HOMES);
+    expect(db.organisation(HOMES)).toMatchObject({ callsDay: '2026-11-20', callsUsed: 1 });
+    expect(db.organisation(PEST)).toMatchObject({ callsUsed: 300 });
   });
 
-  it('stops at the console’s ceiling, before asking Xero', async () => {
-    const db = database(connected({ callsDay: '2026-11-20', callsUsed: 300 }));
+  it('stops one organisation at the console’s ceiling, before asking Xero, while another goes on', async () => {
+    const db = two();
+    const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({ Accounts: [] }));
+    const client = new XeroClient(db as never, new XeroAuthService(db as never));
+    await expect(client.get(ORG, PEST, '/Accounts', schema as never)).rejects.toMatchObject({ code: 'XERO_DAILY_CEILING', status: 429 });
+    expect(fetch).not.toHaveBeenCalled();
+    await client.get(ORG, HOMES, '/Accounts', schema as never);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks nothing of an organisation that is not connected', async () => {
+    const db = database(signedIn(), [{ xeroTenantId: AIR, name: 'Example Air Co', status: 'REMOVED' }]);
     const fetch = jest.spyOn(globalThis, 'fetch');
     const client = new XeroClient(db as never, new XeroAuthService(db as never));
-    await expect(client.get(ORG, '/Accounts', schema as never)).rejects.toMatchObject({ code: 'XERO_DAILY_CEILING', status: 429 });
+    await expect(client.get(ORG, AIR, '/Accounts', schema as never)).rejects.toMatchObject({ code: 'XERO_NOT_CONNECTED' });
+    await expect(client.get(ORG, 'unknown', '/Accounts', schema as never)).rejects.toMatchObject({ code: 'XERO_NOT_CONNECTED' });
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it('says how long Xero asked it to wait, and does not keep trying', async () => {
-    const db = database(connected());
+    const db = two();
     const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({}, 429, { 'retry-after': '120' }));
     const client = new XeroClient(db as never, new XeroAuthService(db as never));
-    await expect(client.get(ORG, '/Accounts', schema as never)).rejects.toThrow('try again in 2 minutes');
+    await expect(client.get(ORG, HOMES, '/Accounts', schema as never)).rejects.toThrow('try again in 2 minutes');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('connecting the office’s organisation', () => {
-  function service(row: Record<string, unknown> | null, tenants: unknown[]) {
-    const db = database(row);
+describe('connecting the office’s organisations', () => {
+  function service(connection: Row | null, organisations: Row[], tenants: unknown[]) {
+    const db = database(connection, organisations);
     const auth = new XeroAuthService(db as never);
     const client = new XeroClient(db as never, auth);
-    jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
+      const tenant = (init?.headers as Record<string, string> | undefined)?.['xero-tenant-id'];
       if (url.endsWith('/connect/token')) return json({ access_token: jwt({ authentication_event_id: 'event-1' }), refresh_token: 'r', expires_in: 1800, scope: XERO_READ_SCOPES });
       if (url.endsWith('/connections')) return json(tenants);
-      if (url.endsWith('/Organisation')) return json({ Organisations: [{ Name: 'Example Homes LLC', BaseCurrency: 'USD', CountryCode: 'US', SalesTaxBasis: 'NONE' }] });
+      if (url.endsWith('/Organisation')) return json({ Organisations: [{ Name: `Read ${tenant?.slice(0, 2)}`, BaseCurrency: 'USD', CountryCode: 'US', SalesTaxBasis: 'NONE' }] });
       if (url.endsWith('/Accounts')) return json({ Accounts: [] });
       if (url.endsWith('/TaxRates')) return json({ TaxRates: [] });
       return json({}, 404);
     });
-    return { db, xero: new XeroService(db as never, auth, client) };
+    return { db, fetch, xero: new XeroService(db as never, auth, client) };
   }
-  const tenant = (id: string, event = 'event-1') => ({ id: `conn-${id}`, tenantId: id, tenantType: 'ORGANISATION', tenantName: `Org ${id}`, authEventId: event });
+  const tenant = (id: string, name: string) => ({ id: `conn-${id.slice(0, 2)}`, tenantId: id, tenantType: 'ORGANISATION', tenantName: name, authEventId: 'event-1' });
   const stateFor = () => new URL(new XeroAuthService(database() as never).authorizationUrl({ organizationId: ORG, userId: ME })).searchParams.get('state')!;
 
-  it('keeps the one organisation chosen, reads it, and audits the connection', async () => {
-    const { db, xero } = service(null, [tenant('tenant-1'), tenant('old', 'event-0')]);
-    await expect(xero.completeAuthorization({ code: 'c', state: stateFor() })).resolves.toEqual({ name: 'Org tenant-1' });
-    expect(db.row()).toMatchObject({ status: 'CONNECTED', xeroTenantId: 'tenant-1', xeroConnectionId: 'conn-tenant-1', connectedByUserId: ME });
-    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'XERO_CONNECTED', organizationId: ORG });
-    expect(db.row()!.organisation).toMatchObject({ name: 'Example Homes LLC', baseCurrency: 'USD' });
+  it('keeps every organisation ticked, reads each on its own, and audits the connection', async () => {
+    const { db, xero, fetch } = service(null, [], [tenant(HOMES, 'Example Home Services'), tenant(PEST, 'Example Pest Co'), tenant(AIR, 'Example Air Co')]);
+    await expect(xero.completeAuthorization({ code: 'c', state: stateFor() })).resolves.toEqual({
+      names: ['Example Home Services', 'Example Pest Co', 'Example Air Co'],
+    });
+    expect(db.connection()).toMatchObject({ status: 'CONNECTED', connectedByUserId: ME });
+    expect(db.organisations().map((row) => [row.xeroTenantId, row.status, row.xeroConnectionId])).toEqual([
+      [HOMES, 'CONNECTED', 'conn-a1'],
+      [PEST, 'CONNECTED', 'conn-a2'],
+      [AIR, 'CONNECTED', 'conn-a3'],
+    ]);
+    // Three calls to each organisation, each counted against it.
+    for (const id of [HOMES, PEST, AIR]) expect(db.organisation(id)).toMatchObject({ callsUsed: 3, organisation: expect.objectContaining({ baseCurrency: 'USD' }) });
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/api.xro/'))).toHaveLength(9);
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'XERO_CONNECTED',
+      metadata: { organisations: ['Example Home Services', 'Example Pest Co', 'Example Air Co'], noLongerReached: 0 },
+    });
   });
 
-  it('refuses two organisations at once, storing nothing', async () => {
-    const { db, xero } = service(null, [tenant('tenant-1'), tenant('tenant-2')]);
+  it('adds one ticked later, and marks removed -- never deleted -- one the sign-in no longer reaches', async () => {
+    const { db, xero } = service(
+      signedIn(),
+      [
+        { xeroTenantId: HOMES, name: 'Example Home Services' },
+        { xeroTenantId: PEST, name: 'Example Pest Co' },
+      ],
+      [tenant(HOMES, 'Example Home Services'), tenant(AIR, 'Example Air Co')],
+    );
+    await xero.completeAuthorization({ code: 'c', state: stateFor() });
+    expect(db.organisation(PEST)).toMatchObject({ status: 'REMOVED', xeroConnectionId: null, removedAt: expect.any(Date) });
+    expect(db.organisation(AIR)).toMatchObject({ status: 'CONNECTED' });
+    expect(db.organisation(HOMES)).toMatchObject({ status: 'CONNECTED' });
+  });
+
+  it('connects nothing when no organisation was ticked', async () => {
+    const { db, xero } = service(null, [], [{ id: 'conn-p', tenantId: 'practice-1', tenantType: 'PRACTICEMANAGER' }]);
     await expect(xero.completeAuthorization({ code: 'c', state: stateFor() })).rejects.toMatchObject({ code: 'XERO_ORGANISATION_CHOICE' });
-    expect(db.row()).toBeNull();
+    expect(db.connection()).toBeNull();
   });
 
-  it('refuses another organisation while one is connected: the books must not move without anybody seeing', async () => {
-    const { db, xero } = service(connected({ xeroTenantId: 'tenant-1' }), [tenant('tenant-9')]);
-    await expect(xero.completeAuthorization({ code: 'c', state: stateFor() })).rejects.toMatchObject({ code: 'XERO_ORGANISATION_MISMATCH' });
-    expect(db.row()).toMatchObject({ xeroTenantId: 'tenant-1' });
+  it('lists the organisations, connected first, each with its own calls today', async () => {
+    const { xero } = service(
+      signedIn(),
+      [
+        { xeroTenantId: PEST, name: 'Example Pest Co', callsDay: '2026-11-20', callsUsed: 7 },
+        { xeroTenantId: AIR, name: 'Example Air Co', status: 'REMOVED' },
+        { xeroTenantId: HOMES, name: 'Example Home Services', callsDay: '2026-11-19', callsUsed: 40 },
+      ],
+      [],
+    );
+    const view = await xero.describe(ORG);
+    expect(view.organisations.map((item) => [item.name, item.status, item.callsToday])).toEqual([
+      ['Example Home Services', 'CONNECTED', 0],
+      ['Example Pest Co', 'CONNECTED', 7],
+      ['Example Air Co', 'REMOVED', 0],
+    ]);
+    expect(view.dailyCeiling).toBe(300);
   });
 
-  it('reads again only every five minutes', async () => {
-    const { xero } = service(connected({ catalogReadAt: new Date('2026-11-20T17:58:00.000Z') }), []);
-    await expect(xero.read(ORG)).rejects.toMatchObject({ code: 'XERO_READ_TOO_SOON' });
+  it('reads one organisation again only every five minutes, and not one it does not have', async () => {
+    const { xero } = service(signedIn(), [{ xeroTenantId: HOMES, name: 'Example Home Services', catalogReadAt: new Date('2026-11-20T17:58:00.000Z') }], []);
+    await expect(xero.read(ORG, HOMES)).rejects.toMatchObject({ code: 'XERO_READ_TOO_SOON' });
+    await expect(xero.read(ORG, PEST)).rejects.toMatchObject({ code: 'XERO_ORGANISATION_UNKNOWN', status: 404 });
   });
 
-  it('ends the link at Xero, gives back the refresh token, and forgets the sign-in', async () => {
-    const db = database(connected());
+  it('disconnects one organisation at Xero, keeping the others', async () => {
+    const db = database(signedIn(), [
+      { xeroTenantId: HOMES, name: 'Example Home Services', xeroConnectionId: 'conn-a1' },
+      { xeroTenantId: PEST, name: 'Example Pest Co', xeroConnectionId: 'conn-a2' },
+    ]);
+    const auth = new XeroAuthService(db as never);
+    const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, { status: 204 }));
+    const result = await new XeroService(db as never, auth, new XeroClient(db as never, auth)).disconnectOrganisation(office, PEST);
+    expect(fetch.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([['https://api.xero.com/connections/conn-a2', 'DELETE']]);
+    expect(result.removedAtXero).toBe(true);
+    expect(db.organisation(PEST)).toMatchObject({ status: 'REMOVED' });
+    expect(db.organisation(HOMES)).toMatchObject({ status: 'CONNECTED' });
+    expect(db.connection()).toMatchObject({ status: 'CONNECTED' });
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'XERO_ORGANISATION_DISCONNECTED', metadata: { name: 'Example Pest Co' } });
+  });
+
+  it('ends every link at Xero, gives back the refresh token, and forgets the sign-in', async () => {
+    const db = database(signedIn(), [
+      { xeroTenantId: HOMES, name: 'Example Home Services', xeroConnectionId: 'conn-a1' },
+      { xeroTenantId: PEST, name: 'Example Pest Co', xeroConnectionId: 'conn-a2' },
+    ]);
     const auth = new XeroAuthService(db as never);
     const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, { status: 204 }));
     const result = await new XeroService(db as never, auth, new XeroClient(db as never, auth)).disconnect(office);
     expect(fetch.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
-      ['https://api.xero.com/connections/conn-1', 'DELETE'],
+      ['https://api.xero.com/connections/conn-a1', 'DELETE'],
+      ['https://api.xero.com/connections/conn-a2', 'DELETE'],
       ['https://identity.xero.com/connect/revocation', 'POST'],
     ]);
     expect(result.removedAtXero).toBe(true);
-    expect(db.row()).toMatchObject({ status: 'DISCONNECTED', accessTokenCiphertext: null, refreshTokenCiphertext: null, xeroConnectionId: null });
-    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'XERO_DISCONNECTED' });
+    expect(db.connection()).toMatchObject({ status: 'DISCONNECTED', accessTokenCiphertext: null, refreshTokenCiphertext: null });
+    expect(db.organisations().map((row) => row.status)).toEqual(['REMOVED', 'REMOVED']);
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'XERO_DISCONNECTED', metadata: { organisations: 2 } });
   });
 });
 
@@ -295,11 +411,17 @@ describe('what is read', () => {
 });
 
 describe('who may do what', () => {
+  const permission = (name: keyof XeroController) => Reflect.getMetadata(PERMISSIONS_METADATA_KEY, XeroController.prototype[name]);
+
   it('reads with integrations:read; connects, reads again and disconnects with integrations:manage', () => {
-    const permission = (name: keyof XeroController) => Reflect.getMetadata(PERMISSIONS_METADATA_KEY, XeroController.prototype[name]);
     expect(permission('connection')).toEqual(['integrations:read']);
-    expect(permission('authorize')).toEqual(['integrations:manage']);
-    expect(permission('read')).toEqual(['integrations:manage']);
-    expect(permission('disconnect')).toEqual(['integrations:manage']);
+    expect(permission('readSettings')).toEqual(['integrations:read']);
+    for (const name of ['authorize', 'read', 'disconnect', 'disconnectOrganisation', 'saveSettings'] as const)
+      expect(permission(name)).toEqual(['integrations:manage']);
+  });
+
+  it('names an organisation only by Xero’s own id', async () => {
+    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never);
+    expect(() => controller.read({ user: office } as never, '../connections')).toThrow('not one of the office’s Xero organisations');
   });
 });

@@ -6,17 +6,18 @@ import type { SaveXeroSettingsInput, XeroConnectionView, XeroSettingsView } from
 import { ApiError, api } from './api';
 
 /**
- * The office's Xero organisation (2026-11-10, phases 1-2 of the Xero plan).
- * The page reads the console's own copy of what Xero last said; only "Read
- * from Xero" asks Xero again, and the server allows that every five minutes at
- * most. Choosing accounts never calls Xero.
+ * The office's Xero organisations (2026-11-10): one sign-in, each company's
+ * books an organisation of its own. The page reads the console's own copy of
+ * what Xero last said; only "Read from Xero" asks Xero again, one organisation
+ * at a time and every five minutes at most. Choosing accounts never calls Xero.
  */
 
 const XERO = '/api/v1/admin/integrations/xero';
+const organisation = (tenantId: string) => `${XERO}/organisations/${encodeURIComponent(tenantId)}`;
 
 export const xeroKey = ['admin', 'integrations', 'xero'] as const;
 const connectionKey = [...xeroKey, 'connection'] as const;
-export const xeroSettingsKey = [...xeroKey, 'settings'] as const;
+export const xeroSettingsKey = (tenantId: string) => [...xeroKey, 'settings', tenantId] as const;
 
 export function useXeroConnection(enabled = true) {
   return useQuery({
@@ -31,16 +32,20 @@ export function useXeroActions() {
   const saved = (view: XeroConnectionView) => {
     client.setQueryData(connectionKey, view);
     // The choices are checked against what was read: a new read, or none, changes the checks.
-    void client.invalidateQueries({ queryKey: xeroSettingsKey });
+    void client.invalidateQueries({ queryKey: [...xeroKey, 'settings'] });
   };
   return {
     authorize: useMutation({
       mutationFn: () => api<{ authorizationUrl: string }>(`${XERO}/oauth/authorize`, { method: 'POST' }),
     }),
     read: useMutation({
-      mutationFn: () => api<XeroConnectionView>(`${XERO}/read`, { method: 'POST' }),
+      mutationFn: (tenantId: string) => api<XeroConnectionView>(`${organisation(tenantId)}/read`, { method: 'POST' }),
       onSuccess: saved,
       onError: () => void client.invalidateQueries({ queryKey: xeroKey }),
+    }),
+    disconnectOrganisation: useMutation({
+      mutationFn: (tenantId: string) => api<XeroConnectionView & { removedAtXero: boolean }>(`${organisation(tenantId)}/disconnect`, { method: 'POST' }),
+      onSuccess: saved,
     }),
     disconnect: useMutation({
       mutationFn: () => api<XeroConnectionView & { removedAtXero: boolean }>(`${XERO}/disconnect`, { method: 'POST' }),
@@ -49,23 +54,24 @@ export function useXeroActions() {
   };
 }
 
-/** What goes where in Xero (phase 2): the console's own record, no call to Xero. */
-export function useXeroSettings(enabled = true) {
+/** What goes where in one organisation: the console's own record, no call to Xero. */
+export function useXeroSettings(tenantId: string, enabled = true) {
   return useQuery({
-    queryKey: xeroSettingsKey,
-    queryFn: ({ signal }) => api<XeroSettingsView>(`${XERO}/settings`, { signal }),
+    queryKey: xeroSettingsKey(tenantId),
+    queryFn: ({ signal }) => api<XeroSettingsView>(`${organisation(tenantId)}/settings`, { signal }),
     enabled,
   });
 }
 
-export function useSaveXeroSettings() {
+export function useSaveXeroSettings(tenantId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: SaveXeroSettingsInput) => api<XeroSettingsView>(`${XERO}/settings`, { method: 'PUT', body: JSON.stringify(input) }),
-    onSuccess: (view) => client.setQueryData(xeroSettingsKey, view),
+    mutationFn: (input: SaveXeroSettingsInput) =>
+      api<XeroSettingsView>(`${organisation(tenantId)}/settings`, { method: 'PUT', body: JSON.stringify(input) }),
+    onSuccess: (view) => client.setQueryData(xeroSettingsKey(tenantId), view),
     // Somebody saved in between: show theirs.
     onError: (error) => {
-      if (error instanceof ApiError && error.status === 409) void client.invalidateQueries({ queryKey: xeroSettingsKey });
+      if (error instanceof ApiError && error.status === 409) void client.invalidateQueries({ queryKey: xeroSettingsKey(tenantId) });
     },
   });
 }

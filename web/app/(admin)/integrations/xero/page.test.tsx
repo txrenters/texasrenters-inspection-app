@@ -1,27 +1,35 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { XeroConnectionView, XeroSettingsView } from '@texasrenters/shared';
+import type { XeroConnectionView, XeroOrganisationView, XeroSettingsView } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import XeroPage from './page';
 
 /**
- * The office's Xero organisation (2026-11-10, phase 1 of the Xero plan):
- * connected by whoever runs the integrations, then read, never written.
+ * The office's Xero organisations (2026-11-10): one sign-in, a tab for each
+ * company's books, each read and chosen for on its own, never written.
  * Everything invented.
  */
 
+const HOMES = 'a1000000-0000-4000-8000-000000000001';
+const PEST = 'a2000000-0000-4000-8000-000000000002';
+
 const xero = vi.hoisted(() => ({
   view: null as unknown,
-  settings: null as unknown,
+  settings: {} as Record<string, unknown>,
+  settingsAsked: [] as string[],
   save: { mutate: vi.fn(), isPending: false },
   authorize: { mutateAsync: vi.fn(), isPending: false },
-  read: { mutate: vi.fn(), isPending: false },
+  read: { mutate: vi.fn(), isPending: false, variables: undefined as string | undefined },
   disconnect: { mutate: vi.fn(), isPending: false },
+  disconnectOrganisation: { mutate: vi.fn(), isPending: false },
 }));
 vi.mock('@/lib/xero-queries', () => ({
   useXeroConnection: () => ({ isLoading: false, isError: false, data: xero.view, refetch: vi.fn() }),
-  useXeroActions: () => ({ authorize: xero.authorize, read: xero.read, disconnect: xero.disconnect }),
-  useXeroSettings: () => ({ isLoading: false, isError: false, data: xero.settings, refetch: vi.fn() }),
+  useXeroActions: () => ({ authorize: xero.authorize, read: xero.read, disconnect: xero.disconnect, disconnectOrganisation: xero.disconnectOrganisation }),
+  useXeroSettings: (tenantId: string) => {
+    xero.settingsAsked.push(tenantId);
+    return { isLoading: false, isError: false, data: xero.settings[tenantId], refetch: vi.fn() };
+  },
   useSaveXeroSettings: () => xero.save,
 }));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
@@ -31,37 +39,42 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const DISCONNECTED: XeroConnectionView = {
   configured: true,
   status: 'DISCONNECTED',
-  tenantName: null,
   connectedAt: null,
   disconnectedAt: null,
   problem: null,
   scopes: [],
-  organisation: null,
-  accounts: [],
-  taxRates: [],
-  readAt: null,
-  readProblem: null,
-  callsToday: 0,
+  organisations: [],
   dailyCeiling: 300,
 };
+
+const organisation = (over: Partial<XeroOrganisationView>): XeroOrganisationView => ({
+  tenantId: HOMES,
+  name: 'Example Home Services',
+  status: 'CONNECTED',
+  connectedAt: '2026-11-20T15:00:00.000Z',
+  removedAt: null,
+  organisation: { name: 'Example Home Services', legalName: null, baseCurrency: 'USD', countryCode: 'US', organisationType: 'COMPANY', salesTaxBasis: 'NONE', shortCode: '!aB1c' },
+  accounts: [{ accountId: 'a1', code: '400', name: 'Service revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false }],
+  taxRates: [{ name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true }],
+  readAt: '2026-11-20T15:00:05.000Z',
+  readProblem: null,
+  callsToday: 4,
+  ...over,
+});
 
 const CONNECTED: XeroConnectionView = {
   ...DISCONNECTED,
   status: 'CONNECTED',
-  tenantName: 'Example Homes LLC',
   connectedAt: '2026-11-20T15:00:00.000Z',
-  organisation: { name: 'Example Homes LLC', legalName: null, baseCurrency: 'USD', countryCode: 'US', organisationType: 'COMPANY', salesTaxBasis: 'NONE', shortCode: '!aB1c' },
-  accounts: [
-    { accountId: 'a1', code: '400', name: 'Service revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false },
-    { accountId: 'a2', code: '460', name: 'Old revenue', type: 'REVENUE', class: 'REVENUE', status: 'ARCHIVED', takesPayments: false },
-    { accountId: 'a3', code: null, name: 'Operating checking', type: 'BANK', class: 'ASSET', status: 'ACTIVE', takesPayments: true },
+  organisations: [
+    organisation({}),
+    organisation({ tenantId: PEST, name: 'Example Pest Co', callsToday: 9, organisation: null, taxRates: [] }),
+    organisation({ tenantId: 'a3000000-0000-4000-8000-000000000003', name: 'Old Books LLC', status: 'REMOVED', removedAt: '2026-11-19T15:00:00.000Z' }),
   ],
-  taxRates: [{ name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true }],
-  readAt: '2026-11-20T15:00:05.000Z',
-  callsToday: 4,
 };
 
-const SETTINGS: XeroSettingsView = {
+const settings = (tenantId: string): XeroSettingsView => ({
+  tenantId,
   values: { sendFrom: null, salesAccountId: null, salesTaxType: null, salesAccounts: {}, paymentAccounts: {} },
   products: [{ nameKey: 'move-out inspection', name: 'Move-out inspection', listed: true, active: true, accountId: null }],
   payments: [{ method: 'PROPERTYWARE_LEDGER', accountId: null, payments: 3 }],
@@ -69,11 +82,13 @@ const SETTINGS: XeroSettingsView = {
   checks: [{ key: 'sendFrom', label: 'A start date', ok: false, detail: 'Choose the first day whose invoices go to Xero.' }],
   ready: false,
   updatedAt: null,
-};
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
-  xero.settings = SETTINGS;
+  xero.settings = { [HOMES]: settings(HOMES), [PEST]: settings(PEST) };
+  xero.settingsAsked = [];
+  xero.read.variables = undefined;
   permissions.granted = new Set(['integrations:read', 'integrations:manage']);
   xero.view = DISCONNECTED;
 });
@@ -94,29 +109,58 @@ describe('the Xero page', () => {
     expect(screen.queryByRole('button', { name: 'Connect Xero' })).not.toBeInTheDocument();
   });
 
-  it('shows what was read, and what goes where: each product or service, each payment method', () => {
+  it('gives each connected organisation a tab, with Xero’s id for it and its own calls today', () => {
     xero.view = CONNECTED;
     render(<XeroPage />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Example Home Services', 'Example Pest Co']);
+    expect(screen.getByText(HOMES)).toBeInTheDocument();
     expect(screen.getByText('4 of 300')).toBeInTheDocument();
-    expect(screen.getByText('Choose the first day whose invoices go to Xero.')).toBeInTheDocument();
+    // Only the tab shown asks for its choices.
+    expect(new Set(xero.settingsAsked)).toEqual(new Set([HOMES]));
     const sales = screen.getByRole('heading', { name: /Where sales go/ }).closest('section')!;
-    expect(within(sales).getByRole('combobox', { name: 'Account for Move-out inspection' })).toHaveTextContent('The default');
-    const payments = screen.getByRole('heading', { name: /Where payments land/ }).closest('section')!;
-    expect(within(payments).getByRole('combobox', { name: 'Account for Propertyware ledger' })).toHaveTextContent('Not chosen');
-    const taxes = screen.getByRole('heading', { name: /Tax rates/ }).closest('section')!;
-    expect(within(taxes).getByText('NONE')).toBeInTheDocument();
-    expect(within(taxes).getByText('Tax Exempt')).toBeInTheDocument();
+    expect(within(sales).getByRole('combobox', { name: 'Account for Move-out inspection' })).toBeInTheDocument();
   });
 
-  it('reads again on the press, and disconnects only once asked', () => {
+  it('switches to another organisation’s tab: its own reading and choices', async () => {
+    xero.view = CONNECTED;
+    render(<XeroPage />);
+    const tab = screen.getByRole('tab', { name: 'Example Pest Co' });
+    // Radix moves to a tab on mouse-down.
+    fireEvent.mouseDown(tab, { button: 0 });
+    await waitFor(() => expect(screen.getByText('9 of 300')).toBeInTheDocument());
+    expect(xero.settingsAsked).toContain(PEST);
+  });
+
+  it('lists an organisation the sign-in no longer reaches, out of the tabs', () => {
+    xero.view = CONNECTED;
+    render(<XeroPage />);
+    const panel = screen.getByRole('heading', { name: /No longer connected/ }).closest('section')!;
+    expect(within(panel).getByText('Old Books LLC')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Old Books LLC' })).not.toBeInTheDocument();
+  });
+
+  it('reads one organisation again, and disconnects one only once asked', () => {
     xero.view = CONNECTED;
     render(<XeroPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Read from Xero' }));
-    expect(xero.read.mutate).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    expect(xero.read.mutate).toHaveBeenCalledWith(HOMES, expect.anything());
+    const panel = screen.getByRole('heading', { name: 'Organisation' }).closest('section')!;
+    fireEvent.click(within(panel).getByRole('button', { name: 'Disconnect' }));
+    expect(xero.disconnectOrganisation.mutate).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('Disconnect Example Home Services?')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
+    expect(xero.disconnectOrganisation.mutate).toHaveBeenCalledWith(HOMES, expect.anything());
     expect(xero.disconnect.mutate).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Disconnect' }));
-    expect(xero.disconnect.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers to add or remove organisations, which is Xero’s own screen again', async () => {
+    xero.view = CONNECTED;
+    xero.authorize.mutateAsync.mockResolvedValue({ authorizationUrl: 'https://login.xero.com/identity/connect/authorize?x=2' });
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<XeroPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add or remove organisations' }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith('https://login.xero.com/identity/connect/authorize?x=2', '_blank', 'noopener,noreferrer'));
   });
 
   it('is only seen by whoever reads the integrations, and changed by whoever runs them', () => {
@@ -125,6 +169,7 @@ describe('the Xero page', () => {
     render(<XeroPage />);
     expect(screen.queryByRole('button', { name: 'Read from Xero' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add or remove organisations' })).not.toBeInTheDocument();
   });
 
   it('says why it must be connected again', () => {
@@ -132,12 +177,5 @@ describe('the Xero page', () => {
     render(<XeroPage />);
     expect(screen.getByText('Xero refused the stored sign-in. Connect again.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect again' })).toBeInTheDocument();
-  });
-});
-
-describe('choosing what goes where', () => {
-  it('is not offered until Xero is connected', () => {
-    render(<XeroPage />);
-    expect(screen.queryByRole('heading', { name: /Where sales go/ })).not.toBeInTheDocument();
   });
 });

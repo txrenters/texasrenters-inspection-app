@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { paymentAccounts, revenueAccounts, xeroChecks, xeroSettingsProblem, type XeroAccount } from '../src/contracts/xero';
+import { connectedOrganisations, paymentAccounts, revenueAccounts, xeroChecks, xeroSettingsProblem, type XeroAccount, type XeroOrganisationView } from '../src/contracts/xero';
+
+describe('the office’s organisations', () => {
+  const organisation = (tenantId: string, status: XeroOrganisationView['status']) => ({ tenantId, status }) as XeroOrganisationView;
+
+  it('are worked with only while the sign-in and the organisation are both connected', () => {
+    const organisations = [organisation('homes', 'CONNECTED'), organisation('old', 'REMOVED'), organisation('pest', 'CONNECTED')];
+    expect(connectedOrganisations({ status: 'CONNECTED', organisations }).map((item) => item.tenantId)).toEqual(['homes', 'pest']);
+    expect(connectedOrganisations({ status: 'REAUTHORIZATION_REQUIRED', organisations })).toEqual([]);
+  });
+});
 
 const account = (over: Partial<XeroAccount>): XeroAccount => ({
   accountId: 'a',

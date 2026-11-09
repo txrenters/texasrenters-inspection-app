@@ -17,13 +17,14 @@ const connectionSchema = z.object({
 export type XeroTenantConnection = z.infer<typeof connectionSchema>;
 
 /**
- * Every call to Xero's API (2026-11-10), for one office's organisation.
+ * Every call to Xero's API (2026-11-10), for one of the office's organisations.
  *
- * Xero allows an organisation 60 calls a minute and, on its free tier, 1,000 a
- * day. Each call is counted before it is made against the console's own lower
- * ceiling (`XERO_DAILY_CALL_CEILING`, 300), in the database so a restart does
- * not reset it; past it, nothing is asked of Xero until the next Texas day. A
- * 429 is reported with Xero's wait, never retried in a loop.
+ * Xero allows each organisation 60 calls a minute and, on its free tier, 1,000
+ * a day -- each on its own, so each organisation has its own count. A call is
+ * counted before it is made against the console's own lower ceiling
+ * (`XERO_DAILY_CALL_CEILING`, 300), in the database so a restart does not reset
+ * it; past it, nothing more is asked of that organisation until the next Texas
+ * day. A 429 is reported with Xero's wait, never retried in a loop.
  */
 @Injectable()
 export class XeroClient {
@@ -38,18 +39,21 @@ export class XeroClient {
     const response = await this.fetch(config.connectionsUrl, { headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' } });
     if (!response.ok) throw this.failure(response);
     const parsed = z.array(connectionSchema).safeParse(await response.json().catch(() => null));
-    if (!parsed.success) throw new XeroError('Xero did not say which organisation was chosen.', 'XERO_UNEXPECTED_RESPONSE', 502);
+    if (!parsed.success) throw new XeroError('Xero did not say which organisations were chosen.', 'XERO_UNEXPECTED_RESPONSE', 502);
     return parsed.data;
   }
 
-  /** One read of the organisation's data, counted, with the token refreshed once if Xero says it is stale. */
-  async get<T>(organizationId: string, path: string, schema: z.ZodType<T>): Promise<T> {
-    const connection = await this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { xeroTenantId: true } });
-    if (!connection?.xeroTenantId) throw new XeroError('Xero is not connected.', 'XERO_NOT_CONNECTED', 409);
+  /** One read of an organisation's data, counted against it, with the token refreshed once if Xero says it is stale. */
+  async get<T>(organizationId: string, tenantId: string, path: string, schema: z.ZodType<T>): Promise<T> {
+    const organisation = await this.prisma.xeroOrganisation.findUnique({
+      where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
+      select: { status: true },
+    });
+    if (organisation?.status !== 'CONNECTED') throw new XeroError('That Xero organisation is not connected.', 'XERO_NOT_CONNECTED', 409);
     const url = `${getXeroConfig().apiUrl}${path}`;
-    let response = await this.counted(organizationId, async () => this.request(url, await this.auth.accessToken(organizationId), connection.xeroTenantId!));
+    let response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.accessToken(organizationId), tenantId));
     if (response.status === 401)
-      response = await this.counted(organizationId, async () => this.request(url, await this.auth.refresh(organizationId), connection.xeroTenantId!));
+      response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.refresh(organizationId), tenantId));
     if (!response.ok) throw this.failure(response);
     const parsed = schema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new XeroError('Xero did not answer as expected.', 'XERO_UNEXPECTED_RESPONSE', 502);
@@ -65,28 +69,22 @@ export class XeroClient {
     return response.ok || response.status === 404;
   }
 
-  /** Calls left today, and the ceiling. */
-  async allowance(organizationId: string) {
-    const ceiling = getXeroConfig().dailyCallCeiling;
-    const row = await this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { callsDay: true, callsUsed: true } });
-    return { used: row?.callsDay === businessDate() ? row.callsUsed : 0, ceiling };
-  }
-
-  private async counted(organizationId: string, call: () => Promise<Response>) {
+  private async counted(organizationId: string, tenantId: string, call: () => Promise<Response>) {
     const today = businessDate();
     const ceiling = getXeroConfig().dailyCallCeiling;
+    const organisation = { organizationId, xeroTenantId: tenantId };
     // Two single-statement updates: a new day starts the count at one; otherwise one more, while under the ceiling.
-    const fresh = await this.prisma.xeroConnection.updateMany({
-      where: { organizationId, OR: [{ callsDay: null }, { callsDay: { not: today } }] },
+    const fresh = await this.prisma.xeroOrganisation.updateMany({
+      where: { ...organisation, OR: [{ callsDay: null }, { callsDay: { not: today } }] },
       data: { callsDay: today, callsUsed: 1 },
     });
     if (!fresh.count) {
-      const more = await this.prisma.xeroConnection.updateMany({
-        where: { organizationId, callsDay: today, callsUsed: { lt: ceiling } },
+      const more = await this.prisma.xeroOrganisation.updateMany({
+        where: { ...organisation, callsDay: today, callsUsed: { lt: ceiling } },
         data: { callsUsed: { increment: 1 } },
       });
       if (!more.count)
-        throw new XeroError(`The console has used its ${ceiling} calls to Xero today. More can go tomorrow.`, 'XERO_DAILY_CEILING', 429);
+        throw new XeroError(`The console has used its ${ceiling} calls to this Xero organisation today. More can go tomorrow.`, 'XERO_DAILY_CEILING', 429);
     }
     return call();
   }

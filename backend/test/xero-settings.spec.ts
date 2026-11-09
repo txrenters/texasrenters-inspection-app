@@ -13,6 +13,8 @@ import { XeroSettingsService, settingsChanges, valuesFrom, valuesFromInput } fro
  */
 
 const ORG = '90000000-0000-4000-8000-000000000001';
+/** The organisation the choices are for: each has its own chart of accounts. */
+const TENANT = 'a1000000-0000-4000-8000-000000000001';
 const office: AuthenticatedUser = {
   id: '90000000-0000-4000-8000-000000000030',
   authUserId: 'auth-office',
@@ -48,12 +50,12 @@ const TAX_RATES: XeroTaxRate[] = [
 
 const UPDATED = new Date('2026-11-19T15:00:00.000Z');
 
-function database(options: { settings?: Record<string, unknown> | null; connection?: Record<string, unknown> | null } = {}) {
+function database(options: { settings?: Record<string, unknown> | null; organisation?: Record<string, unknown> | null; signedIn?: boolean } = {}) {
   let settings = options.settings === undefined ? null : options.settings;
-  const connection =
-    options.connection === undefined
-      ? { status: 'CONNECTED', accounts: ACCOUNTS, taxRates: TAX_RATES, catalogReadAt: new Date('2026-11-20T15:00:00.000Z') }
-      : options.connection;
+  const organisation =
+    options.organisation === undefined
+      ? { name: 'Example Home Services', status: 'CONNECTED', accounts: ACCOUNTS, taxRates: TAX_RATES, catalogReadAt: new Date('2026-11-20T15:00:00.000Z') }
+      : options.organisation;
   const db = {
     xeroSettings: {
       findUnique: jest.fn(async () => settings),
@@ -67,7 +69,8 @@ function database(options: { settings?: Record<string, unknown> | null; connecti
         return { count: 1 };
       }),
     },
-    xeroConnection: { findUnique: jest.fn(async () => connection) },
+    xeroConnection: { findUnique: jest.fn(async () => ({ status: options.signedIn === false ? 'DISCONNECTED' : 'CONNECTED' })) },
+    xeroOrganisation: { findUnique: jest.fn(async () => organisation) },
     invoiceProduct: {
       findMany: jest.fn(async () => [
         { id: 'p1', name: 'Move-out inspection', nameKey: 'move-out inspection', description: null, unitPriceCents: 15000, active: true, updatedAt: UPDATED },
@@ -126,7 +129,7 @@ describe('reading the choices', () => {
         updatedAt: UPDATED,
       },
     });
-    const view = await service(db).read(ORG);
+    const view = await service(db).read(ORG, TENANT);
 
     expect(view.products.map((item) => [item.name, item.listed, item.active, item.accountId])).toEqual([
       ['Move-out inspection', true, true, null],
@@ -148,7 +151,7 @@ describe('reading the choices', () => {
   });
 
   it('says what is missing before anything can be sent', async () => {
-    const view = await service(database()).read(ORG);
+    const view = await service(database()).read(ORG, TENANT);
     expect(view.ready).toBe(false);
     const failing = Object.fromEntries(view.checks.filter((check) => !check.ok).map((check) => [check.key, check.detail]));
     expect(failing).toEqual({
@@ -170,7 +173,7 @@ describe('reading the choices', () => {
         updatedAt: UPDATED,
       },
     });
-    const view = await service(db).read(ORG);
+    const view = await service(db).read(ORG, TENANT);
     expect(view.checks.filter((check) => !check.ok)).toEqual([]);
     expect(view.ready).toBe(true);
   });
@@ -186,7 +189,7 @@ describe('reading the choices', () => {
         updatedAt: UPDATED,
       },
     });
-    const view = await service(db).read(ORG);
+    const view = await service(db).read(ORG, TENANT);
     const check = view.checks.find((item) => item.key === 'stillInXero')!;
     expect(check.ok).toBe(false);
     expect(check.detail).toBe('Choose again for 460 Old revenue, an account Xero no longer lists.');
@@ -194,18 +197,26 @@ describe('reading the choices', () => {
   });
 
   it('asks for Xero first while it is not connected', async () => {
-    const view = await service(database({ connection: null })).read(ORG);
+    const view = await service(database({ signedIn: false })).read(ORG, TENANT);
     expect(view.checks[0]).toEqual({ key: 'connected', label: 'Xero is connected and read', ok: false, detail: 'Connect Xero first.' });
+    const removed = await service(database({ organisation: { name: 'Example Pest Co', status: 'REMOVED', accounts: ACCOUNTS, taxRates: TAX_RATES } })).read(ORG, TENANT);
+    expect(removed.checks[0]!.ok).toBe(false);
+  });
+
+  it('is each organisation’s own, and refuses one the office does not have', async () => {
+    expect((await service(database()).read(ORG, TENANT)).tenantId).toBe(TENANT);
+    await expect(service(database({ organisation: null })).read(ORG, TENANT)).rejects.toMatchObject({ code: 'XERO_ORGANISATION_UNKNOWN', status: 404 });
   });
 });
 
 describe('saving the choices', () => {
   it('saves the first time, says what changed on the audit trail, and reads back', async () => {
     const db = database();
-    const view = await service(db).save(office, input());
+    const view = await service(db).save(office, TENANT, input());
     expect(db.xeroSettings.create).toHaveBeenCalledWith({
       data: {
         organizationId: ORG,
+        xeroTenantId: TENANT,
         sendFrom: new Date('2026-12-01T00:00:00.000Z'),
         salesAccountId: 'a-400',
         salesTaxType: 'NONE',
@@ -219,6 +230,8 @@ describe('saving the choices', () => {
         entityType: 'XeroSettings',
         actorUserId: office.id,
         metadata: {
+          organisation: 'Example Home Services',
+          tenantId: TENANT,
           changes: [
             'Start date: none → 2026-12-01',
             'Default sales account: none → 400 Service revenue',
@@ -237,19 +250,19 @@ describe('saving the choices', () => {
     const db = database({
       settings: { ...valuesRow(), updatedAt: UPDATED },
     });
-    await expect(service(db).save(office, input({ expectedUpdatedAt: '2026-11-18T00:00:00.000Z' }))).rejects.toMatchObject({
+    await expect(service(db).save(office, TENANT, input({ expectedUpdatedAt: '2026-11-18T00:00:00.000Z' }))).rejects.toMatchObject({
       code: 'XERO_SETTINGS_CHANGED',
     });
-    await service(db).save(office, input({ salesTaxType: 'NONE', salesAccounts: {}, expectedUpdatedAt: UPDATED.toISOString() }));
-    expect(db.xeroSettings.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG, updatedAt: UPDATED } }));
+    await service(db).save(office, TENANT, input({ salesTaxType: 'NONE', salesAccounts: {}, expectedUpdatedAt: UPDATED.toISOString() }));
+    expect(db.xeroSettings.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG, xeroTenantId: TENANT, updatedAt: UPDATED } }));
     expect(db.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ metadata: { changes: ['filter change: 410 Repair revenue → the default'] } }),
+      data: expect.objectContaining({ metadata: { organisation: 'Example Home Services', tenantId: TENANT, changes: ['filter change: 410 Repair revenue → the default'] } }),
     });
   });
 
   it('writes nothing when nothing changed', async () => {
     const db = database({ settings: { ...valuesRow(), updatedAt: UPDATED } });
-    await service(db).save(office, input({ expectedUpdatedAt: UPDATED.toISOString() }));
+    await service(db).save(office, TENANT, input({ expectedUpdatedAt: UPDATED.toISOString() }));
     expect(db.xeroSettings.updateMany).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();
   });
@@ -266,7 +279,7 @@ describe('saving the choices', () => {
     [{ sendFrom: '2028-01-01' }, 'The start date is more than a year away.'],
   ])('refuses %j', async (over, message) => {
     const db = database();
-    await expect(service(db).save(office, input(over as Partial<SaveXeroSettingsInput>))).rejects.toMatchObject({
+    await expect(service(db).save(office, TENANT, input(over as Partial<SaveXeroSettingsInput>))).rejects.toMatchObject({
       code: 'XERO_SETTINGS_INVALID',
       message,
     });
@@ -274,17 +287,17 @@ describe('saving the choices', () => {
   });
 
   it('needs Xero connected and read, since the accounts come from it', async () => {
-    await expect(service(database({ connection: null })).save(office, input())).rejects.toMatchObject({ code: 'XERO_NOT_READ' });
+    await expect(service(database({ signedIn: false })).save(office, TENANT, input())).rejects.toMatchObject({ code: 'XERO_NOT_READ' });
     await expect(
-      service(database({ connection: { status: 'CONNECTED', accounts: ACCOUNTS, taxRates: TAX_RATES, catalogReadAt: null } })).save(office, input()),
+      service(database({ organisation: { name: 'Example Home Services', status: 'CONNECTED', accounts: ACCOUNTS, taxRates: TAX_RATES, catalogReadAt: null } })).save(office, TENANT, input()),
     ).rejects.toMatchObject({ code: 'XERO_NOT_READ' });
   });
 
   it('never calls Xero: reading and saving use the console’s last read', async () => {
     const fetch = jest.spyOn(globalThis, 'fetch');
     const db = database();
-    await service(db).read(ORG);
-    await service(db).save(office, input());
+    await service(db).read(ORG, TENANT);
+    await service(db).save(office, TENANT, input());
     expect(fetch).not.toHaveBeenCalled();
     fetch.mockRestore();
   });
