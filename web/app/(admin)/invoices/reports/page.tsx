@@ -7,6 +7,7 @@ import {
   formatMoney,
   type ClientBalanceRow,
   type InvoiceReportDate,
+  type ReportCompany,
   type ReportInvoiceRow,
   type ReportRange,
   type TaxBasis,
@@ -33,6 +34,7 @@ import {
   useTaxReport,
   useTransactionsReport,
 } from '@/lib/invoice-report-queries';
+import { useInvoiceSettings } from '@/lib/invoice-settings-queries';
 import { useUrlState } from '@/lib/url-state';
 
 /**
@@ -54,12 +56,19 @@ const REPORTS = [
 ] as const;
 type ReportKey = (typeof REPORTS)[number]['key'];
 
+/** Every company's books: the Company select's value for no filter. */
+const ALL_COMPANIES = 'all';
+
 export default function InvoiceReportsPage() {
-  const [state, setState] = useUrlState({ report: 'projected', range: 'last_30_days', from: '', to: '', date: 'issued', basis: 'ACCRUAL' });
+  const [state, setState] = useUrlState({ report: 'projected', range: 'last_30_days', from: '', to: '', date: 'issued', basis: 'ACCRUAL', company: '' });
   const report: ReportKey = REPORTS.some((item) => item.key === state.report) ? (state.report as ReportKey) : 'projected';
   const choice: RangeChoice = { range: state.range || 'last_30_days', from: state.from, to: state.to };
   const range = chosenRange(choice);
   const ranged = report === 'transactions' || report === 'invoices' || report === 'bad_debt' || report === 'taxes';
+  // One company's books (2026-11-10): asked once Xero has an organisation.
+  const organisations = useInvoiceSettings().data?.organisations ?? [];
+  const company = organisations.length ? state.company || undefined : undefined;
+  const scoped = company ? { company } : {};
 
   return (
     <>
@@ -77,48 +86,72 @@ export default function InvoiceReportsPage() {
         </TabsList>
       </Tabs>
 
-      {ranged ? (
+      {ranged || organisations.length ? (
         <div className="mt-4 mb-4 flex flex-wrap items-center gap-3">
-          <RangePicker
-            choice={choice}
-            label={report === 'taxes' ? 'Dates' : report === 'transactions' ? 'Entry date' : state.date === 'created' ? 'Created' : 'Issued'}
-            onChange={(next) => setState({ range: next.range, from: next.range === CUSTOM ? next.from : '', to: next.range === CUSTOM ? next.to : '' })}
-          />
-          {report === 'invoices' || report === 'bad_debt' ? (
-            <Select onValueChange={(next) => setState({ date: next })} value={state.date === 'created' ? 'created' : 'issued'}>
-              <SelectTrigger aria-label="Read by" className="w-auto">
+          {organisations.length ? (
+            <Select onValueChange={(next) => setState({ company: next === ALL_COMPANIES ? '' : next })} value={company ?? ALL_COMPANIES}>
+              <SelectTrigger aria-label="Company" className="w-auto">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="issued">By the day issued</SelectItem>
-                <SelectItem value="created">By the day created</SelectItem>
+                <SelectItem value={ALL_COMPANIES}>Every company</SelectItem>
+                {organisations.map((organisation) => (
+                  <SelectItem key={organisation.tenantId} value={organisation.tenantId}>
+                    {organisation.connected ? organisation.name : `${organisation.name} (not connected)`}
+                  </SelectItem>
+                ))}
+                <SelectItem value="none">No company</SelectItem>
               </SelectContent>
             </Select>
           ) : null}
-          {report === 'taxes' ? (
-            <Select onValueChange={(next) => setState({ basis: next })} value={state.basis === 'CASH' ? 'CASH' : 'ACCRUAL'}>
-              <SelectTrigger aria-label="Basis" className="w-auto">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ACCRUAL">Accrual: what was invoiced</SelectItem>
-                <SelectItem value="CASH">Cash: what was collected</SelectItem>
-              </SelectContent>
-            </Select>
+          {ranged ? (
+            <>
+              <RangePicker
+                choice={choice}
+                label={report === 'taxes' ? 'Dates' : report === 'transactions' ? 'Entry date' : state.date === 'created' ? 'Created' : 'Issued'}
+                onChange={(next) => setState({ range: next.range, from: next.range === CUSTOM ? next.from : '', to: next.range === CUSTOM ? next.to : '' })}
+              />
+              {report === 'invoices' || report === 'bad_debt' ? (
+                <Select onValueChange={(next) => setState({ date: next })} value={state.date === 'created' ? 'created' : 'issued'}>
+                  <SelectTrigger aria-label="Read by" className="w-auto">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="issued">By the day issued</SelectItem>
+                    <SelectItem value="created">By the day created</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : null}
+              {report === 'taxes' ? (
+                <Select onValueChange={(next) => setState({ basis: next })} value={state.basis === 'CASH' ? 'CASH' : 'ACCRUAL'}>
+                  <SelectTrigger aria-label="Basis" className="w-auto">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ACCRUAL">Accrual: what was invoiced</SelectItem>
+                    <SelectItem value="CASH">Cash: what was collected</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : null}
+            </>
           ) : null}
         </div>
       ) : (
         <div className="mt-4" />
       )}
 
-      {report === 'projected' ? <ProjectedIncome /> : null}
-      {report === 'aged' ? <AgedReceivables /> : null}
-      {report === 'transactions' ? <Transactions range={range} /> : null}
+      {report === 'projected' ? <ProjectedIncome company={company} /> : null}
+      {report === 'aged' ? <AgedReceivables company={company} /> : null}
+      {report === 'transactions' ? <Transactions range={range ? { ...range, ...scoped } : null} /> : null}
       {report === 'invoices' || report === 'bad_debt' ? (
-        <InvoicesReport badDebt={report === 'bad_debt'} dateField={state.date === 'created' ? 'created' : 'issued'} range={range} />
+        <InvoicesReport
+          badDebt={report === 'bad_debt'}
+          dateField={state.date === 'created' ? 'created' : 'issued'}
+          range={range ? { ...range, ...scoped } : null}
+        />
       ) : null}
-      {report === 'taxes' ? <Taxation basis={state.basis === 'CASH' ? 'CASH' : 'ACCRUAL'} range={range} /> : null}
-      {report === 'clients' ? <ClientBalances /> : null}
+      {report === 'taxes' ? <Taxation basis={state.basis === 'CASH' ? 'CASH' : 'ACCRUAL'} range={range ? { ...range, ...scoped } : null} /> : null}
+      {report === 'clients' ? <ClientBalances company={company} /> : null}
     </>
   );
 }
@@ -160,8 +193,8 @@ const invoiceColumns = {
   phone: { header: 'Phone', wide: true, cell: (row) => <span className="text-muted-foreground">{row.phone ?? '—'}</span>, csv: (row) => row.phone },
 } satisfies Record<string, ReportColumn<ReportInvoiceRow>>;
 
-function ProjectedIncome() {
-  const query = useProjectedIncome();
+function ProjectedIncome({ company }: { company?: string }) {
+  const query = useProjectedIncome(company);
   return (
     <Loaded query={query}>
       {(data) => (
@@ -192,8 +225,8 @@ function ProjectedIncome() {
   );
 }
 
-function AgedReceivables() {
-  const query = useAgedReceivables();
+function AgedReceivables({ company }: { company?: string }) {
+  const query = useAgedReceivables(company);
   return (
     <Loaded query={query}>
       {(data) => (
@@ -233,7 +266,7 @@ function AgedReceivables() {
   );
 }
 
-function Transactions({ range }: { range: ReportRange | null }) {
+function Transactions({ range }: { range: (ReportRange & ReportCompany) | null }) {
   const query = useTransactionsReport(range);
   const columns: ReportColumn<TransactionRow>[] = [
     {
@@ -289,7 +322,15 @@ function Transactions({ range }: { range: ReportRange | null }) {
   );
 }
 
-function InvoicesReport({ range, dateField, badDebt }: { range: ReportRange | null; dateField: InvoiceReportDate; badDebt: boolean }) {
+function InvoicesReport({
+  range,
+  dateField,
+  badDebt,
+}: {
+  range: (ReportRange & ReportCompany) | null;
+  dateField: InvoiceReportDate;
+  badDebt: boolean;
+}) {
   const query = useInvoicesReport(range ? { ...range, dateField, ...(badDebt ? { status: 'BAD_DEBT' as const } : {}) } : null);
   const columns: ReportColumn<ReportInvoiceRow>[] = [
     invoiceColumns.client,
@@ -337,7 +378,7 @@ function InvoicesReport({ range, dateField, badDebt }: { range: ReportRange | nu
   );
 }
 
-function Taxation({ range, basis }: { range: ReportRange | null; basis: TaxBasis }) {
+function Taxation({ range, basis }: { range: (ReportRange & ReportCompany) | null; basis: TaxBasis }) {
   const query = useTaxReport(range ? { ...range, basis } : null);
   const columns: ReportColumn<TaxReportRow>[] = [
     { header: 'Tax rate', cell: (row) => row.rateName, csv: (row) => row.rateName },
@@ -382,8 +423,8 @@ function Taxation({ range, basis }: { range: ReportRange | null; basis: TaxBasis
   );
 }
 
-function ClientBalances() {
-  const query = useClientBalances();
+function ClientBalances({ company }: { company?: string }) {
+  const query = useClientBalances(company);
   const columns: ReportColumn<ClientBalanceRow>[] = [
     {
       header: 'Name',

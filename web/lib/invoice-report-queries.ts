@@ -8,6 +8,7 @@ import type {
   InvoicesReportQuery,
   PaymentInsights,
   ProjectedIncomeReport,
+  ReportCompany,
   ReportRange,
   TaxBasis,
   TaxReport,
@@ -36,40 +37,44 @@ export const reportKeys = {
 const params = (values: Record<string, string | undefined>) =>
   new URLSearchParams(Object.entries(values).filter((entry): entry is [string, string] => Boolean(entry[1]))).toString();
 
-export function useProjectedIncome(enabled = true) {
+/** `?company=`, or nothing for every company's (2026-11-10). */
+const companyQuery = (company: string | undefined) => (company ? `?${params({ company })}` : '');
+
+export function useProjectedIncome(company?: string, enabled = true) {
   return useQuery({
-    queryKey: reportKeys.one('projected-income'),
-    queryFn: ({ signal }) => api<ProjectedIncomeReport>(`${REPORTS}/projected-income`, { signal }),
+    queryKey: reportKeys.one('projected-income', company ? { company } : undefined),
+    queryFn: ({ signal }) => api<ProjectedIncomeReport>(`${REPORTS}/projected-income${companyQuery(company)}`, { signal }),
     enabled,
     ...KEPT,
   });
 }
 
-export function useAgedReceivables(enabled = true) {
+export function useAgedReceivables(company?: string, enabled = true) {
   return useQuery({
-    queryKey: reportKeys.one('aged-receivables'),
-    queryFn: ({ signal }) => api<AgedReceivablesReport>(`${REPORTS}/aged-receivables`, { signal }),
+    queryKey: reportKeys.one('aged-receivables', company ? { company } : undefined),
+    queryFn: ({ signal }) => api<AgedReceivablesReport>(`${REPORTS}/aged-receivables${companyQuery(company)}`, { signal }),
     enabled,
     ...KEPT,
   });
 }
 
-export function useTransactionsReport(range: ReportRange | null) {
+export function useTransactionsReport(range: (ReportRange & ReportCompany) | null) {
   return useQuery({
     queryKey: reportKeys.one('transactions', range ?? undefined),
-    queryFn: ({ signal }) => api<TransactionsReport>(`${REPORTS}/transactions?${params({ from: range?.from, to: range?.to })}`, { signal }),
+    queryFn: ({ signal }) =>
+      api<TransactionsReport>(`${REPORTS}/transactions?${params({ from: range?.from, to: range?.to, company: range?.company })}`, { signal }),
     enabled: Boolean(range),
     placeholderData: (previous) => previous,
     ...KEPT,
   });
 }
 
-export function useInvoicesReport(query: InvoicesReportQuery | null) {
+export function useInvoicesReport(query: (InvoicesReportQuery & ReportCompany) | null) {
   return useQuery({
     queryKey: reportKeys.one('invoices', query ?? undefined),
     queryFn: ({ signal }) =>
       api<InvoicesReport>(
-        `${REPORTS}/invoices?${params({ from: query?.from, to: query?.to, dateField: query?.dateField, status: query?.status })}`,
+        `${REPORTS}/invoices?${params({ from: query?.from, to: query?.to, dateField: query?.dateField, status: query?.status, company: query?.company })}`,
         { signal },
       ),
     enabled: Boolean(query),
@@ -78,21 +83,21 @@ export function useInvoicesReport(query: InvoicesReportQuery | null) {
   });
 }
 
-export function useTaxReport(query: (ReportRange & { basis: TaxBasis }) | null) {
+export function useTaxReport(query: (ReportRange & ReportCompany & { basis: TaxBasis }) | null) {
   return useQuery({
     queryKey: reportKeys.one('taxes', query ?? undefined),
     queryFn: ({ signal }) =>
-      api<TaxReport>(`${REPORTS}/taxes?${params({ from: query?.from, to: query?.to, basis: query?.basis })}`, { signal }),
+      api<TaxReport>(`${REPORTS}/taxes?${params({ from: query?.from, to: query?.to, basis: query?.basis, company: query?.company })}`, { signal }),
     enabled: Boolean(query),
     placeholderData: (previous) => previous,
     ...KEPT,
   });
 }
 
-export function useClientBalances(enabled = true) {
+export function useClientBalances(company?: string, enabled = true) {
   return useQuery({
-    queryKey: reportKeys.one('client-balances'),
-    queryFn: ({ signal }) => api<ClientBalancesReport>(`${REPORTS}/client-balances`, { signal }),
+    queryKey: reportKeys.one('client-balances', company ? { company } : undefined),
+    queryFn: ({ signal }) => api<ClientBalancesReport>(`${REPORTS}/client-balances${companyQuery(company)}`, { signal }),
     enabled,
     ...KEPT,
   });

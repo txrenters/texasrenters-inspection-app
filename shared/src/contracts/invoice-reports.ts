@@ -18,6 +18,15 @@ export interface ReportRange {
   to: string;
 }
 
+/**
+ * One company's books (2026-11-10): the invoices that go to one Xero
+ * organisation -- its tenant id -- or `none` for those of no company, and the
+ * payments against them. Left out, every company's.
+ */
+export interface ReportCompany {
+  company?: string;
+}
+
 /** Jobber's date options, the custom range aside. */
 export const REPORT_RANGE_PRESETS = ['this_week', 'this_month', 'last_30_days', 'last_90_days', 'last_12_months', 'this_year'] as const;
 export type ReportRangePreset = (typeof REPORT_RANGE_PRESETS)[number];

@@ -10,7 +10,14 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** The statuses an invoice is stored with; past due is worked out, never stored. */
 const STORED_STATUSES = ['DRAFT', 'AWAITING_PAYMENT', 'PAID', 'BAD_DEBT', 'VOIDED'] as const;
 
-export class ReportRangeDto {
+/** One company's invoices (2026-11-10): an organisation's tenant id, or `none` for those of no company. */
+const COMPANY = /^(none|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+export class ReportCompanyDto {
+  @IsOptional() @Matches(COMPANY) company?: string;
+}
+
+export class ReportRangeDto extends ReportCompanyDto {
   @Matches(DAY) from!: string;
   @Matches(DAY) to!: string;
 }
@@ -38,33 +45,33 @@ export class InvoiceReportsController {
   constructor(@Inject(InvoiceReportsService) private readonly reports: InvoiceReportsService) {}
 
   @Get('projected-income')
-  projectedIncome(@Req() request: AuthenticatedRequest) {
-    return this.reports.projectedIncome(request.user);
+  projectedIncome(@Req() request: AuthenticatedRequest, @Query() query: ReportCompanyDto) {
+    return this.reports.projectedIncome(request.user, query.company);
   }
 
   @Get('aged-receivables')
-  agedReceivables(@Req() request: AuthenticatedRequest) {
-    return this.reports.agedReceivables(request.user);
+  agedReceivables(@Req() request: AuthenticatedRequest, @Query() query: ReportCompanyDto) {
+    return this.reports.agedReceivables(request.user, query.company);
   }
 
   @Get('transactions')
   transactions(@Req() request: AuthenticatedRequest, @Query() query: ReportRangeDto) {
-    return this.reports.transactions(request.user, { from: query.from, to: query.to });
+    return this.reports.transactions(request.user, { from: query.from, to: query.to }, query.company);
   }
 
   @Get('invoices')
   invoices(@Req() request: AuthenticatedRequest, @Query() query: InvoicesReportDto) {
-    return this.reports.invoices(request.user, query);
+    return this.reports.invoices(request.user, query, query.company);
   }
 
   @Get('taxes')
   taxes(@Req() request: AuthenticatedRequest, @Query() query: TaxReportDto) {
-    return this.reports.taxes(request.user, query);
+    return this.reports.taxes(request.user, query, query.company);
   }
 
   @Get('client-balances')
-  clientBalances(@Req() request: AuthenticatedRequest) {
-    return this.reports.clientBalances(request.user);
+  clientBalances(@Req() request: AuthenticatedRequest, @Query() query: ReportCompanyDto) {
+    return this.reports.clientBalances(request.user, query.company);
   }
 
   @Get('payment-insights')
