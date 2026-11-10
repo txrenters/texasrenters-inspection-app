@@ -24,17 +24,18 @@ const OFF: XeroSendingView = {
   changedAt: null,
   canWrite: true,
   blockers: [],
-  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0 },
+  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 } },
   lastRunAt: null,
   lastRunProblem: null,
   failures: [],
+  paymentFailures: [],
 };
 
 const ON: XeroSendingView = {
   ...OFF,
   enabled: true,
   changedAt: '2026-12-02T15:00:00.000Z',
-  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3 },
+  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 } },
   lastRunAt: '2026-12-02T17:50:00.000Z',
   failures: [
     {
@@ -51,6 +52,20 @@ const ON: XeroSendingView = {
       number: '8441',
       clientName: '14 Example Lane',
       problem: 'Its lines come to $175.00 and its total is $180.00, so it is not sent.',
+      attempts: 1,
+      lastAttemptAt: '2026-12-02T17:50:00.000Z',
+      nextAttemptAt: null,
+    },
+  ],
+  paymentFailures: [
+    {
+      paymentId: 'pay-1',
+      invoiceId: 'inv-3',
+      number: '8442',
+      clientName: '16 Example Lane',
+      amountCents: 17500,
+      paidOn: '2026-12-03',
+      problem: 'Choose the Xero account Zelle payments land in, under “Before anything is sent”.',
       attempts: 1,
       lastAttemptAt: '2026-12-02T17:50:00.000Z',
       nextAttemptAt: null,
@@ -87,6 +102,22 @@ describe('the sending panel', () => {
     expect(within(refused).getByText('#8440')).toBeInTheDocument();
     const held = screen.getByText(/Its lines come to \$175.00/).closest('tr')!;
     expect(within(held).getByText('When it changes')).toBeInTheDocument();
+  });
+
+  it('shows the payments in Xero and those refused, with why (2026-11-10)', () => {
+    mount(ON);
+    const payments = screen.getByLabelText('Payments');
+    expect(within(payments).getByText('Payments in Xero').nextSibling).toHaveTextContent('9');
+    expect(within(payments).getByText('Payments refused').nextSibling).toHaveTextContent('1');
+    const refused = within(screen.getByRole('table', { name: 'Payments refused' })).getByText(/Zelle payments land in/).closest('tr')!;
+    expect(within(refused).getByText(/^\$175\.00, /)).toBeInTheDocument();
+    expect(within(refused).getByText('#8442')).toBeInTheDocument();
+    expect(within(refused).getByText('When it changes')).toBeInTheDocument();
+  });
+
+  it('offers to try again when only a payment was refused', () => {
+    mount({ ...ON, failures: [], counts: { ...ON.counts, failed: 0 } });
+    expect(screen.getByRole('button', { name: 'Try the refused again' })).toBeInTheDocument();
   });
 
   it('sends now, tries the refused again, and turns off after asking', () => {

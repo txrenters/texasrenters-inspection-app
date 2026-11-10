@@ -7,7 +7,8 @@ import { XERO_SEND_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.c
 import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroError } from '../src/integrations/xero/xero.errors';
 import { clientKeyOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero } from '../src/integrations/xero/xero-invoice';
-import { MAX_INVOICES_PER_RUN, XeroSenderService } from '../src/integrations/xero/xero-sender.service';
+import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero } from '../src/integrations/xero/xero-payment';
+import { MAX_INVOICES_PER_RUN, MAX_PAYMENT_DELETES_PER_RUN, XeroSenderService } from '../src/integrations/xero/xero-sender.service';
 import { remindersFrom } from '../src/integrations/xero/xero.service';
 
 /**
@@ -33,6 +34,8 @@ const ACCOUNTS: XeroAccount[] = [
   { accountId: 'a-400', code: '400', name: 'Service revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false },
   { accountId: 'a-410', code: '410', name: 'Repair revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false },
   { accountId: 'a-460', code: '460', name: 'Old revenue', type: 'REVENUE', class: 'REVENUE', status: 'ARCHIVED', takesPayments: false },
+  // Where payments land (2026-11-10, phase 4).
+  { accountId: 'a-090', code: '090', name: 'Operating checking', type: 'BANK', class: 'ASSET', status: 'ACTIVE', takesPayments: true },
 ];
 const SETTINGS: XeroSettingsValues = {
   sendFrom: '2026-12-01',
@@ -225,8 +228,23 @@ function harness(options: {
   connection?: Record<string, unknown> | null;
   ready?: boolean;
   candidates?: string[];
+  /** The office's payments, and their rows in Xero (2026-11-10, phase 4). */
+  payments?: PaymentFixture[];
+  paymentRows?: Record<string, unknown>[];
+  paymentCandidates?: string[];
+  values?: XeroSettingsValues;
 } = {}) {
   const invoices = options.invoices ?? [invoice()];
+  const payments = options.payments ?? [];
+  const paymentRows: Record<string, unknown>[] = (options.paymentRows ?? []).map((row) => ({ ...row }));
+  // A where clause as the payment rows are asked for: equal, `in`, `not`; an OR is let through.
+  const matches = (row: Record<string, unknown>, where: Record<string, unknown>) =>
+    Object.entries(where).every(([key, value]) => {
+      if (key === 'OR') return true;
+      if (value && typeof value === 'object' && 'in' in value) return (value.in as unknown[]).includes(row[key]);
+      if (value && typeof value === 'object' && 'not' in value) return row[key] !== value.not && row[key] !== undefined;
+      return (row[key] ?? null) === value;
+    });
   let settingsRow =
     options.settingsRow === undefined
       ? { sendingEnabled: true, sendingChangedAt: null, lastRunAt: null, lastRunProblem: null, sendFrom: new Date('2026-12-01T00:00:00.000Z'), sendingClaimedUntil: null }
@@ -273,6 +291,27 @@ function harness(options: {
       findMany: jest.fn(async () => []),
       updateMany: jest.fn(async () => ({ count: 2 })),
     },
+    invoicePayment: {
+      findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        payments
+          .filter((item) => where.id.in.includes(item.id))
+          .map((item) => ({ ...item, xeroSync: paymentRows.find((row) => row.paymentId === item.id) ?? null })),
+      ),
+    },
+    xeroPaymentSync: {
+      findMany: jest.fn(async ({ where }: { where: Record<string, unknown> }) => paymentRows.filter((row) => matches(row, where))),
+      count: jest.fn(async ({ where }: { where: Record<string, unknown> }) => paymentRows.filter((row) => matches(row, where)).length),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => Object.assign(paymentRows.find((row) => row.id === where.id)!, data)),
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => paymentRows.splice(paymentRows.findIndex((row) => row.id === where.id), 1)[0]),
+      upsert: jest.fn(async ({ where, create, update }: { where: { paymentId: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        const row = paymentRows.find((item) => item.paymentId === where.paymentId);
+        if (row) return Object.assign(row, update);
+        const made = { id: `ps-${paymentRows.length + 1}`, ...create };
+        paymentRows.push(made);
+        return made;
+      }),
+      updateMany: jest.fn(async () => ({ count: 2 })),
+    },
     xeroContactLink: {
       findMany: jest.fn(async ({ where }: { where: { clientKey: { in: string[] } } }) =>
         (options.links ?? []).filter((link) => where.clientKey.in.includes(link.clientKey)),
@@ -281,28 +320,217 @@ function harness(options: {
     },
     auditLog: { create: jest.fn() },
     $executeRaw: jest.fn(async () => 1),
-    $queryRaw: jest.fn(async () => (options.candidates ?? invoices.map((item) => item.id)).map((id) => ({ id }))),
+    // The invoices worth looking at, or -- asked of the payments -- the payments.
+    $queryRaw: jest.fn(async (strings: TemplateStringsArray) =>
+      (strings.join('?').includes('"InvoicePayment"')
+        ? (options.paymentCandidates ?? payments.map((item) => item.id))
+        : (options.candidates ?? invoices.map((item) => item.id))
+      ).map((id) => ({ id })),
+    ),
     $transaction: jest.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
   };
   const client = {
-    post: jest.fn(async (_org: string, _tenant: string, path: string, body: { Contacts?: { Name: string }[]; Invoices?: { InvoiceNumber?: string }[] }): Promise<unknown> => {
+    post: jest.fn(async (_org: string, _tenant: string, path: string, body: { Contacts?: { Name: string }[]; Invoices?: { InvoiceNumber?: string }[]; Payments?: unknown[] }): Promise<unknown> => {
       if (path.startsWith('/Contacts')) return { Contacts: body.Contacts!.map((contact, index) => ({ ContactID: `contact-${index}-${contact.Name}`, StatusAttributeString: 'OK' })) };
+      // One deleted, or several made.
+      if (path.startsWith('/Payments/')) return { Payments: [{ PaymentID: path.split('/')[2], StatusAttributeString: 'OK' }] };
+      if (path.startsWith('/Payments')) return { Payments: body.Payments!.map((_payment, index) => ({ PaymentID: `xero-payment-${index + 1}`, StatusAttributeString: 'OK' })) };
       return { Invoices: body.Invoices!.map((item, index) => ({ InvoiceID: `xero-${item.InvoiceNumber ?? index}`, StatusAttributeString: 'OK' })) };
     }),
     get: jest.fn(),
   };
   const auth = { requireReconnect: jest.fn() };
-  const settings = { read: jest.fn(async () => ({ values: SETTINGS, ready: options.ready ?? true, checks: [] })) };
+  const settings = { read: jest.fn(async () => ({ values: options.values ?? SETTINGS, ready: options.ready ?? true, checks: [] })) };
   const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never);
-  return { sender, prisma, client, auth, syncs, settingsRow: () => settingsRow };
+  return { sender, prisma, client, auth, syncs, paymentRows, settingsRow: () => settingsRow };
 }
 
 const calls = (client: { post: jest.Mock }, prefix: string) => client.post.mock.calls.filter(([, , path]) => (path as string).startsWith(prefix));
 
+/** A payment against invoice #8440, as the sender reads it (2026-11-10, phase 4). */
+type PaymentFixture = PaymentForXero & { updatedAt: Date; invoice: { id: string; number: string | null; xeroSync: { xeroInvoiceId: string | null } | null } };
+const payment = (over: Partial<PaymentFixture> = {}): PaymentFixture => ({
+  id: 'pay-1',
+  paidOn: new Date('2026-12-03T00:00:00.000Z'),
+  amountCents: 17500,
+  method: 'CHECK',
+  reference: '1042',
+  updatedAt: UPDATED,
+  invoice: { id: 'inv-1', number: '8440', xeroSync: { xeroInvoiceId: 'xero-8440' } },
+  ...over,
+});
+/** Checks land in the operating account. */
+const PAYING: XeroSettingsValues = { ...SETTINGS, paymentAccounts: { CHECK: 'a-090' } };
+/** Invoice #8440 in Xero as it is now: nothing to send for it. */
+const inXero = (over: Partial<Fixture> = {}) =>
+  invoice({ xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 }, ...over });
+/** A payment row as sent. */
+const sentRow = (over: Record<string, unknown> = {}) => ({
+  id: 'ps-1',
+  organizationId: ORG,
+  paymentId: 'pay-1',
+  invoiceId: 'inv-1',
+  xeroTenantId: TENANT,
+  xeroPaymentId: 'xero-payment-old',
+  status: 'SENT',
+  sentFingerprint: paymentFingerprint(payment()),
+  seenUpdatedAt: new Date('2026-12-01T00:00:00.000Z'),
+  attempts: 0,
+  ...over,
+});
+
+describe('a payment, as Xero is sent it', () => {
+  it('goes against its invoice in Xero, into the account chosen for how it was paid', () => {
+    expect(xeroPaymentFrom(payment(), { settings: PAYING, accounts: ACCOUNTS, xeroInvoiceId: 'xero-8440' })).toEqual({
+      kind: 'send',
+      body: { Invoice: { InvoiceID: 'xero-8440' }, Account: { AccountID: 'a-090' }, Date: '2026-12-03', Amount: 175, Reference: '1042' },
+    });
+    // No reference: the method says what it was.
+    expect(xeroPaymentFrom(payment({ reference: null }), { settings: PAYING, accounts: ACCOUNTS, xeroInvoiceId: 'xero-8440' })).toMatchObject({ body: { Reference: 'Check' } });
+  });
+
+  it('is held back with the reason when its method has no account, or the account no longer takes payments', () => {
+    expect(xeroPaymentFrom(payment({ method: 'ZELLE' }), { settings: PAYING, accounts: ACCOUNTS, xeroInvoiceId: 'x' })).toEqual({
+      kind: 'problem',
+      problem: 'Choose the Xero account Zelle payments land in, under “Before anything is sent”.',
+    });
+    expect(xeroPaymentFrom(payment(), { settings: { ...PAYING, paymentAccounts: { CHECK: 'a-400' } }, accounts: ACCOUNTS, xeroInvoiceId: 'x' })).toMatchObject({
+      problem: 'The account chosen for Check payments is no longer in Xero, or no longer takes payments: choose another.',
+    });
+  });
+
+  it('changes its fingerprint when what it says changes, not when its account does', () => {
+    expect(paymentFingerprint(payment({ amountCents: 1000 }))).not.toBe(paymentFingerprint(payment()));
+    expect(paymentFingerprint(payment({ reference: ' 1042 ' }))).toBe(paymentFingerprint(payment()));
+  });
+});
+
+describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
+  it('sends a new payment against its invoice in Xero, with an idempotency key, and keeps what Xero answered', async () => {
+    const { sender, client, prisma, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [payment()], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, payments: { sent: 1, failed: 0, removed: 0 }, problem: null });
+    const [made] = calls(client, '/Payments');
+    expect(made![2]).toBe('/Payments?summarizeErrors=false');
+    expect(made![3]).toEqual({ Payments: [{ Invoice: { InvoiceID: 'xero-8440' }, Account: { AccountID: 'a-090' }, Date: '2026-12-03', Amount: 175, Reference: '1042' }] });
+    expect(made![5]).toMatch(/^[0-9a-f]{64}$/);
+    expect(paymentRows).toEqual([expect.objectContaining({ paymentId: 'pay-1', invoiceId: 'inv-1', xeroTenantId: TENANT, xeroPaymentId: 'xero-payment-1', status: 'SENT' })]);
+    // Only this organisation's invoices, as they are in its books now.
+    const sql = prisma.$queryRaw.mock.calls.map(([strings]) => strings.join('?')).find((text) => text.includes('"InvoicePayment"'))!;
+    expect(sql).toContain('i."xeroTenantId" = ?');
+    expect(sql).toContain(`s."status" = 'SENT'`);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_INVOICES_SENT', metadata: expect.objectContaining({ payments: { sent: 1, failed: 0, removed: 0 } }) }) });
+  });
+
+  it('calls Xero not at all for a payment that has not changed', async () => {
+    const { sender, client, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [payment()], paymentRows: [sentRow()], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ payments: { sent: 0, failed: 0, removed: 0 } });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(paymentRows[0]).toMatchObject({ seenUpdatedAt: UPDATED, xeroPaymentId: 'xero-payment-old' });
+  });
+
+  it('holds back a payment whose method has no account, without calling Xero, until it or the choices change', async () => {
+    const { sender, client, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [payment({ method: 'ZELLE' })], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ payments: { sent: 0, failed: 1, removed: 0 } });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(paymentRows[0]).toMatchObject({ status: 'FAILED', nextAttemptAt: null, problem: 'Choose the Xero account Zelle payments land in, under “Before anything is sent”.' });
+  });
+
+  it('deletes a changed payment in Xero, then sends it again as it is now: Xero never edits one', async () => {
+    const changed = payment({ amountCents: 10000 });
+    const { sender, client, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [changed], paymentRows: [sentRow()], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ payments: { sent: 1, failed: 0, removed: 0 } });
+    expect(client.post.mock.calls.map(([, , path, body]) => [path, body])).toEqual([
+      ['/Payments/xero-payment-old', { Status: 'DELETED' }],
+      ['/Payments?summarizeErrors=false', { Payments: [expect.objectContaining({ Amount: 100 })] }],
+    ]);
+    expect(paymentRows[0]).toMatchObject({ status: 'SENT', xeroPaymentId: 'xero-payment-1', sentFingerprint: paymentFingerprint(changed) });
+  });
+
+  it('deletes in Xero a payment removed here, before anything else, and forgets it', async () => {
+    const voided = invoice({
+      status: 'VOIDED',
+      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
+    });
+    // The payment was removed, then the invoice voided: Xero voids no invoice with a payment on it.
+    const { sender, client, paymentRows } = harness({ invoices: [voided], paymentRows: [sentRow({ paymentId: null })], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, payments: { sent: 0, failed: 0, removed: 1 } });
+    expect(client.post.mock.calls.map(([, , path]) => path)).toEqual(['/Payments/xero-payment-old', '/Invoices?summarizeErrors=false']);
+    expect(paymentRows).toEqual([]);
+  });
+
+  it('keeps one Xero would not delete, with why, and tries again later', async () => {
+    const { sender, client, paymentRows } = harness({ invoices: [inXero()], candidates: [], paymentRows: [sentRow({ paymentId: null })], values: PAYING });
+    client.post.mockResolvedValueOnce({ Payments: [{ PaymentID: 'xero-payment-old', StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Payment is reconciled' }] }] });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ payments: { sent: 0, failed: 1, removed: 0 } });
+    expect(paymentRows[0]).toMatchObject({ status: 'FAILED', problem: 'Removed here, but Xero would not delete it: Payment is reconciled', nextAttemptAt: expect.any(Date) });
+  });
+
+  it('takes the payments off an invoice changed here, changes it, and puts them back on', async () => {
+    const edited = invoice({
+      subject: 'Quarterly service',
+      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
+    });
+    const { sender, client, paymentRows, syncs } = harness({ invoices: [edited], payments: [payment()], paymentRows: [sentRow()], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, payments: { sent: 1, failed: 0, removed: 0 } });
+    expect(client.post.mock.calls.map(([, , path]) => path).filter((path) => !(path as string).startsWith('/Contacts'))).toEqual([
+      '/Payments/xero-payment-old',
+      '/Invoices?summarizeErrors=false',
+      '/Payments?summarizeErrors=false',
+    ]);
+    expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT' });
+    expect(paymentRows).toEqual([expect.objectContaining({ paymentId: 'pay-1', xeroPaymentId: 'xero-payment-1', status: 'SENT' })]);
+  });
+
+  it('leaves an invoice unchanged when Xero will not take its payments off, saying why', async () => {
+    const edited = invoice({
+      subject: 'Quarterly service',
+      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
+    });
+    const { sender, client, syncs } = harness({ invoices: [edited], payments: [], paymentRows: [sentRow()], values: PAYING });
+    client.post.mockImplementation(async (_org: string, _tenant: string, path: string) =>
+      path.startsWith('/Payments/')
+        ? { Payments: [{ StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Payment is reconciled' }] }] }
+        : { Contacts: [{ ContactID: 'contact-1', StatusAttributeString: 'OK' }] },
+    );
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
+    expect(calls(client, '/Invoices')).toHaveLength(0);
+    expect(syncs.get('inv-1')).toMatchObject({ status: 'FAILED', problem: 'Its payments could not be taken off in Xero to change it: Payment is reconciled' });
+  });
+
+  it('changes no invoice whose payments are more than one run may delete: it waits, untouched, for the next', async () => {
+    const edited = invoice({
+      subject: 'Quarterly service',
+      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
+    });
+    const many = Array.from({ length: MAX_PAYMENT_DELETES_PER_RUN + 1 }, (_, index) => sentRow({ id: `ps-${index}`, paymentId: `pay-${index}`, xeroPaymentId: `xero-payment-${index}` }));
+    const { sender, client, syncs } = harness({ invoices: [edited], payments: [], paymentRows: many, values: PAYING });
+    await sender.run(ORG, TENANT);
+    expect(calls(client, '/Payments')).toHaveLength(0);
+    expect(calls(client, '/Invoices')).toHaveLength(0);
+    expect(syncs.has('inv-1')).toBe(false);
+  });
+
+  it('counts this organisation’s payments in Xero and refused, and lists the refused', async () => {
+    const refusedRow = sentRow({
+      status: 'FAILED',
+      problem: 'Payment exceeds the amount due',
+      attempts: 2,
+      payment: { amountCents: 17500, paidOn: new Date('2026-12-03T00:00:00.000Z') },
+      invoice: { number: '8440', clientName: '12 Example Lane' },
+    });
+    const { sender } = harness({ paymentRows: [sentRow({ id: 'ps-2', paymentId: 'pay-2' }), refusedRow] });
+    const view = await sender.view(ORG, TENANT);
+    expect(view.counts.payments).toEqual({ sent: 1, failed: 1 });
+    expect(view.paymentFailures).toEqual([
+      expect.objectContaining({ paymentId: 'pay-1', number: '8440', clientName: '12 Example Lane', amountCents: 17500, paidOn: '2026-12-03', problem: 'Payment exceeds the amount due', attempts: 2 }),
+    ]);
+  });
+});
+
 describe('a run', () => {
   it('makes the contact, sends the invoice approved with an idempotency key, and keeps what Xero answered', async () => {
     const { sender, client, prisma, syncs, settingsRow } = harness();
-    expect(await sender.run(ORG, TENANT)).toEqual({ sent: 1, failed: 0, unchanged: 0, problem: null });
+    expect(await sender.run(ORG, TENANT)).toEqual({ sent: 1, failed: 0, unchanged: 0, payments: { sent: 0, failed: 0, removed: 0 }, problem: null });
     expect(calls(client, '/Contacts')).toHaveLength(1);
     expect(calls(client, '/Contacts')[0]![3]).toEqual({ Contacts: [{ Name: '12 Example Lane' }] });
     const [org, tenant, path, body, , key] = calls(client, '/Invoices')[0]!;
@@ -482,7 +710,9 @@ describe('turning it on, and the office’s buttons', () => {
     const { sender, prisma } = harness();
     await sender.retryFailed(office, TENANT);
     expect(prisma.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
-    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2 } }) });
+    // And every refused payment (2026-11-10, phase 4).
+    expect(prisma.xeroPaymentSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2, payments: 2 } }) });
   });
 
   it('is seen with integrations:read and run with integrations:manage', () => {

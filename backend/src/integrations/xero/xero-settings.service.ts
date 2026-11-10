@@ -103,10 +103,11 @@ export class XeroSettingsService {
     ]);
     const values = valuesFrom(row);
     // The invoices that would be sent: from the start date, or -- before one is chosen -- the past year, to show what is in use.
-    // Every organisation's for now: which invoices are whose comes with the services (the next phase).
+    // This organisation's only (2026-11-10): each company's invoices, and the payments against them, go to its own books.
     const since = values.sendFrom ?? new Date(Date.parse(`${today}T00:00:00.000Z`) - 365 * DAY_MS).toISOString().slice(0, 10);
     const invoices: Prisma.InvoiceWhereInput = {
       organizationId,
+      xeroTenantId: tenantId,
       status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
       issuedOn: { gte: new Date(`${since}T00:00:00.000Z`) },
     };
@@ -194,6 +195,11 @@ export class XeroSettingsService {
         });
         // An invoice this organisation held back for its account, or refused for it, is worth another go with the new choices.
         await tx.xeroInvoiceSync.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
+        // And a payment held back for its method's account (2026-11-10, phase 4): looked at again, though it did not change.
+        await tx.xeroPaymentSync.updateMany({
+          where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' },
+          data: { nextAttemptAt: new Date(), seenUpdatedAt: null },
+        });
       });
     } catch (error) {
       // Two first saves at once: the other one made the row.
