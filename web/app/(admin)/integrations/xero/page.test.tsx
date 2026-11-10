@@ -66,6 +66,8 @@ const organisation = (over: Partial<XeroOrganisationView>): XeroOrganisationView
   organisation: { name: 'Example Home Services', legalName: null, baseCurrency: 'USD', countryCode: 'US', organisationType: 'COMPANY', salesTaxBasis: 'NONE', shortCode: '!aB1c' },
   accounts: [{ accountId: 'a1', code: '400', name: 'Service revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false }],
   taxRates: [{ name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true }],
+  trackingCategories: [],
+  items: [],
   readAt: '2026-11-20T15:00:05.000Z',
   readProblem: null,
   callsToday: 4,

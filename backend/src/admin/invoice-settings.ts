@@ -1,5 +1,6 @@
 import {
   EMPTY_INVOICE_SETTINGS,
+  invoiceCompany,
   PAYMENT_TERMS,
   productNameKey,
   settingText,
@@ -12,6 +13,7 @@ import {
 import { InvoiceStatus, type Prisma } from '@prisma/client';
 
 import { ApplicationError } from '../common/errors';
+import type { PrismaService } from '../common/prisma.service';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
 
 /**
@@ -205,6 +207,59 @@ export async function officePrices(
  */
 export function productCompanies(db: Db, organizationId: string) {
   return db.invoiceProduct.findMany({ where: { organizationId }, select: { name: true, xeroTenantId: true } });
+}
+
+/**
+ * A Jobber invoice's company (2026-11-11): the one its lines go to, as the
+ * console's own -- none when they go to two, or to none. Once it is in a
+ * company's books in Xero it stays that company's, whatever its lines say now.
+ */
+export async function jobberInvoiceCompany(
+  db: Db,
+  organizationId: string,
+  invoiceId: string | null,
+  lines: readonly { name: string }[],
+): Promise<string | null> {
+  if (invoiceId) {
+    const sync = await db.xeroInvoiceSync.findUnique({ where: { invoiceId }, select: { xeroTenantId: true, xeroInvoiceId: true } });
+    if (sync?.xeroInvoiceId) return sync.xeroTenantId;
+  }
+  return invoiceCompany(lines, await productCompanies(db, organizationId), undefined, () => '').xeroTenantId;
+}
+
+/**
+ * Every Jobber invoice's company worked out again from its lines, after the
+ * office changes which company a product goes to, or its name (2026-11-11).
+ * One statement, as `jobberInvoiceCompany` decides it -- a line names a
+ * product by `productNameKey` -- leaving alone the ones in Xero already.
+ * Returns how many changed.
+ */
+export async function reassignJobberInvoiceCompanies(prisma: PrismaService, organizationId: string): Promise<number> {
+  const [, changed] = await prisma.$transaction([
+    // Raw SQL does not pass through the client's tenant scope: set it here, as it does.
+    prisma.$executeRaw`select set_config('app.organization_id', ${organizationId}, true)`,
+    prisma.$executeRaw`
+      WITH wanted AS (
+        SELECT i."id",
+               CASE WHEN count(DISTINCT p."xeroTenantId") = 1 THEN min(p."xeroTenantId") END AS "xeroTenantId"
+          FROM "Invoice" i
+          LEFT JOIN "InvoiceLine" l ON l."invoiceId" = i."id"
+          LEFT JOIN "InvoiceProduct" p
+            ON p."organizationId" = i."organizationId"
+           AND p."nameKey" = lower(btrim(l."name"))
+           AND p."xeroTenantId" IS NOT NULL
+         WHERE i."organizationId" = ${organizationId}::uuid
+           AND i."origin" = 'JOBBER'
+           AND NOT EXISTS (SELECT 1 FROM "XeroInvoiceSync" s WHERE s."invoiceId" = i."id" AND s."xeroInvoiceId" IS NOT NULL)
+         GROUP BY i."id"
+      )
+      UPDATE "Invoice" i
+         SET "xeroTenantId" = wanted."xeroTenantId"
+        FROM wanted
+       WHERE i."id" = wanted."id"
+         AND i."xeroTenantId" IS DISTINCT FROM wanted."xeroTenantId"`,
+  ]);
+  return changed as number;
 }
 
 /** The office's Xero organisations, connected ones first, then by name: the companies' books its invoices go to (2026-11-10). */

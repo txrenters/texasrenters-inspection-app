@@ -29,6 +29,7 @@ import {
   listedProducts,
   officeOrganisations,
   readInvoiceSettings,
+  reassignJobberInvoiceCompanies,
   receiptBrand,
 } from './invoice-settings';
 
@@ -189,6 +190,8 @@ export class InvoiceSettingsService {
 
   async changeProduct(user: AuthenticatedUser, id: string, input: ChangeInvoiceProductInput): Promise<InvoiceSettingsView> {
     const org = user.organizationId;
+    // Its company or its name changed: Jobber's invoices that bill it may now go to another company's books.
+    let regroup = false;
     try {
       await this.prisma.$transaction(async (tx) => {
         const before = await tx.invoiceProduct.findFirst({ where: { id, organizationId: org } });
@@ -224,11 +227,13 @@ export class InvoiceSettingsService {
         });
         if (count !== 1) throw this.changed();
         await this.audit(tx, user, 'INVOICE_PRODUCT_CHANGED', 'InvoiceProduct', id, { name: after.name, changes });
+        regroup = after.xeroTenantId !== before.xeroTenantId || productNameKey(after.name) !== productNameKey(before.name);
       });
     } catch (error) {
       if (isUniqueViolation(error)) throw this.exists(input.name?.trim() ?? null, true);
       throw error;
     }
+    if (regroup) await reassignJobberInvoiceCompanies(this.prisma, org);
     return this.read(user);
   }
 

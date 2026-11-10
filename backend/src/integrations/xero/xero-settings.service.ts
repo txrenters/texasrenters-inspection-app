@@ -12,7 +12,9 @@ import {
   type XeroSalesItem,
   type XeroSettingsValues,
   type XeroSettingsView,
+  type XeroItem,
   type XeroTaxRate,
+  type XeroTrackingCategory,
 } from '@texasrenters/shared';
 import { InvoiceStatus, Prisma } from '@prisma/client';
 
@@ -33,6 +35,10 @@ type Row = {
   salesAccounts: Prisma.JsonValue;
   paymentAccounts: Prisma.JsonValue;
   badDebtAccountId?: string | null;
+  paymentsToXero?: boolean;
+  trackingCategoryId?: string | null;
+  trackingGroups?: Prisma.JsonValue;
+  itemCodes?: Prisma.JsonValue;
 };
 
 const stringMap = (value: Prisma.JsonValue | undefined): Record<string, string> =>
@@ -50,6 +56,10 @@ export function valuesFrom(row: Row | null): XeroSettingsValues {
     salesAccounts: stringMap(row?.salesAccounts),
     paymentAccounts: Object.fromEntries(PAYMENT_METHODS.filter((method) => payments[method]).map((method) => [method, payments[method]!])),
     badDebtAccountId: row?.badDebtAccountId ?? null,
+    paymentsToXero: row?.paymentsToXero ?? true,
+    trackingCategoryId: row?.trackingCategoryId ?? null,
+    trackingGroups: stringMap(row?.trackingGroups),
+    itemCodes: stringMap(row?.itemCodes),
   };
 }
 
@@ -65,11 +75,21 @@ export function valuesFromInput(input: SaveXeroSettingsInput): XeroSettingsValue
     salesAccounts: kept(input.salesAccounts),
     paymentAccounts: kept(input.paymentAccounts) as XeroSettingsValues['paymentAccounts'],
     badDebtAccountId: blank(input.badDebtAccountId),
+    paymentsToXero: input.paymentsToXero ?? true,
+    trackingCategoryId: blank(input.trackingCategoryId),
+    // With no category, nothing is tagged: what each product was tagged as goes with it.
+    trackingGroups: blank(input.trackingCategoryId) ? kept(input.trackingGroups) : {},
+    itemCodes: kept(input.itemCodes),
   };
 }
 
 /** The audit trail's lines for what changed, in the office's words. */
-export function settingsChanges(before: XeroSettingsValues, after: XeroSettingsValues, accounts: readonly XeroAccount[]): string[] {
+export function settingsChanges(
+  before: XeroSettingsValues,
+  after: XeroSettingsValues,
+  accounts: readonly XeroAccount[],
+  trackingCategories: readonly XeroTrackingCategory[] = [],
+): string[] {
   const byId = new Map(accounts.map((account) => [account.accountId, account]));
   const shown = (id: string | null | undefined) => {
     if (!id) return 'none';
@@ -90,6 +110,19 @@ export function settingsChanges(before: XeroSettingsValues, after: XeroSettingsV
       changes.push(`${PAYMENT_METHOD_LABEL[method]}: ${shown(before.paymentAccounts[method])} → ${shown(after.paymentAccounts[method])}`);
   if ((before.badDebtAccountId ?? null) !== (after.badDebtAccountId ?? null))
     changes.push(`Bad debts: ${shown(before.badDebtAccountId)} → ${shown(after.badDebtAccountId)}`);
+  if ((before.paymentsToXero ?? true) !== (after.paymentsToXero ?? true))
+    changes.push(after.paymentsToXero === false ? 'Payments: sent to Xero → stay out of Xero' : 'Payments: stay out of Xero → sent to Xero');
+  const category = (id: string | null | undefined) =>
+    id ? (trackingCategories.find((each) => each.trackingCategoryId === id)?.name ?? 'a category Xero no longer lists') : 'none';
+  if ((before.trackingCategoryId ?? null) !== (after.trackingCategoryId ?? null))
+    changes.push(`Tracking category: ${category(before.trackingCategoryId)} → ${category(after.trackingCategoryId)}`);
+  const maps: [string, Record<string, string>, Record<string, string>][] = [
+    ['tracked as', before.trackingGroups ?? {}, after.trackingGroups ?? {}],
+    ['item', before.itemCodes ?? {}, after.itemCodes ?? {}],
+  ];
+  for (const [label, was, now] of maps)
+    for (const name of [...new Set([...Object.keys(was), ...Object.keys(now)])].sort())
+      if (was[name] !== now[name]) changes.push(`${name} ${label}: ${was[name] ?? 'none'} → ${now[name] ?? 'none'}`);
   return changes;
 }
 
@@ -137,12 +170,24 @@ export class XeroSettingsService {
         listed: true,
         active: product.active,
         accountId: values.salesAccounts[product.nameKey] ?? null,
+        trackingGroup: values.trackingGroups?.[product.nameKey] ?? null,
+        itemCode: values.itemCodes?.[product.nameKey] ?? null,
       }));
     // Names on the list or billed lately are someone's: a name given an account here that is neither (no longer
     // billed, or deleted) keeps showing, so its choice is never hidden.
     const known = new Set([...listed.map((product) => product.nameKey), ...billed.map((price) => productNameKey(price.name))]);
-    for (const [nameKey, accountId] of Object.entries(values.salesAccounts))
-      if (!known.has(nameKey)) products.push({ nameKey, name: nameKey, listed: false, active: false, accountId });
+    const chosen = new Set([...Object.keys(values.salesAccounts), ...Object.keys(values.trackingGroups ?? {}), ...Object.keys(values.itemCodes ?? {})]);
+    for (const nameKey of chosen)
+      if (!known.has(nameKey))
+        products.push({
+          nameKey,
+          name: nameKey,
+          listed: false,
+          active: false,
+          accountId: values.salesAccounts[nameKey] ?? null,
+          trackingGroup: values.trackingGroups?.[nameKey] ?? null,
+          itemCode: values.itemCodes?.[nameKey] ?? null,
+        });
     const withoutOrganisation = listed.filter((product) => product.active && !product.xeroTenantId).length;
 
     const checks = xeroChecks({
@@ -182,13 +227,17 @@ export class XeroSettingsService {
       salesAccounts: after.salesAccounts as Prisma.InputJsonObject,
       paymentAccounts: after.paymentAccounts as Prisma.InputJsonObject,
       badDebtAccountId: after.badDebtAccountId ?? null,
+      paymentsToXero: after.paymentsToXero !== false,
+      trackingCategoryId: after.trackingCategoryId ?? null,
+      trackingGroups: (after.trackingGroups ?? {}) as Prisma.InputJsonObject,
+      itemCodes: (after.itemCodes ?? {}) as Prisma.InputJsonObject,
     };
     try {
       await this.prisma.$transaction(async (tx) => {
         const row = await tx.xeroSettings.findUnique({ where });
         const expected = input.expectedUpdatedAt ? new Date(input.expectedUpdatedAt).toISOString() : null;
         if ((row?.updatedAt.toISOString() ?? null) !== expected) throw changed();
-        const changes = settingsChanges(valuesFrom(row), after, catalog.accounts);
+        const changes = settingsChanges(valuesFrom(row), after, catalog.accounts, catalog.trackingCategories);
         if (!changes.length) return;
         if (row) {
           // Only over the row as it was read: a save in between makes this one change nothing.
@@ -229,7 +278,7 @@ export class XeroSettingsService {
       this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
       this.prisma.xeroOrganisation.findUnique({
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
-        select: { name: true, status: true, accounts: true, taxRates: true, catalogReadAt: true },
+        select: { name: true, status: true, accounts: true, taxRates: true, trackingCategories: true, items: true, catalogReadAt: true },
       }),
     ]);
     if (!row) throw new XeroError('That is not one of the office’s Xero organisations.', 'XERO_ORGANISATION_UNKNOWN', 404);
@@ -240,6 +289,8 @@ export class XeroSettingsService {
       readAt: connected ? (row.catalogReadAt?.toISOString() ?? null) : null,
       accounts: connected ? ((row.accounts as XeroAccount[] | null) ?? []) : [],
       taxRates: connected ? ((row.taxRates as XeroTaxRate[] | null) ?? []) : [],
+      trackingCategories: connected ? ((row.trackingCategories as XeroTrackingCategory[] | null) ?? []) : [],
+      items: connected ? ((row.items as XeroItem[] | null) ?? []) : [],
     };
   }
 }

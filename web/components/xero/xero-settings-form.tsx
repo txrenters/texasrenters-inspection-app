@@ -2,16 +2,22 @@
 
 import {
   PAYMENT_METHOD_LABEL,
+  activeTrackingCategories,
   badDebtAccounts,
   paymentAccounts,
+  paymentsGoToXero,
   revenueAccounts,
   revenueTaxRates,
+  soldItems,
+  trackingGroups,
   xeroAccountLabel,
   type XeroAccount,
   type XeroCheck,
+  type XeroItem,
   type XeroSettingsValues,
   type XeroSettingsView,
   type XeroTaxRate,
+  type XeroTrackingCategory,
 } from '@texasrenters/shared';
 import { CircleAlertIcon, CircleCheckIcon } from 'lucide-react';
 import Link from 'next/link';
@@ -24,6 +30,7 @@ import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDay } from '@/lib/format';
 import { useSaveXeroSettings } from '@/lib/xero-queries';
@@ -46,8 +53,20 @@ const sameValues = (a: XeroSettingsValues, b: XeroSettingsValues) => {
     a.salesTaxType === b.salesTaxType &&
     JSON.stringify(sorted(a.salesAccounts)) === JSON.stringify(sorted(b.salesAccounts)) &&
     JSON.stringify(sorted(a.paymentAccounts)) === JSON.stringify(sorted(b.paymentAccounts)) &&
-    (a.badDebtAccountId ?? null) === (b.badDebtAccountId ?? null)
+    (a.badDebtAccountId ?? null) === (b.badDebtAccountId ?? null) &&
+    paymentsGoToXero(a) === paymentsGoToXero(b) &&
+    (a.trackingCategoryId ?? null) === (b.trackingCategoryId ?? null) &&
+    JSON.stringify(sorted(a.trackingGroups ?? {})) === JSON.stringify(sorted(b.trackingGroups ?? {})) &&
+    JSON.stringify(sorted(a.itemCodes ?? {})) === JSON.stringify(sorted(b.itemCodes ?? {}))
   );
+};
+
+/** A map with one key set to a value, or taken out for "none". */
+const withKey = (map: Record<string, string> | undefined, key: string, value: string) => {
+  const next = { ...(map ?? {}) };
+  if (value === NONE) delete next[key];
+  else next[key] = value;
+  return next;
 };
 
 /**
@@ -61,11 +80,16 @@ export function XeroSettingsForm({
   view,
   accounts,
   taxRates,
+  trackingCategories = [],
+  items = [],
   canManage,
 }: {
   view: XeroSettingsView;
   accounts: readonly XeroAccount[];
   taxRates: readonly XeroTaxRate[];
+  /** As last read (2026-11-11): what lines are tagged and itemed with. */
+  trackingCategories?: readonly XeroTrackingCategory[];
+  items?: readonly XeroItem[];
   canManage: boolean;
 }) {
   const id = useId();
@@ -94,6 +118,16 @@ export function XeroSettingsForm({
   if (values.salesTaxType && !taxOptions.some((option) => option.value === values.salesTaxType))
     taxOptions.push({ value: values.salesTaxType, label: `${values.salesTaxType} (not active in Xero)` });
   const defaultLabel = values.salesAccountId ? (salesOptions.find((option) => option.value === values.salesAccountId)?.label ?? null) : null;
+  // The tracking category lines are tagged in for the visit's technician, and the Xero items they name (2026-11-11).
+  const categories = activeTrackingCategories(trackingCategories);
+  const categoryOptions: Option[] = categories.map((category) => ({ value: category.trackingCategoryId, label: category.name }));
+  if (values.trackingCategoryId && !categoryOptions.some((option) => option.value === values.trackingCategoryId))
+    categoryOptions.push({ value: values.trackingCategoryId, label: 'A category Xero no longer lists' });
+  const category = categories.find((each) => each.trackingCategoryId === values.trackingCategoryId) ?? null;
+  const groupOptions = trackingGroups(category);
+  const itemOptions = soldItems(items).map((item) => item.code);
+  for (const code of new Set(Object.values(values.itemCodes ?? {}))) if (!itemOptions.includes(code)) itemOptions.push(code);
+  const payments = paymentsGoToXero(values);
 
   const setSalesAccount = (nameKey: string, value: string) =>
     setValues((current) => {
@@ -147,8 +181,8 @@ export function XeroSettingsForm({
               value={values.sendFrom ?? ''}
             />
             <FieldDescription>
-              Invoices issued on or after it go to Xero. If invoices already reach Xero, by hand or through Zapier, choose the day after
-              the last one, or they will be there twice.
+              Invoices issued on or after it go to Xero. One Xero already has under the same number, made through Zapier or by hand, is
+              linked rather than made twice. Turn the Zap off before sending is turned on.
             </FieldDescription>
           </Field>
           <Field>
@@ -195,8 +229,41 @@ export function XeroSettingsForm({
           </Field>
         </div>
         <p className="text-muted-foreground mt-4 text-sm">
-          Each invoice goes to Xero under its client, which is the property, as in Jobber.
+          Each invoice goes to Xero under its client, which is the property, as in Jobber, with the property as its reference. It is dated on
+          the day of its visit and falls due on the last day of that month.
         </p>
+      </Panel>
+
+      <Panel bodyClassName="p-4" title="Tracking">
+        <div className="grid gap-2 sm:max-w-md">
+          <Field>
+            <FieldLabel htmlFor={`${id}-tracking`}>Tag lines in</FieldLabel>
+            <Select
+              disabled={locked}
+              onValueChange={(value) =>
+                // Another category, or none: what each product was tracked as no longer fits.
+                setValues((current) => ({ ...current, trackingCategoryId: value === NONE ? null : value, trackingGroups: {} }))
+              }
+              value={values.trackingCategoryId ?? NONE}
+            >
+              <SelectTrigger className="w-full" id={`${id}-tracking`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>No tracking</SelectItem>
+                {categoryOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              Each line is tagged with the option for the technician who did the visit, by first name: “Air Filter Income: Amy” for a filter
+              change Amy did. Choose what each product or service is tracked as under Where sales go.
+            </FieldDescription>
+          </Field>
+        </div>
       </Panel>
 
       <Panel count={view.products.length} title="Where sales go">
@@ -205,7 +272,9 @@ export function XeroSettingsForm({
             <TableHeader>
               <TableRow>
                 <TableHead>Product or service</TableHead>
-                <TableHead className="w-[45%]">Account</TableHead>
+                <TableHead className="w-[32%]">Account</TableHead>
+                <TableHead className="w-[18%]">Xero item</TableHead>
+                {category ? <TableHead className="w-[24%]">Tracked as</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -242,6 +311,50 @@ export function XeroSettingsForm({
                       </SelectContent>
                     </Select>
                   </TableCell>
+                  <TableCell>
+                    <Select
+                      disabled={locked}
+                      onValueChange={(value) => setValues((current) => ({ ...current, itemCodes: withKey(current.itemCodes, item.nameKey, value) }))}
+                      value={values.itemCodes?.[item.nameKey] ?? NONE}
+                    >
+                      <SelectTrigger aria-label={`Xero item for ${item.name}`} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NONE}>None</SelectItem>
+                        {itemOptions.map((code) => (
+                          <SelectItem key={code} value={code}>
+                            {code}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  {category ? (
+                    <TableCell>
+                      <Select
+                        disabled={locked}
+                        onValueChange={(value) =>
+                          setValues((current) => ({ ...current, trackingGroups: withKey(current.trackingGroups, item.nameKey, value) }))
+                        }
+                        value={values.trackingGroups?.[item.nameKey] ?? NONE}
+                      >
+                        <SelectTrigger aria-label={`Tracked as for ${item.name}`} className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NONE}>Not tracked</SelectItem>
+                          {[...new Set([...groupOptions, ...(values.trackingGroups?.[item.nameKey] ? [values.trackingGroups[item.nameKey]!] : [])])].map(
+                            (group) => (
+                              <SelectItem key={group} value={group}>
+                                {group}
+                              </SelectItem>
+                            ),
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                  ) : null}
                 </TableRow>
               ))}
             </TableBody>
@@ -268,42 +381,62 @@ export function XeroSettingsForm({
       </Panel>
 
       <Panel title="Where payments land">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>How it was paid</TableHead>
-              <TableHead className="text-right">Payments</TableHead>
-              <TableHead className="w-[45%]">Account</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {view.payments.map((item) => (
-              <TableRow key={item.method}>
-                <TableCell>{PAYMENT_METHOD_LABEL[item.method]}</TableCell>
-                <TableCell className="text-muted-foreground text-right tabular-nums">{item.payments.toLocaleString('en-US')}</TableCell>
-                <TableCell>
-                  <Select
-                    disabled={locked}
-                    onValueChange={(value) => setPaymentAccount(item.method, value)}
-                    value={values.paymentAccounts[item.method] ?? NONE}
-                  >
-                    <SelectTrigger aria-label={`Account for ${PAYMENT_METHOD_LABEL[item.method]}`} className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NONE}>Not chosen</SelectItem>
-                      {paymentOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </TableCell>
+        <div className="flex items-start gap-3 border-b px-4 py-3">
+          <Switch
+            checked={payments}
+            disabled={locked}
+            id={`${id}-payments`}
+            onCheckedChange={(checked) => setValues((current) => ({ ...current, paymentsToXero: checked }))}
+          />
+          <div className="grid gap-0.5">
+            <label className="text-sm font-medium" htmlFor={`${id}-payments`}>
+              Send payments to Xero
+            </label>
+            <p className="text-muted-foreground text-sm">
+              {payments
+                ? 'Each payment recorded here goes to the account chosen for how it was paid.'
+                : 'Payments stay out of Xero: the office records them there itself, and no account is needed for them.'}
+            </p>
+          </div>
+        </div>
+        {payments ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>How it was paid</TableHead>
+                <TableHead className="text-right">Payments</TableHead>
+                <TableHead className="w-[45%]">Account</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {view.payments.map((item) => (
+                <TableRow key={item.method}>
+                  <TableCell>{PAYMENT_METHOD_LABEL[item.method]}</TableCell>
+                  <TableCell className="text-muted-foreground text-right tabular-nums">{item.payments.toLocaleString('en-US')}</TableCell>
+                  <TableCell>
+                    <Select
+                      disabled={locked}
+                      onValueChange={(value) => setPaymentAccount(item.method, value)}
+                      value={values.paymentAccounts[item.method] ?? NONE}
+                    >
+                      <SelectTrigger aria-label={`Account for ${PAYMENT_METHOD_LABEL[item.method]}`} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NONE}>Not chosen</SelectItem>
+                        {paymentOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : null}
       </Panel>
 
       <Panel title="Bad debts">

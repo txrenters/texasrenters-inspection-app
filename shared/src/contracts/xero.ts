@@ -51,6 +51,29 @@ export interface XeroTaxRate {
   appliesToRevenue: boolean;
 }
 
+/**
+ * One of an organisation's tracking categories, with its options (2026-11-11).
+ * THMP's "Income by Employee" holds an option for each kind of work and each
+ * technician: "Air Filter Income: Amy", "HVAC Inspection Income: Moses".
+ */
+export interface XeroTrackingCategory {
+  trackingCategoryId: string;
+  name: string;
+  /** ACTIVE or ARCHIVED. */
+  status: string;
+  options: { optionId: string; name: string; status: string }[];
+}
+
+/** One of an organisation's products and services in Xero (2026-11-11): what a line's "Item" names. */
+export interface XeroItem {
+  itemId: string;
+  /** What a line names: "Filter Change", "HVAC". */
+  code: string;
+  name: string | null;
+  /** Xero sells it: it can go on a sales invoice. */
+  isSold: boolean;
+}
+
 /** One organisation the sign-in reaches, as last read. */
 export interface XeroOrganisationView {
   /** Xero's id for the organisation: what every call to it names. */
@@ -62,6 +85,9 @@ export interface XeroOrganisationView {
   organisation: XeroOrganisation | null;
   accounts: XeroAccount[];
   taxRates: XeroTaxRate[];
+  /** As last read (2026-11-11); empty when it has none, or Xero did not say. */
+  trackingCategories: XeroTrackingCategory[];
+  items: XeroItem[];
   readAt: string | null;
   readProblem: string | null;
   /** Calls to this organisation today (Texas): Xero limits each organisation on its own. */
@@ -133,6 +159,25 @@ export interface XeroSettingsValues {
    * a credit note (2026-11-10); null or left out for none chosen yet.
    */
   badDebtAccountId?: string | null;
+  /**
+   * Whether payments go to Xero (2026-11-11). Off, the office records them in
+   * Xero itself: none is sent, and no payment method needs an account. Left
+   * out reads as on.
+   */
+  paymentsToXero?: boolean;
+  /**
+   * The tracking category each line is tagged in for the technician who did
+   * the visit (2026-11-11), e.g. THMP's "Income by Employee"; null for none.
+   */
+  trackingCategoryId?: string | null;
+  /**
+   * Product or service name key to the start of its option in that category,
+   * the part before the technician's first name: "HVAC Inspection Income"
+   * makes "HVAC Inspection Income: Moses". A product left out is not tagged.
+   */
+  trackingGroups?: Record<string, string>;
+  /** Product or service name key to the code of its item in Xero: "Filter Change", "HVAC". */
+  itemCodes?: Record<string, string>;
 }
 
 /** A name a line can carry: on the office's products list, or billed in the past six months. */
@@ -144,6 +189,10 @@ export interface XeroSalesItem {
   /** False when set aside on the list. */
   active: boolean;
   accountId: string | null;
+  /** The start of its tracking option (see `XeroSettingsValues.trackingGroups`); null for none. */
+  trackingGroup?: string | null;
+  /** Its item's code in Xero; null for none. */
+  itemCode?: string | null;
 }
 
 export interface XeroPaymentItem {
@@ -191,7 +240,66 @@ export const MAX_XERO_SALES_ACCOUNTS = 300;
 const isDay = (value: string) =>
   /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`)) && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
 
-type XeroCatalog = { accounts: readonly XeroAccount[]; taxRates: readonly XeroTaxRate[] };
+type XeroCatalog = {
+  accounts: readonly XeroAccount[];
+  taxRates: readonly XeroTaxRate[];
+  trackingCategories?: readonly XeroTrackingCategory[];
+  items?: readonly XeroItem[];
+};
+
+/** Payments go to Xero unless the office said they stay out. */
+export const paymentsGoToXero = (values: Pick<XeroSettingsValues, 'paymentsToXero'>) => values.paymentsToXero !== false;
+
+/** Tracking categories a line can be tagged in: active, with an active option. */
+export const activeTrackingCategories = (categories: readonly XeroTrackingCategory[]) =>
+  categories.filter((category) => category.status === 'ACTIVE' && category.options.some((option) => option.status === 'ACTIVE'));
+
+/** Items a sales line can name: sold, with a code. */
+export const soldItems = (items: readonly XeroItem[]) => items.filter((item) => item.isSold && item.code.trim() !== '');
+
+/** Words for matching an option's name: lower case, colons and runs of spaces as one space. */
+const optionWords = (value: string) => value.toLowerCase().replace(/:/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * The starts of a category's options -- the part before the colon, "Air Filter
+ * Income" in "Air Filter Income: Amy" -- each once, in order. An option with no
+ * colon starts none.
+ */
+export function trackingGroups(category: XeroTrackingCategory | null | undefined): string[] {
+  if (!category) return [];
+  const groups = new Map<string, string>();
+  for (const option of category.options) {
+    if (option.status !== 'ACTIVE') continue;
+    const at = option.name.lastIndexOf(':');
+    if (at <= 0) continue;
+    const group = option.name.slice(0, at).trim();
+    if (group && !groups.has(optionWords(group))) groups.set(optionWords(group), group);
+  }
+  return [...groups.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * A technician's option in a group: "HVAC Inspection Income" and "Moses
+ * Rodriguez" find "HVAC Inspection Income: Moses" -- by first name, else by
+ * the whole name -- however its colon and spaces are written. Null when the
+ * category has no active one.
+ */
+export function trackingOptionFor(
+  category: XeroTrackingCategory,
+  group: string,
+  technicianName: string,
+): { optionId: string; name: string } | null {
+  const whole = technicianName.trim();
+  const first = whole.split(/\s+/)[0] ?? '';
+  if (!first) return null;
+  const active = category.options.filter((option) => option.status === 'ACTIVE');
+  for (const name of [first, whole]) {
+    const wanted = optionWords(`${group} ${name}`);
+    const found = active.find((option) => optionWords(option.name) === wanted);
+    if (found) return { optionId: found.optionId, name: found.name };
+  }
+  return null;
+}
 
 /** The tax types a sale can carry: active, and allowed on revenue. */
 export const revenueTaxRates = (taxRates: readonly XeroTaxRate[]) => taxRates.filter((rate) => rate.status === 'ACTIVE' && rate.appliesToRevenue);
@@ -232,6 +340,26 @@ export function xeroSettingsProblem(values: XeroSettingsValues, catalog: XeroCat
   }
   if (values.badDebtAccountId && !badDebtAccounts(catalog.accounts).some((account) => account.accountId === values.badDebtAccountId))
     return 'Bad debts are given an account that is not an active expense account with a code in Xero.';
+  if (values.paymentsToXero !== undefined && typeof values.paymentsToXero !== 'boolean') return 'Say whether payments go to Xero.';
+  const category = values.trackingCategoryId
+    ? activeTrackingCategories(catalog.trackingCategories ?? []).find((each) => each.trackingCategoryId === values.trackingCategoryId)
+    : null;
+  if (values.trackingCategoryId && !category) return 'That tracking category is not an active one in Xero.';
+  const groups = Object.entries(values.trackingGroups ?? {});
+  if (groups.length > MAX_XERO_SALES_ACCOUNTS) return `At most ${MAX_XERO_SALES_ACCOUNTS} products and services can be tracked.`;
+  if (groups.length && !category) return 'Choose the tracking category before what each product or service is tracked as.';
+  const known = new Set(trackingGroups(category).map(optionWords));
+  for (const [nameKey, group] of groups) {
+    if (!nameKey || nameKey.length > 200 || nameKey !== nameKey.trim().toLowerCase()) return 'A product or service is not named as the list names it.';
+    if (typeof group !== 'string' || !known.has(optionWords(group))) return `“${group}” does not start any option of ${category!.name} in Xero.`;
+  }
+  const items = new Set(soldItems(catalog.items ?? []).map((item) => item.code));
+  const coded = Object.entries(values.itemCodes ?? {});
+  if (coded.length > MAX_XERO_SALES_ACCOUNTS) return `At most ${MAX_XERO_SALES_ACCOUNTS} products and services can have an item.`;
+  for (const [nameKey, code] of coded) {
+    if (!nameKey || nameKey.length > 200 || nameKey !== nameKey.trim().toLowerCase()) return 'A product or service is not named as the list names it.';
+    if (typeof code !== 'string' || !items.has(code)) return `“${code}” is not an item Xero sells.`;
+  }
   return null;
 }
 
@@ -251,15 +379,25 @@ export function xeroChecks(input: {
   const sales = new Set(revenueAccounts(catalog.accounts).map((account) => account.accountId));
   const takes = new Set(paymentAccounts(catalog.accounts).map((account) => account.accountId));
   const taxTypes = new Set(revenueTaxRates(catalog.taxRates).map((rate) => rate.taxType));
-  const unmapped = PAYMENT_METHODS.filter((method) => (input.paymentsByMethod[method] ?? 0) > 0 && !values.paymentAccounts[method]);
+  const payments = paymentsGoToXero(values);
+  const unmapped = payments ? PAYMENT_METHODS.filter((method) => (input.paymentsByMethod[method] ?? 0) > 0 && !values.paymentAccounts[method]) : [];
   // A choice Xero no longer has, or no longer takes for that use: archived, deleted, or another organisation's.
   const gone = new Set<string>();
   for (const id of [values.salesAccountId, ...Object.values(values.salesAccounts)]) if (id && !sales.has(id)) gone.add(id);
-  for (const id of Object.values(values.paymentAccounts)) if (id && !takes.has(id)) gone.add(id);
+  if (payments) for (const id of Object.values(values.paymentAccounts)) if (id && !takes.has(id)) gone.add(id);
   const goneNames = [...gone].map((id) => {
     const account = byId.get(id);
     return account ? xeroAccountLabel(account) : 'an account Xero no longer lists';
   });
+  // And the tracking category and items (2026-11-11): archived or deleted in Xero since they were chosen.
+  const category = values.trackingCategoryId
+    ? activeTrackingCategories(catalog.trackingCategories ?? []).find((each) => each.trackingCategoryId === values.trackingCategoryId)
+    : undefined;
+  if (values.trackingCategoryId && !category) goneNames.push('the tracking category');
+  const groups = new Set(trackingGroups(category).map(optionWords));
+  for (const group of new Set(Object.values(values.trackingGroups ?? {}))) if (category && !groups.has(optionWords(group))) goneNames.push(`“${group}”`);
+  const items = new Set(soldItems(catalog.items ?? []).map((item) => item.code));
+  for (const code of new Set(Object.values(values.itemCodes ?? {}))) if (!items.has(code)) goneNames.push(`the item “${code}”`);
   return [
     {
       key: 'connected',
@@ -280,17 +418,19 @@ export function xeroChecks(input: {
       ok: values.salesTaxType !== null && taxTypes.has(values.salesTaxType),
       detail: values.salesTaxType ? null : 'Choose the tax type every line carries.',
     },
-    {
-      key: 'payments',
-      label: 'An account for every payment method in use',
-      ok: unmapped.length === 0,
-      detail: unmapped.length ? `None yet for ${unmapped.map((method) => PAYMENT_METHOD_LABEL[method]).join(', ')}.` : null,
-    },
+    payments
+      ? {
+          key: 'payments',
+          label: 'An account for every payment method in use',
+          ok: unmapped.length === 0,
+          detail: unmapped.length ? `None yet for ${unmapped.map((method) => PAYMENT_METHOD_LABEL[method]).join(', ')}.` : null,
+        }
+      : { key: 'payments', label: 'Payments stay out of Xero', ok: true, detail: null },
     {
       key: 'stillInXero',
       label: 'Every chosen account is still active in Xero',
-      ok: gone.size === 0,
-      detail: gone.size ? `Choose again for ${goneNames.join(', ')}.` : null,
+      ok: goneNames.length === 0,
+      detail: goneNames.length ? `Choose again for ${goneNames.join(', ')}.` : null,
     },
   ];
 }
