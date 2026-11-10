@@ -23,20 +23,22 @@ const OFF: XeroSendingView = {
   enabled: false,
   changedAt: null,
   canWrite: true,
+  projectsEnabled: false,
   blockers: [],
-  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 } },
+  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 0, failed: 0 } },
   lastRunAt: null,
   lastRunProblem: null,
   failures: [],
   paymentFailures: [],
   writeOffFailures: [],
+  projectFailures: [],
 };
 
 const ON: XeroSendingView = {
   ...OFF,
   enabled: true,
   changedAt: '2026-12-02T15:00:00.000Z',
-  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 }, writeOffs: { sent: 4, failed: 1 } },
+  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 }, writeOffs: { sent: 4, failed: 1 }, projects: { done: 0, failed: 0 } },
   lastRunAt: '2026-12-02T17:50:00.000Z',
   failures: [
     {
@@ -163,5 +165,44 @@ describe('the sending panel', () => {
     expect(screen.queryByRole('button', { name: 'Send now' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Turn off' })).not.toBeInTheDocument();
     expect(screen.getByText('Invoice # must be unique.')).toBeInTheDocument();
+  });
+
+  describe('while each visit gets a project (2026-11-11)', () => {
+    const PROJECTS: XeroSendingView = {
+      ...ON,
+      projectsEnabled: true,
+      failures: [],
+      counts: { ...ON.counts, failed: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 12, failed: 1 } },
+      projectFailures: [
+        {
+          inspectionId: 'visit-1',
+          name: 'Ada: Move Out Inspection - 12.02.2026',
+          problem: 'Its client has no contact in Xero yet.',
+          attempts: 1,
+          lastAttemptAt: '2026-12-02T17:50:00.000Z',
+          nextAttemptAt: '2026-12-02T18:50:00.000Z',
+        },
+      ],
+    };
+
+    it('says invoices go as drafts, for the office to put each line on its project and approve', () => {
+      mount(PROJECTS);
+      expect(screen.getByText(/go to Xero as drafts, each visit with a project of its own: in Xero, put each line on its project/)).toBeInTheDocument();
+      expect(screen.queryByText(/with the payments recorded against them/)).not.toBeInTheDocument();
+    });
+
+    it('shows the visits with a project and the projects Xero refused, and offers to try those again', () => {
+      mount(PROJECTS);
+      expect(within(screen.getByLabelText('Projects')).getByText('Visits with a project').nextSibling).toHaveTextContent('12');
+      const refused = within(screen.getByRole('table', { name: 'Projects refused' })).getByText('Ada: Move Out Inspection - 12.02.2026').closest('tr')!;
+      expect(refused).toHaveTextContent('Its client has no contact in Xero yet.');
+      fireEvent.click(screen.getByRole('button', { name: 'Try the refused again' }));
+      expect(actions.retry.mutate).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows no project counts for a company that makes none', () => {
+      mount(ON);
+      expect(screen.queryByLabelText('Projects')).not.toBeInTheDocument();
+    });
   });
 });

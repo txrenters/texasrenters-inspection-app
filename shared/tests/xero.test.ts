@@ -3,18 +3,55 @@ import { describe, expect, it } from 'vitest';
 import {
   badDebtAccounts,
   connectedOrganisations,
+  labourOf,
   paymentAccounts,
   revenueAccounts,
   trackingGroups,
   trackingOptionFor,
+  xeroCanMakeProjects,
   xeroCanWrite,
   xeroChecks,
+  xeroProjectName,
   xeroSendingBlockers,
   xeroSettingsProblem,
   type XeroAccount,
   type XeroOrganisationView,
   type XeroTrackingCategory,
 } from '../src/contracts/xero';
+
+describe('a visit’s project in Xero (2026-11-11)', () => {
+  const visit = { day: '2026-11-10', technicianName: 'Ada Lane', packageQuarter: { year: 2026, quarter: 4 }, kind: 'HVAC Inspection & Filter Change' };
+
+  it('is named as the office names them: the technician’s first name, the package’s quarter, the visit’s day', () => {
+    expect(xeroProjectName(visit)).toBe('Ada: Tenant Benefit Package - 4th Qtr - 2026 - 11.10.2026');
+    expect(xeroProjectName({ ...visit, packageQuarter: { year: 2027, quarter: 1 } })).toBe('Ada: Tenant Benefit Package - 1st Qtr - 2027 - 11.10.2026');
+    expect(xeroProjectName({ ...visit, packageQuarter: { year: 2027, quarter: 2 } })).toContain('2nd Qtr');
+    expect(xeroProjectName({ ...visit, packageQuarter: { year: 2027, quarter: 3 } })).toContain('3rd Qtr');
+  });
+
+  it('names any other visit by what it was, and none without a technician', () => {
+    expect(xeroProjectName({ ...visit, packageQuarter: null, kind: ' Move Out Inspection ' })).toBe('Ada: Move Out Inspection - 11.10.2026');
+    expect(xeroProjectName({ ...visit, technicianName: '  ' })).toBeNull();
+    expect(xeroProjectName({ ...visit, technicianName: null })).toBeNull();
+  });
+
+  it('logs the labour the office has been adding by hand, and none when projects are off or either part is 0', () => {
+    expect(labourOf({ projectsEnabled: true })).toEqual({ rateCents: 3500, minutes: 6 });
+    expect(labourOf({ projectsEnabled: false, labourRateCents: 3500, labourMinutes: 6 })).toBeNull();
+    expect(labourOf({ projectsEnabled: true, labourMinutes: 0 })).toBeNull();
+    expect(labourOf({ projectsEnabled: true, labourRateCents: 0 })).toBeNull();
+  });
+
+  it('needs a connection allowed to make projects, only once projects are on', () => {
+    const scopes = ['accounting.contacts', 'accounting.invoices'];
+    expect(xeroCanMakeProjects(scopes)).toBe(false);
+    expect(xeroSendingBlockers({ connected: true, scopes, settingsReady: true, invoiceRemindersOn: false })).toEqual([]);
+    expect(xeroSendingBlockers({ connected: true, scopes, settingsReady: true, invoiceRemindersOn: false, projectsEnabled: true })).toEqual([
+      'Connect again, so Xero lets the console make projects.',
+    ]);
+    expect(xeroSendingBlockers({ connected: true, scopes: [...scopes, 'projects'], settingsReady: true, invoiceRemindersOn: false, projectsEnabled: true })).toEqual([]);
+  });
+});
 
 describe('the office’s organisations', () => {
   const organisation = (tenantId: string, status: XeroOrganisationView['status']) => ({ tenantId, status }) as XeroOrganisationView;

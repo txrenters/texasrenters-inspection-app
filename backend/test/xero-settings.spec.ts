@@ -238,6 +238,11 @@ describe('saving the choices', () => {
         trackingCategoryId: null,
         trackingGroups: {},
         itemCodes: {},
+        // No project for each visit unless the office says so (2026-11-11); the labour as it has been.
+        projectsEnabled: false,
+        projectUserId: null,
+        labourRateCents: 3500,
+        labourMinutes: 6,
       },
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
@@ -304,6 +309,60 @@ describe('saving the choices', () => {
     expect(db.xeroSettings.create).not.toHaveBeenCalled();
   });
 
+  describe('a project for each visit (2026-11-11)', () => {
+    const withUsers = () =>
+      database({
+        organisation: {
+          name: 'Example Home Services',
+          status: 'CONNECTED',
+          accounts: ACCOUNTS,
+          taxRates: TAX_RATES,
+          projectUsers: [{ userId: 'user-1', name: 'Ada Office' }],
+          catalogReadAt: new Date('2026-11-20T15:00:00.000Z'),
+        },
+      });
+    const projects = (over: Partial<SaveXeroSettingsInput> = {}) =>
+      input({ paymentsToXero: false, projectsEnabled: true, projectUserId: 'user-1', labourRateCents: 3500, labourMinutes: 6, ...over });
+
+    it('is saved with the labour, on the audit trail in the office’s words', async () => {
+      const db = withUsers();
+      await service(db).save(office, TENANT, projects());
+      expect(db.xeroSettings.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ projectsEnabled: true, projectUserId: 'user-1', labourRateCents: 3500, labourMinutes: 6, paymentsToXero: false }),
+      });
+      const changes = db.auditLog.create.mock.calls[0][0].data.metadata.changes as string[];
+      expect(changes).toEqual(
+        expect.arrayContaining(['Payments: sent to Xero → stay out of Xero', 'Projects: none → one for each visit, invoices as drafts', 'Labour logged as: none → Ada Office']),
+      );
+    });
+
+    it('needs a Xero user for the labour before anything is sent, and none when no labour is logged', async () => {
+      const db = withUsers();
+      await service(db).save(office, TENANT, projects({ projectUserId: null }));
+      const view = await service(db).read(ORG, TENANT);
+      expect(view.checks.find((check) => check.key === 'projects')).toEqual({
+        key: 'projects',
+        label: 'A Xero user to log each visit’s labour under',
+        ok: false,
+        detail: 'Choose the Xero user the labour is logged under.',
+      });
+      const none = withUsers();
+      await service(none).save(office, TENANT, projects({ projectUserId: null, labourMinutes: 0 }));
+      expect((await service(none).read(ORG, TENANT)).checks.find((check) => check.key === 'projects')).toMatchObject({ label: 'Projects log no labour', ok: true });
+    });
+
+    it.each([
+      [{ paymentsToXero: true }, 'Payments must stay out of Xero while each visit gets a project: its invoices go as drafts, and Xero takes no payment on a draft.'],
+      [{ projectUserId: 'user-gone' }, 'That Xero user cannot log time on projects. Read from Xero again, then choose.'],
+      [{ labourMinutes: 601 }, 'The labour is from 0 to 600 whole minutes.'],
+      [{ labourRateCents: 12.5 }, 'The labour’s rate is from $0 to $1000 an hour, in whole cents.'],
+    ])('refuses %j', async (over, message) => {
+      const db = withUsers();
+      await expect(service(db).save(office, TENANT, projects(over as Partial<SaveXeroSettingsInput>))).rejects.toMatchObject({ code: 'XERO_SETTINGS_INVALID', message });
+      expect(db.xeroSettings.create).not.toHaveBeenCalled();
+    });
+  });
+
   it('needs Xero connected and read, since the accounts come from it', async () => {
     await expect(service(database({ signedIn: false })).save(office, TENANT, input())).rejects.toMatchObject({ code: 'XERO_NOT_READ' });
     await expect(
@@ -339,6 +398,7 @@ describe('the words', () => {
       paymentAccounts: {},
       badDebtAccountId: null,
       paymentsToXero: true, trackingCategoryId: null, trackingGroups: {}, itemCodes: {},
+      projectsEnabled: false, projectUserId: null, labourRateCents: 3500, labourMinutes: 6,
     });
   });
 
@@ -351,6 +411,7 @@ describe('the words', () => {
       paymentAccounts: {},
       badDebtAccountId: null,
       paymentsToXero: true, trackingCategoryId: null, trackingGroups: {}, itemCodes: {},
+      projectsEnabled: false, projectUserId: null, labourRateCents: 3500, labourMinutes: 6,
     });
     expect(valuesFrom({ ...valuesRow(), paymentAccounts: { CHECK: 'a-bank', NOPE: 'x' } }).paymentAccounts).toEqual({ CHECK: 'a-bank' });
   });
@@ -379,6 +440,11 @@ describe('the request check (2026-11-11)', () => {
     trackingCategoryId: 'tc-1',
     trackingGroups: { 'filter change': 'Air Filter Income' },
     itemCodes: { 'filter change': 'Filter Change' },
+    // A project for each visit (2026-11-11).
+    projectsEnabled: true,
+    projectUserId: 'user-1',
+    labourRateCents: 3500,
+    labourMinutes: 6,
     expectedUpdatedAt: null,
   };
 
@@ -388,9 +454,13 @@ describe('the request check (2026-11-11)', () => {
       trackingCategoryId: 'tc-1',
       trackingGroups: { 'filter change': 'Air Filter Income' },
       itemCodes: { 'filter change': 'Filter Change' },
+      projectsEnabled: true,
+      projectUserId: 'user-1',
+      labourRateCents: 3500,
+      labourMinutes: 6,
     });
-    // And what the page sent before tracking and items, for a page still open from the release before.
-    const added = new Set(['paymentsToXero', 'trackingCategoryId', 'trackingGroups', 'itemCodes']);
+    // And what the page sent before tracking and items, and before projects, for a page still open from a release before.
+    const added = new Set(['paymentsToXero', 'trackingCategoryId', 'trackingGroups', 'itemCodes', 'projectsEnabled', 'projectUserId', 'labourRateCents', 'labourMinutes']);
     const before = Object.fromEntries(Object.entries(everything).filter(([key]) => !added.has(key)));
     await expect(check(before)).resolves.toBeInstanceOf(SaveXeroSettingsDto);
   });
@@ -399,6 +469,9 @@ describe('the request check (2026-11-11)', () => {
     await expect(check({ ...everything, somethingElse: 1 })).rejects.toThrow();
     await expect(check({ ...everything, paymentsToXero: 'no' })).rejects.toThrow();
     await expect(check({ ...everything, trackingGroups: 'Air Filter Income' })).rejects.toThrow();
+    await expect(check({ ...everything, projectsEnabled: 'yes' })).rejects.toThrow();
+    await expect(check({ ...everything, labourMinutes: 6.5 })).rejects.toThrow();
+    await expect(check({ ...everything, labourRateCents: -1 })).rejects.toThrow();
   });
 });
 

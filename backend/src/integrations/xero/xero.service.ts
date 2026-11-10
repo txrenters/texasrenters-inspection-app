@@ -1,12 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type {
-  XeroAccount,
-  XeroConnectionView,
-  XeroItem,
-  XeroOrganisation,
-  XeroOrganisationStatus,
-  XeroTaxRate,
-  XeroTrackingCategory,
+import {
+  xeroCanMakeProjects,
+  type XeroAccount,
+  type XeroConnectionView,
+  type XeroItem,
+  type XeroOrganisation,
+  type XeroOrganisationStatus,
+  type XeroProjectUser,
+  type XeroTaxRate,
+  type XeroTrackingCategory,
 } from '@texasrenters/shared';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -85,6 +87,18 @@ const trackingSchema = z.object({
 const itemsSchema = z.object({
   Items: z.array(z.object({ ItemID: z.string(), Code: z.string().nullish(), Name: z.string().nullish(), IsSold: z.boolean().nullish() })),
 });
+
+/** The Projects API's users (2026-11-11): camelCase, a page of items. */
+const projectUsersSchema = z.object({
+  items: z.array(z.object({ userId: z.string(), name: z.string().nullish(), email: z.string().nullish() })).nullish(),
+});
+
+/** Who can log time on projects, by name; an email stands in for a missing name, and is otherwise not kept. */
+export function projectUsersFrom(data: z.infer<typeof projectUsersSchema>): XeroProjectUser[] {
+  return (data.items ?? [])
+    .map((user) => ({ userId: user.userId, name: user.name?.trim() || user.email?.trim() || 'Unnamed user' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 /** The tracking categories and their options, by name (2026-11-11). */
 export function trackingCategoriesFrom(data: z.infer<typeof trackingSchema>): XeroTrackingCategory[] {
@@ -196,6 +210,7 @@ export class XeroService {
         taxRates: (organisation.taxRates as XeroTaxRate[] | null) ?? [],
         trackingCategories: (organisation.trackingCategories as XeroTrackingCategory[] | null) ?? [],
         items: (organisation.items as XeroItem[] | null) ?? [],
+        projectUsers: (organisation.projectUsers as XeroProjectUser[] | null) ?? [],
         readAt: organisation.catalogReadAt?.toISOString() ?? null,
         readProblem: organisation.catalogReadError ?? null,
         callsToday: organisation.callsDay === today ? organisation.callsUsed : 0,
@@ -244,12 +259,13 @@ export class XeroService {
   /**
    * Reads one organisation, its accounts, its tax rates, its tracking
    * categories and items, and whether its own invoice reminders are on again:
-   * six calls to it, at most every five minutes.
+   * six calls to it, at most every five minutes -- and a seventh for its users
+   * who can log time on projects, once the connection may read projects.
    */
   async read(organizationId: string, tenantId: string, force = false): Promise<XeroConnectionView> {
     const where = { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } };
     const [connection, row] = await Promise.all([
-      this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+      this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, scopes: true } }),
       this.prisma.xeroOrganisation.findUnique({ where, select: { status: true, catalogReadAt: true } }),
     ]);
     if (connection?.status !== 'CONNECTED') throw new XeroError('Xero is not connected.', 'XERO_NOT_CONNECTED', 409);
@@ -270,6 +286,10 @@ export class XeroService {
       // What a line is tagged and itemed with (2026-11-11). Not saying leaves what was read before.
       const trackingCategories = await this.client.get(organizationId, tenantId, '/TrackingCategories', trackingSchema).then(trackingCategoriesFrom).catch(unsaid);
       const items = await this.client.get(organizationId, tenantId, '/Items', itemsSchema).then(itemsFrom).catch(unsaid);
+      // Who the labour on a visit's project can be logged under (2026-11-11): asked only of a connection allowed to.
+      const projectUsers = xeroCanMakeProjects(connection.scopes)
+        ? await this.client.projectsGet(organizationId, tenantId, '/ProjectsUsers?pageSize=500', projectUsersSchema).then(projectUsersFrom).catch(unsaid)
+        : null;
       await this.prisma.xeroOrganisation.update({
         where,
         data: {
@@ -280,6 +300,7 @@ export class XeroService {
           taxRates: taxRates as unknown as Prisma.InputJsonValue,
           ...(trackingCategories ? { trackingCategories: trackingCategories as unknown as Prisma.InputJsonValue } : {}),
           ...(items ? { items: items as unknown as Prisma.InputJsonValue } : {}),
+          ...(projectUsers ? { projectUsers: projectUsers as unknown as Prisma.InputJsonValue } : {}),
           invoiceRemindersOn,
           catalogReadAt: new Date(),
           catalogReadError: null,

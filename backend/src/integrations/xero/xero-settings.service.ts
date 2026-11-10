@@ -1,5 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  DEFAULT_LABOUR_MINUTES,
+  DEFAULT_LABOUR_RATE_CENTS,
+  formatMoney,
   PAYMENT_METHOD_LABEL,
   PAYMENT_METHODS,
   productNameKey,
@@ -13,6 +16,7 @@ import {
   type XeroSettingsValues,
   type XeroSettingsView,
   type XeroItem,
+  type XeroProjectUser,
   type XeroTaxRate,
   type XeroTrackingCategory,
 } from '@texasrenters/shared';
@@ -39,6 +43,10 @@ type Row = {
   trackingCategoryId?: string | null;
   trackingGroups?: Prisma.JsonValue;
   itemCodes?: Prisma.JsonValue;
+  projectsEnabled?: boolean;
+  projectUserId?: string | null;
+  labourRateCents?: number;
+  labourMinutes?: number;
 };
 
 const stringMap = (value: Prisma.JsonValue | undefined): Record<string, string> =>
@@ -60,6 +68,10 @@ export function valuesFrom(row: Row | null): XeroSettingsValues {
     trackingCategoryId: row?.trackingCategoryId ?? null,
     trackingGroups: stringMap(row?.trackingGroups),
     itemCodes: stringMap(row?.itemCodes),
+    projectsEnabled: row?.projectsEnabled ?? false,
+    projectUserId: row?.projectUserId ?? null,
+    labourRateCents: row?.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
+    labourMinutes: row?.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
   };
 }
 
@@ -80,6 +92,10 @@ export function valuesFromInput(input: SaveXeroSettingsInput): XeroSettingsValue
     // With no category, nothing is tagged: what each product was tagged as goes with it.
     trackingGroups: blank(input.trackingCategoryId) ? kept(input.trackingGroups) : {},
     itemCodes: kept(input.itemCodes),
+    projectsEnabled: input.projectsEnabled ?? false,
+    projectUserId: blank(input.projectUserId),
+    labourRateCents: input.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
+    labourMinutes: input.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
   };
 }
 
@@ -89,6 +105,7 @@ export function settingsChanges(
   after: XeroSettingsValues,
   accounts: readonly XeroAccount[],
   trackingCategories: readonly XeroTrackingCategory[] = [],
+  projectUsers: readonly XeroProjectUser[] = [],
 ): string[] {
   const byId = new Map(accounts.map((account) => [account.accountId, account]));
   const shown = (id: string | null | undefined) => {
@@ -123,6 +140,16 @@ export function settingsChanges(
   for (const [label, was, now] of maps)
     for (const name of [...new Set([...Object.keys(was), ...Object.keys(now)])].sort())
       if (was[name] !== now[name]) changes.push(`${name} ${label}: ${was[name] ?? 'none'} → ${now[name] ?? 'none'}`);
+  // Projects (2026-11-11).
+  if ((before.projectsEnabled ?? false) !== (after.projectsEnabled ?? false))
+    changes.push(after.projectsEnabled ? 'Projects: none → one for each visit, invoices as drafts' : 'Projects: one for each visit → none, invoices approved');
+  const person = (id: string | null | undefined) => (id ? (projectUsers.find((user) => user.userId === id)?.name ?? 'a user Xero no longer lists') : 'none');
+  if ((before.projectUserId ?? null) !== (after.projectUserId ?? null)) changes.push(`Labour logged as: ${person(before.projectUserId)} → ${person(after.projectUserId)}`);
+  const rate = (cents: number | undefined) => formatMoney(cents ?? DEFAULT_LABOUR_RATE_CENTS);
+  if ((before.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) !== (after.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS))
+    changes.push(`Labour rate: ${rate(before.labourRateCents)} → ${rate(after.labourRateCents)} an hour`);
+  if ((before.labourMinutes ?? DEFAULT_LABOUR_MINUTES) !== (after.labourMinutes ?? DEFAULT_LABOUR_MINUTES))
+    changes.push(`Labour: ${before.labourMinutes ?? DEFAULT_LABOUR_MINUTES} → ${after.labourMinutes ?? DEFAULT_LABOUR_MINUTES} minutes a visit`);
   return changes;
 }
 
@@ -231,13 +258,17 @@ export class XeroSettingsService {
       trackingCategoryId: after.trackingCategoryId ?? null,
       trackingGroups: (after.trackingGroups ?? {}) as Prisma.InputJsonObject,
       itemCodes: (after.itemCodes ?? {}) as Prisma.InputJsonObject,
+      projectsEnabled: after.projectsEnabled === true,
+      projectUserId: after.projectUserId ?? null,
+      labourRateCents: after.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
+      labourMinutes: after.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
     };
     try {
       await this.prisma.$transaction(async (tx) => {
         const row = await tx.xeroSettings.findUnique({ where });
         const expected = input.expectedUpdatedAt ? new Date(input.expectedUpdatedAt).toISOString() : null;
         if ((row?.updatedAt.toISOString() ?? null) !== expected) throw changed();
-        const changes = settingsChanges(valuesFrom(row), after, catalog.accounts, catalog.trackingCategories);
+        const changes = settingsChanges(valuesFrom(row), after, catalog.accounts, catalog.trackingCategories, catalog.projectUsers);
         if (!changes.length) return;
         if (row) {
           // Only over the row as it was read: a save in between makes this one change nothing.
@@ -278,7 +309,7 @@ export class XeroSettingsService {
       this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
       this.prisma.xeroOrganisation.findUnique({
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
-        select: { name: true, status: true, accounts: true, taxRates: true, trackingCategories: true, items: true, catalogReadAt: true },
+        select: { name: true, status: true, accounts: true, taxRates: true, trackingCategories: true, items: true, projectUsers: true, catalogReadAt: true },
       }),
     ]);
     if (!row) throw new XeroError('That is not one of the office’s Xero organisations.', 'XERO_ORGANISATION_UNKNOWN', 404);
@@ -291,6 +322,7 @@ export class XeroSettingsService {
       taxRates: connected ? ((row.taxRates as XeroTaxRate[] | null) ?? []) : [],
       trackingCategories: connected ? ((row.trackingCategories as XeroTrackingCategory[] | null) ?? []) : [],
       items: connected ? ((row.items as XeroItem[] | null) ?? []) : [],
+      projectUsers: connected ? ((row.projectUsers as XeroProjectUser[] | null) ?? []) : [],
     };
   }
 }

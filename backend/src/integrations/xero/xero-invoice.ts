@@ -68,11 +68,18 @@ export interface XeroInvoiceBody {
   Date: string;
   DueDate: string;
   LineAmountTypes: 'Exclusive';
-  Status: 'AUTHORISED';
+  /**
+   * Approved; or, for a company whose visits get projects (2026-11-11), a
+   * draft for the office to put on its project and approve. Changing one
+   * already sent there says nothing of its status, so an approved one stays
+   * approved and a draft a draft.
+   */
+  Status?: 'AUTHORISED' | 'DRAFT';
   LineItems: XeroLineItem[];
 }
 
-export type XeroVoidBody = { InvoiceID: string; Status: 'VOIDED' };
+/** Voided; a draft, which Xero does not void, is deleted (2026-11-11). */
+export type XeroVoidBody = { InvoiceID: string; Status: 'VOIDED' | 'DELETED' };
 
 export type XeroInvoicePlan = { kind: 'send'; body: XeroInvoiceBody } | { kind: 'void'; body: XeroVoidBody } | { kind: 'problem'; problem: string };
 
@@ -135,6 +142,8 @@ export function xeroInvoiceFrom(
     items?: readonly XeroItem[];
     contactId: string;
     xeroInvoiceId: string | null;
+    /** Its company's visits get projects (2026-11-11): a new one goes as a draft. */
+    asDraft?: boolean;
   },
 ): XeroInvoicePlan {
   if (invoice.status === 'VOIDED')
@@ -225,7 +234,8 @@ export function xeroInvoiceFrom(
       Date: date,
       DueDate: monthEndOf(date),
       LineAmountTypes: 'Exclusive',
-      Status: 'AUTHORISED',
+      // As a draft (2026-11-11): new, a draft; changed, as the office left it -- approving it is theirs.
+      ...(context.asDraft ? (context.xeroInvoiceId ? {} : { Status: 'DRAFT' as const }) : { Status: 'AUTHORISED' as const }),
       LineItems: items,
     },
   };

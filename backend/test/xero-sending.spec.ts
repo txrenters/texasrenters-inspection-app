@@ -279,6 +279,9 @@ describe('the client’s writes', () => {
       }),
     ).toBe('Invoice # must be unique. Account code 999 is not valid.');
     expect(xeroValidationMessages({ Message: 'A validation exception occurred' })).toBeNull();
+    // The Projects API's way (2026-11-11): the field's messages, else its one message.
+    expect(xeroValidationMessages({ message: 'The request is invalid.', modelState: { rate: ['The Rate field is required.'] } })).toBe('The Rate field is required.');
+    expect(xeroValidationMessages({ message: 'Project not found.' })).toBe('Project not found.');
   });
 
   it('posts JSON with an idempotency key, counted, and turns a refusal into Xero’s words', async () => {
@@ -310,7 +313,8 @@ describe('the client’s writes', () => {
 
   it('asks Xero for writing contacts, invoices and payments when connecting', () => {
     expect(getXeroConfig({}).scopes).toBe(XERO_SEND_SCOPES);
-    expect(XERO_SEND_SCOPES).toBe('offline_access accounting.settings.read accounting.contacts accounting.invoices accounting.payments');
+    // And projects (2026-11-11): a project for each visit, its labour as time.
+    expect(XERO_SEND_SCOPES).toBe('offline_access accounting.settings.read accounting.contacts accounting.invoices accounting.payments projects');
   });
 
   it('reads whether Xero’s own reminders are on', () => {
@@ -482,6 +486,11 @@ function harness(options: {
         const asked = decodeURIComponent(/InvoiceNumbers=([^&]*)/.exec(path)![1]!).split(',');
         return { Invoices: (options.inXero ?? []).filter((theirs) => asked.includes(theirs.InvoiceNumber)) };
       }
+      // By Xero's ids, to void (2026-11-11): what each is there now.
+      if (path.startsWith('/Invoices?IDs=')) {
+        const asked = decodeURIComponent(/IDs=([^&]*)/.exec(path)![1]!).split(',');
+        return { Invoices: (options.inXero ?? []).filter((theirs) => asked.includes(theirs.InvoiceID)) };
+      }
       return path.startsWith('/CreditNotes/') ? { CreditNotes: [{ CreditNoteID: path.split('/')[2], Allocations: [{ AllocationID: 'allocation-found' }] }] } : {};
     }),
     // A credit note's allocation, made or taken off (2026-11-10).
@@ -490,8 +499,14 @@ function harness(options: {
   };
   const auth = { requireReconnect: jest.fn() };
   const settings = { read: jest.fn(async () => ({ values: options.values ?? SETTINGS, ready: options.ready ?? true, checks: [] })) };
-  const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never);
-  return { sender, prisma, client, auth, syncs, paymentRows, writeOffRows, settingsRow: () => settingsRow };
+  // Visits' projects (2026-11-11): tested on their own in xero-projects.spec.ts.
+  const projects = {
+    run: jest.fn<Promise<unknown>, unknown[]>(async () => ({ made: 0, linked: 0, failed: 0, names: [] as string[] })),
+    summary: jest.fn(async () => ({ done: 0, failed: 0, failures: [] })),
+    retry: jest.fn(async () => 0),
+  };
+  const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never, projects as never);
+  return { sender, prisma, client, auth, projects, syncs, paymentRows, writeOffRows, settingsRow: () => settingsRow };
 }
 
 const calls = (client: { post: jest.Mock }, prefix: string) => client.post.mock.calls.filter(([, , path]) => (path as string).startsWith(prefix));
@@ -884,6 +899,112 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
   });
 });
 
+describe('a company whose visits get projects (2026-11-11)', () => {
+  const PROJECTS: XeroSettingsValues = { ...SETTINGS, paymentsToXero: false, projectsEnabled: true, projectUserId: 'user-1', labourRateCents: 3500, labourMinutes: 6 };
+  const plan = (xeroInvoiceId: string | null) =>
+    xeroInvoiceFrom(invoice(), { settings: PROJECTS, accounts: ACCOUNTS, contactId: 'contact-1', xeroInvoiceId, asDraft: true });
+
+  it('sends a new invoice as a draft, for the office to put its line on the project and approve', () => {
+    const sent = plan(null);
+    expect(sent.kind === 'send' && sent.body.Status).toBe('DRAFT');
+  });
+
+  it('changes one already in Xero without saying its status: approved by the office, it stays approved', () => {
+    const sent = plan('xero-inv-1');
+    expect(sent.kind === 'send' && 'Status' in sent.body).toBe(false);
+  });
+
+  it('sends drafts, then makes the projects, with the company’s choices and currency -- and sends no payment', async () => {
+    const { sender, client, projects, prisma } = harness({ values: { ...PROJECTS, paymentsToXero: true }, payments: [payment()], paymentRows: [] });
+    // As the service does: filling the result it is given, as it goes.
+    projects.run.mockImplementationOnce(async (...args: unknown[]) => Object.assign(args[5] as object, { made: 1, linked: 1, failed: 0, names: ['Ada: Move-out inspection - 12.02.2026'] }));
+    const result = await sender.run(ORG, TENANT);
+    expect(calls(client, '/Invoices')[0]![3]).toMatchObject({ Invoices: [{ InvoiceNumber: '8440', Status: 'DRAFT' }] });
+    expect(projects.run).toHaveBeenCalledWith(ORG, TENANT, '2026-12-01', expect.objectContaining({ projectsEnabled: true }), 'USD', expect.any(Object));
+    expect(result.projects).toEqual({ made: 1, linked: 1, failed: 0 });
+    // Xero takes no payment on a draft.
+    expect(calls(client, '/Payments')).toHaveLength(0);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'XERO_INVOICES_SENT',
+        metadata: expect.objectContaining({ projects: { made: 1, linked: 1, failed: 0, names: ['Ada: Move-out inspection - 12.02.2026'] } }),
+      }),
+    });
+  });
+
+  it('counts the projects made before a run stopped', async () => {
+    const { sender, projects } = harness({ values: PROJECTS });
+    projects.run.mockImplementationOnce(async (...args: unknown[]) => {
+      const into = args[5] as { made: number; names: string[] };
+      into.made = 2;
+      into.names.push('Ada: one', 'Ada: two');
+      throw new XeroError('The console has used its 300 calls to this Xero organisation today. More can go tomorrow.', 'XERO_DAILY_CEILING', 429);
+    });
+    const result = await sender.run(ORG, TENANT);
+    expect(result.projects.made).toBe(2);
+    expect(result.problem).toMatch(/300 calls/);
+  });
+
+  it('makes no project while projects are off', async () => {
+    const { sender, projects, client } = harness();
+    await sender.run(ORG, TENANT);
+    expect(projects.run).not.toHaveBeenCalled();
+    expect(calls(client, '/Invoices')[0]![3]).toMatchObject({ Invoices: [{ Status: 'AUTHORISED' }] });
+  });
+
+  it('deletes a draft the office has not approved, voids one it has, and is done with one Xero no longer has', async () => {
+    const voided = (id: string, number: string) =>
+      invoice({
+        id,
+        number,
+        status: 'VOIDED',
+        xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: 'before', xeroInvoiceId: `xero-${number}`, attempts: 0 },
+      });
+    const { sender, client, syncs } = harness({
+      values: PROJECTS,
+      invoices: [voided('inv-1', '8440'), voided('inv-2', '8441'), voided('inv-3', '8442')],
+      inXero: [
+        { InvoiceID: 'xero-8440', InvoiceNumber: '8440', Status: 'DRAFT' },
+        { InvoiceID: 'xero-8441', InvoiceNumber: '8441', Status: 'AUTHORISED' },
+      ],
+    });
+    const result = await sender.run(ORG, TENANT);
+    expect(calls(client, '/Invoices')[0]![3]).toEqual({
+      Invoices: [
+        { InvoiceID: 'xero-8440', Status: 'DELETED' },
+        { InvoiceID: 'xero-8441', Status: 'VOIDED' },
+      ],
+    });
+    // Not in Xero any more: nothing left to void, and done without a call.
+    expect(syncs.get('inv-3')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'xero-8442' });
+    expect(result.sent).toBe(3);
+  });
+
+  it('waits for a connection that may make projects', async () => {
+    const { sender, client, projects } = harness({
+      values: PROJECTS,
+      connection: { status: 'CONNECTED', xeroTenantId: TENANT, scopes: XERO_SEND_SCOPES.split(' ').filter((scope) => scope !== 'projects'), invoiceRemindersOn: false, accounts: ACCOUNTS },
+    });
+    const result = await sender.run(ORG, TENANT);
+    expect(result.problem).toBe('Connect again, so Xero lets the console make projects.');
+    expect(client.post).not.toHaveBeenCalled();
+    expect(projects.run).not.toHaveBeenCalled();
+  });
+
+  it('says on the page that each visit gets a project, with the counts and refusals', async () => {
+    const { sender, projects } = harness({ values: PROJECTS });
+    projects.summary.mockResolvedValueOnce({
+      done: 4,
+      failed: 1,
+      failures: [{ inspectionId: 'visit-1', name: 'Ada: Move Out Inspection - 12.02.2026', problem: 'Xero refused it.', attempts: 1, lastAttemptAt: null, nextAttemptAt: null }],
+    } as never);
+    const view = await sender.view(ORG, TENANT);
+    expect(view.projectsEnabled).toBe(true);
+    expect(view.counts.projects).toEqual({ done: 4, failed: 1 });
+    expect(view.projectFailures).toHaveLength(1);
+  });
+});
+
 describe('a run', () => {
   it('makes the contact, sends the invoice approved with an idempotency key, and keeps what Xero answered', async () => {
     const { sender, client, prisma, syncs, settingsRow } = harness();
@@ -894,6 +1015,8 @@ describe('a run', () => {
       linked: 0,
       payments: { sent: 0, failed: 0, removed: 0 },
       writeOffs: { sent: 0, failed: 0, reversed: 0 },
+      // No project for each visit while projects are off (2026-11-11).
+      projects: { made: 0, linked: 0, failed: 0 },
       problem: null,
     });
     expect(calls(client, '/Contacts')).toHaveLength(1);
@@ -1081,7 +1204,7 @@ describe('turning it on, and the office’s buttons', () => {
     expect(prisma.xeroPaymentSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
     expect(prisma.xeroWriteOffSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date) } });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2, payments: 2, writeOffs: 2 } }),
+      data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2, payments: 2, writeOffs: 2, projects: 0 } }),
     });
   });
 

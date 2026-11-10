@@ -324,6 +324,7 @@ function OrganisationTab({
           canManage={canManage}
           items={organisation.items}
           key={`${organisation.tenantId}:${settings.data.updatedAt ?? 'new'}`}
+          projectUsers={organisation.projectUsers}
           taxRates={organisation.taxRates}
           trackingCategories={organisation.trackingCategories}
           view={settings.data}
