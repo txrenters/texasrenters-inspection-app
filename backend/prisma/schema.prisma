@@ -456,6 +456,7 @@ model Organization {
   xeroSettings   XeroSettings[]
   xeroContactLinks XeroContactLink[]
   xeroInvoiceSyncs XeroInvoiceSync[]
+  xeroPaymentSyncs XeroPaymentSync[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -3277,6 +3278,8 @@ model Invoice {
   deliveries           InvoiceDelivery[]
   xeroSync             XeroInvoiceSync?
   xeroOrganisation     XeroOrganisation?     @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+  /// Its payments in the company's books in Xero (2026-11-10, phase 4), and those removed here still to delete there.
+  xeroPaymentSyncs     XeroPaymentSync[]
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
@@ -3517,6 +3520,8 @@ model InvoicePayment {
   updatedAt       DateTime             @updatedAt
 
   invoice    Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  /// Where it stands in its invoice's company's books in Xero (2026-11-10, phase 4).
+  xeroSync   XeroPaymentSync?
   receipts   InvoiceDelivery[]
   recordedBy UserProfile? @relation("InvoicePaymentRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
 
@@ -4792,6 +4797,8 @@ model XeroOrganisation {
   products     InvoiceProduct[]
   /// The invoices that go to this organisation's books.
   invoices     Invoice[]
+  /// The payments sent to its books.
+  paymentSyncs XeroPaymentSync[]
 
   @@unique([organizationId, xeroTenantId])
 }
@@ -4900,4 +4907,39 @@ model XeroInvoiceSync {
   invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
+}
+
+/// A payment in its invoice's company's books in Xero (2026-11-10, phase 4 of
+/// the multi-company plan): sent to the organisation the invoice goes to, to
+/// the account chosen for how it was paid, or refused with Xero's reason. A
+/// payment removed here keeps its row, with no payment, until it is deleted in
+/// Xero too.
+model XeroPaymentSync {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  /// Null once the payment was removed in the console: then it is deleted in Xero, and the row with it.
+  paymentId       String?   @unique @db.Uuid
+  invoiceId       String    @db.Uuid
+  xeroTenantId    String
+  xeroPaymentId   String?
+  /// SENT or FAILED (checked).
+  status          String
+  sentFingerprint String?
+  /// The payment's updatedAt when last looked at: it is looked at again only once that moves.
+  seenUpdatedAt   DateTime?
+  attempts        Int       @default(0)
+  lastAttemptAt   DateTime?
+  nextAttemptAt   DateTime?
+  problem         String?
+  sentAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  payment          InvoicePayment?  @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  invoice          Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+
+  @@index([organizationId, xeroTenantId, status])
+  @@index([invoiceId])
 }

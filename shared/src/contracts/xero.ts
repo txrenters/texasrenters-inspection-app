@@ -295,6 +295,22 @@ export interface XeroSendingFailure {
   nextAttemptAt: string | null;
 }
 
+/** A payment Xero refused, or the console held back (2026-11-10, phase 4). */
+export interface XeroPaymentFailure {
+  /** Null for one removed here that Xero has not deleted yet. */
+  paymentId: string | null;
+  invoiceId: string;
+  number: string | null;
+  clientName: string;
+  amountCents: number | null;
+  /** `YYYY-MM-DD`; null for one removed here. */
+  paidOn: string | null;
+  problem: string;
+  attempts: number;
+  lastAttemptAt: string | null;
+  nextAttemptAt: string | null;
+}
+
 export interface XeroSendingView {
   /** The organisation sending is for: each has its own switch. */
   tenantId: string;
@@ -313,11 +329,15 @@ export interface XeroSendingView {
     notYet: number;
     /** The office's invoices from the start date that belong to no company (2026-11-10): never sent anywhere. */
     noCompany: number;
+    /** Payments against this organisation's invoices (2026-11-10, phase 4): in Xero, and refused or held back. */
+    payments: { sent: number; failed: number };
   };
   lastRunAt: string | null;
   lastRunProblem: string | null;
   /** The latest refusals, newest first; at most 50. */
   failures: XeroSendingFailure[];
+  /** The latest payments refused or held back, newest first; at most 50. */
+  paymentFailures: XeroPaymentFailure[];
 }
 
 /** Why sending cannot run, in the order to fix them. */

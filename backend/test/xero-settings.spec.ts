@@ -96,6 +96,7 @@ function database(options: { settings?: Record<string, unknown> | null; organisa
     },
     auditLog: { create: jest.fn() },
     xeroInvoiceSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
+    xeroPaymentSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
     $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(db)),
     settings: () => settings,
   };
@@ -149,10 +150,11 @@ describe('reading the choices', () => {
     expect(view.payments[0]).toEqual({ method: 'PROPERTYWARE_LEDGER', accountId: 'a-815', payments: 10 });
     expect(view.payments.find((item) => item.method === 'CHECK')).toEqual({ method: 'CHECK', accountId: null, payments: 2 });
     expect(view.invoicesToSend).toBe(12);
-    // Counted from the start date, on invoices that are neither drafts nor voided.
-    expect(db.invoice.count).toHaveBeenCalledWith({
-      where: expect.objectContaining({ organizationId: ORG, status: { notIn: ['DRAFT', 'VOIDED'] }, issuedOn: { gte: new Date('2026-12-01T00:00:00.000Z') } }),
-    });
+    // Counted from the start date, on this organisation's invoices that are neither drafts nor voided (2026-11-10).
+    const invoices = { organizationId: ORG, xeroTenantId: TENANT, status: { notIn: ['DRAFT', 'VOIDED'] }, issuedOn: { gte: new Date('2026-12-01T00:00:00.000Z') } };
+    expect(db.invoice.count).toHaveBeenCalledWith({ where: expect.objectContaining(invoices) });
+    // And the payments by method, on the same invoices only.
+    expect(db.invoicePayment.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG, invoice: expect.objectContaining(invoices) } }));
     expect(view.updatedAt).toBe(UPDATED.toISOString());
   });
 

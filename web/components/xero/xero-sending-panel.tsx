@@ -1,6 +1,6 @@
 'use client';
 
-import type { XeroSendingView } from '@texasrenters/shared';
+import { formatMoney, type XeroSendingView } from '@texasrenters/shared';
 import { CircleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -26,7 +26,9 @@ import { useXeroSendingActions } from '@/lib/xero-queries';
 /**
  * Sending invoices to Xero (2026-11-10, phase 3 of the Xero plan): on or off,
  * what went, what Xero refused and why. Approved invoices, under each property
- * as a contact; Xero emails nobody. Nothing is sent while it is off.
+ * as a contact; Xero emails nobody. Nothing is sent while it is off. And the
+ * payments recorded against them (phase 4 of the multi-company plan), each
+ * into the account chosen for how it was paid.
  */
 export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSendingView; sendFrom: string | null; canManage: boolean }) {
   const actions = useXeroSendingActions(view.tenantId);
@@ -62,7 +64,7 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
     >
       <p className="text-sm">
         {view.enabled
-          ? `On${view.changedAt ? ` since ${formatRelative(view.changedAt)}` : ''}. Invoices issued since ${sendFrom ? formatDay(sendFrom, 'long') : 'the start date'} go to Xero as approved invoices, and each change follows within about ten minutes.`
+          ? `On${view.changedAt ? ` since ${formatRelative(view.changedAt)}` : ''}. Invoices issued since ${sendFrom ? formatDay(sendFrom, 'long') : 'the start date'} go to Xero as approved invoices, with the payments recorded against them, and each change follows within about ten minutes.`
           : 'Off. Nothing is sent to Xero.'}{' '}
         <span className="text-muted-foreground">Xero emails nobody: invoices, follow-ups and receipts still go from the console.</span>
       </p>
@@ -82,6 +84,10 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
         <Count label="In Xero" value={view.counts.sent} />
         <Count label="Not sent yet" value={view.counts.notYet} />
         <Count label="Refused" tone={view.counts.failed ? 'warning' : undefined} value={view.counts.failed} />
+      </dl>
+      <dl aria-label="Payments" className="grid grid-cols-3 gap-3 text-sm sm:max-w-md">
+        <Count label="Payments in Xero" value={view.counts.payments.sent} />
+        <Count label="Payments refused" tone={view.counts.payments.failed ? 'warning' : undefined} value={view.counts.payments.failed} />
       </dl>
       {view.counts.noCompany ? (
         // Sent to no organisation (2026-11-10): not taken for sent.
@@ -106,7 +112,7 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
               <Button disabled={busy || view.blockers.length > 0} onClick={run}>
                 {actions.run.isPending ? 'Sending…' : 'Send now'}
               </Button>
-              {view.counts.failed ? (
+              {view.counts.failed || view.counts.payments.failed ? (
                 <Button disabled={busy} onClick={retry} variant="outline">
                   Try the refused again
                 </Button>
@@ -150,13 +156,44 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
         </Table>
       ) : null}
 
+      {view.paymentFailures.length ? (
+        <Table aria-label="Payments refused">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Payment</TableHead>
+              <TableHead>Invoice</TableHead>
+              <TableHead>Why</TableHead>
+              <TableHead className="text-right">Tries</TableHead>
+              <TableHead>Next try</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {view.paymentFailures.map((failure) => (
+              <TableRow key={failure.paymentId ?? `removed-${failure.invoiceId}-${failure.lastAttemptAt}`}>
+                <TableCell className="tabular-nums">
+                  {failure.amountCents === null ? 'Removed here' : `${formatMoney(failure.amountCents)}${failure.paidOn ? `, ${formatDay(failure.paidOn)}` : ''}`}
+                </TableCell>
+                <TableCell>
+                  {failure.number ? `#${failure.number}` : '—'} <span className="text-muted-foreground">{failure.clientName}</span>
+                </TableCell>
+                <TableCell className="max-w-md whitespace-normal">{failure.problem}</TableCell>
+                <TableCell className="text-right tabular-nums">{failure.attempts}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {failure.nextAttemptAt ? formatRelative(failure.nextAttemptAt) : 'When it changes'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : null}
+
       <AlertDialog onOpenChange={(open) => (open ? undefined : setAsking(null))} open={asking !== null}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{asking === 'on' ? 'Turn on sending to Xero?' : 'Turn off sending to Xero?'}</AlertDialogTitle>
             <AlertDialogDescription>
               {asking === 'on'
-                ? `Invoices issued since ${sendFrom ? formatDay(sendFrom, 'long') : 'the start date'} go to Xero as approved invoices, each under its property as a contact, and every change after follows. They are in the office's books from then on. Xero emails nobody.`
+                ? `Invoices issued since ${sendFrom ? formatDay(sendFrom, 'long') : 'the start date'} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them, and every change after follows. They are in the office's books from then on. Xero emails nobody.`
                 : 'Nothing more goes to Xero until it is turned on again. What was sent stays in Xero.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
