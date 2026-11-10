@@ -2,7 +2,9 @@ import { UserRole, type SaveXeroSettingsInput, type XeroAccount, type XeroTaxRat
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { PERMISSIONS_METADATA_KEY } from '../src/common/auth';
-import { XeroController } from '../src/integrations/xero/xero.controller';
+import { ValidationPipe } from '@nestjs/common';
+
+import { SaveXeroSettingsDto, XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroSettingsService, settingsChanges, valuesFrom, valuesFromInput } from '../src/integrations/xero/xero-settings.service';
 
 /**
@@ -358,6 +360,45 @@ describe('the words', () => {
     expect(settingsChanges(before, { ...before, salesAccountId: 'a-missing' }, ACCOUNTS)).toEqual([
       'Default sales account: none → an account Xero no longer lists',
     ]);
+  });
+});
+
+describe('the request check (2026-11-11)', () => {
+  // As main.ts runs it on every request: a field the DTO does not name is refused.
+  const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+  const check = (body: unknown) => pipe.transform(body, { type: 'body', metatype: SaveXeroSettingsDto });
+  // Every field of the contract, as the page sends them: one added there and not to the DTO fails here.
+  const everything: Required<SaveXeroSettingsInput> = {
+    sendFrom: '2026-12-01',
+    salesAccountId: 'a-400',
+    salesTaxType: 'NONE',
+    salesAccounts: { 'filter change': 'a-410' },
+    paymentAccounts: { CHECK: 'a-bank' },
+    badDebtAccountId: null,
+    paymentsToXero: false,
+    trackingCategoryId: 'tc-1',
+    trackingGroups: { 'filter change': 'Air Filter Income' },
+    itemCodes: { 'filter change': 'Filter Change' },
+    expectedUpdatedAt: null,
+  };
+
+  it('takes every choice the page saves', async () => {
+    await expect(check(everything)).resolves.toMatchObject({
+      paymentsToXero: false,
+      trackingCategoryId: 'tc-1',
+      trackingGroups: { 'filter change': 'Air Filter Income' },
+      itemCodes: { 'filter change': 'Filter Change' },
+    });
+    // And what the page sent before tracking and items, for a page still open from the release before.
+    const added = new Set(['paymentsToXero', 'trackingCategoryId', 'trackingGroups', 'itemCodes']);
+    const before = Object.fromEntries(Object.entries(everything).filter(([key]) => !added.has(key)));
+    await expect(check(before)).resolves.toBeInstanceOf(SaveXeroSettingsDto);
+  });
+
+  it('refuses what it does not know, and the wrong kind of answer', async () => {
+    await expect(check({ ...everything, somethingElse: 1 })).rejects.toThrow();
+    await expect(check({ ...everything, paymentsToXero: 'no' })).rejects.toThrow();
+    await expect(check({ ...everything, trackingGroups: 'Air Filter Income' })).rejects.toThrow();
   });
 });
 

@@ -21,6 +21,14 @@ export class SaveXeroSettingsDto {
   @IsObject() paymentAccounts!: Record<string, string>;
   /** The expense account bad debts are written off to (2026-11-10). */
   @IsOptional() @IsString() @MaxLength(64) badDebtAccountId?: string | null;
+  /** Off, payments stay out of Xero (2026-11-11). */
+  @IsOptional() @IsBoolean() paymentsToXero?: boolean;
+  /** The tracking category lines are tagged in for the visit's technician (2026-11-11). */
+  @IsOptional() @IsString() @MaxLength(64) trackingCategoryId?: string | null;
+  /** Product or service name key to the start of its tracking option, e.g. "HVAC Inspection Income". */
+  @IsOptional() @IsObject() trackingGroups?: Record<string, string>;
+  /** Product or service name key to its Xero item's code. */
+  @IsOptional() @IsObject() itemCodes?: Record<string, string>;
   @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
 }
 
