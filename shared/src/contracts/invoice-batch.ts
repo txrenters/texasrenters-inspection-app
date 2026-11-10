@@ -6,7 +6,11 @@
  */
 import type { InvoiceLineInput, InvoiceProperty } from './invoices.js';
 
-/** The most one batch makes. A cap on a mistake, and on what one request holds a lock for. */
+/**
+ * The most visits one batch takes. A cap on a mistake, and on what one request
+ * holds a lock for. A visit whose services go to several companies makes one
+ * invoice for each (2026-11-10).
+ */
 export const MAX_BATCH_INVOICES = 100;
 
 /** The most a list of visits to invoice reaches back, in days. */
@@ -26,6 +30,20 @@ export interface UninvoicedVisit {
   totalCents: number;
   /** Why it cannot be invoiced as it stands, in words; null when it can. */
   problem: string | null;
+  /**
+   * The invoices it makes, one per company (2026-11-10): each company's lines,
+   * and the lines that go to no company on one of their own.
+   */
+  invoices: UninvoicedPart[];
+}
+
+/** One company's invoice for a visit, as the batch would make it. */
+export interface UninvoicedPart {
+  xeroTenantId: string | null;
+  /** The company's name, as Xero has it; null for none. */
+  company: string | null;
+  lineItems: InvoiceLineInput[];
+  totalCents: number;
 }
 
 export interface UninvoicedVisitList {
@@ -48,7 +66,8 @@ export interface BatchInvoiceInput {
 }
 
 export interface BatchInvoiceResult {
-  created: { inspectionId: string; invoiceId: string; number: string | null; totalCents: number }[];
+  /** Each invoice made, a visit's one after another; `company` is the name of the organisation it goes to, null for none. */
+  created: { inspectionId: string; invoiceId: string; number: string | null; totalCents: number; company?: string | null }[];
   /** Each visit not invoiced, and why, in words. */
   skipped: { inspectionId: string; reason: string }[];
 }

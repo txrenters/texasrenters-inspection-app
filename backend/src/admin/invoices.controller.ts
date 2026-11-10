@@ -6,6 +6,7 @@ import {
   MAX_BATCH_INVOICES,
   MAX_INVOICE_CENTS,
   MAX_INVOICE_LINES,
+  MAX_INVOICES_PER_VISIT,
   PAYMENT_METHODS,
   type InvoiceFilter,
   type PaymentMethod,
@@ -38,6 +39,11 @@ import { InvoicesService } from './invoices.service';
 
 const trimmed = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
+/** A Xero organisation's tenant id: a GUID. */
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** One company's invoices, or `none` for those of no company. */
+const COMPANY = /^(none|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
 export class InvoiceListQueryDto {
   @IsOptional() @IsIn(INVOICE_FILTERS) filter?: InvoiceFilter;
   @IsOptional() @Transform(trimmed) @IsString() @MaxLength(120) search?: string;
@@ -47,6 +53,7 @@ export class InvoiceListQueryDto {
   @IsOptional() @IsUUID() inspectionId?: string;
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedFrom?: string;
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedTo?: string;
+  @IsOptional() @Matches(COMPANY) company?: string;
 }
 
 /** A finished visit's draft, or a property's when no visit covers the work. One of the two. */
@@ -104,6 +111,36 @@ export class CreateInvoiceDto {
   @ValidateNested({ each: true })
   @Type(() => InvoiceLineDto)
   lineItems!: InvoiceLineDto[];
+  @IsOptional() @IsString() @MaxLength(2000) clientMessage?: string;
+  /** The company's books it goes to; null for none, left out for its lines' company. */
+  @IsOptional() @Matches(TENANT_ID) xeroTenantId?: string | null;
+  @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
+}
+
+/** One company's invoice on a form that makes one per company (2026-11-10). */
+export class InvoicePartDto {
+  @IsOptional() @Matches(TENANT_ID) xeroTenantId?: string | null;
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_INVOICE_LINES)
+  @ValidateNested({ each: true })
+  @Type(() => InvoiceLineDto)
+  lineItems!: InvoiceLineDto[];
+}
+
+export class CreateInvoicesDto {
+  @IsOptional() @IsUUID() inspectionId?: string;
+  @IsOptional() @IsUUID() propertyId?: string;
+  @IsOptional() @IsBoolean() asDraft?: boolean;
+  @IsString() @MinLength(1) @MaxLength(200) subject!: string;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedOn!: string;
+  @IsInt() @Min(0) @Max(365) paymentTermsDays!: number;
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_INVOICES_PER_VISIT)
+  @ValidateNested({ each: true })
+  @Type(() => InvoicePartDto)
+  invoices!: InvoicePartDto[];
   @IsOptional() @IsString() @MaxLength(2000) clientMessage?: string;
   @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
 }
@@ -185,6 +222,13 @@ export class InvoicesController {
   @RequirePermissions('invoices:read', 'invoices:manage')
   create(@Req() request: AuthenticatedRequest, @Body() body: CreateInvoiceDto) {
     return this.service.create(request.user, body);
+  }
+
+  /** One invoice per company from one form (2026-11-10): each with its own lines, made together or not at all. */
+  @Post('per-company')
+  @RequirePermissions('invoices:read', 'invoices:manage')
+  createPerCompany(@Req() request: AuthenticatedRequest, @Body() body: CreateInvoicesDto) {
+    return this.service.createPerCompany(request.user, body);
   }
 
   @Post(':invoiceId/payments')

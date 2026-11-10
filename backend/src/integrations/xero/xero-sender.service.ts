@@ -95,16 +95,29 @@ export class XeroSenderService {
   async view(organizationId: string, tenantId: string): Promise<XeroSendingView> {
     const state = await this.state(organizationId, tenantId);
     const tenant = state.tenantId;
-    const [sent, failed, notYet, failures] = await Promise.all([
+    const [sent, failed, notYet, noCompany, failures] = await Promise.all([
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'SENT' } }) : 0,
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'FAILED' } }) : 0,
       tenant && state.sendFrom
         ? this.prisma.invoice.count({
             where: {
               organizationId,
+              // Only this organisation's invoices (2026-11-10): each company's go to its own books.
+              xeroTenantId: tenant,
               issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
               status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
               OR: [{ xeroSync: { is: null } }, { xeroSync: { xeroTenantId: { not: tenant } } }],
+            },
+          })
+        : 0,
+      // What belongs to no company is sent nowhere: said, so it is not taken for sent.
+      tenant && state.sendFrom
+        ? this.prisma.invoice.count({
+            where: {
+              organizationId,
+              xeroTenantId: null,
+              issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
+              status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
             },
           })
         : 0,
@@ -130,7 +143,7 @@ export class XeroSenderService {
       changedAt: state.row?.sendingChangedAt?.toISOString() ?? null,
       canWrite: state.canWrite,
       blockers: state.blockers,
-      counts: { sent, failed, notYet },
+      counts: { sent, failed, notYet, noCompany },
       lastRunAt: state.row?.lastRunAt?.toISOString() ?? null,
       lastRunProblem: state.row?.lastRunProblem ?? null,
       failures: failures.map((row) => ({
@@ -437,10 +450,11 @@ export class XeroSenderService {
   }
 
   /**
-   * The invoices worth looking at: issued from the start date, not drafts,
-   * and either never sent to this organisation, changed since last seen, or
-   * due a retry. A voided one is looked at only once it has a row -- one that
-   * never reached Xero is not sent to be voided. Oldest first, at most 200.
+   * The invoices worth looking at: this organisation's (2026-11-10), issued
+   * from the start date, not drafts, and either never sent to it, changed since
+   * last seen, or due a retry. A voided one is looked at only once it has a
+   * row -- one that never reached Xero is not sent to be voided. Oldest first,
+   * at most 200.
    */
   private async candidates(organizationId: string, tenantId: string, sendFrom: string): Promise<string[]> {
     const [, rows] = await this.prisma.$transaction([
@@ -451,6 +465,7 @@ export class XeroSenderService {
           FROM "Invoice" i
           LEFT JOIN "XeroInvoiceSync" s ON s."invoiceId" = i."id"
          WHERE i."organizationId" = ${organizationId}::uuid
+           AND i."xeroTenantId" = ${tenantId}
            AND i."issuedOn" >= ${sendFrom}::date
            AND i."status" <> 'DRAFT'
            AND (
@@ -465,9 +480,9 @@ export class XeroSenderService {
     return (rows as { id: string }[]).map((row) => row.id);
   }
 
-  /** Everything a run and the page need: the organisation's switch and choices, the sign-in, the others connected. No call to Xero. */
+  /** Everything a run and the page need: the organisation's switch and choices, and the sign-in. No call to Xero. */
   private async state(organizationId: string, tenantId: string) {
-    const [row, connection, organisation, connectedCount, settings] = await Promise.all([
+    const [row, connection, organisation, settings] = await Promise.all([
       this.prisma.xeroSettings.findUnique({
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
         select: { sendingEnabled: true, sendingChangedAt: true, lastRunAt: true, lastRunProblem: true, sendFrom: true },
@@ -477,7 +492,6 @@ export class XeroSenderService {
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
         select: { name: true, status: true, invoiceRemindersOn: true, accounts: true },
       }),
-      this.prisma.xeroOrganisation.count({ where: { organizationId, status: 'CONNECTED' } }),
       this.settings.read(organizationId, tenantId),
     ]);
     const connected = connection?.status === 'CONNECTED' && organisation?.status === 'CONNECTED';
@@ -494,7 +508,6 @@ export class XeroSenderService {
         scopes,
         settingsReady: settings.ready,
         invoiceRemindersOn: connected ? (organisation?.invoiceRemindersOn ?? null) : null,
-        organisationsConnected: connectedCount,
       }),
     };
   }

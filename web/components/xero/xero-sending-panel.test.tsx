@@ -24,7 +24,7 @@ const OFF: XeroSendingView = {
   changedAt: null,
   canWrite: true,
   blockers: [],
-  counts: { sent: 0, failed: 0, notYet: 18 },
+  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0 },
   lastRunAt: null,
   lastRunProblem: null,
   failures: [],
@@ -34,7 +34,7 @@ const ON: XeroSendingView = {
   ...OFF,
   enabled: true,
   changedAt: '2026-12-02T15:00:00.000Z',
-  counts: { sent: 16, failed: 2, notYet: 0 },
+  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3 },
   lastRunAt: '2026-12-02T17:50:00.000Z',
   failures: [
     {

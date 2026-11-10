@@ -28,6 +28,8 @@ export interface ConsoleInvoice {
   asDraft: boolean;
   /** The batch it was made in, for its record. */
   batchKey?: string;
+  /** The company's books it goes to (2026-11-10): an organisation of the office, decided by the caller; null or left out for none. */
+  xeroTenantId?: string | null;
 }
 
 const dateOf = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -63,6 +65,7 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
       contractDisclaimer: invoice.contractDisclaimer ?? null,
       createdById: user.id,
       clientRequestId: invoice.clientRequestId,
+      xeroTenantId: invoice.xeroTenantId ?? null,
       lines: {
         create: lines.map((line, position) => ({
           organizationId: user.organizationId,
@@ -91,6 +94,7 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
         issuedOn: invoice.issuedOn,
         paymentTermsDays: invoice.paymentTermsDays,
         clientRequestId: invoice.clientRequestId,
+        xeroTenantId: invoice.xeroTenantId ?? null,
         ...(invoice.batchKey ? { batch: invoice.batchKey } : {}),
       },
     },

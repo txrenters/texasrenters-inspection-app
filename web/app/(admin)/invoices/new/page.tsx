@@ -4,12 +4,15 @@ import {
   PAYMENT_TERMS,
   dueOnFor,
   formatMoney,
+  invoiceCompany,
   invoiceLinesProblem,
   invoiceTotals,
   type InvoiceDraft,
+  type InvoiceDraftProduct,
   type InvoiceLineInput,
   type InvoiceDetail,
 } from '@texasrenters/shared';
+import { Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useId, useMemo, useState } from 'react';
@@ -36,6 +39,12 @@ import { usePropertyOptions } from '@/lib/queries';
  * visit covers, found by its address, with the lines typed. Made out to the
  * property, every bit of it the office's to change, kept as a draft or made
  * owed at once and numbered next in the office's sequence.
+ *
+ * One invoice per company (2026-11-10, phase 3 of the multi-company plan):
+ * each product or service goes to the company's books the office chose for
+ * it, so a visit whose services go to two companies makes two invoices, each
+ * with its own lines, made together. An invoice no product decides goes to
+ * the company chosen for it.
  */
 export default function NewInvoicePage() {
   const search = useSearchParams();
@@ -60,17 +69,22 @@ export default function NewInvoicePage() {
   return <InvoiceEditor draft={start} key={`${draft.data.inspection?.id ?? draft.data.property?.id}:${similarId}`} />;
 }
 
-/** A draft that starts as another invoice did: its subject, its lines at their prices, and its message. */
+/** A draft that starts as another invoice did: its subject, its lines at their prices, its company and its message. */
 function likeInvoice(draft: InvoiceDraft, invoice: InvoiceDetail): InvoiceDraft {
   return {
     ...draft,
     subject: invoice.subject,
-    lineItems: invoice.lineItems.map((line) => ({
-      name: line.name,
-      description: line.description,
-      quantity: line.quantity,
-      unitPriceCents: line.unitPriceCents,
-    })),
+    invoices: [
+      {
+        xeroTenantId: invoice.company?.tenantId ?? null,
+        lineItems: invoice.lineItems.map((line) => ({
+          name: line.name,
+          description: line.description,
+          quantity: line.quantity,
+          unitPriceCents: line.unitPriceCents,
+        })),
+      },
+    ],
     clientMessage: invoice.clientMessage ?? draft.clientMessage,
   };
 }
@@ -125,6 +139,16 @@ function PropertyStep({ onChoose }: { onChoose: (propertyId: string) => void }) 
   );
 }
 
+/** One company's invoice as it is being made: the company chosen for it, used when no line's product says. */
+interface Part {
+  key: string;
+  chosen: string | null;
+  lines: EditLine[];
+}
+
+/** No company: the value the company select gives it. */
+const NO_COMPANY = 'none';
+
 function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   const id = useId();
   const router = useRouter();
@@ -133,45 +157,107 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   const [issuedOn, setIssuedOn] = useState(draft.issuedOn);
   const [terms, setTerms] = useState(String(draft.paymentTermsDays));
   const [message, setMessage] = useState(draft.clientMessage);
-  const [lines, setLines] = useState<EditLine[]>(() => draft.lineItems.map(toEditLine));
-  // One key for this form: a double click or a resend makes one invoice.
+  const [parts, setParts] = useState<Part[]>(() =>
+    draft.invoices.map((part, index) => ({ key: `part-${index}`, chosen: part.xeroTenantId, lines: part.lineItems.map(toEditLine) })),
+  );
+  // One key for this form: a double click or a resend makes no invoice twice.
   const [requestId] = useState(newClientRequestId);
   const visit = draft.inspection;
+  const organisations = draft.organisations ?? [];
+  const connected = organisations.filter((organisation) => organisation.connected);
+  // The companies are asked about only once Xero has an organisation.
+  const companies = organisations.length > 0;
+  const nameOf = (tenantId: string) => organisations.find((organisation) => organisation.tenantId === tenantId)?.name ?? 'an organisation no longer known';
+  const companyWords = (tenantId: string | null) => (tenantId ? nameOf(tenantId) : 'no company');
 
-  const read = readLines(lines);
-  // A new invoice's lines are its name, description, quantity and price; the
-  // service day and tax are an edit's.
-  const ready: InvoiceLineInput[] = read.ready.map(({ name, description, quantity, unitPriceCents }) => ({
-    name,
-    description,
-    quantity,
-    unitPriceCents,
-  }));
-  const problem = read.problem ?? (!subject.trim() ? 'Give the invoice a subject.' : invoiceLinesProblem(ready));
-  const { subtotalCents, totalCents } = invoiceTotals(ready);
+  // Each invoice as it would be sent: its lines, its company, and what stops it.
+  const read = parts.map((part) => {
+    const lines = readLines(part.lines);
+    // A new invoice's lines are its name, description, quantity and price; the
+    // service day and tax are an edit's.
+    const ready: InvoiceLineInput[] = lines.ready.map(({ name, description, quantity, unitPriceCents }) => ({ name, description, quantity, unitPriceCents }));
+    const said = invoiceCompany(ready, draft.products, undefined, nameOf);
+    const company = said.xeroTenantId ?? part.chosen;
+    return { part, ready, said: said.xeroTenantId, company, problem: lines.problem ?? said.problem ?? invoiceLinesProblem(ready), ...invoiceTotals(ready) };
+  });
+  const twice = read.find((invoice, index) => read.findIndex((other) => other.company === invoice.company) !== index);
+  const partProblem = read.find((invoice) => invoice.problem);
+  const problem = !subject.trim()
+    ? 'Give the invoice a subject.'
+    : partProblem
+      ? read.length > 1
+        ? `The invoice for ${companyWords(partProblem.company)}: ${partProblem.problem}`
+        : partProblem.problem
+      : twice
+        ? `Two invoices go to ${companyWords(twice.company)}: put their lines on one.`
+        : null;
+  const totalCents = read.reduce((sum, invoice) => sum + invoice.totalCents, 0);
+  const several = read.length > 1;
   const cancelHref = visit ? `/inspections/${visit.id}` : '/invoices';
+  // Another company's invoice: one connected that has none on this form yet.
+  const others = connected.filter((organisation) => !read.some((invoice) => invoice.company === organisation.tenantId));
+  // An invoice the visit has already that no invoice here goes with: said above them all.
+  const elsewhere = companies ? draft.existing.filter((row) => !read.some((invoice) => invoice.company === row.xeroTenantId)) : draft.existing;
+
+  const change = (key: string, patch: Partial<Part>) => setParts((current) => current.map((part) => (part.key === key ? { ...part, ...patch } : part)));
+  const addPart = (tenantId: string) =>
+    setParts((current) => {
+      const used = new Set(current.map((part) => part.key));
+      let next = current.length;
+      while (used.has(`part-${next}`)) next += 1;
+      return [...current, { key: `part-${next}`, chosen: tenantId, lines: [] }];
+    });
+
+  const madeToast = (asDraft: boolean, made: { number: string | null; totalCents: number; clientName: string; company?: { name: string } | null }[]) => {
+    if (made.length === 1) {
+      const invoice = made[0]!;
+      toast.success(asDraft ? 'Draft saved' : invoice.number ? `Invoice #${invoice.number} created` : 'Invoice created', {
+        description: `${formatMoney(invoice.totalCents)} to ${invoice.clientName}.`,
+      });
+      return;
+    }
+    toast.success(asDraft ? `${made.length} drafts saved` : `${made.length} invoices created`, {
+      description: made
+        .map((invoice) => `${invoice.number ? `#${invoice.number}` : 'Draft'} ${invoice.company?.name ?? 'no company'} ${formatMoney(invoice.totalCents)}`)
+        .join(' · '),
+    });
+  };
 
   const create = (asDraft: boolean) => {
     if (problem) return;
-    actions.create.mutate(
-      {
-        ...(visit ? { inspectionId: visit.id } : { propertyId: draft.property?.id }),
-        ...(asDraft ? { asDraft: true } : {}),
-        subject: subject.trim(),
-        issuedOn,
-        paymentTermsDays: Number(terms),
-        lineItems: ready,
-        ...(message.trim() ? { clientMessage: message.trim() } : {}),
-        clientRequestId: requestId,
-      },
-      {
-        onSuccess: (invoice) => {
-          toast.success(asDraft ? 'Draft saved' : invoice.number ? `Invoice #${invoice.number} created` : 'Invoice created', {
-            description: `${formatMoney(invoice.totalCents)} to ${invoice.clientName}.`,
-          });
-          router.push(`/invoices/${invoice.id}`);
+    const form = {
+      ...(visit ? { inspectionId: visit.id } : { propertyId: draft.property?.id }),
+      ...(asDraft ? { asDraft: true } : {}),
+      subject: subject.trim(),
+      issuedOn,
+      paymentTermsDays: Number(terms),
+      ...(message.trim() ? { clientMessage: message.trim() } : {}),
+      clientRequestId: requestId,
+    };
+    const failed = (error: Error) => toast.error(several ? 'No invoice was created' : 'The invoice was not created', { description: error.message });
+    if (!several) {
+      const only = read[0]!;
+      actions.create.mutate(
+        { ...form, lineItems: only.ready, ...(only.company ? { xeroTenantId: only.company } : {}) },
+        {
+          onSuccess: (invoice) => {
+            madeToast(asDraft, [invoice]);
+            router.push(`/invoices/${invoice.id}`);
+          },
+          onError: failed,
         },
-        onError: (error) => toast.error('The invoice was not created', { description: error.message }),
+      );
+      return;
+    }
+    actions.createPerCompany.mutate(
+      { ...form, invoices: read.map((invoice) => ({ xeroTenantId: invoice.company, lineItems: invoice.ready })) },
+      {
+        onSuccess: ({ invoices }) => {
+          madeToast(asDraft, invoices);
+          // The visit lists its invoices; a property's open the first.
+          router.push(visit ? `/inspections/${visit.id}` : `/invoices/${invoices[0]!.id}`);
+        },
+        onError: failed,
       },
     );
   };
@@ -205,15 +291,18 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         title="New invoice"
       />
 
-      {draft.existing ? (
+      {elsewhere.length ? (
         <div className="border-warning/30 bg-warning/10 mb-4 flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm" role="status">
           This visit already has an invoice:
-          <Link className="font-semibold underline underline-offset-2" href={`/invoices/${draft.existing.id}`}>
-            {draft.existing.number ? `#${draft.existing.number}` : 'a draft'}
-          </Link>
-          <InvoiceStatusBadge status={draft.existing.status} />
+          <Existing invoices={elsewhere} />
           Make a second one only if it bills something the first does not.
         </div>
+      ) : null}
+
+      {several ? (
+        <p className="text-muted-foreground mb-4 text-sm" role="status">
+          One invoice for each company’s books: {read.length} invoices, created together.
+        </p>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -245,15 +334,89 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         </div>
       </div>
 
-      <section aria-label="Products and services" className="bg-card mt-6 rounded-lg border">
-        <LineItemsEditor lines={lines} onChange={setLines} products={draft.products} />
-        <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 border-t px-4 py-3 text-sm sm:ml-auto sm:w-72">
-          <dt className="text-muted-foreground">Subtotal</dt>
-          <dd className="text-right tabular-nums">{formatMoney(subtotalCents)}</dd>
-          <dt className="text-heading text-base font-bold">Total</dt>
-          <dd className="text-heading text-right text-base font-bold tabular-nums">{formatMoney(totalCents)}</dd>
-        </dl>
-      </section>
+      {read.map((invoice) => {
+        const { part } = invoice;
+        const name = companyWords(invoice.company);
+        const existing = draft.existing.filter((row) => row.xeroTenantId === invoice.company);
+        return (
+          <section aria-label={companies ? `Invoice for ${name}` : 'Products and services'} className="bg-card mt-6 rounded-lg border" key={part.key}>
+            {companies ? (
+              <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
+                <h2 className="text-heading text-base font-bold">Invoice for {name}</h2>
+                {invoice.said ? (
+                  <span className="text-muted-foreground text-xs">Its products go to {nameOf(invoice.said)}’s books.</span>
+                ) : (
+                  <Select onValueChange={(value) => change(part.key, { chosen: value === NO_COMPANY ? null : value })} value={part.chosen ?? NO_COMPANY}>
+                    <SelectTrigger aria-label={`Company for the invoice for ${name}`} className="h-8 w-auto gap-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NO_COMPANY}>No company</SelectItem>
+                      {organisations
+                        .filter((organisation) => organisation.connected || organisation.tenantId === part.chosen)
+                        .map((organisation) => (
+                          <SelectItem key={organisation.tenantId} value={organisation.tenantId}>
+                            {organisation.connected ? organisation.name : `${organisation.name} (not connected)`}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {several ? (
+                  <Button
+                    aria-label={`Leave out the invoice for ${name}`}
+                    className="ml-auto"
+                    onClick={() => setParts((current) => current.filter((entry) => entry.key !== part.key))}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <Trash2Icon />
+                    Leave out
+                  </Button>
+                ) : null}
+                {!invoice.company ? (
+                  <p className="text-muted-foreground w-full text-xs">An invoice that belongs to no company is never sent to Xero.</p>
+                ) : null}
+                {existing.length ? (
+                  <p className="border-warning/30 bg-warning/10 flex w-full flex-wrap items-center gap-2 rounded-md border p-2 text-xs" role="status">
+                    This visit already has an invoice for {name}:
+                    <Existing invoices={existing} />
+                    Make a second one only if it bills something the first does not.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            <LineItemsEditor
+              lines={part.lines}
+              onChange={(lines) => change(part.key, { lines })}
+              products={productsFor(draft.products, invoice.company, companies)}
+            />
+            <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 border-t px-4 py-3 text-sm sm:ml-auto sm:w-72">
+              <dt className="text-muted-foreground">Subtotal</dt>
+              <dd className="text-right tabular-nums">{formatMoney(invoice.subtotalCents)}</dd>
+              <dt className="text-heading text-base font-bold">Total</dt>
+              <dd className="text-heading text-right text-base font-bold tabular-nums">{formatMoney(invoice.totalCents)}</dd>
+            </dl>
+          </section>
+        );
+      })}
+
+      {companies && others.length ? (
+        <div className="mt-3 flex justify-end">
+          <Select onValueChange={addPart} value="">
+            <SelectTrigger aria-label="Add an invoice for another company" className="h-8 w-auto gap-2">
+              <SelectValue placeholder="Add an invoice for another company" />
+            </SelectTrigger>
+            <SelectContent>
+              {others.map((organisation) => (
+                <SelectItem key={organisation.tenantId} value={organisation.tenantId}>
+                  {organisation.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       <Field className="mt-6">
         <FieldLabel htmlFor={`${id}-message`}>Client message</FieldLabel>
@@ -273,13 +436,43 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         <Button asChild variant="secondary">
           <Link href={cancelHref}>Cancel</Link>
         </Button>
-        <Button disabled={Boolean(problem) || actions.create.isPending} onClick={() => create(true)} variant="outline">
-          Save as draft
+        <Button
+          disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending}
+          onClick={() => create(true)}
+          variant="outline"
+        >
+          {several ? 'Save as drafts' : 'Save as draft'}
         </Button>
-        <Button disabled={Boolean(problem) || actions.create.isPending} onClick={() => create(false)}>
-          {actions.create.isPending ? 'Creating…' : `Create invoice · ${formatMoney(totalCents)}`}
+        <Button disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending} onClick={() => create(false)}>
+          {actions.create.isPending || actions.createPerCompany.isPending
+            ? 'Creating…'
+            : several
+              ? `Create ${read.length} invoices · ${formatMoney(totalCents)}`
+              : `Create invoice · ${formatMoney(totalCents)}`}
         </Button>
       </div>
+    </>
+  );
+}
+
+/** The products a company's invoice is offered: its own and those of no company; every one while it has no company. */
+function productsFor(products: readonly InvoiceDraftProduct[], company: string | null, companies: boolean) {
+  if (!companies || !company) return products;
+  return products.filter((product) => !product.xeroTenantId || product.xeroTenantId === company);
+}
+
+/** The invoices a visit has already, each opening it. */
+function Existing({ invoices }: { invoices: InvoiceDraft['existing'] }) {
+  return (
+    <>
+      {invoices.map((invoice) => (
+        <span className="inline-flex items-center gap-1.5" key={invoice.id}>
+          <Link className="font-semibold underline underline-offset-2" href={`/invoices/${invoice.id}`}>
+            {invoice.number ? `#${invoice.number}` : 'a draft'}
+          </Link>
+          <InvoiceStatusBadge status={invoice.status} />
+        </span>
+      ))}
     </>
   );
 }

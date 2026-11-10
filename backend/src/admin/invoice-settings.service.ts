@@ -27,6 +27,7 @@ import {
   defaultsFrom,
   fallbackDefaults,
   listedProducts,
+  officeOrganisations,
   readInvoiceSettings,
   receiptBrand,
 } from './invoice-settings';
@@ -85,12 +86,8 @@ export class InvoiceSettingsService {
       billedPrices(this.prisma, org, businessDate()),
       // Before the cutover every file must be kept (phase 7).
       fileCopyStatus(this.prisma, org),
-      // The companies' books a product or service can go to. CONNECTED sorts before REMOVED.
-      this.prisma.xeroOrganisation.findMany({
-        where: { organizationId: org },
-        orderBy: [{ status: 'asc' }, { name: 'asc' }],
-        select: { xeroTenantId: true, name: true, status: true },
-      }),
+      // The companies' books a product or service can go to.
+      officeOrganisations(this.prisma, org),
     ]);
     const listed = new Set(products.map((product) => product.nameKey));
     const serverBrand = receiptBrand();
@@ -102,7 +99,7 @@ export class InvoiceSettingsService {
       updatedAt: settings.updatedAt?.toISOString() ?? null,
       products: products.map(view),
       billed: billed.filter((price) => !listed.has(productNameKey(price.name))),
-      organisations: organisations.map((row) => ({ tenantId: row.xeroTenantId, name: row.name, connected: row.status === 'CONNECTED' })),
+      organisations,
       files,
     };
   }

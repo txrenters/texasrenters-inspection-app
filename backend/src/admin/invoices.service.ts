@@ -1,8 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  MAX_INVOICES_PER_VISIT,
   PAYMENT_TERMS,
   REPORTABLE_VISIT_SERVICES,
   acceptsPayment,
+  invoiceCompany,
+  splitByCompany,
   invoiceLinesProblem,
   invoiceStatusOn,
   isFinishedStatus,
@@ -10,6 +13,8 @@ import {
   paymentProblem,
   paymentTermsLabel,
   type CreateInvoiceInput,
+  type CreateInvoicesInput,
+  type CreatedInvoices,
   type InvoiceBucket,
   type InvoiceCustomField,
   type InvoiceDeliveryKind,
@@ -42,7 +47,16 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { defaultRecipients } from './invoice-email-settings';
 import { insertConsoleInvoice } from './invoice-insert';
-import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officePrices } from './invoice-settings';
+import {
+  invoiceWritesOff,
+  invoiceWritesOn,
+  newInvoiceDefaults,
+  officeBrand,
+  officeOrganisations,
+  officePrices,
+  organisationName,
+  productCompanies,
+} from './invoice-settings';
 
 // Kept exported from here for the callers that already import them (phase 6 moved them).
 export { priceList, receiptBrand } from './invoice-settings';
@@ -93,6 +107,8 @@ const summarySelect = {
   balanceCents: true,
   jobberWebUrl: true,
   propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
+  // The company's books it goes to (2026-11-10).
+  xeroOrganisation: { select: { xeroTenantId: true, name: true } },
 } satisfies Prisma.InvoiceSelect;
 
 const detailSelect = {
@@ -275,6 +291,7 @@ function summary(row: SummaryRow, today: string): InvoiceSummary {
     totalCents: row.totalCents,
     balanceCents: row.balanceCents,
     jobberUrl: row.jobberWebUrl,
+    company: row.xeroOrganisation ? { tenantId: row.xeroOrganisation.xeroTenantId, name: row.xeroOrganisation.name } : null,
   };
 }
 
@@ -448,6 +465,8 @@ export interface InvoiceListQuery {
   /** Issued on or after, and on or before (2026-11-09): Jobber's date filter. */
   issuedFrom?: string;
   issuedTo?: string;
+  /** One company's invoices (2026-11-10): an organisation's tenant id, or `none` for those that belong to no company. */
+  company?: string;
 }
 
 export interface PaymentListQuery {
@@ -510,6 +529,8 @@ export class InvoicesService {
       organizationId: user.organizationId,
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.inspectionId ? { inspectionId: query.inspectionId } : {}),
+      // One company's books, or those of none (2026-11-10).
+      ...(query.company ? { xeroTenantId: query.company === 'none' ? null : query.company } : {}),
     };
     const issuedWithin = daysWhere(query.issuedFrom, query.issuedTo);
     const where: Prisma.InvoiceWhereInput = {
@@ -523,7 +544,7 @@ export class InvoicesService {
       ],
     });
 
-    const [rows, total, byStatus, pastDue, last30, previous30, synced, connection] = await Promise.all([
+    const [rows, total, byStatus, pastDue, last30, previous30, synced, connection, organisations] = await Promise.all([
       this.prisma.invoice.findMany({
         where,
         orderBy: [{ issuedOn: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
@@ -550,6 +571,7 @@ export class InvoicesService {
         where: { organizationId: user.organizationId },
         select: { status: true, invoiceReadProblem: true, invoiceReadCheckedAt: true, invoiceReadCompletedAt: true },
       }),
+      officeOrganisations(this.prisma, user.organizationId),
     ]);
 
     const status = (key: InvoiceStatus) => byStatus.find((row) => row.status === key);
@@ -588,6 +610,7 @@ export class InvoicesService {
       syncedAt: synced._max.syncedAt?.toISOString() ?? null,
       jobberRead: jobberRead(connection),
       writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
+      organisations,
     };
   }
 
@@ -612,24 +635,29 @@ export class InvoicesService {
   /**
    * What a finished visit would be invoiced for, before anybody edits it; or,
    * for a property no visit covers (2026-11-06), an invoice made out to it with
-   * no lines yet.
+   * no lines yet. Split one invoice per company (2026-11-10): each company's
+   * services on its own, and those that go to no company on one of their own.
    */
   async draft(user: AuthenticatedUser, target: { inspectionId?: string; propertyId?: string }): Promise<InvoiceDraft> {
     const inspection = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
-    const [products, defaults, existing] = await Promise.all([
+    const [products, defaults, existing, companies, organisations] = await Promise.all([
       officePrices(this.prisma, user.organizationId, today),
       // The office's settings, else its own wording and terms from the latest invoice it issued.
       newInvoiceDefaults(this.prisma, user.organizationId),
       inspection
-        ? this.prisma.invoice.findFirst({
+        ? this.prisma.invoice.findMany({
             where: { organizationId: user.organizationId, inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
             orderBy: { createdAt: 'desc' },
-            select: { id: true, number: true, status: true, dueOn: true },
+            take: MAX_INVOICES_PER_VISIT,
+            select: { id: true, number: true, status: true, dueOn: true, xeroTenantId: true },
           })
-        : null,
+        : [],
+      productCompanies(this.prisma, user.organizationId),
+      officeOrganisations(this.prisma, user.organizationId),
     ]);
+    const parts = splitByCompany(inspection ? draftLines(servicesDone(inspection.servicesReport), products) : [], companies);
     return {
       inspection: inspection
         ? {
@@ -644,12 +672,16 @@ export class InvoicesService {
       subject: defaults.subject,
       issuedOn: today,
       paymentTermsDays: defaults.termsDays,
-      lineItems: inspection ? draftLines(servicesDone(inspection.servicesReport), products) : [],
+      invoices: parts.length ? parts : [{ xeroTenantId: null, lineItems: [] }],
       clientMessage: defaults.clientMessage ?? '',
-      existing: existing
-        ? { id: existing.id, number: existing.number, status: invoiceStatusOn(existing.status, day(existing.dueOn), today) }
-        : null,
+      existing: existing.map((row) => ({
+        id: row.id,
+        number: row.number,
+        status: invoiceStatusOn(row.status, day(row.dueOn), today),
+        xeroTenantId: row.xeroTenantId,
+      })),
       products,
+      organisations,
     };
   }
 
@@ -823,59 +855,134 @@ export class InvoicesService {
    * property no visit covers (2026-11-06) -- its lines priced as entered and
    * its totals worked out here, never taken from the browser. Numbered next in
    * the office's sequence, unless it is kept as a draft. One per key: a resend
-   * answers with the invoice already made.
+   * answers with the invoice already made. It goes to its lines' one company,
+   * else the one chosen for it, else none (2026-11-10); two companies' lines
+   * are refused.
    */
   async create(user: AuthenticatedUser, input: CreateInvoiceInput): Promise<InvoiceDetail> {
+    const { lineItems, xeroTenantId, ...form } = input;
+    const [made] = await this.make(user, form, [{ xeroTenantId, lineItems, clientRequestId: input.clientRequestId }]);
+    return this.one(user, made!.id);
+  }
+
+  /**
+   * The invoices a visit or a property gets from one form (2026-11-10, phase 3
+   * of the multi-company plan): one per company, each with its own lines and
+   * number, made together in one write or not at all. The form's key keys each
+   * of them (`key:1`, `key:2`, ...), so a resend makes none of them twice.
+   */
+  async createPerCompany(user: AuthenticatedUser, input: CreateInvoicesInput): Promise<CreatedInvoices> {
+    const { invoices, ...form } = input;
+    if (!invoices.length) throw new ApplicationError(422, 'INVOICE_INVALID', 'Add at least one line.');
+    if (invoices.length > MAX_INVOICES_PER_VISIT)
+      throw new ApplicationError(422, 'INVOICE_INVALID', `One form makes at most ${MAX_INVOICES_PER_VISIT} invoices.`);
+    const made = await this.make(
+      user,
+      form,
+      invoices.map((part, index) => ({ ...part, clientRequestId: `${input.clientRequestId}:${index + 1}` })),
+    );
+    const today = businessDate();
+    const rows = await this.prisma.invoice.findMany({
+      where: { organizationId: user.organizationId, id: { in: made.map((row) => row.id) } },
+      select: summarySelect,
+    });
+    return { invoices: made.map((row) => summary(rows.find((candidate) => candidate.id === row.id)!, today)) };
+  }
+
+  /**
+   * Makes each invoice asked for, in one transaction, after checking all of
+   * them: the form's subject, day and terms; each invoice's lines and its one
+   * company; no company twice. Nothing is made unless all of it can be. A
+   * resend answers with what the first request made.
+   */
+  private async make(
+    user: AuthenticatedUser,
+    form: Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId'>,
+    parts: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[]; clientRequestId: string }[],
+  ): Promise<{ id: string }[]> {
     await this.requireWrites(user);
-    if (Boolean(input.inspectionId) === Boolean(input.propertyId))
+    if (Boolean(form.inspectionId) === Boolean(form.propertyId))
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Invoice either a finished visit or a property.');
-    const target = { inspectionId: input.inspectionId ?? null, propertyId: input.propertyId ?? null };
-    const prior = await this.byInvoiceKey(user, input.clientRequestId);
-    if (prior) return this.answerResend(user, prior, target);
+    const target = { inspectionId: form.inspectionId ?? null, propertyId: form.propertyId ?? null };
+    const keys = parts.map((part) => part.clientRequestId);
+    const prior = await this.byInvoiceKeys(user, keys);
+    if (prior.length) return this.answerResend(prior, keys, target);
 
     const today = businessDate();
-    const subject = input.subject.trim();
+    const subject = form.subject.trim();
     if (!subject) throw new ApplicationError(422, 'INVOICE_INVALID', 'Give the invoice a subject.');
-    if (!DAY.test(input.issuedOn) || Number.isNaN(dateOf(input.issuedOn).getTime()))
+    if (!DAY.test(form.issuedOn) || Number.isNaN(dateOf(form.issuedOn).getTime()))
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Give the day the invoice is issued.');
-    if (input.issuedOn > today)
+    if (form.issuedOn > today)
       throw new ApplicationError(422, 'INVOICE_INVALID', 'An invoice cannot be issued on a day still to come.');
-    if (!PAYMENT_TERMS.some((option) => option.days === input.paymentTermsDays))
+    if (!PAYMENT_TERMS.some((option) => option.days === form.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Pick the payment terms from the list.');
-    const lines = input.lineItems.map((line) => ({
-      name: line.name.trim(),
-      description: line.description?.trim() || null,
-      quantity: line.quantity,
-      unitPriceCents: line.unitPriceCents,
-    }));
-    const problem = invoiceLinesProblem(lines);
-    if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', problem);
+
+    // Which company's books each goes to: its lines' products, else the company chosen for it.
+    const [products, organisations] = await Promise.all([
+      productCompanies(this.prisma, user.organizationId),
+      officeOrganisations(this.prisma, user.organizationId),
+    ]);
+    const nameOf = organisationName(organisations);
+    const companyWords = (tenantId: string | null) => (tenantId ? nameOf(tenantId) : 'no company');
+    const companies = new Set<string | null>();
+    const invoices = parts.map((part) => {
+      const lines = part.lineItems.map((line) => ({
+        name: line.name.trim(),
+        description: line.description?.trim() || null,
+        quantity: line.quantity,
+        unitPriceCents: line.unitPriceCents,
+      }));
+      const company = invoiceCompany(lines, products, part.xeroTenantId, nameOf);
+      if (company.problem) throw new ApplicationError(422, 'INVOICE_INVALID', company.problem);
+      // A company chosen, rather than said by a line, is one connected now.
+      const chosen = !invoiceCompany(lines, products, undefined, nameOf).xeroTenantId;
+      if (chosen && company.xeroTenantId && !organisations.some((row) => row.tenantId === company.xeroTenantId && row.connected))
+        throw new ApplicationError(422, 'INVOICE_INVALID', 'That Xero organisation is not connected.');
+      const problem = invoiceLinesProblem(lines);
+      if (problem)
+        throw new ApplicationError(422, 'INVOICE_INVALID', parts.length > 1 ? `The invoice for ${companyWords(company.xeroTenantId)}: ${problem}` : problem);
+      if (companies.has(company.xeroTenantId))
+        throw new ApplicationError(422, 'INVOICE_INVALID', `Two invoices go to ${companyWords(company.xeroTenantId)}: put their lines on one.`);
+      companies.add(company.xeroTenantId);
+      return { lines, xeroTenantId: company.xeroTenantId, clientRequestId: part.clientRequestId };
+    });
 
     const visit = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = visit ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     try {
-      const created = await this.prisma.$transaction(async (tx) =>
-        insertConsoleInvoice(tx, user, {
-          subject,
-          clientName: place.clientName,
-          inspectionId: visit?.id ?? null,
-          propertywareBuildingId: place.building.id,
-          jobberJobId: visit?.jobberJobId ?? null,
-          issuedOn: input.issuedOn,
-          paymentTermsDays: input.paymentTermsDays,
-          lines,
-          clientMessage: input.clientMessage?.trim() || null,
-          contractDisclaimer: (await newInvoiceDefaults(tx, user.organizationId)).contractDisclaimer,
-          clientRequestId: input.clientRequestId,
-          asDraft: input.asDraft === true,
-        }),
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const { contractDisclaimer } = await newInvoiceDefaults(tx, user.organizationId);
+          const made: { id: string }[] = [];
+          for (const invoice of invoices)
+            made.push(
+              await insertConsoleInvoice(tx, user, {
+                subject,
+                clientName: place.clientName,
+                inspectionId: visit?.id ?? null,
+                propertywareBuildingId: place.building.id,
+                jobberJobId: visit?.jobberJobId ?? null,
+                issuedOn: form.issuedOn,
+                paymentTermsDays: form.paymentTermsDays,
+                lines: invoice.lines,
+                clientMessage: form.clientMessage?.trim() || null,
+                contractDisclaimer,
+                clientRequestId: invoice.clientRequestId,
+                asDraft: form.asDraft === true,
+                xeroTenantId: invoice.xeroTenantId,
+              }),
+            );
+          return made;
+        },
+        // Each invoice is a few writes: room for several on a slow connection.
+        { maxWait: 5_000, timeout: 20_000 },
       );
-      return this.one(user, created.id);
     } catch (error) {
-      // The same key, sent twice at once: the other request made it.
+      // The same key, sent twice at once: the other request made them.
       if (isUniqueViolation(error)) {
-        const made = await this.byInvoiceKey(user, input.clientRequestId);
-        if (made) return this.answerResend(user, made, target);
+        const made = await this.byInvoiceKeys(user, keys);
+        if (made.length) return this.answerResend(made, keys, target);
       }
       throw error;
     }
@@ -1041,10 +1148,10 @@ export class InvoicesService {
     return { building, clientName: building.addressLine1 ?? building.name };
   }
 
-  private byInvoiceKey(user: AuthenticatedUser, clientRequestId: string) {
-    return this.prisma.invoice.findFirst({
-      where: { organizationId: user.organizationId, clientRequestId },
-      select: { id: true, inspectionId: true, propertywareBuildingId: true },
+  private byInvoiceKeys(user: AuthenticatedUser, clientRequestIds: string[]) {
+    return this.prisma.invoice.findMany({
+      where: { organizationId: user.organizationId, clientRequestId: { in: clientRequestIds } },
+      select: { id: true, inspectionId: true, propertywareBuildingId: true, clientRequestId: true },
     });
   }
 
@@ -1055,17 +1162,24 @@ export class InvoicesService {
     });
   }
 
-  /** A resend of the same invoice answers with it; the same key for another visit or property is a mistake. */
+  /**
+   * A resend answers with the invoices the first request made, in the order
+   * asked for. The same key for another visit or property, or for another
+   * number of invoices, is a mistake.
+   */
   private answerResend(
-    user: AuthenticatedUser,
-    prior: { id: string; inspectionId: string | null; propertywareBuildingId: string | null },
+    prior: { id: string; inspectionId: string | null; propertywareBuildingId: string | null; clientRequestId: string | null }[],
+    keys: string[],
     target: { inspectionId: string | null; propertyId: string | null },
-  ) {
-    const same = target.inspectionId
-      ? prior.inspectionId === target.inspectionId
-      : prior.inspectionId === null && prior.propertywareBuildingId === target.propertyId;
-    if (!same) throw this.keyReused();
-    return this.one(user, prior.id);
+  ): { id: string }[] {
+    const made = keys.map((key) => prior.find((row) => row.clientRequestId === key));
+    const same = (row: (typeof prior)[number] | undefined) =>
+      row !== undefined &&
+      (target.inspectionId
+        ? row.inspectionId === target.inspectionId
+        : row.inspectionId === null && row.propertywareBuildingId === target.propertyId);
+    if (prior.length !== keys.length || !made.every(same)) throw this.keyReused();
+    return made.map((row) => ({ id: row!.id }));
   }
 
   private answerPaymentResend(user: AuthenticatedUser, prior: { invoiceId: string }, invoiceId: string) {

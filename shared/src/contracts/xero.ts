@@ -309,8 +309,10 @@ export interface XeroSendingView {
     sent: number;
     /** Refused by Xero, or held back by the console, with a reason. */
     failed: number;
-    /** From the start date, not drafts or voided, never sent yet. */
+    /** This organisation's, from the start date, not drafts or voided, never sent yet. */
     notYet: number;
+    /** The office's invoices from the start date that belong to no company (2026-11-10): never sent anywhere. */
+    noCompany: number;
   };
   lastRunAt: string | null;
   lastRunProblem: string | null;
@@ -324,14 +326,10 @@ export function xeroSendingBlockers(input: {
   scopes: readonly string[];
   settingsReady: boolean;
   invoiceRemindersOn: boolean | null;
-  /** Organisations connected now, this one included. */
-  organisationsConnected: number;
 }): string[] {
   if (!input.connected) return ['Connect Xero.'];
+  // Each organisation is sent only the invoices that go to it (2026-11-10), so several can send at once.
   const blockers: string[] = [];
-  // Until an invoice says which company it is for (the next phases), every one would go to every organisation.
-  if (input.organisationsConnected > 1)
-    blockers.push('Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.');
   if (!xeroCanWrite(input.scopes)) blockers.push('Connect again, so Xero lets the console write contacts and invoices.');
   if (!input.settingsReady) blockers.push('Finish “Before anything is sent”.');
   if (input.invoiceRemindersOn === true)

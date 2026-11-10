@@ -2,6 +2,7 @@
 
 import type { XeroSendingView } from '@texasrenters/shared';
 import { CircleAlertIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -82,6 +83,17 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
         <Count label="Not sent yet" value={view.counts.notYet} />
         <Count label="Refused" tone={view.counts.failed ? 'warning' : undefined} value={view.counts.failed} />
       </dl>
+      {view.counts.noCompany ? (
+        // Sent to no organisation (2026-11-10): not taken for sent.
+        <p className="text-muted-foreground text-sm">
+          {view.counts.noCompany.toLocaleString('en-US')} {view.counts.noCompany === 1 ? 'invoice belongs' : 'invoices belong'} to no company, and{' '}
+          {view.counts.noCompany === 1 ? 'is' : 'are'} not sent anywhere: choose each product’s organisation on{' '}
+          <Link className="underline underline-offset-2" href="/invoices/settings">
+            Invoices → Settings
+          </Link>
+          .
+        </p>
+      ) : null}
       <p className="text-muted-foreground text-sm">
         {view.lastRunAt ? `Last run ${formatRelative(view.lastRunAt)}.` : 'Not run yet.'}
         {view.lastRunProblem ? <span className="text-destructive block">{view.lastRunProblem}</span> : null}

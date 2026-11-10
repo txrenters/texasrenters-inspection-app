@@ -4,6 +4,7 @@ import {
   productNameKey,
   settingText,
   type BilledPrice,
+  type InvoiceProductOrganisation,
   type InvoiceSettingsValues,
   type NewInvoiceDefaults,
   type ReceiptBrand,
@@ -182,16 +183,44 @@ export async function officePrices(
   db: Db,
   organizationId: string,
   today: string,
-): Promise<{ name: string; unitPriceCents: number; description?: string | null }[]> {
+): Promise<{ name: string; unitPriceCents: number; description?: string | null; xeroTenantId?: string | null }[]> {
   const [listed, billed] = await Promise.all([listedProducts(db, organizationId), billedPrices(db, organizationId, today)]);
   const known = new Set(listed.map((product) => product.nameKey));
   return [
-    ...listed
-      .filter((product) => product.active)
-      .map((product) => ({ name: product.name, unitPriceCents: product.unitPriceCents, description: product.description })),
+    ...listed.filter((product) => product.active).map((product) => ({
+      name: product.name,
+      unitPriceCents: product.unitPriceCents,
+      description: product.description,
+      // The company's books it goes to (2026-11-10).
+      xeroTenantId: product.xeroTenantId,
+    })),
     ...billed.filter((price) => !known.has(productNameKey(price.name))),
   ];
 }
+
+/**
+ * Each product or service on the office's list and the company it goes to,
+ * set aside or not (2026-11-10): what decides an invoice's company. A name
+ * billed only in Jobber goes to none.
+ */
+export function productCompanies(db: Db, organizationId: string) {
+  return db.invoiceProduct.findMany({ where: { organizationId }, select: { name: true, xeroTenantId: true } });
+}
+
+/** The office's Xero organisations, connected ones first, then by name: the companies' books its invoices go to (2026-11-10). */
+export async function officeOrganisations(db: Db, organizationId: string): Promise<InvoiceProductOrganisation[]> {
+  const rows = await db.xeroOrganisation.findMany({
+    where: { organizationId },
+    // CONNECTED sorts before REMOVED.
+    orderBy: [{ status: 'asc' }, { name: 'asc' }],
+    select: { xeroTenantId: true, name: true, status: true },
+  });
+  return rows.map((row) => ({ tenantId: row.xeroTenantId, name: row.name, connected: row.status === 'CONNECTED' }));
+}
+
+/** An organisation's name for a message; one the office no longer has is said so. */
+export const organisationName = (organisations: readonly InvoiceProductOrganisation[]) => (tenantId: string) =>
+  organisations.find((organisation) => organisation.tenantId === tenantId)?.name ?? 'an organisation no longer known';
 
 /** When the console took invoicing over from Jobber (2026-11-06, phase 8); null while Jobber holds it. */
 export async function invoicingTakenOverAt(db: Db, organizationId: string): Promise<Date | null> {

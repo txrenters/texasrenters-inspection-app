@@ -6,6 +6,7 @@ import {
   canDeleteInvoice,
   formatMoney,
   invoiceAmounts,
+  invoiceCompany,
   invoiceEditProblem,
   invoiceStatusActionProblem,
   invoiceStatusOn,
@@ -24,7 +25,7 @@ import {
   CLIENT_VIEW_LABEL,
   type InvoiceClientView,
 } from '@texasrenters/shared';
-import { InvoiceStatus, type Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
@@ -32,7 +33,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { nextInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
-import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
+import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
 
 /**
  * Editing an invoice in the console (2026-11-06, phase 3 of taking invoicing
@@ -64,6 +65,7 @@ const dayWords = (value: string | null | undefined) =>
 
 const editSelect = {
   id: true,
+  origin: true,
   status: true,
   number: true,
   subject: true,
@@ -85,6 +87,9 @@ const editSelect = {
   showAccountBalance: true,
   showLateStamp: true,
   updatedAt: true,
+  // The company's books it goes to, and whether it reached them (2026-11-10).
+  xeroTenantId: true,
+  xeroSync: { select: { xeroInvoiceId: true } },
   lines: {
     orderBy: { position: 'asc' },
     select: { name: true, quantity: true, unitPriceCents: true, description: true, serviceOn: true, taxable: true },
@@ -288,6 +293,7 @@ export class InvoiceEditsService {
         });
         if (taken) throw new ApplicationError(409, 'INVOICE_NUMBER_TAKEN', `Invoice #${clean.number} is another invoice already.`);
       }
+      const company = await this.companyAfterEdit(tx, user, before, clean.lineItems);
 
       const amounts = invoiceAmounts(clean.lineItems, clean.discount, clean.tax);
       const balanceCents = amounts.totalCents - paidCents;
@@ -316,6 +322,7 @@ export class InvoiceEditsService {
           clientMessage: clean.clientMessage,
           contractDisclaimer: clean.contractDisclaimer,
           ...(clean.clientView ?? {}),
+          xeroTenantId: company.xeroTenantId,
         },
       });
       if (!count) throw this.invoiceChanged();
@@ -335,7 +342,7 @@ export class InvoiceEditsService {
         })),
       });
       await this.audit(tx, user, id, 'INVOICE_EDITED', {
-        changes: invoiceChanges(before, clean, amounts) as unknown as Prisma.InputJsonValue,
+        changes: [...invoiceChanges(before, clean, amounts), ...company.changes] as unknown as Prisma.InputJsonValue,
         totalCents: amounts.totalCents,
         balanceCents,
       });
@@ -445,6 +452,41 @@ export class InvoiceEditsService {
     if (!row) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');
     if (row.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.invoiceChanged();
     return row;
+  }
+
+  /**
+   * The company's books an edited invoice goes to (2026-11-10): its lines' one
+   * company, or where it was when no line says. Two companies' lines are
+   * refused, and so is moving one already in a company's books in Xero to
+   * another's. One read from Jobber stays with no company: Jobber's invoices
+   * are not sent. So does one made before invoices had a company whose lines
+   * already went to two: it can still be corrected, and is never sent.
+   */
+  private async companyAfterEdit(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    before: EditRow,
+    lines: readonly { name: string }[],
+  ): Promise<{ xeroTenantId: string | null; changes: InvoiceChange[] }> {
+    if (before.origin !== InvoiceOrigin.CONSOLE) return { xeroTenantId: before.xeroTenantId, changes: [] };
+    const products = await productCompanies(tx, user.organizationId);
+    const nameOf = organisationName(await officeOrganisations(tx, user.organizationId));
+    const said = invoiceCompany(lines, products, undefined, nameOf);
+    if (said.problem) {
+      const mixedAlready = before.xeroTenantId === null && invoiceCompany(before.lines, products, undefined, nameOf).problem !== null;
+      if (mixedAlready) return { xeroTenantId: null, changes: [] };
+      throw new ApplicationError(422, 'INVOICE_INVALID', said.problem);
+    }
+    const xeroTenantId = said.xeroTenantId ?? before.xeroTenantId;
+    if (xeroTenantId === before.xeroTenantId) return { xeroTenantId, changes: [] };
+    const words = (tenantId: string | null) => (tenantId ? nameOf(tenantId) : 'none');
+    if (before.xeroSync?.xeroInvoiceId)
+      throw new ApplicationError(
+        409,
+        'INVOICE_IN_XERO',
+        `This invoice is in ${words(before.xeroTenantId)}’s books in Xero already, so its lines cannot go to ${words(xeroTenantId)}: make an invoice of their own for them.`,
+      );
+    return { xeroTenantId, changes: [{ field: 'Company', from: words(before.xeroTenantId), to: words(xeroTenantId) }] };
   }
 
   private async paidCents(tx: Prisma.TransactionClient, invoiceId: string) {

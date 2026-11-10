@@ -127,6 +127,8 @@ function database() {
     // No invoice settings saved, and no price list: the fallbacks (2026-11-06, phase 6).
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoiceProduct: { findMany: jest.fn().mockResolvedValue([]) },
+    // No Xero organisation: every invoice belongs to no company (2026-11-10).
+    xeroOrganisation: { findMany: jest.fn().mockResolvedValue([]) },
     invoicePayment: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
@@ -346,27 +348,30 @@ describe("a finished visit's draft", () => {
     const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
     // Pest control was not done, so it is not billed.
-    expect(draft.lineItems).toEqual([{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 }]);
+    // No company's books yet: one invoice, for none.
+    expect(draft.invoices).toEqual([
+      { xeroTenantId: null, lineItems: [{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 }] },
+    ]);
     expect(draft).toMatchObject({
       clientName: '100 Example Way',
       subject: 'For Services Rendered',
       clientMessage: 'Thank you.',
       paymentTermsDays: 15,
-      existing: null,
+      existing: [],
       property: { id: BUILDING },
+      organisations: [],
     });
     expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control']);
   });
 
   it('says when the visit has an invoice already, so a second is not made by mistake', async () => {
     const db = database();
-    db.invoice.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: INVOICE, number: '8439', status: 'AWAITING_PAYMENT', dueOn: date(PAST) });
+    db.invoice.findMany.mockResolvedValueOnce([{ id: INVOICE, number: '8439', status: 'AWAITING_PAYMENT', dueOn: date(PAST), xeroTenantId: null }]);
 
     const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
-    expect(draft.existing).toEqual({ id: INVOICE, number: '8439', status: 'PAST_DUE' });
+    expect(draft.existing).toEqual([{ id: INVOICE, number: '8439', status: 'PAST_DUE', xeroTenantId: null }]);
+    expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({ organizationId: ORG, inspectionId: VISIT, status: { not: 'VOIDED' } });
     // No invoice yet in the copy: Jobber's own defaults.
     expect(draft).toMatchObject({ subject: 'For Services Rendered', paymentTermsDays: 30, clientMessage: '' });
   });
@@ -788,7 +793,8 @@ describe('making an invoice and recording a payment', () => {
 
     it('answers a resend with the invoice already made, and makes no second', async () => {
       const db = database();
-      db.invoice.findFirst.mockResolvedValueOnce({ id: INVOICE, inspectionId: VISIT }).mockResolvedValue(invoiceRow());
+      db.invoice.findMany.mockResolvedValueOnce([{ id: INVOICE, inspectionId: VISIT, propertywareBuildingId: BUILDING, clientRequestId: 'web-key-0001' }]);
+      db.invoice.findFirst.mockResolvedValue(invoiceRow());
 
       await expect(serviceOver(db).create(office, create)).resolves.toMatchObject({ id: INVOICE });
       expect(db.invoice.create).not.toHaveBeenCalled();
@@ -796,16 +802,16 @@ describe('making an invoice and recording a payment', () => {
 
     it('refuses the same key for another visit', async () => {
       const db = database();
-      db.invoice.findFirst.mockResolvedValueOnce({ id: INVOICE, inspectionId: 'another-visit' });
+      db.invoice.findMany.mockResolvedValueOnce([{ id: INVOICE, inspectionId: 'another-visit', propertywareBuildingId: BUILDING, clientRequestId: 'web-key-0001' }]);
       await expect(serviceOver(db).create(office, create)).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
     });
 
     it('answers with the invoice the other request made when both arrive at once', async () => {
       const db = database();
-      db.invoice.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: INVOICE, inspectionId: VISIT })
-        .mockResolvedValue(invoiceRow());
+      db.invoice.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: INVOICE, inspectionId: VISIT, propertywareBuildingId: BUILDING, clientRequestId: 'web-key-0001' }]);
+      db.invoice.findFirst.mockResolvedValue(invoiceRow());
       db.invoice.create.mockRejectedValue(uniqueViolation());
 
       await expect(serviceOver(db).create(office, create)).resolves.toMatchObject({ id: INVOICE });

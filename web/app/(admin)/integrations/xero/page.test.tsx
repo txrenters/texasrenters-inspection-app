@@ -100,8 +100,8 @@ function sending(tenantId: string): XeroSendingView {
     enabled: false,
     changedAt: null,
     canWrite: true,
-    blockers: ['Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.'],
-    counts: { sent: 0, failed: 0, notYet: 5 },
+    blockers: ['Finish “Before anything is sent”.'],
+    counts: { sent: 0, failed: 0, notYet: 5, noCompany: 0 },
     lastRunAt: null,
     lastRunProblem: null,
     failures: [],
@@ -206,11 +206,11 @@ describe('the Xero page', () => {
 });
 
 describe('sending invoices', () => {
-  it('belongs to each organisation’s tab, and waits while several are connected', () => {
+  it('belongs to each organisation’s tab, and says what it waits for', () => {
     xero.view = CONNECTED;
     render(<XeroPage />);
     const panel = screen.getByRole('heading', { name: /Sending to Xero/ }).closest('section')!;
-    expect(within(panel).getByText(/Several organisations are connected/)).toBeInTheDocument();
+    expect(within(panel).getByText('Finish “Before anything is sent”.')).toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: 'Turn on' })).toBeDisabled();
     expect(new Set(xero.sendingAsked)).toEqual(new Set([HOMES]));
   });

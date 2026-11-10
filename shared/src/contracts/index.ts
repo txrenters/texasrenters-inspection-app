@@ -112,5 +112,6 @@ export * from './property-account.js';
 export * from './invoice-reports.js';
 export * from './invoice-edits.js';
 export * from './invoice-batch.js';
+export * from './invoice-companies.js';
 export * from './invoice-settings.js';
 export * from './invoice-takeover.js';
