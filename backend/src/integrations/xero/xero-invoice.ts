@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 
-import { formatMoney, productNameKey, type XeroAccount, type XeroSettingsValues } from '@texasrenters/shared';
+import {
+  activeTrackingCategories,
+  formatMoney,
+  productNameKey,
+  soldItems,
+  trackingOptionFor,
+  type XeroAccount,
+  type XeroItem,
+  type XeroSettingsValues,
+  type XeroTrackingCategory,
+} from '@texasrenters/shared';
 
 /**
  * A console invoice as Xero is sent it (2026-11-10, phase 3 of the Xero plan).
@@ -9,6 +19,12 @@ import { formatMoney, productNameKey, type XeroAccount, type XeroSettingsValues 
  * goes -- an invoice whose lines do not come to its total, or that carries
  * sales tax the console would not send, is held back with the reason in words,
  * never posted to the office's books wrong.
+ *
+ * As the office finishes its invoices in Xero by hand (2026-11-11, from
+ * Jobber's through Zapier until then): dated on the visit's day, due on the
+ * last day of that month, the property -- the contact's name -- as the
+ * reference, each line under its Xero item and tagged for the technician who
+ * did the visit.
  */
 
 export interface InvoiceForXero {
@@ -26,15 +42,21 @@ export interface InvoiceForXero {
   discountCents: number;
   totalCents: number;
   lines: { position: number; name: string; description: string | null; quantity: number; unitPriceCents: number; totalCents: number }[];
+  /** The day of the visit it bills (`YYYY-MM-DD`, as scheduled); null for one that bills no visit. */
+  visitDay: string | null;
+  /** The technician who did that visit; null when none is known. */
+  technicianName: string | null;
 }
 
 export interface XeroLineItem {
+  ItemCode?: string;
   Description: string;
   Quantity: number;
   UnitAmount: number;
   LineAmount: number;
   AccountCode: string;
   TaxType: string;
+  Tracking?: { TrackingCategoryID: string; Name: string; Option: string }[];
 }
 
 export interface XeroInvoiceBody {
@@ -62,6 +84,17 @@ export const clientKeyOf = (invoice: Pick<InvoiceForXero, 'jobberClientId' | 'cl
 export const contactNameOf = (invoice: Pick<InvoiceForXero, 'clientName'>) => invoice.clientName.trim().slice(0, 255) || 'Unnamed client';
 
 const day = (value: Date) => value.toISOString().slice(0, 10);
+
+/** The invoice's date in Xero: the visit's day, as the office dates them; else the day it was issued. */
+export const xeroDayOf = (invoice: Pick<InvoiceForXero, 'visitDay' | 'issuedOn'>): string | null =>
+  invoice.visitDay ?? (invoice.issuedOn ? day(invoice.issuedOn) : null);
+
+/** The last day of a day's month: when the office's invoices fall due in Xero. */
+export function monthEndOf(value: string): string {
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+}
 const dollars = (cents: number) => Number((cents / 100).toFixed(2));
 const sortedLines = (invoice: InvoiceForXero) => [...invoice.lines].sort((a, b) => a.position - b.position);
 
@@ -74,13 +107,11 @@ const sortedLines = (invoice: InvoiceForXero) => [...invoice.lines].sort((a, b) 
 export function invoiceFingerprint(invoice: InvoiceForXero): string {
   const content = {
     number: invoice.number,
-    subject: invoice.subject,
     voided: invoice.status === 'VOIDED',
     client: clientKeyOf(invoice),
     clientName: contactNameOf(invoice),
-    jobNumber: invoice.jobNumber,
-    issuedOn: invoice.issuedOn ? day(invoice.issuedOn) : null,
-    dueOn: invoice.dueOn ? day(invoice.dueOn) : null,
+    day: xeroDayOf(invoice),
+    technician: invoice.technicianName?.trim() || null,
     taxCents: invoice.taxCents,
     discountCents: invoice.discountCents,
     totalCents: invoice.totalCents,
@@ -96,7 +127,15 @@ export function invoiceFingerprint(invoice: InvoiceForXero): string {
  */
 export function xeroInvoiceFrom(
   invoice: InvoiceForXero,
-  context: { settings: XeroSettingsValues; accounts: readonly XeroAccount[]; contactId: string; xeroInvoiceId: string | null },
+  context: {
+    settings: XeroSettingsValues;
+    accounts: readonly XeroAccount[];
+    /** As last read (2026-11-11); left out, no line is tagged or itemed. */
+    trackingCategories?: readonly XeroTrackingCategory[];
+    items?: readonly XeroItem[];
+    contactId: string;
+    xeroInvoiceId: string | null;
+  },
 ): XeroInvoicePlan {
   if (invoice.status === 'VOIDED')
     return context.xeroInvoiceId
@@ -115,21 +154,43 @@ export function xeroInvoiceFrom(
   const defaultCode = settings.salesAccountId ? codes.get(settings.salesAccountId) : undefined;
   if (!defaultCode) return { kind: 'problem', problem: 'The default sales account is not an active account in Xero. Choose again on the Xero page.' };
 
+  // The category lines are tagged in, and the items they name (2026-11-11): as last read, active.
+  const category = settings.trackingCategoryId
+    ? activeTrackingCategories(context.trackingCategories ?? []).find((each) => each.trackingCategoryId === settings.trackingCategoryId)
+    : null;
+  if (settings.trackingCategoryId && !category)
+    return { kind: 'problem', problem: 'The tracking category is not an active one in Xero. Choose again on the Xero page.' };
+  const sold = new Set(soldItems(context.items ?? []).map((item) => item.code));
+  const technician = invoice.technicianName?.trim() || null;
+
   const items: XeroLineItem[] = [];
   for (const line of sortedLines(invoice)) {
     const chosen = settings.salesAccounts[productNameKey(line.name)];
     const code = chosen ? codes.get(chosen) : defaultCode;
     if (!code) return { kind: 'problem', problem: `The account chosen for “${line.name}” is not an active account in Xero. Choose again on the Xero page.` };
     const description = (line.description?.trim() ? `${line.name}\n${line.description.trim()}` : line.name).slice(0, 4000);
+    const itemCode = settings.itemCodes?.[productNameKey(line.name)];
+    if (itemCode && !sold.has(itemCode))
+      return { kind: 'problem', problem: `The item “${itemCode}” chosen for “${line.name}” is not one Xero sells. Choose again on the Xero page.` };
+    // The technician's option, when the line's product is tracked and the visit's technician is known.
+    const group = category ? settings.trackingGroups?.[productNameKey(line.name)] : undefined;
+    const option = category && group && technician ? trackingOptionFor(category, group, technician) : null;
+    if (category && group && technician && !option)
+      return {
+        kind: 'problem',
+        problem: `${category.name} has no option “${group}: ${technician.split(/\s+/)[0]}” for ${technician}. Add it in Xero, then read from Xero again.`,
+      };
     // Xero works a line out as quantity × unit price. When the stored total is not exactly that, the line goes as one of its total.
     const exact = Number.isFinite(line.quantity) && line.quantity > 0 && Math.round(line.quantity * line.unitPriceCents) === line.totalCents;
     items.push({
+      ...(itemCode ? { ItemCode: itemCode } : {}),
       Description: exact ? description : `${description} (${line.quantity} × ${formatMoney(line.unitPriceCents)})`.slice(0, 4000),
       Quantity: exact ? line.quantity : 1,
       UnitAmount: exact ? dollars(line.unitPriceCents) : dollars(line.totalCents),
       LineAmount: dollars(line.totalCents),
       AccountCode: code,
       TaxType: settings.salesTaxType,
+      ...(category && option ? { Tracking: [{ TrackingCategoryID: category.trackingCategoryId, Name: category.name, Option: option.name }] } : {}),
     });
   }
   if (invoice.discountCents > 0)
@@ -150,7 +211,9 @@ export function xeroInvoiceFrom(
     };
   if (invoice.totalCents < 0) return { kind: 'problem', problem: 'Its total is below zero; Xero takes that as a credit note, which phase 3 does not send.' };
 
-  const reference = [invoice.subject.trim(), invoice.jobNumber ? `Job #${invoice.jobNumber}` : null].filter(Boolean).join(' · ').slice(0, 255);
+  // The property, as the office writes it: the contact's name.
+  const reference = contactNameOf(invoice);
+  const date = xeroDayOf(invoice)!;
   return {
     kind: 'send',
     body: {
@@ -159,8 +222,8 @@ export function xeroInvoiceFrom(
       Contact: { ContactID: context.contactId },
       InvoiceNumber: invoice.number,
       Reference: reference,
-      Date: day(invoice.issuedOn),
-      DueDate: day(invoice.dueOn ?? invoice.issuedOn),
+      Date: date,
+      DueDate: monthEndOf(date),
       LineAmountTypes: 'Exclusive',
       Status: 'AUTHORISED',
       LineItems: items,

@@ -107,7 +107,9 @@ describe('a month, the console against Xero', () => {
   });
 });
 
-function harness(options: { xeroPages?: XeroInvoiceForCheck[][]; latest?: Date | null; sendFrom?: Date | null; invoices?: unknown[] } = {}) {
+function harness(
+  options: { xeroPages?: XeroInvoiceForCheck[][]; latest?: Date | null; sendFrom?: Date | null; invoices?: unknown[]; paymentsToXero?: boolean } = {},
+) {
   const stored: Record<string, unknown>[] = [];
   const prisma = {
     xeroCheck: {
@@ -119,7 +121,10 @@ function harness(options: { xeroPages?: XeroInvoiceForCheck[][]; latest?: Date |
       }),
     },
     xeroSettings: {
-      findUnique: jest.fn(async () => ({ sendFrom: options.sendFrom === undefined ? new Date('2026-11-01T00:00:00.000Z') : options.sendFrom })),
+      findUnique: jest.fn(async () => ({
+        sendFrom: options.sendFrom === undefined ? new Date('2026-11-01T00:00:00.000Z') : options.sendFrom,
+        paymentsToXero: options.paymentsToXero ?? true,
+      })),
     },
     invoice: {
       findMany: jest.fn<Promise<unknown[]>, [{ where: Record<string, unknown> }]>(async () =>
@@ -157,12 +162,14 @@ describe('checking a month', () => {
     const [, tenant, path] = client.get.mock.calls[0]!;
     expect(tenant).toBe(TENANT);
     expect(path).toBe(`/Invoices?where=${encodeURIComponent(monthWhere('2026-11'))}&Statuses=AUTHORISED,PAID,VOIDED&summaryOnly=true&page=1&pageSize=100`);
-    // The office's invoices of the month, its company's, from the start date, not drafts.
+    // The office's invoices of the month, its company's, from the start date, not drafts -- the month Xero files
+    // them in (2026-11-11): their visit's, else the one they were issued in.
     expect(prisma.invoice.findMany.mock.calls[0]![0].where).toEqual({
       organizationId: ORG,
       xeroTenantId: TENANT,
       status: { not: 'DRAFT' },
-      issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') },
+      issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z') },
+      OR: [{ inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } }, { inspectionId: null, issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } }],
     });
     expect(view).toMatchObject({ month: '2026-11', ranBy: 'Office Coordinator', calls: 1, truncated: false, counts: { console: 1, xero: 1, matching: 1 }, differences: [] });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
@@ -194,21 +201,27 @@ describe('checking a month', () => {
     expect(client.get).not.toHaveBeenCalled();
   });
 
-  it('expects nothing in Xero from before the start date, and lists only what Xero has', async () => {
-    const before = harness({ sendFrom: new Date('2026-12-01T00:00:00.000Z'), xeroPages: [[there({ InvoiceID: 'by-hand', InvoiceNumber: 'INV-1' })]] });
-    const view = await before.checks.run(office, TENANT, '2026-11');
-    expect(before.prisma.invoice.findMany).not.toHaveBeenCalled();
-    expect(view.counts).toMatchObject({ console: 0, onlyInXero: 1 });
-
-    const none = harness({ sendFrom: null });
-    await none.checks.run(office, TENANT, '2026-11');
+  it('expects nothing in Xero before a start date, and lists only what Xero has', async () => {
+    const none = harness({ sendFrom: null, xeroPages: [[there({ InvoiceID: 'by-hand', InvoiceNumber: 'INV-1' })]] });
+    const view = await none.checks.run(office, TENANT, '2026-11');
     expect(none.prisma.invoice.findMany).not.toHaveBeenCalled();
+    expect(view.counts).toMatchObject({ console: 0, onlyInXero: 1 });
   });
 
-  it('starts the month at the start date when it falls inside it', async () => {
-    const { checks, prisma } = harness({ sendFrom: new Date('2026-11-15T00:00:00.000Z') });
+  it('counts an invoice issued from the start date in the month of its visit, even an earlier one', async () => {
+    // Issued on or after December 1 for a November visit: dated November in Xero, so November's.
+    const { checks, prisma } = harness({ sendFrom: new Date('2026-12-01T00:00:00.000Z') });
     await checks.run(office, TENANT, '2026-11');
-    expect(prisma.invoice.findMany.mock.calls[0]![0].where.issuedOn).toEqual({ gte: new Date('2026-11-15T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') });
+    const where = prisma.invoice.findMany.mock.calls[0]![0].where;
+    expect(where.issuedOn).toEqual({ gte: new Date('2026-12-01T00:00:00.000Z') });
+    expect((where.OR as unknown[])[0]).toEqual({ inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } });
+  });
+
+  it('leaves what is paid in Xero alone when payments stay out of it', async () => {
+    // Paid here, with nothing paid in Xero: the office records payments there itself.
+    const { checks } = harness({ paymentsToXero: false, xeroPages: [[there({ Status: 'PAID', AmountPaid: 0 })]] });
+    const view = await checks.run(office, TENANT, '2026-11');
+    expect(view.counts).toMatchObject({ matching: 1, different: 0 });
   });
 
   it('shows the latest check from the console’s record, without asking Xero', async () => {

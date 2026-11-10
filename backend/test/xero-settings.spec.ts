@@ -232,6 +232,10 @@ describe('saving the choices', () => {
         salesAccounts: { 'filter change': 'a-410' },
         paymentAccounts: { PROPERTYWARE_LEDGER: 'a-815', CHECK: 'a-bank' },
         badDebtAccountId: null,
+        paymentsToXero: true,
+        trackingCategoryId: null,
+        trackingGroups: {},
+        itemCodes: {},
       },
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
@@ -325,11 +329,27 @@ describe('the words', () => {
         salesAccounts: { 'filter change': '', 'move-out inspection': 'a-410' },
         paymentAccounts: { CHECK: '' },
       }),
-    ).toEqual({ sendFrom: null, salesAccountId: null, salesTaxType: 'NONE', salesAccounts: { 'move-out inspection': 'a-410' }, paymentAccounts: {}, badDebtAccountId: null });
+    ).toEqual({
+      sendFrom: null,
+      salesAccountId: null,
+      salesTaxType: 'NONE',
+      salesAccounts: { 'move-out inspection': 'a-410' },
+      paymentAccounts: {},
+      badDebtAccountId: null,
+      paymentsToXero: true, trackingCategoryId: null, trackingGroups: {}, itemCodes: {},
+    });
   });
 
   it('reads no row as nothing chosen, and ignores what is not a method', () => {
-    expect(valuesFrom(null)).toEqual({ sendFrom: null, salesAccountId: null, salesTaxType: null, salesAccounts: {}, paymentAccounts: {}, badDebtAccountId: null });
+    expect(valuesFrom(null)).toEqual({
+      sendFrom: null,
+      salesAccountId: null,
+      salesTaxType: null,
+      salesAccounts: {},
+      paymentAccounts: {},
+      badDebtAccountId: null,
+      paymentsToXero: true, trackingCategoryId: null, trackingGroups: {}, itemCodes: {},
+    });
     expect(valuesFrom({ ...valuesRow(), paymentAccounts: { CHECK: 'a-bank', NOPE: 'x' } }).paymentAccounts).toEqual({ CHECK: 'a-bank' });
   });
 

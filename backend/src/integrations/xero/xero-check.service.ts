@@ -93,7 +93,11 @@ export class XeroCheckService {
       throw new XeroError('It was checked a moment ago. Try again in a minute.', 'XERO_CHECK_TOO_SOON', 429);
 
     const [consoleInvoices, xero] = await Promise.all([this.consoleInvoices(organizationId, tenantId, month), this.xeroInvoices(organizationId, tenantId, month)]);
-    const compared = compareMonth(consoleInvoices, xero.invoices);
+    const settings = await this.prisma.xeroSettings.findUnique({
+      where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
+      select: { paymentsToXero: true },
+    });
+    const compared = compareMonth(consoleInvoices, xero.invoices, { comparePaid: settings?.paymentsToXero !== false });
     const truncated = compared.truncated || xero.truncated;
     const data = {
       ranAt: new Date(),
@@ -135,10 +139,15 @@ export class XeroCheckService {
     if (!settings?.sendFrom) return [];
     const first = new Date(`${month}-01T00:00:00.000Z`);
     const next = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 1));
-    const from = settings.sendFrom > first ? settings.sendFrom : first;
-    if (from >= next) return [];
     const rows = await this.prisma.invoice.findMany({
-      where: { organizationId, xeroTenantId: tenantId, status: { not: InvoiceStatus.DRAFT }, issuedOn: { gte: from, lt: next } },
+      where: {
+        organizationId,
+        xeroTenantId: tenantId,
+        status: { not: InvoiceStatus.DRAFT },
+        issuedOn: { gte: settings.sendFrom },
+        // The month Xero files it in (2026-11-11): dated on its visit's day, else the day it was issued.
+        OR: [{ inspection: { is: { scheduledAt: { gte: first, lt: next } } } }, { inspectionId: null, issuedOn: { gte: first, lt: next } }],
+      },
       orderBy: [{ issuedOn: 'asc' }, { number: 'asc' }],
       select: {
         id: true,

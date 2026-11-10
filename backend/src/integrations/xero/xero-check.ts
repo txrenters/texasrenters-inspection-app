@@ -56,7 +56,10 @@ const voidedInXero = (status: string | null | undefined) => status === 'VOIDED' 
 export function compareMonth(
   consoleInvoices: readonly ConsoleInvoiceForCheck[],
   xeroInvoices: readonly XeroInvoiceForCheck[],
+  /** Payments stay out of Xero (2026-11-11): what is paid there is the office's own doing, not a difference. */
+  options: { comparePaid?: boolean } = {},
 ): { counts: XeroCheckCounts; differences: XeroDifference[]; truncated: boolean } {
+  const comparePaid = options.comparePaid !== false;
   const byId = new Map(xeroInvoices.map((invoice) => [invoice.InvoiceID, invoice]));
   const matched = new Set<string>();
   const differences: XeroDifference[] = [];
@@ -92,7 +95,7 @@ export function compareMonth(
     if (voided !== voidedInXero(theirs.Status)) found.push(row('STATUS', consoleStatus(invoice.status), xeroStatus(theirs.Status)));
     else if (!voided) {
       if (cents(theirs.Total) !== invoice.totalCents) found.push(row('TOTAL', formatMoney(invoice.totalCents), formatMoney(cents(theirs.Total))));
-      if (cents(theirs.AmountPaid) !== invoice.paidCents)
+      if (comparePaid && cents(theirs.AmountPaid) !== invoice.paidCents)
         found.push(row('PAID', `${formatMoney(invoice.paidCents)} paid`, `${formatMoney(cents(theirs.AmountPaid))} paid`));
     }
     if (found.length) {

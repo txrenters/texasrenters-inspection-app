@@ -1,7 +1,7 @@
 import type { InvoiceStatus as ShownInvoiceStatus, PaymentMethod } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
-import { invoicingTakenOverAt } from '../../admin/invoice-settings';
+import { invoicingTakenOverAt, jobberInvoiceCompany } from '../../admin/invoice-settings';
 
 /**
  * The console's copy of a Jobber invoice (2026-11-05), written from what Jobber
@@ -203,6 +203,8 @@ export async function applyJobberInvoice(
       })
     : null;
   const pendingCents = pending?._sum.amountCents ?? 0;
+  // Its company (2026-11-11): the one its lines go to, so the console sends it to that company's books in Xero.
+  const xeroTenantId = await jobberInvoiceCompany(tx, organizationId, existing?.id ?? null, copy.lines);
 
   const data = {
     jobberClientId: copy.jobberClientId,
@@ -227,6 +229,7 @@ export async function applyJobberInvoice(
     jobberWebUrl: jobberPageUrl(copy.jobberWebUrl),
     jobberUpdatedAt: updatedAt,
     syncedAt: now,
+    xeroTenantId,
     ...(copy.details ? detailColumns(copy.details) : {}),
   } satisfies Prisma.InvoiceUncheckedUpdateInput;
 

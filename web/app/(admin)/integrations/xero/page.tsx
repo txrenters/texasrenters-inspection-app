@@ -322,8 +322,10 @@ function OrganisationTab({
         <XeroSettingsForm
           accounts={organisation.accounts}
           canManage={canManage}
+          items={organisation.items}
           key={`${organisation.tenantId}:${settings.data.updatedAt ?? 'new'}`}
           taxRates={organisation.taxRates}
+          trackingCategories={organisation.trackingCategories}
           view={settings.data}
         />
       ) : settings.isError ? (

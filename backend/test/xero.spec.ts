@@ -9,7 +9,7 @@ import { XeroAuthService, authEventOf } from '../src/integrations/xero/xero-auth
 import { XeroClient } from '../src/integrations/xero/xero.client';
 import { XERO_READ_SCOPES, XERO_SEND_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.config';
 import { XeroController } from '../src/integrations/xero/xero.controller';
-import { XeroService, accountsFrom, taxRatesFrom } from '../src/integrations/xero/xero.service';
+import { XeroService, accountsFrom, itemsFrom, taxRatesFrom, trackingCategoriesFrom } from '../src/integrations/xero/xero.service';
 
 /**
  * The office's Xero organisations (2026-11-10): one sign-in reaching each of
@@ -122,6 +122,8 @@ function database(connection: Row | null = null, organisations: Row[] = []) {
         return { count: hit.length };
       }),
     },
+    // Invoices held back for what Xero lacked are tried again after a read (2026-11-11).
+    xeroInvoiceSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
     auditLog: { create: jest.fn() },
     connection: () => stored,
     organisation: (tenantId: string) => find({ organizationId: ORG, xeroTenantId: tenantId }),
@@ -285,6 +287,15 @@ describe('connecting the office’s organisations', () => {
       if (url.endsWith('/Accounts')) return json({ Accounts: [] });
       if (url.endsWith('/TaxRates')) return json({ TaxRates: [] });
       if (url.endsWith('/InvoiceReminders/Settings')) return json({ InvoiceReminders: [{ Enabled: tenant === PEST }] });
+      if (url.endsWith('/TrackingCategories'))
+        return json({
+          TrackingCategories:
+            tenant === HOMES
+              ? [{ TrackingCategoryID: 'tc-1', Name: 'Income by Employee', Status: 'ACTIVE', Options: [{ TrackingOptionID: 'to-1', Name: 'Air Filter Income: Ada', Status: 'ACTIVE' }] }]
+              : [],
+        });
+      // One organisation does not say: what was read before stays.
+      if (url.endsWith('/Items')) return tenant === AIR ? json({}, 404) : json({ Items: [{ ItemID: 'it-1', Code: 'Filter Change', Name: 'Filter Change', IsSold: true }] });
       return json({}, 404);
     });
     return { db, fetch, xero: new XeroService(db as never, auth, client) };
@@ -303,11 +314,20 @@ describe('connecting the office’s organisations', () => {
       [PEST, 'CONNECTED', 'conn-a2'],
       [AIR, 'CONNECTED', 'conn-a3'],
     ]);
-    // Four calls to each organisation, each counted against it -- and each one's own invoice reminders.
-    for (const id of [HOMES, PEST, AIR]) expect(db.organisation(id)).toMatchObject({ callsUsed: 4, organisation: expect.objectContaining({ baseCurrency: 'USD' }) });
+    // Six calls to each organisation, each counted against it -- and each one's own invoice reminders, tracking and items.
+    for (const id of [HOMES, PEST, AIR]) expect(db.organisation(id)).toMatchObject({ callsUsed: 6, organisation: expect.objectContaining({ baseCurrency: 'USD' }) });
     expect(db.organisation(PEST)).toMatchObject({ invoiceRemindersOn: true });
-    expect(db.organisation(HOMES)).toMatchObject({ invoiceRemindersOn: false });
-    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/api.xro/'))).toHaveLength(12);
+    expect(db.organisation(HOMES)).toMatchObject({
+      invoiceRemindersOn: false,
+      trackingCategories: [{ trackingCategoryId: 'tc-1', name: 'Income by Employee', status: 'ACTIVE', options: [{ optionId: 'to-1', name: 'Air Filter Income: Ada', status: 'ACTIVE' }] }],
+      items: [{ itemId: 'it-1', code: 'Filter Change', name: 'Filter Change', isSold: true }],
+    });
+    expect(db.organisation(AIR)).not.toHaveProperty('items');
+    expect(db.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: ORG, xeroTenantId: HOMES, status: 'FAILED', nextAttemptAt: null },
+      data: { nextAttemptAt: expect.any(Date) },
+    });
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/api.xro/'))).toHaveLength(18);
     expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
       action: 'XERO_CONNECTED',
       metadata: { organisations: ['Example Home Services', 'Example Pest Co', 'Example Air Co'], noLongerReached: 0 },
@@ -411,6 +431,47 @@ describe('what is read', () => {
       [null, true],
     ]);
     expect(taxRatesFrom({ TaxRates: [{ Name: 'Tax Exempt', TaxType: 'NONE', Status: 'ACTIVE', EffectiveRate: '0.00' }] })[0]).toMatchObject({ effectiveRate: 0 });
+  });
+
+  it('keeps tracking categories with their options in order, and only items with a code (2026-11-11)', () => {
+    expect(
+      trackingCategoriesFrom({
+        TrackingCategories: [
+          { TrackingCategoryID: 'b', Name: 'Region', Status: 'ARCHIVED', Options: null },
+          {
+            TrackingCategoryID: 'a',
+            Name: 'Income by Employee',
+            Options: [
+              { TrackingOptionID: '2', Name: 'HVAC Inspection Income: Ada' },
+              { TrackingOptionID: '1', Name: 'Air Filter Income: Ada', Status: 'ARCHIVED' },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        trackingCategoryId: 'a',
+        name: 'Income by Employee',
+        status: 'ACTIVE',
+        options: [
+          { optionId: '1', name: 'Air Filter Income: Ada', status: 'ARCHIVED' },
+          { optionId: '2', name: 'HVAC Inspection Income: Ada', status: 'ACTIVE' },
+        ],
+      },
+      { trackingCategoryId: 'b', name: 'Region', status: 'ARCHIVED', options: [] },
+    ]);
+    expect(
+      itemsFrom({
+        Items: [
+          { ItemID: '1', Code: ' HVAC ', Name: 'HVAC Inspection', IsSold: true },
+          { ItemID: '2', Code: null, Name: 'No code' },
+          { ItemID: '3', Code: 'Bought', Name: null, IsSold: false },
+        ],
+      }),
+    ).toEqual([
+      { itemId: '3', code: 'Bought', name: null, isSold: false },
+      { itemId: '1', code: 'HVAC', name: 'HVAC Inspection', isSold: true },
+    ]);
   });
 });
 

@@ -89,9 +89,11 @@ function database() {
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue({ id: BUILDING, name: 'Building 12', addressLine1: '100 Example Way', city: 'Sampletown' }) },
     auditLog: { create: jest.fn() },
     $queryRaw: jest.fn().mockResolvedValue([{ highest: '8439' }]),
+    // Jobber's invoices given their company again (2026-11-11): rows changed.
+    $executeRaw: jest.fn<Promise<number>, [TemplateStringsArray, ...unknown[]]>().mockResolvedValue(3),
     $transaction: jest.fn(),
   };
-  db.$transaction.mockImplementation((work: (tx: typeof db) => unknown) => work(db));
+  db.$transaction.mockImplementation((work: unknown) => (Array.isArray(work) ? Promise.all(work) : (work as (tx: typeof db) => unknown)(db)));
   return db;
 }
 
@@ -304,6 +306,11 @@ describe('the products and services list', () => {
     await service.changeProduct(office, PRODUCT, { xeroTenantId: PEST, expectedUpdatedAt: SAVED_AT.toISOString() });
     expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ xeroTenantId: PEST }) }));
     expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ metadata: { changes: ['Xero organisation: none → Example Pest Co'] } });
+    // Jobber's invoices that bill it go to its company now (2026-11-11): one statement, the office's only, none in Xero already.
+    const regroup = db.$executeRaw.mock.calls.map(([strings]) => strings.join('?')).find((text) => text.includes('UPDATE "Invoice"'))!;
+    expect(regroup).toContain(`i."origin" = 'JOBBER'`);
+    expect(regroup).toContain('i."organizationId" = ?::uuid');
+    expect(regroup).toContain('s."xeroInvoiceId" IS NOT NULL');
 
     // One no longer connected is not offered, and one that is not the office's is not either.
     for (const tenantId of [OLD, 'b9000000-0000-4000-8000-000000000009'])
@@ -325,6 +332,8 @@ describe('the products and services list', () => {
     // A price change leaves the organisation as it was: no check on it.
     await new InvoiceSettingsService(db as never).changeProduct(office, PRODUCT, { unitPriceCents: 5000, expectedUpdatedAt: SAVED_AT.toISOString() });
     expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ xeroTenantId: OLD }) }));
+    // Nor are Jobber's invoices given their company again: a price says nothing of whose books they go to.
+    expect(db.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('offers the office’s organisations, connected first, with each product’s choice', async () => {

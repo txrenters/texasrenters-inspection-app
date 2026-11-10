@@ -5,12 +5,15 @@ import {
   connectedOrganisations,
   paymentAccounts,
   revenueAccounts,
+  trackingGroups,
+  trackingOptionFor,
   xeroCanWrite,
   xeroChecks,
   xeroSendingBlockers,
   xeroSettingsProblem,
   type XeroAccount,
   type XeroOrganisationView,
+  type XeroTrackingCategory,
 } from '../src/contracts/xero';
 
 describe('the office’s organisations', () => {
@@ -116,5 +119,70 @@ describe('Xero choices', () => {
     expect(checks.every((check) => check.ok)).toBe(true);
     const missing = xeroChecks({ connected: true, readAt: '2026-11-20T15:00:00.000Z', values, catalog, paymentsByMethod: { CASH: 1 } });
     expect(missing.find((check) => check.key === 'payments')?.detail).toBe('None yet for Cash.');
+  });
+
+  it('ask for no payment account while payments stay out of Xero (2026-11-11)', () => {
+    const out = xeroChecks({ connected: true, readAt: '2026-11-20T15:00:00.000Z', values: { ...values, paymentsToXero: false }, catalog, paymentsByMethod: { CASH: 1 } });
+    expect(out.find((check) => check.key === 'payments')).toEqual({ key: 'payments', label: 'Payments stay out of Xero', ok: true, detail: null });
+    expect(out.every((check) => check.ok)).toBe(true);
+  });
+
+  describe('tracking and items (2026-11-11)', () => {
+    const category: XeroTrackingCategory = {
+      trackingCategoryId: 'tc-1',
+      name: 'Income by Employee',
+      status: 'ACTIVE',
+      options: [
+        { optionId: '1', name: 'Air Filter Income: Ada', status: 'ACTIVE' },
+        { optionId: '2', name: 'HVAC Inspection Income:  Ada Lane', status: 'ACTIVE' },
+        { optionId: '3', name: 'Occupied Inspection Income Bea', status: 'ACTIVE' },
+        { optionId: '4', name: 'Code Work Income: Ada', status: 'ARCHIVED' },
+      ],
+    };
+    const tracked = {
+      ...catalog,
+      trackingCategories: [category, { trackingCategoryId: 'tc-old', name: 'Region', status: 'ARCHIVED', options: [] }],
+      items: [
+        { itemId: 'i-1', code: 'Filter Change', name: 'Filter Change', isSold: true },
+        { itemId: 'i-2', code: 'Bought', name: null, isSold: false },
+      ],
+    };
+
+    it('find a category’s groups -- what comes before the colon -- each once, active ones only', () => {
+      expect(trackingGroups(category)).toEqual(['Air Filter Income', 'HVAC Inspection Income']);
+      expect(trackingGroups(null)).toEqual([]);
+    });
+
+    it('find a technician’s option by first name, else whole name, however the colon and spaces are written', () => {
+      expect(trackingOptionFor(category, 'Air Filter Income', 'Ada Lane')).toEqual({ optionId: '1', name: 'Air Filter Income: Ada' });
+      expect(trackingOptionFor(category, 'hvac inspection income', 'Ada Lane')).toEqual({ optionId: '2', name: 'HVAC Inspection Income:  Ada Lane' });
+      expect(trackingOptionFor(category, 'Occupied Inspection Income', 'Bea Stone')).toEqual({ optionId: '3', name: 'Occupied Inspection Income Bea' });
+      expect(trackingOptionFor(category, 'Code Work Income', 'Ada Lane')).toBeNull();
+      expect(trackingOptionFor(category, 'Air Filter Income', ' ')).toBeNull();
+    });
+
+    it('take only an active category, groups it has, and items Xero sells', () => {
+      const chosen = { ...values, trackingCategoryId: 'tc-1', trackingGroups: { 'filter change': 'Air Filter Income' }, itemCodes: { 'filter change': 'Filter Change' } };
+      expect(xeroSettingsProblem(chosen, tracked, '2026-11-20')).toBeNull();
+      expect(xeroSettingsProblem({ ...chosen, trackingCategoryId: 'tc-old' }, tracked, '2026-11-20')).toBe('That tracking category is not an active one in Xero.');
+      expect(xeroSettingsProblem({ ...chosen, trackingCategoryId: null }, tracked, '2026-11-20')).toBe(
+        'Choose the tracking category before what each product or service is tracked as.',
+      );
+      expect(xeroSettingsProblem({ ...chosen, trackingGroups: { 'filter change': 'Pest Income' } }, tracked, '2026-11-20')).toBe(
+        '“Pest Income” does not start any option of Income by Employee in Xero.',
+      );
+      expect(xeroSettingsProblem({ ...chosen, itemCodes: { 'filter change': 'Bought' } }, tracked, '2026-11-20')).toBe('“Bought” is not an item Xero sells.');
+    });
+
+    it('say when a chosen category, group or item has gone from Xero', () => {
+      const gone = xeroChecks({
+        connected: true,
+        readAt: '2026-11-20T15:00:00.000Z',
+        values: { ...values, trackingCategoryId: 'tc-1', trackingGroups: { 'filter change': 'Pest Income' }, itemCodes: { 'filter change': 'HVAC' } },
+        catalog: tracked,
+        paymentsByMethod: {},
+      });
+      expect(gone.find((check) => check.key === 'stillInXero')?.detail).toBe('Choose again for “Pest Income”, the item “HVAC”.');
+    });
   });
 });

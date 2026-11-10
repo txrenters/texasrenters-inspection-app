@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { XeroAccount, XeroSettingsView, XeroTaxRate } from '@texasrenters/shared';
+import type { XeroAccount, XeroItem, XeroSettingsView, XeroTaxRate, XeroTrackingCategory } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { XeroSettingsForm } from './xero-settings-form';
@@ -126,6 +126,61 @@ describe('choosing what goes where', () => {
     mount(VIEW, false);
     expect(screen.getByRole('combobox', { name: 'Account for Check' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+});
+
+describe('as the office finishes its invoices in Xero (2026-11-11)', () => {
+  const CATEGORIES: XeroTrackingCategory[] = [
+    {
+      trackingCategoryId: 'tc-1',
+      name: 'Income by Employee',
+      status: 'ACTIVE',
+      options: [
+        { optionId: 'o-1', name: 'Air Filter Income: Ada', status: 'ACTIVE' },
+        { optionId: 'o-2', name: 'Move Out Inspection Income: Ada', status: 'ACTIVE' },
+      ],
+    },
+  ];
+  const ITEMS: XeroItem[] = [
+    { itemId: 'i-1', code: 'Filter Change', name: 'Filter Change', isSold: true },
+    { itemId: 'i-2', code: 'Bought in', name: null, isSold: false },
+  ];
+  const mountTagged = (view: XeroSettingsView = VIEW) =>
+    render(<XeroSettingsForm accounts={ACCOUNTS} canManage items={ITEMS} taxRates={TAX_RATES} trackingCategories={CATEGORIES} view={view} />);
+
+  it('tags lines in a category, and saves each product’s item and what it is tracked as', () => {
+    mountTagged();
+    // Tracked as is chosen once there is a category to track in.
+    expect(screen.queryByRole('combobox', { name: 'Tracked as for Filter change' })).not.toBeInTheDocument();
+    pick('Tag lines in', 'Income by Employee');
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Tracked as for Filter change' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Not tracked', 'Air Filter Income', 'Move Out Inspection Income']);
+    fireEvent.click(screen.getByRole('option', { name: 'Air Filter Income' }));
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Xero item for Filter change' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    // Only what Xero sells.
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['None', 'Filter Change']);
+    fireEvent.click(screen.getByRole('option', { name: 'Filter Change' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(save.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ trackingCategoryId: 'tc-1', trackingGroups: { 'filter change': 'Air Filter Income' }, itemCodes: { 'filter change': 'Filter Change' } }),
+      expect.anything(),
+    );
+  });
+
+  it('forgets what each product was tracked as when the category goes', () => {
+    mountTagged({ ...VIEW, values: { ...VIEW.values, trackingCategoryId: 'tc-1', trackingGroups: { 'filter change': 'Air Filter Income' } } });
+    pick('Tag lines in', 'No tracking');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(save.mutate).toHaveBeenCalledWith(expect.objectContaining({ trackingCategoryId: null, trackingGroups: {} }), expect.anything());
+  });
+
+  it('keeps payments out of Xero with the switch, and then asks for no account for them', () => {
+    mountTagged();
+    fireEvent.click(screen.getByRole('switch', { name: 'Send payments to Xero' }));
+    expect(screen.queryByRole('combobox', { name: 'Account for Check' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Payments stay out of Xero/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(save.mutate).toHaveBeenCalledWith(expect.objectContaining({ paymentsToXero: false }), expect.anything());
   });
 });
 

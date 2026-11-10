@@ -1,4 +1,4 @@
-import { UserRole, type XeroAccount, type XeroSettingsValues } from '@texasrenters/shared';
+import { UserRole, type XeroAccount, type XeroItem, type XeroSettingsValues, type XeroTrackingCategory } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { PERMISSIONS_METADATA_KEY } from '../src/common/auth';
@@ -8,7 +8,7 @@ import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroError } from '../src/integrations/xero/xero.errors';
 import { clientKeyOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero } from '../src/integrations/xero/xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero } from '../src/integrations/xero/xero-payment';
-import { MAX_INVOICES_PER_RUN, MAX_PAYMENT_DELETES_PER_RUN, XeroSenderService } from '../src/integrations/xero/xero-sender.service';
+import { MAX_INVOICES_PER_RUN, MAX_PAYMENT_DELETES_PER_RUN, XeroSenderService, invoiceForXero } from '../src/integrations/xero/xero-sender.service';
 import { xeroWriteOffFrom } from '../src/integrations/xero/xero-write-off';
 import { remindersFrom } from '../src/integrations/xero/xero.service';
 
@@ -49,7 +49,9 @@ const SETTINGS: XeroSettingsValues = {
 };
 
 const UPDATED = new Date('2026-12-02T15:00:00.000Z');
-type Fixture = InvoiceForXero & { updatedAt: Date; xeroSync: Record<string, unknown> | null };
+/** The visit it bills, as the sender reads it (2026-11-11): its day, and its technician. */
+type Visit = { scheduledAt: Date; assignments: { technician: { displayName: string } }[] };
+type Fixture = InvoiceForXero & { updatedAt: Date; xeroSync: Record<string, unknown> | null; inspection?: Visit | null };
 const invoice = (over: Partial<Fixture> = {}): Fixture => ({
   id: 'inv-1',
   number: '8440',
@@ -67,6 +69,8 @@ const invoice = (over: Partial<Fixture> = {}): Fixture => ({
     { position: 0, name: 'Move-out inspection', description: 'Full walk-through', quantity: 1, unitPriceCents: 15000, totalCents: 15000 },
     { position: 1, name: 'Filter change', description: null, quantity: 1, unitPriceCents: 2500, totalCents: 2500 },
   ],
+  visitDay: null,
+  technicianName: null,
   updatedAt: UPDATED,
   xeroSync: null,
   ...over,
@@ -94,9 +98,9 @@ describe('a console invoice, as Xero is sent it', () => {
         Type: 'ACCREC',
         Contact: { ContactID: 'contact-1' },
         InvoiceNumber: '8440',
-        Reference: 'For Services Rendered · Job #512',
+        Reference: '12 Example Lane',
         Date: '2026-12-02',
-        DueDate: '2027-01-01',
+        DueDate: '2026-12-31',
         LineAmountTypes: 'Exclusive',
         Status: 'AUTHORISED',
         LineItems: [
@@ -167,6 +171,98 @@ describe('a console invoice, as Xero is sent it', () => {
     expect(invoiceFingerprint(invoice({ lines: [...invoice().lines].reverse() }))).toBe(before);
     expect(invoiceFingerprint(invoice({ totalCents: 18000 }))).not.toBe(before);
     expect(invoiceFingerprint(invoice({ status: 'VOIDED' }))).not.toBe(before);
+    // What Xero is sent of it (2026-11-11): its visit's day and technician, not its subject or job number.
+    expect(invoiceFingerprint(invoice({ subject: 'Quarterly service', jobNumber: '513' }))).toBe(before);
+    expect(invoiceFingerprint(invoice({ visitDay: '2026-11-30' }))).not.toBe(before);
+    expect(invoiceFingerprint(invoice({ technicianName: 'Ada Lane' }))).not.toBe(before);
+  });
+
+  describe('as the office finishes its invoices in Xero (2026-11-11)', () => {
+    const CATEGORY: XeroTrackingCategory = {
+      trackingCategoryId: 'tc-1',
+      name: 'Income by Employee',
+      status: 'ACTIVE',
+      options: [
+        { optionId: 'to-1', name: 'Air Filter Income: Ada', status: 'ACTIVE' },
+        // Written without its colon in Xero: found all the same.
+        { optionId: 'to-2', name: 'Move Out Inspection Income Ada', status: 'ACTIVE' },
+        { optionId: 'to-3', name: 'Air Filter Income: Bea', status: 'ARCHIVED' },
+      ],
+    };
+    const ITEMS: XeroItem[] = [{ itemId: 'it-1', code: 'Filter Change', name: 'Filter Change', isSold: true }];
+    const TAGGED: XeroSettingsValues = {
+      ...SETTINGS,
+      trackingCategoryId: 'tc-1',
+      trackingGroups: { 'filter change': 'Air Filter Income', 'move-out inspection': 'Move Out Inspection Income' },
+      itemCodes: { 'filter change': 'Filter Change' },
+    };
+    const tagged = (over: Partial<Fixture> = {}, settings = TAGGED, catalog: { trackingCategories?: XeroTrackingCategory[]; items?: XeroItem[] } = {}) =>
+      xeroInvoiceFrom(invoice(over), {
+        settings,
+        accounts: ACCOUNTS,
+        trackingCategories: catalog.trackingCategories ?? [CATEGORY],
+        items: catalog.items ?? ITEMS,
+        contactId: 'contact-1',
+        xeroInvoiceId: null,
+      });
+
+    it('dates it on the visit’s day, due on the last day of that month, with the property as its reference', () => {
+      const sent = plan({ visitDay: '2026-11-28' });
+      expect(sent.kind === 'send' && [sent.body.Date, sent.body.DueDate, sent.body.Reference]).toEqual(['2026-11-28', '2026-11-30', '12 Example Lane']);
+      // No visit: the day it was issued, due at the end of that month.
+      const alone = plan({ issuedOn: new Date('2026-02-10T00:00:00.000Z') });
+      expect(alone.kind === 'send' && [alone.body.Date, alone.body.DueDate]).toEqual(['2026-02-10', '2026-02-28']);
+    });
+
+    it('puts each line under its Xero item, tagged for the visit’s technician by first name', () => {
+      const sent = tagged({ technicianName: 'Ada Lane' });
+      expect(sent.kind === 'send' && sent.body.LineItems).toEqual([
+        {
+          Description: 'Move-out inspection\nFull walk-through',
+          Quantity: 1,
+          UnitAmount: 150,
+          LineAmount: 150,
+          AccountCode: '400',
+          TaxType: 'NONE',
+          Tracking: [{ TrackingCategoryID: 'tc-1', Name: 'Income by Employee', Option: 'Move Out Inspection Income Ada' }],
+        },
+        {
+          ItemCode: 'Filter Change',
+          Description: 'Filter change',
+          Quantity: 1,
+          UnitAmount: 25,
+          LineAmount: 25,
+          AccountCode: '410',
+          TaxType: 'NONE',
+          Tracking: [{ TrackingCategoryID: 'tc-1', Name: 'Income by Employee', Option: 'Air Filter Income: Ada' }],
+        },
+      ]);
+    });
+
+    it('sends a line untagged when no technician is known, or its product is not tracked', () => {
+      const unknown = tagged({ technicianName: null });
+      expect(unknown.kind === 'send' && unknown.body.LineItems.map((line) => line.Tracking)).toEqual([undefined, undefined]);
+      const untracked = tagged({ technicianName: 'Ada Lane' }, { ...TAGGED, trackingGroups: { 'filter change': 'Air Filter Income' } });
+      expect(untracked.kind === 'send' && untracked.body.LineItems.map((line) => line.Tracking?.[0]?.Option)).toEqual([undefined, 'Air Filter Income: Ada']);
+    });
+
+    it('holds it back when Xero has no option for the technician -- an archived one is none', () => {
+      expect(tagged({ technicianName: 'Bea Stone' })).toEqual({
+        kind: 'problem',
+        problem: 'Income by Employee has no option “Move Out Inspection Income: Bea” for Bea Stone. Add it in Xero, then read from Xero again.',
+      });
+    });
+
+    it('holds it back when the category or an item is no longer in Xero', () => {
+      expect(tagged({ technicianName: 'Ada Lane' }, TAGGED, { trackingCategories: [] })).toMatchObject({ kind: 'problem', problem: expect.stringContaining('tracking category') });
+      expect(tagged({}, TAGGED, { items: [] })).toMatchObject({ kind: 'problem', problem: expect.stringContaining('The item “Filter Change”') });
+    });
+
+    it('reads the visit’s day and technician from the invoice’s visit', () => {
+      const visit = { scheduledAt: new Date('2026-11-09T00:00:00.000Z'), assignments: [{ technician: { displayName: 'Ada Lane' } }] };
+      expect(invoiceForXero({ ...invoice(), inspection: visit } as never)).toMatchObject({ visitDay: '2026-11-09', technicianName: 'Ada Lane' });
+      expect(invoiceForXero({ ...invoice(), inspection: null } as never)).toMatchObject({ visitDay: null, technicianName: null });
+    });
   });
 
   it('goes under its client: by Jobber’s id, or by name when Jobber gave none', () => {
@@ -239,6 +335,11 @@ function harness(options: {
   /** Invoices closed as bad debt and in Xero, and their write-offs (2026-11-10). */
   badDebts?: Record<string, unknown>[];
   writeOffRows?: Record<string, unknown>[];
+  /** What Xero has already under the numbers asked about (2026-11-11): made by Zapier, or by hand. */
+  inXero?: { InvoiceID: string; InvoiceNumber: string; Type?: string; Status: string; Contact?: { Name: string } }[];
+  /** The organisation's tracking categories and items, as last read (2026-11-11). */
+  trackingCategories?: XeroTrackingCategory[];
+  items?: XeroItem[];
 } = {}) {
   const writeOffRows: Record<string, unknown>[] = (options.writeOffRows ?? []).map((row) => ({ ...row }));
   const invoices = options.invoices ?? [invoice()];
@@ -279,7 +380,16 @@ function harness(options: {
     xeroConnection: { findUnique: jest.fn(async () => (connection ? { status: connection.status, scopes: connection.scopes } : null)) },
     xeroOrganisation: {
       findUnique: jest.fn(async () =>
-        connection ? { name: 'Example Home Services', status: 'CONNECTED', invoiceRemindersOn: connection.invoiceRemindersOn, accounts: connection.accounts } : null,
+        connection
+          ? {
+              name: 'Example Home Services',
+              status: 'CONNECTED',
+              invoiceRemindersOn: connection.invoiceRemindersOn,
+              accounts: connection.accounts,
+              trackingCategories: options.trackingCategories ?? [],
+              items: options.items ?? [],
+            }
+          : null,
       ),
     },
     invoice: {
@@ -367,9 +477,13 @@ function harness(options: {
         return { CreditNotes: (body as { CreditNotes: { CreditNoteID?: string }[] }).CreditNotes.map((note, index) => ({ CreditNoteID: note.CreditNoteID ?? `credit-${index + 1}`, StatusAttributeString: 'OK' })) };
       return { Invoices: body.Invoices!.map((item, index) => ({ InvoiceID: `xero-${item.InvoiceNumber ?? index}`, StatusAttributeString: 'OK' })) };
     }),
-    get: jest.fn(async (_org: string, _tenant: string, path: string): Promise<unknown> =>
-      path.startsWith('/CreditNotes/') ? { CreditNotes: [{ CreditNoteID: path.split('/')[2], Allocations: [{ AllocationID: 'allocation-found' }] }] } : {},
-    ),
+    get: jest.fn(async (_org: string, _tenant: string, path: string): Promise<unknown> => {
+      if (path.startsWith('/Invoices?InvoiceNumbers=')) {
+        const asked = decodeURIComponent(/InvoiceNumbers=([^&]*)/.exec(path)![1]!).split(',');
+        return { Invoices: (options.inXero ?? []).filter((theirs) => asked.includes(theirs.InvoiceNumber)) };
+      }
+      return path.startsWith('/CreditNotes/') ? { CreditNotes: [{ CreditNoteID: path.split('/')[2], Allocations: [{ AllocationID: 'allocation-found' }] }] } : {};
+    }),
     // A credit note's allocation, made or taken off (2026-11-10).
     put: jest.fn<Promise<unknown>, [string, string, string, unknown, unknown, string]>(async () => ({ Allocations: [{ AllocationID: 'allocation-1', StatusAttributeString: 'OK' }] })),
     delete: jest.fn(async (): Promise<unknown> => ({ Allocations: [] })),
@@ -545,7 +659,7 @@ describe('bad debts, written off in the company’s books (2026-11-10)', () => {
 
   it('takes a write-off back for an invoice reopened here, before anything else: allocation off, credit note voided', async () => {
     const edited = invoice({
-      subject: 'Quarterly service',
+      inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const { sender, client, writeOffRows } = harness({ invoices: [edited], writeOffRows: [writtenOff()], values: WRITING });
@@ -605,7 +719,50 @@ describe('bad debts, written off in the company’s books (2026-11-10)', () => {
   });
 });
 
+describe('already in Xero, made by Zapier or by hand (2026-11-11)', () => {
+  const theirs = (over: Record<string, unknown> = {}) => ({ InvoiceID: 'zap-1', InvoiceNumber: '8440', Type: 'ACCREC', Status: 'AUTHORISED', Contact: { Name: '12 Example Lane' }, ...over });
+
+  it('links one Xero has approved under the same number, leaving it as it is, and makes no second', async () => {
+    const { sender, client, syncs, prisma } = harness({ inXero: [theirs() as never] });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, linked: 1, failed: 0 });
+    expect(calls(client, '/Invoices')).toHaveLength(0);
+    expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'zap-1', sentFingerprint: invoiceFingerprint(invoice()) });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ metadata: expect.objectContaining({ linked: 1 }) }) });
+  });
+
+  it('makes a draft Xero has the console’s, approved', async () => {
+    const { sender, client, syncs } = harness({ inXero: [theirs({ Status: 'DRAFT' }) as never] });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, linked: 0 });
+    expect((calls(client, '/Invoices')[0]![3] as { Invoices: { InvoiceID?: string; Status: string }[] }).Invoices[0]).toMatchObject({ InvoiceID: 'zap-1', Status: 'AUTHORISED' });
+    expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT' });
+  });
+
+  it('holds one back whose number Xero gave another client, or two invoices', async () => {
+    const other = harness({ inXero: [theirs({ Contact: { Name: '14 Example Lane' } }) as never] });
+    expect(await other.sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
+    expect(other.syncs.get('inv-1')).toMatchObject({ status: 'FAILED', problem: 'Xero has invoice 8440 for “14 Example Lane”, not this client: renumber one of them.' });
+    expect(calls(other.client, '/Invoices')).toHaveLength(0);
+
+    const twice = harness({ inXero: [theirs() as never, theirs({ InvoiceID: 'zap-2' }) as never] });
+    expect(await twice.sender.run(ORG, TENANT)).toMatchObject({ failed: 1 });
+    expect(twice.syncs.get('inv-1')).toMatchObject({ problem: 'Xero has 2 invoices numbered 8440: void the extra one there.' });
+  });
+
+  it('does not ask about one Xero already has from the console', async () => {
+    const { sender, client } = harness({ invoices: [inXero({ totalCents: 17500, inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] } })] });
+    await sender.run(ORG, TENANT);
+    expect(client.get.mock.calls.filter(([, , path]) => (path as string).startsWith('/Invoices?InvoiceNumbers='))).toHaveLength(0);
+  });
+});
+
 describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
+  it('sends none while the office records them in Xero itself (2026-11-11)', async () => {
+    const { sender, client, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [payment()], values: { ...PAYING, paymentsToXero: false } });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ payments: { sent: 0, failed: 0, removed: 0 }, problem: null });
+    expect(calls(client, '/Payments')).toHaveLength(0);
+    expect(paymentRows).toEqual([]);
+  });
+
   it('sends a new payment against its invoice in Xero, with an idempotency key, and keeps what Xero answered', async () => {
     const { sender, client, prisma, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [payment()], values: PAYING });
     expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, payments: { sent: 1, failed: 0, removed: 0 }, problem: null });
@@ -667,7 +824,7 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
 
   it('takes the payments off an invoice changed here, changes it, and puts them back on', async () => {
     const edited = invoice({
-      subject: 'Quarterly service',
+      inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const { sender, client, paymentRows, syncs } = harness({ invoices: [edited], payments: [payment()], paymentRows: [sentRow()], values: PAYING });
@@ -683,7 +840,7 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
 
   it('leaves an invoice unchanged when Xero will not take its payments off, saying why', async () => {
     const edited = invoice({
-      subject: 'Quarterly service',
+      inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const { sender, client, syncs } = harness({ invoices: [edited], payments: [], paymentRows: [sentRow()], values: PAYING });
@@ -699,7 +856,7 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
 
   it('changes no invoice whose payments are more than one run may delete: it waits, untouched, for the next', async () => {
     const edited = invoice({
-      subject: 'Quarterly service',
+      inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const many = Array.from({ length: MAX_PAYMENT_DELETES_PER_RUN + 1 }, (_, index) => sentRow({ id: `ps-${index}`, paymentId: `pay-${index}`, xeroPaymentId: `xero-payment-${index}` }));
@@ -734,6 +891,7 @@ describe('a run', () => {
       sent: 1,
       failed: 0,
       unchanged: 0,
+      linked: 0,
       payments: { sent: 0, failed: 0, removed: 0 },
       writeOffs: { sent: 0, failed: 0, reversed: 0 },
       problem: null,
@@ -744,6 +902,8 @@ describe('a run', () => {
     expect([org, tenant, path]).toEqual([ORG, TENANT, '/Invoices?summarizeErrors=false']);
     expect((body as { Invoices: { Status: string; Contact: unknown }[] }).Invoices[0]).toMatchObject({ Status: 'AUTHORISED', Contact: { ContactID: 'contact-0-12 Example Lane' } });
     expect(key).toMatch(/^[0-9a-f]{64}$/);
+    // Asked first whether Xero has it already, by its number (2026-11-11): one call for up to 50.
+    expect(client.get).toHaveBeenCalledWith(ORG, TENANT, '/Invoices?InvoiceNumbers=8440&Statuses=DRAFT,SUBMITTED,AUTHORISED,PAID&summaryOnly=true', expect.anything());
     expect(prisma.xeroContactLink.createMany).toHaveBeenCalledWith({
       data: [{ organizationId: ORG, xeroTenantId: TENANT, clientKey: 'jobber:client-1', xeroContactId: 'contact-0-12 Example Lane', name: '12 Example Lane' }],
       skipDuplicates: true,

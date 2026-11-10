@@ -1,5 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { XeroAccount, XeroConnectionView, XeroOrganisation, XeroOrganisationStatus, XeroTaxRate } from '@texasrenters/shared';
+import type {
+  XeroAccount,
+  XeroConnectionView,
+  XeroItem,
+  XeroOrganisation,
+  XeroOrganisationStatus,
+  XeroTaxRate,
+  XeroTrackingCategory,
+} from '@texasrenters/shared';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
@@ -12,7 +20,7 @@ import { XeroClient } from './xero.client';
 import { getXeroConfig, xeroConfigured } from './xero.config';
 import { XeroError } from './xero.errors';
 
-/** At most one read of an organisation's settings this often: each costs it four calls. */
+/** At most one read of an organisation's settings this often: each costs it six calls. */
 const READ_GAP_MS = 5 * 60_000;
 
 /** About the connection, not the reminders: these stop the read rather than leave the reminders unknown. */
@@ -62,6 +70,40 @@ const taxRatesSchema = z.object({
     }),
   ),
 });
+
+const trackingSchema = z.object({
+  TrackingCategories: z.array(
+    z.object({
+      TrackingCategoryID: z.string(),
+      Name: z.string(),
+      Status: z.string().nullish(),
+      Options: z.array(z.object({ TrackingOptionID: z.string(), Name: z.string(), Status: z.string().nullish() })).nullish(),
+    }),
+  ),
+});
+
+const itemsSchema = z.object({
+  Items: z.array(z.object({ ItemID: z.string(), Code: z.string().nullish(), Name: z.string().nullish(), IsSold: z.boolean().nullish() })),
+});
+
+/** The tracking categories and their options, by name (2026-11-11). */
+export function trackingCategoriesFrom(data: z.infer<typeof trackingSchema>): XeroTrackingCategory[] {
+  return data.TrackingCategories.map((category) => ({
+    trackingCategoryId: category.TrackingCategoryID,
+    name: category.Name,
+    status: category.Status ?? 'ACTIVE',
+    options: (category.Options ?? [])
+      .map((option) => ({ optionId: option.TrackingOptionID, name: option.Name, status: option.Status ?? 'ACTIVE' }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** The products and services with a code, by code (2026-11-11). */
+export function itemsFrom(data: z.infer<typeof itemsSchema>): XeroItem[] {
+  return data.Items.flatMap((item) =>
+    item.Code?.trim() ? [{ itemId: item.ItemID, code: item.Code.trim(), name: item.Name?.trim() || null, isSold: item.IsSold !== false }] : [],
+  ).sort((a, b) => a.code.localeCompare(b.code));
+}
 
 /** Only what the console uses, in its own words. */
 export function organisationFrom(data: z.infer<typeof organisationsSchema>): XeroOrganisation | null {
@@ -152,6 +194,8 @@ export class XeroService {
         organisation: (organisation.organisation as XeroOrganisation | null) ?? null,
         accounts: (organisation.accounts as XeroAccount[] | null) ?? [],
         taxRates: (organisation.taxRates as XeroTaxRate[] | null) ?? [],
+        trackingCategories: (organisation.trackingCategories as XeroTrackingCategory[] | null) ?? [],
+        items: (organisation.items as XeroItem[] | null) ?? [],
         readAt: organisation.catalogReadAt?.toISOString() ?? null,
         readProblem: organisation.catalogReadError ?? null,
         callsToday: organisation.callsDay === today ? organisation.callsUsed : 0,
@@ -198,8 +242,9 @@ export class XeroService {
   }
 
   /**
-   * Reads one organisation, its accounts, its tax rates and whether its own
-   * invoice reminders are on again: four calls to it, at most every five minutes.
+   * Reads one organisation, its accounts, its tax rates, its tracking
+   * categories and items, and whether its own invoice reminders are on again:
+   * six calls to it, at most every five minutes.
    */
   async read(organizationId: string, tenantId: string, force = false): Promise<XeroConnectionView> {
     const where = { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } };
@@ -217,13 +262,14 @@ export class XeroService {
       const accounts = accountsFrom(await this.client.get(organizationId, tenantId, '/Accounts', accountsSchema));
       const taxRates = taxRatesFrom(await this.client.get(organizationId, tenantId, '/TaxRates', taxRatesSchema));
       // On, Xero would email the organisation's clients beside the console. Not saying is not a reason to fail the read.
-      const invoiceRemindersOn = await this.client
-        .get(organizationId, tenantId, '/InvoiceReminders/Settings', remindersSchema)
-        .then(remindersFrom)
-        .catch((error: unknown) => {
-          if (error instanceof XeroError && READ_STOPPERS.has(error.code)) throw error;
-          return null;
-        });
+      const unsaid = (error: unknown) => {
+        if (error instanceof XeroError && READ_STOPPERS.has(error.code)) throw error;
+        return null;
+      };
+      const invoiceRemindersOn = await this.client.get(organizationId, tenantId, '/InvoiceReminders/Settings', remindersSchema).then(remindersFrom).catch(unsaid);
+      // What a line is tagged and itemed with (2026-11-11). Not saying leaves what was read before.
+      const trackingCategories = await this.client.get(organizationId, tenantId, '/TrackingCategories', trackingSchema).then(trackingCategoriesFrom).catch(unsaid);
+      const items = await this.client.get(organizationId, tenantId, '/Items', itemsSchema).then(itemsFrom).catch(unsaid);
       await this.prisma.xeroOrganisation.update({
         where,
         data: {
@@ -232,10 +278,17 @@ export class XeroService {
           organisation: organisation as unknown as Prisma.InputJsonValue,
           accounts: accounts as unknown as Prisma.InputJsonValue,
           taxRates: taxRates as unknown as Prisma.InputJsonValue,
+          ...(trackingCategories ? { trackingCategories: trackingCategories as unknown as Prisma.InputJsonValue } : {}),
+          ...(items ? { items: items as unknown as Prisma.InputJsonValue } : {}),
           invoiceRemindersOn,
           catalogReadAt: new Date(),
           catalogReadError: null,
         },
+      });
+      // An invoice held back for what Xero lacked -- an option for its technician, an item -- is worth another go now.
+      await this.prisma.xeroInvoiceSync.updateMany({
+        where: { organizationId, xeroTenantId: tenantId, status: 'FAILED', nextAttemptAt: null },
+        data: { nextAttemptAt: new Date() },
       });
     } catch (error) {
       const message = error instanceof XeroError ? error.message : 'Xero could not be read.';

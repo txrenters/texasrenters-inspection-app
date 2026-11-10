@@ -76,8 +76,43 @@ function transaction() {
       findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', propertywareBuildingId: 'building-1' }),
       findMany: jest.fn().mockResolvedValue([]),
     },
+    // Which company each product goes to, and whether it is in a company's books in Xero already (2026-11-11).
+    invoiceProduct: { findMany: jest.fn<Promise<{ name: string; xeroTenantId: string | null }[]>, []>().mockResolvedValue([]) },
+    xeroInvoiceSync: { findUnique: jest.fn<Promise<{ xeroTenantId: string; xeroInvoiceId: string | null } | null>, []>().mockResolvedValue(null) },
   };
 }
+
+describe("a Jobber invoice's company (2026-11-11)", () => {
+  it('goes to the one company its lines go to; a line that says nothing follows', async () => {
+    const tx = transaction();
+    tx.invoiceProduct.findMany.mockResolvedValue([{ name: 'Filter Change', xeroTenantId: 'homes' }]);
+    await applyJobberInvoice(tx as never, ORG, copy(), NOW);
+    expect(tx.invoice.create.mock.calls[0][0].data).toMatchObject({ xeroTenantId: 'homes' });
+  });
+
+  it('goes to none when its lines go to two companies, or to none', async () => {
+    const two = transaction();
+    two.invoiceProduct.findMany.mockResolvedValue([
+      { name: 'Filter Change', xeroTenantId: 'homes' },
+      { name: 'pest control', xeroTenantId: 'pest' },
+    ]);
+    await applyJobberInvoice(two as never, ORG, copy(), NOW);
+    expect(two.invoice.create.mock.calls[0][0].data).toMatchObject({ xeroTenantId: null });
+
+    const none = transaction();
+    await applyJobberInvoice(none as never, ORG, copy(), NOW);
+    expect(none.invoice.create.mock.calls[0][0].data).toMatchObject({ xeroTenantId: null });
+  });
+
+  it('stays in the books it is in, whatever its lines say now', async () => {
+    const tx = transaction();
+    tx.invoice.findUnique.mockResolvedValue({ id: 'invoice-1', jobberUpdatedAt: new Date('2026-11-01T00:00:00.000Z') } as never);
+    tx.invoiceProduct.findMany.mockResolvedValue([{ name: 'Filter Change', xeroTenantId: 'homes' }]);
+    tx.xeroInvoiceSync.findUnique.mockResolvedValue({ xeroTenantId: 'air', xeroInvoiceId: 'xero-1' });
+    await applyJobberInvoice(tx as never, ORG, copy(), NOW);
+    expect(tx.invoice.update.mock.calls[0][0].data).toMatchObject({ xeroTenantId: 'air' });
+  });
+});
 
 describe("writing Jobber's invoice into the copy", () => {
   it('makes a new copy with its lines and payments, matched to the visit it names', async () => {
