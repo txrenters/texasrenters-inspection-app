@@ -103,6 +103,15 @@ export const revenueAccounts = (accounts: readonly XeroAccount[]) =>
 export const paymentAccounts = (accounts: readonly XeroAccount[]) =>
   accounts.filter((account) => account.status === 'ACTIVE' && account.takesPayments);
 
+/** The accounts a bad debt can be written off to (2026-11-10): active expense accounts with a code. */
+export const badDebtAccounts = (accounts: readonly XeroAccount[]) =>
+  accounts.filter(
+    (account) =>
+      account.status === 'ACTIVE' &&
+      account.code &&
+      (account.class === 'EXPENSE' || account.type === 'EXPENSE' || account.type === 'OVERHEADS' || account.type === 'DIRECTCOSTS'),
+  );
+
 /**
  * The office's choices for sending to Xero (2026-11-10, phase 2 of the Xero
  * plan). The contact on a Xero invoice is the invoice's client -- for the
@@ -119,6 +128,11 @@ export interface XeroSettingsValues {
   /** Product or service name key (`productNameKey`) to Xero account id. */
   salesAccounts: Record<string, string>;
   paymentAccounts: Partial<Record<PaymentMethod, string>>;
+  /**
+   * The expense account an invoice closed as bad debt is written off to, with
+   * a credit note (2026-11-10); null or left out for none chosen yet.
+   */
+  badDebtAccountId?: string | null;
 }
 
 /** A name a line can carry: on the office's products list, or billed in the past six months. */
@@ -216,6 +230,8 @@ export function xeroSettingsProblem(values: XeroSettingsValues, catalog: XeroCat
     if (typeof accountId !== 'string' || !payments.has(accountId))
       return `${PAYMENT_METHOD_LABEL[method as PaymentMethod]} is given an account that does not take payments in Xero.`;
   }
+  if (values.badDebtAccountId && !badDebtAccounts(catalog.accounts).some((account) => account.accountId === values.badDebtAccountId))
+    return 'Bad debts are given an account that is not an active expense account with a code in Xero.';
   return null;
 }
 
@@ -311,6 +327,20 @@ export interface XeroPaymentFailure {
   nextAttemptAt: string | null;
 }
 
+/** A bad debt Xero refused to write off, or take back, or the console held back (2026-11-10). */
+export interface XeroWriteOffFailure {
+  invoiceId: string;
+  number: string | null;
+  clientName: string;
+  amountCents: number;
+  /** Taking a write-off back, for an invoice reopened here; otherwise writing one off. */
+  reversing: boolean;
+  problem: string;
+  attempts: number;
+  lastAttemptAt: string | null;
+  nextAttemptAt: string | null;
+}
+
 export interface XeroSendingView {
   /** The organisation sending is for: each has its own switch. */
   tenantId: string;
@@ -331,6 +361,8 @@ export interface XeroSendingView {
     noCompany: number;
     /** Payments against this organisation's invoices (2026-11-10, phase 4): in Xero, and refused or held back. */
     payments: { sent: number; failed: number };
+    /** Bad debts written off in Xero, and refused or held back (2026-11-10). */
+    writeOffs: { sent: number; failed: number };
   };
   lastRunAt: string | null;
   lastRunProblem: string | null;
@@ -338,6 +370,8 @@ export interface XeroSendingView {
   failures: XeroSendingFailure[];
   /** The latest payments refused or held back, newest first; at most 50. */
   paymentFailures: XeroPaymentFailure[];
+  /** The latest bad debts refused or held back, newest first; at most 50. */
+  writeOffFailures: XeroWriteOffFailure[];
 }
 
 /** Why sending cannot run, in the order to fix them. */

@@ -9,6 +9,7 @@ import { XeroError } from '../src/integrations/xero/xero.errors';
 import { clientKeyOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero } from '../src/integrations/xero/xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero } from '../src/integrations/xero/xero-payment';
 import { MAX_INVOICES_PER_RUN, MAX_PAYMENT_DELETES_PER_RUN, XeroSenderService } from '../src/integrations/xero/xero-sender.service';
+import { xeroWriteOffFrom } from '../src/integrations/xero/xero-write-off';
 import { remindersFrom } from '../src/integrations/xero/xero.service';
 
 /**
@@ -36,6 +37,8 @@ const ACCOUNTS: XeroAccount[] = [
   { accountId: 'a-460', code: '460', name: 'Old revenue', type: 'REVENUE', class: 'REVENUE', status: 'ARCHIVED', takesPayments: false },
   // Where payments land (2026-11-10, phase 4).
   { accountId: 'a-090', code: '090', name: 'Operating checking', type: 'BANK', class: 'ASSET', status: 'ACTIVE', takesPayments: true },
+  // Where bad debts are written off (2026-11-10).
+  { accountId: 'a-480', code: '480', name: 'Bad debts', type: 'EXPENSE', class: 'EXPENSE', status: 'ACTIVE', takesPayments: false },
 ];
 const SETTINGS: XeroSettingsValues = {
   sendFrom: '2026-12-01',
@@ -233,7 +236,11 @@ function harness(options: {
   paymentRows?: Record<string, unknown>[];
   paymentCandidates?: string[];
   values?: XeroSettingsValues;
+  /** Invoices closed as bad debt and in Xero, and their write-offs (2026-11-10). */
+  badDebts?: Record<string, unknown>[];
+  writeOffRows?: Record<string, unknown>[];
 } = {}) {
+  const writeOffRows: Record<string, unknown>[] = (options.writeOffRows ?? []).map((row) => ({ ...row }));
   const invoices = options.invoices ?? [invoice()];
   const payments = options.payments ?? [];
   const paymentRows: Record<string, unknown>[] = (options.paymentRows ?? []).map((row) => ({ ...row }));
@@ -276,7 +283,10 @@ function harness(options: {
       ),
     },
     invoice: {
-      findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => invoices.filter((item) => where.id.in.includes(item.id))),
+      // The invoices to send; or, asked for bad debts, those (2026-11-10).
+      findMany: jest.fn(async ({ where }: { where: { id?: { in: string[] }; status?: string } }) =>
+        where.id ? invoices.filter((item) => where.id!.in.includes(item.id)) : where.status === 'BAD_DEBT' ? (options.badDebts ?? []) : [],
+      ),
       count: jest.fn(async () => 0),
     },
     xeroInvoiceSync: {
@@ -312,6 +322,23 @@ function harness(options: {
       }),
       updateMany: jest.fn(async () => ({ count: 2 })),
     },
+    xeroWriteOffSync: {
+      // Asked with `invoice`: those of invoices reopened here.
+      findMany: jest.fn(async ({ where }: { where: { invoice?: unknown; status?: string } }) =>
+        writeOffRows.filter((row) => (where.invoice ? row.invoiceStatus !== 'BAD_DEBT' : true) && (where.status ? row.status === where.status : true)),
+      ),
+      count: jest.fn(async ({ where }: { where: { status: string } }) => writeOffRows.filter((row) => row.status === where.status).length),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => Object.assign(writeOffRows.find((row) => row.id === where.id)!, data)),
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => writeOffRows.splice(writeOffRows.findIndex((row) => row.id === where.id), 1)[0]),
+      upsert: jest.fn(async ({ where, create, update }: { where: { invoiceId: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        const row = writeOffRows.find((item) => item.invoiceId === where.invoiceId);
+        if (row) return Object.assign(row, update);
+        const made = { id: `wo-${writeOffRows.length + 1}`, ...create };
+        writeOffRows.push(made);
+        return made;
+      }),
+      updateMany: jest.fn(async () => ({ count: 2 })),
+    },
     xeroContactLink: {
       findMany: jest.fn(async ({ where }: { where: { clientKey: { in: string[] } } }) =>
         (options.links ?? []).filter((link) => where.clientKey.in.includes(link.clientKey)),
@@ -335,14 +362,22 @@ function harness(options: {
       // One deleted, or several made.
       if (path.startsWith('/Payments/')) return { Payments: [{ PaymentID: path.split('/')[2], StatusAttributeString: 'OK' }] };
       if (path.startsWith('/Payments')) return { Payments: body.Payments!.map((_payment, index) => ({ PaymentID: `xero-payment-${index + 1}`, StatusAttributeString: 'OK' })) };
+      // A credit note made, or voided (2026-11-10).
+      if (path.startsWith('/CreditNotes'))
+        return { CreditNotes: (body as { CreditNotes: { CreditNoteID?: string }[] }).CreditNotes.map((note, index) => ({ CreditNoteID: note.CreditNoteID ?? `credit-${index + 1}`, StatusAttributeString: 'OK' })) };
       return { Invoices: body.Invoices!.map((item, index) => ({ InvoiceID: `xero-${item.InvoiceNumber ?? index}`, StatusAttributeString: 'OK' })) };
     }),
-    get: jest.fn(),
+    get: jest.fn(async (_org: string, _tenant: string, path: string): Promise<unknown> =>
+      path.startsWith('/CreditNotes/') ? { CreditNotes: [{ CreditNoteID: path.split('/')[2], Allocations: [{ AllocationID: 'allocation-found' }] }] } : {},
+    ),
+    // A credit note's allocation, made or taken off (2026-11-10).
+    put: jest.fn<Promise<unknown>, [string, string, string, unknown, unknown, string]>(async () => ({ Allocations: [{ AllocationID: 'allocation-1', StatusAttributeString: 'OK' }] })),
+    delete: jest.fn(async (): Promise<unknown> => ({ Allocations: [] })),
   };
   const auth = { requireReconnect: jest.fn() };
   const settings = { read: jest.fn(async () => ({ values: options.values ?? SETTINGS, ready: options.ready ?? true, checks: [] })) };
   const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never);
-  return { sender, prisma, client, auth, syncs, paymentRows, settingsRow: () => settingsRow };
+  return { sender, prisma, client, auth, syncs, paymentRows, writeOffRows, settingsRow: () => settingsRow };
 }
 
 const calls = (client: { post: jest.Mock }, prefix: string) => client.post.mock.calls.filter(([, , path]) => (path as string).startsWith(prefix));
@@ -402,6 +437,171 @@ describe('a payment, as Xero is sent it', () => {
   it('changes its fingerprint when what it says changes, not when its account does', () => {
     expect(paymentFingerprint(payment({ amountCents: 1000 }))).not.toBe(paymentFingerprint(payment()));
     expect(paymentFingerprint(payment({ reference: ' 1042 ' }))).toBe(paymentFingerprint(payment()));
+  });
+});
+
+/** Bad debts are written off to the bad-debts expense account (2026-11-10). */
+const WRITING: XeroSettingsValues = { ...SETTINGS, badDebtAccountId: 'a-480' };
+/** Invoice #8449, in Xero, closed as bad debt here on Dec 2 with $175.00 still owed. */
+const badDebt = (over: Record<string, unknown> = {}) => ({
+  id: 'inv-9',
+  number: '8449',
+  clientName: '12 Example Lane',
+  jobberClientId: 'client-1',
+  balanceCents: 17500,
+  updatedAt: new Date('2026-12-02T15:00:00.000Z'),
+  xeroSync: { xeroInvoiceId: 'xero-8449' },
+  xeroWriteOff: null,
+  ...over,
+});
+const LINKS = [{ clientKey: 'jobber:client-1', xeroContactId: 'contact-1' }];
+const writtenOff = (over: Record<string, unknown> = {}) => ({
+  id: 'wo-1',
+  invoiceId: 'inv-9',
+  xeroTenantId: TENANT,
+  xeroCreditNoteId: 'credit-old',
+  xeroAllocationId: 'allocation-old',
+  amountCents: 17500,
+  status: 'SENT',
+  attempts: 0,
+  // The invoice was reopened here.
+  invoiceStatus: 'AWAITING_PAYMENT',
+  ...over,
+});
+
+describe('a bad debt, as Xero is sent it (2026-11-10)', () => {
+  const context = { settings: WRITING, accounts: ACCOUNTS, contactId: 'contact-1', xeroInvoiceId: 'xero-8449', day: '2026-12-02' };
+
+  it('is a credit note for what was still owed, to the bad-debts account, and its allocation to the invoice', () => {
+    expect(xeroWriteOffFrom({ number: '8449', balanceCents: 17500 }, context)).toEqual({
+      kind: 'send',
+      creditNote: {
+        Type: 'ACCRECCREDIT',
+        Contact: { ContactID: 'contact-1' },
+        Date: '2026-12-02',
+        Status: 'AUTHORISED',
+        LineAmountTypes: 'Exclusive',
+        Reference: 'Bad debt: invoice #8449',
+        LineItems: [{ Description: 'Written off as bad debt: invoice #8449', Quantity: 1, UnitAmount: 175, LineAmount: 175, AccountCode: '480', TaxType: 'NONE' }],
+      },
+      allocation: { Invoice: { InvoiceID: 'xero-8449' }, Amount: 175, Date: '2026-12-02' },
+    });
+  });
+
+  it('is held back with the reason with no account chosen, or one no longer an expense account', () => {
+    expect(xeroWriteOffFrom({ number: '8449', balanceCents: 17500 }, { ...context, settings: SETTINGS })).toEqual({
+      kind: 'problem',
+      problem: 'Choose the account bad debts are written off to, under “Before anything is sent”.',
+    });
+    expect(xeroWriteOffFrom({ number: '8449', balanceCents: 17500 }, { ...context, settings: { ...WRITING, badDebtAccountId: 'a-400' } })).toMatchObject({
+      problem: 'The account chosen for bad debts is no longer an active expense account in Xero: choose another.',
+    });
+  });
+});
+
+describe('bad debts, written off in the company’s books (2026-11-10)', () => {
+  it('writes off what a bad debt still owed with a credit note, allocates it to the invoice, and keeps both', async () => {
+    const { sender, client, writeOffRows } = harness({ invoices: [], candidates: [], badDebts: [badDebt()], links: LINKS, values: WRITING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ writeOffs: { sent: 1, failed: 0, reversed: 0 }, problem: null });
+    const [made] = calls(client, '/CreditNotes');
+    expect(made![3]).toEqual({ CreditNotes: [expect.objectContaining({ Type: 'ACCRECCREDIT', Contact: { ContactID: 'contact-1' }, Date: '2026-12-02' })] });
+    expect(made![5]).toMatch(/^[0-9a-f]{64}$/);
+    expect(client.put).toHaveBeenCalledWith(
+      ORG,
+      TENANT,
+      '/CreditNotes/credit-1/Allocations',
+      { Allocations: [{ Invoice: { InvoiceID: 'xero-8449' }, Amount: 175, Date: '2026-12-02' }] },
+      expect.anything(),
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+    );
+    expect(writeOffRows).toEqual([expect.objectContaining({ invoiceId: 'inv-9', xeroCreditNoteId: 'credit-1', xeroAllocationId: 'allocation-1', amountCents: 17500, status: 'SENT' })]);
+  });
+
+  it('holds one back, without calling Xero, until a bad-debts account is chosen', async () => {
+    const { sender, client, writeOffRows } = harness({ invoices: [], candidates: [], badDebts: [badDebt()], links: LINKS, values: SETTINGS });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ writeOffs: { sent: 0, failed: 1, reversed: 0 } });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(writeOffRows[0]).toMatchObject({ status: 'FAILED', nextAttemptAt: null, problem: expect.stringContaining('Choose the account bad debts are written off to') });
+  });
+
+  it('keeps the credit note when Xero refuses its allocation, and allocates that one next time, never a second', async () => {
+    const first = harness({ invoices: [], candidates: [], badDebts: [badDebt()], links: LINKS, values: WRITING });
+    first.client.put.mockResolvedValueOnce({ Allocations: [{ AllocationID: null, StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Amount exceeds the amount due' }] }] } as never);
+    expect(await first.sender.run(ORG, TENANT)).toMatchObject({ writeOffs: { sent: 0, failed: 1 } });
+    expect(first.writeOffRows[0]).toMatchObject({ status: 'FAILED', xeroCreditNoteId: 'credit-1', problem: 'Amount exceeds the amount due', nextAttemptAt: expect.any(Date) });
+
+    const again = harness({
+      invoices: [],
+      candidates: [],
+      badDebts: [badDebt({ xeroWriteOff: { xeroCreditNoteId: 'credit-1', attempts: 1 } })],
+      writeOffRows: [{ id: 'wo-1', invoiceId: 'inv-9', xeroCreditNoteId: 'credit-1', status: 'FAILED', invoiceStatus: 'BAD_DEBT' }],
+      links: LINKS,
+      values: WRITING,
+    });
+    expect(await again.sender.run(ORG, TENANT)).toMatchObject({ writeOffs: { sent: 1 } });
+    expect(calls(again.client, '/CreditNotes')).toHaveLength(0);
+    expect(again.client.put.mock.calls[0]![2]).toBe('/CreditNotes/credit-1/Allocations');
+  });
+
+  it('takes a write-off back for an invoice reopened here, before anything else: allocation off, credit note voided', async () => {
+    const edited = invoice({
+      subject: 'Quarterly service',
+      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
+    });
+    const { sender, client, writeOffRows } = harness({ invoices: [edited], writeOffRows: [writtenOff()], values: WRITING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, writeOffs: { sent: 0, failed: 0, reversed: 1 } });
+    expect(client.delete).toHaveBeenCalledWith(ORG, TENANT, '/CreditNotes/credit-old/Allocations/allocation-old', expect.anything());
+    const [voided] = calls(client, '/CreditNotes');
+    expect(voided![3]).toEqual({ CreditNotes: [{ CreditNoteID: 'credit-old', Status: 'VOIDED' }] });
+    // Before the invoice is changed: Xero changes no invoice with a credit on it.
+    const order = [...client.delete.mock.invocationCallOrder, ...client.post.mock.invocationCallOrder];
+    expect(client.delete.mock.invocationCallOrder[0]).toBe(Math.min(...order));
+    expect(writeOffRows).toEqual([]);
+  });
+
+  it('finds the allocation in Xero when Xero did not say its id', async () => {
+    const { sender, client } = harness({ invoices: [], candidates: [], writeOffRows: [writtenOff({ xeroAllocationId: null })], values: WRITING });
+    await sender.run(ORG, TENANT);
+    expect(client.get).toHaveBeenCalledWith(ORG, TENANT, '/CreditNotes/credit-old', expect.anything());
+    expect(client.delete).toHaveBeenCalledWith(ORG, TENANT, '/CreditNotes/credit-old/Allocations/allocation-found', expect.anything());
+  });
+
+  it('only forgets a write-off that never reached Xero', async () => {
+    const { sender, client, writeOffRows } = harness({
+      invoices: [],
+      candidates: [],
+      writeOffRows: [writtenOff({ xeroCreditNoteId: null, xeroAllocationId: null, status: 'FAILED', nextAttemptAt: null })],
+      values: WRITING,
+    });
+    await sender.run(ORG, TENANT);
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(client.post).not.toHaveBeenCalled();
+    expect(writeOffRows).toEqual([]);
+  });
+
+  it('keeps one Xero would not take back, with why, and tries again later', async () => {
+    const { sender, client, writeOffRows } = harness({ invoices: [], candidates: [], writeOffRows: [writtenOff()], values: WRITING });
+    client.delete.mockRejectedValueOnce(new XeroError('Xero refused it: The credit note is reconciled', 'XERO_VALIDATION', 422, 400));
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ writeOffs: { failed: 1, reversed: 0 } });
+    expect(writeOffRows[0]).toMatchObject({
+      status: 'FAILED',
+      problem: 'Reopened here, but Xero would not take the write-off back: Xero refused it: The credit note is reconciled',
+      nextAttemptAt: expect.any(Date),
+    });
+  });
+
+  it('counts the bad debts written off and refused, and lists the refused', async () => {
+    const { sender } = harness({
+      writeOffRows: [
+        writtenOff({ id: 'wo-2', invoiceId: 'inv-8' }),
+        writtenOff({ status: 'FAILED', problem: 'Amount exceeds the amount due', invoice: { number: '8449', clientName: '12 Example Lane', status: 'BAD_DEBT' } }),
+      ],
+    });
+    const view = await sender.view(ORG, TENANT);
+    expect(view.counts.writeOffs).toEqual({ sent: 1, failed: 1 });
+    expect(view.writeOffFailures).toEqual([
+      expect.objectContaining({ invoiceId: 'inv-9', number: '8449', amountCents: 17500, reversing: false, problem: 'Amount exceeds the amount due' }),
+    ]);
   });
 });
 
@@ -530,7 +730,14 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
 describe('a run', () => {
   it('makes the contact, sends the invoice approved with an idempotency key, and keeps what Xero answered', async () => {
     const { sender, client, prisma, syncs, settingsRow } = harness();
-    expect(await sender.run(ORG, TENANT)).toEqual({ sent: 1, failed: 0, unchanged: 0, payments: { sent: 0, failed: 0, removed: 0 }, problem: null });
+    expect(await sender.run(ORG, TENANT)).toEqual({
+      sent: 1,
+      failed: 0,
+      unchanged: 0,
+      payments: { sent: 0, failed: 0, removed: 0 },
+      writeOffs: { sent: 0, failed: 0, reversed: 0 },
+      problem: null,
+    });
     expect(calls(client, '/Contacts')).toHaveLength(1);
     expect(calls(client, '/Contacts')[0]![3]).toEqual({ Contacts: [{ Name: '12 Example Lane' }] });
     const [org, tenant, path, body, , key] = calls(client, '/Invoices')[0]!;
@@ -712,7 +919,10 @@ describe('turning it on, and the office’s buttons', () => {
     expect(prisma.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
     // And every refused payment (2026-11-10, phase 4).
     expect(prisma.xeroPaymentSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date), seenUpdatedAt: null } });
-    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2, payments: 2 } }) });
+    expect(prisma.xeroWriteOffSync.updateMany).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'FAILED' }, data: { nextAttemptAt: expect.any(Date) } });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'XERO_SENDING_RETRIED', metadata: { tenantId: TENANT, invoices: 2, payments: 2, writeOffs: 2 } }),
+    });
   });
 
   it('is seen with integrations:read and run with integrations:manage', () => {

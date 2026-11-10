@@ -24,18 +24,19 @@ const OFF: XeroSendingView = {
   changedAt: null,
   canWrite: true,
   blockers: [],
-  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 } },
+  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 } },
   lastRunAt: null,
   lastRunProblem: null,
   failures: [],
   paymentFailures: [],
+  writeOffFailures: [],
 };
 
 const ON: XeroSendingView = {
   ...OFF,
   enabled: true,
   changedAt: '2026-12-02T15:00:00.000Z',
-  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 } },
+  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 }, writeOffs: { sent: 4, failed: 1 } },
   lastRunAt: '2026-12-02T17:50:00.000Z',
   failures: [
     {
@@ -69,6 +70,19 @@ const ON: XeroSendingView = {
       attempts: 1,
       lastAttemptAt: '2026-12-02T17:50:00.000Z',
       nextAttemptAt: null,
+    },
+  ],
+  writeOffFailures: [
+    {
+      invoiceId: 'inv-4',
+      number: '8443',
+      clientName: '18 Example Lane',
+      amountCents: 6000,
+      reversing: true,
+      problem: 'Reopened here, but Xero would not take the write-off back: The credit note is reconciled',
+      attempts: 2,
+      lastAttemptAt: '2026-12-02T17:50:00.000Z',
+      nextAttemptAt: '2026-12-02T23:50:00.000Z',
     },
   ],
 };
@@ -113,6 +127,19 @@ describe('the sending panel', () => {
     expect(within(refused).getByText(/^\$175\.00, /)).toBeInTheDocument();
     expect(within(refused).getByText('#8442')).toBeInTheDocument();
     expect(within(refused).getByText('When it changes')).toBeInTheDocument();
+  });
+
+  it('shows the bad debts written off, and the one Xero would not take back (2026-11-10)', () => {
+    mount(ON);
+    expect(within(screen.getByLabelText('Bad debts')).getByText('Written off in Xero').nextSibling).toHaveTextContent('4');
+    const refused = within(screen.getByRole('table', { name: 'Bad debts refused' })).getByText(/would not take the write-off back/).closest('tr')!;
+    expect(within(refused).getByText('#8443')).toBeInTheDocument();
+    expect(refused).toHaveTextContent('$60.00 · taking back');
+  });
+
+  it('offers to try again when only a bad debt was refused', () => {
+    mount({ ...ON, failures: [], counts: { ...ON.counts, failed: 0, payments: { sent: 9, failed: 0 } } });
+    expect(screen.getByRole('button', { name: 'Try the refused again' })).toBeInTheDocument();
   });
 
   it('offers to try again when only a payment was refused', () => {

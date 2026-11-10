@@ -19,6 +19,8 @@ export class SaveXeroSettingsDto {
   @IsObject() salesAccounts!: Record<string, string>;
   /** Payment method to Xero account id. */
   @IsObject() paymentAccounts!: Record<string, string>;
+  /** The expense account bad debts are written off to (2026-11-10). */
+  @IsOptional() @IsString() @MaxLength(64) badDebtAccountId?: string | null;
   @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
 }
 

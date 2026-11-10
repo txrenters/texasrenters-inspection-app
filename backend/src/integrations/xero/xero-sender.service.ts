@@ -6,12 +6,14 @@ import { InvoiceStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../../common/auth';
+import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { XeroAuthService } from './xero-auth.service';
 import { xeroValidationMessages, XeroClient } from './xero.client';
 import { XeroError } from './xero.errors';
 import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody, type XeroVoidBody } from './xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
+import { xeroWriteOffFrom } from './xero-write-off';
 import { XeroSettingsService } from './xero-settings.service';
 
 /** Xero takes up to 50 of a kind in one call. */
@@ -22,6 +24,8 @@ export const MAX_INVOICES_PER_RUN = 200;
 export const MAX_PAYMENTS_PER_RUN = 200;
 /** Payments deleted in Xero in one run -- removed or changed here, or taken off an invoice to change it. One call each. */
 export const MAX_PAYMENT_DELETES_PER_RUN = 20;
+/** Bad debts written off, and write-offs taken back, in one run (2026-11-10): two calls each. */
+export const MAX_WRITE_OFFS_PER_RUN = 20;
 /** Contacts looked up by name in one run, after Xero said the name was taken. */
 const MAX_LOOKUPS_PER_RUN = 20;
 /** A run's claim on the office; longer than any run, short enough that a crashed one does not stop sending for long. */
@@ -40,6 +44,19 @@ const invoicesSchema = z.object({
 });
 const paymentsSchema = z.object({
   Payments: z.array(z.object({ PaymentID: z.string().nullish(), StatusAttributeString: z.string().nullish(), ValidationErrors: validationErrors })),
+});
+const creditNotesSchema = z.object({
+  CreditNotes: z.array(
+    z.object({
+      CreditNoteID: z.string().nullish(),
+      StatusAttributeString: z.string().nullish(),
+      ValidationErrors: validationErrors,
+      Allocations: z.array(z.object({ AllocationID: z.string().nullish() })).nullish(),
+    }),
+  ),
+});
+const allocationsSchema = z.object({
+  Allocations: z.array(z.object({ AllocationID: z.string().nullish(), StatusAttributeString: z.string().nullish(), ValidationErrors: validationErrors })).nullish(),
 });
 type XeroAnswer = {
   ContactID?: string | null;
@@ -94,6 +111,8 @@ export interface XeroRunResult {
   unchanged: number;
   /** Payments (2026-11-10, phase 4): sent, refused or held back, and deleted in Xero after they were removed here. */
   payments: { sent: number; failed: number; removed: number };
+  /** Bad debts (2026-11-10): written off, refused or held back, and taken back for invoices reopened here. */
+  writeOffs: { sent: number; failed: number; reversed: number };
   problem: string | null;
 }
 
@@ -129,7 +148,7 @@ export class XeroSenderService {
   async view(organizationId: string, tenantId: string): Promise<XeroSendingView> {
     const state = await this.state(organizationId, tenantId);
     const tenant = state.tenantId;
-    const [sent, failed, notYet, noCompany, failures, paymentsSent, paymentsFailed, paymentFailures] = await Promise.all([
+    const [sent, failed, notYet, noCompany, failures, paymentsSent, paymentsFailed, paymentFailures, writeOffsSent, writeOffsFailed, writeOffFailures] = await Promise.all([
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'SENT' } }) : 0,
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'FAILED' } }) : 0,
       tenant && state.sendFrom
@@ -190,6 +209,25 @@ export class XeroSenderService {
             },
           })
         : [],
+      // Its bad debts (2026-11-10).
+      tenant ? this.prisma.xeroWriteOffSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'SENT' } }) : 0,
+      tenant ? this.prisma.xeroWriteOffSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'FAILED' } }) : 0,
+      tenant
+        ? this.prisma.xeroWriteOffSync.findMany({
+            where: { organizationId, xeroTenantId: tenant, status: 'FAILED' },
+            orderBy: [{ lastAttemptAt: 'desc' }],
+            take: 50,
+            select: {
+              invoiceId: true,
+              amountCents: true,
+              problem: true,
+              attempts: true,
+              lastAttemptAt: true,
+              nextAttemptAt: true,
+              invoice: { select: { number: true, clientName: true, status: true } },
+            },
+          })
+        : [],
     ]);
     return {
       tenantId,
@@ -197,7 +235,14 @@ export class XeroSenderService {
       changedAt: state.row?.sendingChangedAt?.toISOString() ?? null,
       canWrite: state.canWrite,
       blockers: state.blockers,
-      counts: { sent, failed, notYet, noCompany, payments: { sent: paymentsSent, failed: paymentsFailed } },
+      counts: {
+        sent,
+        failed,
+        notYet,
+        noCompany,
+        payments: { sent: paymentsSent, failed: paymentsFailed },
+        writeOffs: { sent: writeOffsSent, failed: writeOffsFailed },
+      },
       lastRunAt: state.row?.lastRunAt?.toISOString() ?? null,
       lastRunProblem: state.row?.lastRunProblem ?? null,
       failures: failures.map((row) => ({
@@ -218,6 +263,18 @@ export class XeroSenderService {
         amountCents: row.payment?.amountCents ?? null,
         paidOn: row.payment ? row.payment.paidOn.toISOString().slice(0, 10) : null,
         problem: row.problem ?? 'Not sent.',
+        attempts: row.attempts,
+        lastAttemptAt: row.lastAttemptAt?.toISOString() ?? null,
+        nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
+      })),
+      writeOffFailures: writeOffFailures.map((row) => ({
+        invoiceId: row.invoiceId,
+        number: row.invoice.number,
+        clientName: row.invoice.clientName,
+        amountCents: row.amountCents,
+        // Reopened here: what is left to do is taking it back.
+        reversing: row.invoice.status !== InvoiceStatus.BAD_DEBT,
+        problem: row.problem ?? 'Not written off.',
         attempts: row.attempts,
         lastAttemptAt: row.lastAttemptAt?.toISOString() ?? null,
         nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
@@ -264,7 +321,11 @@ export class XeroSenderService {
     const due = { nextAttemptAt: new Date(), seenUpdatedAt: null };
     const { count } = await this.prisma.xeroInvoiceSync.updateMany({ where: { organizationId, xeroTenantId: tenantId, status: 'FAILED' }, data: due });
     const payments = await this.prisma.xeroPaymentSync.updateMany({ where: { organizationId, xeroTenantId: tenantId, status: 'FAILED' }, data: due });
-    if (count || payments.count)
+    const writeOffs = await this.prisma.xeroWriteOffSync.updateMany({
+      where: { organizationId, xeroTenantId: tenantId, status: 'FAILED' },
+      data: { nextAttemptAt: due.nextAttemptAt },
+    });
+    if (count || payments.count || writeOffs.count)
       await this.prisma.auditLog.create({
         data: {
           organizationId,
@@ -272,7 +333,7 @@ export class XeroSenderService {
           action: 'XERO_SENDING_RETRIED',
           entityType: 'XeroSettings',
           entityId: organizationId,
-          metadata: { tenantId, invoices: count, payments: payments.count },
+          metadata: { tenantId, invoices: count, payments: payments.count, writeOffs: writeOffs.count },
         },
       });
     return this.view(organizationId, tenantId);
@@ -285,7 +346,14 @@ export class XeroSenderService {
    * the rest for the next run and says why.
    */
   async run(organizationId: string, tenantId: string): Promise<XeroRunResult> {
-    const result: XeroRunResult = { sent: 0, failed: 0, unchanged: 0, payments: { sent: 0, failed: 0, removed: 0 }, problem: null };
+    const result: XeroRunResult = {
+      sent: 0,
+      failed: 0,
+      unchanged: 0,
+      payments: { sent: 0, failed: 0, removed: 0 },
+      writeOffs: { sent: 0, failed: 0, reversed: 0 },
+      problem: null,
+    };
     const state = await this.state(organizationId, tenantId);
     if (!state.row?.sendingEnabled) return { ...result, problem: 'Sending is off.' };
     if (state.blockers.length || !state.tenantId || !state.sendFrom) {
@@ -303,11 +371,14 @@ export class XeroSenderService {
     const sentNumbers: string[] = [];
     const budget: DeleteBudget = { left: MAX_PAYMENT_DELETES_PER_RUN };
     try {
-      // Payments removed here first: Xero voids no invoice with a payment on it.
+      // Payments removed here, and write-offs of invoices reopened here, first: Xero changes and voids no invoice
+      // with a payment or a credit on it.
       await this.removePayments(organizationId, state.tenantId, result, budget);
+      await this.reverseWriteOffs(organizationId, state.tenantId, result);
       await this.send(organizationId, state.tenantId, state.sendFrom, state.accounts, result, sentNumbers, budget);
-      // Then the payments, against the invoices as they now are in Xero.
+      // Then the payments, against the invoices as they now are in Xero; then what was written off as bad debt.
       await this.sendPayments(organizationId, state.tenantId, state.accounts, result, budget);
+      await this.writeOffs(organizationId, state.tenantId, state.accounts, result);
     } catch (error) {
       result.problem = error instanceof XeroError ? error.message : 'The run stopped on an unexpected error.';
       if (error instanceof XeroError && error.code === 'XERO_REAUTHORIZATION_REQUIRED') await this.auth.requireReconnect(organizationId, error.message);
@@ -318,8 +389,8 @@ export class XeroSenderService {
         data: { sendingClaimedUntil: null, lastRunAt: new Date(), lastRunProblem: result.problem },
       });
     }
-    const { payments } = result;
-    if (result.sent || result.failed || payments.sent || payments.failed || payments.removed)
+    const { payments, writeOffs } = result;
+    if (result.sent || result.failed || payments.sent || payments.failed || payments.removed || writeOffs.sent || writeOffs.failed || writeOffs.reversed)
       await this.prisma.auditLog.create({
         data: {
           organizationId,
@@ -334,6 +405,7 @@ export class XeroSenderService {
             failed: result.failed,
             numbers: sentNumbers.slice(0, 100),
             payments,
+            writeOffs,
             problem: result.problem,
           },
         },
@@ -695,6 +767,206 @@ export class XeroSenderService {
         result.payments.sent++;
       }
     }
+  }
+
+  /**
+   * Bad debts (2026-11-10): each invoice of this organisation's closed as bad
+   * debt here, once it is in Xero, is written off there -- a credit note for
+   * what it still owed, to the bad-debt account, allocated to the invoice. The
+   * credit note is kept as soon as Xero makes it, so an allocation Xero refused
+   * is tried again without a second one. At most 20 a run.
+   */
+  private async writeOffs(organizationId: string, tenantId: string, accounts: XeroAccount[], result: XeroRunResult) {
+    const now = new Date();
+    const invoices = await this.prisma.invoice.findMany({
+      where: {
+        organizationId,
+        xeroTenantId: tenantId,
+        status: InvoiceStatus.BAD_DEBT,
+        balanceCents: { gt: 0 },
+        xeroSync: { is: { xeroTenantId: tenantId, status: 'SENT', xeroInvoiceId: { not: null } } },
+        OR: [{ xeroWriteOff: { is: null } }, { xeroWriteOff: { is: { status: 'FAILED', nextAttemptAt: { lte: now } } } }],
+      },
+      orderBy: [{ updatedAt: 'asc' }],
+      take: MAX_WRITE_OFFS_PER_RUN,
+      select: {
+        id: true,
+        number: true,
+        clientName: true,
+        jobberClientId: true,
+        balanceCents: true,
+        updatedAt: true,
+        xeroSync: { select: { xeroInvoiceId: true } },
+        xeroWriteOff: { select: { xeroCreditNoteId: true, attempts: true } },
+      },
+    });
+    if (!invoices.length) return;
+    const values = (await this.settings.read(organizationId, tenantId)).values;
+    const links = await this.prisma.xeroContactLink.findMany({
+      where: { organizationId, xeroTenantId: tenantId, clientKey: { in: invoices.map((invoice) => clientKeyOf(invoice)) } },
+      select: { clientKey: true, xeroContactId: true },
+    });
+    const scope = `${organizationId}:${tenantId}`;
+    for (const invoice of invoices) {
+      const attempts = invoice.xeroWriteOff?.attempts ?? 0;
+      let creditNoteId = invoice.xeroWriteOff?.xeroCreditNoteId ?? null;
+      const failed = (problem: string, retry: boolean) => {
+        result.writeOffs.failed++;
+        return this.writeOffFailed(organizationId, tenantId, invoice, { creditNoteId, attempts }, problem, retry);
+      };
+      const contactId = links.find((link) => link.clientKey === clientKeyOf(invoice))?.xeroContactId;
+      if (!contactId) {
+        await failed('Its client is not a contact in Xero yet.', true);
+        continue;
+      }
+      const plan = xeroWriteOffFrom(invoice, {
+        settings: values,
+        accounts,
+        contactId,
+        xeroInvoiceId: invoice.xeroSync!.xeroInvoiceId!,
+        // Locked once closed as bad debt: its last change is the day it was closed.
+        day: businessDate(invoice.updatedAt),
+      });
+      if (plan.kind === 'problem') {
+        // Held back by the console: looked at again once the choices are saved, not on a timer.
+        await failed(plan.problem, false);
+        continue;
+      }
+      try {
+        if (!creditNoteId) {
+          const path = '/CreditNotes?summarizeErrors=false';
+          const body = { CreditNotes: [plan.creditNote] };
+          const [answer] = (await this.client.post(organizationId, tenantId, path, body, creditNotesSchema, keyOf(scope, path, body))).CreditNotes;
+          if (!answer?.CreditNoteID || refused(answer)) {
+            await failed(answer ? said(answer) : 'Xero did not answer for it.', true);
+            continue;
+          }
+          creditNoteId = answer.CreditNoteID;
+          // Kept at once: an allocation refused below is tried again on this credit note, never a second one.
+          await this.prisma.xeroWriteOffSync.upsert({
+            where: { invoiceId: invoice.id },
+            create: { organizationId, invoiceId: invoice.id, xeroTenantId: tenantId, xeroCreditNoteId: creditNoteId, amountCents: invoice.balanceCents, status: 'FAILED', nextAttemptAt: now, problem: 'Not allocated to the invoice yet.' },
+            update: { xeroCreditNoteId: creditNoteId, amountCents: invoice.balanceCents, status: 'FAILED', nextAttemptAt: now, problem: 'Not allocated to the invoice yet.' },
+          });
+        }
+        const path = `/CreditNotes/${encodeURIComponent(creditNoteId)}/Allocations`;
+        const body = { Allocations: [plan.allocation] };
+        const [allocation] = (await this.client.put(organizationId, tenantId, path, body, allocationsSchema, keyOf(scope, path, body))).Allocations ?? [];
+        if (allocation && refused(allocation)) {
+          await failed(said(allocation), true);
+          continue;
+        }
+        const sentAt = new Date();
+        const data = {
+          xeroTenantId: tenantId,
+          xeroCreditNoteId: creditNoteId,
+          xeroAllocationId: allocation?.AllocationID ?? null,
+          amountCents: invoice.balanceCents,
+          status: 'SENT',
+          attempts: 0,
+          lastAttemptAt: sentAt,
+          nextAttemptAt: null,
+          problem: null,
+          sentAt,
+        };
+        await this.prisma.xeroWriteOffSync.upsert({ where: { invoiceId: invoice.id }, create: { organizationId, invoiceId: invoice.id, ...data }, update: data });
+        result.writeOffs.sent++;
+      } catch (error) {
+        if (!(error instanceof XeroError) || error.code !== 'XERO_VALIDATION') throw error;
+        await failed(error.message, true);
+      }
+    }
+  }
+
+  /**
+   * Write-offs of invoices reopened here (2026-11-10): the credit note's
+   * allocation comes off the invoice, the credit note is voided, and the row
+   * goes -- so the invoice is owed again in Xero, as it is here. A write-off
+   * that never reached Xero is only forgotten. At most 20 a run.
+   */
+  private async reverseWriteOffs(organizationId: string, tenantId: string, result: XeroRunResult) {
+    const now = new Date();
+    const rows = await this.prisma.xeroWriteOffSync.findMany({
+      where: {
+        organizationId,
+        xeroTenantId: tenantId,
+        invoice: { status: { not: InvoiceStatus.BAD_DEBT } },
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+      },
+      orderBy: [{ updatedAt: 'asc' }],
+      take: MAX_WRITE_OFFS_PER_RUN,
+      select: { id: true, xeroCreditNoteId: true, xeroAllocationId: true, attempts: true },
+    });
+    const scope = `${organizationId}:${tenantId}`;
+    for (const row of rows) {
+      const creditNoteId = row.xeroCreditNoteId;
+      if (creditNoteId) {
+        try {
+          // Its allocation, as kept; or, when Xero did not say it, as Xero has it.
+          const allocations = row.xeroAllocationId ? [row.xeroAllocationId] : await this.allocationsOf(organizationId, tenantId, creditNoteId);
+          for (const allocationId of allocations) {
+            try {
+              await this.client.delete(organizationId, tenantId, `/CreditNotes/${encodeURIComponent(creditNoteId)}/Allocations/${encodeURIComponent(allocationId)}`, allocationsSchema);
+            } catch (error) {
+              // Already off.
+              if (!(error instanceof XeroError) || error.providerStatus !== 404) throw error;
+            }
+          }
+          if (row.xeroAllocationId) await this.prisma.xeroWriteOffSync.update({ where: { id: row.id }, data: { xeroAllocationId: null } });
+          const path = '/CreditNotes?summarizeErrors=false';
+          const body = { CreditNotes: [{ CreditNoteID: creditNoteId, Status: 'VOIDED' }] };
+          const [answer] = (await this.client.post(organizationId, tenantId, path, body, creditNotesSchema, keyOf(scope, path, body))).CreditNotes;
+          if (answer && refused(answer)) throw new XeroError(`Xero refused it: ${said(answer)}`, 'XERO_VALIDATION', 422, 400);
+          result.writeOffs.reversed++;
+        } catch (error) {
+          if (!(error instanceof XeroError) || (error.code !== 'XERO_VALIDATION' && error.providerStatus !== 404)) throw error;
+          const attempts = row.attempts + 1;
+          await this.prisma.xeroWriteOffSync.update({
+            where: { id: row.id },
+            data: {
+              status: 'FAILED',
+              attempts,
+              lastAttemptAt: now,
+              nextAttemptAt: new Date(now.getTime() + BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length) - 1]!),
+              problem: `Reopened here, but Xero would not take the write-off back: ${error.message}`.slice(0, 1000),
+            },
+          });
+          result.writeOffs.failed++;
+          continue;
+        }
+      }
+      await this.prisma.xeroWriteOffSync.delete({ where: { id: row.id } });
+    }
+  }
+
+  /** A credit note's allocations, as Xero has them: one call. */
+  private async allocationsOf(organizationId: string, tenantId: string, creditNoteId: string): Promise<string[]> {
+    const { CreditNotes } = await this.client.get(organizationId, tenantId, `/CreditNotes/${encodeURIComponent(creditNoteId)}`, creditNotesSchema);
+    return (CreditNotes[0]?.Allocations ?? []).map((allocation) => allocation.AllocationID).filter((id): id is string => Boolean(id));
+  }
+
+  /** Kept with the reason, and the credit note if Xero made one. `retry`: Xero's refusal, tried again later; otherwise the console's. */
+  private writeOffFailed(
+    organizationId: string,
+    tenantId: string,
+    invoice: { id: string; balanceCents: number },
+    known: { creditNoteId: string | null; attempts: number },
+    problem: string,
+    retry: boolean,
+  ) {
+    const now = new Date();
+    const attempts = known.attempts + 1;
+    const data = {
+      xeroTenantId: tenantId,
+      xeroCreditNoteId: known.creditNoteId,
+      amountCents: invoice.balanceCents,
+      status: 'FAILED',
+      attempts,
+      lastAttemptAt: now,
+      nextAttemptAt: retry ? new Date(now.getTime() + BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length) - 1]!) : null,
+      problem: problem.slice(0, 1000),
+    };
+    return this.prisma.xeroWriteOffSync.upsert({ where: { invoiceId: invoice.id }, create: { organizationId, invoiceId: invoice.id, ...data }, update: data });
   }
 
   /**

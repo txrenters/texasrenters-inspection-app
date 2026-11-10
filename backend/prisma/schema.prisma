@@ -458,6 +458,7 @@ model Organization {
   xeroInvoiceSyncs XeroInvoiceSync[]
   xeroPaymentSyncs XeroPaymentSync[]
   xeroChecks       XeroCheck[]
+  xeroWriteOffSyncs XeroWriteOffSync[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -3282,6 +3283,8 @@ model Invoice {
   xeroOrganisation     XeroOrganisation?     @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
   /// Its payments in the company's books in Xero (2026-11-10, phase 4), and those removed here still to delete there.
   xeroPaymentSyncs     XeroPaymentSync[]
+  /// Written off as bad debt in the company's books (2026-11-10).
+  xeroWriteOff         XeroWriteOffSync?
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
@@ -4803,6 +4806,8 @@ model XeroOrganisation {
   paymentSyncs XeroPaymentSync[]
   /// Each month's latest check of the console against its books.
   checks       XeroCheck[]
+  /// The bad debts written off in its books.
+  writeOffSyncs XeroWriteOffSync[]
 
   @@unique([organizationId, xeroTenantId])
 }
@@ -4851,6 +4856,8 @@ model XeroSettings {
   salesAccounts   Json      @default("{}")
   /// { "<payment method>": "<Xero account id>" }.
   paymentAccounts Json      @default("{}")
+  /// The expense account bad debts are written off to (2026-11-10).
+  badDebtAccountId String?
   /// Phase 3: invoices go to Xero only while this is on.
   sendingEnabled      Boolean   @default(false)
   sendingChangedAt    DateTime?
@@ -4976,4 +4983,35 @@ model XeroCheck {
   ranBy            UserProfile?     @relation("XeroCheckRanBy", fields: [ranById], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, xeroTenantId, month])
+}
+
+/// An invoice closed as bad debt, written off in its company's books in Xero
+/// (2026-11-10): a credit note for what was still owed, to the organisation's
+/// bad-debt account, allocated to the invoice. Reopened here, the allocation
+/// comes off, the credit note is voided, and the row goes.
+model XeroWriteOffSync {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @db.Uuid
+  invoiceId        String    @unique @db.Uuid
+  xeroTenantId     String
+  xeroCreditNoteId String?
+  /// Null until the credit note is allocated; or when Xero did not say its id.
+  xeroAllocationId String?
+  /// What was still owed, written off.
+  amountCents      Int
+  /// SENT or FAILED (checked).
+  status           String
+  attempts         Int       @default(0)
+  lastAttemptAt    DateTime?
+  nextAttemptAt    DateTime?
+  problem          String?
+  sentAt           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice          Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+
+  @@index([organizationId, xeroTenantId, status])
 }
