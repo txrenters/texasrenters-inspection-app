@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { XeroAuthService } from './xero-auth.service';
 import { XeroSenderScheduler } from './xero-sender.scheduler';
+import { XeroCheckService } from './xero-check.service';
 import { XeroSenderService } from './xero-sender.service';
 import { XeroSettingsService } from './xero-settings.service';
 import { XeroClient } from './xero.client';
@@ -15,7 +16,7 @@ import { XeroService } from './xero.service';
  */
 @Module({
   controllers: [XeroController, XeroOAuthCallbackController],
-  providers: [XeroAuthService, XeroClient, XeroService, XeroSettingsService, XeroSenderService, XeroSenderScheduler],
+  providers: [XeroAuthService, XeroClient, XeroService, XeroSettingsService, XeroSenderService, XeroSenderScheduler, XeroCheckService],
   exports: [XeroService, XeroClient, XeroSettingsService, XeroSenderService],
 })
 export class XeroModule {}

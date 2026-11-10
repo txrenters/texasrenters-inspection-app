@@ -457,6 +457,7 @@ model Organization {
   xeroContactLinks XeroContactLink[]
   xeroInvoiceSyncs XeroInvoiceSync[]
   xeroPaymentSyncs XeroPaymentSync[]
+  xeroChecks       XeroCheck[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -597,6 +598,7 @@ model UserProfile {
   invoiceNotesWritten  InvoiceNote[]      @relation("InvoiceNoteCreatedBy")
   invoiceFilesUploaded InvoiceFile[]      @relation("InvoiceFileUploadedBy")
   invoicingTakenOver   InvoiceSettings[]  @relation("InvoicingTakenOverBy")
+  xeroChecksRun        XeroCheck[]        @relation("XeroCheckRanBy")
   geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
   managementEndsMarked PropertyServiceStatus[] @relation("ManagementEndedBy")
   tbpOptOutsMarked     PropertyServiceStatus[] @relation("TbpOptedOutBy")
@@ -4799,6 +4801,8 @@ model XeroOrganisation {
   invoices     Invoice[]
   /// The payments sent to its books.
   paymentSyncs XeroPaymentSync[]
+  /// Each month's latest check of the console against its books.
+  checks       XeroCheck[]
 
   @@unique([organizationId, xeroTenantId])
 }
@@ -4942,4 +4946,34 @@ model XeroPaymentSync {
 
   @@index([organizationId, xeroTenantId, status])
   @@index([invoiceId])
+}
+
+/// One month of a company's invoices checked against its books in Xero
+/// (2026-11-10, phase 5 of the multi-company plan): run only when somebody
+/// asks, the latest of each month kept, so the page shows it without asking
+/// Xero again.
+model XeroCheck {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  xeroTenantId   String
+  /// YYYY-MM (checked): a Texas month of invoice days.
+  month          String
+  ranAt          DateTime
+  ranById        String?   @db.Uuid
+  /// What was compared, in numbers.
+  counts         Json
+  /// What differed, in words: at most 200.
+  differences    Json
+  /// More differed than are kept.
+  truncated      Boolean   @default(false)
+  /// The calls to Xero it took.
+  calls          Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+  ranBy            UserProfile?     @relation("XeroCheckRanBy", fields: [ranById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, xeroTenantId, month])
 }
