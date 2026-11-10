@@ -425,7 +425,7 @@ describe('who may do what', () => {
   });
 
   it('names an organisation only by Xero’s own id', async () => {
-    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never);
+    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never, {} as never);
     expect(() => controller.read({ user: office } as never, '../connections')).toThrow('not one of the office’s Xero organisations');
   });
 });

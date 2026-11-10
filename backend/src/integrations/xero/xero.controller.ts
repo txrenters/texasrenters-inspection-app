@@ -4,6 +4,7 @@ import { IsBoolean, IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLengt
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
+import { XeroCheckService } from './xero-check.service';
 import { XeroSenderService } from './xero-sender.service';
 import { XeroSettingsService } from './xero-settings.service';
 import { XeroError } from './xero.errors';
@@ -33,6 +34,13 @@ export class SetXeroSendingDto {
   @IsBoolean() enabled!: boolean;
 }
 
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** A month of invoices to check against Xero (2026-11-10, phase 5): `YYYY-MM`. */
+export class XeroCheckMonthDto {
+  @Matches(MONTH) month!: string;
+}
+
 /**
  * The office's Xero organisations (2026-11-10): seen with `integrations:read`;
  * connected, read again, their accounts chosen, sending turned on or off and
@@ -50,6 +58,7 @@ export class XeroController {
     @Inject(XeroAuthService) private readonly auth: XeroAuthService,
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
     @Inject(XeroSenderService) private readonly sender: XeroSenderService,
+    @Inject(XeroCheckService) private readonly checks: XeroCheckService,
   ) {}
 
   /** What the page shows. Never a token. */
@@ -132,6 +141,21 @@ export class XeroController {
   @RequirePermissions('integrations:manage')
   retrySending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
     return this.sender.retryFailed(request.user, tenantOf(tenantId));
+  }
+
+  /** The month's latest check against Xero (2026-11-10, phase 5), from the console's record: no call to Xero. */
+  @Get('organisations/:tenantId/check')
+  @RequirePermissions('integrations:read')
+  check(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Query() query: XeroCheckMonthDto) {
+    return this.checks.view(request.user.organizationId, tenantOf(tenantId), query.month);
+  }
+
+  /** "Check now": reads the month's invoices from Xero, at most once a minute, and keeps what differs. */
+  @Post('organisations/:tenantId/check')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  runCheck(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: XeroCheckMonthDto) {
+    return this.checks.run(request.user, tenantOf(tenantId), body.month);
   }
 }
 

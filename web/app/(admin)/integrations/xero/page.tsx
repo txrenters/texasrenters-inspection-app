@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { XeroCheckPanel } from '@/components/xero/xero-check-panel';
 import { XeroSendingPanel } from '@/components/xero/xero-sending-panel';
 import { XeroSettingsForm } from '@/components/xero/xero-settings-form';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -336,6 +337,8 @@ function OrganisationTab({
       ) : sending.isError ? (
         <ErrorState error={sending.error} retry={() => void sending.refetch()} />
       ) : null}
+
+      {canRead ? <XeroCheckPanel canManage={canManage} name={organisation.name} tenantId={organisation.tenantId} /> : null}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SaveXeroSettingsInput, XeroConnectionView, XeroSendingView, XeroSettingsView } from '@texasrenters/shared';
+import type { SaveXeroSettingsInput, XeroCheckView, XeroConnectionView, XeroSendingView, XeroSettingsView } from '@texasrenters/shared';
 
 import { ApiError, api } from './api';
 
@@ -20,6 +20,7 @@ export const xeroKey = ['admin', 'integrations', 'xero'] as const;
 const connectionKey = [...xeroKey, 'connection'] as const;
 export const xeroSettingsKey = (tenantId: string) => [...xeroKey, 'settings', tenantId] as const;
 export const xeroSendingKey = (tenantId: string) => [...xeroKey, 'sending', tenantId] as const;
+export const xeroCheckKey = (tenantId: string, month: string) => [...xeroKey, 'check', tenantId, month] as const;
 
 export function useXeroConnection(enabled = true) {
   return useQuery({
@@ -113,4 +114,25 @@ export function useXeroSendingActions(tenantId: string) {
       onSuccess: saved,
     }),
   };
+}
+
+/**
+ * A month's latest check against Xero (2026-11-10, phase 5), from the console's
+ * record: reading it never asks Xero. Only "Check now" does.
+ */
+export function useXeroCheck(tenantId: string, month: string, enabled = true) {
+  return useQuery({
+    queryKey: xeroCheckKey(tenantId, month),
+    queryFn: ({ signal }) => api<XeroCheckView>(`${organisation(tenantId)}/check?month=${encodeURIComponent(month)}`, { signal }),
+    enabled,
+  });
+}
+
+/** "Check now": reads the month from Xero -- one call per 100 invoices -- and keeps what differs. */
+export function useRunXeroCheck(tenantId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (month: string) => api<XeroCheckView>(`${organisation(tenantId)}/check`, { method: 'POST', body: JSON.stringify({ month }) }),
+    onSuccess: (view) => client.setQueryData(xeroCheckKey(tenantId, view.month), view),
+  });
 }
