@@ -311,6 +311,47 @@ describe("the payments page's cards", () => {
   });
 });
 
+describe('one company’s books (2026-11-10)', () => {
+  const PEST = 'a2000000-0000-4000-8000-000000000002';
+
+  it('reads what is owed and what is late for one company, or for none', async () => {
+    const db = database();
+    await reportsOver(db).projectedIncome(office, PEST);
+    expect(db.invoice.findMany.mock.calls[0][0].where).toMatchObject({ organizationId: ORG, xeroTenantId: PEST });
+    expect(db.invoice.aggregate.mock.calls[0][0].where.AND[0]).toMatchObject({ xeroTenantId: PEST });
+
+    await reportsOver(db).agedReceivables(office, 'none');
+    expect(db.invoice.findMany.mock.calls[1][0].where).toMatchObject({ organizationId: ORG, xeroTenantId: null });
+  });
+
+  it('counts a company’s invoices and the payments against them, and no one else’s', async () => {
+    const db = database();
+    await reportsOver(db).transactions(office, { from: '2026-11-01', to: TODAY }, PEST);
+    expect(db.invoice.aggregate.mock.calls[0][0].where).toMatchObject({ xeroTenantId: PEST });
+    for (const [args] of db.invoicePayment.aggregate.mock.calls) expect(args.where.invoice).toEqual({ xeroTenantId: PEST });
+    expect(db.invoicePayment.findMany.mock.calls[0][0].where.invoice).toEqual({ xeroTenantId: PEST });
+  });
+
+  it('lists a company’s invoices, its taxes, and its clients’ balances', async () => {
+    const db = database();
+    await reportsOver(db).invoices(office, { from: '2026-11-01', to: TODAY, dateField: 'issued' }, PEST);
+    expect(db.invoice.findMany.mock.calls[0][0].where.AND).toContainEqual({ xeroTenantId: PEST });
+
+    await reportsOver(db).taxes(office, { from: '2026-11-01', to: TODAY, basis: 'CASH' }, PEST);
+    expect(db.invoicePayment.findMany.mock.calls[0][0].where.invoice).toEqual({ xeroTenantId: PEST });
+
+    await reportsOver(db).clientBalances(office, PEST);
+    expect(db.invoice.findMany.mock.calls.at(-1)![0].where).toMatchObject({ organizationId: ORG, xeroTenantId: PEST });
+  });
+
+  it('reads every company’s when none is chosen', async () => {
+    const db = database();
+    await reportsOver(db).transactions(office, { from: '2026-11-01', to: TODAY });
+    expect(db.invoice.aggregate.mock.calls[0][0].where).not.toHaveProperty('xeroTenantId');
+    expect(db.invoicePayment.aggregate.mock.calls[0][0].where).not.toHaveProperty('invoice');
+  });
+});
+
 describe('who may read them', () => {
   it('is anybody who reads invoices, and nothing more', () => {
     expect(Reflect.getMetadata(PERMISSIONS_METADATA_KEY, InvoiceReportsController)).toEqual(['invoices:read']);

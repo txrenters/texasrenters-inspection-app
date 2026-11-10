@@ -37,6 +37,10 @@ import { PrismaService } from '../common/prisma.service';
  *
  * The cards are counted by the database over everything that matches; the
  * rows stop at `MAX_REPORT_ROWS`, and the report says so when they do.
+ *
+ * Each can be read for one company's books (2026-11-10): the invoices that go
+ * to one Xero organisation, or those of no company, and the payments against
+ * them. Left out, every company's.
  */
 
 const DAY_MS = 86_400_000;
@@ -49,6 +53,12 @@ const bucket = (count: number | null | undefined, cents: number | null | undefin
   count: count ?? 0,
   amountCents: cents ?? 0,
 });
+
+/** One company's invoices -- an organisation's tenant id, or `none` for those of no company -- or, left out, every company's. */
+const companyOf = (company: string | undefined): Prisma.InvoiceWhereInput =>
+  company ? { xeroTenantId: company === 'none' ? null : company } : {};
+/** The payments against one company's invoices. */
+const paymentsOf = (company: string | undefined): Prisma.InvoicePaymentWhereInput => (company ? { invoice: companyOf(company) } : {});
 
 /** Neither a draft nor a voided invoice is owed, invoiced or taxed. */
 const SENT = { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] };
@@ -99,9 +109,14 @@ export class InvoiceReportsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   /** What is owed, by when it falls due. */
-  async projectedIncome(user: AuthenticatedUser): Promise<ProjectedIncomeReport> {
+  async projectedIncome(user: AuthenticatedUser, company?: string): Promise<ProjectedIncomeReport> {
     const today = businessDate();
-    const owed: Prisma.InvoiceWhereInput = { organizationId: user.organizationId, status: InvoiceStatus.AWAITING_PAYMENT, balanceCents: { gt: 0 } };
+    const owed: Prisma.InvoiceWhereInput = {
+      organizationId: user.organizationId,
+      status: InvoiceStatus.AWAITING_PAYMENT,
+      balanceCents: { gt: 0 },
+      ...companyOf(company),
+    };
     const sum = (dueOn: Prisma.InvoiceWhereInput) =>
       this.prisma.invoice.aggregate({ where: { AND: [owed, dueOn] }, _count: { _all: true }, _sum: { balanceCents: true } });
     const [late, dueToday, dueWithin7, dueWithin30, dueLater, outstanding, rows] = await Promise.all([
@@ -133,13 +148,14 @@ export class InvoiceReportsService {
   }
 
   /** The late invoices, by how late: under 30 days, 30 to 60, 60 to 90, over 90. */
-  async agedReceivables(user: AuthenticatedUser): Promise<AgedReceivablesReport> {
+  async agedReceivables(user: AuthenticatedUser, company?: string): Promise<AgedReceivablesReport> {
     const today = businessDate();
     const late: Prisma.InvoiceWhereInput = {
       organizationId: user.organizationId,
       status: InvoiceStatus.AWAITING_PAYMENT,
       balanceCents: { gt: 0 },
       dueOn: { lt: dateOf(today) },
+      ...companyOf(company),
     };
     // Days late, d: due on today - d.
     const lateBy = (min: number, max: number | null) =>
@@ -171,18 +187,20 @@ export class InvoiceReportsService {
   }
 
   /** What was invoiced and what came in, in the days chosen. */
-  async transactions(user: AuthenticatedUser, range: ReportRange): Promise<TransactionsReport> {
+  async transactions(user: AuthenticatedUser, range: ReportRange, company?: string): Promise<TransactionsReport> {
     this.checkRange(range);
     const organizationId = user.organizationId;
     const issued: Prisma.InvoiceWhereInput = {
       organizationId,
       status: SENT,
       issuedOn: { gte: dateOf(range.from), lte: dateOf(range.to) },
+      ...companyOf(company),
     };
     const paid = (sign: 'in' | 'out'): Prisma.InvoicePaymentWhereInput => ({
       organizationId,
       paidOn: { gte: dateOf(range.from), lte: dateOf(range.to) },
       amountCents: sign === 'in' ? { gt: 0 } : { lte: 0 },
+      ...paymentsOf(company),
     });
     const [invoiced, received, refunded, invoices, payments] = await Promise.all([
       this.prisma.invoice.aggregate({ where: issued, _count: { _all: true }, _sum: { totalCents: true } }),
@@ -195,7 +213,7 @@ export class InvoiceReportsService {
         select: { id: true, number: true, clientName: true, issuedOn: true, totalCents: true, jobNumber: true },
       }),
       this.prisma.invoicePayment.findMany({
-        where: { organizationId, paidOn: { gte: dateOf(range.from), lte: dateOf(range.to) } },
+        where: { organizationId, paidOn: { gte: dateOf(range.from), lte: dateOf(range.to) }, ...paymentsOf(company) },
         orderBy: [{ paidOn: 'desc' }, { createdAt: 'desc' }],
         take: MAX_REPORT_ROWS + 1,
         select: {
@@ -251,7 +269,7 @@ export class InvoiceReportsService {
   }
 
   /** Every invoice made or issued in the days chosen; with a status, only those (Bad debt). */
-  async invoices(user: AuthenticatedUser, query: InvoicesReportQuery): Promise<InvoicesReport> {
+  async invoices(user: AuthenticatedUser, query: InvoicesReportQuery, company?: string): Promise<InvoicesReport> {
     this.checkRange(query);
     const today = businessDate();
     const when: Prisma.InvoiceWhereInput =
@@ -259,7 +277,12 @@ export class InvoiceReportsService {
         ? { createdAt: { gte: businessInstant(query.from, '00:00:00'), lt: businessInstant(day(plusDays(query.to, 1))!, '00:00:00') } }
         : { issuedOn: { gte: dateOf(query.from), lte: dateOf(query.to) } };
     const scope: Prisma.InvoiceWhereInput = {
-      AND: [{ organizationId: user.organizationId }, when, ...(query.status ? [{ status: query.status as InvoiceStatus }] : [])],
+      AND: [
+        { organizationId: user.organizationId },
+        when,
+        ...(company ? [companyOf(company)] : []),
+        ...(query.status ? [{ status: query.status as InvoiceStatus }] : []),
+      ],
     };
     const [byStatus, rows] = await Promise.all([
       this.prisma.invoice.groupBy({ by: ['status'], where: scope, _count: { _all: true }, _sum: { totalCents: true } }),
@@ -292,7 +315,7 @@ export class InvoiceReportsService {
   }
 
   /** Tax by rate: invoiced in the days chosen (accrual), or collected in them (cash). */
-  async taxes(user: AuthenticatedUser, range: ReportRange & { basis: TaxBasis }): Promise<TaxReport> {
+  async taxes(user: AuthenticatedUser, range: ReportRange & { basis: TaxBasis }, company?: string): Promise<TaxReport> {
     this.checkRange(range);
     const organizationId = user.organizationId;
     const within = { gte: dateOf(range.from), lte: dateOf(range.to) };
@@ -320,19 +343,19 @@ export class InvoiceReportsService {
 
     if (range.basis === 'ACCRUAL') {
       const invoices = await this.prisma.invoice.findMany({
-        where: { organizationId, status: SENT, issuedOn: within },
+        where: { organizationId, status: SENT, issuedOn: within, ...companyOf(company) },
         select: taxSelect,
       });
       for (const invoice of invoices) add(invoice, invoice.totalCents, invoice.taxCents);
     } else {
       const payments = await this.prisma.invoicePayment.findMany({
-        where: { organizationId, paidOn: within },
+        where: { organizationId, paidOn: within, ...paymentsOf(company) },
         select: { amountCents: true, invoice: { select: taxSelect } },
       });
       for (const payment of payments) add(payment.invoice, payment.amountCents, taxShareCents(payment.amountCents, payment.invoice));
     }
     const owed = await this.prisma.invoice.findMany({
-      where: { organizationId, status: InvoiceStatus.AWAITING_PAYMENT, balanceCents: { gt: 0 }, taxCents: { gt: 0 }, issuedOn: within },
+      where: { organizationId, status: InvoiceStatus.AWAITING_PAYMENT, balanceCents: { gt: 0 }, taxCents: { gt: 0 }, issuedOn: within, ...companyOf(company) },
       select: { balanceCents: true, taxCents: true, totalCents: true },
     });
 
@@ -366,11 +389,11 @@ export class InvoiceReportsService {
    * Jobber's, which for the office is the property. Bad debt was invoiced and
    * is not owed.
    */
-  async clientBalances(user: AuthenticatedUser): Promise<ClientBalancesReport> {
+  async clientBalances(user: AuthenticatedUser, company?: string): Promise<ClientBalancesReport> {
     const today = dateOf(businessDate());
     const [invoices, emailed] = await Promise.all([
       this.prisma.invoice.findMany({
-        where: { organizationId: user.organizationId, status: SENT },
+        where: { organizationId: user.organizationId, status: SENT, ...companyOf(company) },
         select: {
           id: true,
           jobberClientId: true,

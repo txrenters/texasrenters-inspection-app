@@ -31,6 +31,9 @@ const reports = vi.hoisted(() => ({
   useClientBalances: vi.fn(),
 }));
 vi.mock('@/lib/invoice-report-queries', () => reports);
+// The office's Xero organisations, for the Company filter (2026-11-10): none until a test gives some.
+const settings = vi.hoisted(() => ({ organisations: [] as { tenantId: string; name: string; connected: boolean }[] }));
+vi.mock('@/lib/invoice-settings-queries', () => ({ useInvoiceSettings: () => ({ data: { organisations: settings.organisations } }) }));
 const csv = vi.hoisted(() => ({ downloadCsv: vi.fn() }));
 vi.mock('@/lib/csv', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), downloadCsv: csv.downloadCsv }));
 // The page's address as plain state, so a tab or a range can be changed in the test.
@@ -77,6 +80,7 @@ const PROJECTED: ProjectedIncomeReport = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settings.organisations = [];
   for (const hook of Object.values(reports)) hook.mockReturnValue(idle);
   reports.useProjectedIncome.mockReturnValue(ready(PROJECTED));
 });
@@ -180,6 +184,44 @@ describe('the invoice reports', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Client balances' }));
     expect(screen.getByRole('region', { name: 'Client balances at a glance' })).toHaveTextContent('In credit-$419.507 clients');
     expect(screen.getByRole('link', { name: '100 Example Way' })).toHaveAttribute('href', '/properties/b1');
+  });
+});
+
+describe('one company’s books (2026-11-10)', () => {
+  const HOMES = 'a1000000-0000-4000-8000-000000000001';
+  const PEST = 'a2000000-0000-4000-8000-000000000002';
+  const choose = (option: string) => {
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Company' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    fireEvent.click(screen.getByRole('option', { name: option }));
+  };
+
+  it('asks nothing until Xero has an organisation, and reads every company’s', () => {
+    render(<InvoiceReportsPage />);
+    expect(screen.queryByRole('combobox', { name: 'Company' })).not.toBeInTheDocument();
+    expect(reports.useProjectedIncome).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('reads each report for the company chosen, or for no company', () => {
+    settings.organisations = [
+      { tenantId: HOMES, name: 'Example Home Services', connected: true },
+      { tenantId: PEST, name: 'Example Pest Co', connected: true },
+    ];
+    render(<InvoiceReportsPage />);
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Company' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Every company', 'Example Home Services', 'Example Pest Co', 'No company']);
+    fireEvent.click(screen.getByRole('option', { name: 'Example Pest Co' }));
+    expect(reports.useProjectedIncome).toHaveBeenLastCalledWith(PEST);
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Transactions' }));
+    const today = businessToday();
+    expect(reports.useTransactionsReport).toHaveBeenLastCalledWith({ from: shiftDay(today, -29), to: today, company: PEST });
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Client balances' }));
+    choose('No company');
+    expect(reports.useClientBalances).toHaveBeenLastCalledWith('none');
+
+    choose('Every company');
+    expect(reports.useClientBalances).toHaveBeenLastCalledWith(undefined);
   });
 });
 
