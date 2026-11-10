@@ -261,6 +261,8 @@ function invoiceFacts(data: InvoiceDetail, visitHref: string | null): Fact[] {
       ),
       detail: details?.jobTitle ?? undefined,
     },
+    // The company's books it goes to (2026-11-10).
+    ...(data.company ? [{ label: 'Company', value: data.company.name, detail: 'Goes to this company’s books in Xero' }] : []),
     { label: 'Issued', value: formatInvoiceDay(data.issuedOn) },
     { label: 'Payment terms', value: data.paymentTerms ?? '—' },
     { label: 'Due date', value: formatInvoiceDay(data.dueOn) },

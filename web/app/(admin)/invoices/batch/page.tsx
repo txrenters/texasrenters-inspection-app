@@ -6,6 +6,7 @@ import {
   formatEnumLabel,
   formatMoney,
   type BatchInvoiceResult,
+  type UninvoicedPart,
   type UninvoicedVisit,
 } from '@texasrenters/shared';
 import Link from 'next/link';
@@ -41,8 +42,13 @@ import { newClientRequestId } from '@/lib/invoice-queries';
  * days that have no invoice yet, each priced from what the technician
  * reported done at the office's own prices. Every visit that can be billed is
  * ticked to start with; one that cannot says why, and is invoiced by itself.
- * Asked once before anything is made.
+ * Asked once before anything is made. A visit whose services go to several
+ * companies' books makes one invoice for each (2026-11-10).
  */
+
+/** A visit's invoices, one per company; one for the whole visit from a server that does not split them. */
+const partsOf = (visit: UninvoicedVisit): UninvoicedPart[] =>
+  visit.invoices?.length ? visit.invoices : [{ xeroTenantId: null, company: null, lineItems: visit.lineItems, totalCents: visit.totalCents }];
 export default function BatchInvoicesPage() {
   const { has } = usePermissions();
   if (!has('invoices:manage'))
@@ -73,6 +79,9 @@ function BatchInvoices() {
   const billable = items.filter((visit) => !visit.problem);
   const chosen = billable.filter((visit) => !unticked.has(visit.inspectionId));
   const chosenCents = chosen.reduce((sum, visit) => sum + visit.totalCents, 0);
+  // What the batch makes: one invoice per company of each visit.
+  const invoiceCount = chosen.reduce((sum, visit) => sum + partsOf(visit).length, 0);
+  const invoicesWord = `${invoiceCount} ${invoiceCount === 1 ? 'invoice' : 'invoices'}`;
   const tooMany = chosen.length > MAX_BATCH_INVOICES;
 
   const toggle = (visit: UninvoicedVisit, on: boolean) =>
@@ -175,6 +184,15 @@ function BatchInvoices() {
                     </p>
                     {visit.problem ? (
                       <p className="text-destructive text-xs">{visit.problem}</p>
+                    ) : partsOf(visit).some((part) => part.company) || partsOf(visit).length > 1 ? (
+                      <ul aria-label={`Invoices for ${visit.clientName}`} className="text-muted-foreground grid gap-0.5 text-xs">
+                        {partsOf(visit).map((part) => (
+                          <li key={part.xeroTenantId ?? 'none'}>
+                            <span className="text-foreground font-medium">{part.company ?? 'No company'}</span>:{' '}
+                            {part.lineItems.map((line) => line.name).join(' · ')} · {formatMoney(part.totalCents)}
+                          </li>
+                        ))}
+                      </ul>
                     ) : (
                       <p className="text-muted-foreground text-xs">{visit.lineItems.map((line) => line.name).join(' · ')}</p>
                     )}
@@ -210,9 +228,9 @@ function BatchInvoices() {
               Make them drafts, to look over first
             </label>
             <div className="ml-auto flex flex-wrap items-center gap-3">
-              {tooMany ? <span className="text-destructive text-sm">At most {MAX_BATCH_INVOICES} at a time.</span> : null}
+              {tooMany ? <span className="text-destructive text-sm">At most {MAX_BATCH_INVOICES} visits at a time.</span> : null}
               <Button disabled={!chosen.length || tooMany || batch.isPending} onClick={() => setAsking(true)}>
-                {`Create ${chosen.length} ${chosen.length === 1 ? 'invoice' : 'invoices'} · ${formatMoney(chosenCents)}`}
+                {`Create ${invoicesWord} · ${formatMoney(chosenCents)}`}
               </Button>
             </div>
           </section>
@@ -222,11 +240,10 @@ function BatchInvoices() {
       <AlertDialog onOpenChange={(open) => (open ? undefined : setAsking(false))} open={asking}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              Create {chosen.length} {chosen.length === 1 ? 'invoice' : 'invoices'}?
-            </AlertDialogTitle>
+            <AlertDialogTitle>Create {invoicesWord}?</AlertDialogTitle>
             <AlertDialogDescription>
-              {formatMoney(chosenCents)} in all, issued {formatInvoiceDay(issuedOn)}.{' '}
+              {formatMoney(chosenCents)} in all, issued {formatInvoiceDay(issuedOn)}
+              {invoiceCount > chosen.length ? `, for ${chosen.length} ${chosen.length === 1 ? 'visit' : 'visits'}: one for each company’s books` : ''}.{' '}
               {asDraft ? 'They are kept as drafts, and numbered when each is marked sent.' : 'Each is numbered next and owed from now.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -263,7 +280,10 @@ function BatchResult({ result, items }: { result: BatchInvoiceResult; items: rea
               <Link className="underline underline-offset-2" href={`/invoices/${made.invoiceId}`}>
                 {made.number ? `#${made.number}` : 'Draft'}
               </Link>{' '}
-              <span className="text-muted-foreground">{formatMoney(made.totalCents)}</span>
+              <span className="text-muted-foreground">
+                {made.company ? `${made.company} · ` : ''}
+                {formatMoney(made.totalCents)}
+              </span>
             </li>
           ))}
         </ul>

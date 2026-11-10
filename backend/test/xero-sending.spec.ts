@@ -225,8 +225,6 @@ function harness(options: {
   connection?: Record<string, unknown> | null;
   ready?: boolean;
   candidates?: string[];
-  /** Organisations connected, this one included. */
-  organisations?: number;
 } = {}) {
   const invoices = options.invoices ?? [invoice()];
   let settingsRow =
@@ -258,7 +256,6 @@ function harness(options: {
       findUnique: jest.fn(async () =>
         connection ? { name: 'Example Home Services', status: 'CONNECTED', invoiceRemindersOn: connection.invoiceRemindersOn, accounts: connection.accounts } : null,
       ),
-      count: jest.fn(async () => options.organisations ?? 1),
     },
     invoice: {
       findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) => invoices.filter((item) => where.id.in.includes(item.id))),
@@ -426,12 +423,25 @@ describe('a run', () => {
     for (const run of [off, readOnly, reminders, busy]) expect(run.client.post).not.toHaveBeenCalled();
   });
 
-  it('sends nothing while several organisations are connected: invoices do not yet say whose they are', async () => {
-    const { sender, client } = harness({ organisations: 3 });
-    expect((await sender.run(ORG, TENANT)).problem).toBe(
-      'Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.',
-    );
-    expect(client.post).not.toHaveBeenCalled();
+  it('looks only at the invoices that go to this organisation (2026-11-10): each company’s go to its own books', async () => {
+    const { sender, prisma, client } = harness();
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, problem: null });
+    const [strings, ...values] = prisma.$queryRaw.mock.calls[0] as unknown as [string[], ...unknown[]];
+    const sql = strings.join('?');
+    expect(sql).toContain('i."xeroTenantId" = ?');
+    expect(values[strings.findIndex((part) => part.endsWith('i."xeroTenantId" = '))]).toBe(TENANT);
+    expect(calls(client, '/Invoices')).toHaveLength(1);
+  });
+
+  it('counts this organisation’s invoices not sent yet, and says how many belong to no company', async () => {
+    const { sender, prisma } = harness();
+    prisma.invoice.count.mockResolvedValueOnce(4).mockResolvedValueOnce(2);
+    const view = await sender.view(ORG, TENANT);
+    expect(view.counts).toMatchObject({ notYet: 4, noCompany: 2 });
+    expect(view.blockers).toEqual([]);
+    const [notYet, noCompany] = prisma.invoice.count.mock.calls.map((call) => (call as unknown as [{ where: Record<string, unknown> }])[0].where);
+    expect(notYet).toMatchObject({ organizationId: ORG, xeroTenantId: TENANT });
+    expect(noCompany).toMatchObject({ organizationId: ORG, xeroTenantId: null, status: { notIn: ['DRAFT', 'VOIDED'] } });
   });
 
   it('sends a busy day -- 200 changed invoices for 200 clients -- in eight calls, 50 a call', async () => {

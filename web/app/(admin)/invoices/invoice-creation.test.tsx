@@ -50,6 +50,7 @@ const NOW = new Date('2026-11-06T18:00:00.000Z');
 const TODAY = '2026-11-06';
 const ready = (data: unknown) => ({ isLoading: false, isError: false, data, refetch: vi.fn() });
 const create = { mutate: vi.fn(), isPending: false };
+const createPerCompany = { mutate: vi.fn(), isPending: false };
 const batch = { mutate: vi.fn(), isPending: false };
 
 const PROPERTY_DRAFT: InvoiceDraft = {
@@ -59,10 +60,11 @@ const PROPERTY_DRAFT: InvoiceDraft = {
   subject: 'For Services Rendered',
   issuedOn: TODAY,
   paymentTermsDays: 30,
-  lineItems: [],
+  invoices: [{ xeroTenantId: null, lineItems: [] }],
   clientMessage: '',
-  existing: null,
+  existing: [],
   products: [{ name: 'Filter Change', unitPriceCents: 3999 }],
+  organisations: [],
 };
 
 beforeEach(() => {
@@ -71,7 +73,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   permissions.granted = new Set(['invoices:read', 'invoices:manage']);
   params.search = new URLSearchParams();
-  hooks.useInvoiceActions.mockReturnValue({ create });
+  hooks.useInvoiceActions.mockReturnValue({ create, createPerCompany });
   hooks.useInvoiceDraft.mockReturnValue(ready(PROPERTY_DRAFT));
   batches.useBatchInvoices.mockReturnValue(batch);
 });
@@ -193,6 +195,7 @@ describe('a batch', () => {
         lineItems: [{ name: 'Filter Change', quantity: 1, unitPriceCents: 3999 }],
         totalCents: 3999,
         problem: null,
+        invoices: [{ xeroTenantId: null, company: null, lineItems: [{ name: 'Filter Change', quantity: 1, unitPriceCents: 3999 }], totalCents: 3999 }],
       },
       {
         inspectionId: 'v2',
@@ -204,6 +207,7 @@ describe('a batch', () => {
         lineItems: [{ name: 'Pest Control', quantity: 1, unitPriceCents: 2500 }],
         totalCents: 2500,
         problem: null,
+        invoices: [{ xeroTenantId: null, company: null, lineItems: [{ name: 'Pest Control', quantity: 1, unitPriceCents: 2500 }], totalCents: 2500 }],
       },
       {
         inspectionId: 'v3',
@@ -215,6 +219,7 @@ describe('a batch', () => {
         lineItems: [],
         totalCents: 0,
         problem: 'Nothing was reported done to bill.',
+        invoices: [],
       },
     ],
     truncated: false,
@@ -253,6 +258,46 @@ describe('a batch', () => {
     // Announced as it appears.
     const made = screen.getByRole('status', { name: 'What was made' });
     expect(within(made).getByRole('link', { name: '#8440' })).toHaveAttribute('href', '/invoices/inv-9');
+  });
+
+  it('makes a visit whose services go to two companies’ books one invoice for each (2026-11-10)', async () => {
+    const filter = { name: 'Filter Change', quantity: 1, unitPriceCents: 3999 };
+    const pest = { name: 'Pest Control', quantity: 1, unitPriceCents: 2500 };
+    const split = {
+      ...VISITS.items[0]!,
+      lineItems: [filter, pest],
+      totalCents: 6499,
+      invoices: [
+        { xeroTenantId: 'a1000000-0000-4000-8000-000000000001', company: 'Example Home Services', lineItems: [filter], totalCents: 3999 },
+        { xeroTenantId: 'a2000000-0000-4000-8000-000000000002', company: 'Example Pest Co', lineItems: [pest], totalCents: 2500 },
+      ],
+    };
+    batches.useUninvoicedVisits.mockReturnValue(ready({ items: [split], truncated: false }));
+    batch.mutate.mockImplementation((_input, { onSuccess }) =>
+      onSuccess({
+        created: [
+          { inspectionId: 'v1', invoiceId: 'inv-9', number: '8440', totalCents: 3999, company: 'Example Home Services' },
+          { inspectionId: 'v1', invoiceId: 'inv-10', number: '8441', totalCents: 2500, company: 'Example Pest Co' },
+        ],
+        skipped: [],
+      }),
+    );
+    render(<BatchInvoicesPage />);
+
+    const invoices = screen.getByRole('list', { name: 'Invoices for 100 Example Way' });
+    expect(within(invoices).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Example Home Services: Filter Change · $39.99',
+      'Example Pest Co: Pest Control · $25.00',
+    ]);
+    expect(screen.getByText('1 of 1 chosen')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create 2 invoices · $64.99' }));
+    const confirm = await screen.findByRole('alertdialog');
+    expect(confirm).toHaveTextContent('for 1 visit: one for each company’s books');
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Create them' }));
+    });
+    const made = screen.getByRole('status', { name: 'What was made' });
+    expect(made).toHaveTextContent('Example Pest Co · $25.00');
   });
 
   it('says plainly when there is nothing to invoice', () => {

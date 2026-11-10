@@ -2,13 +2,18 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   FINISHED_INSPECTION_STATUSES,
   MAX_BATCH_INVOICES,
+  MAX_INVOICES_PER_VISIT,
   MAX_UNINVOICED_RANGE_DAYS,
   PAYMENT_TERMS,
   invoiceLinesProblem,
   invoiceTotals,
+  splitByCompany,
   type BatchInvoiceInput,
   type BatchInvoiceResult,
   type InspectionType,
+  type InvoiceLineInput,
+  type ProductCompany,
+  type UninvoicedPart,
   type UninvoicedVisit,
   type UninvoicedVisitList,
   type VisitServicesReport,
@@ -22,7 +27,7 @@ import { PrismaService } from '../common/prisma.service';
 import { insertConsoleInvoice } from './invoice-insert';
 import { lockInvoiceNumbers } from './invoice-numbers';
 import { InvoicesService, draftLines, servicesDone } from './invoices.service';
-import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
+import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
 
 /**
  * Making many invoices at once (2026-11-06, phase 4 of taking invoicing over
@@ -34,6 +39,10 @@ import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
  * service the office has never priced -- is listed with the reason and left
  * out rather than invoiced for nothing; it is invoiced by itself, where the
  * price can be typed. Off until the cutover, as every invoice write is.
+ *
+ * One invoice per company (2026-11-10, phase 3 of the multi-company plan): a
+ * visit whose services go to two companies' books gets one invoice for each,
+ * made together, so a visit is invoiced in full or not at all.
  */
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -70,6 +79,20 @@ export function batchLines(row: Pick<VisitRow, 'servicesReport'>, prices: readon
   return { lineItems, totalCents: invoiceTotals(lineItems).totalCents, problem: invoiceLinesProblem(lineItems) };
 }
 
+/** A visit's lines, one invoice per company, as the batch would make them. */
+export function batchParts(
+  lineItems: readonly InvoiceLineInput[],
+  companies: readonly ProductCompany[],
+  nameOf: (tenantId: string) => string,
+): UninvoicedPart[] {
+  return splitByCompany(lineItems, companies).map((part) => ({
+    xeroTenantId: part.xeroTenantId,
+    company: part.xeroTenantId ? nameOf(part.xeroTenantId) : null,
+    lineItems: part.lineItems,
+    totalCents: invoiceTotals(part.lineItems).totalCents,
+  }));
+}
+
 @Injectable()
 export class InvoiceBatchService {
   constructor(
@@ -86,7 +109,7 @@ export class InvoiceBatchService {
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Give the first and the last day, the first one first.');
     if ((dateOf(query.to).getTime() - dateOf(query.from).getTime()) / DAY_MS > MAX_UNINVOICED_RANGE_DAYS)
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', `Look at ${MAX_UNINVOICED_RANGE_DAYS} days at most at a time.`);
-    const [{ products, termsDays }, rows] = await Promise.all([
+    const [{ products, termsDays }, rows, companies, organisations] = await Promise.all([
       this.invoices.officeDefaults(user),
       this.prisma.inspection.findMany({
         where: {
@@ -101,10 +124,14 @@ export class InvoiceBatchService {
         take: LIST_LIMIT + 1,
         select: visitSelect,
       }),
+      productCompanies(this.prisma, user.organizationId),
+      officeOrganisations(this.prisma, user.organizationId),
     ]);
+    const nameOf = organisationName(organisations);
     return {
       items: rows.slice(0, LIST_LIMIT).map((row): UninvoicedVisit => {
         const building = row.propertywareBuilding!;
+        const lines = batchLines(row, products);
         return {
           inspectionId: row.id,
           inspectionType: row.inspectionType,
@@ -112,7 +139,8 @@ export class InvoiceBatchService {
           status: row.status,
           property: { id: building.id, address: building.addressLine1 ?? building.name, city: building.city },
           clientName: building.addressLine1 ?? building.name,
-          ...batchLines(row, products),
+          ...lines,
+          invoices: batchParts(lines.lineItems, companies, nameOf),
         };
       }),
       truncated: rows.length > LIST_LIMIT,
@@ -121,11 +149,12 @@ export class InvoiceBatchService {
   }
 
   /**
-   * One invoice for each visit chosen that can still be invoiced, each numbered
-   * next in the office's sequence (or kept as a draft), each its own write.
-   * Visits invoiced meanwhile, or that cannot be billed, are skipped with the
-   * reason. A resend of the same batch makes nothing twice: each invoice is
-   * keyed by the batch and its visit.
+   * One invoice for each company of each visit chosen that can still be
+   * invoiced, each numbered next in the office's sequence (or kept as a
+   * draft); a visit's invoices are one write. Visits invoiced meanwhile, or
+   * that cannot be billed, are skipped with the reason. A resend of the same
+   * batch makes nothing twice: each invoice is keyed by the batch, its visit
+   * and its place among the visit's invoices.
    */
   async batch(user: AuthenticatedUser, input: BatchInvoiceInput): Promise<BatchInvoiceResult> {
     if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
@@ -139,13 +168,28 @@ export class InvoiceBatchService {
     if (!PAYMENT_TERMS.some((terms) => terms.days === input.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Pick the payment terms from the list.');
 
-    const defaults = await this.invoices.officeDefaults(user);
+    const [defaults, companies, organisations] = await Promise.all([
+      this.invoices.officeDefaults(user),
+      productCompanies(this.prisma, user.organizationId),
+      officeOrganisations(this.prisma, user.organizationId),
+    ]);
+    const nameOf = organisationName(organisations);
     const result: BatchInvoiceResult = { created: [], skipped: [] };
+    const madeFor = (inspectionId: string, rows: { id: string; number: string | null; totalCents: number; xeroTenantId: string | null }[]) => {
+      for (const row of rows)
+        result.created.push({
+          inspectionId,
+          invoiceId: row.id,
+          number: row.number,
+          totalCents: row.totalCents,
+          company: row.xeroTenantId ? nameOf(row.xeroTenantId) : null,
+        });
+    };
     for (const inspectionId of ids) {
-      const clientRequestId = `${input.clientRequestId}:${inspectionId}`;
-      const made = await this.byKey(user, clientRequestId);
-      if (made) {
-        result.created.push({ inspectionId, invoiceId: made.id, number: made.number, totalCents: made.totalCents });
+      const keys = Array.from({ length: MAX_INVOICES_PER_VISIT }, (_, index) => `${input.clientRequestId}:${inspectionId}:${index + 1}`);
+      const made = await this.byKeys(user, keys);
+      if (made.length) {
+        madeFor(inspectionId, made);
         continue;
       }
       const visit = await this.prisma.inspection.findFirst({
@@ -169,49 +213,63 @@ export class InvoiceBatchService {
         continue;
       }
       const building = visit.propertywareBuilding;
+      // One invoice per company: each company's services, and those of none on one of their own.
+      const parts = batchParts(lines.lineItems, companies, nameOf);
       try {
-        const created = await this.prisma.$transaction(async (tx) => {
-          // Under the office's invoice lock, so a visit invoiced by somebody
-          // else a moment ago is seen here rather than invoiced twice.
-          await lockInvoiceNumbers(tx, user.organizationId);
-          const already = await tx.invoice.findFirst({
-            where: { organizationId: user.organizationId, inspectionId, status: { not: InvoiceStatus.VOIDED } },
-            select: { id: true },
-          });
-          if (already) return null;
-          return insertConsoleInvoice(tx, user, {
-            subject: defaults.subject,
-            clientName: building.addressLine1 ?? building.name,
-            inspectionId,
-            propertywareBuildingId: building.id,
-            jobberJobId: visit.jobberJobId,
-            issuedOn: input.issuedOn,
-            paymentTermsDays: input.paymentTermsDays,
-            lines: lines.lineItems,
-            clientMessage: defaults.clientMessage,
-            contractDisclaimer: defaults.contractDisclaimer,
-            clientRequestId,
-            asDraft: input.asDraft === true,
-            batchKey: input.clientRequestId,
-          });
-        });
-        if (created) result.created.push({ inspectionId, invoiceId: created.id, number: created.number, totalCents: created.totalCents });
+        const created = await this.prisma.$transaction(
+          async (tx) => {
+            // Under the office's invoice lock, so a visit invoiced by somebody
+            // else a moment ago is seen here rather than invoiced twice.
+            await lockInvoiceNumbers(tx, user.organizationId);
+            const already = await tx.invoice.findFirst({
+              where: { organizationId: user.organizationId, inspectionId, status: { not: InvoiceStatus.VOIDED } },
+              select: { id: true },
+            });
+            if (already) return null;
+            const rows: { id: string; number: string | null; totalCents: number; xeroTenantId: string | null }[] = [];
+            for (const [index, part] of parts.entries()) {
+              const row = await insertConsoleInvoice(tx, user, {
+                subject: defaults.subject,
+                clientName: building.addressLine1 ?? building.name,
+                inspectionId,
+                propertywareBuildingId: building.id,
+                jobberJobId: visit.jobberJobId,
+                issuedOn: input.issuedOn,
+                paymentTermsDays: input.paymentTermsDays,
+                lines: part.lineItems,
+                clientMessage: defaults.clientMessage,
+                contractDisclaimer: defaults.contractDisclaimer,
+                clientRequestId: keys[index]!,
+                asDraft: input.asDraft === true,
+                batchKey: input.clientRequestId,
+                xeroTenantId: part.xeroTenantId,
+              });
+              rows.push({ ...row, xeroTenantId: part.xeroTenantId });
+            }
+            return rows;
+          },
+          // A visit's invoices are a few writes each: room for several on a slow connection.
+          { maxWait: 5_000, timeout: 20_000 },
+        );
+        if (created) madeFor(inspectionId, created);
         else result.skipped.push({ inspectionId, reason: 'The visit has an invoice already.' });
       } catch (error) {
-        // The same batch, sent twice at once: the other request made this one.
+        // The same batch, sent twice at once: the other request made this visit's.
         const other =
-          error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002' ? await this.byKey(user, clientRequestId) : null;
-        if (!other) throw error;
-        result.created.push({ inspectionId, invoiceId: other.id, number: other.number, totalCents: other.totalCents });
+          error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002' ? await this.byKeys(user, keys) : [];
+        if (!other.length) throw error;
+        madeFor(inspectionId, other);
       }
     }
     return result;
   }
 
-  private byKey(user: AuthenticatedUser, clientRequestId: string) {
-    return this.prisma.invoice.findFirst({
-      where: { organizationId: user.organizationId, clientRequestId },
-      select: { id: true, number: true, totalCents: true },
+  /** The invoices made under these keys, in the keys' order. */
+  private async byKeys(user: AuthenticatedUser, keys: string[]) {
+    const rows = await this.prisma.invoice.findMany({
+      where: { organizationId: user.organizationId, clientRequestId: { in: keys } },
+      select: { id: true, number: true, totalCents: true, xeroTenantId: true, clientRequestId: true },
     });
+    return keys.flatMap((key) => rows.filter((row) => row.clientRequestId === key));
   }
 }

@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ChangePaymentInput,
   CreateInvoiceInput,
+  CreateInvoicesInput,
+  CreatedInvoices,
   InvoiceDetail,
   InvoiceDraft,
   InvoiceFilter,
@@ -39,6 +41,8 @@ export interface InvoiceQuery {
   /** Issued on or after, and on or before (2026-11-09). */
   issuedFrom?: string;
   issuedTo?: string;
+  /** One company's invoices (2026-11-10): an organisation's tenant id, or `none`. */
+  company?: string;
 }
 
 export interface PaymentQuery {
@@ -80,6 +84,7 @@ export function useInvoices(query: InvoiceQuery, enabled = true) {
           inspectionId: query.inspectionId,
           issuedFrom: query.issuedFrom,
           issuedTo: query.issuedTo,
+          company: query.company,
         })}`,
         { signal },
       ),
@@ -164,6 +169,12 @@ export function useInvoiceActions() {
         client.setQueryData(invoiceKeys.detail(invoice.id), invoice);
         refresh();
       },
+    }),
+    /** Make one invoice per company from one form (2026-11-10): together, or none of them. */
+    createPerCompany: useMutation({
+      mutationFn: (input: CreateInvoicesInput) =>
+        api<CreatedInvoices>(`${INVOICES}/per-company`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: refresh,
     }),
     /** Record a payment against an invoice, which marks it paid once it is all paid. */
     recordPayment: useMutation({

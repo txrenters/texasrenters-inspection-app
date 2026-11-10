@@ -57,6 +57,7 @@ function database() {
   const db = {
     invoice: {
       findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockResolvedValue({ id: INVOICE }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
@@ -64,6 +65,8 @@ function database() {
     // No invoice settings saved, and no price list: the fallbacks (2026-11-06, phase 6).
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoiceProduct: { findMany: jest.fn().mockResolvedValue([]) },
+    // No Xero organisation: every invoice belongs to no company (2026-11-10).
+    xeroOrganisation: { findMany: jest.fn().mockResolvedValue([]) },
     invoicePayment: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountCents: 0 }, _max: { paidOn: null } }) },
     inspection: { findFirst: jest.fn().mockResolvedValue(visit()), findMany: jest.fn().mockResolvedValue([]) },
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(building) },
@@ -162,7 +165,7 @@ describe('making one invoice', () => {
 
   it("answers a resend with the invoice it made, for the same property; another property's is a mistake", async () => {
     const db = database();
-    db.invoice.findFirst.mockResolvedValue({ id: INVOICE, inspectionId: null, propertywareBuildingId: BUILDING });
+    db.invoice.findMany.mockResolvedValue([{ id: INVOICE, inspectionId: null, propertywareBuildingId: BUILDING, clientRequestId: 'web-key-0001' }]);
     const service = invoicesOver(db);
     await service.create(office, { ...create, propertyId: BUILDING });
     expect(db.invoice.create).not.toHaveBeenCalled();
@@ -181,8 +184,9 @@ describe('making one invoice', () => {
       clientName: '100 Example Way',
       subject: 'Quarterly service',
       paymentTermsDays: 15,
-      lineItems: [],
-      existing: null,
+      // One invoice, with no lines and no company chosen yet.
+      invoices: [{ xeroTenantId: null, lineItems: [] }],
+      existing: [],
     });
     expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control']);
   });
@@ -280,12 +284,14 @@ describe('a batch', () => {
     const result = await batchOver(db).batch(office, input);
 
     expect(result).toEqual({
-      created: [{ inspectionId: VISIT, invoiceId: INVOICE, number: '8440', totalCents: 6499 }],
+      created: [{ inspectionId: VISIT, invoiceId: INVOICE, number: '8440', totalCents: 6499, company: null }],
       skipped: [{ inspectionId: VISIT_2, reason: 'Nothing was reported done to bill.' }],
     });
     expect(db.invoice.create.mock.calls[0][0].data).toMatchObject({
       inspectionId: VISIT,
-      clientRequestId: `web-batch-0001:${VISIT}`,
+      // Keyed by the batch, the visit, and its place among the visit's invoices.
+      clientRequestId: `web-batch-0001:${VISIT}:1`,
+      xeroTenantId: null,
       status: 'AWAITING_PAYMENT',
     });
     expect(db.auditLog.create.mock.calls[0][0].data.metadata).toMatchObject({ batch: 'web-batch-0001' });
@@ -294,7 +300,6 @@ describe('a batch', () => {
   it('skips a visit invoiced meanwhile, seen under the lock', async () => {
     const db = database();
     db.invoice.findFirst
-      .mockResolvedValueOnce(null) // no invoice with this batch's key
       .mockResolvedValueOnce(null) // the office's latest invoice, for its wording
       .mockResolvedValueOnce({ id: 'someone-else' }); // invoiced a moment ago
     const result = await batchOver(db).batch(office, { ...input, inspectionIds: [VISIT] });
@@ -304,11 +309,12 @@ describe('a batch', () => {
 
   it('answers a resend with what the batch already made, making nothing twice', async () => {
     const db = database();
-    db.invoice.findFirst.mockImplementation(async ({ where }: { where: { clientRequestId?: string } }) =>
-      where.clientRequestId === `web-batch-0001:${VISIT}` ? { id: INVOICE, number: '8440', totalCents: 6499 } : null,
+    const key = `web-batch-0001:${VISIT}:1`;
+    db.invoice.findMany.mockImplementation(async ({ where }: { where: { clientRequestId?: { in: string[] } } }) =>
+      where.clientRequestId?.in.includes(key) ? [{ id: INVOICE, number: '8440', totalCents: 6499, xeroTenantId: null, clientRequestId: key }] : [],
     );
     const result = await batchOver(db).batch(office, { ...input, inspectionIds: [VISIT] });
-    expect(result.created).toEqual([{ inspectionId: VISIT, invoiceId: INVOICE, number: '8440', totalCents: 6499 }]);
+    expect(result.created).toEqual([{ inspectionId: VISIT, invoiceId: INVOICE, number: '8440', totalCents: 6499, company: null }]);
     expect(db.invoice.create).not.toHaveBeenCalled();
   });
 

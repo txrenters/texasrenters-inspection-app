@@ -1,5 +1,6 @@
 import type { InvoiceClientView } from './invoice-templates.js';
 import type { InvoiceDeliveryView } from './invoice-delivery.js';
+import type { InvoiceProductOrganisation } from './invoice-settings.js';
 
 /**
  * Invoices and the payments recorded against them, in the console (the office,
@@ -176,6 +177,12 @@ export interface InvoiceProperty {
   city: string | null;
 }
 
+/** The company's books an invoice goes to (2026-11-10): one of the office's Xero organisations. */
+export interface InvoiceCompanyView {
+  tenantId: string;
+  name: string;
+}
+
 /** An invoice as the list shows it. */
 export interface InvoiceSummary {
   id: string;
@@ -197,6 +204,11 @@ export interface InvoiceSummary {
   balanceCents: number;
   /** Jobber's own page for it, for anything only Jobber can do. */
   jobberUrl: string | null;
+  /**
+   * The company's books it goes to (2026-11-10, phase 3 of the multi-company
+   * plan); null when it belongs to no company, and then it is never sent to Xero.
+   */
+  company?: InvoiceCompanyView | null;
 }
 
 /** An invoice in full, as its record page shows it. */
@@ -353,6 +365,8 @@ export interface InvoiceList {
   jobberRead: InvoiceJobberRead;
   /** Whether the console makes invoices yet: off until the cutover (2026-11-06). */
   writesEnabled?: boolean;
+  /** The office's Xero organisations, connected ones first, to filter by company (2026-11-10). Empty until Xero is connected. */
+  organisations?: InvoiceProductOrganisation[];
 }
 
 /**
@@ -400,6 +414,31 @@ export interface InvoiceLineInput {
  * line per service done, at the price in Jobber's products list. For a
  * property with no visit (2026-11-06), no lines: the office adds them.
  */
+/** One company's invoice in a draft (2026-11-10): the company and its lines. */
+export interface InvoiceDraftPart {
+  /** The organisation; null for lines that go to no company. */
+  xeroTenantId: string | null;
+  lineItems: InvoiceLineInput[];
+}
+
+/** An invoice the visit already has, so a second is not made by mistake. */
+export interface InvoiceDraftExisting {
+  id: string;
+  number: string | null;
+  status: InvoiceStatus;
+  /** The organisation it goes to; null for none. */
+  xeroTenantId: string | null;
+}
+
+/** A product or service the office sells, for a line added by hand. */
+export interface InvoiceDraftProduct {
+  name: string;
+  unitPriceCents: number;
+  description?: string | null;
+  /** The organisation it goes to (2026-11-10); null or left out for none. */
+  xeroTenantId?: string | null;
+}
+
 export interface InvoiceDraft {
   /** The visit it bills; null for an invoice made out to a property directly. */
   inspection: { id: string; inspectionType: string; scheduledOn: string; status: string } | null;
@@ -408,12 +447,20 @@ export interface InvoiceDraft {
   subject: string;
   issuedOn: string;
   paymentTermsDays: number;
-  lineItems: InvoiceLineInput[];
+  /**
+   * The invoices it makes, one per company (2026-11-10, phase 3 of the
+   * multi-company plan): each company's lines, and the lines that go to none on
+   * one of their own. One, with no company, when nothing goes to a company; one
+   * with no lines for an invoice made out to a property.
+   */
+  invoices: InvoiceDraftPart[];
   clientMessage: string;
-  /** Already invoiced: the invoice, so a second is not made by mistake. */
-  existing: { id: string; number: string | null; status: InvoiceStatus } | null;
+  /** What the visit is invoiced on already, newest first, so a second is not made by mistake. */
+  existing: InvoiceDraftExisting[];
   /** The products the office sells, for a line added by hand: its own list first (2026-11-06), then what it billed. */
-  products: { name: string; unitPriceCents: number; description?: string | null }[];
+  products: InvoiceDraftProduct[];
+  /** The office's Xero organisations, connected ones first (2026-11-10): what an invoice can go to. Empty until Xero is connected. */
+  organisations: InvoiceProductOrganisation[];
 }
 
 export interface CreateInvoiceInput {
@@ -428,8 +475,29 @@ export interface CreateInvoiceInput {
   paymentTermsDays: number;
   lineItems: InvoiceLineInput[];
   clientMessage?: string;
+  /**
+   * The company's books it goes to (2026-11-10): a connected organisation of
+   * the office, or null for none. Left out, it is its lines' company. Lines
+   * that go to another company are refused.
+   */
+  xeroTenantId?: string | null;
   /** The browser's key, so a double click or a resend makes one invoice. */
   clientRequestId: string;
+}
+
+/**
+ * The invoices a visit or a property gets from one form (2026-11-10, phase 3
+ * of the multi-company plan): one per company, each with its own lines, made
+ * together or not at all. One request key for all of them.
+ */
+export interface CreateInvoicesInput extends Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId'> {
+  /** Each invoice: its company (null for none; left out, its lines' company) and its lines. */
+  invoices: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[] }[];
+}
+
+export interface CreatedInvoices {
+  /** In the order they were asked for. */
+  invoices: InvoiceSummary[];
 }
 
 export interface RecordPaymentInput {

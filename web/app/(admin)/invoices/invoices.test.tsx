@@ -67,6 +67,7 @@ vi.mock('@/lib/invoice-record-queries', () => ({
 }));
 
 const create = { mutate: vi.fn(), isPending: false };
+const createPerCompany = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };
 const changePayment = { mutate: vi.fn(), isPending: false };
 const removePayment = { mutate: vi.fn(), isPending: false };
@@ -124,13 +125,20 @@ const DRAFT: InvoiceDraft = {
   subject: 'For Services Rendered',
   issuedOn: TODAY,
   paymentTermsDays: 30,
-  lineItems: [
-    { name: 'Filter Change', quantity: 1, unitPriceCents: 3999 },
-    { name: 'Pest Control', quantity: 1, unitPriceCents: 2500 },
+  // No Xero organisation: one invoice, for no company.
+  invoices: [
+    {
+      xeroTenantId: null,
+      lineItems: [
+        { name: 'Filter Change', quantity: 1, unitPriceCents: 3999 },
+        { name: 'Pest Control', quantity: 1, unitPriceCents: 2500 },
+      ],
+    },
   ],
   clientMessage: 'Thank you for your business.',
-  existing: null,
+  existing: [],
   products: [{ name: 'Flea Treatment', unitPriceCents: 3500 }],
+  organisations: [],
 };
 
 const ready = (data: unknown) => ({ isLoading: false, isError: false, data, refetch: vi.fn() });
@@ -140,7 +148,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(NOW);
   permissions.granted = new Set(['invoices:read', 'invoices:manage', 'payments:record']);
-  hooks.useInvoiceActions.mockReturnValue({ create, recordPayment, changePayment, removePayment });
+  hooks.useInvoiceActions.mockReturnValue({ create, createPerCompany, recordPayment, changePayment, removePayment });
   hooks.useInvoices.mockReturnValue(ready(LIST));
   hooks.useInvoice.mockReturnValue(ready(DETAIL));
   hooks.useInvoiceDraft.mockReturnValue(ready(DRAFT));
@@ -555,7 +563,7 @@ describe('a new invoice for a finished visit', () => {
   });
 
   it('warns when the visit is already invoiced', () => {
-    hooks.useInvoiceDraft.mockReturnValue(ready({ ...DRAFT, existing: { id: 'inv-1', number: '8439', status: 'PAST_DUE' } }));
+    hooks.useInvoiceDraft.mockReturnValue(ready({ ...DRAFT, existing: [{ id: 'inv-1', number: '8439', status: 'PAST_DUE', xeroTenantId: null }] }));
     render(<NewInvoicePage />);
 
     expect(screen.getByRole('status')).toHaveTextContent('This visit already has an invoice:');
@@ -568,6 +576,109 @@ describe('a new invoice for a finished visit', () => {
 
     expect(screen.getByText('You may not create invoices')).toBeInTheDocument();
     expect(create.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('a new invoice, one per company (2026-11-10)', () => {
+  const HOMES = 'a1000000-0000-4000-8000-000000000001';
+  const PEST = 'a2000000-0000-4000-8000-000000000002';
+  const filter = { name: 'Filter Change', quantity: 1, unitPriceCents: 3999 };
+  const pest = { name: 'Pest Control', quantity: 1, unitPriceCents: 2500 };
+  /** The visit's services go to two companies' books. */
+  const SPLIT: InvoiceDraft = {
+    ...DRAFT,
+    invoices: [
+      { xeroTenantId: HOMES, lineItems: [filter] },
+      { xeroTenantId: PEST, lineItems: [pest] },
+    ],
+    products: [
+      { name: 'Filter Change', unitPriceCents: 3999, xeroTenantId: HOMES },
+      { name: 'Pest Control', unitPriceCents: 2500, xeroTenantId: PEST },
+      { name: 'Lockbox Install', unitPriceCents: 3000, xeroTenantId: null },
+    ],
+    organisations: [
+      { tenantId: HOMES, name: 'Example Home Services', connected: true },
+      { tenantId: PEST, name: 'Example Pest Co', connected: true },
+    ],
+  };
+  const section = (company: string) => screen.getByRole('region', { name: `Invoice for ${company}` });
+
+  beforeEach(() => {
+    hooks.useInvoiceDraft.mockReturnValue(ready(SPLIT));
+  });
+
+  it('shows each company’s invoice with its own lines and total, and makes them together', () => {
+    render(<NewInvoicePage />);
+    expect(within(section('Example Home Services')).getByLabelText('Line 1: name')).toHaveValue('Filter Change');
+    expect(within(section('Example Pest Co')).getByLabelText('Line 1: name')).toHaveValue('Pest Control');
+    expect(screen.getByText('One invoice for each company’s books: 2 invoices, created together.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create 2 invoices · $64.99' }));
+    expect(create.mutate).not.toHaveBeenCalled();
+    expect(createPerCompany.mutate.mock.calls[0][0]).toEqual({
+      inspectionId: 'insp-1',
+      subject: 'For Services Rendered',
+      issuedOn: TODAY,
+      paymentTermsDays: 30,
+      clientMessage: 'Thank you for your business.',
+      clientRequestId: expect.stringMatching(/^web-/),
+      invoices: [
+        { xeroTenantId: HOMES, lineItems: [{ ...filter, description: null }] },
+        { xeroTenantId: PEST, lineItems: [{ ...pest, description: null }] },
+      ],
+    });
+  });
+
+  it('goes to the visit once they are made, which lists them', () => {
+    createPerCompany.mutate.mockImplementation((_input, options: { onSuccess: (made: unknown) => void }) =>
+      options.onSuccess({ invoices: [{ id: 'inv-1', number: '8440', totalCents: 3999, clientName: '1902 Mockup Dr', company: { tenantId: HOMES, name: 'Example Home Services' } }, { id: 'inv-2', number: '8441', totalCents: 2500, clientName: '1902 Mockup Dr', company: { tenantId: PEST, name: 'Example Pest Co' } }] }),
+    );
+    render(<NewInvoicePage />);
+    fireEvent.click(screen.getByRole('button', { name: /Create 2 invoices/ }));
+    expect(router.push).toHaveBeenCalledWith('/inspections/insp-1');
+  });
+
+  it('makes the one left when the other is left out, still to its company', () => {
+    render(<NewInvoicePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Leave out the invoice for Example Pest Co' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create invoice · $39.99' }));
+    expect(create.mutate.mock.calls[0][0]).toMatchObject({ xeroTenantId: HOMES, lineItems: [{ ...filter, description: null }] });
+  });
+
+  it('refuses another company’s product on an invoice, and says where it belongs', () => {
+    render(<NewInvoicePage />);
+    fireEvent.change(within(section('Example Home Services')).getByLabelText('Line 1: name'), { target: { value: 'Pest Control' } });
+    // The lines now say Example Pest Co twice.
+    expect(screen.getByText('Two invoices go to Example Pest Co: put their lines on one.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create 2 invoices/ })).toBeDisabled();
+  });
+
+  it('asks which company an invoice no product decides goes to, and says one of none is never sent', () => {
+    hooks.useInvoiceDraft.mockReturnValue(ready({ ...SPLIT, invoices: [{ xeroTenantId: null, lineItems: [{ name: 'Gate repair', quantity: 1, unitPriceCents: 12000 }] }] }));
+    render(<NewInvoicePage />);
+    expect(screen.getByText('An invoice that belongs to no company is never sent to Xero.')).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Company for the invoice for no company' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    fireEvent.click(screen.getByRole('option', { name: 'Example Pest Co' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create invoice · $120.00' }));
+    expect(create.mutate.mock.calls[0][0]).toMatchObject({ xeroTenantId: PEST });
+  });
+
+  it('adds an invoice for a company that has none on the form yet', () => {
+    hooks.useInvoiceDraft.mockReturnValue(ready({ ...SPLIT, invoices: [{ xeroTenantId: HOMES, lineItems: [filter] }] }));
+    render(<NewInvoicePage />);
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Add an invoice for another company' }), { button: 0, pointerId: 1, pointerType: 'mouse' });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Example Pest Co']);
+    fireEvent.click(screen.getByRole('option', { name: 'Example Pest Co' }));
+    expect(section('Example Pest Co')).toBeInTheDocument();
+    // Empty, it cannot be made yet.
+    expect(screen.getByText('The invoice for Example Pest Co: Add at least one line.')).toBeInTheDocument();
+  });
+
+  it('warns on the company whose invoice the visit has already', () => {
+    hooks.useInvoiceDraft.mockReturnValue(ready({ ...SPLIT, existing: [{ id: 'inv-9', number: '8439', status: 'AWAITING_PAYMENT', xeroTenantId: PEST }] }));
+    render(<NewInvoicePage />);
+    expect(within(section('Example Pest Co')).getByRole('status')).toHaveTextContent('This visit already has an invoice for Example Pest Co:');
+    expect(within(section('Example Home Services')).queryByRole('status')).not.toBeInTheDocument();
   });
 });
 

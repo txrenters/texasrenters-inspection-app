@@ -3258,6 +3258,11 @@ model Invoice {
   /// The browser's key for an invoice made in the console, so a double click
   /// or a resend makes one invoice.
   clientRequestId        String?
+  /// The company's books it goes to (2026-11-10, phase 3 of the multi-company
+  /// plan): a Xero organisation of the office, from its lines' products or
+  /// chosen. Null when it belongs to no company -- one read from Jobber, or one
+  /// whose products go to none yet -- and then it is never sent to Xero.
+  xeroTenantId           String?
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
@@ -3271,6 +3276,7 @@ model Invoice {
   files                InvoiceFile[]
   deliveries           InvoiceDelivery[]
   xeroSync             XeroInvoiceSync?
+  xeroOrganisation     XeroOrganisation?     @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
@@ -3278,6 +3284,7 @@ model Invoice {
   @@index([organizationId, issuedOn])
   @@index([organizationId, jobberClientId])
   @@index([organizationId, jobberPropertyId])
+  @@index([organizationId, xeroTenantId, issuedOn])
   @@index([inspectionId])
   @@index([propertywareBuildingId])
 }
@@ -4783,6 +4790,8 @@ model XeroOrganisation {
   settings     XeroSettings?
   /// The products and services the office sends to this organisation.
   products     InvoiceProduct[]
+  /// The invoices that go to this organisation's books.
+  invoices     Invoice[]
 
   @@unique([organizationId, xeroTenantId])
 }

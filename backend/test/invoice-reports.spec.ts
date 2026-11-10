@@ -332,6 +332,8 @@ describe("the lists' date filters", () => {
     },
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     jobberConnection: { findUnique: jest.fn().mockResolvedValue(null) },
+    // The companies' books to filter by (2026-11-10): none here.
+    xeroOrganisation: { findMany: jest.fn().mockResolvedValue([]) },
   });
 
   it('lists the invoices issued within the days chosen', async () => {

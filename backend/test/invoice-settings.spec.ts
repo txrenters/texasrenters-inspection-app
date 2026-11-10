@@ -174,7 +174,7 @@ describe("a new invoice's prices", () => {
       product({ id: 'p2', name: 'Pest Control', nameKey: 'pest control', active: false, unitPriceCents: 2600, description: null }),
     ]);
     expect(await officePrices(db as never, ORG, '2026-11-06')).toEqual([
-      { name: 'Filter Change', unitPriceCents: 4500, description: 'One filter, any size' },
+      { name: 'Filter Change', unitPriceCents: 4500, description: 'One filter, any size', xeroTenantId: null },
       // Pest Control is set aside: offered from neither the list nor billing.
       { name: 'Gate Repair', unitPriceCents: 12000 },
     ]);

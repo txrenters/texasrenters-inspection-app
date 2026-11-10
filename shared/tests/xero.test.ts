@@ -24,7 +24,7 @@ describe('the office’s organisations', () => {
 
 describe('sending to Xero', () => {
   const writes = ['offline_access', 'accounting.settings.read', 'accounting.contacts', 'accounting.invoices'];
-  const ready = { connected: true, scopes: writes, settingsReady: true, invoiceRemindersOn: false, organisationsConnected: 1 };
+  const ready = { connected: true, scopes: writes, settingsReady: true, invoiceRemindersOn: false };
 
   it('may write only with the contacts and invoices scopes', () => {
     expect(xeroCanWrite(writes)).toBe(true);
@@ -39,11 +39,6 @@ describe('sending to Xero', () => {
     expect(xeroSendingBlockers({ ...ready, scopes: ['offline_access'], settingsReady: false, invoiceRemindersOn: true })).toHaveLength(3);
   });
 
-  it('waits while several organisations are connected: invoices do not yet say whose they are', () => {
-    expect(xeroSendingBlockers({ ...ready, organisationsConnected: 3 })).toEqual([
-      'Several organisations are connected, and invoices do not yet say which company they belong to: sending waits for that.',
-    ]);
-  });
 });
 
 const account = (over: Partial<XeroAccount>): XeroAccount => ({

@@ -72,15 +72,23 @@ const COLUMNS: Array<Column<InvoiceSummary>> = [
 ];
 
 export default function InvoicesPage() {
-  const [state, setState, reset] = useUrlState({ page: 1, q: '', filter: '', issued: '', from: '', to: '' });
+  const [state, setState, reset] = useUrlState({ page: 1, q: '', filter: '', issued: '', from: '', to: '', company: '' });
   const search = useDebouncedValue(state.q);
   const pending = state.q.trim() !== search.trim();
   const filter = (INVOICE_FILTERS as readonly string[]).includes(state.filter) ? (state.filter as InvoiceFilter) : 'all';
   // Issued in the days chosen, as Jobber's list filters by date (2026-11-09).
   const issuedChoice = { range: state.issued, from: state.from, to: state.to };
   const issued = chosenRange(issuedChoice);
-  const invoices = useInvoices({ filter, search, page: state.page, pageSize: 25, issuedFrom: issued?.from, issuedTo: issued?.to });
-  const filtered = Boolean(state.q.trim()) || filter !== 'all' || Boolean(state.issued);
+  const invoices = useInvoices({
+    filter,
+    search,
+    page: state.page,
+    pageSize: 25,
+    issuedFrom: issued?.from,
+    issuedTo: issued?.to,
+    company: state.company || undefined,
+  });
+  const filtered = Boolean(state.q.trim()) || filter !== 'all' || Boolean(state.issued) || Boolean(state.company);
   const { has } = usePermissions();
 
   const data = invoices.data;
@@ -162,6 +170,22 @@ export default function InvoicesPage() {
               label="Issued"
               onChange={(next) => setState({ issued: next.range, from: next.from, to: next.to, page: 1 })}
             />
+            {data?.organisations?.length ? (
+              // Each company's books (2026-11-10): once Xero has an organisation.
+              <SelectFilter
+                allLabel="All"
+                label="Company"
+                onChange={(next) => setState({ company: next, page: 1 })}
+                options={[
+                  ...data.organisations.map((organisation) => ({
+                    value: organisation.tenantId,
+                    label: organisation.connected ? organisation.name : `${organisation.name} (not connected)`,
+                  })),
+                  { value: 'none', label: 'No company' },
+                ]}
+                value={state.company}
+              />
+            ) : null}
           </>
         }
         heading="All invoices"
@@ -182,7 +206,7 @@ export default function InvoicesPage() {
         <EmptyState
           description={
             filtered
-              ? 'No invoice matches. Try another status, other days or a shorter search.'
+              ? 'No invoice matches. Try another status, other days, another company or a shorter search.'
               : noInvoicesYet(data?.jobberRead)
           }
           title="No invoices"
