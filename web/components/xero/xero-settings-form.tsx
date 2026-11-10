@@ -2,6 +2,7 @@
 
 import {
   PAYMENT_METHOD_LABEL,
+  badDebtAccounts,
   paymentAccounts,
   revenueAccounts,
   revenueTaxRates,
@@ -44,7 +45,8 @@ const sameValues = (a: XeroSettingsValues, b: XeroSettingsValues) => {
     a.salesAccountId === b.salesAccountId &&
     a.salesTaxType === b.salesTaxType &&
     JSON.stringify(sorted(a.salesAccounts)) === JSON.stringify(sorted(b.salesAccounts)) &&
-    JSON.stringify(sorted(a.paymentAccounts)) === JSON.stringify(sorted(b.paymentAccounts))
+    JSON.stringify(sorted(a.paymentAccounts)) === JSON.stringify(sorted(b.paymentAccounts)) &&
+    (a.badDebtAccountId ?? null) === (b.badDebtAccountId ?? null)
   );
 };
 
@@ -86,6 +88,8 @@ export function XeroSettingsForm({
   };
   const salesOptions = withChosen(revenueAccounts(accounts), [values.salesAccountId, ...Object.values(values.salesAccounts)]);
   const paymentOptions = withChosen(paymentAccounts(accounts), Object.values(values.paymentAccounts));
+  // Where a bad debt is written off (2026-11-10): an expense account.
+  const badDebtOptions = withChosen(badDebtAccounts(accounts), [values.badDebtAccountId ?? null]);
   const taxOptions: Option[] = revenueTaxRates(taxRates).map((rate) => ({ value: rate.taxType, label: `${rate.name} (${rate.taxType})` }));
   if (values.salesTaxType && !taxOptions.some((option) => option.value === values.salesTaxType))
     taxOptions.push({ value: values.salesTaxType, label: `${values.salesTaxType} (not active in Xero)` });
@@ -300,6 +304,35 @@ export function XeroSettingsForm({
             ))}
           </TableBody>
         </Table>
+      </Panel>
+
+      <Panel title="Bad debts">
+        <div className="grid gap-2 p-4 sm:max-w-md">
+          <Field>
+            <FieldLabel htmlFor={`${id}-bad-debts`}>Written off to</FieldLabel>
+            <Select
+              disabled={locked}
+              onValueChange={(value) => setValues((current) => ({ ...current, badDebtAccountId: value === NONE ? null : value }))}
+              value={values.badDebtAccountId ?? NONE}
+            >
+              <SelectTrigger className="w-full" id={`${id}-bad-debts`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>Not chosen</SelectItem>
+                {badDebtOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              An invoice closed as bad debt is written off in Xero with a credit note to this expense account, for what it still owed. Reopening it
+              takes the credit note back.
+            </FieldDescription>
+          </Field>
+        </div>
       </Panel>
 
       {canManage ? (

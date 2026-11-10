@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  badDebtAccounts,
   connectedOrganisations,
   paymentAccounts,
   revenueAccounts,
@@ -73,6 +74,17 @@ describe('Xero accounts', () => {
     ];
     expect(paymentAccounts(accounts).map((item) => item.accountId)).toEqual(['bank', 'clearing']);
   });
+
+  it('offer active expense accounts with a code for bad debts (2026-11-10)', () => {
+    const accounts = [
+      account({ accountId: 'bad-debts', type: 'EXPENSE', class: 'EXPENSE', code: '480' }),
+      account({ accountId: 'overheads', type: 'OVERHEADS', class: null, code: '490' }),
+      account({ accountId: 'no-code', type: 'EXPENSE', class: 'EXPENSE', code: null }),
+      account({ accountId: 'archived', type: 'EXPENSE', class: 'EXPENSE', status: 'ARCHIVED' }),
+      account({ accountId: 'sales' }),
+    ];
+    expect(badDebtAccounts(accounts).map((item) => item.accountId)).toEqual(['bad-debts', 'overheads']);
+  });
 });
 
 describe('Xero choices', () => {
@@ -87,6 +99,16 @@ describe('Xero choices', () => {
     expect(xeroSettingsProblem({ ...values, sendFrom: '2026-02-29' }, catalog, '2026-11-20')).toBe('The start date is not a date.');
     expect(xeroSettingsProblem({ ...values, sendFrom: '2027-11-21' }, catalog, '2026-11-20')).toBeNull();
     expect(xeroSettingsProblem({ ...values, sendFrom: '2027-11-22' }, catalog, '2026-11-20')).toBe('The start date is more than a year away.');
+  });
+
+  it('write bad debts off only to an active expense account (2026-11-10)', () => {
+    const withBadDebts = { ...catalog, accounts: [...catalog.accounts, account({ accountId: 'bad-debts', type: 'EXPENSE', class: 'EXPENSE', code: '480' })] };
+    expect(xeroSettingsProblem({ ...values, badDebtAccountId: 'bad-debts' }, withBadDebts, '2026-11-20')).toBeNull();
+    expect(xeroSettingsProblem({ ...values, badDebtAccountId: 'sales' }, withBadDebts, '2026-11-20')).toBe(
+      'Bad debts are given an account that is not an active expense account with a code in Xero.',
+    );
+    // None chosen is no problem: an invoice closed as bad debt waits for one.
+    expect(xeroSettingsProblem({ ...values, badDebtAccountId: null }, withBadDebts, '2026-11-20')).toBeNull();
   });
 
   it('ask for an account only for the payment methods in use', () => {

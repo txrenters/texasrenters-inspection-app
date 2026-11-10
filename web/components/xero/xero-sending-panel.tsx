@@ -89,6 +89,10 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
         <Count label="Payments in Xero" value={view.counts.payments.sent} />
         <Count label="Payments refused" tone={view.counts.payments.failed ? 'warning' : undefined} value={view.counts.payments.failed} />
       </dl>
+      <dl aria-label="Bad debts" className="grid grid-cols-3 gap-3 text-sm sm:max-w-md">
+        <Count label="Written off in Xero" value={view.counts.writeOffs.sent} />
+        <Count label="Bad debts refused" tone={view.counts.writeOffs.failed ? 'warning' : undefined} value={view.counts.writeOffs.failed} />
+      </dl>
       {view.counts.noCompany ? (
         // Sent to no organisation (2026-11-10): not taken for sent.
         <p className="text-muted-foreground text-sm">
@@ -112,7 +116,7 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
               <Button disabled={busy || view.blockers.length > 0} onClick={run}>
                 {actions.run.isPending ? 'Sending…' : 'Send now'}
               </Button>
-              {view.counts.failed || view.counts.payments.failed ? (
+              {view.counts.failed || view.counts.payments.failed || view.counts.writeOffs.failed ? (
                 <Button disabled={busy} onClick={retry} variant="outline">
                   Try the refused again
                 </Button>
@@ -172,6 +176,38 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
               <TableRow key={failure.paymentId ?? `removed-${failure.invoiceId}-${failure.lastAttemptAt}`}>
                 <TableCell className="tabular-nums">
                   {failure.amountCents === null ? 'Removed here' : `${formatMoney(failure.amountCents)}${failure.paidOn ? `, ${formatDay(failure.paidOn)}` : ''}`}
+                </TableCell>
+                <TableCell>
+                  {failure.number ? `#${failure.number}` : '—'} <span className="text-muted-foreground">{failure.clientName}</span>
+                </TableCell>
+                <TableCell className="max-w-md whitespace-normal">{failure.problem}</TableCell>
+                <TableCell className="text-right tabular-nums">{failure.attempts}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {failure.nextAttemptAt ? formatRelative(failure.nextAttemptAt) : 'When it changes'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : null}
+
+      {view.writeOffFailures.length ? (
+        <Table aria-label="Bad debts refused">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Bad debt</TableHead>
+              <TableHead>Invoice</TableHead>
+              <TableHead>Why</TableHead>
+              <TableHead className="text-right">Tries</TableHead>
+              <TableHead>Next try</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {view.writeOffFailures.map((failure) => (
+              <TableRow key={failure.invoiceId}>
+                <TableCell className="tabular-nums">
+                  {formatMoney(failure.amountCents)}
+                  {failure.reversing ? <span className="text-muted-foreground"> · taking back</span> : null}
                 </TableCell>
                 <TableCell>
                   {failure.number ? `#${failure.number}` : '—'} <span className="text-muted-foreground">{failure.clientName}</span>

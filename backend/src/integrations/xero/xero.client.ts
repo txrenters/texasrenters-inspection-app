@@ -83,6 +83,20 @@ export class XeroClient {
     });
   }
 
+  /** A write Xero takes only as PUT -- a credit note's allocation (2026-11-10) -- counted, with an idempotency key, as a post is. */
+  async put<T>(organizationId: string, tenantId: string, path: string, body: unknown, schema: z.ZodType<T>, idempotencyKey: string): Promise<T> {
+    return this.call(organizationId, tenantId, path, schema, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+    });
+  }
+
+  /** Removes something Xero keeps -- a credit note's allocation (2026-11-10) -- counted against the organisation. */
+  async delete<T>(organizationId: string, tenantId: string, path: string, schema: z.ZodType<T>): Promise<T> {
+    return this.call(organizationId, tenantId, path, schema, { method: 'DELETE' });
+  }
+
   private async call<T>(
     organizationId: string,
     tenantId: string,

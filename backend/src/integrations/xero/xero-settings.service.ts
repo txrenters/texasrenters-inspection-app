@@ -26,7 +26,14 @@ const DAY_MS = 86_400_000;
 
 const isUniqueViolation = (error: unknown) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
-type Row = { sendFrom: Date | null; salesAccountId: string | null; salesTaxType: string | null; salesAccounts: Prisma.JsonValue; paymentAccounts: Prisma.JsonValue };
+type Row = {
+  sendFrom: Date | null;
+  salesAccountId: string | null;
+  salesTaxType: string | null;
+  salesAccounts: Prisma.JsonValue;
+  paymentAccounts: Prisma.JsonValue;
+  badDebtAccountId?: string | null;
+};
 
 const stringMap = (value: Prisma.JsonValue | undefined): Record<string, string> =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -42,6 +49,7 @@ export function valuesFrom(row: Row | null): XeroSettingsValues {
     salesTaxType: row?.salesTaxType ?? null,
     salesAccounts: stringMap(row?.salesAccounts),
     paymentAccounts: Object.fromEntries(PAYMENT_METHODS.filter((method) => payments[method]).map((method) => [method, payments[method]!])),
+    badDebtAccountId: row?.badDebtAccountId ?? null,
   };
 }
 
@@ -56,6 +64,7 @@ export function valuesFromInput(input: SaveXeroSettingsInput): XeroSettingsValue
     salesTaxType: blank(input.salesTaxType),
     salesAccounts: kept(input.salesAccounts),
     paymentAccounts: kept(input.paymentAccounts) as XeroSettingsValues['paymentAccounts'],
+    badDebtAccountId: blank(input.badDebtAccountId),
   };
 }
 
@@ -79,6 +88,8 @@ export function settingsChanges(before: XeroSettingsValues, after: XeroSettingsV
   for (const method of PAYMENT_METHODS)
     if (before.paymentAccounts[method] !== after.paymentAccounts[method])
       changes.push(`${PAYMENT_METHOD_LABEL[method]}: ${shown(before.paymentAccounts[method])} → ${shown(after.paymentAccounts[method])}`);
+  if ((before.badDebtAccountId ?? null) !== (after.badDebtAccountId ?? null))
+    changes.push(`Bad debts: ${shown(before.badDebtAccountId)} → ${shown(after.badDebtAccountId)}`);
   return changes;
 }
 
@@ -170,6 +181,7 @@ export class XeroSettingsService {
       salesTaxType: after.salesTaxType,
       salesAccounts: after.salesAccounts as Prisma.InputJsonObject,
       paymentAccounts: after.paymentAccounts as Prisma.InputJsonObject,
+      badDebtAccountId: after.badDebtAccountId ?? null,
     };
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -195,6 +207,8 @@ export class XeroSettingsService {
         });
         // An invoice this organisation held back for its account, or refused for it, is worth another go with the new choices.
         await tx.xeroInvoiceSync.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
+        // And a bad debt held back for its account (2026-11-10).
+        await tx.xeroWriteOffSync.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' }, data: { nextAttemptAt: new Date() } });
         // And a payment held back for its method's account (2026-11-10, phase 4): looked at again, though it did not change.
         await tx.xeroPaymentSync.updateMany({
           where: { organizationId: org, xeroTenantId: tenantId, status: 'FAILED' },

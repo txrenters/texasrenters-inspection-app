@@ -97,6 +97,7 @@ function database(options: { settings?: Record<string, unknown> | null; organisa
     auditLog: { create: jest.fn() },
     xeroInvoiceSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
     xeroPaymentSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
+    xeroWriteOffSync: { updateMany: jest.fn(async () => ({ count: 0 })) },
     $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(db)),
     settings: () => settings,
   };
@@ -230,6 +231,7 @@ describe('saving the choices', () => {
         salesTaxType: 'NONE',
         salesAccounts: { 'filter change': 'a-410' },
         paymentAccounts: { PROPERTYWARE_LEDGER: 'a-815', CHECK: 'a-bank' },
+        badDebtAccountId: null,
       },
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
@@ -323,11 +325,11 @@ describe('the words', () => {
         salesAccounts: { 'filter change': '', 'move-out inspection': 'a-410' },
         paymentAccounts: { CHECK: '' },
       }),
-    ).toEqual({ sendFrom: null, salesAccountId: null, salesTaxType: 'NONE', salesAccounts: { 'move-out inspection': 'a-410' }, paymentAccounts: {} });
+    ).toEqual({ sendFrom: null, salesAccountId: null, salesTaxType: 'NONE', salesAccounts: { 'move-out inspection': 'a-410' }, paymentAccounts: {}, badDebtAccountId: null });
   });
 
   it('reads no row as nothing chosen, and ignores what is not a method', () => {
-    expect(valuesFrom(null)).toEqual({ sendFrom: null, salesAccountId: null, salesTaxType: null, salesAccounts: {}, paymentAccounts: {} });
+    expect(valuesFrom(null)).toEqual({ sendFrom: null, salesAccountId: null, salesTaxType: null, salesAccounts: {}, paymentAccounts: {}, badDebtAccountId: null });
     expect(valuesFrom({ ...valuesRow(), paymentAccounts: { CHECK: 'a-bank', NOPE: 'x' } }).paymentAccounts).toEqual({ CHECK: 'a-bank' });
   });
 

@@ -124,5 +124,6 @@
   "202611100007_invoice_product_organisation": "9e8f747583890b6c",
   "202611100008_invoice_organisation": "ea68f7a7934073b6",
   "202611100009_xero_payment_sync": "35b7c5686b0e1b78",
-  "202611100010_xero_check": "34825095cb1f8d19"
+  "202611100010_xero_check": "34825095cb1f8d19",
+  "202611100011_xero_bad_debt": "f28e26faac49cd63"
 }
