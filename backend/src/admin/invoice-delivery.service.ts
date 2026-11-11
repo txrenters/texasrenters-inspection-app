@@ -30,6 +30,7 @@ import { invoiceEmail } from './invoice-email';
 import { receiptEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
+import { SHOWN_INVOICE } from './shown-invoices';
 
 export { DEFAULT_INVOICE_EMAIL_CEILING } from './invoice-email-claim';
 
@@ -213,6 +214,7 @@ export class InvoiceDeliveryService {
     const rows = await this.prisma.invoice.findMany({
       where: {
         organizationId: user.organizationId,
+        ...SHOWN_INVOICE,
         status: InvoiceStatus.AWAITING_PAYMENT,
         balanceCents: { gt: 0 },
         issuedOn: { gte: new Date(`${query.from}T00:00:00.000Z`), lte: new Date(`${query.to}T00:00:00.000Z`) },

@@ -167,6 +167,8 @@ describe('checking a month', () => {
     expect(prisma.invoice.findMany.mock.calls[0]![0].where).toEqual({
       organizationId: ORG,
       xeroTenantId: TENANT,
+      // What the console sent, never what it read back from Xero (2026-11-12).
+      origin: { not: 'XERO' },
       status: { not: 'DRAFT' },
       issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z') },
       OR: [{ inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } }, { inspectionId: null, issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } }],

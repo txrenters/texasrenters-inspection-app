@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
 import { labourOf, xeroProjectName, type XeroProjectFailure, type XeroProjectVisit, type XeroSettingsValues } from '@texasrenters/shared';
-import { InvoiceStatus, type Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import { PrismaService } from '../../common/prisma.service';
@@ -128,6 +128,8 @@ export class XeroProjectsService {
       where: {
         organizationId,
         xeroTenantId: tenantId,
+        // The console's sends only: an invoice read from Xero (2026-11-12) is the office's there, project and all.
+        origin: { not: InvoiceOrigin.XERO },
         issuedOn: { gte: new Date(`${sendFrom}T00:00:00.000Z`) },
         status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
         xeroSync: { is: { xeroTenantId: tenantId, status: 'SENT' } },

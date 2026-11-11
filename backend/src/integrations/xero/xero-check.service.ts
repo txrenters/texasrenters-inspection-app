@@ -6,7 +6,7 @@ import {
   type XeroCheckView,
   type XeroDifference,
 } from '@texasrenters/shared';
-import { InvoiceStatus, type Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../../common/auth';
@@ -143,6 +143,8 @@ export class XeroCheckService {
       where: {
         organizationId,
         xeroTenantId: tenantId,
+        // What the console sent, not what it read back from Xero (2026-11-12): that is Xero's own.
+        origin: { not: InvoiceOrigin.XERO },
         status: { not: InvoiceStatus.DRAFT },
         issuedOn: { gte: settings.sendFrom },
         // The month Xero files it in (2026-11-11): dated on its visit's day, else the day it was issued.

@@ -3170,10 +3170,13 @@ enum InvoicePaymentMethod {
 }
 
 /// Where a row began: read from Jobber, or made in the console. A console row
-/// with no Jobber id is one Jobber has not been sent yet.
+/// with no Jobber id is one Jobber has not been sent yet. XERO (2026-11-12): a
+/// company's own invoice or payment, read back from its books in Xero, which
+/// are the record; kept out of sight until the pages show them.
 enum InvoiceOrigin {
   JOBBER
   CONSOLE
+  XERO
 }
 
 /// An invoice, as Jobber keeps it (the office, 2026-11-05: "we will need the
@@ -3271,6 +3274,20 @@ model Invoice {
   /// chosen. Null when it belongs to no company -- one read from Jobber, or one
   /// whose products go to none yet -- and then it is never sent to Xero.
   xeroTenantId           String?
+  /// As it is in its company's books (2026-11-12): Xero's id, on a row read
+  /// from Xero or a console invoice Xero has; never on Jobber's copy (checked).
+  xeroInvoiceId          String?
+  /// The Xero contact it is made out to.
+  xeroContactId          String?
+  /// Xero's own status: DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED or DELETED.
+  xeroStatus             String?
+  /// Xero's "updated at": an invoice read again unchanged is not written again.
+  xeroUpdatedAt          DateTime?
+  /// The link Xero keeps on it, to where it was made.
+  xeroUrl                String?
+  /// What Xero says was paid on it, and credited to it; null on a row not read from Xero.
+  amountPaidCents        Int?
+  amountCreditedCents    Int?
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
@@ -3292,6 +3309,8 @@ model Invoice {
 
   @@unique([organizationId, jobberInvoiceId])
   @@unique([organizationId, clientRequestId])
+  @@unique([organizationId, xeroTenantId, xeroInvoiceId])
+  @@index([organizationId, number])
   @@index([organizationId, status, dueOn])
   @@index([organizationId, issuedOn])
   @@index([organizationId, jobberClientId])
@@ -3554,6 +3573,8 @@ model InvoicePayment {
   recordedById    String?              @db.Uuid
   /// The browser's key, so a double click or a resend records one payment.
   clientRequestId String?
+  /// Xero's id (2026-11-12): on a payment read from Xero, or one of the console's that Xero has.
+  xeroPaymentId   String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 
@@ -3566,6 +3587,7 @@ model InvoicePayment {
   @@unique([organizationId, jobberPaymentId])
   @@unique([organizationId, clientRequestId])
   @@unique([organizationId, jobberRecordId])
+  @@unique([organizationId, xeroPaymentId])
   @@index([organizationId, paidOn])
   @@index([invoiceId])
 }
@@ -4925,6 +4947,17 @@ model XeroSettings {
   sendingClaimedUntil DateTime?
   lastRunAt           DateTime?
   lastRunProblem      String?
+  /// Reading the company's books back from Xero (2026-11-12): where the next
+  /// read of its invoices, and of its payments, carries on -- what changed
+  /// since, and which page of that -- under the same claim as sending.
+  booksInvoicesSince  DateTime?
+  booksInvoicesPage   Int       @default(1)
+  booksPaymentsSince  DateTime?
+  booksPaymentsPage   Int       @default(1)
+  /// When its invoices had first all been read: from then the console has its books.
+  booksReadAt         DateTime?
+  booksLastRunAt      DateTime?
+  booksLastRunProblem String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -4950,6 +4983,7 @@ model XeroContactLink {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, xeroTenantId, clientKey])
+  @@index([organizationId, xeroTenantId, xeroContactId])
 }
 
 /// An invoice's state in Xero (2026-11-10, phase 3 of the Xero plan): what was
@@ -4982,6 +5016,7 @@ model XeroInvoiceSync {
   invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
+  @@index([organizationId, xeroTenantId, xeroInvoiceId])
 }
 
 /// A payment in its invoice's company's books in Xero (2026-11-10, phase 4 of
@@ -5017,6 +5052,7 @@ model XeroPaymentSync {
 
   @@index([organizationId, xeroTenantId, status])
   @@index([invoiceId])
+  @@index([organizationId, xeroPaymentId])
 }
 
 /// One month of a company's invoices checked against its books in Xero

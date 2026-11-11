@@ -17,6 +17,8 @@ export async function nextInvoiceNumber(tx: Prisma.TransactionClient, organizati
     SELECT max("number"::bigint)::text AS highest
       FROM "Invoice"
      WHERE "organizationId" = ${organizationId}::uuid
+       -- Xero numbers its own (2026-11-12): what was read back from it is not where this sequence goes on from.
+       AND "origin" <> 'XERO'
        AND "number" ~ '^[0-9]{1,15}$'`;
   return String(BigInt(row?.highest ?? '0') + 1n);
 }

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 
 import { XeroAuthService } from './xero-auth.service';
+import { XeroBooksScheduler } from './xero-books.scheduler';
+import { XeroBooksService } from './xero-books.service';
 import { XeroSenderScheduler } from './xero-sender.scheduler';
 import { XeroCheckService } from './xero-check.service';
 import { XeroProjectsService } from './xero-projects.service';
@@ -14,11 +16,11 @@ import { XeroService } from './xero.service';
  * The office's Xero organisation (2026-11-10, phases 1-3 of the Xero plan):
  * connected, read, its accounts chosen, and -- only once sending is turned on
  * -- its invoices sent, with a project for each visit where the company keeps
- * them (2026-11-11).
+ * them (2026-11-11); and each company's books read back from Xero (2026-11-12).
  */
 @Module({
   controllers: [XeroController, XeroOAuthCallbackController],
-  providers: [XeroAuthService, XeroClient, XeroService, XeroSettingsService, XeroProjectsService, XeroSenderService, XeroSenderScheduler, XeroCheckService],
+  providers: [XeroAuthService, XeroClient, XeroService, XeroSettingsService, XeroProjectsService, XeroSenderService, XeroSenderScheduler, XeroCheckService, XeroBooksService, XeroBooksScheduler],
   exports: [XeroService, XeroClient, XeroSettingsService, XeroSenderService],
 })
 export class XeroModule {}

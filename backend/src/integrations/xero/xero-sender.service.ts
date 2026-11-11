@@ -12,7 +12,7 @@ import {
   type XeroSendingView,
   type XeroTrackingCategory,
 } from '@texasrenters/shared';
-import { InvoiceStatus, type Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../../common/auth';
@@ -225,6 +225,9 @@ export class XeroSenderService {
               organizationId,
               // Only this organisation's invoices (2026-11-10): each company's go to its own books.
               xeroTenantId: tenant,
+              // Never one read from its books (2026-11-12), nor one of the console's that Xero already has.
+              origin: { not: InvoiceOrigin.XERO },
+              xeroInvoiceId: null,
               issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
               status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
               OR: [{ xeroSync: { is: null } }, { xeroSync: { xeroTenantId: { not: tenant } } }],
@@ -237,6 +240,7 @@ export class XeroSenderService {
             where: {
               organizationId,
               xeroTenantId: null,
+              origin: { not: InvoiceOrigin.XERO },
               issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
               status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
             },
@@ -460,7 +464,8 @@ export class XeroSenderService {
       where: { organizationId, xeroTenantId: tenantId, sendingEnabled: true, OR: [{ sendingClaimedUntil: null }, { sendingClaimedUntil: { lt: now } }] },
       data: { sendingClaimedUntil: new Date(now.getTime() + CLAIM_MS) },
     });
-    if (!claimed.count) return { ...result, problem: 'Another run is sending.' };
+    // A read of the company's books holds the same claim (2026-11-12).
+    if (!claimed.count) return { ...result, problem: 'Another run is sending to Xero, or reading from it.' };
 
     const sentNumbers: string[] = [];
     const budget: DeleteBudget = { left: MAX_PAYMENT_DELETES_PER_RUN };
@@ -927,6 +932,8 @@ export class XeroSenderService {
       where: {
         organizationId,
         xeroTenantId: tenantId,
+        // The console's own write-offs only: one read from Xero is Xero's already (2026-11-12).
+        origin: { not: InvoiceOrigin.XERO },
         status: InvoiceStatus.BAD_DEBT,
         balanceCents: { gt: 0 },
         xeroSync: { is: { xeroTenantId: tenantId, status: 'SENT', xeroInvoiceId: { not: null } } },
@@ -1132,6 +1139,10 @@ export class XeroSenderService {
          WHERE p."organizationId" = ${organizationId}::uuid
            AND i."xeroTenantId" = ${tenantId}
            AND i."status" <> 'VOIDED'
+           -- Never a payment read from Xero, nor one Xero has been found to have (2026-11-12): it is there already.
+           AND i."origin" <> 'XERO'
+           AND p."origin" <> 'XERO'
+           AND p."xeroPaymentId" IS NULL
            AND s."xeroTenantId" = ${tenantId}
            AND s."status" = 'SENT'
            AND s."xeroInvoiceId" IS NOT NULL
@@ -1241,6 +1252,9 @@ export class XeroSenderService {
            AND i."xeroTenantId" = ${tenantId}
            AND i."issuedOn" >= ${sendFrom}::date
            AND i."status" <> 'DRAFT'
+           -- Never one read from its books, nor one of the console's read back from there (2026-11-12): Xero has it.
+           AND i."origin" <> 'XERO'
+           AND i."xeroInvoiceId" IS NULL
            AND (
                 (s."id" IS NULL AND i."status" <> 'VOIDED')
              OR (s."xeroTenantId" <> ${tenantId} AND i."status" <> 'VOIDED')

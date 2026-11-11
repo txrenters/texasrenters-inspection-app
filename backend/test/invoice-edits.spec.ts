@@ -207,7 +207,8 @@ describe('once the console owns invoicing', () => {
         code: 'INVOICE_NUMBER_TAKEN',
         message: 'Invoice #9000 is another invoice already.',
       });
-      expect(db.invoice.findFirst.mock.calls[1][0].where).toEqual({ organizationId: ORG, number: '9000', id: { not: INVOICE } });
+      // Not one read back from Xero (2026-11-12): those are out of sight until the pages show them.
+      expect(db.invoice.findFirst.mock.calls[1][0].where).toEqual({ organizationId: ORG, origin: { not: 'XERO' }, number: '9000', id: { not: INVOICE } });
     });
 
     it('refuses an invoice changed since it was read, before or during the write', async () => {

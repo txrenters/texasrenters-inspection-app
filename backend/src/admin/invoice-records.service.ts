@@ -8,6 +8,7 @@ import { ApplicationError } from '../common/errors';
 import { InvoiceFileStorageService, invoiceFileKey } from '../common/invoice-file-storage.service';
 import { PrismaService } from '../common/prisma.service';
 import { InvoicesService } from './invoices.service';
+import { SHOWN_INVOICE } from './shown-invoices';
 
 /**
  * Notes and files written on an invoice in the console (2026-11-10, phase 4
@@ -160,7 +161,7 @@ export class InvoiceRecordsService {
 
   private async invoiceOf(user: AuthenticatedUser, invoiceId: string) {
     const invoice = await this.prisma.invoice.findFirst({
-      where: { id: invoiceId, organizationId: user.organizationId },
+      where: { id: invoiceId, organizationId: user.organizationId, ...SHOWN_INVOICE },
       select: { id: true },
     });
     if (!invoice) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');

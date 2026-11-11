@@ -18,6 +18,7 @@ import { defaultRecipients, readEmailSettings, readEmailTemplates } from './invo
 import { followUpEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
 import { invoiceWritesOn } from './invoice-settings';
+import { SHOWN_INVOICE } from './shown-invoices';
 
 /** The most follow-ups one run sends, whatever the ceiling allows: a bad day's data must not empty it. */
 const MAX_FOLLOW_UPS_A_RUN = 150;
@@ -131,6 +132,7 @@ export class InvoiceFollowUpsService {
     const owed = await this.prisma.invoice.findMany({
       where: {
         organizationId,
+        ...SHOWN_INVOICE,
         status: InvoiceStatus.AWAITING_PAYMENT,
         balanceCents: { gt: 0 },
         dueOn: { in: due },

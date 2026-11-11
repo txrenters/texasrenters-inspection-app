@@ -20,7 +20,7 @@ import {
   type XeroTaxRate,
   type XeroTrackingCategory,
 } from '@texasrenters/shared';
-import { InvoiceStatus, Prisma } from '@prisma/client';
+import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
 import { billedPrices, listedProducts } from '../../admin/invoice-settings';
 import type { AuthenticatedUser } from '../../common/auth';
@@ -179,6 +179,8 @@ export class XeroSettingsService {
     const invoices: Prisma.InvoiceWhereInput = {
       organizationId,
       xeroTenantId: tenantId,
+      // The console's own and Jobber's: one read from Xero (2026-11-12) is never sent there.
+      origin: { not: InvoiceOrigin.XERO },
       status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
       issuedOn: { gte: new Date(`${since}T00:00:00.000Z`) },
     };

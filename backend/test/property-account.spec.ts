@@ -124,6 +124,8 @@ describe("a property's billing history", () => {
     expect(account.entries.find((entry) => entry.key === 'invoice:inv-2')).toMatchObject({ status: 'PAST_DUE', invoiceNumber: '8440' });
     expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({
       organizationId: ORG,
+      // Not the books read back from Xero (2026-11-12): out of sight until the pages show them.
+      origin: { not: 'XERO' },
       propertywareBuildingId: PROPERTY,
       status: { notIn: ['DRAFT', 'VOIDED'] },
     });

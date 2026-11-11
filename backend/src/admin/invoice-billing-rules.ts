@@ -73,6 +73,7 @@ export async function suggestedBillingRules(
         FROM "Invoice" i
         JOIN "Inspection" n ON n."id" = i."inspectionId"
        WHERE i."organizationId" = ${organizationId}::uuid
+         AND i."origin" <> 'XERO'
          AND i."issuedOn" >= ${from}::date
          AND i."status" NOT IN ('DRAFT', 'VOIDED')
        GROUP BY 1`,
@@ -82,6 +83,8 @@ export async function suggestedBillingRules(
         JOIN "Inspection" n ON n."id" = i."inspectionId"
         JOIN "InvoiceLine" l ON l."invoiceId" = i."id"
        WHERE i."organizationId" = ${organizationId}::uuid
+         -- The office's own billing, as Jobber and the console made it; not yet Xero's copies of it (2026-11-12).
+         AND i."origin" <> 'XERO'
          AND i."issuedOn" >= ${from}::date
          AND i."status" NOT IN ('DRAFT', 'VOIDED')
        GROUP BY 1, 2`,
