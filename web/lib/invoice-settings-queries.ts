@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  AddBillingRulesInput,
   AddInvoiceProductsInput,
   ChangeInvoiceProductInput,
   InvoiceSettingsView,
@@ -49,6 +50,16 @@ export function useInvoiceSettingsEdits() {
     changeProduct: useMutation({
       mutationFn: ({ id, input }: { id: string; input: ChangeInvoiceProductInput }) =>
         api<InvoiceSettingsView>(`${SETTINGS}/products/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+      onSuccess: saved,
+    }),
+    // What a finished visit bills (2026-11-12).
+    addBillingRules: useMutation({
+      mutationFn: (input: AddBillingRulesInput) =>
+        api<InvoiceSettingsView>(`${SETTINGS}/billing-rules`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: saved,
+    }),
+    removeBillingRule: useMutation({
+      mutationFn: (id: string) => api<InvoiceSettingsView>(`${SETTINGS}/billing-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
       onSuccess: saved,
     }),
   };

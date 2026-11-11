@@ -15,6 +15,7 @@
  * billed.
  */
 
+import type { InvoiceBillingRuleView, SuggestedBillingRule } from './invoice-billing-rules.js';
 import { isEmailAddress } from './invoice-delivery.js';
 import { PAYMENT_TERMS, type ReceiptBrand } from './invoices.js';
 
@@ -113,6 +114,10 @@ export interface InvoiceSettingsView {
   updatedAt: string | null;
   products: InvoiceProductView[];
   billed: BilledPrice[];
+  /** What a finished visit bills (2026-11-12), oldest first: each names a product on the list above. */
+  billingRules: InvoiceBillingRuleView[];
+  /** The rules the past six months of invoices suggest, not saved yet: the office confirms them. */
+  suggestedRules: SuggestedBillingRule[];
   /** The office's Xero organisations, connected ones first: what each product or service can go to. Empty until Xero is connected. */
   organisations: InvoiceProductOrganisation[];
   /** The console's copies of the files on Jobber's invoices (phase 7). */

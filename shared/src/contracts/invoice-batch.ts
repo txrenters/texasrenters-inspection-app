@@ -1,8 +1,8 @@
 /**
  * Making many invoices at once (2026-11-06, phase 4 of taking invoicing over
  * from Jobber), as Jobber's Batch Create: the finished visits nobody has
- * invoiced yet, each priced from what the technician reported done at the
- * office's own prices, made into one invoice each.
+ * invoiced yet, each billed as the office's rules say (2026-11-12) at its own
+ * prices, made into one invoice each.
  */
 import type { InvoiceLineInput, InvoiceProperty } from './invoices.js';
 
@@ -25,7 +25,7 @@ export interface UninvoicedVisit {
   status: string;
   property: InvoiceProperty | null;
   clientName: string;
-  /** One per service reported done, at the office's price for it. */
+  /** One per product the office's rules bill for it (2026-11-12), at the list's price. */
   lineItems: InvoiceLineInput[];
   totalCents: number;
   /** Why it cannot be invoiced as it stands, in words; null when it can. */

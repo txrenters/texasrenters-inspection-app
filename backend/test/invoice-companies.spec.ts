@@ -45,6 +45,11 @@ const product = (name: string, unitPriceCents: number, xeroTenantId: string | nu
 });
 /** The office's list: filter changes to one company's books, pest control to another's, a lockbox to none yet. */
 const PRODUCTS = [product('Filter Change', 3999, HOMES), product('Pest Control', 2500, PEST), product('Lockbox Install', 3000, null)];
+/** What a visit bills (2026-11-12): a filter change and pest control wherever they were done. */
+const RULES = [
+  { id: 'rule-filter', inspectionType: null, service: 'filterChange', productId: 'product-Filter Change' },
+  { id: 'rule-pest', inspectionType: null, service: 'pestControl', productId: 'product-Pest Control' },
+];
 /** Two companies connected, one no longer. */
 const ORGANISATIONS = [
   { xeroTenantId: HOMES, name: 'Example Home Services', status: 'CONNECTED' },
@@ -101,6 +106,7 @@ function database() {
     invoiceLine: { groupBy: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), createMany: jest.fn() },
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoiceProduct: { findMany: jest.fn().mockResolvedValue(PRODUCTS) },
+    invoiceBillingRule: { findMany: jest.fn().mockResolvedValue(RULES) },
     xeroOrganisation: { findMany: jest.fn().mockResolvedValue(ORGANISATIONS) },
     invoicePayment: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountCents: 0 }, _max: { paidOn: null } }) },
     inspection: { findFirst: jest.fn().mockResolvedValue(visit()), findMany: jest.fn().mockResolvedValue([]) },

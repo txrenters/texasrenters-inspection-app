@@ -1,6 +1,14 @@
-import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MAX_PRODUCT_PRICE_CENTS, MAX_PRODUCTS_PER_ADD, PAYMENT_TERMS } from '@texasrenters/shared';
+import {
+  InspectionType,
+  MAX_BILLING_RULES,
+  MAX_PRODUCT_PRICE_CENTS,
+  MAX_PRODUCTS_PER_ADD,
+  PAYMENT_TERMS,
+  REPORTABLE_VISIT_SERVICES,
+  type ReportableVisitService,
+} from '@texasrenters/shared';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -12,6 +20,7 @@ import {
   IsISO8601,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -60,6 +69,24 @@ export class ChangeInvoiceProductDto {
   @IsISO8601() expectedUpdatedAt!: string;
 }
 
+/** A rule for what a finished visit bills (2026-11-12): every field of `NewBillingRule`. */
+export class NewBillingRuleDto {
+  /** The visit's type; null for any visit. */
+  @IsOptional() @IsIn(Object.values(InspectionType)) inspectionType!: InspectionType | null;
+  /** A service reported done; null for whatever was done. */
+  @IsOptional() @IsIn([...REPORTABLE_VISIT_SERVICES]) service!: ReportableVisitService | null;
+  @IsUUID() productId!: string;
+}
+
+export class AddBillingRulesDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_BILLING_RULES)
+  @ValidateNested({ each: true })
+  @Type(() => NewBillingRuleDto)
+  rules!: NewBillingRuleDto[];
+}
+
 /**
  * Invoice settings (2026-11-06, phase 6): read by whoever reads invoices,
  * changed by whoever makes them -- `invoices:manage`, which an API key can
@@ -98,5 +125,18 @@ export class InvoiceSettingsController {
     @Body() body: ChangeInvoiceProductDto,
   ) {
     return this.settings.changeProduct(request.user, id, body);
+  }
+
+  /** What a finished visit bills (2026-11-12): rules confirmed or written by the office. */
+  @Post('billing-rules')
+  @RequirePermissions('invoices:read', 'invoices:manage')
+  addBillingRules(@Req() request: AuthenticatedRequest, @Body() body: AddBillingRulesDto) {
+    return this.settings.addBillingRules(request.user, body);
+  }
+
+  @Delete('billing-rules/:ruleId')
+  @RequirePermissions('invoices:read', 'invoices:manage')
+  removeBillingRule(@Req() request: AuthenticatedRequest, @Param('ruleId', new ParseUUIDPipe()) id: string) {
+    return this.settings.removeBillingRule(request.user, id);
   }
 }

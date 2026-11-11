@@ -39,8 +39,8 @@ import { newClientRequestId } from '@/lib/invoice-queries';
 /**
  * Making many invoices at once (2026-11-06, phase 4 of taking invoicing over
  * from Jobber), as Jobber's Batch Create: the finished visits in a span of
- * days that have no invoice yet, each priced from what the technician
- * reported done at the office's own prices. Every visit that can be billed is
+ * days that have no invoice yet, each billed as the office's rules say -- its
+ * type and what the technician reported done (2026-11-12) -- at its own prices. Every visit that can be billed is
  * ticked to start with; one that cannot says why, and is invoiced by itself.
  * Asked once before anything is made. A visit whose services go to several
  * companies' books makes one invoice for each (2026-11-10).
@@ -121,7 +121,7 @@ function BatchInvoices() {
   return (
     <>
       <PageHeader
-        description="The finished visits with no invoice yet, each priced from what the technician reported done at the office's prices."
+        description="The finished visits with no invoice yet, each billed as the rules under Invoices → Settings say, at the office's prices."
         title="Batch create invoices"
       />
 

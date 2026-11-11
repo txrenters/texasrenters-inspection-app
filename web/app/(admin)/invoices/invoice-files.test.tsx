@@ -30,7 +30,7 @@ vi.mock('@/lib/invoice-delivery-queries', () => ({ useSendInvoice: () => ({ muta
 const settings = vi.hoisted(() => ({ view: null as unknown }));
 vi.mock('@/lib/invoice-settings-queries', () => ({
   useInvoiceSettings: () => ({ isLoading: false, isError: false, data: settings.view, refetch: vi.fn() }),
-  useInvoiceSettingsEdits: () => ({ save: {}, addProducts: {}, changeProduct: {} }),
+  useInvoiceSettingsEdits: () => ({ save: {}, addProducts: {}, changeProduct: {}, addBillingRules: {}, removeBillingRule: {} }),
 }));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));
@@ -136,6 +136,8 @@ describe('the copies before the cutover', () => {
     updatedAt: null,
     products: [],
     billed: [],
+    billingRules: [],
+    suggestedRules: [],
     organisations: [],
     files: status,
   });
