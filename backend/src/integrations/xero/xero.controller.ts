@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Header, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsISO8601, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { MAX_LABOUR_MINUTES, MAX_LABOUR_RATE_CENTS } from '@texasrenters/shared';
+import { IsBoolean, IsISO8601, IsInt, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
@@ -29,6 +30,13 @@ export class SaveXeroSettingsDto {
   @IsOptional() @IsObject() trackingGroups?: Record<string, string>;
   /** Product or service name key to its Xero item's code. */
   @IsOptional() @IsObject() itemCodes?: Record<string, string>;
+  /** A Xero project for each visit; its invoices then go as drafts (2026-11-11). */
+  @IsOptional() @IsBoolean() projectsEnabled?: boolean;
+  /** The Xero user each visit's labour is logged under. */
+  @IsOptional() @IsString() @MaxLength(64) projectUserId?: string | null;
+  /** The labour on each project: cents an hour, and minutes. */
+  @IsOptional() @IsInt() @Min(0) @Max(MAX_LABOUR_RATE_CENTS) labourRateCents?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(MAX_LABOUR_MINUTES) labourMinutes?: number;
   @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
 }
 

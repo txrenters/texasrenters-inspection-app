@@ -459,6 +459,7 @@ model Organization {
   xeroPaymentSyncs XeroPaymentSync[]
   xeroChecks       XeroCheck[]
   xeroWriteOffSyncs XeroWriteOffSync[]
+  xeroProjectLinks  XeroProjectLink[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -1495,6 +1496,8 @@ model Inspection {
   @@index([organizationId, propertywareBuildingId, propertywareUnitId, propertywareLeaseId, inspectionType, scheduledAt])
   jobberOutboundTasks        JobberOutboundTask[]
   tbpPlanStop                TbpQuarterPlanStop?     @relation("TbpStopInspection")
+  /// Its project in each company's books in Xero (2026-11-11).
+  xeroProjectLinks           XeroProjectLink[]
   /// This visit asked to be booked again.
   rescheduleRequests         RescheduleRequest[]     @relation("RescheduleRequestInspection")
   officeNotes                InspectionNote[]
@@ -4787,6 +4790,8 @@ model XeroOrganisation {
   /// Its tracking categories with their options, and its products and services (2026-11-11), as last read.
   trackingCategories Json?
   items              Json?
+  /// Its Xero users who can log time on projects (2026-11-11), as last read: `[{ userId, name }]`.
+  projectUsers       Json?
   catalogReadAt    DateTime?
   catalogReadError String?
   /// Whether Xero's own invoice reminders are on in this organisation, as last read; null when Xero did not say.
@@ -4811,6 +4816,8 @@ model XeroOrganisation {
   checks       XeroCheck[]
   /// The bad debts written off in its books.
   writeOffSyncs XeroWriteOffSync[]
+  /// Each visit's project in its books (2026-11-11).
+  projectLinks  XeroProjectLink[]
 
   @@unique([organizationId, xeroTenantId])
 }
@@ -4869,6 +4876,15 @@ model XeroSettings {
   trackingGroups     Json    @default("{}")
   /// { "<product name key>": "<Xero item code>" }.
   itemCodes          Json    @default("{}")
+  /// A Xero project for each visit (2026-11-11), with the technician's labour logged as time on it. On, the
+  /// company's invoices go to Xero as drafts -- the API cannot put a line on a project, so the office does,
+  /// then approves -- and payments stay out (checked: Xero takes none on a draft).
+  projectsEnabled    Boolean @default(false)
+  /// The Xero user the labour is logged under (Xero's projects user id); null for none chosen yet.
+  projectUserId      String?
+  /// The labour on each project the console makes: $35.00 an hour for 6 minutes. Either 0 logs none (checked ranges).
+  labourRateCents    Int     @default(3500)
+  labourMinutes      Int     @default(6)
   /// Phase 3: invoices go to Xero only while this is on.
   sendingEnabled      Boolean   @default(false)
   sendingChangedAt    DateTime?
@@ -5025,4 +5041,41 @@ model XeroWriteOffSync {
   xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
 
   @@index([organizationId, xeroTenantId, status])
+}
+
+/// A visit's project in one company's books in Xero (2026-11-11), as the office
+/// keeps one for every visit: made by the console, or found already made by the
+/// office under the same name. On one the console made it logs the labour, a
+/// task and a time entry; each step's id is kept, so a run that stopped half-way
+/// carries on without making anything twice.
+model XeroProjectLink {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  xeroTenantId    String
+  inspectionId    String    @db.Uuid
+  /// "Moses: Tenant Benefit Package - 4th Qtr - 2026 - 11.10.2026".
+  name            String
+  /// Null until Xero has it.
+  xeroProjectId   String?
+  /// Made by the console; otherwise found, made by the office, and given no labour.
+  madeHere        Boolean   @default(false)
+  xeroTaskId      String?
+  xeroTimeEntryId String?
+  /// DONE or FAILED (checked).
+  status          String
+  attempts        Int       @default(0)
+  lastAttemptAt   DateTime?
+  nextAttemptAt   DateTime?
+  problem         String?
+  doneAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection       Inspection       @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+
+  @@unique([organizationId, xeroTenantId, inspectionId])
+  @@index([organizationId, xeroTenantId, status])
+  @@index([inspectionId])
 }

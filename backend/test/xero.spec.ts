@@ -274,14 +274,17 @@ describe('calls to Xero', () => {
 });
 
 describe('connecting the office’s organisations', () => {
-  function service(connection: Row | null, organisations: Row[], tenants: unknown[]) {
+  function service(connection: Row | null, organisations: Row[], tenants: unknown[], scope = XERO_READ_SCOPES) {
     const db = database(connection, organisations);
     const auth = new XeroAuthService(db as never);
     const client = new XeroClient(db as never, auth);
     const fetch = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const tenant = (init?.headers as Record<string, string> | undefined)?.['xero-tenant-id'];
-      if (url.endsWith('/connect/token')) return json({ access_token: jwt({ authentication_event_id: 'event-1' }), refresh_token: 'r', expires_in: 1800, scope: XERO_READ_SCOPES });
+      if (url.endsWith('/connect/token')) return json({ access_token: jwt({ authentication_event_id: 'event-1' }), refresh_token: 'r', expires_in: 1800, scope });
+      // Who can log time on projects (2026-11-11), from the Projects API.
+      if (url.includes('/projects.xro/2.0/ProjectsUsers'))
+        return json({ items: [{ userId: 'user-2', name: 'Zed Office', email: 'zed@example.com' }, { userId: 'user-1', name: null, email: 'ada@example.com' }] });
       if (url.endsWith('/connections')) return json(tenants);
       if (url.endsWith('/Organisation')) return json({ Organisations: [{ Name: `Read ${tenant?.slice(0, 2)}`, BaseCurrency: 'USD', CountryCode: 'US', SalesTaxBasis: 'NONE' }] });
       if (url.endsWith('/Accounts')) return json({ Accounts: [] });
@@ -332,6 +335,24 @@ describe('connecting the office’s organisations', () => {
       action: 'XERO_CONNECTED',
       metadata: { organisations: ['Example Home Services', 'Example Pest Co', 'Example Air Co'], noLongerReached: 0 },
     });
+  });
+
+  it('reads who can log time on projects only of a connection allowed to read projects (2026-11-11)', async () => {
+    const { db, fetch } = await (async () => {
+      const made = service(null, [], [tenant(HOMES, 'Example Home Services')], XERO_SEND_SCOPES);
+      await made.xero.completeAuthorization({ code: 'c', state: stateFor() });
+      return made;
+    })();
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/projects.xro/2.0/ProjectsUsers'))).toHaveLength(1);
+    // Seven calls now; by name, an email standing in for a missing one, and no email kept.
+    expect(db.organisation(HOMES)).toMatchObject({
+      callsUsed: 7,
+      projectUsers: [
+        { userId: 'user-1', name: 'ada@example.com' },
+        { userId: 'user-2', name: 'Zed Office' },
+      ],
+    });
+    expect(JSON.stringify(db.organisation(HOMES)?.projectUsers)).not.toContain('zed@example.com');
   });
 
   it('adds one ticked later, and marks removed -- never deleted -- one the sign-in no longer reaches', async () => {

@@ -74,6 +74,13 @@ export interface XeroItem {
   isSold: boolean;
 }
 
+/** One of an organisation's Xero users who can log time on projects (2026-11-11). */
+export interface XeroProjectUser {
+  /** Xero's projects user id: what a time entry names. */
+  userId: string;
+  name: string;
+}
+
 /** One organisation the sign-in reaches, as last read. */
 export interface XeroOrganisationView {
   /** Xero's id for the organisation: what every call to it names. */
@@ -88,6 +95,8 @@ export interface XeroOrganisationView {
   /** As last read (2026-11-11); empty when it has none, or Xero did not say. */
   trackingCategories: XeroTrackingCategory[];
   items: XeroItem[];
+  /** Its users who can log time on projects, as last read (2026-11-11); empty before the connection may read projects. */
+  projectUsers: XeroProjectUser[];
   readAt: string | null;
   readProblem: string | null;
   /** Calls to this organisation today (Texas): Xero limits each organisation on its own. */
@@ -120,6 +129,12 @@ export const XERO_WRITE_SCOPES = ['accounting.contacts', 'accounting.invoices'] 
 
 /** Whether a connection may write invoices: made with the scopes phase 3 asks for. */
 export const xeroCanWrite = (scopes: readonly string[]) => XERO_WRITE_SCOPES.every((scope) => scopes.includes(scope));
+
+/** What making a project for each visit needs Xero to allow (2026-11-11). */
+export const XERO_PROJECTS_SCOPE = 'projects';
+
+/** Whether a connection may make projects and log time on them. */
+export const xeroCanMakeProjects = (scopes: readonly string[]) => scopes.includes(XERO_PROJECTS_SCOPE);
 
 /** The accounts a sale is posted to: active revenue accounts with a code. */
 export const revenueAccounts = (accounts: readonly XeroAccount[]) =>
@@ -178,6 +193,66 @@ export interface XeroSettingsValues {
   trackingGroups?: Record<string, string>;
   /** Product or service name key to the code of its item in Xero: "Filter Change", "HVAC". */
   itemCodes?: Record<string, string>;
+  /**
+   * A Xero project for each visit (2026-11-11), as the office keeps one, with
+   * the technician's labour logged as time on it. On, the invoices go to Xero
+   * as drafts -- Xero's API cannot put a line on a project, so the office does,
+   * then approves -- and payments must stay out of Xero. Left out reads as off.
+   */
+  projectsEnabled?: boolean;
+  /** The Xero user the labour is logged under (`XeroProjectUser.userId`); null for none chosen yet. */
+  projectUserId?: string | null;
+  /** The labour's rate, in cents an hour; left out reads as $35.00. 0 logs none. */
+  labourRateCents?: number;
+  /** The labour's minutes on each visit; left out reads as 6. 0 logs none. */
+  labourMinutes?: number;
+}
+
+/** The labour the office has been adding to each project by hand: $35.00 an hour, a tenth of an hour. */
+export const DEFAULT_LABOUR_RATE_CENTS = 3500;
+export const DEFAULT_LABOUR_MINUTES = 6;
+export const MAX_LABOUR_RATE_CENTS = 100_000;
+export const MAX_LABOUR_MINUTES = 600;
+
+/** Projects are made for each visit: invoices then go as drafts. */
+export const projectsAreOn = (values: Pick<XeroSettingsValues, 'projectsEnabled'>) => values.projectsEnabled === true;
+
+/** The labour logged on each project the console makes; null when projects are off, or either part is 0. */
+export function labourOf(values: Pick<XeroSettingsValues, 'projectsEnabled' | 'labourRateCents' | 'labourMinutes'>): { rateCents: number; minutes: number } | null {
+  if (!projectsAreOn(values)) return null;
+  const rateCents = values.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS;
+  const minutes = values.labourMinutes ?? DEFAULT_LABOUR_MINUTES;
+  return rateCents > 0 && minutes > 0 ? { rateCents, minutes } : null;
+}
+
+/** What a visit's project is named after (2026-11-11). */
+export interface XeroProjectVisit {
+  /** The visit's day, `YYYY-MM-DD`. */
+  day: string;
+  technicianName: string | null;
+  /** The benefit-package quarter the visit belongs to -- its plan's, never its day's; null for any other visit. */
+  packageQuarter: { year: number; quarter: number } | null;
+  /** What any other visit was, as its invoice's first line names it: "Move Out Inspection". */
+  kind: string;
+}
+
+const QUARTER_WORDS = ['1st', '2nd', '3rd', '4th'] as const;
+
+/**
+ * A visit's project, named as the office names them: the technician's first
+ * name, then "Tenant Benefit Package - 4th Qtr - 2026" for a package visit, or
+ * what any other visit was, then the visit's day as 11.10.2026. Null when the
+ * visit has no technician: the office's names always start with one.
+ */
+export function xeroProjectName(visit: XeroProjectVisit): string | null {
+  const first = visit.technicianName?.trim().split(/\s+/)[0] ?? '';
+  if (!first) return null;
+  const [year, month, day] = visit.day.split('-');
+  const dated = `${month}.${day}.${year}`;
+  const what = visit.packageQuarter
+    ? `Tenant Benefit Package - ${QUARTER_WORDS[visit.packageQuarter.quarter - 1] ?? `${visit.packageQuarter.quarter}th`} Qtr - ${visit.packageQuarter.year}`
+    : visit.kind.trim() || 'Visit';
+  return `${first}: ${what} - ${dated}`.slice(0, 100);
 }
 
 /** A name a line can carry: on the office's products list, or billed in the past six months. */
@@ -202,7 +277,7 @@ export interface XeroPaymentItem {
   payments: number;
 }
 
-export type XeroCheckKey = 'connected' | 'sendFrom' | 'salesAccount' | 'taxType' | 'payments' | 'stillInXero';
+export type XeroCheckKey = 'connected' | 'sendFrom' | 'salesAccount' | 'taxType' | 'payments' | 'stillInXero' | 'projects';
 
 export interface XeroCheck {
   key: XeroCheckKey;
@@ -245,6 +320,7 @@ type XeroCatalog = {
   taxRates: readonly XeroTaxRate[];
   trackingCategories?: readonly XeroTrackingCategory[];
   items?: readonly XeroItem[];
+  projectUsers?: readonly XeroProjectUser[];
 };
 
 /** Payments go to Xero unless the office said they stay out. */
@@ -360,6 +436,16 @@ export function xeroSettingsProblem(values: XeroSettingsValues, catalog: XeroCat
     if (!nameKey || nameKey.length > 200 || nameKey !== nameKey.trim().toLowerCase()) return 'A product or service is not named as the list names it.';
     if (typeof code !== 'string' || !items.has(code)) return `“${code}” is not an item Xero sells.`;
   }
+  // A project for each visit (2026-11-11).
+  if (values.projectsEnabled !== undefined && typeof values.projectsEnabled !== 'boolean') return 'Say whether each visit gets a project.';
+  const whole = (value: unknown, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= max;
+  if (values.labourRateCents !== undefined && !whole(values.labourRateCents, MAX_LABOUR_RATE_CENTS))
+    return `The labour’s rate is from $0 to $${MAX_LABOUR_RATE_CENTS / 100} an hour, in whole cents.`;
+  if (values.labourMinutes !== undefined && !whole(values.labourMinutes, MAX_LABOUR_MINUTES)) return `The labour is from 0 to ${MAX_LABOUR_MINUTES} whole minutes.`;
+  if (values.projectUserId && !(catalog.projectUsers ?? []).some((user) => user.userId === values.projectUserId))
+    return 'That Xero user cannot log time on projects. Read from Xero again, then choose.';
+  if (projectsAreOn(values) && paymentsGoToXero(values))
+    return 'Payments must stay out of Xero while each visit gets a project: its invoices go as drafts, and Xero takes no payment on a draft.';
   return null;
 }
 
@@ -398,6 +484,19 @@ export function xeroChecks(input: {
   for (const group of new Set(Object.values(values.trackingGroups ?? {}))) if (category && !groups.has(optionWords(group))) goneNames.push(`“${group}”`);
   const items = new Set(soldItems(catalog.items ?? []).map((item) => item.code));
   for (const code of new Set(Object.values(values.itemCodes ?? {}))) if (!items.has(code)) goneNames.push(`the item “${code}”`);
+  // Projects (2026-11-11): the labour needs a Xero user to log it under, one Xero still has.
+  const labour = labourOf(values);
+  const user = values.projectUserId ? (catalog.projectUsers ?? []).find((each) => each.userId === values.projectUserId) : undefined;
+  const projects: XeroCheck[] = projectsAreOn(values)
+    ? [
+        {
+          key: 'projects',
+          label: labour ? 'A Xero user to log each visit’s labour under' : 'Projects log no labour',
+          ok: !labour || Boolean(user),
+          detail: !labour || user ? null : values.projectUserId ? 'That Xero user is no longer listed: choose again.' : 'Choose the Xero user the labour is logged under.',
+        },
+      ]
+    : [];
   return [
     {
       key: 'connected',
@@ -432,6 +531,7 @@ export function xeroChecks(input: {
       ok: goneNames.length === 0,
       detail: goneNames.length ? `Choose again for ${goneNames.join(', ')}.` : null,
     },
+    ...projects,
   ];
 }
 
@@ -481,6 +581,17 @@ export interface XeroWriteOffFailure {
   nextAttemptAt: string | null;
 }
 
+/** A visit's project Xero refused, or the console could not make (2026-11-11). */
+export interface XeroProjectFailure {
+  inspectionId: string;
+  /** The project's name, as made or looked for. */
+  name: string;
+  problem: string;
+  attempts: number;
+  lastAttemptAt: string | null;
+  nextAttemptAt: string | null;
+}
+
 export interface XeroSendingView {
   /** The organisation sending is for: each has its own switch. */
   tenantId: string;
@@ -488,6 +599,11 @@ export interface XeroSendingView {
   changedAt: string | null;
   /** The connection was made with the scopes sending needs. */
   canWrite: boolean;
+  /**
+   * Each visit gets a project (2026-11-11): invoices go as drafts, for the
+   * office to put each line on its project and approve in Xero.
+   */
+  projectsEnabled: boolean;
   /** Why it cannot run now, in words; empty when it can. */
   blockers: string[];
   counts: {
@@ -503,6 +619,8 @@ export interface XeroSendingView {
     payments: { sent: number; failed: number };
     /** Bad debts written off in Xero, and refused or held back (2026-11-10). */
     writeOffs: { sent: number; failed: number };
+    /** Visits' projects in Xero -- made here or found -- and those refused (2026-11-11). */
+    projects: { done: number; failed: number };
   };
   lastRunAt: string | null;
   lastRunProblem: string | null;
@@ -512,6 +630,8 @@ export interface XeroSendingView {
   paymentFailures: XeroPaymentFailure[];
   /** The latest bad debts refused or held back, newest first; at most 50. */
   writeOffFailures: XeroWriteOffFailure[];
+  /** The latest visits' projects refused, newest first; at most 50 (2026-11-11). */
+  projectFailures: XeroProjectFailure[];
 }
 
 /** Why sending cannot run, in the order to fix them. */
@@ -520,11 +640,14 @@ export function xeroSendingBlockers(input: {
   scopes: readonly string[];
   settingsReady: boolean;
   invoiceRemindersOn: boolean | null;
+  /** Each visit gets a project (2026-11-11). */
+  projectsEnabled?: boolean;
 }): string[] {
   if (!input.connected) return ['Connect Xero.'];
   // Each organisation is sent only the invoices that go to it (2026-11-10), so several can send at once.
   const blockers: string[] = [];
   if (!xeroCanWrite(input.scopes)) blockers.push('Connect again, so Xero lets the console write contacts and invoices.');
+  if (input.projectsEnabled && !xeroCanMakeProjects(input.scopes)) blockers.push('Connect again, so Xero lets the console make projects.');
   if (!input.settingsReady) blockers.push('Finish “Before anything is sent”.');
   if (input.invoiceRemindersOn === true)
     blockers.push('Turn off Xero’s own invoice reminders, then read from Xero again: the console already sends follow-ups, and clients would get both.');

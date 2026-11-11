@@ -184,6 +184,50 @@ describe('as the office finishes its invoices in Xero (2026-11-11)', () => {
   });
 });
 
+describe('a project for each visit (2026-11-11)', () => {
+  const mountProjects = (values: Partial<XeroSettingsView['values']> = {}, projectUsers = [{ userId: 'user-1', name: 'Ada Office' }]) =>
+    render(
+      <XeroSettingsForm
+        accounts={ACCOUNTS}
+        canManage
+        projectUsers={projectUsers}
+        taxRates={TAX_RATES}
+        view={{ ...VIEW, values: { ...VIEW.values, paymentsToXero: true, ...values } }}
+      />,
+    );
+
+  it('makes one for each visit, keeping payments out, with the labour logged under a Xero user', () => {
+    mountProjects();
+    fireEvent.click(screen.getByRole('switch', { name: 'Make a Xero project for each visit' }));
+    // Xero takes no payment on a draft: payments go out, and stay out while projects are on.
+    expect(screen.getByRole('switch', { name: 'Send payments to Xero' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Send payments to Xero' })).toBeDisabled();
+    expect(screen.getByText(/invoices go as drafts: in Xero, put each line on its project, then approve it/)).toBeInTheDocument();
+    pick('Labour logged as', 'Ada Office');
+    expect(screen.getByText(/\$3\.50 a visit/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Minutes a visit'), { target: { value: '12' } });
+    expect(screen.getByText(/\$7\.00 a visit/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(save.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ projectsEnabled: true, paymentsToXero: false, projectUserId: 'user-1', labourMinutes: 12 }),
+      expect.anything(),
+    );
+  });
+
+  it('logs no labour at 0 minutes, and says how to list the Xero users before the connection may', () => {
+    mountProjects({ paymentsToXero: false, projectsEnabled: true, labourMinutes: 0 }, []);
+    expect(screen.getByText(/No labour is logged/)).toBeInTheDocument();
+    expect(screen.getByText(/Connect again so Xero lets the console make projects/)).toBeInTheDocument();
+  });
+
+  it('puts the typed rate and minutes back with the rest when the changes are undone', () => {
+    mountProjects({ paymentsToXero: false, projectsEnabled: true });
+    fireEvent.change(screen.getByLabelText('Rate an hour ($)'), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Undo changes' }));
+    expect(screen.getByLabelText('Rate an hour ($)')).toHaveValue(35);
+  });
+});
+
 describe('the services this organisation is sent', () => {
   it('says how many go to no organisation yet, and where to choose', () => {
     mount({ ...VIEW, withoutOrganisation: 3 });

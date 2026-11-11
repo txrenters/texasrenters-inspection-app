@@ -33,6 +33,15 @@ export function xeroValidationMessages(body: unknown): string | null {
     for (const key of ['Elements', 'Invoices', 'Contacts', 'Payments']) visit(record[key], depth + 1);
   };
   visit(body, 0);
+  // The Projects API (2026-11-11) says it another way: `{ message, modelState: { field: [messages] } }`.
+  if (!found.size && body && typeof body === 'object' && !Array.isArray(body)) {
+    const record = body as Record<string, unknown>;
+    const state = record.modelState;
+    if (state && typeof state === 'object')
+      for (const messages of Object.values(state as Record<string, unknown>))
+        if (Array.isArray(messages)) for (const message of messages) if (typeof message === 'string') found.add(message.trim());
+    if (!found.size && typeof record.message === 'string') found.add(record.message.trim());
+  }
   const text = [...found].filter(Boolean).join(' ');
   return text ? text.slice(0, 500) : null;
 }
@@ -97,19 +106,38 @@ export class XeroClient {
     return this.call(organizationId, tenantId, path, schema, { method: 'DELETE' });
   }
 
+  /** One read of the organisation's projects (2026-11-11), counted as any other call to it. */
+  async projectsGet<T>(organizationId: string, tenantId: string, path: string, schema: z.ZodType<T>): Promise<T> {
+    return this.call(organizationId, tenantId, path, schema, { method: 'GET' }, 'projects');
+  }
+
+  /** One write to the organisation's projects (2026-11-11): a project, a task, a time entry. */
+  async projectsPost<T>(organizationId: string, tenantId: string, path: string, body: unknown, schema: z.ZodType<T>, idempotencyKey: string): Promise<T> {
+    return this.call(
+      organizationId,
+      tenantId,
+      path,
+      schema,
+      { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey } },
+      'projects',
+    );
+  }
+
   private async call<T>(
     organizationId: string,
     tenantId: string,
     path: string,
     schema: z.ZodType<T>,
     init: { method: string; body?: string; headers?: Record<string, string> },
+    api: 'accounting' | 'projects' = 'accounting',
   ): Promise<T> {
     const organisation = await this.prisma.xeroOrganisation.findUnique({
       where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
       select: { status: true },
     });
     if (organisation?.status !== 'CONNECTED') throw new XeroError('That Xero organisation is not connected.', 'XERO_NOT_CONNECTED', 409);
-    const url = `${getXeroConfig().apiUrl}${path}`;
+    const config = getXeroConfig();
+    const url = `${api === 'projects' ? config.projectsApiUrl : config.apiUrl}${path}`;
     let response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.accessToken(organizationId), tenantId, init));
     if (response.status === 401)
       response = await this.counted(organizationId, tenantId, async () => this.request(url, await this.auth.refresh(organizationId), tenantId, init));

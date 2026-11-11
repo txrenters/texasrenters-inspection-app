@@ -1,11 +1,18 @@
 'use client';
 
 import {
+  DEFAULT_LABOUR_MINUTES,
+  DEFAULT_LABOUR_RATE_CENTS,
+  MAX_LABOUR_MINUTES,
+  MAX_LABOUR_RATE_CENTS,
   PAYMENT_METHOD_LABEL,
   activeTrackingCategories,
   badDebtAccounts,
+  formatMoney,
+  labourOf,
   paymentAccounts,
   paymentsGoToXero,
+  projectsAreOn,
   revenueAccounts,
   revenueTaxRates,
   soldItems,
@@ -14,6 +21,7 @@ import {
   type XeroAccount,
   type XeroCheck,
   type XeroItem,
+  type XeroProjectUser,
   type XeroSettingsValues,
   type XeroSettingsView,
   type XeroTaxRate,
@@ -57,8 +65,22 @@ const sameValues = (a: XeroSettingsValues, b: XeroSettingsValues) => {
     paymentsGoToXero(a) === paymentsGoToXero(b) &&
     (a.trackingCategoryId ?? null) === (b.trackingCategoryId ?? null) &&
     JSON.stringify(sorted(a.trackingGroups ?? {})) === JSON.stringify(sorted(b.trackingGroups ?? {})) &&
-    JSON.stringify(sorted(a.itemCodes ?? {})) === JSON.stringify(sorted(b.itemCodes ?? {}))
+    JSON.stringify(sorted(a.itemCodes ?? {})) === JSON.stringify(sorted(b.itemCodes ?? {})) &&
+    projectsAreOn(a) === projectsAreOn(b) &&
+    (a.projectUserId ?? null) === (b.projectUserId ?? null) &&
+    (a.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) === (b.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) &&
+    (a.labourMinutes ?? DEFAULT_LABOUR_MINUTES) === (b.labourMinutes ?? DEFAULT_LABOUR_MINUTES)
   );
+};
+
+/** Dollars typed, cents kept: blank or not a number reads as none; never past what the server takes. */
+const centsOf = (text: string) => {
+  const dollars = Number(text);
+  return text.trim() === '' || !Number.isFinite(dollars) ? 0 : Math.min(Math.max(Math.round(dollars * 100), 0), MAX_LABOUR_RATE_CENTS);
+};
+const minutesOf = (text: string) => {
+  const minutes = Number(text);
+  return text.trim() === '' || !Number.isFinite(minutes) ? 0 : Math.min(Math.max(Math.round(minutes), 0), MAX_LABOUR_MINUTES);
 };
 
 /** A map with one key set to a value, or taken out for "none". */
@@ -82,6 +104,7 @@ export function XeroSettingsForm({
   taxRates,
   trackingCategories = [],
   items = [],
+  projectUsers = [],
   canManage,
 }: {
   view: XeroSettingsView;
@@ -90,6 +113,8 @@ export function XeroSettingsForm({
   /** As last read (2026-11-11): what lines are tagged and itemed with. */
   trackingCategories?: readonly XeroTrackingCategory[];
   items?: readonly XeroItem[];
+  /** As last read (2026-11-11): who a visit's labour can be logged under. */
+  projectUsers?: readonly XeroProjectUser[];
   canManage: boolean;
 }) {
   const id = useId();
@@ -128,6 +153,14 @@ export function XeroSettingsForm({
   const itemOptions = soldItems(items).map((item) => item.code);
   for (const code of new Set(Object.values(values.itemCodes ?? {}))) if (!itemOptions.includes(code)) itemOptions.push(code);
   const payments = paymentsGoToXero(values);
+  // A project for each visit (2026-11-11): its invoices go as drafts, so payments stay out of Xero while it is on.
+  const projects = projectsAreOn(values);
+  const labour = labourOf(values);
+  const userOptions: Option[] = projectUsers.map((user) => ({ value: user.userId, label: user.name }));
+  if (values.projectUserId && !userOptions.some((option) => option.value === values.projectUserId))
+    userOptions.push({ value: values.projectUserId, label: 'A user Xero no longer lists' });
+  const [rateText, setRateText] = useState(((values.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) / 100).toFixed(2));
+  const [minutesText, setMinutesText] = useState(String(values.labourMinutes ?? DEFAULT_LABOUR_MINUTES));
 
   const setSalesAccount = (nameKey: string, value: string) =>
     setValues((current) => {
@@ -266,6 +299,96 @@ export function XeroSettingsForm({
         </div>
       </Panel>
 
+      <Panel title="Projects">
+        <div className="flex items-start gap-3 border-b px-4 py-3">
+          <Switch
+            checked={projects}
+            disabled={locked}
+            id={`${id}-projects`}
+            onCheckedChange={(checked) =>
+              // On, payments stay out: Xero takes none on a draft.
+              setValues((current) => ({ ...current, projectsEnabled: checked, ...(checked ? { paymentsToXero: false } : {}) }))
+            }
+          />
+          <div className="grid gap-0.5">
+            <label className="text-sm font-medium" htmlFor={`${id}-projects`}>
+              Make a Xero project for each visit
+            </label>
+            <p className="text-muted-foreground text-sm">
+              {projects
+                ? 'Each visit gets a project under its property, named as the office names them (“Moses: Tenant Benefit Package - 4th Qtr - 2026 - 11.10.2026”) and due on the visit’s day, with the labour below on it. Xero cannot be told which project an invoice line is on, so invoices go as drafts: in Xero, put each line on its project, then approve it.'
+                : 'No projects are made, and invoices go to Xero approved.'}
+            </p>
+          </div>
+        </div>
+        {projects ? (
+          <div className="grid gap-4 p-4 md:grid-cols-3">
+            <Field>
+              <FieldLabel htmlFor={`${id}-project-user`}>Labour logged as</FieldLabel>
+              <Select
+                disabled={locked}
+                onValueChange={(value) => setValues((current) => ({ ...current, projectUserId: value === NONE ? null : value }))}
+                value={values.projectUserId ?? NONE}
+              >
+                <SelectTrigger className="w-full" id={`${id}-project-user`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>Not chosen</SelectItem>
+                  {userOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                {projectUsers.length
+                  ? 'The Xero user the time is logged under.'
+                  : 'Connect again so Xero lets the console make projects, then read from Xero to list who can log time.'}
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${id}-labour-rate`}>Rate an hour ($)</FieldLabel>
+              <Input
+                disabled={locked}
+                id={`${id}-labour-rate`}
+                inputMode="decimal"
+                min={0}
+                onChange={(event) => {
+                  setRateText(event.target.value);
+                  setValues((current) => ({ ...current, labourRateCents: centsOf(event.target.value) }));
+                }}
+                step="0.01"
+                type="number"
+                value={rateText}
+              />
+              <FieldDescription>An “Hourly Labor Charge” task on each project the console makes.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${id}-labour-minutes`}>Minutes a visit</FieldLabel>
+              <Input
+                disabled={locked}
+                id={`${id}-labour-minutes`}
+                inputMode="numeric"
+                min={0}
+                onChange={(event) => {
+                  setMinutesText(event.target.value);
+                  setValues((current) => ({ ...current, labourMinutes: minutesOf(event.target.value) }));
+                }}
+                step="1"
+                type="number"
+                value={minutesText}
+              />
+              <FieldDescription>
+                {labour ? `Logged on the visit’s day: ${formatMoney(Math.round((labour.rateCents * labour.minutes) / 60))} a visit.` : 'No labour is logged.'}{' '}
+                A project the office made by hand under the same name is used as it is, with no labour added.
+              </FieldDescription>
+            </Field>
+          </div>
+        ) : null}
+      </Panel>
+
       <Panel count={view.products.length} title="Where sales go">
         {view.products.length ? (
           <Table>
@@ -384,7 +507,7 @@ export function XeroSettingsForm({
         <div className="flex items-start gap-3 border-b px-4 py-3">
           <Switch
             checked={payments}
-            disabled={locked}
+            disabled={locked || projects}
             id={`${id}-payments`}
             onCheckedChange={(checked) => setValues((current) => ({ ...current, paymentsToXero: checked }))}
           />
@@ -393,9 +516,11 @@ export function XeroSettingsForm({
               Send payments to Xero
             </label>
             <p className="text-muted-foreground text-sm">
-              {payments
-                ? 'Each payment recorded here goes to the account chosen for how it was paid.'
-                : 'Payments stay out of Xero: the office records them there itself, and no account is needed for them.'}
+              {projects
+                ? 'Payments stay out of Xero while each visit gets a project: its invoices go as drafts, and Xero takes no payment on a draft.'
+                : payments
+                  ? 'Each payment recorded here goes to the account chosen for how it was paid.'
+                  : 'Payments stay out of Xero: the office records them there itself, and no account is needed for them.'}
             </p>
           </div>
         </div>
@@ -473,7 +598,15 @@ export function XeroSettingsForm({
         <div className={`flex items-center justify-end gap-3 py-3 ${dirty ? 'bg-background sticky bottom-0 z-10 border-t' : ''}`}>
           {dirty ? <span className="text-muted-foreground text-sm">Not saved yet</span> : null}
           {dirty ? (
-            <Button disabled={save.isPending} onClick={() => setValues(view.values)} variant="outline">
+            <Button
+              disabled={save.isPending}
+              onClick={() => {
+                setValues(view.values);
+                setRateText(((view.values.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) / 100).toFixed(2));
+                setMinutesText(String(view.values.labourMinutes ?? DEFAULT_LABOUR_MINUTES));
+              }}
+              variant="outline"
+            >
               Undo changes
             </Button>
           ) : null}
