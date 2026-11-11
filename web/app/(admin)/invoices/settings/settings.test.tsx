@@ -16,6 +16,8 @@ const hooks = vi.hoisted(() => ({
   save: { mutate: vi.fn(), isPending: false },
   addProducts: { mutate: vi.fn(), isPending: false },
   changeProduct: { mutate: vi.fn(), isPending: false },
+  addBillingRules: { mutate: vi.fn(), isPending: false },
+  removeBillingRule: { mutate: vi.fn(), isPending: false },
 }));
 vi.mock('@/lib/invoice-settings-queries', () => ({
   useInvoiceSettings: () => ({ isLoading: false, isError: false, data: hooks.view.current, refetch: vi.fn() }),
@@ -59,6 +61,9 @@ const VIEW: InvoiceSettingsView = {
     { name: 'Pest Control', unitPriceCents: 2500 },
     { name: 'Gate Repair', unitPriceCents: 12000 },
   ],
+  // What a visit bills (2026-11-12): tested in billing-rules-section.test.tsx.
+  billingRules: [],
+  suggestedRules: [],
   // No Xero organisation yet: the column is not shown.
   organisations: [],
 };

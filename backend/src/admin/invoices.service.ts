@@ -4,6 +4,7 @@ import {
   PAYMENT_TERMS,
   REPORTABLE_VISIT_SERVICES,
   acceptsPayment,
+  billedLines,
   invoiceCompany,
   splitByCompany,
   invoiceLinesProblem,
@@ -45,6 +46,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { billingBasis } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
 import { insertConsoleInvoice } from './invoice-insert';
 import {
@@ -78,20 +80,6 @@ export { priceList, receiptBrand } from './invoice-settings';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
-
-/** The word that finds a service's product in the office's price list. */
-const SERVICE_PRODUCT_WORD: Record<ReportableVisitService, string> = {
-  filterChange: 'filter',
-  pestControl: 'pest',
-  fleaTreatment: 'flea',
-};
-
-/** A service's line when the office has never billed it: named as Jobber's are. */
-const SERVICE_LINE_NAME: Record<ReportableVisitService, string> = {
-  filterChange: 'Filter Change',
-  pestControl: 'Pest Control',
-  fleaTreatment: 'Flea Treatment',
-};
 
 const summarySelect = {
   id: true,
@@ -490,27 +478,6 @@ export function servicesDone(report: VisitServicesReport | null | undefined): Re
   return REPORTABLE_VISIT_SERVICES.filter((service) => report?.services?.[service]?.done === true);
 }
 
-/**
- * A finished visit's lines: one per service done, at the office's price for
- * it, or at nothing with the usual name when the office has never billed it --
- * the editor then asks for a price rather than guessing one.
- */
-export function draftLines(
-  services: readonly ReportableVisitService[],
-  products: readonly { name: string; unitPriceCents: number }[],
-): InvoiceLineInput[] {
-  return services.map((service) => {
-    const word = SERVICE_PRODUCT_WORD[service];
-    const product = products.find((candidate) => candidate.name.toLowerCase().includes(word));
-    return {
-      name: product?.name ?? SERVICE_LINE_NAME[service],
-      description: null,
-      quantity: 1,
-      unitPriceCents: product?.unitPriceCents ?? 0,
-    };
-  });
-}
-
 const isUniqueViolation = (error: unknown) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
@@ -625,25 +592,24 @@ export class InvoicesService {
 
   /** What a new invoice starts from: the office's prices and settings, else the latest invoice it issued (2026-11-06). */
   async officeDefaults(user: AuthenticatedUser) {
-    const [products, defaults] = await Promise.all([
-      officePrices(this.prisma, user.organizationId, businessDate()),
-      newInvoiceDefaults(this.prisma, user.organizationId),
-    ]);
+    const [products, defaults] = await Promise.all([officePrices(this.prisma, user.organizationId), newInvoiceDefaults(this.prisma, user.organizationId)]);
     return { products, ...defaults };
   }
 
   /**
    * What a finished visit would be invoiced for, before anybody edits it; or,
    * for a property no visit covers (2026-11-06), an invoice made out to it with
-   * no lines yet. Split one invoice per company (2026-11-10): each company's
-   * services on its own, and those that go to no company on one of their own.
+   * no lines yet. Its lines are what the office's rules say the visit bills
+   * (2026-11-12); none when no rule covers it, for the office to add. Split one
+   * invoice per company (2026-11-10): each company's services on its own, and
+   * those that go to no company on one of their own.
    */
   async draft(user: AuthenticatedUser, target: { inspectionId?: string; propertyId?: string }): Promise<InvoiceDraft> {
     const inspection = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
-    const [products, defaults, existing, companies, organisations] = await Promise.all([
-      officePrices(this.prisma, user.organizationId, today),
+    const [products, defaults, existing, companies, organisations, basis] = await Promise.all([
+      officePrices(this.prisma, user.organizationId),
       // The office's settings, else its own wording and terms from the latest invoice it issued.
       newInvoiceDefaults(this.prisma, user.organizationId),
       inspection
@@ -656,8 +622,12 @@ export class InvoicesService {
         : [],
       productCompanies(this.prisma, user.organizationId),
       officeOrganisations(this.prisma, user.organizationId),
+      billingBasis(this.prisma, user.organizationId),
     ]);
-    const parts = splitByCompany(inspection ? draftLines(servicesDone(inspection.servicesReport), products) : [], companies);
+    const lines = inspection
+      ? billedLines({ inspectionType: inspection.inspectionType, services: servicesDone(inspection.servicesReport) }, basis.rules, basis.products).lineItems
+      : [];
+    const parts = splitByCompany(lines, companies);
     return {
       inspection: inspection
         ? {

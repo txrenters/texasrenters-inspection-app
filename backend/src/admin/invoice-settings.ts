@@ -2,7 +2,6 @@ import {
   EMPTY_INVOICE_SETTINGS,
   invoiceCompany,
   PAYMENT_TERMS,
-  productNameKey,
   settingText,
   type BilledPrice,
   type InvoiceProductOrganisation,
@@ -177,27 +176,24 @@ export function listedProducts(db: Db, organizationId: string) {
 }
 
 /**
- * The prices a new invoice's lines are priced at: the office's own list first,
- * then what it billed in the past six months for anything not on it. A product
- * the office set aside is offered from neither.
+ * The prices a new invoice's lines are priced at: the office's own list, and
+ * nothing else (2026-11-12) -- what was billed in Jobber no longer prices a
+ * line. A product the office set aside is not offered.
  */
 export async function officePrices(
   db: Db,
   organizationId: string,
-  today: string,
 ): Promise<{ name: string; unitPriceCents: number; description?: string | null; xeroTenantId?: string | null }[]> {
-  const [listed, billed] = await Promise.all([listedProducts(db, organizationId), billedPrices(db, organizationId, today)]);
-  const known = new Set(listed.map((product) => product.nameKey));
-  return [
-    ...listed.filter((product) => product.active).map((product) => ({
+  const listed = await listedProducts(db, organizationId);
+  return listed
+    .filter((product) => product.active)
+    .map((product) => ({
       name: product.name,
       unitPriceCents: product.unitPriceCents,
       description: product.description,
       // The company's books it goes to (2026-11-10).
       xeroTenantId: product.xeroTenantId,
-    })),
-    ...billed.filter((price) => !known.has(productNameKey(price.name))),
-  ];
+    }));
 }
 
 /**

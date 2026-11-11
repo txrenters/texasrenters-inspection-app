@@ -14,6 +14,7 @@ import {
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
+import { BillingRulesSection } from '@/components/invoices/billing-rules-section';
 import { EmailTemplatesSection } from '@/components/invoices/email-templates-section';
 import { InvoiceEmailsSection } from '@/components/invoices/invoice-emails-section';
 import { StatementSettingsSection } from '@/components/invoices/statement-settings-section';
@@ -34,8 +35,9 @@ import { useInvoiceSettings, useInvoiceSettingsEdits } from '@/lib/invoice-setti
 /**
  * Invoice settings (2026-11-06, phase 6 of taking invoicing over from Jobber),
  * as Jobber keeps them in its settings: the company the invoices, receipts and
- * emails are from; what a new invoice starts with; and the products and
- * services at the office's prices, which price a new invoice's lines.
+ * emails are from; what a new invoice starts with; the products and services
+ * at the office's prices, which price a new invoice's lines; and what a
+ * finished visit bills of them (2026-11-12).
  *
  * Every field left blank keeps what the console used before -- shown greyed in
  * it -- so nothing changes until somebody fills one in. Changed by whoever
@@ -61,6 +63,7 @@ export default function InvoiceSettingsPage() {
       {/* Started again from what was saved, each time it is saved. */}
       <SettingsForm key={settings.data.updatedAt ?? 'never'} mayChange={mayChange} view={settings.data} />
       <ProductsSection mayChange={mayChange} view={settings.data} />
+      <BillingRulesSection mayChange={mayChange} view={settings.data} />
       <InvoiceEmailsSection mayChange={mayChange} />
       <EmailTemplatesSection mayChange={mayChange} />
       <StatementSettingsSection mayChange={mayChange} />
@@ -260,7 +263,7 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
     <section aria-label="Products and services" className="bg-card mt-6 rounded-lg border p-4">
       <h2 className="text-heading text-lg font-bold">Products &amp; services</h2>
       <p className="text-muted-foreground mt-1 text-sm">
-        A new invoice&apos;s lines are priced from this list first, then from what was billed in the past six months.
+        A new invoice&apos;s lines are priced from this list, and only from it.
         {organisations.length ? " Each goes to the Xero organisation chosen for it: that company's books." : ''}
       </p>
 
@@ -339,7 +342,7 @@ function ProductsSection({ view, mayChange }: { view: InvoiceSettingsView; mayCh
         </Table>
       ) : (
         <p className="text-muted-foreground mt-3 text-sm">
-          Nothing on the list yet, so new invoices are priced from what was billed.
+          Nothing on the list yet, so a new invoice&apos;s lines are priced by hand.
         </p>
       )}
 

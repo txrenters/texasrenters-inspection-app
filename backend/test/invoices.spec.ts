@@ -2,7 +2,7 @@ import { MACHINE_FORBIDDEN_PERMISSIONS } from '@texasrenters/shared';
 import { Prisma, UserRole } from '@prisma/client';
 
 import { InvoicesController, PaymentsController } from '../src/admin/invoices.controller';
-import { InvoicesService, draftLines, jobberRead, priceList, servicesDone } from '../src/admin/invoices.service';
+import { InvoicesService, jobberRead, priceList, servicesDone } from '../src/admin/invoices.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
 /**
@@ -98,7 +98,7 @@ const invoiceRow = (over: Record<string, unknown> = {}) => ({
 
 const finishedVisit = (over: Record<string, unknown> = {}) => ({
   id: VISIT,
-  inspectionType: 'BENEFIT_PACKAGE',
+  inspectionType: 'OCCUPIED',
   scheduledAt: date('2020-02-01'),
   status: 'COMPLETED',
   jobberJobId: 'job-1',
@@ -127,6 +127,8 @@ function database() {
     // No invoice settings saved, and no price list: the fallbacks (2026-11-06, phase 6).
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoiceProduct: { findMany: jest.fn().mockResolvedValue([]) },
+    // No rules yet (2026-11-12): a visit's draft has no lines.
+    invoiceBillingRule: { findMany: jest.fn().mockResolvedValue([]) },
     // No Xero organisation: every invoice belongs to no company (2026-11-10).
     xeroOrganisation: { findMany: jest.fn().mockResolvedValue([]) },
     invoicePayment: {
@@ -334,20 +336,32 @@ describe('an invoice', () => {
 });
 
 describe("a finished visit's draft", () => {
-  it('has a line for each service done, at the price the office charges most, in its own wording and terms', async () => {
+  it("has a line for each product the office's rules bill, at the list's price, in its own wording and terms (2026-11-12)", async () => {
     const db = database();
-    db.invoiceLine.groupBy.mockResolvedValue([
-      { name: 'Filter Change', unitPriceCents: 3999, _count: { _all: 900 } },
-      { name: 'Filter Change', unitPriceCents: 2999, _count: { _all: 12 } },
-      { name: 'Pest Control', unitPriceCents: 2500, _count: { _all: 300 } },
+    const listed = (id: string, name: string, unitPriceCents: number) => ({
+      id,
+      name,
+      nameKey: name.toLowerCase(),
+      description: null,
+      unitPriceCents,
+      active: true,
+      xeroTenantId: null,
+      updatedAt: new Date('2020-01-01T00:00:00.000Z'),
+    });
+    db.invoiceProduct.findMany.mockResolvedValue([listed('product-filter', 'Filter Change', 3999), listed('product-pest', 'Pest Control', 2500)]);
+    db.invoiceBillingRule.findMany.mockResolvedValue([
+      { id: 'rule-1', inspectionType: 'OCCUPIED', service: null, productId: 'product-filter' },
+      { id: 'rule-2', inspectionType: null, service: 'pestControl', productId: 'product-pest' },
     ]);
+    // What Jobber billed prices nothing.
+    db.invoiceLine.groupBy.mockResolvedValue([{ name: 'Filter Change', unitPriceCents: 2999, _count: { _all: 900 } }]);
     db.invoice.findFirst
       .mockResolvedValueOnce({ subject: 'For Services Rendered', clientMessage: 'Thank you.', paymentTermsDays: 15 })
       .mockResolvedValueOnce(null);
 
     const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
-    // Pest control was not done, so it is not billed.
+    // Pest control was not done, so its rule bills nothing.
     // No company's books yet: one invoice, for none.
     expect(draft.invoices).toEqual([
       { xeroTenantId: null, lineItems: [{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 }] },
@@ -362,6 +376,15 @@ describe("a finished visit's draft", () => {
       organisations: [],
     });
     expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control']);
+  });
+
+  it('has no lines when no rule covers the visit, for the office to add them (2026-11-12)', async () => {
+    const db = database();
+    db.invoiceLine.groupBy.mockResolvedValue([{ name: 'Filter Change', unitPriceCents: 3999, _count: { _all: 900 } }]);
+    const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
+    expect(draft.invoices).toEqual([{ xeroTenantId: null, lineItems: [] }]);
+    // Nothing on the list: nothing billed in Jobber is offered in its place.
+    expect(draft.products).toEqual([]);
   });
 
   it('says when the visit has an invoice already, so a second is not made by mistake', async () => {
@@ -398,12 +421,6 @@ describe("the office's prices", () => {
     ).toEqual([
       { name: 'Filter Change', unitPriceCents: 3999 },
       { name: 'Pest Control', unitPriceCents: 2500 },
-    ]);
-  });
-
-  it('asks for a price, rather than guessing one, for a service the office has never billed', () => {
-    expect(draftLines(['fleaTreatment'], [{ name: 'Filter Change', unitPriceCents: 3999 }])).toEqual([
-      { name: 'Flea Treatment', description: null, quantity: 1, unitPriceCents: 0 },
     ]);
   });
 

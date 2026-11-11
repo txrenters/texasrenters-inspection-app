@@ -1,8 +1,10 @@
-import { EMPTY_INVOICE_SETTINGS, invoiceProductProblem, invoiceSettingsProblem } from '@texasrenters/shared';
+import { EMPTY_INVOICE_SETTINGS, billingRuleProblem, invoiceProductProblem, invoiceSettingsProblem } from '@texasrenters/shared';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { Prisma, UserRole } from '@prisma/client';
 
 import { insertConsoleInvoice } from '../src/admin/invoice-insert';
-import { InvoiceSettingsController } from '../src/admin/invoice-settings.controller';
+import { AddBillingRulesDto, InvoiceSettingsController } from '../src/admin/invoice-settings.controller';
 import { InvoiceSettingsService } from '../src/admin/invoice-settings.service';
 import { brandFrom, defaultsFrom, newInvoiceDefaults, officeBrand, officePrices } from '../src/admin/invoice-settings';
 import { InvoicesService } from '../src/admin/invoices.service';
@@ -73,6 +75,13 @@ function database() {
       findFirst: jest.fn().mockResolvedValue(null),
       createMany: jest.fn().mockResolvedValue({ count: 1 }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    // What a finished visit bills (2026-11-12): none kept yet.
+    invoiceBillingRule: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      delete: jest.fn().mockResolvedValue({}),
     },
     invoice: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -169,17 +178,15 @@ describe('what a new invoice starts with', () => {
 });
 
 describe("a new invoice's prices", () => {
-  it("are the office's list first, then what it billed for anything not on it, and nothing set aside", async () => {
+  it("are the office's list alone (2026-11-12): nothing billed in Jobber, and nothing set aside", async () => {
     const db = database();
     db.invoiceProduct.findMany.mockResolvedValue([
       product(),
       product({ id: 'p2', name: 'Pest Control', nameKey: 'pest control', active: false, unitPriceCents: 2600, description: null }),
     ]);
-    expect(await officePrices(db as never, ORG, '2026-11-06')).toEqual([
-      { name: 'Filter Change', unitPriceCents: 4500, description: 'One filter, any size', xeroTenantId: null },
-      // Pest Control is set aside: offered from neither the list nor billing.
-      { name: 'Gate Repair', unitPriceCents: 12000 },
-    ]);
+    expect(await officePrices(db as never, ORG)).toEqual([{ name: 'Filter Change', unitPriceCents: 4500, description: 'One filter, any size', xeroTenantId: null }]);
+    // Gate Repair was billed, but is not on the list: it prices nothing.
+    expect(db.invoiceLine.groupBy).not.toHaveBeenCalled();
   });
 });
 
@@ -333,7 +340,7 @@ describe('the products and services list', () => {
     await new InvoiceSettingsService(db as never).changeProduct(office, PRODUCT, { unitPriceCents: 5000, expectedUpdatedAt: SAVED_AT.toISOString() });
     expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ xeroTenantId: OLD }) }));
     // Nor are Jobber's invoices given their company again: a price says nothing of whose books they go to.
-    expect(db.$executeRaw).not.toHaveBeenCalled();
+    expect(db.$executeRaw.mock.calls.some(([strings]) => strings.join('?').includes('UPDATE "Invoice"'))).toBe(false);
   });
 
   it('offers the office’s organisations, connected first, with each product’s choice', async () => {
@@ -375,5 +382,137 @@ describe('who may change them', () => {
     expect(permissions('save')).toEqual(['invoices:read', 'invoices:manage']);
     expect(permissions('addProducts')).toEqual(['invoices:read', 'invoices:manage']);
     expect(permissions('changeProduct')).toEqual(['invoices:read', 'invoices:manage']);
+    expect(permissions('addBillingRules')).toEqual(['invoices:read', 'invoices:manage']);
+    expect(permissions('removeBillingRule')).toEqual(['invoices:read', 'invoices:manage']);
+  });
+});
+
+describe('what a finished visit bills (2026-11-12)', () => {
+  const HVAC_PRODUCT = product({ id: 'p2', name: 'HVAC Inspection & Filter Change', nameKey: 'hvac inspection & filter change', unitPriceCents: 6450, description: null });
+  const PEST_PRODUCT = product({ id: 'p3', name: 'Pest Control', nameKey: 'pest control', unitPriceCents: 3900, description: null, xeroTenantId: PEST });
+  /** Six months of invoices, as THMP's read on 2026-11-12: visits invoiced by type, and by type and product. */
+  const pastInvoices = (db: ReturnType<typeof database>) =>
+    db.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+      const sql = strings.join('?');
+      if (!sql.includes('"Inspection"')) return [{ highest: '8439' }];
+      if (!sql.includes('"InvoiceLine"'))
+        return [
+          { type: 'OCCUPIED', visits: BigInt(470) },
+          { type: 'HVAC', visits: BigInt(179) },
+          { type: 'ROOF', visits: BigInt(2) },
+        ];
+      return [
+        { type: 'OCCUPIED', nameKey: 'filter change', visits: BigInt(468) },
+        { type: 'HVAC', nameKey: 'hvac inspection & filter change', visits: BigInt(173) },
+        { type: 'HVAC', nameKey: 'filter change', visits: BigInt(6) },
+        // Two roof visits are no pattern; a move-out inspection is not on the list.
+        { type: 'ROOF', nameKey: 'filter change', visits: BigInt(2) },
+        { type: 'MOVE_OUT', nameKey: 'move out inspection', visits: BigInt(54) },
+      ];
+    });
+
+  it('suggests, for each visit type, the product on the list billed on most of its visits in the past six months', async () => {
+    const db = database();
+    db.invoiceProduct.findMany.mockResolvedValue([product(), HVAC_PRODUCT]);
+    pastInvoices(db);
+    const view = await new InvoiceSettingsService(db as never).read(office);
+    expect(view.suggestedRules).toEqual([
+      { inspectionType: 'OCCUPIED', productId: PRODUCT, seen: 468, of: 470 },
+      { inspectionType: 'HVAC', productId: 'p2', seen: 173, of: 179 },
+    ]);
+    expect(view.billingRules).toEqual([]);
+    // Read in the office's own scope: raw SQL sets it.
+    expect(db.$executeRaw.mock.calls[0]).toContain(ORG);
+  });
+
+  it("suggests nothing more for a type the office has a rule for, and lists the office's rules", async () => {
+    const db = database();
+    db.invoiceProduct.findMany.mockResolvedValue([product(), HVAC_PRODUCT]);
+    db.invoiceBillingRule.findMany.mockResolvedValue([{ id: 'rule-1', inspectionType: 'OCCUPIED', service: null, productId: 'p2' }]);
+    pastInvoices(db);
+    const view = await new InvoiceSettingsService(db as never).read(office);
+    expect(view.suggestedRules.map((rule) => rule.inspectionType)).toEqual(['HVAC']);
+    expect(view.billingRules).toEqual([{ id: 'rule-1', inspectionType: 'OCCUPIED', service: null, productId: 'p2' }]);
+  });
+
+  it('keeps the rules confirmed, each once, on the record', async () => {
+    const db = database();
+    db.invoiceProduct.findMany.mockResolvedValue([product(), PEST_PRODUCT]);
+    const service = new InvoiceSettingsService(db as never);
+    await service.addBillingRules(office, {
+      rules: [
+        { inspectionType: 'OCCUPIED', service: null, productId: PRODUCT },
+        { inspectionType: null, service: 'pestControl', productId: 'p3' },
+        { inspectionType: 'OCCUPIED', service: null, productId: PRODUCT },
+      ],
+    });
+    expect(db.invoiceBillingRule.createMany).toHaveBeenCalledWith({
+      data: [
+        { organizationId: ORG, inspectionType: 'OCCUPIED', service: null, productId: PRODUCT },
+        { organizationId: ORG, inspectionType: null, service: 'pestControl', productId: 'p3' },
+      ],
+      skipDuplicates: true,
+    });
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'INVOICE_BILLING_RULES_ADDED',
+      actorUserId: office.id,
+      metadata: { rules: ['Occupied inspection visits → Filter Change ($45.00)', 'Visits with pest control done → Pest Control ($39.00)'] },
+    });
+
+    // Confirmed again: nothing is added, nothing recorded.
+    const again = database();
+    again.invoiceProduct.findMany.mockResolvedValue([product()]);
+    again.invoiceBillingRule.findMany.mockResolvedValue([{ inspectionType: 'OCCUPIED', service: null, productId: PRODUCT }]);
+    await new InvoiceSettingsService(again as never).addBillingRules(office, { rules: [{ inspectionType: 'OCCUPIED', service: null, productId: PRODUCT }] });
+    expect(again.invoiceBillingRule.createMany).not.toHaveBeenCalled();
+    expect(again.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a rule for no visits in particular, for a product set aside, or for one not on its own list', async () => {
+    expect(billingRuleProblem({ inspectionType: null, service: null })).toBe('Say which visits it is for: their type, a service done, or both.');
+    const db = database();
+    const service = new InvoiceSettingsService(db as never);
+    await expect(service.addBillingRules(office, { rules: [{ inspectionType: null, service: null, productId: PRODUCT }] })).rejects.toMatchObject({
+      code: 'INVOICE_BILLING_RULE_INVALID',
+    });
+    db.invoiceProduct.findMany.mockResolvedValue([product({ active: false })]);
+    await expect(service.addBillingRules(office, { rules: [{ inspectionType: 'OCCUPIED', service: null, productId: PRODUCT }] })).rejects.toMatchObject({
+      code: 'INVOICE_BILLING_RULE_INVALID',
+      message: 'Filter Change is set aside. Offer it again first.',
+    });
+    db.invoiceProduct.findMany.mockResolvedValue([]);
+    await expect(service.addBillingRules(office, { rules: [{ inspectionType: 'OCCUPIED', service: null, productId: PRODUCT }] })).rejects.toMatchObject({
+      code: 'INVOICE_PRODUCT_NOT_FOUND',
+    });
+    // Looked for in its own office only.
+    expect(db.invoiceProduct.findMany.mock.calls.at(-1)![0].where).toEqual({ organizationId: ORG, id: { in: [PRODUCT] } });
+    expect(db.invoiceBillingRule.createMany).not.toHaveBeenCalled();
+  });
+
+  it('removes a rule of its own office, on the record', async () => {
+    const db = database();
+    db.invoiceBillingRule.findFirst.mockResolvedValue({ id: 'rule-1', inspectionType: 'HVAC', service: null, product: { name: 'HVAC Inspection & Filter Change' } });
+    await new InvoiceSettingsService(db as never).removeBillingRule(office, 'rule-1');
+    expect(db.invoiceBillingRule.findFirst.mock.calls[0][0].where).toEqual({ id: 'rule-1', organizationId: ORG });
+    expect(db.invoiceBillingRule.delete).toHaveBeenCalledWith({ where: { id: 'rule-1' } });
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      action: 'INVOICE_BILLING_RULE_REMOVED',
+      metadata: { rule: 'HVAC inspection visits → HVAC Inspection & Filter Change' },
+    });
+
+    db.invoiceBillingRule.findFirst.mockResolvedValue(null);
+    await expect(new InvoiceSettingsService(db as never).removeBillingRule(office, 'rule-9')).rejects.toMatchObject({ code: 'INVOICE_BILLING_RULE_NOT_FOUND' });
+  });
+
+  it('takes every field of a rule through the request check, and nothing else', async () => {
+    const errorsFor = (body: unknown) => validate(plainToInstance(AddBillingRulesDto, body), { whitelist: true, forbidNonWhitelisted: true });
+    const rule = { inspectionType: 'HVAC', service: 'pestControl', productId: '30000000-0000-4000-8000-000000000001' };
+    expect(await errorsFor({ rules: [rule] })).toEqual([]);
+    expect(await errorsFor({ rules: [{ ...rule, inspectionType: null, service: null }] })).toEqual([]);
+    expect(await errorsFor({ rules: [{ ...rule, inspectionType: 'GARDEN' }] })).not.toEqual([]);
+    expect(await errorsFor({ rules: [{ ...rule, service: 'mowing' }] })).not.toEqual([]);
+    expect(await errorsFor({ rules: [{ ...rule, productId: 'p1' }] })).not.toEqual([]);
+    expect(await errorsFor({ rules: [{ ...rule, price: 100 }] })).not.toEqual([]);
+    expect(await errorsFor({ rules: [] })).not.toEqual([]);
   });
 });

@@ -400,6 +400,7 @@ model Organization {
   invoices Invoice[]
   invoiceSettings InvoiceSettings?
   invoiceProducts InvoiceProduct[]
+  invoiceBillingRules InvoiceBillingRule[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -3432,7 +3433,7 @@ model InvoiceSettings {
 
 /// A product or service at the office's price (2026-11-06, phase 6), as
 /// Jobber's Products & Services list: a new invoice's lines are priced from
-/// it first, then from what was billed. Never deleted, only set inactive, so
+/// it alone (2026-11-12), as the billing rules name it. Never deleted, only set inactive, so
 /// what an old invoice was priced from stays readable.
 model InvoiceProduct {
   id             String       @id @default(uuid()) @db.Uuid
@@ -3449,10 +3450,39 @@ model InvoiceProduct {
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   xeroOrganisation XeroOrganisation? @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+  billingRules   InvoiceBillingRule[]
 
   @@unique([organizationId, nameKey])
+  /// What a billing rule points at: a product of its own office (2026-11-12).
+  @@unique([organizationId, id])
   @@index([organizationId, active])
   @@index([organizationId, xeroTenantId])
+}
+
+/// What a finished visit bills (2026-11-12, PR 1 of making invoices in the
+/// console): a visit of this type -- or any visit -- on which this service was
+/// reported done -- or whatever was done -- bills this product, at its price
+/// and to its company's books. Learned from past invoices, confirmed by the
+/// office. Added and removed, never changed.
+///
+/// NOT DECLARED HERE: `InvoiceBillingRule_one_rule_key`, the unique index on
+/// (organizationId, inspectionType, service, productId), is NULLS NOT
+/// DISTINCT, which Prisma cannot express; see migration
+/// 202611120002_invoice_billing_rules.
+model InvoiceBillingRule {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  /// The visit's type; null for any visit.
+  inspectionType InspectionType?
+  /// filterChange, pestControl or fleaTreatment (checked); null for whatever was done. One of the two is always given (checked).
+  service        String?
+  productId      String          @db.Uuid
+  createdAt      DateTime        @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      InvoiceProduct @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+
+  @@index([productId])
 }
 
 /// An invoice sent to the client from the console (2026-11-06, phase 5 of taking

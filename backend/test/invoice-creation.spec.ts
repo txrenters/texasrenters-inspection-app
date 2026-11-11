@@ -39,7 +39,7 @@ const report = (done: Record<string, boolean>) => ({
 });
 const visit = (over: Record<string, unknown> = {}) => ({
   id: VISIT,
-  inspectionType: 'BENEFIT_PACKAGE',
+  inspectionType: 'OCCUPIED',
   scheduledAt: date('2026-11-02'),
   status: 'COMPLETED',
   jobberJobId: 'job-1',
@@ -47,11 +47,30 @@ const visit = (over: Record<string, unknown> = {}) => ({
   propertywareBuilding: building,
   ...over,
 });
-/** What the office charges, read from its own invoices. */
+/** What the office billed in Jobber: it prices nothing any more (2026-11-12). */
 const PRICES = [
   { name: 'Filter Change', unitPriceCents: 3999, _count: { _all: 40 } },
   { name: 'Pest Control', unitPriceCents: 2500, _count: { _all: 30 } },
 ];
+/** The office's list, and what a visit bills of it (2026-11-12): an occupied visit a filter change, pest control where it was done. */
+const product = (id: string, name: string, unitPriceCents: number, over: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  nameKey: name.toLowerCase(),
+  description: null,
+  unitPriceCents,
+  active: true,
+  xeroTenantId: null,
+  updatedAt: new Date('2026-11-01T00:00:00.000Z'),
+  ...over,
+});
+const PRODUCTS = [product('product-filter', 'Filter Change', 3999), product('product-pest', 'Pest Control', 2500), product('product-flea', 'Flea Treatment', 0)];
+const RULES = [
+  { id: 'rule-1', inspectionType: 'OCCUPIED' as const, service: null, productId: 'product-filter' },
+  { id: 'rule-2', inspectionType: null, service: 'pestControl' as const, productId: 'product-pest' },
+  { id: 'rule-3', inspectionType: null, service: 'fleaTreatment' as const, productId: 'product-flea' },
+];
+const BASIS = { rules: RULES, products: PRODUCTS };
 
 function database() {
   const db = {
@@ -64,7 +83,8 @@ function database() {
     invoiceLine: { groupBy: jest.fn().mockResolvedValue(PRICES) },
     // No invoice settings saved, and no price list: the fallbacks (2026-11-06, phase 6).
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
-    invoiceProduct: { findMany: jest.fn().mockResolvedValue([]) },
+    invoiceProduct: { findMany: jest.fn().mockResolvedValue(PRODUCTS) },
+    invoiceBillingRule: { findMany: jest.fn().mockResolvedValue(RULES) },
     // No Xero organisation: every invoice belongs to no company (2026-11-10).
     xeroOrganisation: { findMany: jest.fn().mockResolvedValue([]) },
     invoicePayment: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountCents: 0 }, _max: { paidOn: null } }) },
@@ -188,7 +208,8 @@ describe('making one invoice', () => {
       invoices: [{ xeroTenantId: null, lineItems: [] }],
       existing: [],
     });
-    expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control']);
+    // The office's list, and only it (2026-11-12).
+    expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control', 'Flea Treatment']);
   });
 });
 
@@ -227,12 +248,11 @@ describe('marking a draft sent', () => {
 });
 
 describe('a batch', () => {
-  const prices = PRICES.map(({ name, unitPriceCents }) => ({ name, unitPriceCents }));
   const batchOver = (db: ReturnType<typeof database>) => new InvoiceBatchService(db as never, new InvoicesService(db as never));
   const input = { inspectionIds: [VISIT, VISIT_2], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0001' };
 
-  it("prices each visit from what was reported done, and says why one cannot be billed", () => {
-    expect(batchLines(visit(), prices)).toEqual({
+  it("bills each visit as the office's rules say, at the list's prices, and says why one cannot be billed (2026-11-12)", () => {
+    expect(batchLines(visit(), BASIS)).toEqual({
       lineItems: [
         { name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 },
         { name: 'Pest Control', description: null, quantity: 1, unitPriceCents: 2500 },
@@ -240,10 +260,15 @@ describe('a batch', () => {
       totalCents: 6499,
       problem: null,
     });
-    expect(batchLines(visit({ servicesReport: report({ filterChange: false }) }), prices).problem).toBe('Nothing was reported done to bill.');
-    expect(batchLines(visit({ servicesReport: report({ fleaTreatment: true }) }), prices).problem).toBe(
-      'No price yet for Flea Treatment. Invoice this visit by itself and type the price.',
-    );
+    // Its type bills the filter change, whatever the report says.
+    expect(batchLines(visit({ servicesReport: null }), BASIS).lineItems.map((line) => line.name)).toEqual(['Filter Change']);
+    expect(batchLines(visit({ inspectionType: 'ROOF', servicesReport: report({}) }), BASIS)).toMatchObject({
+      lineItems: [],
+      problem: 'No rule says what this visit bills (Roof inspection). Add one under Invoices → Settings.',
+    });
+    expect(batchLines(visit({ servicesReport: report({ fleaTreatment: true }) }), BASIS).problem).toBe('No price yet for Flea Treatment. Set one under Invoices → Settings.');
+    // Jobber's billing prices nothing.
+    expect(batchLines(visit(), { rules: RULES, products: [] }).problem).toBe('A product a rule bills is set aside. Offer it again, or change the rule, under Invoices → Settings.');
   });
 
   it('lists the finished visits in the days asked for that have no invoice, in its own office', async () => {
@@ -278,14 +303,14 @@ describe('a batch', () => {
     const db = database();
     db.inspection.findFirst
       .mockResolvedValueOnce(visit())
-      .mockResolvedValueOnce(visit({ id: VISIT_2, servicesReport: report({ filterChange: false }) }));
+      .mockResolvedValueOnce(visit({ id: VISIT_2, inspectionType: 'ROOF', servicesReport: report({ filterChange: false }) }));
     db.invoice.create.mockResolvedValue({ id: INVOICE });
 
     const result = await batchOver(db).batch(office, input);
 
     expect(result).toEqual({
       created: [{ inspectionId: VISIT, invoiceId: INVOICE, number: '8440', totalCents: 6499, company: null }],
-      skipped: [{ inspectionId: VISIT_2, reason: 'Nothing was reported done to bill.' }],
+      skipped: [{ inspectionId: VISIT_2, reason: 'No rule says what this visit bills (Roof inspection). Add one under Invoices → Settings.' }],
     });
     expect(db.invoice.create.mock.calls[0][0].data).toMatchObject({
       inspectionId: VISIT,

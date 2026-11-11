@@ -218,7 +218,7 @@ describe('a batch', () => {
         clientName: '300 Example Way',
         lineItems: [],
         totalCents: 0,
-        problem: 'Nothing was reported done to bill.',
+        problem: 'No rule says what this visit bills (Roof inspection). Add one under Invoices → Settings.',
         invoices: [],
       },
     ],
@@ -230,7 +230,7 @@ describe('a batch', () => {
     render(<BatchInvoicesPage />);
     expect(batches.useUninvoicedVisits).toHaveBeenLastCalledWith({ from: '2026-10-30', to: TODAY });
     expect(screen.getByText('2 of 2 chosen')).toBeInTheDocument();
-    expect(screen.getByText('Nothing was reported done to bill.')).toBeInTheDocument();
+    expect(screen.getByText('No rule says what this visit bills (Roof inspection). Add one under Invoices → Settings.')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /300 Example Way/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Create 2 invoices · $64.99' })).toBeEnabled();
   });

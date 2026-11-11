@@ -115,4 +115,5 @@ export * from './invoice-edits.js';
 export * from './invoice-batch.js';
 export * from './invoice-companies.js';
 export * from './invoice-settings.js';
+export * from './invoice-billing-rules.js';
 export * from './invoice-takeover.js';

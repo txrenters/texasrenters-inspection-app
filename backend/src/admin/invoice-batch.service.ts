@@ -5,7 +5,7 @@ import {
   MAX_INVOICES_PER_VISIT,
   MAX_UNINVOICED_RANGE_DAYS,
   PAYMENT_TERMS,
-  invoiceLinesProblem,
+  billedLines,
   invoiceTotals,
   splitByCompany,
   type BatchInvoiceInput,
@@ -24,21 +24,23 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { billingBasis, type BillingBasis } from './invoice-billing-rules';
 import { insertConsoleInvoice } from './invoice-insert';
 import { lockInvoiceNumbers } from './invoice-numbers';
-import { InvoicesService, draftLines, servicesDone } from './invoices.service';
+import { InvoicesService, servicesDone } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
 
 /**
  * Making many invoices at once (2026-11-06, phase 4 of taking invoicing over
  * from Jobber), as Jobber's Batch Create: the finished visits in a span of
- * days nobody has invoiced yet, each priced from what the technician reported
- * done at the office's own prices, and one invoice made for each visit chosen.
+ * days nobody has invoiced yet, each billed as the office's rules say -- its
+ * type, and what the technician reported done (2026-11-12) -- at the prices on
+ * its list, and one invoice made for each visit chosen.
  *
- * A visit that cannot be billed as it stands -- nothing reported done, a
- * service the office has never priced -- is listed with the reason and left
- * out rather than invoiced for nothing; it is invoiced by itself, where the
- * price can be typed. Off until the cutover, as every invoice write is.
+ * A visit that cannot be billed as it stands -- no rule covers it, a product
+ * has no price -- is listed with the reason and left out rather than invoiced
+ * for nothing; it is invoiced by itself, where the lines can be typed. Off
+ * until the cutover, as every invoice write is.
  *
  * One invoice per company (2026-11-10, phase 3 of the multi-company plan): a
  * visit whose services go to two companies' books gets one invoice for each,
@@ -65,18 +67,11 @@ const visitSelect = {
 
 type VisitRow = Prisma.InspectionGetPayload<{ select: typeof visitSelect }>;
 
-/** A visit's invoice as the batch would make it, and why it cannot be made, in words. */
-export function batchLines(row: Pick<VisitRow, 'servicesReport'>, prices: readonly { name: string; unitPriceCents: number }[]) {
-  const lineItems = draftLines(servicesDone(row.servicesReport as unknown as VisitServicesReport | null), prices);
-  if (!lineItems.length) return { lineItems, totalCents: 0, problem: 'Nothing was reported done to bill.' };
-  const unpriced = lineItems.filter((line) => line.unitPriceCents <= 0).map((line) => line.name);
-  if (unpriced.length)
-    return {
-      lineItems,
-      totalCents: invoiceTotals(lineItems).totalCents,
-      problem: `No price yet for ${unpriced.join(' and ')}. Invoice this visit by itself and type the price.`,
-    };
-  return { lineItems, totalCents: invoiceTotals(lineItems).totalCents, problem: invoiceLinesProblem(lineItems) };
+/** A visit's invoice as the batch would make it, by the office's rules, and why it cannot be made, in words. */
+export function batchLines(row: Pick<VisitRow, 'servicesReport'> & { inspectionType: string }, basis: BillingBasis) {
+  const services = servicesDone(row.servicesReport as unknown as VisitServicesReport | null);
+  const { lineItems, problem } = billedLines({ inspectionType: row.inspectionType, services }, basis.rules, basis.products);
+  return { lineItems, totalCents: invoiceTotals(lineItems).totalCents, problem };
 }
 
 /** A visit's lines, one invoice per company, as the batch would make them. */
@@ -109,8 +104,9 @@ export class InvoiceBatchService {
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Give the first and the last day, the first one first.');
     if ((dateOf(query.to).getTime() - dateOf(query.from).getTime()) / DAY_MS > MAX_UNINVOICED_RANGE_DAYS)
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', `Look at ${MAX_UNINVOICED_RANGE_DAYS} days at most at a time.`);
-    const [{ products, termsDays }, rows, companies, organisations] = await Promise.all([
+    const [{ termsDays }, basis, rows, companies, organisations] = await Promise.all([
       this.invoices.officeDefaults(user),
+      billingBasis(this.prisma, user.organizationId),
       this.prisma.inspection.findMany({
         where: {
           organizationId: user.organizationId,
@@ -131,7 +127,7 @@ export class InvoiceBatchService {
     return {
       items: rows.slice(0, LIST_LIMIT).map((row): UninvoicedVisit => {
         const building = row.propertywareBuilding!;
-        const lines = batchLines(row, products);
+        const lines = batchLines(row, basis);
         return {
           inspectionId: row.id,
           inspectionType: row.inspectionType,
@@ -168,8 +164,9 @@ export class InvoiceBatchService {
     if (!PAYMENT_TERMS.some((terms) => terms.days === input.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Pick the payment terms from the list.');
 
-    const [defaults, companies, organisations] = await Promise.all([
+    const [defaults, basis, companies, organisations] = await Promise.all([
       this.invoices.officeDefaults(user),
+      billingBasis(this.prisma, user.organizationId),
       productCompanies(this.prisma, user.organizationId),
       officeOrganisations(this.prisma, user.organizationId),
     ]);
@@ -207,7 +204,7 @@ export class InvoiceBatchService {
         result.skipped.push({ inspectionId, reason: reason ?? 'The visit has no property to invoice.' });
         continue;
       }
-      const lines = batchLines(visit, defaults.products);
+      const lines = batchLines(visit, basis);
       if (lines.problem) {
         result.skipped.push({ inspectionId, reason: lines.problem });
         continue;
