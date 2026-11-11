@@ -1,9 +1,13 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { compare, hashSync } from 'bcryptjs';
 import { UserRole } from '@prisma/client';
 
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { withSystemTenant } from '../database/tenant-context';
+import { PORTAL_SESSION_MAX_SECONDS } from './portal/portal.config';
+import { PortalSessionService } from './portal/portal-session.service';
+import { isStaffAccount, STAFF_ACCOUNT_SELECT } from './staff-account';
 import { TokenService } from './token.service';
 
 /**
@@ -50,6 +54,17 @@ const REJECTED = new ApplicationError(
   'That email address and password do not match an active account.',
 );
 
+/**
+ * A portal session the portal, or this app, has ended. Its own code so the
+ * console can send the person back through the portal rather than to the
+ * password form. Says nothing the holder of the token did not already know.
+ */
+const PORTAL_SESSION_ENDED = new ApplicationError(
+  401,
+  'PORTAL_SESSION_ENDED',
+  'Your TR Staff Portal sign-in has ended. Sign in again.',
+);
+
 export interface SessionTokens {
   accessToken: string;
   refreshToken: string;
@@ -65,6 +80,13 @@ export class SessionService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(TokenService) private readonly tokens: TokenService,
+    /**
+     * Optional only so the many tests that build this with `new` keep working.
+     * AuthModule provides it beside this service, and `module-graph.spec.ts`
+     * checks that it arrives. Without it a portal session's renewal is refused
+     * and password sign-in is never restricted: the app as it was.
+     */
+    @Optional() @Inject(PortalSessionService) private readonly portal?: PortalSessionService,
   ) {}
 
   /**
@@ -109,6 +131,15 @@ export class SessionService {
     // coordinator who is a technician too signs in to the console without being
     // refused, and without signing their phone out.
     const fromConsole = context.client === 'console';
+
+    // Once staff are all in the TR Staff Portal, PORTAL_ALLOW_PASSWORD_LOGIN=false
+    // takes the console password away from them — staff only, and the console
+    // only: the phone has no portal sign-in, and a coordinator who is also a
+    // technician must keep the app. Same message as a wrong password, and only
+    // reached with the right one, so it never says who is staff.
+    if (fromConsole && this.portal && !this.portal.passwordLoginAllowed()) {
+      if (await this.isStaff(credential.authUserId)) throw REJECTED;
+    }
     if (!fromConsole) await this.enforceSingleDevice(credential.authUserId, credential.profile, context);
 
     const session = await this.issueSession(credential.authUserId, { ...context, fromConsole });
@@ -176,7 +207,29 @@ export class SessionService {
     if (existing.expiresAt.getTime() <= Date.now()) throw REJECTED;
     if (!existing.credential.profile.isActive) throw REJECTED;
 
-    const next = this.tokens.createRefreshToken();
+    // A portal session is re-checked with the portal here, when a check is due;
+    // see PortalSessionService.renew. A console password session of a staff
+    // account ends here once password sign-in has been switched off for staff.
+    const portalSessionId = this.tokens.portalSessionIdOf(refreshToken);
+    let accessTtlSeconds: number | undefined;
+    if (portalSessionId) {
+      const renewal = this.portal ? await this.portal.renew(portalSessionId, existing.authUserId) : { live: false as const };
+      if (!renewal.live) {
+        await this.retire(existing.id);
+        throw PORTAL_SESSION_ENDED;
+      }
+      accessTtlSeconds = renewal.accessTtlSeconds;
+    } else if (existing.fromConsole && this.portal && !this.portal.passwordLoginAllowed()) {
+      if (await this.isStaff(existing.authUserId)) {
+        await this.retire(existing.id);
+        this.logger.log(`Ended a console password session for ${existing.authUserId}: password sign-in is off for staff.`);
+        throw REJECTED;
+      }
+    }
+
+    const next = this.tokens.createRefreshToken(
+      portalSessionId ? { portalSessionId, ttlMs: PORTAL_SESSION_MAX_SECONDS * 1000 } : {},
+    );
     // The session keeps its device and where it was signed in from. Dropping
     // `deviceId` here made a phone's own session look like another handset
     // after its first refresh; a console session from before `fromConsole`
@@ -202,9 +255,13 @@ export class SessionService {
       });
     });
 
+    // A portal sign-in is never sent to replace a temporary password: the
+    // password is not what signed them in. The column is left as it is.
+    const mustChangePassword = portalSessionId ? false : existing.credential.mustChangePassword;
     const access = this.tokens.issueAccessToken({
       authUserId: existing.authUserId,
-      mustChangePassword: existing.credential.mustChangePassword,
+      mustChangePassword,
+      ...(portalSessionId ? { portalSessionId, ttlSeconds: accessTtlSeconds } : {}),
     });
 
     return {
@@ -212,7 +269,56 @@ export class SessionService {
       refreshToken: next.token,
       tokenType: 'Bearer',
       expiresIn: access.expiresIn,
-      mustChangePassword: existing.credential.mustChangePassword,
+      mustChangePassword,
+    };
+  }
+
+  /**
+   * A new session for someone who just signed in through the TR Staff Portal.
+   *
+   * A whole new refresh-token chain, never a continuation of whatever the
+   * browser held before: the console overwrites its cookies with this one, so
+   * nothing planted ahead of the sign-in survives it. Always a console session.
+   * Its refresh token names the portal session, and lasts no longer than a
+   * portal sign-in can.
+   */
+  async issuePortalSession(
+    authUserId: string,
+    portalSessionId: string,
+    accessTtlSeconds: number,
+    context: { userAgent?: string; ipAddress?: string } = {},
+  ): Promise<SessionTokens> {
+    const refresh = this.tokens.createRefreshToken({
+      portalSessionId,
+      ttlMs: PORTAL_SESSION_MAX_SECONDS * 1000,
+    });
+    await this.prisma.authRefreshToken.create({
+      data: {
+        authUserId,
+        tokenHash: refresh.tokenHash,
+        expiresAt: refresh.expiresAt,
+        userAgent: context.userAgent ?? null,
+        ipAddress: context.ipAddress ?? null,
+        deviceId: null,
+        fromConsole: true,
+      },
+    });
+    await this.prisma.authCredential.updateMany({
+      where: { authUserId },
+      data: { lastSignInAt: new Date() },
+    });
+    const access = this.tokens.issueAccessToken({
+      authUserId,
+      mustChangePassword: false,
+      portalSessionId,
+      ttlSeconds: accessTtlSeconds,
+    });
+    return {
+      accessToken: access.token,
+      refreshToken: refresh.token,
+      tokenType: 'Bearer',
+      expiresIn: access.expiresIn,
+      mustChangePassword: false,
     };
   }
 
@@ -222,11 +328,24 @@ export class SessionService {
    * Idempotent and silent about whether the token existed: sign-out is not a
    * place to tell an anonymous caller that a token was real.
    */
-  async signOut(refreshToken: string) {
+  async signOut(refreshToken: string): Promise<{ signedOutUrl?: string }> {
+    const tokenHash = this.tokens.hashRefreshToken(refreshToken);
+    // Someone who signed in through the portal is sent back to it afterwards.
+    // Read from the token itself, so it holds even for one already ended.
+    const portalSessionId = this.tokens.portalSessionIdOf(refreshToken);
+    const owner =
+      portalSessionId && this.portal
+        ? await this.prisma.authRefreshToken.findUnique({ where: { tokenHash }, select: { authUserId: true } })
+        : null;
     await this.prisma.authRefreshToken.updateMany({
-      where: { tokenHash: this.tokens.hashRefreshToken(refreshToken), revokedAt: null },
+      where: { tokenHash, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+
+    if (!portalSessionId || !this.portal) return {};
+    if (owner) await this.portal.end(portalSessionId, owner.authUserId);
+    const signedOutUrl = this.portal.signedOutUrl();
+    return signedOutUrl ? { signedOutUrl } : {};
   }
 
   /**
@@ -238,15 +357,45 @@ export class SessionService {
    * indistinguishable from an outage to whoever it happens to, so the log has
    * to be able to answer "why was I signed out" months later.
    */
-  async revokeAllFor(authUserId: string, reason: string, options: { handsetsOnly?: boolean } = {}) {
+  async revokeAllFor(
+    authUserId: string,
+    reason: string,
+    options: { handsetsOnly?: boolean; consoleOnly?: boolean } = {},
+  ) {
     const { count } = await this.prisma.authRefreshToken.updateMany({
       // `handsetsOnly` for the one-device rule, which is the app's alone: a
       // phone taking the account over must not sign the console out. A replayed
       // token or a new password still ends everything.
-      where: { authUserId, revokedAt: null, ...(options.handsetsOnly ? { fromConsole: false } : {}) },
+      //
+      // `consoleOnly` for a TR Staff Portal sign-out, which is the console's
+      // alone: the phone is signed in with a password the portal knows nothing
+      // about, and signing it out mid-walkthrough is how filmed work goes missing.
+      where: {
+        authUserId,
+        revokedAt: null,
+        ...(options.handsetsOnly ? { fromConsole: false } : {}),
+        ...(options.consoleOnly ? { fromConsole: true } : {}),
+      },
       data: { revokedAt: new Date() },
     });
     if (count > 0) this.logger.log(`Revoked ${count} session(s) for ${authUserId}: ${reason}.`);
+    return count;
+  }
+
+  /** Ends one session without treating it as anything worse. */
+  private async retire(refreshTokenId: string) {
+    await this.prisma.authRefreshToken.updateMany({
+      where: { id: refreshTokenId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  /** Whether an account is office staff (see staff-account.ts). The relations are tenant-scoped. */
+  private async isStaff(authUserId: string) {
+    const account = await withSystemTenant(() =>
+      this.prisma.userProfile.findUnique({ where: { authUserId }, select: STAFF_ACCOUNT_SELECT }),
+    );
+    return account ? isStaffAccount(account) : false;
   }
 
   /**
