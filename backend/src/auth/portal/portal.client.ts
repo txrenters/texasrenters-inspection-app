@@ -52,6 +52,8 @@ export type PortalRefreshOutcome =
 @Injectable()
 export class PortalClient {
   private readonly logger = new Logger(PortalClient.name);
+  /** A property only so a test can prove a timeout is an outage without waiting ten seconds. */
+  timeoutMs = PORTAL_TIMEOUT_MS;
 
   /** Exchanges an authorization code for tokens. Throws on anything but a complete answer. */
   async exchangeCode(settings: PortalSettings, code: string, verifier: string) {
@@ -155,7 +157,7 @@ export class PortalClient {
         ...init,
         // A token endpoint that redirects is not one to follow with a secret in the body.
         redirect: 'error',
-        signal: AbortSignal.timeout(PORTAL_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
