@@ -59,8 +59,11 @@ export interface XeroLineItem {
   Tracking?: { TrackingCategoryID: string; Name: string; Option: string }[];
 }
 
+/**
+ * A new invoice, never a change to one (2026-11-12): once an invoice is in
+ * Xero it is the office's there, and nothing the console sends overwrites it.
+ */
 export interface XeroInvoiceBody {
-  InvoiceID?: string;
   Type: 'ACCREC';
   Contact: { ContactID: string };
   InvoiceNumber: string;
@@ -68,20 +71,12 @@ export interface XeroInvoiceBody {
   Date: string;
   DueDate: string;
   LineAmountTypes: 'Exclusive';
-  /**
-   * Approved; or, for a company whose visits get projects (2026-11-11), a
-   * draft for the office to put on its project and approve. Changing one
-   * already sent there says nothing of its status, so an approved one stays
-   * approved and a draft a draft.
-   */
-  Status?: 'AUTHORISED' | 'DRAFT';
+  /** Approved; or, for a company whose visits get projects (2026-11-11), a draft for the office to put on its project and approve. */
+  Status: 'AUTHORISED' | 'DRAFT';
   LineItems: XeroLineItem[];
 }
 
-/** Voided; a draft, which Xero does not void, is deleted (2026-11-11). */
-export type XeroVoidBody = { InvoiceID: string; Status: 'VOIDED' | 'DELETED' };
-
-export type XeroInvoicePlan = { kind: 'send'; body: XeroInvoiceBody } | { kind: 'void'; body: XeroVoidBody } | { kind: 'problem'; problem: string };
+export type XeroInvoicePlan = { kind: 'send'; body: XeroInvoiceBody } | { kind: 'problem'; problem: string };
 
 /** The client is the property, as in Jobber: by Jobber's id, or -- for one Jobber did not name -- by its name. */
 export const clientKeyOf = (invoice: Pick<InvoiceForXero, 'jobberClientId' | 'clientName'>) =>
@@ -106,10 +101,10 @@ const dollars = (cents: number) => Number((cents / 100).toFixed(2));
 const sortedLines = (invoice: InvoiceForXero) => [...invoice.lines].sort((a, b) => a.position - b.position);
 
 /**
- * What the invoice says, as a hash: sent again only when this changes. The
- * accounts and tax type are not in it -- choosing another account applies to
- * invoices from then on, and never rewrites one already in Xero's books. Paid
- * or written off reads as approved: payments are phase 4.
+ * What the invoice says, as a hash, as it was when it went to Xero: one that
+ * says something else now changed here after it went (2026-11-12), and the
+ * office makes the change in Xero. The accounts and tax type are not in it.
+ * Paid or written off reads as approved.
  */
 export function invoiceFingerprint(invoice: InvoiceForXero): string {
   const content = {
@@ -128,9 +123,9 @@ export function invoiceFingerprint(invoice: InvoiceForXero): string {
 }
 
 /**
- * The invoice for Xero: approved, under its client's contact, each line to its
- * product's account or the default, with the office's tax type. A voided one
- * already in Xero is voided there; one never sent is not sent.
+ * The invoice, new in Xero: approved, under its client's contact, each line to
+ * its product's account or the default, with the office's tax type. Only for
+ * one not in Xero yet: one voided before it got there is not sent.
  */
 export function xeroInvoiceFrom(
   invoice: InvoiceForXero,
@@ -141,15 +136,11 @@ export function xeroInvoiceFrom(
     trackingCategories?: readonly XeroTrackingCategory[];
     items?: readonly XeroItem[];
     contactId: string;
-    xeroInvoiceId: string | null;
-    /** Its company's visits get projects (2026-11-11): a new one goes as a draft. */
+    /** Its company's visits get projects (2026-11-11): it goes as a draft. */
     asDraft?: boolean;
   },
 ): XeroInvoicePlan {
-  if (invoice.status === 'VOIDED')
-    return context.xeroInvoiceId
-      ? { kind: 'void', body: { InvoiceID: context.xeroInvoiceId, Status: 'VOIDED' } }
-      : { kind: 'problem', problem: 'It was voided before it reached Xero, so it is not sent.' };
+  if (invoice.status === 'VOIDED') return { kind: 'problem', problem: 'It was voided before it reached Xero, so it is not sent.' };
   if (invoice.status === 'DRAFT') return { kind: 'problem', problem: 'It is a draft.' };
   if (!invoice.number) return { kind: 'problem', problem: 'It has no invoice number yet.' };
   if (!invoice.issuedOn) return { kind: 'problem', problem: 'It has no issue date.' };
@@ -226,7 +217,6 @@ export function xeroInvoiceFrom(
   return {
     kind: 'send',
     body: {
-      ...(context.xeroInvoiceId ? { InvoiceID: context.xeroInvoiceId } : {}),
       Type: 'ACCREC',
       Contact: { ContactID: context.contactId },
       InvoiceNumber: invoice.number,
@@ -234,8 +224,8 @@ export function xeroInvoiceFrom(
       Date: date,
       DueDate: monthEndOf(date),
       LineAmountTypes: 'Exclusive',
-      // As a draft (2026-11-11): new, a draft; changed, as the office left it -- approving it is theirs.
-      ...(context.asDraft ? (context.xeroInvoiceId ? {} : { Status: 'DRAFT' as const }) : { Status: 'AUTHORISED' as const }),
+      // As a draft (2026-11-11): approving it is the office's, in Xero.
+      Status: context.asDraft ? 'DRAFT' : 'AUTHORISED',
       LineItems: items,
     },
   };

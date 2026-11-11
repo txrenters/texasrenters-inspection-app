@@ -21,7 +21,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { XeroAuthService } from './xero-auth.service';
 import { xeroValidationMessages, XeroClient } from './xero.client';
 import { XeroError } from './xero.errors';
-import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody, type XeroVoidBody } from './xero-invoice';
+import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody } from './xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
 import { xeroWriteOffFrom } from './xero-write-off';
 import { XeroProjectsService, type XeroProjectsResult } from './xero-projects.service';
@@ -33,7 +33,7 @@ const BATCH = 50;
 export const MAX_INVOICES_PER_RUN = 200;
 /** Payments looked at in one run (2026-11-10, phase 4): four calls at most to send them. */
 export const MAX_PAYMENTS_PER_RUN = 200;
-/** Payments deleted in Xero in one run -- removed or changed here, or taken off an invoice to change it. One call each. */
+/** Payments deleted in Xero in one run -- removed or changed here. One call each. */
 export const MAX_PAYMENT_DELETES_PER_RUN = 20;
 /** Bad debts written off, and write-offs taken back, in one run (2026-11-10): two calls each. */
 export const MAX_WRITE_OFFS_PER_RUN = 20;
@@ -174,15 +174,15 @@ interface DeleteBudget {
 /**
  * Sends the office's invoices to Xero (2026-11-10, phase 3 of the Xero plan).
  *
- * Only while it is turned on, only invoices issued from the start date, and
- * only the ones that changed: an invoice is looked at again when its row moved
- * since it was last seen, and sent again only when what it says changed (its
- * fingerprint). Nothing calls Xero when nothing changed. Contacts and invoices
- * go up to 50 a call, with an idempotency key, under the console's daily
- * ceiling. Approved, never emailed by Xero. A refusal is kept with Xero's
- * reason and tried again later; an invoice the console will not send as it is
- * (its lines do not come to its total, it carries sales tax) is held with the
- * reason until it changes.
+ * Only while it is turned on, and only invoices issued from the start date.
+ * Each goes once (2026-11-12): an invoice in Xero is the office's there, and
+ * is never sent again -- one changed here after it went is marked, for the
+ * office to make the change in Xero too. Nothing calls Xero for it. Contacts
+ * and invoices go up to 50 a call, with an idempotency key, under the
+ * console's daily ceiling. Approved, or drafts, never emailed by Xero. A
+ * refusal is kept with Xero's reason and tried again later; an invoice the
+ * console will not send as it is (its lines do not come to its total, it
+ * carries sales tax) is held with the reason until it changes.
  */
 @Injectable()
 export class XeroSenderService {
@@ -199,7 +199,24 @@ export class XeroSenderService {
   async view(organizationId: string, tenantId: string): Promise<XeroSendingView> {
     const state = await this.state(organizationId, tenantId);
     const tenant = state.tenantId;
-    const [sent, failed, notYet, noCompany, failures, paymentsSent, paymentsFailed, paymentFailures, writeOffsSent, writeOffsFailed, writeOffFailures, projects] = await Promise.all([
+    // Changed here after it went (2026-11-12): never sent again, the office's to change in Xero.
+    const changedHereWhere = { organizationId, xeroTenantId: tenant ?? '', status: 'SENT', changedHereAt: { not: null } } satisfies Prisma.XeroInvoiceSyncWhereInput;
+    const [
+      sent,
+      failed,
+      notYet,
+      noCompany,
+      failures,
+      paymentsSent,
+      paymentsFailed,
+      paymentFailures,
+      writeOffsSent,
+      writeOffsFailed,
+      writeOffFailures,
+      projects,
+      changedHere,
+      changedHereRows,
+    ] = await Promise.all([
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'SENT' } }) : 0,
       tenant ? this.prisma.xeroInvoiceSync.count({ where: { organizationId, xeroTenantId: tenant, status: 'FAILED' } }) : 0,
       tenant && state.sendFrom
@@ -281,6 +298,15 @@ export class XeroSenderService {
         : [],
       // Its visits' projects (2026-11-11).
       tenant ? this.projects.summary(organizationId, tenant) : { done: 0, failed: 0, failures: [] },
+      tenant ? this.prisma.xeroInvoiceSync.count({ where: changedHereWhere }) : 0,
+      tenant
+        ? this.prisma.xeroInvoiceSync.findMany({
+            where: changedHereWhere,
+            orderBy: [{ changedHereAt: 'desc' }],
+            take: 50,
+            select: { invoiceId: true, changedHereAt: true, invoice: { select: { number: true, clientName: true, status: true } } },
+          })
+        : [],
     ]);
     return {
       tenantId,
@@ -297,6 +323,7 @@ export class XeroSenderService {
         payments: { sent: paymentsSent, failed: paymentsFailed },
         writeOffs: { sent: writeOffsSent, failed: writeOffsFailed },
         projects: { done: projects.done, failed: projects.failed },
+        changedHere,
       },
       lastRunAt: state.row?.lastRunAt?.toISOString() ?? null,
       lastRunProblem: state.row?.lastRunProblem ?? null,
@@ -335,6 +362,13 @@ export class XeroSenderService {
         nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
       })),
       projectFailures: projects.failures,
+      changedHere: changedHereRows.map((row) => ({
+        invoiceId: row.invoiceId,
+        number: row.invoice.number,
+        clientName: row.invoice.clientName,
+        voided: row.invoice.status === InvoiceStatus.VOIDED,
+        changedAt: row.changedHereAt!.toISOString(),
+      })),
     };
   }
 
@@ -431,11 +465,10 @@ export class XeroSenderService {
     const sentNumbers: string[] = [];
     const budget: DeleteBudget = { left: MAX_PAYMENT_DELETES_PER_RUN };
     try {
-      // Payments removed here, and write-offs of invoices reopened here, first: Xero changes and voids no invoice
-      // with a payment or a credit on it.
+      // Payments removed here, and write-offs of invoices reopened here, first.
       await this.removePayments(organizationId, state.tenantId, result, budget);
       await this.reverseWriteOffs(organizationId, state.tenantId, result);
-      await this.send(organizationId, state.tenantId, state.sendFrom, state.catalog, result, sentNumbers, budget, state.projectsEnabled);
+      await this.send(organizationId, state.tenantId, state.sendFrom, state.catalog, result, sentNumbers, state.projectsEnabled);
       // A project for each visit whose invoice is now in Xero (2026-11-11), the office's to put the line on.
       if (state.projectsEnabled) {
         // Filled as it goes: what was made before a stop still reaches the audit entry.
@@ -507,7 +540,6 @@ export class XeroSenderService {
     catalog: Catalog,
     result: XeroRunResult,
     sentNumbers: string[],
-    budget: DeleteBudget,
     /** Its visits get projects (2026-11-11): new invoices go as drafts. */
     asDraft = false,
   ) {
@@ -516,18 +548,18 @@ export class XeroSenderService {
     const invoices = await this.prisma.invoice.findMany({ where: { organizationId, id: { in: ids } }, select: INVOICE_FIELDS });
     const values = (await this.settings.read(organizationId, tenantId)).values;
 
-    // Unchanged since it was sent: only noted as seen, no call.
     const due: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }[] = [];
     for (const invoice of invoices) {
       const sync = invoice.xeroSync?.xeroTenantId === tenantId ? invoice.xeroSync : null;
       const fingerprint = invoiceFingerprint(invoiceForXero(invoice));
-      if (sync?.status === 'SENT' && sync.sentFingerprint === fingerprint) {
-        await this.prisma.xeroInvoiceSync.update({ where: { invoiceId: invoice.id }, data: { seenUpdatedAt: invoice.updatedAt } });
+      // In Xero already (2026-11-12): never sent again, only noted as seen -- and marked when it changed here since.
+      if (sync?.xeroInvoiceId) {
+        await this.seen(invoice, sync, fingerprint);
         result.unchanged++;
         continue;
       }
       // Voided before it ever reached Xero: there is nothing there to void, and its old refusal no longer matters.
-      if (invoice.status === InvoiceStatus.VOIDED && !sync?.xeroInvoiceId) {
+      if (invoice.status === InvoiceStatus.VOIDED) {
         if (invoice.xeroSync) await this.prisma.xeroInvoiceSync.delete({ where: { invoiceId: invoice.id } });
         result.unchanged++;
         continue;
@@ -540,14 +572,14 @@ export class XeroSenderService {
     const contacts = await this.contacts(
       organizationId,
       tenantId,
-      due.filter((item) => item.invoice.status !== InvoiceStatus.VOIDED).map((item) => item.invoice),
+      due.map((item) => item.invoice),
     );
 
-    let outgoing: { item: (typeof due)[number]; body: XeroInvoiceBody | XeroVoidBody }[] = [];
+    let outgoing: { item: (typeof due)[number]; body: XeroInvoiceBody }[] = [];
     for (const item of due) {
       const contact = contacts.get(clientKeyOf(item.invoice));
-      if (item.invoice.status !== InvoiceStatus.VOIDED && (!contact || 'problem' in contact)) {
-        await this.failed(organizationId, tenantId, item, contact && 'problem' in contact ? contact.problem : 'Its client could not be made a contact in Xero.', true);
+      if (!contact || 'problem' in contact) {
+        await this.failed(organizationId, tenantId, item, contact ? contact.problem : 'Its client could not be made a contact in Xero.', true);
         result.failed++;
         continue;
       }
@@ -556,8 +588,7 @@ export class XeroSenderService {
         accounts: catalog.accounts,
         trackingCategories: catalog.trackingCategories,
         items: catalog.items,
-        contactId: contact && 'id' in contact ? contact.id : '',
-        xeroInvoiceId: item.sync?.xeroInvoiceId ?? null,
+        contactId: contact.id,
         asDraft,
       });
       if (plan.kind === 'problem') {
@@ -570,18 +601,8 @@ export class XeroSenderService {
     }
 
     // One never sent may be in Xero already (2026-11-11): made there by Zapier, or by hand, before the console sent
-    // Jobber's invoices. Found by its number, it is linked -- or, still a draft, made the console's -- never made twice.
+    // Jobber's invoices. Found by its number, it is linked as it is there -- draft or not -- never made twice.
     outgoing = await this.alreadyInXero(organizationId, tenantId, outgoing, result);
-    // Sent as drafts (2026-11-11): one the office has not approved yet is deleted in Xero, which voids no draft.
-    if (asDraft) outgoing = await this.draftVoids(organizationId, tenantId, outgoing, result, sentNumbers);
-
-    // Xero does not change an invoice with payments on it (2026-11-10, phase 4): its payments come off first, and go
-    // back on after it, below. One whose payments cannot all come off this run waits, unchanged, for the next.
-    const changing = outgoing.filter((entry) => entry.item.sync?.xeroInvoiceId && entry.item.invoice.status !== InvoiceStatus.VOIDED);
-    if (changing.length) {
-      const waiting = await this.clearPayments(organizationId, tenantId, changing.map((entry) => entry.item), budget, result);
-      outgoing = outgoing.filter((entry) => !waiting.has(entry.item.invoice.id));
-    }
 
     for (let start = 0; start < outgoing.length; start += BATCH) {
       const batch = outgoing.slice(start, start + BATCH);
@@ -615,21 +636,19 @@ export class XeroSenderService {
 
   /**
    * The invoices about to be made in Xero that it has already, by number, 50
-   * numbers a call (2026-11-11). One approved or paid there is linked as it
-   * is, and left until it changes here; a draft is sent over as the console's
-   * and approved. Another contact's invoice under the number, or two under it,
-   * holds this one back with the reason.
+   * numbers a call (2026-11-11). One there, draft, approved or paid, is linked
+   * as it is and never sent over (2026-11-12): the office may have put it on
+   * its project already. Another contact's invoice under the number, or two
+   * under it, holds this one back with the reason.
    */
-  private async alreadyInXero<T extends { item: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }; body: XeroInvoiceBody | XeroVoidBody }>(
+  private async alreadyInXero<T extends { item: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }; body: XeroInvoiceBody }>(
     organizationId: string,
     tenantId: string,
     outgoing: T[],
     result: XeroRunResult,
   ): Promise<T[]> {
     // Xero takes the numbers comma-separated: one with a comma in it cannot be asked about, and is made as before.
-    const fresh = outgoing.filter(
-      (entry) => !entry.item.sync?.xeroInvoiceId && 'Type' in entry.body && entry.item.invoice.number && !entry.item.invoice.number.includes(','),
-    );
+    const fresh = outgoing.filter((entry) => entry.item.invoice.number && !entry.item.invoice.number.includes(','));
     if (!fresh.length) return outgoing;
     const held = new Set<string>();
     for (let start = 0; start < fresh.length; start += BATCH) {
@@ -652,52 +671,12 @@ export class XeroSenderService {
           held.add(entry.item.invoice.id);
           continue;
         }
-        if (theirs.Status === 'DRAFT' || theirs.Status === 'SUBMITTED') {
-          (entry.body as XeroInvoiceBody).InvoiceID = theirs.InvoiceID;
-          continue;
-        }
         await this.sent(organizationId, tenantId, entry.item, theirs.InvoiceID);
         result.linked++;
         held.add(entry.item.invoice.id);
       }
     }
     return outgoing.filter((entry) => !held.has(entry.item.invoice.id));
-  }
-
-  /**
-   * The voids of invoices sent as drafts (2026-11-11), against what Xero has
-   * now, 50 a call: a draft the office has not approved yet is deleted, as
-   * Xero voids no draft; one approved is voided; one Xero no longer has, or
-   * has voided or deleted already, is done without another call.
-   */
-  private async draftVoids<T extends { item: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }; body: XeroInvoiceBody | XeroVoidBody }>(
-    organizationId: string,
-    tenantId: string,
-    outgoing: T[],
-    result: XeroRunResult,
-    sentNumbers: string[],
-  ): Promise<T[]> {
-    const voids = outgoing.filter((entry) => !('Type' in entry.body));
-    if (!voids.length) return outgoing;
-    const done = new Set<string>();
-    for (let start = 0; start < voids.length; start += BATCH) {
-      const batch = voids.slice(start, start + BATCH);
-      const ids = batch.map((entry) => (entry.body as XeroVoidBody).InvoiceID);
-      const path = `/Invoices?IDs=${encodeURIComponent(ids.join(','))}&summaryOnly=true`;
-      const found = (await this.client.get(organizationId, tenantId, path, numberedSchema)).Invoices;
-      for (const entry of batch) {
-        const body = entry.body as XeroVoidBody;
-        const status = found.find((theirs) => theirs.InvoiceID === body.InvoiceID)?.Status ?? 'DELETED';
-        if (status === 'DRAFT' || status === 'SUBMITTED') body.Status = 'DELETED';
-        else if (status === 'VOIDED' || status === 'DELETED') {
-          await this.sent(organizationId, tenantId, entry.item, body.InvoiceID);
-          if (entry.item.invoice.number) sentNumbers.push(entry.item.invoice.number);
-          result.sent++;
-          done.add(entry.item.invoice.id);
-        }
-      }
-    }
-    return outgoing.filter((entry) => !done.has(entry.item.invoice.id));
   }
 
   /**
@@ -778,6 +757,7 @@ export class XeroSenderService {
       nextAttemptAt: null,
       problem: null,
       sentAt: now,
+      changedHereAt: null,
     };
     return this.prisma.xeroInvoiceSync.upsert({
       where: { invoiceId: item.invoice.id },
@@ -787,44 +767,24 @@ export class XeroSenderService {
   }
 
   /**
-   * Takes the payments off invoices about to be changed in Xero, which refuses
-   * to change one with payments on it. Each comes off with one call, and its
-   * row goes, so it is sent again once the invoice is. Returns the invoices
-   * that must wait: more payments than this run may still delete, or one
-   * Xero would not take off -- that invoice is kept as refused, with why.
+   * One in Xero already, looked at again (2026-11-12): nothing is sent. It is
+   * the office's there -- a refusal from before, when changes went, no longer
+   * stands -- and it is marked when what it says here is not what went, or
+   * unmarked once it says that again.
    */
-  private async clearPayments(
-    organizationId: string,
-    tenantId: string,
-    items: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }[],
-    budget: DeleteBudget,
-    result: XeroRunResult,
-  ) {
-    const waiting = new Set<string>();
-    const rows = await this.prisma.xeroPaymentSync.findMany({
-      where: { organizationId, xeroTenantId: tenantId, invoiceId: { in: items.map((item) => item.invoice.id) }, xeroPaymentId: { not: null } },
-      select: { id: true, invoiceId: true, xeroPaymentId: true },
+  private seen(invoice: Candidate, sync: SyncRow, fingerprint: string) {
+    const changed = sync.sentFingerprint !== fingerprint;
+    return this.prisma.xeroInvoiceSync.update({
+      where: { invoiceId: invoice.id },
+      data: {
+        status: 'SENT',
+        seenUpdatedAt: invoice.updatedAt,
+        attempts: 0,
+        nextAttemptAt: null,
+        problem: null,
+        changedHereAt: changed ? (sync.changedHereAt ?? new Date()) : null,
+      },
     });
-    for (const item of items) {
-      const mine = rows.filter((row) => row.invoiceId === item.invoice.id);
-      if (!mine.length) continue;
-      if (mine.length > budget.left) {
-        waiting.add(item.invoice.id);
-        continue;
-      }
-      for (const row of mine) {
-        budget.left--;
-        const gone = await this.deletePayment(organizationId, tenantId, row.xeroPaymentId!);
-        if (gone !== true) {
-          await this.failed(organizationId, tenantId, item, `Its payments could not be taken off in Xero to change it: ${gone}`, true);
-          result.failed++;
-          waiting.add(item.invoice.id);
-          break;
-        }
-        await this.prisma.xeroPaymentSync.delete({ where: { id: row.id } });
-      }
-    }
-    return waiting;
   }
 
   /** Deletes a payment in Xero: true once it is gone (or was already), else Xero's reason. */
@@ -1245,9 +1205,9 @@ export class XeroSenderService {
     const attempts = (item.sync?.attempts ?? 0) + 1;
     const data = {
       xeroTenantId: tenantId,
-      // What Xero has, if anything, stays known: another organisation's never does.
-      xeroInvoiceId: item.sync?.xeroInvoiceId ?? null,
-      sentFingerprint: item.sync?.sentFingerprint ?? null,
+      // Only one not in this organisation's Xero is ever refused (2026-11-12): one there is never sent again.
+      xeroInvoiceId: null,
+      sentFingerprint: null,
       status: 'FAILED',
       seenUpdatedAt: item.invoice.updatedAt,
       attempts,
