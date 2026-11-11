@@ -344,7 +344,7 @@ export class PropertyAccountService {
       invoicedCents,
       paidCents,
       truncated: invoices.length > MAX_ACCOUNT_ENTRIES,
-      keptInXero: kept.some((invoice) => keptInXero(invoice, read)),
+      keptInXero: kept.some((invoice) => keptInXero(invoice)),
       statementTo: defaultRecipients(null, latest?.clientEmails ?? []),
     };
   }

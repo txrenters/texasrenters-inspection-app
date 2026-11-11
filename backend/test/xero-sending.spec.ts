@@ -341,6 +341,10 @@ function harness(options: {
   /** The organisation's tracking categories and items, as last read (2026-11-11). */
   trackingCategories?: XeroTrackingCategory[];
   items?: XeroItem[];
+  /** The console makes the invoices (2026-11-12): Jobber's are sent no more. */
+  takenOver?: boolean;
+  /** Xero's invoices of a contact on a day, as a lookup for a console draft finds them (2026-11-12). */
+  drafts?: { InvoiceID: string; InvoiceNumber?: string; Url?: string; Status?: string }[];
 } = {}) {
   const writeOffRows: Record<string, unknown>[] = (options.writeOffRows ?? []).map((row) => ({ ...row }));
   const invoices = options.invoices ?? [invoice()];
@@ -393,7 +397,15 @@ function harness(options: {
           : null,
       ),
     },
+    // When the console began making the invoices (2026-11-12): not yet, unless the test says.
+    invoiceSettings: {
+      findUnique: jest.fn(async () => (options.takenOver ? { invoicingTakenOverAt: new Date('2026-12-01T15:00:00.000Z') } : null)),
+    },
     invoice: {
+      // A console draft takes Xero's number and id (2026-11-12).
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) =>
+        Object.assign(invoices.find((item) => item.id === where.id) ?? {}, data),
+      ),
       // The invoices to send; or, asked for bad debts, those (2026-11-10).
       findMany: jest.fn(async ({ where }: { where: { id?: { in: string[] }; status?: string } }) =>
         where.id ? invoices.filter((item) => where.id!.in.includes(item.id)) : where.status === 'BAD_DEBT' ? (options.badDebts ?? []) : [],
@@ -488,10 +500,22 @@ function harness(options: {
         const asked = decodeURIComponent(/IDs=([^&]*)/.exec(path)![1]!).split(',');
         return { Invoices: (options.inXero ?? []).filter((theirs) => asked.includes(theirs.InvoiceID)) };
       }
+      // A contact's invoices on a day (2026-11-12): what a console draft is looked for among.
+      if (path.startsWith('/Invoices?ContactIDs=')) return { Invoices: options.drafts ?? [] };
       return path.startsWith('/CreditNotes/') ? { CreditNotes: [{ CreditNoteID: path.split('/')[2], Allocations: [{ AllocationID: 'allocation-found' }] }] } : {};
     }),
-    // A credit note's allocation, made or taken off (2026-11-10).
-    put: jest.fn<Promise<unknown>, [string, string, string, unknown, unknown, string]>(async () => ({ Allocations: [{ AllocationID: 'allocation-1', StatusAttributeString: 'OK' }] })),
+    // A credit note's allocation, made or taken off (2026-11-10); or the console's drafts, made in Xero (2026-11-12).
+    put: jest.fn<Promise<unknown>, [string, string, string, unknown, unknown, string]>(async (_org, _tenant, path, body) =>
+      path.startsWith('/Invoices')
+        ? {
+            Invoices: (body as { Invoices: unknown[] }).Invoices.map((_draft, index) => ({
+              InvoiceID: `xero-draft-${index + 1}`,
+              InvoiceNumber: `INV-010${index + 1}`,
+              StatusAttributeString: 'OK',
+            })),
+          }
+        : { Allocations: [{ AllocationID: 'allocation-1', StatusAttributeString: 'OK' }] },
+    ),
     delete: jest.fn(async (): Promise<unknown> => ({ Allocations: [] })),
   };
   const auth = { requireReconnect: jest.fn() };
@@ -1269,5 +1293,72 @@ describe('a company whose books are read from Xero (2026-11-12)', () => {
     });
     expect((await reminders.sender.view(ORG, TENANT)).blockers).toEqual([]);
     expect((await reminders.sender.run(ORG, TENANT)).problem).toBeNull();
+  });
+});
+
+describe('the console’s own invoices, made once in Xero as drafts (2026-11-12)', () => {
+  const draft = (over: Partial<Fixture> & Record<string, unknown> = {}) =>
+    invoice({ id: 'console-1', origin: 'CONSOLE', number: null, status: 'DRAFT', jobberClientId: null, propertywareBuildingId: 'building-1', ...over } as Partial<Fixture>);
+  const LINKED = [{ clientKey: 'property:building-1', xeroContactId: 'contact-9' }];
+
+  it('makes each by PUT, as a draft Xero numbers, linked back to its page, written down before the call', async () => {
+    const { sender, client, prisma, syncs } = harness({ invoices: [draft()], links: LINKED });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, failed: 0, problem: null });
+    expect(calls(client, '/Invoices')).toHaveLength(0);
+    const [, , path, body] = client.put.mock.calls[0]!;
+    expect(path).toBe('/Invoices?summarizeErrors=false');
+    const made = (body as { Invoices: Record<string, unknown>[] }).Invoices[0]!;
+    expect(made).toMatchObject({ Contact: { ContactID: 'contact-9' }, Status: 'DRAFT', Url: 'http://localhost:5454/invoices/console-1', Date: '2026-12-02' });
+    expect(made).not.toHaveProperty('InvoiceNumber');
+    // PENDING before the call; then Xero's number and id, with the record of the send.
+    expect(prisma.xeroInvoiceSync.upsert.mock.calls[0]![0].create).toMatchObject({ status: 'PENDING', xeroInvoiceId: null, attempts: 1 });
+    expect(prisma.invoice.update).toHaveBeenCalledWith({ where: { id: 'console-1' }, data: { xeroInvoiceId: 'xero-draft-1', xeroStatus: 'DRAFT', number: 'INV-0101' } });
+    expect(syncs.get('console-1')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'xero-draft-1' });
+  });
+
+  it('looks for one tried before among its contact’s invoices that day, and links the one linked back to it: never made twice', async () => {
+    const pending = { invoiceId: 'console-1', xeroTenantId: TENANT, xeroInvoiceId: null, status: 'PENDING', attempts: 1, seenUpdatedAt: UPDATED };
+    const { sender, client, syncs } = harness({
+      invoices: [draft({ xeroSync: pending })],
+      links: LINKED,
+      drafts: [
+        { InvoiceID: 'xero-other', InvoiceNumber: 'INV-0098', Url: 'http://localhost:5454/invoices/console-2', Status: 'DRAFT' },
+        { InvoiceID: 'xero-made', InvoiceNumber: 'INV-0099', Url: 'http://localhost:5454/invoices/console-1', Status: 'DRAFT' },
+      ],
+    });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, linked: 1, problem: null });
+    expect(client.put).not.toHaveBeenCalled();
+    const [, , path] = client.get.mock.calls.find(([, , asked]) => (asked as string).startsWith('/Invoices?ContactIDs='))!;
+    expect(decodeURIComponent(path as string)).toContain('ContactIDs=contact-9&where=Date==DateTime(2026,12,2)');
+    expect(syncs.get('console-1')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'xero-made' });
+  });
+
+  it('makes one tried before that Xero has not got, and leaves one whose answer was lost PENDING, to look for next time', async () => {
+    const failed = { invoiceId: 'console-1', xeroTenantId: TENANT, xeroInvoiceId: null, status: 'FAILED', attempts: 1, seenUpdatedAt: null };
+    const again = harness({ invoices: [draft({ xeroSync: failed })], links: LINKED, drafts: [] });
+    expect(await again.sender.run(ORG, TENANT)).toMatchObject({ sent: 1 });
+    expect(again.syncs.get('console-1')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'xero-draft-1' });
+
+    const lost = harness({ invoices: [draft()], links: LINKED });
+    lost.client.put.mockRejectedValueOnce(new XeroError('Xero could not be reached. Try again in a moment.', 'XERO_UNREACHABLE', 502));
+    expect((await lost.sender.run(ORG, TENANT)).problem).toBe('Xero could not be reached. Try again in a moment.');
+    expect(lost.syncs.get('console-1')).toMatchObject({ status: 'PENDING', xeroInvoiceId: null });
+  });
+
+  it('goes under its property’s contact, made by name when Xero has none yet; Jobber’s under their clients, as before', async () => {
+    expect(clientKeyOf({ jobberClientId: null, clientName: '12 Example Lane', origin: 'CONSOLE', propertywareBuildingId: 'building-1' })).toBe('property:building-1');
+    expect(clientKeyOf({ jobberClientId: 'client-1', clientName: '12 Example Lane', origin: 'JOBBER', propertywareBuildingId: 'building-1' })).toBe('jobber:client-1');
+    expect(clientKeyOf({ jobberClientId: null, clientName: '12 Example Lane', origin: 'JOBBER', propertywareBuildingId: 'building-1' })).toMatch(/^name:/);
+    const { sender, client } = harness({ invoices: [draft()] });
+    await sender.run(ORG, TENANT);
+    expect(calls(client, '/Contacts')[0]![3]).toEqual({ Contacts: [{ Name: '12 Example Lane' }] });
+  });
+
+  it('sends Jobber’s invoices no more once the console makes them', async () => {
+    const { sender, prisma } = harness({ takenOver: true, candidates: [] });
+    await sender.run(ORG, TENANT);
+    const [strings, ...values] = prisma.$queryRaw.mock.calls.find(([asked]) => !(asked as TemplateStringsArray).join('?').includes('"InvoicePayment"'))!;
+    expect((strings as TemplateStringsArray).join('?')).toContain(`i."origin" = 'JOBBER' AND ? AND`);
+    expect(values).toContain(false);
   });
 });

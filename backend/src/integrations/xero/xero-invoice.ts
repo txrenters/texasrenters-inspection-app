@@ -46,6 +46,10 @@ export interface InvoiceForXero {
   visitDay: string | null;
   /** The technician who did that visit; null when none is known. */
   technicianName: string | null;
+  /** JOBBER or CONSOLE (2026-11-12): the console's own goes as a draft Xero numbers. */
+  origin?: string;
+  /** The property it bills: the console's own goes under that property's contact in Xero. */
+  propertywareBuildingId?: string | null;
 }
 
 export interface XeroLineItem {
@@ -66,7 +70,8 @@ export interface XeroLineItem {
 export interface XeroInvoiceBody {
   Type: 'ACCREC';
   Contact: { ContactID: string };
-  InvoiceNumber: string;
+  /** Left out for the console's own draft (2026-11-12): Xero numbers it. */
+  InvoiceNumber?: string;
   Reference: string;
   Date: string;
   DueDate: string;
@@ -74,13 +79,20 @@ export interface XeroInvoiceBody {
   /** Approved; or, for a company whose visits get projects (2026-11-11), a draft for the office to put on its project and approve. */
   Status: 'AUTHORISED' | 'DRAFT';
   LineItems: XeroLineItem[];
+  /** The console's own (2026-11-12): its page here, which also finds it in Xero again. */
+  Url?: string;
 }
 
 export type XeroInvoicePlan = { kind: 'send'; body: XeroInvoiceBody } | { kind: 'problem'; problem: string };
 
 /** The client is the property, as in Jobber: by Jobber's id, or -- for one Jobber did not name -- by its name. */
-export const clientKeyOf = (invoice: Pick<InvoiceForXero, 'jobberClientId' | 'clientName'>) =>
-  invoice.jobberClientId ? `jobber:${invoice.jobberClientId}` : `name:${productNameKey(invoice.clientName)}`;
+export const clientKeyOf = (invoice: Pick<InvoiceForXero, 'jobberClientId' | 'clientName' | 'origin' | 'propertywareBuildingId'>) =>
+  invoice.jobberClientId
+    ? `jobber:${invoice.jobberClientId}`
+    : // The console's own (2026-11-12): under its property's contact, as Xero's books have it.
+      invoice.origin === 'CONSOLE' && invoice.propertywareBuildingId
+      ? `property:${invoice.propertywareBuildingId}`
+      : `name:${productNameKey(invoice.clientName)}`;
 
 /** Xero's contact name: the client's, trimmed to what Xero holds. */
 export const contactNameOf = (invoice: Pick<InvoiceForXero, 'clientName'>) => invoice.clientName.trim().slice(0, 255) || 'Unnamed client';
@@ -138,11 +150,18 @@ export function xeroInvoiceFrom(
     contactId: string;
     /** Its company's visits get projects (2026-11-11): it goes as a draft. */
     asDraft?: boolean;
+    /**
+     * The console's own (2026-11-12): its page here. It goes as a complete
+     * draft, numbered by Xero, for the office to approve there -- a draft
+     * here is what it is meant to be.
+     */
+    consoleUrl?: string;
   },
 ): XeroInvoicePlan {
+  const consoleDraft = Boolean(context.consoleUrl);
   if (invoice.status === 'VOIDED') return { kind: 'problem', problem: 'It was voided before it reached Xero, so it is not sent.' };
-  if (invoice.status === 'DRAFT') return { kind: 'problem', problem: 'It is a draft.' };
-  if (!invoice.number) return { kind: 'problem', problem: 'It has no invoice number yet.' };
+  if (invoice.status === 'DRAFT' && !consoleDraft) return { kind: 'problem', problem: 'It is a draft.' };
+  if (!invoice.number && !consoleDraft) return { kind: 'problem', problem: 'It has no invoice number yet.' };
   if (!invoice.issuedOn) return { kind: 'problem', problem: 'It has no issue date.' };
   if (invoice.taxCents !== 0)
     return { kind: 'problem', problem: `It carries ${formatMoney(invoice.taxCents)} of sales tax, and the console sends Xero none. Enter it in Xero by hand.` };
@@ -219,14 +238,15 @@ export function xeroInvoiceFrom(
     body: {
       Type: 'ACCREC',
       Contact: { ContactID: context.contactId },
-      InvoiceNumber: invoice.number,
+      ...(invoice.number ? { InvoiceNumber: invoice.number } : {}),
       Reference: reference,
       Date: date,
       DueDate: monthEndOf(date),
       LineAmountTypes: 'Exclusive',
       // As a draft (2026-11-11): approving it is the office's, in Xero.
-      Status: context.asDraft ? 'DRAFT' : 'AUTHORISED',
+      Status: context.asDraft || consoleDraft ? 'DRAFT' : 'AUTHORISED',
       LineItems: items,
+      ...(context.consoleUrl ? { Url: context.consoleUrl } : {}),
     },
   };
 }

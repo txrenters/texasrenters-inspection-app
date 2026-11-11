@@ -287,6 +287,20 @@ describe('once the console owns invoicing', () => {
       expect(covered.invoice.updateMany.mock.calls[0][0].data).toEqual({ status: 'PAID', balanceCents: 0, paidOn: date('2026-11-03') });
     });
 
+    it('leaves a draft for a company that sends to Xero to go there as it is (2026-11-12): Xero numbers it', async () => {
+      const HOMES = 'b1000000-0000-4000-8000-000000000001';
+      const db = database(stored({ status: 'DRAFT', number: null, origin: 'CONSOLE', xeroTenantId: HOMES, xeroInvoiceId: null }));
+      db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+      await expect(service(db).edits.changeStatus(office, INVOICE, change('MARK_SENT'))).rejects.toMatchObject({ code: 'INVOICE_GOES_TO_XERO', status: 409 });
+      expect(db.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('changes nothing on its way to Xero (2026-11-12): it is changed there once it arrives', async () => {
+      const db = database(stored({ origin: 'CONSOLE', xeroInvoiceId: null, xeroSync: { xeroInvoiceId: null, status: 'PENDING' } }));
+      await expect(service(db).edits.changeStatus(office, INVOICE, change('VOID'))).rejects.toMatchObject({ code: 'INVOICE_GOING_TO_XERO', status: 409 });
+      expect(db.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
     it('marks a draft sent, and nothing else', async () => {
       const db = database(stored({ status: 'DRAFT' }));
       await service(db).edits.changeStatus(office, INVOICE, change('MARK_SENT'));

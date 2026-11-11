@@ -45,6 +45,9 @@ const OLDEST_CHANGE_FIRST = encodeURIComponent('UpdatedDateUTC ASC');
 const dateOf = (day: string | null) => (day ? new Date(`${day}T00:00:00.000Z`) : null);
 const sameDay = (date: Date | null, day: string | null) => (date ? date.toISOString().slice(0, 10) : null) === day;
 const nameKey = (value: string | null | undefined) => value?.trim().toLowerCase().replace(/\s+/g, ' ') ?? '';
+/** The console's own invoice a draft in Xero links back to (2026-11-12), from the link's last part: its id. */
+const consoleIdOf = (url: string | null | undefined) =>
+  /\/invoices\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i.exec(url?.trim() ?? '')?.[1]?.toLowerCase() ?? null;
 const updatedOf = (entry: unknown) =>
   entry && typeof entry === 'object' && typeof (entry as { UpdatedDateUTC?: unknown }).UpdatedDateUTC === 'string'
     ? ((entry as { UpdatedDateUTC: string }).UpdatedDateUTC)
@@ -318,7 +321,8 @@ export class XeroBooksService {
     }
     if (!page.length) return;
     const ids = page.map((theirs) => theirs.InvoiceID);
-    const [rows, sent, writeOffs] = await Promise.all([
+    const linkedBack = [...new Set(page.map((theirs) => consoleIdOf(theirs.Url)).filter((id): id is string => Boolean(id)))];
+    const [rows, sent, writeOffs, waiting] = await Promise.all([
       this.prisma.invoice.findMany({
         where: { organizationId, xeroTenantId: tenantId, xeroInvoiceId: { in: ids } },
         select: { id: true, origin: true, xeroInvoiceId: true, xeroUpdatedAt: true, inspectionId: true, propertywareBuildingId: true, jobberCopyId: true },
@@ -333,7 +337,15 @@ export class XeroBooksService {
         where: { organizationId, xeroTenantId: tenantId, status: 'SENT', invoice: { is: { xeroSync: { is: { xeroInvoiceId: { in: ids } } } } } },
         select: { invoice: { select: { xeroSync: { select: { xeroInvoiceId: true } } } } },
       }),
+      // The console's own drafts Xero has, by the link back to them (2026-11-12): one whose send lost its answer.
+      linkedBack.length
+        ? this.prisma.invoice.findMany({
+            where: { organizationId, xeroTenantId: tenantId, origin: InvoiceOrigin.CONSOLE, xeroInvoiceId: null, id: { in: linkedBack } },
+            select: { id: true },
+          })
+        : [],
     ]);
+    const waitingIds = new Set(waiting.map((row) => row.id));
     const byId = new Map(rows.map((row) => [row.xeroInvoiceId!, row]));
     const sentAs = new Map(sent.map((row) => [row.xeroInvoiceId!, row.invoice]));
     const writtenOff = new Set(writeOffs.map((row) => row.invoice.xeroSync?.xeroInvoiceId).filter((id): id is string => Boolean(id)));
@@ -343,7 +355,9 @@ export class XeroBooksService {
       const row = byId.get(theirs.InvoiceID);
       if (row) return row.origin === InvoiceOrigin.CONSOLE ? row.id : null;
       const ours = sentAs.get(theirs.InvoiceID);
-      return ours?.origin === InvoiceOrigin.CONSOLE && !ours.xeroInvoiceId ? ours.id : null;
+      if (ours?.origin === InvoiceOrigin.CONSOLE && !ours.xeroInvoiceId) return ours.id;
+      const linked = consoleIdOf(theirs.Url);
+      return linked && waitingIds.has(linked) ? linked : null;
     };
     // On no visit yet, or with no Jobber copy found yet: where it goes is asked again.
     const unplaced = page.filter((theirs) => {
@@ -521,6 +535,15 @@ export class XeroBooksService {
 
     await tx.invoiceLine.deleteMany({ where: { invoiceId } });
     if (mapped.lines.length) await tx.invoiceLine.createMany({ data: mapped.lines.map((line) => ({ organizationId, invoiceId, ...line })) });
+    // The console's own, found in Xero (2026-11-12): its send is done, whatever became of the answer.
+    if (target.console) {
+      const sent = { xeroTenantId: tenantId, xeroInvoiceId: mapped.xeroInvoiceId, status: 'SENT', nextAttemptAt: null, problem: null };
+      await tx.xeroInvoiceSync.upsert({
+        where: { invoiceId },
+        create: { organizationId, invoiceId, ...sent, sentAt: new Date() },
+        update: sent,
+      });
+    }
 
     const counts = { made: 0, updated: 0, removed: 0 };
     const listed = mapped.payments.map((paid) => paid.xeroPaymentId);

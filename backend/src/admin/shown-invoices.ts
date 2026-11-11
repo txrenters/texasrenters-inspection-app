@@ -79,11 +79,11 @@ export const shownPayments = (read: readonly string[]): Prisma.InvoicePaymentWhe
 
 /**
  * Kept in its company's books in Xero, and changed only there: one read from
- * Xero, or the console's own once Xero has it and its company's books are
- * read. Its edits, payments and emails are Xero's.
+ * Xero, or the console's own once Xero has it (2026-11-12) -- sent as a draft,
+ * or read back. Its edits, payments and emails are Xero's.
  */
-export function keptInXero(invoice: { origin: string; xeroTenantId: string | null; xeroInvoiceId: string | null }, read: readonly string[]): boolean {
-  return invoice.origin === InvoiceOrigin.XERO || Boolean(invoice.xeroInvoiceId && invoice.xeroTenantId && read.includes(invoice.xeroTenantId));
+export function keptInXero(invoice: { origin: string; xeroInvoiceId: string | null }): boolean {
+  return invoice.origin === InvoiceOrigin.XERO || Boolean(invoice.xeroInvoiceId);
 }
 
 /** Refused for an invoice kept in Xero, in the console's words. */

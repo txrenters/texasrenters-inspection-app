@@ -66,13 +66,13 @@ describe('what the invoice pages show', () => {
     expect(shown(shownInvoices([HOMES], { outsideXeroBooks: true }))).toEqual(['jobber-none', 'jobber-air', 'console-none']);
   });
 
-  it('keeps an invoice in Xero once it is read from there, or the console’s once its company is read', () => {
-    const row = (id: string) => ROWS.find((candidate) => candidate.id === id)! as Row & { xeroInvoiceId: string | null };
-    const kept = (id: string, read: string[]) => keptInXero({ ...row(id), xeroInvoiceId: row(id).xeroInvoiceId ?? null }, read);
-    expect(kept('xero-pest', [])).toBe(true);
-    expect(kept('console-homes', [HOMES])).toBe(true);
-    expect(kept('console-homes', [])).toBe(false);
-    expect(kept('jobber-homes', [HOMES])).toBe(false);
+  it('keeps an invoice in Xero once it is read from there, or the console’s own once Xero has it (2026-11-12)', () => {
+    const row = (id: string) => ROWS.find((candidate) => candidate.id === id)!;
+    const kept = (id: string) => keptInXero({ origin: row(id).origin, xeroInvoiceId: row(id).xeroInvoiceId ?? null });
+    expect(kept('xero-pest')).toBe(true);
+    expect(kept('console-homes')).toBe(true);
+    expect(kept('console-none')).toBe(false);
+    expect(kept('jobber-homes')).toBe(false);
     expect(KEPT_IN_XERO).toMatch(/Change it there/);
   });
 

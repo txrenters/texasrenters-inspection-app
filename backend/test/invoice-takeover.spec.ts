@@ -60,9 +60,16 @@ const connection = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function setup({ settings = null as Record<string, unknown> | null, files = [10, 10, 0] as number[], conn = connection() as unknown } = {}) {
+function setup({
+  settings = null as Record<string, unknown> | null,
+  files = [10, 10, 0] as number[],
+  conn = connection() as unknown,
+  // The companies that send to Xero, and whether their books are read back (2026-11-12).
+  sending = [] as { booksReadAt: Date | null; xeroOrganisation: { name: string } }[],
+} = {}) {
   const [total, kept, failed] = files;
   const db = {
+    xeroSettings: { findMany: jest.fn().mockResolvedValue(sending) },
     invoiceSettings: {
       findUnique: jest.fn().mockResolvedValue(settings),
       create: jest.fn().mockResolvedValue({}),
@@ -96,6 +103,7 @@ describe('what the cutover waits on', () => {
       ['FILES_COPIED', true],
       ['FILES_FAILED', true],
       ['COMPANY_DETAILS', false],
+      ['XERO_BOOKS_READ', true],
     ]);
 
     const waiting = await setup({ files: [10, 6, 1], conn: connection({ paymentReadCompletedAt: null }) }).service.view(admin);
@@ -109,6 +117,30 @@ describe('what the cutover waits on', () => {
     const view = await setup({ files: [10, 8, 2] }).service.view(admin);
     expect(view.ready).toBe(true);
     expect(view.checks.find((check) => check.key === 'FILES_FAILED')).toMatchObject({ ok: false, blocking: false });
+  });
+});
+
+describe('the switch without Jobber (2026-11-12)', () => {
+  it('waits for each company that sends to Xero to have its books read back first', async () => {
+    const view = await setup({
+      sending: [
+        { booksReadAt: new Date('2026-11-12T22:05:00Z'), xeroOrganisation: { name: 'Example Home Services' } },
+        { booksReadAt: null, xeroOrganisation: { name: 'Example Pest Co' } },
+      ],
+    }).service.view(admin);
+    expect(view.ready).toBe(false);
+    expect(view.checks.find((check) => check.key === 'XERO_BOOKS_READ')).toMatchObject({ ok: false, blocking: true, detail: expect.stringContaining('Example Pest Co') });
+  });
+
+  it('is not held back by Jobber once it is disconnected, and reads nothing more from it', async () => {
+    const { db, worker, service } = setup({ conn: connection({ status: JobberConnectionStatus.DISCONNECTED, paymentReadCompletedAt: null }), files: [10, 4, 0] });
+    const view = await service.view(admin);
+    expect(view).toMatchObject({ ready: true, jobberConnected: false });
+    for (const key of ['JOBBER_ANSWERS', 'INVOICES_READ', 'PAYMENTS_READ', 'FILES_COPIED'])
+      expect(view.checks.find((check) => check.key === key)).toMatchObject({ blocking: false });
+    await service.takeOver(admin, {});
+    expect(worker.run).not.toHaveBeenCalled();
+    expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ action: 'INVOICING_TAKEN_OVER', metadata: { lastRead: null } });
   });
 });
 

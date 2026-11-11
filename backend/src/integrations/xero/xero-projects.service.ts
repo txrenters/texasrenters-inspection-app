@@ -35,6 +35,9 @@ const VISIT_FIELDS = {
   id: true,
   clientName: true,
   jobberClientId: true,
+  // The console's own goes under its property's contact (2026-11-12): its project too.
+  origin: true,
+  propertywareBuildingId: true,
   lines: { orderBy: { position: 'asc' }, take: 1, select: { name: true } },
   inspection: {
     select: {
@@ -131,7 +134,8 @@ export class XeroProjectsService {
         // The console's sends only: an invoice read from Xero (2026-11-12) is the office's there, project and all.
         origin: { not: InvoiceOrigin.XERO },
         issuedOn: { gte: new Date(`${sendFrom}T00:00:00.000Z`) },
-        status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
+        // Once its invoice is in Xero, whatever its state there (2026-11-12): the console's own go as drafts.
+        status: { not: InvoiceStatus.VOIDED },
         xeroSync: { is: { xeroTenantId: tenantId, status: 'SENT' } },
         // A visit with its project, or one refused and not due again yet, is left alone.
         inspection: { is: { xeroProjectLinks: { none: { xeroTenantId: tenantId, OR: [{ status: 'DONE' }, { nextAttemptAt: { gt: now } }] } } } },

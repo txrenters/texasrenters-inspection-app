@@ -28,7 +28,15 @@ import { billingBasis, type BillingBasis } from './invoice-billing-rules';
 import { insertConsoleInvoice } from './invoice-insert';
 import { lockInvoiceNumbers } from './invoice-numbers';
 import { InvoicesService, servicesDone } from './invoices.service';
-import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
+import {
+  invoiceWritesOff,
+  invoiceWritesOn,
+  invoicingTakenOverAt,
+  officeOrganisations,
+  organisationName,
+  productCompanies,
+  xeroSendingCompanies,
+} from './invoice-settings';
 
 /**
  * Making many invoices at once (2026-11-06, phase 4 of taking invoicing over
@@ -79,12 +87,15 @@ export function batchParts(
   lineItems: readonly InvoiceLineInput[],
   companies: readonly ProductCompany[],
   nameOf: (tenantId: string) => string,
+  /** The companies that send to Xero (2026-11-12): their invoices are drafts there. */
+  toXero: ReadonlySet<string> = new Set(),
 ): UninvoicedPart[] {
   return splitByCompany(lineItems, companies).map((part) => ({
     xeroTenantId: part.xeroTenantId,
     company: part.xeroTenantId ? nameOf(part.xeroTenantId) : null,
     lineItems: part.lineItems,
     totalCents: invoiceTotals(part.lineItems).totalCents,
+    toXero: part.xeroTenantId !== null && toXero.has(part.xeroTenantId),
   }));
 }
 
@@ -104,14 +115,19 @@ export class InvoiceBatchService {
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Give the first and the last day, the first one first.');
     if ((dateOf(query.to).getTime() - dateOf(query.from).getTime()) / DAY_MS > MAX_UNINVOICED_RANGE_DAYS)
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', `Look at ${MAX_UNINVOICED_RANGE_DAYS} days at most at a time.`);
-    const [{ termsDays }, basis, rows, companies, organisations] = await Promise.all([
+    // From the day the console began making the invoices (2026-11-12): a visit before it was billed in Jobber, or by
+    // hand in Xero -- pest control never went through Jobber -- and is not billed again here.
+    const switchedAt = await invoicingTakenOverAt(this.prisma, user.organizationId);
+    const startsOn = switchedAt ? businessDate(switchedAt) : null;
+    const from = startsOn && startsOn > query.from ? startsOn : query.from;
+    const [{ termsDays }, basis, rows, companies, organisations, toXero] = await Promise.all([
       this.invoices.officeDefaults(user),
       billingBasis(this.prisma, user.organizationId),
       this.prisma.inspection.findMany({
         where: {
           organizationId: user.organizationId,
           status: { in: [...FINISHED_INSPECTION_STATUSES] as InspectionStatus[] },
-          scheduledAt: { gte: dateOf(query.from), lt: new Date(dateOf(query.to).getTime() + DAY_MS) },
+          scheduledAt: { gte: dateOf(from), lt: new Date(dateOf(query.to).getTime() + DAY_MS) },
           propertywareBuildingId: { not: null },
           ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
           // Every invoice counts here, whatever its origin -- one read back from Xero too (2026-11-12) -- so nothing is billed twice.
@@ -123,6 +139,7 @@ export class InvoiceBatchService {
       }),
       productCompanies(this.prisma, user.organizationId),
       officeOrganisations(this.prisma, user.organizationId),
+      xeroSendingCompanies(this.prisma, user.organizationId),
     ]);
     const nameOf = organisationName(organisations);
     return {
@@ -137,11 +154,12 @@ export class InvoiceBatchService {
           property: { id: building.id, address: building.addressLine1 ?? building.name, city: building.city },
           clientName: building.addressLine1 ?? building.name,
           ...lines,
-          invoices: batchParts(lines.lineItems, companies, nameOf),
+          invoices: batchParts(lines.lineItems, companies, nameOf, toXero),
         };
       }),
       truncated: rows.length > LIST_LIMIT,
       paymentTermsDays: termsDays,
+      startsOn,
     };
   }
 
@@ -165,11 +183,13 @@ export class InvoiceBatchService {
     if (!PAYMENT_TERMS.some((terms) => terms.days === input.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Pick the payment terms from the list.');
 
-    const [defaults, basis, companies, organisations] = await Promise.all([
+    const [defaults, basis, companies, organisations, toXero] = await Promise.all([
       this.invoices.officeDefaults(user),
       billingBasis(this.prisma, user.organizationId),
       productCompanies(this.prisma, user.organizationId),
       officeOrganisations(this.prisma, user.organizationId),
+      // A company that sends to Xero gets a draft there (2026-11-12): Xero numbers it, and the office approves it.
+      xeroSendingCompanies(this.prisma, user.organizationId),
     ]);
     const nameOf = organisationName(organisations);
     const result: BatchInvoiceResult = { created: [], skipped: [] };
@@ -212,7 +232,7 @@ export class InvoiceBatchService {
       }
       const building = visit.propertywareBuilding;
       // One invoice per company: each company's services, and those of none on one of their own.
-      const parts = batchParts(lines.lineItems, companies, nameOf);
+      const parts = batchParts(lines.lineItems, companies, nameOf, toXero);
       try {
         const created = await this.prisma.$transaction(
           async (tx) => {
@@ -238,7 +258,7 @@ export class InvoiceBatchService {
                 clientMessage: defaults.clientMessage,
                 contractDisclaimer: defaults.contractDisclaimer,
                 clientRequestId: keys[index]!,
-                asDraft: input.asDraft === true,
+                asDraft: input.asDraft === true || (part.xeroTenantId !== null && toXero.has(part.xeroTenantId)),
                 batchKey: input.clientRequestId,
                 xeroTenantId: part.xeroTenantId,
               });

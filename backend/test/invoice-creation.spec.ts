@@ -292,6 +292,8 @@ describe('a batch', () => {
       truncated: false,
       // The office's terms for the batch: its settings, else the latest invoice's, else Net 30.
       paymentTermsDays: 30,
+      // Before the switch, every day asked for (2026-11-12).
+      startsOn: null,
     });
   });
 

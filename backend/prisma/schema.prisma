@@ -5009,7 +5009,7 @@ model XeroInvoiceSync {
   invoiceId       String    @unique @db.Uuid
   xeroTenantId    String
   xeroInvoiceId   String?
-  /// SENT or FAILED (checked).
+  /// SENT, FAILED, or PENDING (2026-11-12): a console draft written down before the call to Xero (checked).
   status          String
   sentFingerprint String?
   /// The invoice's updatedAt when last looked at: it is looked at again only once that moves.
