@@ -11,8 +11,11 @@ import { MediaProcessingService } from '../src/technician/media-processing.servi
 import { RecordingSummaryService } from '../src/technician/recording-summary.service';
 import { CacheInvalidationService } from '../src/cache/cache-invalidation.service';
 import { CacheModule } from '../src/cache/cache.module';
+import { RedisCacheConnection } from '../src/cache/redis-cache.connection';
 import { PrismaService } from '../src/common/prisma.service';
 import { DatabaseModule } from '../src/database/database.module';
+import { GatewayModule } from '../src/gateway/gateway.module';
+import { ApiRateLimitGuard } from '../src/gateway/rate-limit.guard';
 import { JobberModule } from '../src/integrations/jobber/jobber.module';
 import { InspectionVideoService } from '../src/media/inspection-video.service';
 import { MediaModule } from '../src/media/media.module';
@@ -24,26 +27,6 @@ import { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService } from '../src/planning/tbp-stop-edit.service';
 import { TechnicianEventsGateway } from '../src/realtime/technician-events.gateway';
 import { JobberSyncWorker } from '../src/workers/jobber-sync/jobber-sync.worker';
-import { RedisCacheConnection } from '../src/cache/redis-cache.connection';
-import { GatewayModule } from '../src/gateway/gateway.module';
-import { ApiRateLimitGuard } from '../src/gateway/rate-limit.guard';
-
-/**
- * The API-key rate limit (found 2026-11-12). The guard takes Redis as an
- * optional dependency, and CacheModule did not export it, so every replica
- * counted on its own and a deployment of N containers allowed N times each
- * client's limit -- with nothing failing to say so.
- */
-describe('the API gateway', () => {
-  it('counts each client’s requests in Redis, shared by every replica', async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [CacheModule, GatewayModule] })
-      .overrideProvider(PrismaService)
-      .useValue({})
-      .compile();
-    const guard = moduleRef.get(ApiRateLimitGuard) as unknown as { redis?: unknown };
-    expect(guard.redis).toBeInstanceOf(RedisCacheConnection);
-  });
-});
 
 /**
  * The wiring, which no other test here touches.
@@ -183,5 +166,22 @@ describe('the narration pre-fill', () => {
     expect(comparisons.aiSettings).toBeInstanceOf(AiProviderSettingsService);
     const pipelineComparison = (pipeline as unknown as { comparison?: { aiSettings?: unknown } }).comparison;
     expect(pipelineComparison?.aiSettings).toBeInstanceOf(AiProviderSettingsService);
+  });
+});
+
+/**
+ * The API-key rate limit (found 2026-11-12). The guard takes Redis as an
+ * optional dependency, and CacheModule did not export it, so every replica
+ * counted on its own and a deployment of N containers allowed N times each
+ * client's limit -- with nothing failing to say so.
+ */
+describe('the API gateway', () => {
+  it('counts each client’s requests in Redis, shared by every replica', async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [CacheModule, GatewayModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+    const guard = moduleRef.get(ApiRateLimitGuard) as unknown as { redis?: unknown };
+    expect(guard.redis).toBeInstanceOf(RedisCacheConnection);
   });
 });
