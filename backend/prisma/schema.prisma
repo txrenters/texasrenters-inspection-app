@@ -620,6 +620,12 @@ model UserProfile {
   /// Null until somebody types one in.
   phone                String?
   isActive             Boolean                  @default(true)
+  /// The TR Staff Portal's `sub` for this person: its stable id for them, a
+  /// UUID. Written once, the first time they sign in through the portal with a
+  /// verified company address matching this account; every later portal
+  /// sign-in finds them by it. Null for anyone who has never used the portal.
+  /// Unique, so one portal identity can never open two accounts here.
+  portalSubject        String?                  @unique
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
   memberships          OrganizationMember[]

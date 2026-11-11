@@ -24,6 +24,9 @@ import { ApplicationError } from '../common/errors';
 const DEFAULT_ACCESS_TTL_SECONDS = 3600;
 const DEFAULT_REFRESH_TTL_DAYS = 30;
 
+/** `p.<portal session id>.<token>`; see `createRefreshToken`. */
+const PORTAL_REFRESH_TOKEN = /^p\.([A-Za-z0-9_-]{22})\.[A-Za-z0-9_-]{43}$/;
+
 export interface AccessToken {
   token: string;
   /** Seconds until expiry, which is what OAuth-shaped clients expect. */
@@ -80,9 +83,21 @@ export class TokenService {
    * mobile from `/auth/me`. Sourcing it here makes the column authoritative
    * while keeping the claim the guards already read.
    */
-  issueAccessToken(input: { authUserId: string; mustChangePassword: boolean }): AccessToken {
+  issueAccessToken(input: {
+    authUserId: string;
+    mustChangePassword: boolean;
+    /**
+     * Set for a session that came from the TR Staff Portal, as the `psid`
+     * claim. The guards check that portal session is still live on every
+     * request, so a portal sign-out ends this token at once rather than when it
+     * expires.
+     */
+    portalSessionId?: string;
+    /** Overrides AUTH_ACCESS_TOKEN_TTL_SECONDS: a portal session lives only until its next check. */
+    ttlSeconds?: number;
+  }): AccessToken {
     const issuedAt = Math.floor(Date.now() / 1000);
-    const expiresIn = this.accessTtlSeconds();
+    const expiresIn = input.ttlSeconds ?? this.accessTtlSeconds();
     const exp = issuedAt + expiresIn;
 
     const header = this.encode({ alg: 'HS256', typ: 'JWT' });
@@ -93,6 +108,7 @@ export class TokenService {
       iat: issuedAt,
       exp,
       app_metadata: { must_change_password: input.mustChangePassword },
+      ...(input.portalSessionId ? { psid: input.portalSessionId } : {}),
     });
     const signature = createHmac('sha256', this.secret())
       .update(`${header}.${payload}`)
@@ -108,13 +124,29 @@ export class TokenService {
    * only ever looked up, so signing it would add structure an attacker could
    * read for nothing in return.
    */
-  createRefreshToken(): RefreshTokenMaterial {
-    const token = randomBytes(32).toString('base64url');
+  createRefreshToken(options: { portalSessionId?: string; ttlMs?: number } = {}): RefreshTokenMaterial {
+    const random = randomBytes(32).toString('base64url');
+    // A portal session's token names its portal session in the clear, so every
+    // renewal knows to check the portal without asking anything that could be
+    // lost. Base64url has no `.`, so the prefix can never be mistaken for part
+    // of an ordinary token, and the whole string is what is hashed: changing
+    // the prefix makes a token that matches nothing.
+    const token = options.portalSessionId ? `p.${options.portalSessionId}.${random}` : random;
     return {
       token,
       tokenHash: this.hashRefreshToken(token),
-      expiresAt: new Date(Date.now() + this.refreshTtlMs()),
+      expiresAt: new Date(Date.now() + (options.ttlMs ?? this.refreshTtlMs())),
     };
+  }
+
+  /** A new portal session id: 128 bits, base64url. */
+  newPortalSessionId() {
+    return randomBytes(16).toString('base64url');
+  }
+
+  /** The portal session a refresh token belongs to, or null for an ordinary session. */
+  portalSessionIdOf(refreshToken: string) {
+    return PORTAL_REFRESH_TOKEN.exec(refreshToken)?.[1] ?? null;
   }
 
   /**

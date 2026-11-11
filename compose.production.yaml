@@ -31,6 +31,13 @@ services:
     # Cache only — every value is derived and re-computable, so persistence
     # would buy nothing and a stale dump restored after a deploy is worse than
     # a cold cache.
+    #
+    # One exception that is still safe to lose: TR Staff Portal sessions
+    # (`<prefix>:portal:*`). A restart ends them, and each person is sent back
+    # through the portal at their next renewal — usually one click. A sign-out
+    # is recorded in Postgres, so losing this can end a session early but
+    # never keep one alive. A restored dump would be worse: it could bring back
+    # a portal token the portal has since rotated.
     command: ['redis-server', '--save', '', '--appendonly', 'no']
 
   backend:

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { REFRESH_COOKIE } from '@/lib/session';
+import { PORTAL_COOKIE, REFRESH_COOKIE } from '@/lib/session';
 import { apiBaseUrl, applySession, clearSession } from '@/lib/session-cookies';
 
 /**
@@ -62,25 +62,40 @@ export async function POST(request: NextRequest) {
   // from the access cookie; the refresh token stays out of script entirely.
   const response = NextResponse.json({ mustChangePassword: session.mustChangePassword });
   // Only a literal `true` remembers: anything else keeps the default, a
-  // session that ends with the browser.
-  applySession(response, session, { remember: credentials.remember === true });
+  // session that ends with the browser. A password sign-in replaces an earlier
+  // portal one, so its marker goes too -- and is left alone when there is none.
+  applySession(response, session, {
+    remember: credentials.remember === true,
+    portal: request.cookies.has(PORTAL_COOKIE) ? false : undefined,
+  });
   return response;
 }
 
 export async function DELETE(request: NextRequest) {
   const refreshToken = request.cookies.get(REFRESH_COOKIE)?.value;
-  const response = new NextResponse(null, { status: 204 });
-  // Cookies are cleared whatever the API says. A backend that is unreachable
-  // must not leave someone stuck signed in on a shared machine.
-  clearSession(response);
 
+  // A session from the TR Staff Portal is told where to go next — the
+  // portal's dashboard — and passes it on to the page. Every other sign-out is
+  // the 204 it always was.
+  let signedOutUrl: string | undefined;
   if (refreshToken) {
-    await fetch(`${apiBaseUrl()}/api/v1/auth/logout`, {
+    const upstream = await fetch(`${apiBaseUrl()}/api/v1/auth/logout`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
       body: JSON.stringify({ refreshToken }),
     }).catch(() => undefined);
+    if (upstream?.status === 200) {
+      const body = (await upstream.json().catch(() => null)) as { signedOutUrl?: unknown } | null;
+      if (typeof body?.signedOutUrl === 'string' && body.signedOutUrl.startsWith('https://'))
+        signedOutUrl = body.signedOutUrl;
+    }
   }
 
+  const response = signedOutUrl
+    ? NextResponse.json({ signedOutUrl }, { headers: { 'cache-control': 'no-store' } })
+    : new NextResponse(null, { status: 204 });
+  // Cookies are cleared whatever the API says. A backend that is unreachable
+  // must not leave someone stuck signed in on a shared machine.
+  clearSession(response);
   return response;
 }

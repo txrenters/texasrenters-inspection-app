@@ -3,19 +3,20 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { AuthLayout } from '@/components/auth-layout';
 import { PasswordInput } from '@/components/password-input';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/lib/auth';
+import { PORTAL_REFUSAL_MESSAGES, portalRefusalOf, portalSignInPath } from '@/lib/portal';
 import { signIn } from '@/lib/session';
 
 const schema = z.object({
@@ -34,6 +35,35 @@ export default function LoginPage() {
     resolver: zodResolver(schema),
     defaultValues: { email: '', password: '', remember: false },
   });
+  // "Sign in with TR Staff Portal", shown only once the API says it is on: a
+  // console with the portal switched off looks exactly as it did before.
+  const [portalEnabled, setPortalEnabled] = useState(false);
+  const [portalHref, setPortalHref] = useState(portalSignInPath());
+
+  useEffect(() => {
+    // Read here rather than with useSearchParams, which would make this
+    // statically rendered page wait on a Suspense boundary.
+    const params = new URLSearchParams(window.location.search);
+    setPortalHref(portalSignInPath(params.get('next')));
+    // A refusal from the portal's callback. Only a known code picks one of the
+    // fixed sentences; anything else in the URL is ignored.
+    const refusal = portalRefusalOf(params.get('portal_error'));
+    if (refusal) {
+      setErrorTitle('Could not sign you in with TR Staff Portal');
+      setError(PORTAL_REFUSAL_MESSAGES[refusal]);
+    }
+
+    let cancelled = false;
+    void fetch('/api/session/portal')
+      .then((response) => (response.ok ? (response.json() as Promise<{ enabled?: unknown }>) : null))
+      .then((body) => {
+        if (!cancelled && body?.enabled === true) setPortalEnabled(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const submit = form.handleSubmit(async (values) => {
     setError(undefined);
@@ -66,6 +96,20 @@ export default function LoginPage() {
       description="Sign in to manage properties, inspections, assignments and integrations."
       footer="Administrator accounts are provisioned by TexasRenters. Public registration is disabled."
     >
+      {portalEnabled ? (
+        <div className="mb-4 grid gap-4">
+          {/* A plain link: the route handler behind it sends the browser to the portal. */}
+          <a className={buttonVariants({ className: 'w-full' })} href={portalHref}>
+            Sign in with TR Staff Portal
+          </a>
+          <div className="text-muted-foreground flex items-center gap-3 text-xs">
+            <span className="bg-border h-px flex-1" />
+            or sign in with your password
+            <span className="bg-border h-px flex-1" />
+          </div>
+        </div>
+      ) : null}
+
       <form className="grid gap-4" noValidate onSubmit={submit}>
         <Field>
           <FieldLabel htmlFor="email">Email address</FieldLabel>
@@ -134,7 +178,13 @@ export default function LoginPage() {
           </Alert>
         ) : null}
 
-        <Button className="w-full" disabled={form.formState.isSubmitting} type="submit">
+        <Button
+          className="w-full"
+          disabled={form.formState.isSubmitting}
+          type="submit"
+          // The portal is the main way in once it is on; the password is the second.
+          variant={portalEnabled ? 'outline' : 'default'}
+        >
           {form.formState.isSubmitting ? (
             <>
               <Spinner />

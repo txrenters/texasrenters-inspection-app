@@ -1,6 +1,6 @@
-import type { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
-import { ACCESS_COOKIE, REFRESH_COOKIE, REMEMBER_COOKIE } from './session';
+import { ACCESS_COOKIE, PORTAL_COOKIE, REFRESH_COOKIE, REMEMBER_COOKIE } from './session';
 
 /**
  * How long a remembered sign-in lasts without being used: the refresh token's
@@ -49,10 +49,28 @@ export function applySession(
    * Every other attribute is unchanged -- still httpOnly, `Secure`, and sent
    * to the session handlers alone. Off, both are as they always were.
    */
-  options: { remember?: boolean } = {},
+  options: {
+    remember?: boolean;
+    /**
+     * A TR Staff Portal session: true sets `PORTAL_COOKIE`, false clears it,
+     * and leaving it out leaves whatever is there — so a password sign-in that
+     * never involved the portal sends exactly the cookies it always did.
+     */
+    portal?: boolean;
+  } = {},
 ) {
   const secure = true;
   const remember = options.remember === true;
+
+  if (options.portal !== undefined)
+    response.cookies.set(PORTAL_COOKIE, options.portal ? '1' : '', {
+      httpOnly: false,
+      sameSite: 'lax',
+      secure,
+      path: '/',
+      // A browser-session cookie, like the portal session's refresh cookie.
+      maxAge: options.portal ? undefined : 0,
+    });
 
   // Readable by script: lib/api.ts puts it in an Authorization header on every
   // request. Short-lived, so an exfiltrated one buys only its remaining life.
@@ -94,6 +112,23 @@ export function clearSession(response: NextResponse) {
   response.cookies.set(ACCESS_COOKIE, '', { path: '/', maxAge: 0 });
   response.cookies.set(REFRESH_COOKIE, '', { path: '/api/session', maxAge: 0 });
   response.cookies.set(REMEMBER_COOKIE, '', { path: '/', maxAge: 0 });
+  response.cookies.set(PORTAL_COOKIE, '', { path: '/', maxAge: 0 });
+}
+
+/**
+ * A redirect within this site, by path.
+ *
+ * Relative on purpose. Behind the proxy, the URL a route handler sees is the
+ * container's own (`http://0.0.0.0:5454`), so an absolute redirect built from
+ * it would send the browser somewhere it cannot reach, over plain HTTP. The
+ * browser resolves a relative `Location` against the page it is on, which is
+ * always the public https:// address.
+ */
+export function redirectTo(path: string) {
+  return new NextResponse(null, {
+    status: 303,
+    headers: { location: path, 'cache-control': 'no-store' },
+  });
 }
 
 /**

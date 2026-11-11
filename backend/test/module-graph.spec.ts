@@ -24,6 +24,25 @@ import { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService } from '../src/planning/tbp-stop-edit.service';
 import { TechnicianEventsGateway } from '../src/realtime/technician-events.gateway';
 import { JobberSyncWorker } from '../src/workers/jobber-sync/jobber-sync.worker';
+import { AuthModule } from '../src/auth/auth.module';
+import { PortalSessionService } from '../src/auth/portal/portal-session.service';
+import { SessionService } from '../src/auth/session.service';
+
+/**
+ * Sign in with TR Staff Portal (2026-11-12). SessionService takes the portal
+ * as an optional dependency, so a module that failed to provide it would boot
+ * and quietly refuse every portal session's renewal.
+ */
+describe('the auth module', () => {
+  it('gives the session service its portal sessions', async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AuthModule] })
+      .overrideProvider(PrismaService)
+      .useValue({})
+      .compile();
+    const sessions = moduleRef.get(SessionService) as unknown as { portal?: unknown };
+    expect(sessions.portal).toBeInstanceOf(PortalSessionService);
+  });
+});
 
 /**
  * The wiring, which no other test here touches.

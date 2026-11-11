@@ -74,12 +74,41 @@ export interface RequiredPasswordRequest extends Request {
   };
 }
 
+/**
+ * Whether a TR Staff Portal session is still live, set by `PortalSessionService`.
+ *
+ * A function registered from the auth module rather than an injected
+ * dependency, because this check runs inside `authenticateApplicationUser`, a
+ * plain function the guard and both websocket gateways call. Threading a new
+ * argument through every caller would be the same check with more ways to
+ * forget it.
+ */
+export type PortalSessionCheck = (portalSessionId: string, authUserId: string) => Promise<boolean>;
+let portalSessionCheck: PortalSessionCheck | undefined;
+
+export function setPortalSessionCheck(check: PortalSessionCheck | undefined) {
+  portalSessionCheck = check;
+}
+
 export async function authenticateApplicationUser(
   prisma: PrismaService,
   token: string,
   requestedOrganization?: string,
 ): Promise<AuthenticatedUser> {
   const claims = await verifyAccessToken(token);
+  // Only tokens minted for a portal sign-in carry `psid`. Ending that portal
+  // session — a back-channel logout, the portal refusing a refresh, signing
+  // out here — ends the token on its next request. Fails closed: with no check
+  // registered, nothing can say the session is live.
+  if (claims.psid !== undefined) {
+    const live = portalSessionCheck ? await portalSessionCheck(claims.psid, claims.sub) : false;
+    if (!live)
+      throw new ApplicationError(
+        401,
+        'PORTAL_SESSION_ENDED',
+        'Your TR Staff Portal sign-in has ended. Sign in again.',
+      );
+  }
   // The one query that cannot be tenant-scoped, because it is what *produces*
   // the tenant. `UserProfile` is unpoliced, but the nested `memberships` and
   // `roleAssignments` are not — and with policies that fail closed, reading
@@ -164,6 +193,8 @@ interface AccessTokenClaims {
   exp: number;
   nbf?: number;
   app_metadata?: Record<string, unknown>;
+  /** The TR Staff Portal session this token belongs to. Absent for a password sign-in. */
+  psid?: string;
 }
 
 function bearerToken(header?: string) {

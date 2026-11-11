@@ -949,7 +949,9 @@ describe('sign-out', () => {
     };
     const service = new SessionService(prisma as never, new TokenService());
 
-    await expect(service.signOut('some-token')).resolves.toBeUndefined();
+    // Nothing to say for a password session, known or not: only a TR Staff
+    // Portal session is told where to go next (portal-sign-in.spec.ts).
+    await expect(service.signOut('some-token')).resolves.toEqual({});
     expect(prisma.authRefreshToken.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { revokedAt: expect.any(Date) } }),
     );
