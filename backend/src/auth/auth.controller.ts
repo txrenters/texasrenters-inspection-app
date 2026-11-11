@@ -1,8 +1,8 @@
 /* DTO classes and guards are runtime imports required by Nest metadata. */
 /* eslint-disable @typescript-eslint/consistent-type-imports */
-import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import {
   ApiAuthGuard,
@@ -17,24 +17,9 @@ import {
   ResetPasswordDto,
   SignInDto,
 } from './auth.dto';
+import { clientContext } from './client-context';
 import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
-
-/**
- * Recorded against each session so a stolen-token investigation has something
- * to work with. Deliberately not used for validation: pinning a session to an
- * address would sign out every technician moving between cellular and site
- * Wi-Fi, which is most of them, most of the day.
- */
-function clientContext(request: Request) {
-  const forwarded = request.header('x-forwarded-for');
-  return {
-    userAgent: request.header('user-agent')?.slice(0, 512),
-    // Behind nginx and the tunnel, the socket address is the proxy. The first
-    // entry is the original client.
-    ipAddress: (forwarded?.split(',')[0]?.trim() || request.ip)?.slice(0, 64),
-  };
-}
 
 @ApiTags('Authentication')
 @ApiBearerAuth()
@@ -110,11 +95,18 @@ export class AuthController {
    * anonymous caller that a token was real. Takes the refresh token rather than
    * the access token because the refresh token is the thing with a lifetime
    * worth ending — an access token expires on its own within the hour.
+   *
+   * A session that came from the TR Staff Portal answers 200 with where to go
+   * next, the portal's dashboard; every other one still answers 204 and
+   * nothing more, which is all the phone has ever expected.
    */
   @Post('logout')
   @HttpCode(204)
-  async signOut(@Body() body: RefreshTokenDto) {
-    await this.sessions.signOut(body.refreshToken);
+  async signOut(@Body() body: RefreshTokenDto, @Res({ passthrough: true }) response: Response) {
+    const { signedOutUrl } = await this.sessions.signOut(body.refreshToken);
+    if (!signedOutUrl) return;
+    response.status(200);
+    return { signedOutUrl };
   }
 
   /**

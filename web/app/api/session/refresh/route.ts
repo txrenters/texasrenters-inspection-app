@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { REFRESH_COOKIE, REMEMBER_COOKIE } from '@/lib/session';
+import { PORTAL_COOKIE, REFRESH_COOKIE, REMEMBER_COOKIE } from '@/lib/session';
 import { apiBaseUrl, applySession, clearSession } from '@/lib/session-cookies';
 
 /**
@@ -47,7 +47,15 @@ export async function POST(request: NextRequest) {
     // Refused, so the token is genuinely dead — expired, revoked, or already
     // replayed. Clearing is correct here, and stops a loop of retries against
     // a token that will never work again.
-    const response = NextResponse.json({ message: 'Session expired.' }, { status: 401 });
+    //
+    // A TR Staff Portal session the portal ended says so, and the page sends
+    // the person back through the portal rather than to the password form.
+    const refusal = (await upstream.json().catch(() => null)) as { code?: unknown } | null;
+    const reauth = refusal?.code === 'PORTAL_SESSION_ENDED';
+    const response = NextResponse.json(
+      { message: 'Session expired.', ...(reauth ? { reauth: true } : {}) },
+      { status: 401 },
+    );
     clearSession(response);
     return response;
   }
@@ -60,7 +68,11 @@ export async function POST(request: NextRequest) {
   };
   const response = NextResponse.json({ mustChangePassword: session.mustChangePassword });
   // A remembered sign-in stays remembered across the rotation; the new
-  // refresh cookie would otherwise fall back to ending with the browser.
-  applySession(response, session, { remember: request.cookies.has(REMEMBER_COOKIE) });
+  // refresh cookie would otherwise fall back to ending with the browser. A
+  // portal session keeps its marker the same way.
+  applySession(response, session, {
+    remember: request.cookies.has(REMEMBER_COOKIE),
+    portal: request.cookies.has(PORTAL_COOKIE) ? true : undefined,
+  });
   return response;
 }
