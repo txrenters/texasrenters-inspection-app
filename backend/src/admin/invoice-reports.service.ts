@@ -27,6 +27,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate, businessInstant } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { SHOWN_INVOICE } from './shown-invoices';
 
 /**
  * Where the money stands (2026-11-09, phase 2 of the invoice gap review), as
@@ -54,11 +55,16 @@ const bucket = (count: number | null | undefined, cents: number | null | undefin
   amountCents: cents ?? 0,
 });
 
-/** One company's invoices -- an organisation's tenant id, or `none` for those of no company -- or, left out, every company's. */
-const companyOf = (company: string | undefined): Prisma.InvoiceWhereInput =>
-  company ? { xeroTenantId: company === 'none' ? null : company } : {};
+/**
+ * One company's invoices -- an organisation's tenant id, or `none` for those of no company -- or, left out, every
+ * company's. Only those the pages show (2026-11-12): not yet the books read back from Xero.
+ */
+const companyOf = (company: string | undefined): Prisma.InvoiceWhereInput => ({
+  ...SHOWN_INVOICE,
+  ...(company ? { xeroTenantId: company === 'none' ? null : company } : {}),
+});
 /** The payments against one company's invoices. */
-const paymentsOf = (company: string | undefined): Prisma.InvoicePaymentWhereInput => (company ? { invoice: companyOf(company) } : {});
+const paymentsOf = (company: string | undefined): Prisma.InvoicePaymentWhereInput => ({ invoice: { is: companyOf(company) } });
 
 /** Neither a draft nor a voided invoice is owed, invoiced or taxed. */
 const SENT = { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] };
@@ -280,7 +286,7 @@ export class InvoiceReportsService {
       AND: [
         { organizationId: user.organizationId },
         when,
-        ...(company ? [companyOf(company)] : []),
+        companyOf(company),
         ...(query.status ? [{ status: query.status as InvoiceStatus }] : []),
       ],
     };
@@ -475,6 +481,7 @@ export class InvoiceReportsService {
       this.prisma.invoice.findMany({
         where: {
           organizationId: user.organizationId,
+          ...SHOWN_INVOICE,
           status: InvoiceStatus.PAID,
           paidOn: { gte: plusDays(today, -(days - 1)), lte: dateOf(today) },
         },

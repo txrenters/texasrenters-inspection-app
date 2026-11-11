@@ -41,6 +41,9 @@ vi.mock('@/lib/xero-queries', () => ({
   // The month's check (2026-11-10, phase 5) has its own tests (xero-check-panel.test.tsx).
   useXeroCheck: () => ({ isLoading: false, isError: false, data: undefined, refetch: vi.fn() }),
   useRunXeroCheck: () => ({ mutate: vi.fn(), isPending: false }),
+  // The books read back from Xero (2026-11-12): tested on their own in xero-books-panel.test.tsx.
+  useXeroBooks: () => ({ isLoading: false, isError: false, data: undefined, refetch: vi.fn() }),
+  useReadXeroBooks: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 const permissions = vi.hoisted(() => ({ granted: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => permissions.granted.has(key) }) }));

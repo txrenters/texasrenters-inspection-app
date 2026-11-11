@@ -34,6 +34,7 @@ import { PrismaService } from '../common/prisma.service';
 import { nextInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
+import { SHOWN_INVOICE } from './shown-invoices';
 
 /**
  * Editing an invoice in the console (2026-11-06, phase 3 of taking invoicing
@@ -288,7 +289,7 @@ export class InvoiceEditsService {
       if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', problem);
       if (clean.number && clean.number !== before.number) {
         const taken = await tx.invoice.findFirst({
-          where: { organizationId: user.organizationId, number: clean.number, id: { not: id } },
+          where: { organizationId: user.organizationId, ...SHOWN_INVOICE, number: clean.number, id: { not: id } },
           select: { id: true },
         });
         if (taken) throw new ApplicationError(409, 'INVOICE_NUMBER_TAKEN', `Invoice #${clean.number} is another invoice already.`);
@@ -424,7 +425,7 @@ export class InvoiceEditsService {
    */
   async history(user: AuthenticatedUser, id: string): Promise<InvoiceHistory> {
     const invoice = await this.prisma.invoice.findFirst({
-      where: { id, organizationId: user.organizationId },
+      where: { id, organizationId: user.organizationId, ...SHOWN_INVOICE },
       select: { id: true },
     });
     if (!invoice) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');
@@ -448,7 +449,8 @@ export class InvoiceEditsService {
 
   /** The invoice as it was read, or a refusal: not found in this office, or changed since. */
   private async invoiceAsRead(tx: Prisma.TransactionClient, user: AuthenticatedUser, id: string, expectedUpdatedAt: string) {
-    const row = await tx.invoice.findFirst({ where: { id, organizationId: user.organizationId }, select: editSelect });
+    // One read from Xero (2026-11-12) is changed there, never here.
+    const row = await tx.invoice.findFirst({ where: { id, organizationId: user.organizationId, ...SHOWN_INVOICE }, select: editSelect });
     if (!row) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');
     if (row.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.invoiceChanged();
     return row;

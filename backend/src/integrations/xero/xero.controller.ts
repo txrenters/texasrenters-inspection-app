@@ -5,6 +5,7 @@ import { IsBoolean, IsISO8601, IsInt, IsObject, IsOptional, IsString, Matches, M
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
+import { XeroBooksService } from './xero-books.service';
 import { XeroCheckService } from './xero-check.service';
 import { XeroSenderService } from './xero-sender.service';
 import { XeroSettingsService } from './xero-settings.service';
@@ -77,6 +78,7 @@ export class XeroController {
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
     @Inject(XeroSenderService) private readonly sender: XeroSenderService,
     @Inject(XeroCheckService) private readonly checks: XeroCheckService,
+    @Inject(XeroBooksService) private readonly books: XeroBooksService,
   ) {}
 
   /** What the page shows. Never a token. */
@@ -159,6 +161,21 @@ export class XeroController {
   @RequirePermissions('integrations:manage')
   retrySending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
     return this.sender.retryFailed(request.user, tenantOf(tenantId));
+  }
+
+  /** The company's books read back from Xero (2026-11-12): what has been read, from the console's own rows. No call to Xero. */
+  @Get('organisations/:tenantId/books')
+  @RequirePermissions('integrations:read')
+  booksRead(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.books.view(request.user.organizationId, tenantOf(tenantId));
+  }
+
+  /** "Read invoices from Xero now": a page of its invoices and one of its payments, at most once a minute. */
+  @Post('organisations/:tenantId/books/read')
+  @HttpCode(200)
+  @RequirePermissions('integrations:manage')
+  readBooks(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string) {
+    return this.books.readNow(request.user, tenantOf(tenantId));
   }
 
   /** The month's latest check against Xero (2026-11-10, phase 5), from the console's record: no call to Xero. */

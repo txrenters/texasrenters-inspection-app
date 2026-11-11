@@ -79,6 +79,15 @@ export class XeroClient {
   }
 
   /**
+   * One read of what changed since a time (2026-11-12), counted as any other:
+   * Xero's If-Modified-Since, a UTC time to the second. Null when Xero answers
+   * that nothing has (304). Without a time, everything.
+   */
+  async getChanged<T>(organizationId: string, tenantId: string, path: string, schema: z.ZodType<T>, since: string | null): Promise<T | null> {
+    return this.answer(organizationId, tenantId, path, schema, { method: 'GET', headers: since ? { 'if-modified-since': since } : undefined });
+  }
+
+  /**
    * One write to an organisation, counted against it. Xero creates or updates
    * what it is sent. The idempotency key makes a retry of the same body --
    * after a timeout that hid Xero's answer -- return the first answer instead
@@ -131,6 +140,20 @@ export class XeroClient {
     init: { method: string; body?: string; headers?: Record<string, string> },
     api: 'accounting' | 'projects' = 'accounting',
   ): Promise<T> {
+    const answer = await this.answer(organizationId, tenantId, path, schema, init, api);
+    if (answer === null) throw new XeroError('Xero did not answer as expected.', 'XERO_UNEXPECTED_RESPONSE', 502);
+    return answer;
+  }
+
+  /** The call, and Xero's answer; null only for a read that asked what changed, when nothing had. */
+  private async answer<T>(
+    organizationId: string,
+    tenantId: string,
+    path: string,
+    schema: z.ZodType<T>,
+    init: { method: string; body?: string; headers?: Record<string, string> },
+    api: 'accounting' | 'projects' = 'accounting',
+  ): Promise<T | null> {
     const organisation = await this.prisma.xeroOrganisation.findUnique({
       where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
       select: { status: true },
@@ -145,6 +168,8 @@ export class XeroClient {
       const said = xeroValidationMessages(await response.json().catch(() => null));
       throw new XeroError(said ? `Xero refused it: ${said}` : 'Xero refused the request.', 'XERO_VALIDATION', 422, 400);
     }
+    // Nothing changed since the time asked about (2026-11-12): only a read that asked says so.
+    if (response.status === 304 && init.method === 'GET' && init.headers?.['if-modified-since']) return null;
     if (!response.ok) throw this.failure(response);
     const parsed = schema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new XeroError('Xero did not answer as expected.', 'XERO_UNEXPECTED_RESPONSE', 502);

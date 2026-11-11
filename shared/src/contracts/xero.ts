@@ -673,3 +673,44 @@ export function xeroSendingBlockers(input: {
     blockers.push('Turn off Xero’s own invoice reminders, then read from Xero again: the console already sends follow-ups, and clients would get both.');
   return blockers;
 }
+
+/**
+ * A company's books read back from Xero (2026-11-12, PR 2 of the plan to make
+ * invoices in the console with Xero as the record): its invoices and payments
+ * as Xero has them, read every hour and on "Read invoices from Xero now". Kept
+ * out of the invoice pages until they show Xero's books in place of Jobber's.
+ */
+export interface XeroBooksView {
+  tenantId: string;
+  /** When its invoices had first all been read; null while that first read goes on. */
+  readAt: string | null;
+  lastRunAt: string | null;
+  lastRunProblem: string | null;
+  counts: {
+    /** Its invoices read from Xero, voided ones included. */
+    invoices: number;
+    /** Of those, on a property: through the visit, the Jobber invoice, the contact or the address. */
+    placed: number;
+    /** On no property yet. */
+    unplaced: number;
+    /** What its approved invoices still owe, as Xero says: to set beside Xero's aged receivables. */
+    owedCents: number;
+    /** Payments read from Xero. */
+    payments: number;
+    /** The console's own invoices that Xero has, kept as they are there. */
+    consoleInvoices: number;
+  };
+  /** The latest invoices on no property, newest first; at most 50. */
+  unplaced: XeroUnplacedInvoice[];
+}
+
+/** An invoice read from Xero that no visit, Jobber invoice, contact or address puts on a property. */
+export interface XeroUnplacedInvoice {
+  number: string | null;
+  clientName: string;
+  /** `YYYY-MM-DD`. */
+  issuedOn: string | null;
+  totalCents: number;
+  /** Xero's status: DRAFT, AUTHORISED, PAID. */
+  xeroStatus: string | null;
+}

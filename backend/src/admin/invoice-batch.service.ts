@@ -114,6 +114,7 @@ export class InvoiceBatchService {
           scheduledAt: { gte: dateOf(query.from), lt: new Date(dateOf(query.to).getTime() + DAY_MS) },
           propertywareBuildingId: { not: null },
           ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
+          // Every invoice counts here, whatever its origin -- one read back from Xero too (2026-11-12) -- so nothing is billed twice.
           invoices: { none: { status: { not: InvoiceStatus.VOIDED } } },
         },
         orderBy: [{ scheduledAt: 'asc' }, { id: 'asc' }],

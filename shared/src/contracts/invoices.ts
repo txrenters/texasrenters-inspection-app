@@ -166,8 +166,8 @@ export interface InvoicePayment {
   /** Who recorded it; null for one recorded in Jobber. */
   recordedBy: InvoicePerson | null;
   recordedAt: string;
-  /** Where it was recorded: in Jobber, or in the console. */
-  origin?: 'JOBBER' | 'CONSOLE';
+  /** Where it was recorded: in Jobber, in the console, or -- read back from the company's books (2026-11-12) -- in Xero. */
+  origin?: 'JOBBER' | 'CONSOLE' | 'XERO';
 }
 
 /** Where an invoice's property is, as the console knows it. */
@@ -278,7 +278,7 @@ export interface InvoiceExtraDetails {
 
 /** One payment on its own page (2026-11-05: "payment items are not clickable"). */
 export interface PaymentDetail extends PaymentListItem {
-  origin: 'JOBBER' | 'CONSOLE';
+  origin: 'JOBBER' | 'CONSOLE' | 'XERO';
   /** Jobber's own word for how it was paid ("ACH_BANK_PAYMENT"), when it came from Jobber. */
   jobberPaymentType: string | null;
   invoiceTotalCents: number;

@@ -1145,7 +1145,7 @@ describe('a run', () => {
     const busy = harness({
       settingsRow: { sendingEnabled: true, sendFrom: new Date('2026-12-01T00:00:00.000Z'), sendingClaimedUntil: new Date('2026-12-02T18:10:00.000Z') },
     });
-    expect(await busy.sender.run(ORG, TENANT)).toMatchObject({ problem: 'Another run is sending.' });
+    expect(await busy.sender.run(ORG, TENANT)).toMatchObject({ problem: 'Another run is sending to Xero, or reading from it.' });
     for (const run of [off, readOnly, reminders, busy]) expect(run.client.post).not.toHaveBeenCalled();
   });
 
@@ -1220,5 +1220,27 @@ describe('turning it on, and the office’s buttons', () => {
     const permissions = (method: keyof XeroController) => Reflect.getMetadata(PERMISSIONS_METADATA_KEY, XeroController.prototype[method]);
     expect(permissions('sending')).toEqual(['integrations:read']);
     for (const method of ['setSending', 'runSending', 'retrySending'] as const) expect(permissions(method)).toEqual(['integrations:manage']);
+  });
+});
+
+describe('what came back from Xero stays there (2026-11-12)', () => {
+  it('never sends an invoice read from the company’s books, a console one read back from there, or a payment Xero has', async () => {
+    const { sender, prisma } = harness({ candidates: [], paymentCandidates: [] });
+    await sender.run(ORG, TENANT);
+    const sql = prisma.$queryRaw.mock.calls.map(([strings]) => (strings as TemplateStringsArray).join('?'));
+    const invoices = sql.find((text) => !text.includes('"InvoicePayment"'))!;
+    expect(invoices).toContain(`i."origin" <> 'XERO'`);
+    expect(invoices).toContain(`i."xeroInvoiceId" IS NULL`);
+    const payments = sql.find((text) => text.includes('"InvoicePayment"'))!;
+    expect(payments).toContain(`p."origin" <> 'XERO'`);
+    expect(payments).toContain(`p."xeroPaymentId" IS NULL`);
+  });
+
+  it('counts none of them among those still to send', async () => {
+    const { sender, prisma } = harness();
+    await sender.view(ORG, TENANT);
+    const counted = prisma.invoice.count.mock.calls as unknown as [{ where: Record<string, unknown> }][];
+    expect(counted.length).toBeGreaterThan(0);
+    for (const [args] of counted) expect(args.where).toMatchObject({ origin: { not: 'XERO' } });
   });
 });

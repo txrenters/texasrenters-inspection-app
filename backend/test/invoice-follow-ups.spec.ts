@@ -117,7 +117,8 @@ describe('invoice follow-ups', () => {
     const { followUps, prisma } = harness();
     await followUps.run(ORG, TODAY);
     const { where } = prisma.invoice.findMany.mock.calls[0]![0] as { where: Record<string, unknown> & { dueOn: { in: Date[] } } };
-    expect(where).toMatchObject({ organizationId: ORG, status: 'AWAITING_PAYMENT', balanceCents: { gt: 0 } });
+    // Never an invoice read back from Xero (2026-11-12): its company's reminders are Xero's.
+    expect(where).toMatchObject({ organizationId: ORG, origin: { not: 'XERO' }, status: 'AWAITING_PAYMENT', balanceCents: { gt: 0 } });
     expect(where.dueOn.in.map((value) => value.toISOString().slice(0, 10))).toEqual(['2026-11-20', '2026-11-16']);
   });
 

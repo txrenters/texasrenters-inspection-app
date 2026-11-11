@@ -59,6 +59,7 @@ import {
   organisationName,
   productCompanies,
 } from './invoice-settings';
+import { SHOWN_INVOICE, SHOWN_PAYMENT } from './shown-invoices';
 
 // Kept exported from here for the callers that already import them (phase 6 moved them).
 export { priceList, receiptBrand } from './invoice-settings';
@@ -494,6 +495,7 @@ export class InvoicesService {
     // whole office, a property, or a visit -- whatever is searched.
     const scope: Prisma.InvoiceWhereInput = {
       organizationId: user.organizationId,
+      ...SHOWN_INVOICE,
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.inspectionId ? { inspectionId: query.inspectionId } : {}),
       // One company's books, or those of none (2026-11-10).
@@ -533,7 +535,7 @@ export class InvoicesService {
       }),
       this.prisma.invoice.aggregate({ where: issued(0, 29), _count: { _all: true }, _sum: { totalCents: true } }),
       this.prisma.invoice.aggregate({ where: issued(30, 59), _count: { _all: true }, _sum: { totalCents: true } }),
-      this.prisma.invoice.aggregate({ where: { organizationId: user.organizationId }, _max: { syncedAt: true } }),
+      this.prisma.invoice.aggregate({ where: { organizationId: user.organizationId, ...SHOWN_INVOICE }, _max: { syncedAt: true } }),
       this.prisma.jobberConnection.findUnique({
         where: { organizationId: user.organizationId },
         select: { status: true, invoiceReadProblem: true, invoiceReadCheckedAt: true, invoiceReadCompletedAt: true },
@@ -583,7 +585,7 @@ export class InvoicesService {
 
   async one(user: AuthenticatedUser, id: string): Promise<InvoiceDetail> {
     const row = await this.prisma.invoice.findFirst({
-      where: { id, organizationId: user.organizationId },
+      where: { id, organizationId: user.organizationId, ...SHOWN_INVOICE },
       select: detailSelect,
     });
     if (!row) throw this.notFound();
@@ -614,7 +616,7 @@ export class InvoicesService {
       newInvoiceDefaults(this.prisma, user.organizationId),
       inspection
         ? this.prisma.invoice.findMany({
-            where: { organizationId: user.organizationId, inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
+            where: { organizationId: user.organizationId, ...SHOWN_INVOICE, inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
             orderBy: { createdAt: 'desc' },
             take: MAX_INVOICES_PER_VISIT,
             select: { id: true, number: true, status: true, dueOn: true, xeroTenantId: true },
@@ -663,6 +665,7 @@ export class InvoicesService {
     const paidWithin = daysWhere(query.paidFrom, query.paidTo);
     const where: Prisma.InvoicePaymentWhereInput = {
       organizationId: user.organizationId,
+      ...SHOWN_PAYMENT,
       ...(query.method ? { method: query.method } : {}),
       ...(paidWithin ? { paidOn: paidWithin } : {}),
       ...(term
@@ -677,7 +680,7 @@ export class InvoicesService {
     };
     const received = (from: number, to: number) =>
       this.prisma.invoicePayment.aggregate({
-        where: { organizationId: user.organizationId, paidOn: { gte: daysBefore(today, to), lte: daysBefore(today, from) } },
+        where: { organizationId: user.organizationId, ...SHOWN_PAYMENT, paidOn: { gte: daysBefore(today, to), lte: daysBefore(today, from) } },
         _count: { _all: true },
         _sum: { amountCents: true },
       });
@@ -713,7 +716,7 @@ export class InvoicesService {
   /** One payment on its own page, with the invoice it paid and what that invoice still owes. */
   async onePayment(user: AuthenticatedUser, id: string): Promise<PaymentDetail> {
     const row = await this.prisma.invoicePayment.findFirst({
-      where: { id, organizationId: user.organizationId },
+      where: { id, organizationId: user.organizationId, ...SHOWN_PAYMENT },
       select: {
         ...paymentSelect(),
         jobberPaymentType: true,
@@ -975,7 +978,7 @@ export class InvoicesService {
     try {
       await this.prisma.$transaction(async (tx) => {
         const invoice = await tx.invoice.findFirst({
-          where: { id: invoiceId, organizationId: user.organizationId },
+          where: { id: invoiceId, organizationId: user.organizationId, ...SHOWN_INVOICE },
           select: { status: true, dueOn: true, balanceCents: true },
         });
         if (!invoice) throw this.notFound();
@@ -1055,7 +1058,7 @@ export class InvoicesService {
         : null;
     const account = client
       ? await this.prisma.invoice.aggregate({
-          where: { organizationId: user.organizationId, status: InvoiceStatus.AWAITING_PAYMENT, ...client },
+          where: { organizationId: user.organizationId, ...SHOWN_INVOICE, status: InvoiceStatus.AWAITING_PAYMENT, ...client },
           _sum: { balanceCents: true },
         })
       : null;
@@ -1164,7 +1167,8 @@ export class InvoicesService {
    */
   private async paymentToChange(tx: Prisma.TransactionClient, user: AuthenticatedUser, id: string, expectedUpdatedAt: string) {
     const found = await tx.invoicePayment.findFirst({
-      where: { id, organizationId: user.organizationId },
+      // One read from Xero (2026-11-12) is changed there, never here.
+      where: { id, organizationId: user.organizationId, ...SHOWN_PAYMENT, origin: { not: InvoiceOrigin.XERO } },
       select: {
         invoiceId: true,
         amountCents: true,

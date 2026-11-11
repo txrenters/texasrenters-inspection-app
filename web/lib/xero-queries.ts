@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SaveXeroSettingsInput, XeroCheckView, XeroConnectionView, XeroSendingView, XeroSettingsView } from '@texasrenters/shared';
+import type { SaveXeroSettingsInput, XeroBooksView, XeroCheckView, XeroConnectionView, XeroSendingView, XeroSettingsView } from '@texasrenters/shared';
 
 import { ApiError, api } from './api';
 
@@ -21,6 +21,7 @@ const connectionKey = [...xeroKey, 'connection'] as const;
 export const xeroSettingsKey = (tenantId: string) => [...xeroKey, 'settings', tenantId] as const;
 export const xeroSendingKey = (tenantId: string) => [...xeroKey, 'sending', tenantId] as const;
 export const xeroCheckKey = (tenantId: string, month: string) => [...xeroKey, 'check', tenantId, month] as const;
+export const xeroBooksKey = (tenantId: string) => [...xeroKey, 'books', tenantId] as const;
 
 export function useXeroConnection(enabled = true) {
   return useQuery({
@@ -134,5 +135,28 @@ export function useRunXeroCheck(tenantId: string) {
   return useMutation({
     mutationFn: (month: string) => api<XeroCheckView>(`${organisation(tenantId)}/check`, { method: 'POST', body: JSON.stringify({ month }) }),
     onSuccess: (view) => client.setQueryData(xeroCheckKey(tenantId, view.month), view),
+  });
+}
+
+/**
+ * The company's books read back from Xero (2026-11-12): what has been read,
+ * from the console's own rows. Reading it never asks Xero; the server reads
+ * every hour, and "Read invoices from Xero now" once more.
+ */
+export function useXeroBooks(tenantId: string, enabled = true) {
+  return useQuery({
+    queryKey: xeroBooksKey(tenantId),
+    queryFn: ({ signal }) => api<XeroBooksView>(`${organisation(tenantId)}/books`, { signal }),
+    enabled,
+  });
+}
+
+/** "Read invoices from Xero now": a page of its invoices and one of its payments -- two calls -- at most once a minute. */
+export function useReadXeroBooks(tenantId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<XeroBooksView>(`${organisation(tenantId)}/books/read`, { method: 'POST' }),
+    onSuccess: (view) => client.setQueryData(xeroBooksKey(tenantId), view),
+    onError: () => void client.invalidateQueries({ queryKey: xeroBooksKey(tenantId) }),
   });
 }

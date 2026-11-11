@@ -193,7 +193,8 @@ describe('the invoice list', () => {
 
     const query = db.invoice.findMany.mock.calls[0][0];
     const [scope, filter, search] = query.where.AND;
-    expect(scope).toEqual({ organizationId: ORG, propertywareBuildingId: BUILDING });
+    // Never the books read back from Xero (2026-11-12): out of sight until the pages show them.
+    expect(scope).toEqual({ organizationId: ORG, origin: { not: 'XERO' }, propertywareBuildingId: BUILDING });
     expect(filter).toMatchObject({ status: 'AWAITING_PAYMENT', dueOn: { lt: expect.any(Date) } });
     // "#8439" finds number 8439: the # is how the office writes it.
     expect(search.OR).toContainEqual({ number: { startsWith: '8439' } });
@@ -269,9 +270,10 @@ describe('an invoice', () => {
       payments: [{ paidOn: '2020-02-20', amountCents: 1000, reference: 'Receipt 77', recordedAt: '2020-02-20T16:00:00.000Z' }],
       accountBalanceCents: 12000,
     });
-    expect(db.invoice.findFirst.mock.calls[0][0].where).toEqual({ id: INVOICE, organizationId: ORG });
+    expect(db.invoice.findFirst.mock.calls[0][0].where).toEqual({ id: INVOICE, organizationId: ORG, origin: { not: 'XERO' } });
     expect(db.invoice.aggregate.mock.calls[0][0].where).toEqual({
       organizationId: ORG,
+      origin: { not: 'XERO' },
       status: 'AWAITING_PAYMENT',
       jobberClientId: 'client-1',
     });
@@ -394,7 +396,7 @@ describe("a finished visit's draft", () => {
     const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
     expect(draft.existing).toEqual([{ id: INVOICE, number: '8439', status: 'PAST_DUE', xeroTenantId: null }]);
-    expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({ organizationId: ORG, inspectionId: VISIT, status: { not: 'VOIDED' } });
+    expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({ organizationId: ORG, origin: { not: 'XERO' }, inspectionId: VISIT, status: { not: 'VOIDED' } });
     // No invoice yet in the copy: Jobber's own defaults.
     expect(draft).toMatchObject({ subject: 'For Services Rendered', paymentTermsDays: 30, clientMessage: '' });
   });
@@ -548,7 +550,7 @@ describe('a payment on its own page', () => {
       ],
       receiptTo: ['owner@example.com'],
     });
-    expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG });
+    expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG, invoice: { is: { origin: { not: 'XERO' } } } });
   });
 
   it("is not found in another office's organization", async () => {

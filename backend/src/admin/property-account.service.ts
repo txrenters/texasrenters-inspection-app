@@ -30,6 +30,7 @@ import { defaultRecipients, readEmailTemplates } from './invoice-email-settings'
 import { invoiceWritesOff, invoiceWritesOn, officeBrand } from './invoice-settings';
 import { deliveryView } from './invoices.service';
 import { statementEmail } from './statement-email';
+import { SHOWN_INVOICE } from './shown-invoices';
 
 /**
  * A property's account (2026-11-10, phase 3 of the invoice gap review), as
@@ -256,7 +257,7 @@ export class PropertyAccountService {
     if (!building) throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'That property is not one of the office’s.');
     const today = businessDate();
     const invoices = await this.prisma.invoice.findMany({
-      where: { organizationId, propertywareBuildingId: propertyId, status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
+      where: { organizationId, ...SHOWN_INVOICE, propertywareBuildingId: propertyId, status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
       orderBy: [{ issuedOn: 'asc' }, { createdAt: 'asc' }],
       take: MAX_ACCOUNT_ENTRIES + 1,
       select: {

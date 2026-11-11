@@ -245,6 +245,27 @@ describe('calls to Xero', () => {
     expect(db.organisation(PEST)).toMatchObject({ callsUsed: 300 });
   });
 
+  it('asks what changed since a time, and takes a 304 as nothing changed (2026-11-12)', async () => {
+    const db = two();
+    const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 304 }));
+    const client = new XeroClient(db as never, new XeroAuthService(db as never));
+    await expect(client.getChanged(ORG, HOMES, '/Invoices?page=1', schema as never, '2026-11-12T18:00:00')).resolves.toBeNull();
+    const [, init] = fetch.mock.calls[0]!;
+    expect((init!.headers as Record<string, string>)['if-modified-since']).toBe('2026-11-12T18:00:00');
+    // Counted as any other call.
+    expect(db.organisation(HOMES)).toMatchObject({ callsUsed: 1 });
+  });
+
+  it('asks for everything without a time, and never takes a 304 it did not ask for as an answer', async () => {
+    const db = two();
+    const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({ Invoices: [] }));
+    const client = new XeroClient(db as never, new XeroAuthService(db as never));
+    await expect(client.getChanged(ORG, HOMES, '/Invoices?page=1', schema as never, null)).resolves.toEqual({ Invoices: [] });
+    expect((fetch.mock.calls[0]![1]!.headers as Record<string, string>)['if-modified-since']).toBeUndefined();
+    fetch.mockResolvedValue(new Response(null, { status: 304 }));
+    await expect(client.get(ORG, HOMES, '/Invoices', schema as never)).rejects.toMatchObject({ code: 'XERO_UNEXPECTED_RESPONSE' });
+  });
+
   it('stops one organisation at the console’s ceiling, before asking Xero, while another goes on', async () => {
     const db = two();
     const fetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(json({ Accounts: [] }));
@@ -504,10 +525,13 @@ describe('who may do what', () => {
     expect(permission('readSettings')).toEqual(['integrations:read']);
     for (const name of ['authorize', 'read', 'disconnect', 'disconnectOrganisation', 'saveSettings'] as const)
       expect(permission(name)).toEqual(['integrations:manage']);
+    // The books read back from Xero (2026-11-12): seen with read, read again with manage.
+    expect(permission('booksRead')).toEqual(['integrations:read']);
+    expect(permission('readBooks')).toEqual(['integrations:manage']);
   });
 
   it('names an organisation only by Xero’s own id', async () => {
-    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never, {} as never);
+    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never, {} as never, {} as never);
     expect(() => controller.read({ user: office } as never, '../connections')).toThrow('not one of the office’s Xero organisations');
   });
 });
