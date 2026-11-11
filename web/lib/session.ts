@@ -1,3 +1,5 @@
+import { isPublicPath, portalSignInPath } from './portal';
+
 /**
  * The admin session, held in cookies on this origin.
  *
@@ -35,6 +37,17 @@ export const REFRESH_COOKIE = 'tr_refresh';
  * renewed rather than treated as a sign-out.
  */
 export const REMEMBER_COOKIE = 'tr_remember';
+
+/**
+ * Set beside a session that came from the TR Staff Portal.
+ *
+ * Not a credential either. A portal session's access token lives only until
+ * its next check, five minutes, so without this the access cookie would be
+ * gone after a short pause and the next page load sent to sign in with a good
+ * refresh token still on file. Like `REMEMBER_COOKIE`, it says "renew, don't
+ * sign out"; unlike it, it ends with the browser.
+ */
+export const PORTAL_COOKIE = 'tr_portal';
 
 export interface AppSession {
   accessToken: string;
@@ -154,7 +167,15 @@ async function refreshSession(): Promise<AppSession | null> {
 async function exchangeRefreshToken(): Promise<AppSession | null> {
   try {
     const response = await fetch('/api/session/refresh', { method: 'POST' });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // A portal session the portal has ended: back through the portal, which
+      // signs the person straight in again if they still have access.
+      if (response.status === 401) {
+        const body = (await response.json().catch(() => null)) as { reauth?: unknown } | null;
+        if (body?.reauth === true) restartPortalSignIn();
+      }
+      return null;
+    }
     const raw = readCookie(ACCESS_COOKIE);
     return raw ? decodeSession(raw) : null;
   } catch {
@@ -185,10 +206,38 @@ export async function signIn(email: string, password: string, remember = false) 
   return session;
 }
 
-export async function signOut() {
+export async function signOut(options: { ended?: boolean } = {}) {
   // Best effort: the cookies are cleared by the handler, and a network failure
   // here must not strand someone on a page they are trying to leave.
-  await fetch('/api/session', { method: 'DELETE' }).catch(() => undefined);
+  const response = await fetch('/api/session', { method: 'DELETE' }).catch(() => undefined);
+
+  // Someone who signed in through the TR Staff Portal goes back to it: to its
+  // dashboard when they chose to sign out, or through it again when the API
+  // said their portal session had ended. Everyone else is unchanged.
+  if (response?.status !== 200) return;
+  const body = (await response.json().catch(() => null)) as { signedOutUrl?: unknown } | null;
+  if (typeof body?.signedOutUrl !== 'string' || !body.signedOutUrl.startsWith('https://')) return;
+  if (options.ended) restartPortalSignIn();
+  else window.location.assign(body.signedOutUrl);
+  // The page is leaving. Never settling keeps callers from routing to /login
+  // underneath the navigation.
+  return new Promise<never>(() => undefined);
+}
+
+let restartingPortalSignIn = false;
+
+/**
+ * Sends the browser through the portal again, coming back to this page.
+ *
+ * Never from a page anyone can open signed out — a homeowner's report link
+ * opened in a browser that once held a portal session stays where it is.
+ */
+function restartPortalSignIn() {
+  if (typeof window === 'undefined' || restartingPortalSignIn) return;
+  const { pathname, search } = window.location;
+  if (isPublicPath(pathname)) return;
+  restartingPortalSignIn = true;
+  window.location.assign(portalSignInPath(`${pathname}${search}`));
 }
 
 /**
@@ -219,7 +268,7 @@ export function onSessionChange(listener: (session: AppSession | null) => void) 
      * through `getSession`, so the cross-tab lock still guards the rotation.
      * A renewal the API refuses clears the cookies and reports no session.
      */
-    if (!current && readCookie(REMEMBER_COOKIE)) {
+    if (!current && (readCookie(REMEMBER_COOKIE) || readCookie(PORTAL_COOKIE))) {
       void getSession().then(listener);
       return;
     }

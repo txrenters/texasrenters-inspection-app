@@ -27,7 +27,10 @@ function visit(cookies: string) {
   );
 }
 
-const sentToSignIn = (response: Response) => response.headers.get('location')?.endsWith('/login') ?? false;
+const sentToSignIn = (response: Response) => {
+  const location = response.headers.get('location');
+  return location ? new URL(location).pathname === '/login' : false;
+};
 const letThrough = (response: Response) => response.headers.get('x-middleware-next') === '1';
 
 describe('the admin shell guard', () => {
@@ -47,6 +50,23 @@ describe('the admin shell guard', () => {
     expect(letThrough(visit(`tr_access=${token(now() - 60)}; tr_remember=1`))).toBe(true);
     // The access cookie is gone altogether once its hour is up.
     expect(letThrough(visit('tr_remember=1'))).toBe(true);
+  });
+
+  it('lets a TR Staff Portal session through when its five-minute access token has run out', () => {
+    expect(letThrough(visit(`tr_access=${token(now() - 60)}; tr_portal=1`))).toBe(true);
+    expect(letThrough(visit('tr_portal=1'))).toBe(true);
+  });
+
+  it('says where the visitor was going, for the portal sign-in to come back to', () => {
+    const location = new URL(
+      middleware(new NextRequest('https://inspection.texasrenters.com/inspections/42?tab=photos')).headers.get(
+        'location',
+      )!,
+    );
+    expect(location.pathname).toBe('/login');
+    expect(location.searchParams.get('next')).toBe('/inspections/42?tab=photos');
+    // Nothing to say about the front door.
+    expect(new URL(middleware(new NextRequest('https://inspection.texasrenters.com/')).headers.get('location')!).search).toBe('');
   });
 });
 
@@ -73,6 +93,11 @@ describe('the paths it guards', () => {
     expect(guarded('/privacy/anything')).toBe(true);
     expect(guarded('/supporting')).toBe(true);
     expect(guarded('/settings')).toBe(true);
+  });
+
+  it('leaves the TR Staff Portal redirect and callback open: they are how someone signs in', () => {
+    expect(guarded('/auth/portal/redirect')).toBe(false);
+    expect(guarded('/auth/portal/callback')).toBe(false);
   });
 
   it('keeps the console’s comparison report behind sign-in', () => {

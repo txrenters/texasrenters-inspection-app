@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { ACCESS_COOKIE, REMEMBER_COOKIE, decodeSession, sessionIsExpired } from '@/lib/session';
+import { ACCESS_COOKIE, PORTAL_COOKIE, REMEMBER_COOKIE, decodeSession, sessionIsExpired } from '@/lib/session';
 
 /**
  * Server-side guard for the admin shell.
@@ -42,10 +42,17 @@ export function middleware(request: NextRequest) {
    * to sign in.
    */
   if (request.cookies.has(REMEMBER_COOKIE)) return NextResponse.next();
+  // A TR Staff Portal session, the same way: its access token lives only
+  // five minutes, and running out is not a sign-out.
+  if (request.cookies.has(PORTAL_COOKIE)) return NextResponse.next();
 
   const loginUrl = request.nextUrl.clone();
   loginUrl.pathname = '/login';
   loginUrl.search = '';
+  // Where they were going, for "Sign in with TR Staff Portal" to come back
+  // to. The API narrows it to a path on this site before it is ever used.
+  if (request.nextUrl.pathname !== '/')
+    loginUrl.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search}`);
   return NextResponse.redirect(loginUrl);
 }
 
@@ -65,6 +72,9 @@ export const config = {
     // browser holding a valid cookie still got the file, so it appeared to
     // work, but a lapsed session made the Audio element fetch the login page
     // instead and the sound simply stopped, with nothing to indicate why.
-    '/((?!login|forgot-password|reset-password|report/|comparison-report/|privacy$|support$|api/session|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|wav|ogg)$).*)',
+    //
+    // `auth/portal` is the TR Staff Portal's redirect and callback, which are
+    // how someone signed out becomes signed in.
+    '/((?!login|forgot-password|reset-password|report/|comparison-report/|privacy$|support$|api/session|auth/portal|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|wav|ogg)$).*)',
   ],
 };

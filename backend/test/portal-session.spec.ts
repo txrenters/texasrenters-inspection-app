@@ -1,5 +1,5 @@
 import { UserRole } from '@prisma/client';
-import nock = require('nock');
+import * as nock from 'nock';
 
 import { portalTokenKey, readPortalConfig } from '../src/auth/portal/portal.config';
 import { PortalClient } from '../src/auth/portal/portal.client';

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { SignJWT, exportJWK, generateKeyPair, type CryptoKey, type KeyObject } from 'jose';
-import nock = require('nock');
+import * as nock from 'nock';
 
 import { AuthController } from '../src/auth/auth.controller';
 import { PasswordResetService } from '../src/auth/password-reset.service';

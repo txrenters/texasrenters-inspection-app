@@ -65,7 +65,8 @@ export async function api<T>(
   }
   if (!response.ok) {
     const error = (await response.json().catch(() => null)) as ApiErrorContract | null;
-    if (response.status === 401) await signOut();
+    // An ended TR Staff Portal session goes back through the portal, not to the password form.
+    if (response.status === 401) await signOut({ ended: error?.code === 'PORTAL_SESSION_ENDED' });
     throw new ApiError(
       response.status,
       error?.code ?? 'REQUEST_FAILED',
@@ -170,8 +171,9 @@ export async function apiUpload<T>(
   });
 
   if (status.code === 401) {
-    await signOut();
-    throw failure(401, status.body);
+    const refusal = failure(401, status.body);
+    await signOut({ ended: refusal.code === 'PORTAL_SESSION_ENDED' });
+    throw refusal;
   }
   if (status.code < 200 || status.code >= 300) throw failure(status.code, status.body);
   // Same reasoning as `api`: an empty body is an answer, not a failure.
