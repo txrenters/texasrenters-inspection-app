@@ -302,6 +302,7 @@ export interface XeroSettingsView {
   checks: XeroCheck[];
   /** Every check passes: phase 3 may send. */
   ready: boolean;
+  /** When the choices were last saved (2026-11-11): what a save names as `expectedUpdatedAt`. Sending runs do not move it. */
   updatedAt: string | null;
 }
 

@@ -65,8 +65,9 @@ function database(options: { settings?: Record<string, unknown> | null; organisa
         settings = { ...data, updatedAt: UPDATED };
         return settings;
       }),
-      updateMany: jest.fn(async ({ where, data }: { where: { updatedAt: Date }; data: Record<string, unknown> }) => {
-        if (!settings || (settings.updatedAt as Date).getTime() !== where.updatedAt.getTime()) return { count: 0 };
+      // Over the choices as they were read (2026-11-11): `choicesUpdatedAt`, which only a save moves.
+      updateMany: jest.fn(async ({ where, data }: { where: { choicesUpdatedAt: Date }; data: Record<string, unknown> }) => {
+        if (!settings || (settings.choicesUpdatedAt as Date).getTime() !== where.choicesUpdatedAt.getTime()) return { count: 0 };
         settings = { ...settings, ...data, updatedAt: new Date('2026-11-20T18:00:00.000Z') };
         return { count: 1 };
       }),
@@ -136,6 +137,7 @@ describe('reading the choices', () => {
         salesAccounts: { 'filter change': 'a-410', 'gutter cleaning': 'a-410' },
         paymentAccounts: { PROPERTYWARE_LEDGER: 'a-815' },
         updatedAt: UPDATED,
+        choicesUpdatedAt: UPDATED,
       },
     });
     const view = await service(db).read(ORG, TENANT);
@@ -182,6 +184,7 @@ describe('reading the choices', () => {
         salesAccounts: {},
         paymentAccounts: { PROPERTYWARE_LEDGER: 'a-815', CHECK: 'a-bank' },
         updatedAt: UPDATED,
+        choicesUpdatedAt: UPDATED,
       },
     });
     const view = await service(db).read(ORG, TENANT);
@@ -198,6 +201,7 @@ describe('reading the choices', () => {
         salesAccounts: { 'filter change': 'a-460' },
         paymentAccounts: { PROPERTYWARE_LEDGER: 'a-815', CHECK: 'a-gone' },
         updatedAt: UPDATED,
+        choicesUpdatedAt: UPDATED,
       },
     });
     const view = await service(db).read(ORG, TENANT);
@@ -243,6 +247,8 @@ describe('saving the choices', () => {
         projectUserId: null,
         labourRateCents: 3500,
         labourMinutes: 6,
+        // When the choices were saved: the page's guard, which sending runs do not move.
+        choicesUpdatedAt: new Date('2026-11-20T18:00:00.000Z'),
       },
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
@@ -271,20 +277,38 @@ describe('saving the choices', () => {
 
   it('changes only the row it read: a save in between is refused', async () => {
     const db = database({
-      settings: { ...valuesRow(), updatedAt: UPDATED },
+      settings: { ...valuesRow(), updatedAt: UPDATED, choicesUpdatedAt: UPDATED },
     });
     await expect(service(db).save(office, TENANT, input({ expectedUpdatedAt: '2026-11-18T00:00:00.000Z' }))).rejects.toMatchObject({
       code: 'XERO_SETTINGS_CHANGED',
     });
     await service(db).save(office, TENANT, input({ salesTaxType: 'NONE', salesAccounts: {}, expectedUpdatedAt: UPDATED.toISOString() }));
-    expect(db.xeroSettings.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG, xeroTenantId: TENANT, updatedAt: UPDATED } }));
+    expect(db.xeroSettings.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG, xeroTenantId: TENANT, choicesUpdatedAt: UPDATED } }));
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ metadata: { organisation: 'Example Home Services', tenantId: TENANT, changes: ['filter change: 410 Repair revenue → the default'] } }),
     });
   });
 
+  it('saves over a sending run in between: the run moves the row, not when the choices were saved (2026-11-11)', async () => {
+    // Turned on, then a run's claim and last run: updatedAt moves on every one, the choices do not.
+    const ran = new Date('2026-11-20T17:50:00.000Z');
+    const db = database({ settings: { ...valuesRow(), updatedAt: ran, choicesUpdatedAt: UPDATED, sendingEnabled: true, lastRunAt: ran } });
+    expect((await service(db).read(ORG, TENANT)).updatedAt).toBe(UPDATED.toISOString());
+    await service(db).save(office, TENANT, input({ salesAccounts: {}, expectedUpdatedAt: UPDATED.toISOString() }));
+    expect(db.xeroSettings.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: ORG, xeroTenantId: TENANT, choicesUpdatedAt: UPDATED },
+      data: expect.objectContaining({ salesAccounts: {}, choicesUpdatedAt: new Date('2026-11-20T18:00:00.000Z') }),
+    });
+    // And the page it reads back names the new save, so the next one goes through too.
+    expect((await service(db).read(ORG, TENANT)).updatedAt).toBe('2026-11-20T18:00:00.000Z');
+    // Another person's save in between is still refused.
+    await expect(service(db).save(office, TENANT, input({ salesTaxType: 'NONE', expectedUpdatedAt: UPDATED.toISOString() }))).rejects.toMatchObject({
+      code: 'XERO_SETTINGS_CHANGED',
+    });
+  });
+
   it('writes nothing when nothing changed', async () => {
-    const db = database({ settings: { ...valuesRow(), updatedAt: UPDATED } });
+    const db = database({ settings: { ...valuesRow(), updatedAt: UPDATED, choicesUpdatedAt: UPDATED } });
     await service(db).save(office, TENANT, input({ expectedUpdatedAt: UPDATED.toISOString() }));
     expect(db.xeroSettings.updateMany).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();

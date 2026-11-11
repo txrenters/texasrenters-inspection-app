@@ -233,7 +233,8 @@ export class XeroSettingsService {
       invoicesToSend,
       checks,
       ready: checks.every((check) => check.ok),
-      updatedAt: row?.updatedAt.toISOString() ?? null,
+      // When the choices were last saved (2026-11-11): not the row's updatedAt, which every sending run moves.
+      updatedAt: row?.choicesUpdatedAt.toISOString() ?? null,
     };
   }
 
@@ -262,17 +263,22 @@ export class XeroSettingsService {
       projectUserId: after.projectUserId ?? null,
       labourRateCents: after.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
       labourMinutes: after.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
+      choicesUpdatedAt: new Date(),
     };
     try {
       await this.prisma.$transaction(async (tx) => {
         const row = await tx.xeroSettings.findUnique({ where });
+        // Against the choices as they were last saved (2026-11-11): a sending run in between changes none of them.
         const expected = input.expectedUpdatedAt ? new Date(input.expectedUpdatedAt).toISOString() : null;
-        if ((row?.updatedAt.toISOString() ?? null) !== expected) throw changed();
+        if ((row?.choicesUpdatedAt.toISOString() ?? null) !== expected) throw changed();
         const changes = settingsChanges(valuesFrom(row), after, catalog.accounts, catalog.trackingCategories, catalog.projectUsers);
         if (!changes.length) return;
         if (row) {
-          // Only over the row as it was read: a save in between makes this one change nothing.
-          const { count } = await tx.xeroSettings.updateMany({ where: { organizationId: org, xeroTenantId: tenantId, updatedAt: row.updatedAt }, data });
+          // Only over the choices as they were read: a save in between makes this one change nothing.
+          const { count } = await tx.xeroSettings.updateMany({
+            where: { organizationId: org, xeroTenantId: tenantId, choicesUpdatedAt: row.choicesUpdatedAt },
+            data,
+          });
           if (count !== 1) throw changed();
         } else await tx.xeroSettings.create({ data: { organizationId: org, xeroTenantId: tenantId, ...data } });
         await tx.auditLog.create({

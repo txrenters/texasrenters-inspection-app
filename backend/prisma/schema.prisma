@@ -4885,6 +4885,9 @@ model XeroSettings {
   /// The labour on each project the console makes: $35.00 an hour for 6 minutes. Either 0 logs none (checked ranges).
   labourRateCents    Int     @default(3500)
   labourMinutes      Int     @default(6)
+  /// When somebody last saved the choices above (2026-11-11): the settings page's guard against overwriting a newer
+  /// save. Not `updatedAt`, which turning sending on and every sending run also move.
+  choicesUpdatedAt   DateTime @default(now())
   /// Phase 3: invoices go to Xero only while this is on.
   sendingEnabled      Boolean   @default(false)
   sendingChangedAt    DateTime?
