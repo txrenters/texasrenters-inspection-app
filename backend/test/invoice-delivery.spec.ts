@@ -202,6 +202,12 @@ describe('sending an invoice', () => {
     await expect(setup({ status: 'VOIDED' }).service.send(office, INVOICE, input)).rejects.toMatchObject({ code: 'INVOICE_NOT_SENDABLE' });
   });
 
+  it('sends nothing kept in Xero (2026-11-12): Xero sends it', async () => {
+    const { mail, service } = setup({ xero: { status: 'AUTHORISED', url: 'https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID=x-1', kept: true } });
+    await expect(service.send(office, INVOICE, input)).rejects.toMatchObject({ code: 'INVOICE_KEPT_IN_XERO', status: 409 });
+    expect(mail.sendInvoice).not.toHaveBeenCalled();
+  });
+
   it('refuses too many people, or an address that is not one, before anything else', async () => {
     const { mail, invoices, service } = setup();
     const six = Array.from({ length: 6 }, (_, index) => `p${index}@example.com`);

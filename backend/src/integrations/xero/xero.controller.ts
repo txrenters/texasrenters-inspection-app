@@ -170,6 +170,17 @@ export class XeroController {
     return this.books.view(request.user.organizationId, tenantOf(tenantId));
   }
 
+  /**
+   * "Read invoices from Xero now" on the invoices page (2026-11-12): every company whose books are shown as Xero has
+   * them, two calls each, at most once a minute. Whoever manages invoices may ask.
+   */
+  @Post('books/read')
+  @HttpCode(200)
+  @RequirePermissions('invoices:manage')
+  readAllBooks(@Req() request: AuthenticatedRequest) {
+    return this.books.readAllNow(request.user);
+  }
+
   /** "Read invoices from Xero now": a page of its invoices and one of its payments, at most once a minute. */
   @Post('organisations/:tenantId/books/read')
   @HttpCode(200)

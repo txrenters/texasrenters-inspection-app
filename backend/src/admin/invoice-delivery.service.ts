@@ -30,7 +30,7 @@ import { invoiceEmail } from './invoice-email';
 import { receiptEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn } from './invoice-settings';
-import { SHOWN_INVOICE } from './shown-invoices';
+import { readCompanies, shownInvoices } from './shown-invoices';
 
 export { DEFAULT_INVOICE_EMAIL_CEILING } from './invoice-email-claim';
 
@@ -96,6 +96,8 @@ export class InvoiceDeliveryService {
     if (prior) return this.answerResend(user, prior, invoiceId);
 
     const invoice = await this.invoices.one(user, invoiceId);
+    // Kept in Xero (2026-11-12): Xero sends it.
+    if (invoice.xero?.kept) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', 'This invoice is kept in Xero. Send it from there.');
     if (invoice.status === 'DRAFT') throw new ApplicationError(409, 'INVOICE_NOT_SENDABLE', 'Mark the draft sent before it is emailed.');
     if (invoice.status === 'VOIDED') throw new ApplicationError(409, 'INVOICE_NOT_SENDABLE', 'A voided invoice is not sent.');
     // The office's words (2026-11-10): the note somebody wrote on the press, else the template's -- a
@@ -149,6 +151,8 @@ export class InvoiceDeliveryService {
     if (prior) return this.answerReceiptResend(user, prior, paymentId);
 
     const payment = await this.invoices.onePayment(user, paymentId);
+    // Recorded in Xero, or against an invoice kept there (2026-11-12): Xero sends its receipt.
+    if (payment.keptInXero) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', 'This payment is kept in Xero. Send its receipt from there.');
     const deliveryId = await claimInvoiceEmail(this.prisma, {
       organizationId: user.organizationId,
       invoiceId: payment.invoice.id,
@@ -211,10 +215,12 @@ export class InvoiceDeliveryService {
     if (span < 0) throw new ApplicationError(422, 'DELIVERABLE_RANGE_INVALID', 'The first day comes after the last.');
     if (span > MAX_DELIVERABLE_DAYS)
       throw new ApplicationError(422, 'DELIVERABLE_RANGE_INVALID', `Choose at most ${MAX_DELIVERABLE_DAYS} days at a time.`);
+    // None of a company whose books are read from Xero (2026-11-12): Xero sends those.
+    const read = await readCompanies(this.prisma, user.organizationId);
     const rows = await this.prisma.invoice.findMany({
       where: {
         organizationId: user.organizationId,
-        ...SHOWN_INVOICE,
+        ...shownInvoices(read, { outsideXeroBooks: true }),
         status: InvoiceStatus.AWAITING_PAYMENT,
         balanceCents: { gt: 0 },
         issuedOn: { gte: new Date(`${query.from}T00:00:00.000Z`), lte: new Date(`${query.to}T00:00:00.000Z`) },

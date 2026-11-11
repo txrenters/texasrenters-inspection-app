@@ -173,7 +173,8 @@ export function StatementDialog({ account, open, onClose }: { account: PropertyA
   const periodProblem = statementQueryProblem(query, today);
   const to = [...chosen, ...typedAddresses(others)];
   const toProblem = recipientsProblem(to);
-  const mayEmail = account.writesEnabled && has('invoices:manage');
+  // Xero sends the statements of invoices kept in its books (2026-11-12).
+  const mayEmail = account.writesEnabled && !account.keptInXero && has('invoices:manage');
 
   const download = async () => {
     setDownloading(true);
@@ -299,7 +300,9 @@ export function StatementDialog({ account, open, onClose }: { account: PropertyA
             )
           ) : null}
         </DialogFooter>
-        {!account.writesEnabled ? (
+        {account.keptInXero ? (
+          <p className="text-muted-foreground text-xs">This property&apos;s invoices are kept in Xero: send its statement from there.</p>
+        ) : !account.writesEnabled ? (
           <p className="text-muted-foreground text-xs">Statements are emailed from Jobber until the console takes over invoicing.</p>
         ) : null}
       </DialogContent>

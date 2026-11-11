@@ -13,6 +13,7 @@ import {
   paymentLockedReason,
   paymentProblem,
   paymentTermsLabel,
+  xeroInvoiceUrl,
   type CreateInvoiceInput,
   type CreateInvoicesInput,
   type CreatedInvoices,
@@ -59,7 +60,7 @@ import {
   organisationName,
   productCompanies,
 } from './invoice-settings';
-import { SHOWN_INVOICE, SHOWN_PAYMENT } from './shown-invoices';
+import { KEPT_IN_XERO, keptInXero, officeXeroBooks, readCompanies, shownInvoices, shownPayments, type OfficeXeroBooks } from './shown-invoices';
 
 // Kept exported from here for the callers that already import them (phase 6 moved them).
 export { priceList, receiptBrand } from './invoice-settings';
@@ -98,6 +99,11 @@ const summarySelect = {
   propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
   // The company's books it goes to (2026-11-10).
   xeroOrganisation: { select: { xeroTenantId: true, name: true } },
+  // As it is in those books (2026-11-12).
+  origin: true,
+  xeroTenantId: true,
+  xeroInvoiceId: true,
+  xeroStatus: true,
 } satisfies Prisma.InvoiceSelect;
 
 const detailSelect = {
@@ -264,7 +270,17 @@ function property(row: SummaryRow['propertywareBuilding']) {
   return row ? { id: row.id, address: row.addressLine1 ?? row.name, city: row.city } : null;
 }
 
-function summary(row: SummaryRow, today: string): InvoiceSummary {
+/** As its company's books in Xero have it (2026-11-12); null for one the console has not read from there. */
+function inXero(row: SummaryRow, books: OfficeXeroBooks | null) {
+  if (!row.xeroInvoiceId || !row.xeroTenantId) return null;
+  return {
+    status: row.xeroStatus ?? 'AUTHORISED',
+    url: xeroInvoiceUrl(row.xeroInvoiceId, row.xeroStatus, books?.shortCodes.get(row.xeroTenantId) ?? null),
+    kept: keptInXero(row, books?.read ?? []),
+  };
+}
+
+function summary(row: SummaryRow, today: string, books: OfficeXeroBooks | null = null): InvoiceSummary {
   const dueOn = day(row.dueOn);
   return {
     id: row.id,
@@ -281,6 +297,7 @@ function summary(row: SummaryRow, today: string): InvoiceSummary {
     balanceCents: row.balanceCents,
     jobberUrl: row.jobberWebUrl,
     company: row.xeroOrganisation ? { tenantId: row.xeroOrganisation.xeroTenantId, name: row.xeroOrganisation.name } : null,
+    xero: inXero(row, books),
   };
 }
 
@@ -491,11 +508,13 @@ export class InvoicesService {
     const filter = query.filter ?? 'all';
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 25));
+    // Each company's books as Xero has them, once read; Jobber's copies for the rest (2026-11-12).
+    const books = await officeXeroBooks(this.prisma, user.organizationId);
     // The Overview and the Status pill count what the page is about -- the
     // whole office, a property, or a visit -- whatever is searched.
     const scope: Prisma.InvoiceWhereInput = {
       organizationId: user.organizationId,
-      ...SHOWN_INVOICE,
+      ...shownInvoices(books.read),
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.inspectionId ? { inspectionId: query.inspectionId } : {}),
       // One company's books, or those of none (2026-11-10).
@@ -535,7 +554,7 @@ export class InvoicesService {
       }),
       this.prisma.invoice.aggregate({ where: issued(0, 29), _count: { _all: true }, _sum: { totalCents: true } }),
       this.prisma.invoice.aggregate({ where: issued(30, 59), _count: { _all: true }, _sum: { totalCents: true } }),
-      this.prisma.invoice.aggregate({ where: { organizationId: user.organizationId, ...SHOWN_INVOICE }, _max: { syncedAt: true } }),
+      this.prisma.invoice.aggregate({ where: { organizationId: user.organizationId, ...shownInvoices(books.read) }, _max: { syncedAt: true } }),
       this.prisma.jobberConnection.findUnique({
         where: { organizationId: user.organizationId },
         select: { status: true, invoiceReadProblem: true, invoiceReadCheckedAt: true, invoiceReadCompletedAt: true },
@@ -549,7 +568,7 @@ export class InvoicesService {
     const pastDueCount = pastDue._count._all;
     const pastDueCents = pastDue._sum.balanceCents ?? 0;
     return {
-      items: rows.map((row) => summary(row, today)),
+      items: rows.map((row) => summary(row, today, books)),
       page,
       pageSize,
       total,
@@ -580,16 +599,18 @@ export class InvoicesService {
       jobberRead: jobberRead(connection),
       writesEnabled: await invoiceWritesOn(this.prisma, user.organizationId),
       organisations,
+      xeroBooks: books.companies,
     };
   }
 
   async one(user: AuthenticatedUser, id: string): Promise<InvoiceDetail> {
+    const books = await officeXeroBooks(this.prisma, user.organizationId);
     const row = await this.prisma.invoice.findFirst({
-      where: { id, organizationId: user.organizationId, ...SHOWN_INVOICE },
+      where: { id, organizationId: user.organizationId, ...shownInvoices(books.read) },
       select: detailSelect,
     });
     if (!row) throw this.notFound();
-    return this.detail(user, row);
+    return this.detail(user, row, books);
   }
 
   /** What a new invoice starts from: the office's prices and settings, else the latest invoice it issued (2026-11-06). */
@@ -610,13 +631,14 @@ export class InvoicesService {
     const inspection = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
+    const read = await readCompanies(this.prisma, user.organizationId);
     const [products, defaults, existing, companies, organisations, basis] = await Promise.all([
       officePrices(this.prisma, user.organizationId),
       // The office's settings, else its own wording and terms from the latest invoice it issued.
       newInvoiceDefaults(this.prisma, user.organizationId),
       inspection
         ? this.prisma.invoice.findMany({
-            where: { organizationId: user.organizationId, ...SHOWN_INVOICE, inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
+            where: { organizationId: user.organizationId, ...shownInvoices(read), inspectionId: inspection.id, status: { not: InvoiceStatus.VOIDED } },
             orderBy: { createdAt: 'desc' },
             take: MAX_INVOICES_PER_VISIT,
             select: { id: true, number: true, status: true, dueOn: true, xeroTenantId: true },
@@ -663,9 +685,10 @@ export class InvoicesService {
     const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 25));
     const term = query.search?.trim().replace(/^#/, '') ?? '';
     const paidWithin = daysWhere(query.paidFrom, query.paidTo);
+    const read = await readCompanies(this.prisma, user.organizationId);
     const where: Prisma.InvoicePaymentWhereInput = {
       organizationId: user.organizationId,
-      ...SHOWN_PAYMENT,
+      ...shownPayments(read),
       ...(query.method ? { method: query.method } : {}),
       ...(paidWithin ? { paidOn: paidWithin } : {}),
       ...(term
@@ -680,7 +703,7 @@ export class InvoicesService {
     };
     const received = (from: number, to: number) =>
       this.prisma.invoicePayment.aggregate({
-        where: { organizationId: user.organizationId, ...SHOWN_PAYMENT, paidOn: { gte: daysBefore(today, to), lte: daysBefore(today, from) } },
+        where: { organizationId: user.organizationId, ...shownPayments(read), paidOn: { gte: daysBefore(today, to), lte: daysBefore(today, from) } },
         _count: { _all: true },
         _sum: { amountCents: true },
       });
@@ -715,15 +738,18 @@ export class InvoicesService {
 
   /** One payment on its own page, with the invoice it paid and what that invoice still owes. */
   async onePayment(user: AuthenticatedUser, id: string): Promise<PaymentDetail> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     const row = await this.prisma.invoicePayment.findFirst({
-      where: { id, organizationId: user.organizationId, ...SHOWN_PAYMENT },
+      where: { id, organizationId: user.organizationId, ...shownPayments(read) },
       select: {
         ...paymentSelect(),
         jobberPaymentType: true,
         updatedAt: true,
         // Each receipt emailed for it (2026-11-09), and who one would go to.
         receipts: { orderBy: { createdAt: 'desc' }, take: 10, select: DELIVERY_SELECT },
-        invoice: { select: { ...paidInvoiceSelect, ...RECEIPT_TO_SELECT, totalCents: true, balanceCents: true, status: true, dueOn: true } },
+        invoice: {
+          select: { ...paidInvoiceSelect, ...RECEIPT_TO_SELECT, totalCents: true, balanceCents: true, status: true, dueOn: true, origin: true, xeroTenantId: true, xeroInvoiceId: true },
+        },
       },
     });
     if (!row) throw this.paymentNotFound();
@@ -742,6 +768,8 @@ export class InvoicesService {
       brand: await officeBrand(this.prisma, user.organizationId),
       receipts: receipts.map(deliveryView),
       receiptTo: defaultRecipients(invoice.deliveries[0]?.recipients, invoice.clientEmails),
+      // Read from Xero, or against an invoice kept there (2026-11-12): changed and receipted in Xero.
+      keptInXero: rest.origin === InvoiceOrigin.XERO || keptInXero(invoice, read),
     };
   }
 
@@ -977,11 +1005,14 @@ export class InvoicesService {
     const note = input.note?.trim() || null;
     try {
       await this.prisma.$transaction(async (tx) => {
+        const read = await readCompanies(tx, user.organizationId);
         const invoice = await tx.invoice.findFirst({
-          where: { id: invoiceId, organizationId: user.organizationId, ...SHOWN_INVOICE },
-          select: { status: true, dueOn: true, balanceCents: true },
+          where: { id: invoiceId, organizationId: user.organizationId, ...shownInvoices(read) },
+          select: { status: true, dueOn: true, balanceCents: true, origin: true, xeroTenantId: true, xeroInvoiceId: true },
         });
         if (!invoice) throw this.notFound();
+        // Its payments are recorded in Xero (2026-11-12), and read back from there.
+        if (keptInXero(invoice, read)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
         const status = invoiceStatusOn(invoice.status, day(invoice.dueOn), today);
         if (!acceptsPayment({ status, balanceCents: invoice.balanceCents }))
           throw new ApplicationError(409, 'INVOICE_NOT_PAYABLE', 'This invoice is not waiting for a payment.');
@@ -1048,7 +1079,7 @@ export class InvoicesService {
     return this.one(user, invoiceId);
   }
 
-  private async detail(user: AuthenticatedUser, row: DetailRow): Promise<InvoiceDetail> {
+  private async detail(user: AuthenticatedUser, row: DetailRow, books: OfficeXeroBooks): Promise<InvoiceDetail> {
     const today = businessDate();
     // "Account balance", as Jobber shows it: everything the same client still owes.
     const client: Prisma.InvoiceWhereInput | null = row.jobberClientId
@@ -1058,12 +1089,12 @@ export class InvoicesService {
         : null;
     const account = client
       ? await this.prisma.invoice.aggregate({
-          where: { organizationId: user.organizationId, ...SHOWN_INVOICE, status: InvoiceStatus.AWAITING_PAYMENT, ...client },
+          where: { organizationId: user.organizationId, ...shownInvoices(books.read), status: InvoiceStatus.AWAITING_PAYMENT, ...client },
           _sum: { balanceCents: true },
         })
       : null;
     return {
-      ...summary(row, today),
+      ...summary(row, today, books),
       paymentTerms: paymentTermsLabel(row.paymentTermsDays),
       billingAddress: row.billingAddress,
       lineItems: row.lines.map(lineItem),
@@ -1166,9 +1197,10 @@ export class InvoicesService {
    * closed to payments.
    */
   private async paymentToChange(tx: Prisma.TransactionClient, user: AuthenticatedUser, id: string, expectedUpdatedAt: string) {
+    const read = await readCompanies(tx, user.organizationId);
     const found = await tx.invoicePayment.findFirst({
       // One read from Xero (2026-11-12) is changed there, never here.
-      where: { id, organizationId: user.organizationId, ...SHOWN_PAYMENT, origin: { not: InvoiceOrigin.XERO } },
+      where: { id, organizationId: user.organizationId, ...shownPayments(read), origin: { not: InvoiceOrigin.XERO } },
       select: {
         invoiceId: true,
         amountCents: true,
@@ -1179,10 +1211,12 @@ export class InvoicesService {
         origin: true,
         recordedById: true,
         updatedAt: true,
-        invoice: { select: { status: true, balanceCents: true } },
+        invoice: { select: { status: true, balanceCents: true, origin: true, xeroTenantId: true, xeroInvoiceId: true } },
       },
     });
     if (!found) throw this.paymentNotFound();
+    // Against an invoice kept in Xero (2026-11-12): its payments are changed there.
+    if (keptInXero(found.invoice, read)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
     if (found.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.paymentChanged();
     const locked = paymentLockedReason({ amountCents: found.amountCents, invoiceStatus: found.invoice.status });
     if (locked) throw new ApplicationError(409, 'PAYMENT_LOCKED', locked);

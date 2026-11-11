@@ -34,7 +34,7 @@ import { PrismaService } from '../common/prisma.service';
 import { nextInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
-import { SHOWN_INVOICE } from './shown-invoices';
+import { KEPT_IN_XERO, keptInXero, readCompanies, shownInvoices } from './shown-invoices';
 
 /**
  * Editing an invoice in the console (2026-11-06, phase 3 of taking invoicing
@@ -67,6 +67,8 @@ const dayWords = (value: string | null | undefined) =>
 const editSelect = {
   id: true,
   origin: true,
+  // Kept in Xero, once its company's books are read (2026-11-12).
+  xeroInvoiceId: true,
   status: true,
   number: true,
   subject: true,
@@ -289,7 +291,7 @@ export class InvoiceEditsService {
       if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', problem);
       if (clean.number && clean.number !== before.number) {
         const taken = await tx.invoice.findFirst({
-          where: { organizationId: user.organizationId, ...SHOWN_INVOICE, number: clean.number, id: { not: id } },
+          where: { organizationId: user.organizationId, ...shownInvoices(await readCompanies(tx, user.organizationId)), number: clean.number, id: { not: id } },
           select: { id: true },
         });
         if (taken) throw new ApplicationError(409, 'INVOICE_NUMBER_TAKEN', `Invoice #${clean.number} is another invoice already.`);
@@ -425,7 +427,7 @@ export class InvoiceEditsService {
    */
   async history(user: AuthenticatedUser, id: string): Promise<InvoiceHistory> {
     const invoice = await this.prisma.invoice.findFirst({
-      where: { id, organizationId: user.organizationId, ...SHOWN_INVOICE },
+      where: { id, organizationId: user.organizationId, ...shownInvoices(await readCompanies(this.prisma, user.organizationId)) },
       select: { id: true },
     });
     if (!invoice) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');
@@ -449,9 +451,11 @@ export class InvoiceEditsService {
 
   /** The invoice as it was read, or a refusal: not found in this office, or changed since. */
   private async invoiceAsRead(tx: Prisma.TransactionClient, user: AuthenticatedUser, id: string, expectedUpdatedAt: string) {
-    // One read from Xero (2026-11-12) is changed there, never here.
-    const row = await tx.invoice.findFirst({ where: { id, organizationId: user.organizationId, ...SHOWN_INVOICE }, select: editSelect });
+    const read = await readCompanies(tx, user.organizationId);
+    const row = await tx.invoice.findFirst({ where: { id, organizationId: user.organizationId, ...shownInvoices(read) }, select: editSelect });
     if (!row) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');
+    // Kept in Xero (2026-11-12): edited, voided and closed there, never here.
+    if (keptInXero(row, read)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
     if (row.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.invoiceChanged();
     return row;
   }

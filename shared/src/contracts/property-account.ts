@@ -12,7 +12,7 @@
 import type { InvoiceDeliveryView } from './invoice-delivery.js';
 import type { InvoiceStatus, PaymentMethod, ReceiptBrand } from './invoices.js';
 
-export type AccountEntryKind = 'INVOICE' | 'PAYMENT' | 'REFUND' | 'ADJUSTMENT' | 'WRITE_OFF';
+export type AccountEntryKind = 'INVOICE' | 'PAYMENT' | 'REFUND' | 'ADJUSTMENT' | 'WRITE_OFF' | 'CREDIT';
 
 export const ACCOUNT_ENTRY_LABEL: Record<AccountEntryKind, string> = {
   INVOICE: 'Invoice',
@@ -20,6 +20,8 @@ export const ACCOUNT_ENTRY_LABEL: Record<AccountEntryKind, string> = {
   REFUND: 'Refund',
   ADJUSTMENT: 'Deposit or credit in Jobber',
   WRITE_OFF: 'Written off as bad debt',
+  // What a credit note took off it, in its company's books in Xero (2026-11-12).
+  CREDIT: 'Credited in Xero',
 };
 
 export interface AccountEntry {
@@ -69,6 +71,11 @@ export interface PropertyAccount {
   truncated: boolean;
   /** Whether statements can be emailed from here: once the console owns invoicing. */
   writesEnabled: boolean;
+  /**
+   * Some of its invoices are kept in a company's books in Xero (2026-11-12):
+   * Xero sends its statements, never the console.
+   */
+  keptInXero?: boolean;
   /** Who a statement goes to by default: the client's addresses from its latest invoice. */
   statementTo: string[];
   /** The statements emailed for this property, newest first. */

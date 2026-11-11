@@ -488,7 +488,8 @@ export class XeroSenderService {
       // Then the payments, against the invoices as they now are in Xero -- unless the office records them there itself
       // (2026-11-11); then what was written off as bad debt.
       if (state.paymentsToXero) await this.sendPayments(organizationId, state.tenantId, state.accounts, result, budget);
-      await this.writeOffs(organizationId, state.tenantId, state.accounts, result);
+      // Bad debts are written off in Xero by the office once its books are read there (2026-11-12).
+      if (!state.booksRead) await this.writeOffs(organizationId, state.tenantId, state.accounts, result);
     } catch (error) {
       result.problem = error instanceof XeroError ? error.message : 'The run stopped on an unexpected error.';
       if (error instanceof XeroError && error.code === 'XERO_REAUTHORIZATION_REQUIRED') await this.auth.requireReconnect(organizationId, error.message);
@@ -1272,7 +1273,7 @@ export class XeroSenderService {
     const [row, connection, organisation, settings] = await Promise.all([
       this.prisma.xeroSettings.findUnique({
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
-        select: { sendingEnabled: true, sendingChangedAt: true, lastRunAt: true, lastRunProblem: true, sendFrom: true },
+        select: { sendingEnabled: true, sendingChangedAt: true, lastRunAt: true, lastRunProblem: true, sendFrom: true, booksReadAt: true },
       }),
       this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, scopes: true } }),
       this.prisma.xeroOrganisation.findUnique({
@@ -1285,6 +1286,8 @@ export class XeroSenderService {
     const scopes = connected ? (connection?.scopes ?? []) : [];
     // A project for each visit (2026-11-11): invoices then go as drafts, and payments stay out -- Xero takes none on a draft.
     const projectsEnabled = projectsAreOn(settings.values);
+    // Its books read back from Xero (2026-11-12): payments and bad debts are recorded there, its reminders are Xero's.
+    const booksRead = Boolean(row?.booksReadAt);
     return {
       row,
       name: organisation?.name ?? null,
@@ -1296,7 +1299,8 @@ export class XeroSenderService {
         trackingCategories: connected ? ((organisation?.trackingCategories as XeroTrackingCategory[] | null) ?? []) : [],
         items: connected ? ((organisation?.items as XeroItem[] | null) ?? []) : [],
       } satisfies Catalog,
-      paymentsToXero: paymentsGoToXero(settings.values) && !projectsEnabled,
+      paymentsToXero: paymentsGoToXero(settings.values) && !projectsEnabled && !booksRead,
+      booksRead,
       projectsEnabled,
       values: settings.values,
       /** The labour's currency: the company's own, as Xero said it. */
@@ -1306,7 +1310,8 @@ export class XeroSenderService {
         connected,
         scopes,
         settingsReady: settings.ready,
-        invoiceRemindersOn: connected ? (organisation?.invoiceRemindersOn ?? null) : null,
+        // The console sends no follow-ups for a company whose books it reads: Xero's reminders may be on.
+        invoiceRemindersOn: connected && !booksRead ? (organisation?.invoiceRemindersOn ?? null) : null,
         projectsEnabled,
       }),
     };

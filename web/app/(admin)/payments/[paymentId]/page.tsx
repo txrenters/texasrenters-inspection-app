@@ -45,9 +45,10 @@ export default function PaymentPage() {
   const data = payment.data;
   const mayRecord = has('payments:record');
   const locked = paymentLockedReason(data);
-  const changeable = mayRecord && data.writesEnabled && !locked;
+  // Recorded in Xero, or against an invoice kept there (2026-11-12): changed and receipted in Xero.
+  const changeable = mayRecord && data.writesEnabled && !locked && !data.keptInXero;
   // Emailed from here once the console owns invoicing (2026-11-09); Jobber sends its own until then.
-  const mayEmail = mayRecord && data.writesEnabled;
+  const mayEmail = mayRecord && data.writesEnabled && !data.keptInXero;
   const receipt = async () => {
     setDownloading(true);
     try {
@@ -71,7 +72,7 @@ export default function PaymentPage() {
     { label: 'Reference', value: data.reference ?? '—' },
     {
       label: 'Recorded',
-      value: data.recordedBy ? `By ${data.recordedBy.displayName}` : data.origin === 'JOBBER' ? 'In Jobber' : 'In the console',
+      value: data.recordedBy ? `By ${data.recordedBy.displayName}` : data.origin === 'XERO' ? 'In Xero' : data.origin === 'JOBBER' ? 'In Jobber' : 'In the console',
       detail: data.origin === 'CONSOLE' ? formatInvoiceMoment(data.recordedAt) : undefined,
     },
   ];
@@ -116,7 +117,7 @@ export default function PaymentPage() {
             ) : null}
           </>
         }
-        badges={<Badge variant="success">{data.origin === 'JOBBER' ? 'From Jobber' : 'Recorded here'}</Badge>}
+        badges={<Badge variant="success">{data.origin === 'XERO' ? 'From Xero' : data.origin === 'JOBBER' ? 'From Jobber' : 'Recorded here'}</Badge>}
         record={PAYMENT_RECORD}
         title={`Payment for ${invoiceName}`}
       />
