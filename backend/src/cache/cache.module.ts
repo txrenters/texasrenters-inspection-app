@@ -19,6 +19,17 @@ import { SingleFlightService } from './single-flight.service';
     CacheService,
     CacheInvalidationService,
   ],
-  exports: [CacheService, CacheInvalidationService, CacheKeyService, CacheMetricsService],
+  // RedisCacheConnection for the API-key rate limit (gateway/rate-limit.guard.ts),
+  // which counts in Redis so every replica shares one count. It asks for the
+  // connection as optional, so leaving it out of this list never failed: each
+  // replica quietly counted alone, multiplying every client's limit by the
+  // number of containers (found 2026-11-12).
+  exports: [
+    CacheService,
+    CacheInvalidationService,
+    CacheKeyService,
+    CacheMetricsService,
+    RedisCacheConnection,
+  ],
 })
 export class CacheModule {}

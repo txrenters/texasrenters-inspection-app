@@ -493,6 +493,39 @@ describe('ApiRateLimitGuard', () => {
     expect(headers['retry-after']).toBeDefined();
   });
 
+  it('shares one count between replicas through Redis, and counts alone only while Redis is down', async () => {
+    // Two guards are two containers. One Redis counter, as INCR keeps it.
+    const counters = new Map<string, number>();
+    let redisUp = true;
+    const redis = {
+      incrementInWindow: jest.fn(async (key: string) => {
+        if (!redisUp) return undefined;
+        const count = (counters.get(key) ?? 0) + 1;
+        counters.set(key, count);
+        return count;
+      }),
+    };
+    const first = new ApiRateLimitGuard(redis as never);
+    const second = new ApiRateLimitGuard(redis as never);
+    const limit = 2;
+
+    await expect(first.canActivate(limiterContext(limit).context)).resolves.toBe(true);
+    await expect(second.canActivate(limiterContext(limit).context)).resolves.toBe(true);
+    // The third request is over the limit wherever it lands.
+    await expect(first.canActivate(limiterContext(limit).context)).rejects.toMatchObject({
+      response: 'Rate limit exceeded for this API client.',
+    });
+    expect(redis.incrementInWindow).toHaveBeenCalledWith(expect.stringMatching(/^api-rate:client-1:\d+$/), 120);
+
+    // An outage must not remove the limit: each replica then enforces it alone.
+    redisUp = false;
+    await expect(second.canActivate(limiterContext(limit).context)).resolves.toBe(true);
+    await expect(second.canActivate(limiterContext(limit).context)).resolves.toBe(true);
+    await expect(second.canActivate(limiterContext(limit).context)).rejects.toMatchObject({
+      response: 'Rate limit exceeded for this API client.',
+    });
+  });
+
   it('leaves human traffic alone', async () => {
     const guard = new ApiRateLimitGuard();
     const request = { user: { id: 'user-1', principalType: 'USER' } };
