@@ -92,6 +92,8 @@ const JOB_LABEL: Record<string, string> = {
   SUPRA_LOCKBOX_PLACEMENT: 'Supra + lockbox placement',
   SUPRA_LOCKBOX_REMOVAL: 'Supra + lockbox removal',
   AC_FILTER_DELIVERY: 'AC filter delivery',
+  MAINTENANCE: 'Maintenance',
+  PEST_CONTROL: 'Pest control',
 };
 
 /** "Move-out", or the type in words for one this page has no name for yet. */

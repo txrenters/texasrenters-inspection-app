@@ -23,6 +23,8 @@ const INSPECTION_WORDS: Record<string, string> = {
   SUPRA_LOCKBOX_PLACEMENT: 'Supra lockbox placement',
   SUPRA_LOCKBOX_REMOVAL: 'Supra lockbox removal',
   AC_FILTER_DELIVERY: 'AC filter delivery',
+  MAINTENANCE: 'Maintenance work order',
+  PEST_CONTROL: 'Pest control work order',
 };
 
 /** "Occupied inspection", or the type in plain words for one this list has not met. */

@@ -90,6 +90,8 @@ const INSPECTION_TYPE_LABEL: Record<string, string> = {
   SUPRA_LOCKBOX_PLACEMENT: 'Lockbox placement',
   SUPRA_LOCKBOX_REMOVAL: 'Lockbox removal',
   AC_FILTER_DELIVERY: 'AC filter delivery',
+  MAINTENANCE: 'Maintenance work order',
+  PEST_CONTROL: 'Pest control work order',
 };
 
 const isService = (task: JobTask): task is JobTask & { key: ReportableVisitService } => task.key !== 'inspection';

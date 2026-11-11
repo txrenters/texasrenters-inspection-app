@@ -133,6 +133,14 @@ enum InspectionType {
   SUPRA_LOCKBOX_PLACEMENT
   SUPRA_LOCKBOX_REMOVAL
   AC_FILTER_DELIVERY
+  /// A repair work order handed over by the maintenance app for the in-house
+  /// crews (2026-11-12). Not an inspection of the property: a technician goes
+  /// to fix what the work order describes, so it walks no rooms, scores no
+  /// checklist and compares against no move-in. Scheduled here so the crews'
+  /// days are planned in one place.
+  MAINTENANCE
+  /// The same, for Crystal Creek Pest Control's work orders.
+  PEST_CONTROL
 }
 
 enum InspectionAreaCompletionStatus {
@@ -457,6 +465,7 @@ model Organization {
   jobberPropertyLinks  JobberPropertyLink[]
   jobberVisitImports   JobberVisitImport[]
   jobberOutboundTasks  JobberOutboundTask[]
+  workOrderImports     WorkOrderImport[]
   inspectionImportJobs InspectionImportJob[]
   clientErrorReports   ClientErrorReport[]
   tenants              PropertywareTenant[]
@@ -1397,6 +1406,14 @@ model Inspection {
   propertywareBuildingId     String?                 @db.Uuid
   propertywareUnitId         String?                 @db.Uuid
   propertywareLeaseId        String?                 @db.Uuid
+  /// The work order this visit was made from, as the maintenance app keys it
+  /// ("tx-maintenance:work-order:2864"), and the number the office calls it
+  /// by. Set only by the work-order intake on the gateway; null for every
+  /// other inspection. The key is what makes a repeated hand-off an update
+  /// rather than a second visit.
+  workOrderKey               String?
+  workOrderNumber            Int?
+  workOrderImports           WorkOrderImport[]
   /// The Jobber visit this inspection was created from, and the job it belongs
   /// to. Null for anything booked here.
   jobberVisitId              String?
@@ -1539,6 +1556,8 @@ model Inspection {
   /// index, so every manually booked inspection is unaffected — but a visit
   /// that syncs twice cannot become two inspections.
   @@unique([organizationId, jobberVisitId])
+  /// One visit per work order, for the same reason as the Jobber visit above.
+  @@unique([organizationId, workOrderKey])
   @@index([jobberCompanionOfId])
   /// NOT DECLARED HERE: `Inspection_scheduled_booking_key`, a partial unique
   /// index on (organization, building, unit, type, scheduledAt) WHERE status =
@@ -2737,6 +2756,11 @@ enum InspectionSource {
   /// because the evidence was not captured here: nobody on this system walked
   /// the property, and a charge argued from it rests on somebody else's record.
   IMPORTED_REPORT
+  /// A repair work order the maintenance app handed over through the gateway
+  /// (2026-11-12). The maintenance app owns the work order; this row is the
+  /// crew's visit to do it, so the intake may update or cancel it and nothing
+  /// else may claim it.
+  WORK_ORDER
 }
 
 /// to say *which* connection needs attention.
@@ -2944,6 +2968,54 @@ model JobberVisitImport {
   @@unique([organizationId, jobberVisitId])
   @@index([organizationId, status])
   @@index([linkId, status])
+}
+
+/// What became of a work order the maintenance app handed over.
+enum WorkOrderImportStatus {
+  /// Staged; the hand-off is being filed, or was interrupted before an answer.
+  RECEIVED
+  /// Filed: `inspectionId` is the visit, or null when there was nothing to
+  /// make (a work order already closed before it was ever seen here).
+  PROCESSED
+  /// Refused, with the stable code and the words the maintenance app was
+  /// given. It sends the work order again once something about it changes.
+  FAILED
+}
+
+/// A work order as the maintenance app handed it over, kept whole.
+///
+/// The gateway's work-order route stages every hand-off here before touching an
+/// Inspection, the way the Jobber sync stages visits in `JobberVisitImport`: a
+/// refusal has a row to record itself on, the console can list what arrived
+/// and why anything was turned away, and a decision can be re-run from the
+/// payload without asking the other system again. One row per work order:
+/// a repeated hand-off updates it and counts, it never adds a second.
+model WorkOrderImport {
+  id              String                @id @default(uuid()) @db.Uuid
+  organizationId  String                @db.Uuid
+  /// The sending system, "tx-maintenance".
+  sourceSystem    String
+  /// The sender's idempotency key, "tx-maintenance:work-order:2864".
+  externalKey     String
+  workOrderNumber Int?
+  status          WorkOrderImportStatus @default(RECEIVED)
+  failureCode     String?
+  failureMessage  String?
+  /// The hand-off as it arrived, after validation.
+  payload         Json
+  inspectionId    String?               @db.Uuid
+  /// How many times this work order has been handed over.
+  receivedCount   Int                   @default(1)
+  lastReceivedAt  DateTime              @default(now())
+  processedAt     DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection      Inspection?           @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, sourceSystem, externalKey])
+  @@index([organizationId, status, lastReceivedAt])
+  @@index([inspectionId])
 }
 
 

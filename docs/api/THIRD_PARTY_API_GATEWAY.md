@@ -72,8 +72,9 @@ Two independent gates, and both must open:
 The reference page shows both per endpoint: `x-required-permissions`,
 `x-authentication`, and an "Open to integrations" badge.
 
-The opened surface today is `/api/v1/gateway/*` — a curated, read-only slice.
-Every route on it is a `GET`, and tests enforce that:
+The opened surface today is `/api/v1/gateway/*` — a curated slice. Every
+route on it is a `GET` except the one write listed last, and tests enforce
+that no other write exists:
 
 | Route | Permission |
 | --- | --- |
@@ -85,6 +86,13 @@ Every route on it is a `GET`, and tests enforce that:
 | `GET /gateway/inspections/{inspectionId}` | `inspections:read` |
 | `GET /gateway/technicians` | `technicians:read` |
 | `GET /gateway/technician-locations` | `technicians:locate` |
+| `POST /gateway/work-orders` | `work-orders:manage` |
+
+`work-orders` is the maintenance app handing over a repair work order for the
+in-house crews, which becomes a maintenance visit here (2026-11-12). A write,
+so it is signed, and idempotent on the work order's own key: the same envelope
+again updates the visit it made. Its envelope and every answer are in
+[TX_MAINTENANCE_WORK_ORDERS.md](../integrations/TX_MAINTENANCE_WORK_ORDERS.md).
 
 `technician-locations` is the most sensitive of these: it says where a named
 employee was at a given minute. It sits behind `technicians:locate`, a grant of

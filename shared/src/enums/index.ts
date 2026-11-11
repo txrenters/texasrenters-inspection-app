@@ -52,6 +52,15 @@ export const InspectionType = {
   SUPRA_LOCKBOX_PLACEMENT: 'SUPRA_LOCKBOX_PLACEMENT',
   SUPRA_LOCKBOX_REMOVAL: 'SUPRA_LOCKBOX_REMOVAL',
   AC_FILTER_DELIVERY: 'AC_FILTER_DELIVERY',
+  /**
+   * Repair work orders the maintenance app hands over for the in-house crews
+   * (2026-11-12). Not inspections: a technician goes to fix what the work
+   * order describes, so neither walks rooms, scores a checklist or compares
+   * against a move-in. Scheduled here so the crews' days are planned in one
+   * place. The second is Crystal Creek Pest Control's.
+   */
+  MAINTENANCE: 'MAINTENANCE',
+  PEST_CONTROL: 'PEST_CONTROL',
 } as const;
 export type InspectionType = (typeof InspectionType)[keyof typeof InspectionType];
 export enum UploadQueueStatus {

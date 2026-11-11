@@ -139,8 +139,21 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 export function inspectionSeedsStandardLayout(
   inspectionType: string | null | undefined,
 ): boolean {
+  // A repair visit has no rooms to walk, so a property nobody has surveyed
+  // is not given a guessed layout for it. It is booked with technician area
+  // capture instead, and the technician files evidence where the work was.
+  if (inspectionIsWorkOrder(inspectionType)) return false;
   const scope = areaScopeFor(inspectionType);
   return scope === AreaScope.CHOSEN || scope === AreaScope.ALL;
+}
+
+/**
+ * Whether the visit is a repair work order handed over by the maintenance app
+ * rather than an inspection of the property: maintenance, or pest control.
+ * Such a visit walks no rooms, scores no checklist and compares to nothing.
+ */
+export function inspectionIsWorkOrder(inspectionType: string | null | undefined): boolean {
+  return inspectionType === InspectionType.MAINTENANCE || inspectionType === InspectionType.PEST_CONTROL;
 }
 
 /**
@@ -263,11 +276,15 @@ export function checklistKindFor(
     // Nothing to score. A lockbox is placed or it is not, and a filter is
     // delivered or it is not; the evidence is the answer. Asking the room
     // checklist here would be the original bug in a new costume — a technician
-    // fitting a lockbox asked whether the floor coverings are clean.
+    // fitting a lockbox asked whether the floor coverings are clean. The same
+    // for a repair work order: it is done or it is not, the work order says
+    // what, and the technician's photos say whether. No room is assessed.
     case InspectionType.SUPRA_LOCKBOX_PLACEMENT:
     case InspectionType.SUPRA_LOCKBOX_REMOVAL:
     case InspectionType.AC_FILTER_DELIVERY:
     case InspectionType.ROOF:
+    case InspectionType.MAINTENANCE:
+    case InspectionType.PEST_CONTROL:
       return 'NONE';
     default:
       return areaScopeFor(inspectionType) === AreaScope.HVAC_SYSTEM

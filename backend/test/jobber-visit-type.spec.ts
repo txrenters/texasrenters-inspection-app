@@ -1,4 +1,5 @@
 import { InspectionType } from '@prisma/client';
+import { inspectionIsWorkOrder } from '@texasrenters/shared';
 
 import {
   DEFAULT_VISIT_TYPE_RULES,
@@ -96,8 +97,16 @@ describe('Jobber visit type resolution', () => {
   });
 
   it('covers every inspection type, so a new one cannot be silently untypeable', () => {
-    for (const type of Object.values(InspectionType))
+    for (const type of Object.values(InspectionType)) {
+      // The two work-order types never come from a Jobber title: the
+      // maintenance app hands them over through the gateway, and the sync keeps
+      // skipping maintenance visits. Listed with no keywords, deliberately.
+      if (inspectionIsWorkOrder(type)) {
+        expect(DEFAULT_VISIT_TYPE_RULES[type]).toEqual([]);
+        continue;
+      }
       expect(DEFAULT_VISIT_TYPE_RULES[type]?.length ?? 0).toBeGreaterThan(0);
+    }
   });
 });
 

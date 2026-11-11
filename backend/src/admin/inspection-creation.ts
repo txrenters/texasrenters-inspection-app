@@ -93,12 +93,22 @@ export interface InspectionCreationInput {
    * only, never read from a request body.
    */
   rebookOf?: string | null;
+  /**
+   * Leave the same-day duplicate rule aside: for a work order handed over by
+   * the maintenance app, whose own key (`workOrderKey`, unique) is what says
+   * whether two are the same job. Two repair visits at one property on one
+   * day are two work orders, not one booked twice. Set by the server only.
+   */
+  skipDuplicateCheck?: boolean;
 }
 
 export interface InspectionRecordDetails {
   priority: string;
   internalNotes?: string | null;
   createdById: string | null;
+  /** The maintenance app's key and number for a work order this visit does. */
+  workOrderKey?: string | null;
+  workOrderNumber?: number | null;
   /** Defaults to MANUAL, so a caller that has never heard of Jobber cannot
    * accidentally produce a row the sync believes it owns. */
   source?: InspectionSource;
@@ -580,18 +590,20 @@ export async function resolveInspectionPlan(
    * that job, not a second copy of it. Only that one visit is left out; any
    * other live booking of the type that day still refuses.
    */
-  const duplicate = await tx.inspection.findFirst({
-    where: {
-      ...(input.rebookOf ? { id: { not: input.rebookOf } } : {}),
-      organizationId: input.organizationId,
-      propertywareBuildingId: property.id,
-      propertywareUnitId: unit?.id ?? null,
-      inspectionType: input.inspectionType,
-      scheduledAt,
-      status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
-    },
-    select: DUPLICATE_BOOKING_SELECT,
-  });
+  const duplicate = input.skipDuplicateCheck
+    ? null
+    : await tx.inspection.findFirst({
+        where: {
+          ...(input.rebookOf ? { id: { not: input.rebookOf } } : {}),
+          organizationId: input.organizationId,
+          propertywareBuildingId: property.id,
+          propertywareUnitId: unit?.id ?? null,
+          inspectionType: input.inspectionType,
+          scheduledAt,
+          status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
+        },
+        select: DUPLICATE_BOOKING_SELECT,
+      });
   if (duplicate) throw duplicateBooking(duplicate);
 
   return {
@@ -1175,6 +1187,8 @@ export async function insertInspection(
         jobberVisitTitle: details.jobberVisitTitle,
         jobberVisitDetails: details.jobberVisitDetails,
         jobberCompanionOfId: details.jobberCompanionOfId,
+        workOrderKey: details.workOrderKey,
+        workOrderNumber: details.workOrderNumber,
         // Spread rather than assigned, so omitting them leaves the column
         // defaults exactly as they were for every existing caller.
         ...(details.status ? { status: details.status } : {}),

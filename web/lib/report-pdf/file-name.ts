@@ -23,6 +23,8 @@ const INSPECTION_FILE_LABEL: Record<InspectionType, string> = {
   SUPRA_LOCKBOX_PLACEMENT: 'Supra Lockbox Placement',
   SUPRA_LOCKBOX_REMOVAL: 'Supra Lockbox Removal',
   AC_FILTER_DELIVERY: 'AC Filter Delivery',
+  MAINTENANCE: 'Maintenance Work Order',
+  PEST_CONTROL: 'Pest Control Work Order',
 };
 
 export const COMPARISON_FILE_LABEL = 'Move In Move Out Comparison';

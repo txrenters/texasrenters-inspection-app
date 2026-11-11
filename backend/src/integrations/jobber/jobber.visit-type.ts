@@ -58,6 +58,11 @@ export const DEFAULT_VISIT_TYPE_RULES: Record<InspectionType, string[]> = {
     'ac filter',
     'air filter',
   ],
+  // Never typed from a Jobber title. A work order reaches this app through the
+  // gateway, from the maintenance app that owns it; the sync keeps skipping
+  // maintenance visits exactly as before.
+  [InspectionType.MAINTENANCE]: [],
+  [InspectionType.PEST_CONTROL]: [],
 };
 
 /**

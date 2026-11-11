@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 
 import { AdminModule } from '../admin/admin.module';
 import { TechnicianModule } from '../technician/technician.module';
+import { WorkOrdersModule } from '../work-orders/work-orders.module';
 import { ApiAuthGuard, PermissionsGuard } from '../common/auth';
 import { ApiClientController } from './api-client.controller';
 import { GatewayController } from './gateway.controller';
@@ -22,8 +23,9 @@ import { ApiRateLimitGuard } from './rate-limit.guard';
 @Global()
 @Module({
   // TechnicianModule for the position feed the map and any dispatching
-  // integration read; AdminModule for everything else on the gateway surface.
-  imports: [AdminModule, TechnicianModule],
+  // integration read; WorkOrdersModule for the work orders the maintenance
+  // app hands over; AdminModule for everything else on the gateway surface.
+  imports: [AdminModule, TechnicianModule, WorkOrdersModule],
   controllers: [ApiClientController, GatewayController],
   providers: [
     ApiClientService,

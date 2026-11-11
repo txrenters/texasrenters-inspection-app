@@ -33,6 +33,8 @@ describe('report file names', () => {
       'Supra Lockbox Placement',
       'Supra Lockbox Removal',
       'AC Filter Delivery',
+      'Maintenance Work Order',
+      'Pest Control Work Order',
     ]);
   });
 
