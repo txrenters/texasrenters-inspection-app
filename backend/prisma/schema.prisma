@@ -3294,10 +3294,17 @@ model Invoice {
   /// What Xero says was paid on it, and credited to it; null on a row not read from Xero.
   amountPaidCents        Int?
   amountCreditedCents    Int?
+  /// On a row read from Xero (2026-11-12): Jobber's copy of the same invoice --
+  /// the one the console sent as it, or the one under its number -- shown no
+  /// longer once its company's books are read. Only on a XERO row (checked).
+  jobberCopyId           String?         @db.Uuid
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
   organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobberCopy           Invoice?              @relation("XeroTwin", fields: [jobberCopyId], references: [id], onDelete: SetNull)
+  /// Xero's rows that stand for this Jobber copy.
+  xeroTwins            Invoice[]             @relation("XeroTwin")
   inspection           Inspection?           @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
   propertywareBuilding PropertywareBuilding? @relation(fields: [propertywareBuildingId], references: [id], onDelete: SetNull)
   createdBy            UserProfile?          @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -3317,6 +3324,7 @@ model Invoice {
   @@unique([organizationId, clientRequestId])
   @@unique([organizationId, xeroTenantId, xeroInvoiceId])
   @@index([organizationId, number])
+  @@index([jobberCopyId])
   @@index([organizationId, status, dueOn])
   @@index([organizationId, issuedOn])
   @@index([organizationId, jobberClientId])

@@ -27,7 +27,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate, businessInstant } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { SHOWN_INVOICE } from './shown-invoices';
+import { readCompanies, shownInvoices } from './shown-invoices';
 
 /**
  * Where the money stands (2026-11-09, phase 2 of the invoice gap review), as
@@ -59,12 +59,12 @@ const bucket = (count: number | null | undefined, cents: number | null | undefin
  * One company's invoices -- an organisation's tenant id, or `none` for those of no company -- or, left out, every
  * company's. Only those the pages show (2026-11-12): not yet the books read back from Xero.
  */
-const companyOf = (company: string | undefined): Prisma.InvoiceWhereInput => ({
-  ...SHOWN_INVOICE,
+const companyOf = (company: string | undefined, read: readonly string[]): Prisma.InvoiceWhereInput => ({
+  ...shownInvoices(read),
   ...(company ? { xeroTenantId: company === 'none' ? null : company } : {}),
 });
 /** The payments against one company's invoices. */
-const paymentsOf = (company: string | undefined): Prisma.InvoicePaymentWhereInput => ({ invoice: { is: companyOf(company) } });
+const paymentsOf = (company: string | undefined, read: readonly string[]): Prisma.InvoicePaymentWhereInput => ({ invoice: { is: companyOf(company, read) } });
 
 /** Neither a draft nor a voided invoice is owed, invoiced or taxed. */
 const SENT = { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] };
@@ -116,12 +116,13 @@ export class InvoiceReportsService {
 
   /** What is owed, by when it falls due. */
   async projectedIncome(user: AuthenticatedUser, company?: string): Promise<ProjectedIncomeReport> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     const today = businessDate();
     const owed: Prisma.InvoiceWhereInput = {
       organizationId: user.organizationId,
       status: InvoiceStatus.AWAITING_PAYMENT,
       balanceCents: { gt: 0 },
-      ...companyOf(company),
+      ...companyOf(company, read),
     };
     const sum = (dueOn: Prisma.InvoiceWhereInput) =>
       this.prisma.invoice.aggregate({ where: { AND: [owed, dueOn] }, _count: { _all: true }, _sum: { balanceCents: true } });
@@ -155,13 +156,14 @@ export class InvoiceReportsService {
 
   /** The late invoices, by how late: under 30 days, 30 to 60, 60 to 90, over 90. */
   async agedReceivables(user: AuthenticatedUser, company?: string): Promise<AgedReceivablesReport> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     const today = businessDate();
     const late: Prisma.InvoiceWhereInput = {
       organizationId: user.organizationId,
       status: InvoiceStatus.AWAITING_PAYMENT,
       balanceCents: { gt: 0 },
       dueOn: { lt: dateOf(today) },
-      ...companyOf(company),
+      ...companyOf(company, read),
     };
     // Days late, d: due on today - d.
     const lateBy = (min: number, max: number | null) =>
@@ -194,19 +196,20 @@ export class InvoiceReportsService {
 
   /** What was invoiced and what came in, in the days chosen. */
   async transactions(user: AuthenticatedUser, range: ReportRange, company?: string): Promise<TransactionsReport> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     this.checkRange(range);
     const organizationId = user.organizationId;
     const issued: Prisma.InvoiceWhereInput = {
       organizationId,
       status: SENT,
       issuedOn: { gte: dateOf(range.from), lte: dateOf(range.to) },
-      ...companyOf(company),
+      ...companyOf(company, read),
     };
     const paid = (sign: 'in' | 'out'): Prisma.InvoicePaymentWhereInput => ({
       organizationId,
       paidOn: { gte: dateOf(range.from), lte: dateOf(range.to) },
       amountCents: sign === 'in' ? { gt: 0 } : { lte: 0 },
-      ...paymentsOf(company),
+      ...paymentsOf(company, read),
     });
     const [invoiced, received, refunded, invoices, payments] = await Promise.all([
       this.prisma.invoice.aggregate({ where: issued, _count: { _all: true }, _sum: { totalCents: true } }),
@@ -219,7 +222,7 @@ export class InvoiceReportsService {
         select: { id: true, number: true, clientName: true, issuedOn: true, totalCents: true, jobNumber: true },
       }),
       this.prisma.invoicePayment.findMany({
-        where: { organizationId, paidOn: { gte: dateOf(range.from), lte: dateOf(range.to) }, ...paymentsOf(company) },
+        where: { organizationId, paidOn: { gte: dateOf(range.from), lte: dateOf(range.to) }, ...paymentsOf(company, read) },
         orderBy: [{ paidOn: 'desc' }, { createdAt: 'desc' }],
         take: MAX_REPORT_ROWS + 1,
         select: {
@@ -276,6 +279,7 @@ export class InvoiceReportsService {
 
   /** Every invoice made or issued in the days chosen; with a status, only those (Bad debt). */
   async invoices(user: AuthenticatedUser, query: InvoicesReportQuery, company?: string): Promise<InvoicesReport> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     this.checkRange(query);
     const today = businessDate();
     const when: Prisma.InvoiceWhereInput =
@@ -286,7 +290,7 @@ export class InvoiceReportsService {
       AND: [
         { organizationId: user.organizationId },
         when,
-        companyOf(company),
+        companyOf(company, read),
         ...(query.status ? [{ status: query.status as InvoiceStatus }] : []),
       ],
     };
@@ -322,6 +326,7 @@ export class InvoiceReportsService {
 
   /** Tax by rate: invoiced in the days chosen (accrual), or collected in them (cash). */
   async taxes(user: AuthenticatedUser, range: ReportRange & { basis: TaxBasis }, company?: string): Promise<TaxReport> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     this.checkRange(range);
     const organizationId = user.organizationId;
     const within = { gte: dateOf(range.from), lte: dateOf(range.to) };
@@ -349,19 +354,19 @@ export class InvoiceReportsService {
 
     if (range.basis === 'ACCRUAL') {
       const invoices = await this.prisma.invoice.findMany({
-        where: { organizationId, status: SENT, issuedOn: within, ...companyOf(company) },
+        where: { organizationId, status: SENT, issuedOn: within, ...companyOf(company, read) },
         select: taxSelect,
       });
       for (const invoice of invoices) add(invoice, invoice.totalCents, invoice.taxCents);
     } else {
       const payments = await this.prisma.invoicePayment.findMany({
-        where: { organizationId, paidOn: within, ...paymentsOf(company) },
+        where: { organizationId, paidOn: within, ...paymentsOf(company, read) },
         select: { amountCents: true, invoice: { select: taxSelect } },
       });
       for (const payment of payments) add(payment.invoice, payment.amountCents, taxShareCents(payment.amountCents, payment.invoice));
     }
     const owed = await this.prisma.invoice.findMany({
-      where: { organizationId, status: InvoiceStatus.AWAITING_PAYMENT, balanceCents: { gt: 0 }, taxCents: { gt: 0 }, issuedOn: within, ...companyOf(company) },
+      where: { organizationId, status: InvoiceStatus.AWAITING_PAYMENT, balanceCents: { gt: 0 }, taxCents: { gt: 0 }, issuedOn: within, ...companyOf(company, read) },
       select: { balanceCents: true, taxCents: true, totalCents: true },
     });
 
@@ -396,10 +401,11 @@ export class InvoiceReportsService {
    * is not owed.
    */
   async clientBalances(user: AuthenticatedUser, company?: string): Promise<ClientBalancesReport> {
+    const read = await readCompanies(this.prisma, user.organizationId);
     const today = dateOf(businessDate());
     const [invoices, emailed] = await Promise.all([
       this.prisma.invoice.findMany({
-        where: { organizationId: user.organizationId, status: SENT, ...companyOf(company) },
+        where: { organizationId: user.organizationId, status: SENT, ...companyOf(company, read) },
         select: {
           id: true,
           jobberClientId: true,
@@ -477,11 +483,12 @@ export class InvoiceReportsService {
   /** Jobber's two cards on its payments page: how long invoices take to be paid, and how many are paid on time. */
   async paymentInsights(user: AuthenticatedUser): Promise<PaymentInsights> {
     const today = businessDate();
+    const read = await readCompanies(this.prisma, user.organizationId);
     const paidSince = (days: number) =>
       this.prisma.invoice.findMany({
         where: {
           organizationId: user.organizationId,
-          ...SHOWN_INVOICE,
+          ...shownInvoices(read),
           status: InvoiceStatus.PAID,
           paidOn: { gte: plusDays(today, -(days - 1)), lte: dateOf(today) },
         },

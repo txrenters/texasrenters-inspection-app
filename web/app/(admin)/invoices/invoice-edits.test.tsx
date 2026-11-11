@@ -105,6 +105,26 @@ describe("an invoice's page", () => {
     expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument();
   });
 
+  it('keeps one in Xero as Xero has it (2026-11-12): opened there, and nothing to change, send or pay here', () => {
+    permissions.granted = new Set(['invoices:read', 'invoices:manage', 'payments:record']);
+    hooks.useInvoice.mockReturnValue(
+      ready({
+        ...DETAIL,
+        status: 'AWAITING_PAYMENT',
+        balanceCents: 7500,
+        jobberUrl: 'https://secure.getjobber.com/invoices/1',
+        xero: { status: 'DRAFT', url: 'https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=x-1', kept: true },
+      }),
+    );
+    render(<InvoicePage />);
+    expect(screen.getByRole('link', { name: 'Open in Xero' })).toHaveAttribute('href', 'https://go.xero.com/AccountsReceivable/Edit.aspx?InvoiceID=x-1');
+    expect(screen.queryByRole('link', { name: 'Open in Jobber' })).not.toBeInTheDocument();
+    expect(screen.getByText('Draft in Xero')).toBeInTheDocument();
+    expect(screen.getByText(/Change it, record its payments and send it in Xero/)).toBeInTheDocument();
+    for (const name of ['More', 'Send', 'Record payment']) expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
   it('voids an invoice only once asked, against the invoice as it was read', async () => {
     render(<InvoicePage />);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false });

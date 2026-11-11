@@ -4,6 +4,7 @@ import { InvoiceReportsController } from '../src/admin/invoice-reports.controlle
 import { InvoiceReportsService } from '../src/admin/invoice-reports.service';
 import { InvoicesService } from '../src/admin/invoices.service';
 import { PERMISSIONS_METADATA_KEY, type AuthenticatedUser } from '../src/common/auth';
+import { shownInvoices } from '../src/admin/shown-invoices';
 
 /**
  * Where the money stands (2026-11-09, phase 2 of the invoice gap review), as
@@ -55,6 +56,8 @@ const row = (over: Record<string, unknown> = {}) => ({
 
 function database() {
   return {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     invoice: {
       aggregate: jest.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: {} }),
       findMany: jest.fn().mockResolvedValue([]),
@@ -100,8 +103,8 @@ describe('Projected income', () => {
       organizationId: ORG,
       status: 'AWAITING_PAYMENT',
       balanceCents: { gt: 0 },
-      // Not the books read back from Xero (2026-11-12): out of sight until the pages show them.
-      origin: { not: 'XERO' },
+      // A company's books as Xero has them once read, Jobber's copies until then (2026-11-12).
+      ...shownInvoices([]),
     });
     expect(report.overview.outstanding).toEqual({ count: 2, amountCents: 7998 });
     // Past its due date, so past due; the client's first address and phone.
@@ -207,7 +210,7 @@ describe('the invoices report, and bad debt', () => {
     expect(db.invoice.findMany.mock.calls[0][0].where.AND).toEqual([
       { organizationId: ORG },
       { issuedOn: { gte: day('2026-11-01'), lte: day(TODAY) } },
-      { origin: { not: 'XERO' } },
+      shownInvoices([]),
       { status: 'BAD_DEBT' },
     ]);
   });
@@ -331,17 +334,17 @@ describe('one company’s books (2026-11-10)', () => {
     const db = database();
     await reportsOver(db).transactions(office, { from: '2026-11-01', to: TODAY }, PEST);
     expect(db.invoice.aggregate.mock.calls[0][0].where).toMatchObject({ xeroTenantId: PEST });
-    for (const [args] of db.invoicePayment.aggregate.mock.calls) expect(args.where.invoice).toEqual({ is: { origin: { not: 'XERO' }, xeroTenantId: PEST } });
-    expect(db.invoicePayment.findMany.mock.calls[0][0].where.invoice).toEqual({ is: { origin: { not: 'XERO' }, xeroTenantId: PEST } });
+    for (const [args] of db.invoicePayment.aggregate.mock.calls) expect(args.where.invoice).toEqual({ is: { ...shownInvoices([]), xeroTenantId: PEST } });
+    expect(db.invoicePayment.findMany.mock.calls[0][0].where.invoice).toEqual({ is: { ...shownInvoices([]), xeroTenantId: PEST } });
   });
 
   it('lists a company’s invoices, its taxes, and its clients’ balances', async () => {
     const db = database();
     await reportsOver(db).invoices(office, { from: '2026-11-01', to: TODAY, dateField: 'issued' }, PEST);
-    expect(db.invoice.findMany.mock.calls[0][0].where.AND).toContainEqual({ origin: { not: 'XERO' }, xeroTenantId: PEST });
+    expect(db.invoice.findMany.mock.calls[0][0].where.AND).toContainEqual({ ...shownInvoices([]), xeroTenantId: PEST });
 
     await reportsOver(db).taxes(office, { from: '2026-11-01', to: TODAY, basis: 'CASH' }, PEST);
-    expect(db.invoicePayment.findMany.mock.calls[0][0].where.invoice).toEqual({ is: { origin: { not: 'XERO' }, xeroTenantId: PEST } });
+    expect(db.invoicePayment.findMany.mock.calls[0][0].where.invoice).toEqual({ is: { ...shownInvoices([]), xeroTenantId: PEST } });
 
     await reportsOver(db).clientBalances(office, PEST);
     expect(db.invoice.findMany.mock.calls.at(-1)![0].where).toMatchObject({ organizationId: ORG, xeroTenantId: PEST });
@@ -351,8 +354,8 @@ describe('one company’s books (2026-11-10)', () => {
     const db = database();
     await reportsOver(db).transactions(office, { from: '2026-11-01', to: TODAY });
     expect(db.invoice.aggregate.mock.calls[0][0].where).not.toHaveProperty('xeroTenantId');
-    // Every company's -- though never the books read back from Xero (2026-11-12), out of sight until the pages show them.
-    expect(db.invoicePayment.aggregate.mock.calls[0][0].where.invoice).toEqual({ is: { origin: { not: 'XERO' } } });
+    // Every company's, as the pages show them (2026-11-12).
+    expect(db.invoicePayment.aggregate.mock.calls[0][0].where.invoice).toEqual({ is: shownInvoices([]) });
   });
 });
 
@@ -379,14 +382,15 @@ describe("the lists' date filters", () => {
     jobberConnection: { findUnique: jest.fn().mockResolvedValue(null) },
     // The companies' books to filter by (2026-11-10): none here.
     xeroOrganisation: { findMany: jest.fn().mockResolvedValue([]) },
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
   });
 
   it('lists the invoices issued within the days chosen', async () => {
     const db = listDb();
     await new InvoicesService(db as never).list(office, { issuedFrom: '2026-11-01', issuedTo: TODAY });
     expect(db.invoice.findMany.mock.calls[0][0].where.AND).toContainEqual({ issuedOn: { gte: day('2026-11-01'), lte: day(TODAY) } });
-    // The Overview still counts the whole office -- not the books read back from Xero (2026-11-12).
-    expect(db.invoice.groupBy.mock.calls[0][0].where).toEqual({ organizationId: ORG, origin: { not: 'XERO' } });
+    // The Overview still counts the whole office, as the pages show it (2026-11-12).
+    expect(db.invoice.groupBy.mock.calls[0][0].where).toEqual({ organizationId: ORG, ...shownInvoices([]) });
   });
 
   it('lists the payments made within the days chosen, either end alone too', async () => {

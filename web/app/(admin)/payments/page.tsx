@@ -68,7 +68,9 @@ const COLUMNS: Array<Column<PaymentListItem>> = [
     key: 'recorded',
     header: 'Recorded by',
     hideBelow: 'lg',
-    cell: (row) => <span className="text-muted-foreground">{row.recordedBy?.displayName ?? 'In Jobber'}</span>,
+    cell: (row) => (
+      <span className="text-muted-foreground">{row.recordedBy?.displayName ?? (row.origin === 'XERO' ? 'In Xero' : row.origin === 'CONSOLE' ? 'In the console' : 'In Jobber')}</span>
+    ),
   },
   { key: 'amount', header: 'Amount', numeric: true, cell: (row) => <span className="font-semibold">{formatMoney(row.amountCents)}</span> },
 ];

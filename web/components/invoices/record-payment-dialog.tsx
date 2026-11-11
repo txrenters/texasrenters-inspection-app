@@ -166,7 +166,7 @@ export function RecordPaymentDialog({
               value={note}
             />
             <FieldDescription aria-live="polite" className={problem ? 'text-destructive' : undefined}>
-              {problem ?? 'Sent to Jobber, and kept here with who recorded it.'}
+              {problem ?? 'Kept here with who recorded it.'}
             </FieldDescription>
           </Field>
         </div>

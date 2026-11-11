@@ -60,10 +60,11 @@ export interface XeroBooksRunResult {
   problem: string | null;
 }
 
-/** Where an invoice read from Xero is put: the visit it bills, and the property. */
+/** Where an invoice read from Xero is put: the visit it bills, the property, and Jobber's copy of it (2026-11-12). */
 interface Place {
   inspectionId: string | null;
   buildingId: string | null;
+  jobberCopyId: string | null;
 }
 
 /** What one run keeps between pages. */
@@ -160,6 +161,30 @@ export class XeroBooksService {
       throw new XeroError('It was read a moment ago. Try again in a minute.', 'XERO_BOOKS_TOO_SOON', 429);
     await this.run(organizationId, tenantId, { manual: true, actorUserId: user.id });
     return this.view(organizationId, tenantId);
+  }
+
+  /**
+   * "Read invoices from Xero now" on the invoices page (2026-11-12): a page of
+   * each kind for every company whose books are shown as Xero has them, those
+   * not read in the past minute. Two calls a company.
+   */
+  async readAllNow(user: AuthenticatedUser): Promise<{ companies: number; problems: string[] }> {
+    const organizationId = user.organizationId;
+    const rows = await this.prisma.xeroSettings.findMany({
+      where: { organizationId, booksReadAt: { not: null } },
+      select: { xeroTenantId: true, booksLastRunAt: true },
+    });
+    const due = rows.filter((row) => !row.booksLastRunAt || Date.now() - row.booksLastRunAt.getTime() >= MANUAL_GAP_MS);
+    if (!due.length)
+      throw rows.length
+        ? new XeroError('It was read a moment ago. Try again in a minute.', 'XERO_BOOKS_TOO_SOON', 429)
+        : new XeroError('No company’s invoices are read from Xero yet.', 'XERO_BOOKS_NOT_READY', 409);
+    const problems: string[] = [];
+    for (const row of due) {
+      const result = await this.run(organizationId, row.xeroTenantId, { manual: true, actorUserId: user.id });
+      if (result.problem) problems.push(result.problem);
+    }
+    return { companies: due.length, problems };
   }
 
   /**
@@ -296,7 +321,7 @@ export class XeroBooksService {
     const [rows, sent, writeOffs] = await Promise.all([
       this.prisma.invoice.findMany({
         where: { organizationId, xeroTenantId: tenantId, xeroInvoiceId: { in: ids } },
-        select: { id: true, origin: true, xeroInvoiceId: true, xeroUpdatedAt: true, inspectionId: true, propertywareBuildingId: true },
+        select: { id: true, origin: true, xeroInvoiceId: true, xeroUpdatedAt: true, inspectionId: true, propertywareBuildingId: true, jobberCopyId: true },
       }),
       // The console's own invoices it sent as these, and Jobber's it sent.
       this.prisma.xeroInvoiceSync.findMany({
@@ -320,7 +345,11 @@ export class XeroBooksService {
       const ours = sentAs.get(theirs.InvoiceID);
       return ours?.origin === InvoiceOrigin.CONSOLE && !ours.xeroInvoiceId ? ours.id : null;
     };
-    const unplaced = page.filter((theirs) => !consoleRowOf(theirs) && !byId.get(theirs.InvoiceID)?.inspectionId);
+    // On no visit yet, or with no Jobber copy found yet: where it goes is asked again.
+    const unplaced = page.filter((theirs) => {
+      const row = byId.get(theirs.InvoiceID);
+      return !consoleRowOf(theirs) && (!row?.inspectionId || !row.jobberCopyId);
+    });
     const places = await this.places(organizationId, tenantId, unplaced, sentAs, context);
 
     for (const theirs of page) {
@@ -342,9 +371,10 @@ export class XeroBooksService {
         continue;
       }
       const found = places.get(theirs.InvoiceID);
+      const jobberCopyId = found?.jobberCopyId ?? row?.jobberCopyId ?? null;
       const place: Place = found?.inspectionId
-        ? found
-        : { inspectionId: row?.inspectionId ?? null, buildingId: row?.propertywareBuildingId ?? found?.buildingId ?? null };
+        ? { ...found, jobberCopyId }
+        : { inspectionId: row?.inspectionId ?? null, buildingId: row?.propertywareBuildingId ?? found?.buildingId ?? null, jobberCopyId };
       const counts = await this.prisma.$transaction((tx) =>
         this.write(tx, organizationId, tenantId, mapped, { rowId: row?.id ?? consoleRow, console: Boolean(consoleRow), place }),
       );
@@ -371,16 +401,19 @@ export class XeroBooksService {
     organizationId: string,
     tenantId: string,
     invoices: XeroBooksInvoice[],
-    sentAs: Map<string, { origin: InvoiceOrigin; inspectionId: string | null; propertywareBuildingId: string | null }>,
+    sentAs: Map<string, { id: string; origin: InvoiceOrigin; inspectionId: string | null; propertywareBuildingId: string | null }>,
     context: RunContext,
   ): Promise<Map<string, Place>> {
     const found = new Map<string, Place>();
     const put = (theirs: XeroBooksInvoice, place: Place) => {
-      if (place.inspectionId || place.buildingId) found.set(theirs.InvoiceID, place);
+      if (place.inspectionId || place.buildingId || place.jobberCopyId) found.set(theirs.InvoiceID, place);
     };
+    // On a property already. A Jobber copy on none still leaves its contact and address to try.
+    const placed = (theirs: XeroBooksInvoice) => Boolean(found.get(theirs.InvoiceID)?.inspectionId || found.get(theirs.InvoiceID)?.buildingId);
+    const copyOf = (theirs: XeroBooksInvoice) => found.get(theirs.InvoiceID)?.jobberCopyId ?? null;
     for (const theirs of invoices) {
       const jobber = sentAs.get(theirs.InvoiceID);
-      if (jobber?.origin === InvoiceOrigin.JOBBER) put(theirs, { inspectionId: jobber.inspectionId, buildingId: jobber.propertywareBuildingId });
+      if (jobber?.origin === InvoiceOrigin.JOBBER) put(theirs, { inspectionId: jobber.inspectionId, buildingId: jobber.propertywareBuildingId, jobberCopyId: jobber.id });
     }
 
     const byNumber = invoices.filter((theirs) => !found.has(theirs.InvoiceID) && theirs.InvoiceNumber?.trim());
@@ -392,18 +425,18 @@ export class XeroBooksService {
           number: { in: [...new Set(byNumber.map((theirs) => theirs.InvoiceNumber!.trim()))] },
           OR: [{ xeroTenantId: tenantId }, { xeroTenantId: null }],
         },
-        select: { number: true, xeroTenantId: true, clientName: true, inspectionId: true, propertywareBuildingId: true },
+        select: { id: true, number: true, xeroTenantId: true, clientName: true, inspectionId: true, propertywareBuildingId: true },
       });
       for (const theirs of byNumber) {
         const same = copies.filter((copy) => copy.number === theirs.InvoiceNumber!.trim());
         const companys = same.filter((copy) => copy.xeroTenantId === tenantId);
         const named = same.filter((copy) => copy.xeroTenantId === null && nameKey(copy.clientName) === nameKey(theirs.Contact?.Name));
         const copy = companys.length === 1 ? companys[0] : !companys.length && named.length === 1 ? named[0] : null;
-        if (copy) put(theirs, { inspectionId: copy.inspectionId, buildingId: copy.propertywareBuildingId });
+        if (copy) put(theirs, { inspectionId: copy.inspectionId, buildingId: copy.propertywareBuildingId, jobberCopyId: copy.id });
       }
     }
 
-    const byContact = invoices.filter((theirs) => !found.has(theirs.InvoiceID) && theirs.Contact?.ContactID);
+    const byContact = invoices.filter((theirs) => !placed(theirs) && theirs.Contact?.ContactID);
     if (byContact.length) {
       const links = await this.prisma.xeroContactLink.findMany({
         where: { organizationId, xeroTenantId: tenantId, xeroContactId: { in: [...new Set(byContact.map((theirs) => theirs.Contact!.ContactID!))] } },
@@ -427,11 +460,11 @@ export class XeroBooksService {
       for (const theirs of byContact) {
         const theirBuildings = buildings.get(theirs.Contact!.ContactID!);
         // A contact over several properties -- a landlord's -- says none of them.
-        if (theirBuildings?.size === 1) put(theirs, { inspectionId: null, buildingId: [...theirBuildings][0]! });
+        if (theirBuildings?.size === 1) put(theirs, { inspectionId: null, buildingId: [...theirBuildings][0]!, jobberCopyId: copyOf(theirs) });
       }
     }
 
-    const byAddress = invoices.filter((theirs) => !found.has(theirs.InvoiceID) && theirs.Contact?.Addresses?.length);
+    const byAddress = invoices.filter((theirs) => !placed(theirs) && theirs.Contact?.Addresses?.length);
     for (const theirs of byAddress) {
       const address = theirs.Contact!.Addresses!.find((entry) => entry.AddressLine1?.trim() && entry.PostalCode?.trim());
       const key = address ? normalizeAddressKey(address.AddressLine1, address.PostalCode) : '';
@@ -440,7 +473,7 @@ export class XeroBooksService {
         await this.prisma.propertywareBuilding.findMany({ where: { organizationId }, select: { id: true, addressLine1: true, postalCode: true } }),
       );
       const match = matchBuilding(context.addresses, key);
-      if (match.outcome === 'MATCHED') put(theirs, { inspectionId: null, buildingId: match.buildingId });
+      if (match.outcome === 'MATCHED') put(theirs, { inspectionId: null, buildingId: match.buildingId, jobberCopyId: copyOf(theirs) });
     }
     return found;
   }
@@ -474,7 +507,9 @@ export class XeroBooksService {
       taxInclusive: mapped.taxInclusive,
     } satisfies Prisma.InvoiceUncheckedUpdateInput;
     // The console's own invoice keeps its wording and where it is; Xero's has them from here.
-    const own = target.console ? {} : { subject: mapped.subject, inspectionId: target.place.inspectionId, propertywareBuildingId: target.place.buildingId };
+    const own = target.console
+      ? {}
+      : { subject: mapped.subject, inspectionId: target.place.inspectionId, propertywareBuildingId: target.place.buildingId, jobberCopyId: target.place.jobberCopyId };
     const invoiceId = target.rowId
       ? (await tx.invoice.update({ where: { id: target.rowId }, data: { ...columns, ...own }, select: { id: true } })).id
       : (

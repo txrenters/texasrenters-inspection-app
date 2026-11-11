@@ -220,6 +220,8 @@ function harness(options: {
   const prisma: Record<string, unknown> = {
     xeroSettings: {
       findUnique: jest.fn(async () => settings),
+      // The companies whose books are read in full (2026-11-12): this one, once it is.
+      findMany: jest.fn(async () => (settings?.booksReadAt ? [{ xeroTenantId: TENANT, booksLastRunAt: settings.booksLastRunAt ?? null }] : [])),
       update: jest.fn(async ({ data }: { data: Row }) => (settings = { ...settings!, ...data })),
       updateMany: jest.fn(async ({ where }: { where: Row }) => {
         if (!settings || !matches(settings, { OR: where.OR as Row[] })) return { count: 0 };
@@ -369,7 +371,8 @@ describe('reading a company’s books', () => {
       invoicePages: [[theirs()]],
     });
     await books.run(ORG, TENANT);
-    expect(fromXero(invoices)[0]).toMatchObject({ inspectionId: VISIT, propertywareBuildingId: BUILDING });
+    // And stands for it (2026-11-12): Jobber's copy is shown no longer once the company's books are read.
+    expect(fromXero(invoices)[0]).toMatchObject({ inspectionId: VISIT, propertywareBuildingId: BUILDING, jobberCopyId: 'jobber-1' });
     // Nothing is written onto Jobber's copy.
     expect(invoices.find((row) => row.id === 'jobber-1')).not.toHaveProperty('xeroInvoiceId');
   });
@@ -398,6 +401,8 @@ describe('reading a company’s books', () => {
     expect(placed).toEqual({ 'x-1': BUILDING, 'x-2': null, 'x-3': BUILDING_2, 'x-4': null });
     expect(fromXero(invoices).find((row) => row.xeroInvoiceId === 'x-1')).toMatchObject({ inspectionId: VISIT });
     expect(result.invoices.unplaced).toBe(2);
+    const copies = Object.fromEntries(fromXero(invoices).map((row) => [row.xeroInvoiceId, row.jobberCopyId ?? null]));
+    expect(copies).toEqual({ 'x-1': 'jobber-1', 'x-2': null, 'x-3': 'jobber-3', 'x-4': null });
   });
 
   it('puts one on its contact’s one property, through the property or Jobber’s client, and none over several', async () => {
@@ -424,6 +429,16 @@ describe('reading a company’s books', () => {
     await books.run(ORG, TENANT);
     const placed = Object.fromEntries(fromXero(invoices).map((row) => [row.xeroInvoiceId, row.propertywareBuildingId ?? null]));
     expect(placed).toEqual({ 'x-1': BUILDING, 'x-2': BUILDING_2, 'x-3': null });
+  });
+
+  it('keeps the Jobber copy it stands for, and still finds its property through the contact when that copy has none', async () => {
+    const { books, invoices } = harness({
+      invoices: [{ id: 'jobber-1', origin: 'JOBBER', number: '8440', xeroTenantId: TENANT, clientName: '12 Example Lane', inspectionId: null, propertywareBuildingId: null }],
+      contactLinks: [{ clientKey: `property:${BUILDING}`, xeroContactId: 'contact-1' }],
+      invoicePages: [[theirs()]],
+    });
+    await books.run(ORG, TENANT);
+    expect(fromXero(invoices)[0]).toMatchObject({ jobberCopyId: 'jobber-1', propertywareBuildingId: BUILDING, inspectionId: null });
   });
 
   it('puts one on the property its contact’s address is, exactly', async () => {
@@ -580,6 +595,24 @@ describe('reading a company’s books', () => {
     expect(client.getChanged).toHaveBeenCalledTimes(MANUAL_BOOKS_CALLS);
     expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_BOOKS_READ', actorUserId: office.id }) });
     await expect(books.readNow(office, TENANT)).rejects.toMatchObject({ code: 'XERO_BOOKS_TOO_SOON', status: 429 });
+  });
+
+  it('“Read invoices from Xero now” on the invoices page reads each company shown as Xero has it, at most once a minute', async () => {
+    const { books, client } = harness({
+      settings: {
+        booksInvoicesSince: null,
+        booksInvoicesPage: 1,
+        booksPaymentsSince: null,
+        booksPaymentsPage: 1,
+        booksReadAt: new Date('2026-11-13T00:00:00Z'),
+        booksLastRunAt: new Date(NOW.getTime() - 5 * 60_000),
+        paymentAccounts: {},
+      },
+    });
+    await expect(books.readAllNow(office)).resolves.toEqual({ companies: 1, problems: [] });
+    expect(pathsOf(client)).toEqual(['/Invoices', '/Payments']);
+    await expect(books.readAllNow(office)).rejects.toMatchObject({ code: 'XERO_BOOKS_TOO_SOON', status: 429 });
+    await expect(harness().books.readAllNow(office)).rejects.toMatchObject({ code: 'XERO_BOOKS_NOT_READY', status: 409 });
   });
 
   it('leaves the day’s last calls to sending, waits for a sending run, and asks nothing of a company not connected', async () => {

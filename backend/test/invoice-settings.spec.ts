@@ -65,6 +65,8 @@ const BILLED = [
 
 function database() {
   const db = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     invoiceSettings: {
       findUnique: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({}),

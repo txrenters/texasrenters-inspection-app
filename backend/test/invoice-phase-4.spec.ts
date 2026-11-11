@@ -114,11 +114,15 @@ describe('the client view', () => {
 describe('notes and files written in the console', () => {
   function records(over: { invoice?: unknown } = {}) {
     const tx = {
+      // Which companies' books are read from Xero (2026-11-12): none here.
+      xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
       invoiceNote: { create: jest.fn().mockResolvedValue({ id: 'note-1' }), deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
       invoiceFile: { create: jest.fn().mockResolvedValue({}), delete: jest.fn().mockResolvedValue({}) },
       auditLog: { create: jest.fn() },
     };
     const db = {
+      // Which companies' books are read from Xero (2026-11-12): none here.
+      xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
       tx,
       invoice: { findFirst: jest.fn().mockResolvedValue('invoice' in over ? over.invoice : { id: INVOICE }) },
       invoiceFile: { findFirst: jest.fn().mockResolvedValue({ id: 'file-1', fileName: 'Before.jpg', storageKey: 'invoice-files/x' }) },
@@ -205,6 +209,8 @@ describe('notes and files written in the console', () => {
 describe("the office's email words", () => {
   function templates(saved: Record<string, unknown> | null = null) {
     const tx = {
+      // Which companies' books are read from Xero (2026-11-12): none here.
+      xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
       invoiceSettings: { findUnique: jest.fn().mockResolvedValue(saved), upsert: jest.fn() },
       auditLog: { create: jest.fn() },
     };
@@ -240,6 +246,8 @@ describe("the office's email words", () => {
 describe('an invoice email, in the office’s words, with its PDF', () => {
   function sender(saved: Record<string, unknown> | null = null) {
     const db = {
+      // Which companies' books are read from Xero (2026-11-12): none here.
+      xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
       invoiceSettings: {
         findUnique: jest.fn(async ({ select }: { select: Record<string, boolean> }) => ('invoicingTakenOverAt' in select ? { invoicingTakenOverAt: new Date() } : saved)),
       },

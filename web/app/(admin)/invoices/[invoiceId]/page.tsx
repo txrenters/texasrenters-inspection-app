@@ -1,6 +1,6 @@
 'use client';
 
-import { acceptsPayment, formatMoney, type InvoiceDetail } from '@texasrenters/shared';
+import { XERO_INVOICE_STATUS_LABEL, acceptsPayment, formatMoney, type InvoiceDetail } from '@texasrenters/shared';
 import { BanknoteIcon, DownloadIcon, ExternalLinkIcon, MailIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -22,6 +22,7 @@ import { InvoiceDeliveries, SendInvoiceDialog } from '@/components/invoices/send
 import { PageHeader } from '@/components/page-header';
 import { AsideCard, FactTable, PlaceCard, RecordLayout, type Fact } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/lib/auth';
 import { useInvoice } from '@/lib/invoice-queries';
@@ -50,10 +51,12 @@ export default function InvoicePage() {
 
   const data = invoice.data;
   const details = data.details;
-  const payable = acceptsPayment(data) && has('payments:record');
+  // Kept in its company's books in Xero (2026-11-12): edited, paid and sent there, and read back.
+  const kept = data.xero?.kept === true;
+  const payable = !kept && acceptsPayment(data) && has('payments:record');
   const visitHref = data.inspectionId ? `/inspections/${data.inspectionId}` : null;
   // Edited here once the console owns invoicing (2026-11-06); in Jobber until then.
-  const editable = has('invoices:manage') && data.writesEnabled === true;
+  const editable = !kept && has('invoices:manage') && data.writesEnabled === true;
   // Emailed from here once the console owns invoicing; a voided invoice is not sent.
   const sendable = editable && data.status !== 'VOIDED';
   const download = async () => {
@@ -72,7 +75,14 @@ export default function InvoicePage() {
       <PageHeader
         actions={
           <>
-            {data.jobberUrl ? (
+            {data.xero ? (
+              <Button asChild size="sm" variant="outline">
+                <a href={data.xero.url} rel="noreferrer" target="_blank">
+                  <ExternalLinkIcon />
+                  Open in Xero
+                </a>
+              </Button>
+            ) : data.jobberUrl ? (
               <Button asChild size="sm" variant="outline">
                 <a href={data.jobberUrl} rel="noreferrer" target="_blank">
                   <ExternalLinkIcon />
@@ -99,7 +109,12 @@ export default function InvoicePage() {
             ) : null}
           </>
         }
-        badges={<InvoiceStatusBadge status={data.status} />}
+        badges={
+          <>
+            <InvoiceStatusBadge status={data.status} />
+            {data.xero ? <Badge variant="outline">{XERO_INVOICE_STATUS_LABEL[data.xero.status] ?? 'In Xero'}</Badge> : null}
+          </>
+        }
         record={INVOICE_RECORD}
         title={data.subject}
       />
@@ -107,6 +122,13 @@ export default function InvoicePage() {
       <RecordLayout
         aside={
           <>
+            {kept ? (
+              <AsideCard title="Kept in Xero">
+                <p className="text-muted-foreground text-sm">
+                  Change it, record its payments and send it in Xero. The console reads it back within the hour.
+                </p>
+              </AsideCard>
+            ) : null}
             <AsideCard title="Balance">
               <dl className="grid grid-cols-[1fr_auto] gap-y-1.5">
                 <dt className="text-muted-foreground">Invoice balance</dt>

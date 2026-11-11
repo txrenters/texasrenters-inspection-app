@@ -209,6 +209,46 @@ export interface InvoiceSummary {
    * plan); null when it belongs to no company, and then it is never sent to Xero.
    */
   company?: InvoiceCompanyView | null;
+  /**
+   * As it is in its company's books in Xero (2026-11-12), read back from there;
+   * null for one the console has not read from Xero.
+   */
+  xero?: InvoiceInXero | null;
+}
+
+/** An invoice as its company's books in Xero have it (2026-11-12). */
+export interface InvoiceInXero {
+  /** Xero's own: DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED or DELETED. */
+  status: string;
+  /** Opens it in Xero. */
+  url: string;
+  /**
+   * Changed only in Xero: its edits, payments, voids and emails are Xero's,
+   * and the console reads them back.
+   */
+  kept: boolean;
+}
+
+/** Xero's status in the office's words. */
+export const XERO_INVOICE_STATUS_LABEL: Record<string, string> = {
+  DRAFT: 'Draft in Xero',
+  SUBMITTED: 'Awaiting approval in Xero',
+  AUTHORISED: 'Awaiting payment',
+  PAID: 'Paid',
+  VOIDED: 'Voided in Xero',
+  DELETED: 'Deleted in Xero',
+};
+
+/**
+ * Xero's own page for an invoice: through the organisation's short code when
+ * the console has it, so Xero opens the right company's books; a draft opens
+ * to be edited, any other to be read.
+ */
+export function xeroInvoiceUrl(xeroInvoiceId: string, status: string | null, shortCode: string | null): string {
+  const page = `/AccountsReceivable/${status === 'DRAFT' || status === 'SUBMITTED' ? 'Edit' : 'View'}.aspx?InvoiceID=${encodeURIComponent(xeroInvoiceId)}`;
+  return shortCode
+    ? `https://go.xero.com/organisationlogin/default.aspx?shortcode=${encodeURIComponent(shortCode)}&redirecturl=${encodeURIComponent(page)}`
+    : `https://go.xero.com${page}`;
 }
 
 /** An invoice in full, as its record page shows it. */
@@ -299,6 +339,11 @@ export interface PaymentDetail extends PaymentListItem {
   receipts?: InvoiceDeliveryView[];
   /** Who a receipt would go to: whoever the invoice was last sent to, else the client's addresses. */
   receiptTo?: string[];
+  /**
+   * Read from Xero, or against an invoice kept there (2026-11-12): changed,
+   * removed and receipted in Xero, never here.
+   */
+  keptInXero?: boolean;
 }
 
 /** The company a receipt is from. */
@@ -367,6 +412,20 @@ export interface InvoiceList {
   writesEnabled?: boolean;
   /** The office's Xero organisations, connected ones first, to filter by company (2026-11-10). Empty until Xero is connected. */
   organisations?: InvoiceProductOrganisation[];
+  /**
+   * The companies whose invoices are shown as their books in Xero have them
+   * (2026-11-12), and when each was last read from there. Empty while every
+   * company's are Jobber's copies.
+   */
+  xeroBooks?: InvoiceXeroBooks[];
+}
+
+/** A company whose invoices the pages show as Xero has them. */
+export interface InvoiceXeroBooks {
+  tenantId: string;
+  name: string;
+  /** The last read from Xero; null before the next. */
+  readAt: string | null;
 }
 
 /**

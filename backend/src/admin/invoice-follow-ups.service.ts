@@ -18,7 +18,7 @@ import { defaultRecipients, readEmailSettings, readEmailTemplates } from './invo
 import { followUpEmail } from './invoice-reminder-email';
 import { InvoicesService, receiptBrand } from './invoices.service';
 import { invoiceWritesOn } from './invoice-settings';
-import { SHOWN_INVOICE } from './shown-invoices';
+import { readCompanies, shownInvoices } from './shown-invoices';
 
 /** The most follow-ups one run sends, whatever the ceiling allows: a bad day's data must not empty it. */
 const MAX_FOLLOW_UPS_A_RUN = 150;
@@ -129,10 +129,12 @@ export class InvoiceFollowUpsService {
     const { replyTo } = await readEmailTemplates(this.prisma, organizationId);
 
     const due = settings.followUpDays.map((days) => toDate(daysBefore(today, days)));
+    // A company whose books are read from Xero (2026-11-12) has Xero send its reminders: none of its invoices here.
+    const read = await readCompanies(this.prisma, organizationId);
     const owed = await this.prisma.invoice.findMany({
       where: {
         organizationId,
-        ...SHOWN_INVOICE,
+        ...shownInvoices(read, { outsideXeroBooks: true }),
         status: InvoiceStatus.AWAITING_PAYMENT,
         balanceCents: { gt: 0 },
         dueOn: { in: due },

@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PropertyAccountService } from '../src/admin/property-account.service';
 import { statementEmail } from '../src/admin/statement-email';
 import type { AuthenticatedUser } from '../src/common/auth';
+import { shownInvoices } from '../src/admin/shown-invoices';
 
 /**
  * A property's account and its statement (2026-11-10, phase 3 of the invoice
@@ -75,6 +76,8 @@ const ACCOUNT = [
 
 function database(invoices: unknown[] = ACCOUNT) {
   const tx = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn().mockResolvedValue([]),
     invoiceDelivery: {
       findMany: jest.fn().mockResolvedValue([]),
@@ -85,6 +88,8 @@ function database(invoices: unknown[] = ACCOUNT) {
   };
   return {
     tx,
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     propertywareBuilding: {
       findFirst: jest.fn().mockResolvedValue({ id: PROPERTY, name: 'Example', addressLine1: '100 Example Way', city: 'Sampletown' }),
     },
@@ -124,11 +129,44 @@ describe("a property's billing history", () => {
     expect(account.entries.find((entry) => entry.key === 'invoice:inv-2')).toMatchObject({ status: 'PAST_DUE', invoiceNumber: '8440' });
     expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({
       organizationId: ORG,
-      // Not the books read back from Xero (2026-11-12): out of sight until the pages show them.
-      origin: { not: 'XERO' },
+      // A company's books as Xero has them once read, Jobber's copies until then (2026-11-12).
+      ...shownInvoices([]),
       propertywareBuildingId: PROPERTY,
       status: { notIn: ['DRAFT', 'VOIDED'] },
     });
+  });
+
+  it('takes off what a credit note took in Xero (2026-11-12), as a write-off when the console wrote it off, and leaves its statements to Xero', async () => {
+    const HOMES = 'b1000000-0000-4000-8000-000000000001';
+    const fromXero = { origin: 'XERO', xeroTenantId: HOMES, clientEmails: [] };
+    const db = database([
+      invoice({
+        ...fromXero,
+        id: 'xero-1',
+        number: 'INV-2963',
+        xeroInvoiceId: 'x-1',
+        amountCreditedCents: 2500,
+        paidOn: day('2026-09-20'),
+        payments: [{ id: 'pay-x', paidOn: day('2026-09-20'), amountCents: 5000, method: 'OTHER', reference: null }],
+      }),
+      invoice({ ...fromXero, id: 'xero-2', number: 'INV-2964', status: 'BAD_DEBT', xeroInvoiceId: 'x-2', amountCreditedCents: 7500, paidOn: day('2026-10-01') }),
+    ]);
+    db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+
+    const account = await over(db).account(office, PROPERTY);
+
+    expect(account.entries.filter((entry) => entry.invoiceId === 'xero-1').map((entry) => [entry.kind, entry.amountCents])).toEqual([
+      ['CREDIT', -2500],
+      ['PAYMENT', -5000],
+      ['INVOICE', 7500],
+    ]);
+    expect(account.entries.find((entry) => entry.invoiceId === 'xero-2' && entry.kind !== 'INVOICE')).toMatchObject({ kind: 'WRITE_OFF', amountCents: -7500 });
+    expect(account.entries.some((entry) => entry.kind === 'ADJUSTMENT')).toBe(false);
+    expect(account.balanceCents).toBe(0);
+    expect(account.keptInXero).toBe(true);
+    await expect(
+      over(db).sendStatement(office, PROPERTY, { period: 'LIFETIME', to: ['owner@example.com'], clientRequestId: 'press-xero' }),
+    ).rejects.toMatchObject({ code: 'STATEMENT_KEPT_IN_XERO', status: 409 });
   });
 
   it("is only the office's own property", async () => {

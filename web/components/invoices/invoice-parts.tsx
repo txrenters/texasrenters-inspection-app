@@ -285,7 +285,11 @@ export function InvoicePayments({ payments }: { payments: readonly InvoicePaymen
             <span className="text-muted-foreground">
               {PAYMENT_METHOD_LABEL[payment.method]}
               {payment.reference ? ` · ${payment.reference}` : ''}
-              {payment.recordedBy ? ` · recorded by ${payment.recordedBy.displayName}` : ' · recorded in Jobber'}
+              {payment.recordedBy
+                ? ` · recorded by ${payment.recordedBy.displayName}`
+                : payment.origin === 'XERO'
+                  ? ' · recorded in Xero'
+                  : ' · recorded in Jobber'}
             </span>
             <span className="text-heading ml-auto inline-flex items-center gap-1 font-semibold tabular-nums">
               -{formatMoney(payment.amountCents)}

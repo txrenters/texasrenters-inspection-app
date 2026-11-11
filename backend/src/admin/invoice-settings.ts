@@ -14,7 +14,7 @@ import { InvoiceStatus, type Prisma } from '@prisma/client';
 import { ApplicationError } from '../common/errors';
 import type { PrismaService } from '../common/prisma.service';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
-import { SHOWN_INVOICE } from './shown-invoices';
+import { NOT_FROM_XERO } from './shown-invoices';
 
 /**
  * What the office's invoice settings come to (2026-11-06, phase 6): the
@@ -94,7 +94,7 @@ export async function officeBrand(db: Db, organizationId: string): Promise<Recei
 /** What a new invoice starts with when the office has set nothing: the wording and terms of the latest invoice it issued. */
 export async function fallbackDefaults(db: Db, organizationId: string): Promise<NewInvoiceDefaults> {
   const latest = await db.invoice.findFirst({
-    where: { organizationId, ...SHOWN_INVOICE, issuedOn: { not: null } },
+    where: { organizationId, ...NOT_FROM_XERO, issuedOn: { not: null } },
     orderBy: [{ issuedOn: 'desc' }, { createdAt: 'desc' }],
     select: { subject: true, clientMessage: true, paymentTermsDays: true, contractDisclaimer: true },
   });
@@ -158,7 +158,7 @@ export async function billedPrices(db: Db, organizationId: string, today: string
     where: {
       organizationId,
       invoice: {
-        ...SHOWN_INVOICE,
+        ...NOT_FROM_XERO,
         status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
         issuedOn: { gte: new Date(new Date(`${today}T00:00:00.000Z`).getTime() - PRICE_WINDOW_DAYS * DAY_MS) },
       },

@@ -30,7 +30,7 @@ import { defaultRecipients, readEmailTemplates } from './invoice-email-settings'
 import { invoiceWritesOff, invoiceWritesOn, officeBrand } from './invoice-settings';
 import { deliveryView } from './invoices.service';
 import { statementEmail } from './statement-email';
-import { SHOWN_INVOICE } from './shown-invoices';
+import { keptInXero, readCompanies, shownInvoices } from './shown-invoices';
 
 /**
  * A property's account (2026-11-10, phase 3 of the invoice gap review), as
@@ -48,7 +48,7 @@ type Db = PrismaService | Prisma.TransactionClient;
 const isoDay = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : null);
 
 /** Where each kind sits among the entries of one day: the invoice before what pays it. */
-const ORDER: Record<AccountEntryKind, number> = { INVOICE: 0, ADJUSTMENT: 1, PAYMENT: 2, REFUND: 2, WRITE_OFF: 3 };
+const ORDER: Record<AccountEntryKind, number> = { INVOICE: 0, ADJUSTMENT: 1, PAYMENT: 2, REFUND: 2, CREDIT: 2, WRITE_OFF: 3 };
 
 interface LedgerEntry extends Omit<AccountEntry, 'balanceCents'> {
   order: number;
@@ -124,6 +124,7 @@ export class PropertyAccountService {
       paidCents: ledger.paidCents,
       truncated: ledger.truncated,
       writesEnabled,
+      keptInXero: ledger.keptInXero,
       statementTo: ledger.statementTo,
       statements: statements.map(deliveryView),
     };
@@ -160,6 +161,9 @@ export class PropertyAccountService {
   /** Emails the statement, one to each address, on the press. */
   async sendStatement(user: AuthenticatedUser, propertyId: string, input: SendStatementInput): Promise<PropertyAccount> {
     if (!(await invoiceWritesOn(this.prisma, user.organizationId))) throw invoiceWritesOff();
+    // Its invoices kept in a company's books in Xero (2026-11-12): Xero sends its statements.
+    if ((await this.ledger(user, propertyId)).keptInXero)
+      throw new ApplicationError(409, 'STATEMENT_KEPT_IN_XERO', 'This property’s invoices are kept in Xero. Send its statement from there.');
     const to = input.to.map((address) => address.trim()).filter(Boolean);
     const problem = recipientsProblem(to);
     if (problem) throw new ApplicationError(422, 'STATEMENT_SEND_INVALID', problem);
@@ -256,8 +260,9 @@ export class PropertyAccountService {
     });
     if (!building) throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'That property is not one of the office’s.');
     const today = businessDate();
+    const read = await readCompanies(this.prisma, organizationId);
     const invoices = await this.prisma.invoice.findMany({
-      where: { organizationId, ...SHOWN_INVOICE, propertywareBuildingId: propertyId, status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
+      where: { organizationId, ...shownInvoices(read), propertywareBuildingId: propertyId, status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
       orderBy: [{ issuedOn: 'asc' }, { createdAt: 'asc' }],
       take: MAX_ACCOUNT_ENTRIES + 1,
       select: {
@@ -273,6 +278,12 @@ export class PropertyAccountService {
         totalCents: true,
         balanceCents: true,
         payments: { select: { id: true, paidOn: true, amountCents: true, method: true, reference: true } },
+        // As its company's books in Xero have it (2026-11-12).
+        origin: true,
+        xeroTenantId: true,
+        xeroInvoiceId: true,
+        amountCreditedCents: true,
+        paidOn: true,
       },
     });
     const kept = invoices.slice(0, MAX_ACCOUNT_ENTRIES);
@@ -303,7 +314,22 @@ export class PropertyAccountService {
         });
       }
       const writtenOff = invoice.status === InvoiceStatus.BAD_DEBT ? invoice.balanceCents : 0;
-      const unexplained = invoice.totalCents - paid - invoice.balanceCents;
+      // What credit notes took off it in Xero (2026-11-12): written off, when the console wrote it off; else a credit.
+      // On the day it was settled, else the day it last changed.
+      const credited = invoice.amountCreditedCents ?? 0;
+      if (credited > 0) {
+        const kind: AccountEntryKind = invoice.status === InvoiceStatus.BAD_DEBT ? 'WRITE_OFF' : 'CREDIT';
+        entries.push({
+          ...base,
+          key: `credit:${invoice.id}`,
+          kind,
+          on: isoDay(invoice.paidOn) ?? businessDate(invoice.updatedAt),
+          paymentId: null,
+          amountCents: -credited,
+          order: ORDER[kind],
+        });
+      }
+      const unexplained = invoice.totalCents - paid - credited - invoice.balanceCents;
       if (unexplained !== 0)
         entries.push({ ...base, key: `adjustment:${invoice.id}`, kind: 'ADJUSTMENT', on: issued, paymentId: null, amountCents: -unexplained, order: ORDER.ADJUSTMENT });
       // The day it was last changed: for an invoice marked bad debt, that day unless it was edited since.
@@ -318,6 +344,7 @@ export class PropertyAccountService {
       invoicedCents,
       paidCents,
       truncated: invoices.length > MAX_ACCOUNT_ENTRIES,
+      keptInXero: kept.some((invoice) => keptInXero(invoice, read)),
       statementTo: defaultRecipients(null, latest?.clientEmails ?? []),
     };
   }

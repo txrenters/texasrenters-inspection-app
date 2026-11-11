@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 import { InvoiceEditsController } from '../src/admin/invoice-edits.controller';
 import { InvoiceEditsService, historyEvent, invoiceChanges } from '../src/admin/invoice-edits.service';
 import type { AuthenticatedUser } from '../src/common/auth';
+import { shownInvoices } from '../src/admin/shown-invoices';
 
 /**
  * Editing an invoice in the console (2026-11-06, phase 3): its details, lines,
@@ -73,6 +74,8 @@ const edit = (over: Record<string, unknown> = {}) => ({
 
 function database(row: Record<string, unknown> | null = stored(), paidCents = 0) {
   const db = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     // Jobber still holds the invoices: not taken over (phase 8).
     invoiceSettings: { findUnique: jest.fn().mockResolvedValue(null) },
     invoice: {
@@ -208,7 +211,7 @@ describe('once the console owns invoicing', () => {
         message: 'Invoice #9000 is another invoice already.',
       });
       // Not one read back from Xero (2026-11-12): those are out of sight until the pages show them.
-      expect(db.invoice.findFirst.mock.calls[1][0].where).toEqual({ organizationId: ORG, origin: { not: 'XERO' }, number: '9000', id: { not: INVOICE } });
+      expect(db.invoice.findFirst.mock.calls[1][0].where).toEqual({ organizationId: ORG, ...shownInvoices([]), number: '9000', id: { not: INVOICE } });
     });
 
     it('refuses an invoice changed since it was read, before or during the write', async () => {
@@ -236,6 +239,15 @@ describe('once the console owns invoicing', () => {
 
   describe("an invoice's state", () => {
     const change = (action: 'MARK_SENT' | 'VOID' | 'BAD_DEBT' | 'REOPEN') => ({ action, expectedUpdatedAt: READ_AT });
+
+    it('changes nothing kept in Xero (2026-11-12): it is voided, closed and edited there', async () => {
+      const HOMES = 'b1000000-0000-4000-8000-000000000001';
+      const db = database(stored({ origin: 'XERO', xeroTenantId: HOMES, xeroInvoiceId: 'x-1' }));
+      db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+      await expect(service(db).edits.changeStatus(office, INVOICE, change('VOID'))).rejects.toMatchObject({ code: 'INVOICE_KEPT_IN_XERO', status: 409 });
+      expect(db.invoice.updateMany).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    });
 
     it('voids an invoice nobody has paid anything on, owing nothing', async () => {
       const db = database();

@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { InvoiceDeliveryService } from '../src/admin/invoice-delivery.service';
 import { InvoiceFollowUpsService } from '../src/admin/invoice-follow-ups.service';
 import type { AuthenticatedUser } from '../src/common/auth';
+import { shownInvoices } from '../src/admin/shown-invoices';
 
 /**
  * What Jobber did for the office on its own and stops at Take over (2026-11-09):
@@ -52,6 +53,8 @@ function harness(opts: {
   const taken = opts.taken ?? new Set<string>();
   let sentToday = opts.sentToday ?? 0;
   const tx = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     $queryRaw: jest.fn().mockResolvedValue([]),
     invoiceDelivery: {
       findMany: jest.fn(async () => (sentToday ? [{ recipients: Array.from({ length: sentToday }, () => 'x@example.com') }] : [])),
@@ -65,6 +68,8 @@ function harness(opts: {
     },
   };
   const prisma = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     $transaction: jest.fn(async (run: (client: typeof tx) => unknown) => run(tx)),
     invoiceSettings: {
       findUnique: jest.fn(async ({ select }: { select: Record<string, boolean> }) => {
@@ -118,7 +123,7 @@ describe('invoice follow-ups', () => {
     await followUps.run(ORG, TODAY);
     const { where } = prisma.invoice.findMany.mock.calls[0]![0] as { where: Record<string, unknown> & { dueOn: { in: Date[] } } };
     // Never an invoice read back from Xero (2026-11-12): its company's reminders are Xero's.
-    expect(where).toMatchObject({ organizationId: ORG, origin: { not: 'XERO' }, status: 'AWAITING_PAYMENT', balanceCents: { gt: 0 } });
+    expect(where).toMatchObject({ organizationId: ORG, ...shownInvoices([], { outsideXeroBooks: true }), status: 'AWAITING_PAYMENT', balanceCents: { gt: 0 } });
     expect(where.dueOn.in.map((value) => value.toISOString().slice(0, 10))).toEqual(['2026-11-20', '2026-11-16']);
   });
 

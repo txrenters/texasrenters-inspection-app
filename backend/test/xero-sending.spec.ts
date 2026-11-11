@@ -1244,3 +1244,30 @@ describe('what came back from Xero stays there (2026-11-12)', () => {
     for (const [args] of counted) expect(args.where).toMatchObject({ origin: { not: 'XERO' } });
   });
 });
+
+describe('a company whose books are read from Xero (2026-11-12)', () => {
+  const read = { sendingEnabled: true, sendFrom: new Date('2026-12-01T00:00:00.000Z'), sendingClaimedUntil: null, booksReadAt: new Date('2026-11-12T22:05:00.000Z') };
+
+  it('sends no payment from here: they are recorded in Xero, and read back', async () => {
+    const { sender, client, paymentRows } = harness({ invoices: [inXero()], candidates: [], payments: [payment()], values: PAYING, settingsRow: read });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ payments: { sent: 0, failed: 0, removed: 0 }, problem: null });
+    expect(calls(client, '/Payments')).toHaveLength(0);
+    expect(paymentRows).toEqual([]);
+  });
+
+  it('writes off no bad debt from here: the office does that in Xero, and the console reads it back', async () => {
+    const { sender, client, writeOffRows } = harness({ invoices: [], candidates: [], badDebts: [badDebt()], links: LINKS, values: WRITING, settingsRow: read });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ writeOffs: { sent: 0, failed: 0, reversed: 0 }, problem: null });
+    expect(calls(client, '/CreditNotes')).toHaveLength(0);
+    expect(writeOffRows).toEqual([]);
+  });
+
+  it('lets Xero’s own reminders be on: the console sends that company no follow-ups', async () => {
+    const reminders = harness({
+      settingsRow: read,
+      connection: { status: 'CONNECTED', xeroTenantId: TENANT, scopes: XERO_SEND_SCOPES.split(' '), invoiceRemindersOn: true, accounts: ACCOUNTS },
+    });
+    expect((await reminders.sender.view(ORG, TENANT)).blockers).toEqual([]);
+    expect((await reminders.sender.run(ORG, TENANT)).problem).toBeNull();
+  });
+});

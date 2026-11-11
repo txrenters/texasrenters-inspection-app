@@ -4,6 +4,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { InvoicesController, PaymentsController } from '../src/admin/invoices.controller';
 import { InvoicesService, jobberRead, priceList, servicesDone } from '../src/admin/invoices.service';
 import type { AuthenticatedUser } from '../src/common/auth';
+import { shownInvoices } from '../src/admin/shown-invoices';
 
 /**
  * Invoices and payments in the console (2026-11-05): the console's copy of
@@ -113,6 +114,8 @@ const finishedVisit = (over: Record<string, unknown> = {}) => ({
 
 function database() {
   const db = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     invoice: {
       findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
@@ -193,12 +196,26 @@ describe('the invoice list', () => {
 
     const query = db.invoice.findMany.mock.calls[0][0];
     const [scope, filter, search] = query.where.AND;
-    // Never the books read back from Xero (2026-11-12): out of sight until the pages show them.
-    expect(scope).toEqual({ organizationId: ORG, origin: { not: 'XERO' }, propertywareBuildingId: BUILDING });
+    // A company's books as Xero has them once read, Jobber's copies until then (2026-11-12).
+    expect(scope).toEqual({ organizationId: ORG, ...shownInvoices([]), propertywareBuildingId: BUILDING });
     expect(filter).toMatchObject({ status: 'AWAITING_PAYMENT', dueOn: { lt: expect.any(Date) } });
     // "#8439" finds number 8439: the # is how the office writes it.
     expect(search.OR).toContainEqual({ number: { startsWith: '8439' } });
     expect(query).toMatchObject({ skip: 20, take: 10 });
+  });
+
+  it('shows a read company’s invoices as Xero has them, linked into its books there (2026-11-12)', async () => {
+    const HOMES = 'b1000000-0000-4000-8000-000000000001';
+    const db = database();
+    db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES, booksLastRunAt: new Date('2026-11-12T22:05:00.000Z') }]);
+    db.xeroOrganisation.findMany.mockResolvedValue([{ xeroTenantId: HOMES, name: 'Example Home Services', status: 'CONNECTED', organisation: { shortCode: '!abc12' } }]);
+    db.invoice.findMany.mockResolvedValue([invoiceRow({ origin: 'XERO', xeroTenantId: HOMES, xeroInvoiceId: 'x-1', xeroStatus: 'DRAFT', jobberWebUrl: null })]);
+
+    const list = await serviceOver(db).list(office, {});
+
+    expect(list.xeroBooks).toEqual([{ tenantId: HOMES, name: 'Example Home Services', readAt: '2026-11-12T22:05:00.000Z' }]);
+    expect(list.items[0]!.xero).toEqual({ status: 'DRAFT', url: expect.stringContaining('shortcode=!abc12'), kept: true });
+    expect(db.invoice.findMany.mock.calls[0][0].where.AND[0]).toEqual({ organizationId: ORG, ...shownInvoices([HOMES]) });
   });
 
   it('never pages more than a hundred at once', async () => {
@@ -270,10 +287,10 @@ describe('an invoice', () => {
       payments: [{ paidOn: '2020-02-20', amountCents: 1000, reference: 'Receipt 77', recordedAt: '2020-02-20T16:00:00.000Z' }],
       accountBalanceCents: 12000,
     });
-    expect(db.invoice.findFirst.mock.calls[0][0].where).toEqual({ id: INVOICE, organizationId: ORG, origin: { not: 'XERO' } });
+    expect(db.invoice.findFirst.mock.calls[0][0].where).toEqual({ id: INVOICE, organizationId: ORG, ...shownInvoices([]) });
     expect(db.invoice.aggregate.mock.calls[0][0].where).toEqual({
       organizationId: ORG,
-      origin: { not: 'XERO' },
+      ...shownInvoices([]),
       status: 'AWAITING_PAYMENT',
       jobberClientId: 'client-1',
     });
@@ -396,7 +413,7 @@ describe("a finished visit's draft", () => {
     const draft = await serviceOver(db).draft(office, { inspectionId: VISIT });
 
     expect(draft.existing).toEqual([{ id: INVOICE, number: '8439', status: 'PAST_DUE', xeroTenantId: null }]);
-    expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({ organizationId: ORG, origin: { not: 'XERO' }, inspectionId: VISIT, status: { not: 'VOIDED' } });
+    expect(db.invoice.findMany.mock.calls[0][0].where).toEqual({ organizationId: ORG, ...shownInvoices([]), inspectionId: VISIT, status: { not: 'VOIDED' } });
     // No invoice yet in the copy: Jobber's own defaults.
     expect(draft).toMatchObject({ subject: 'For Services Rendered', paymentTermsDays: 30, clientMessage: '' });
   });
@@ -549,8 +566,10 @@ describe('a payment on its own page', () => {
         },
       ],
       receiptTo: ['owner@example.com'],
+      // Recorded in Jobber, on an invoice not kept in Xero (2026-11-12): changed here once the console owns payments.
+      keptInXero: false,
     });
-    expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG, invoice: { is: { origin: { not: 'XERO' } } } });
+    expect(db.invoicePayment.findFirst.mock.calls[0][0].where).toEqual({ id: 'payment-1', organizationId: ORG, invoice: { is: shownInvoices([]) } });
   });
 
   it("is not found in another office's organization", async () => {
@@ -855,6 +874,24 @@ describe('making an invoice and recording a payment', () => {
       const db = database();
       db.inspection.findFirst.mockResolvedValue(finishedVisit({ status: 'IN_PROGRESS' }));
       await expect(serviceOver(db).create(office, create)).rejects.toMatchObject({ code: 'INVOICE_VISIT_NOT_FINISHED' });
+    });
+
+    it('records nothing against an invoice kept in Xero (2026-11-12): its payments are recorded there', async () => {
+      const HOMES = 'b1000000-0000-4000-8000-000000000001';
+      const db = database();
+      db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+      db.invoice.findFirst.mockResolvedValueOnce({
+        status: 'AWAITING_PAYMENT',
+        dueOn: date(PAST),
+        balanceCents: 3999,
+        origin: 'XERO',
+        xeroTenantId: HOMES,
+        xeroInvoiceId: 'x-1',
+      });
+
+      await expect(serviceOver(db).recordPayment(office, INVOICE, pay)).rejects.toMatchObject({ code: 'INVOICE_KEPT_IN_XERO', status: 409 });
+      expect(db.invoicePayment.create).not.toHaveBeenCalled();
+      expect(db.invoice.updateMany).not.toHaveBeenCalled();
     });
 
     it('records a payment, lowers the balance only from what was read, and puts it on the record', async () => {

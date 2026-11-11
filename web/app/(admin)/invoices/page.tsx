@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InvoiceStatusBadge, InvoicesOverview, formatInvoiceDay } from '@/components/invoices/invoice-parts';
 import { RangePicker, chosenRange } from '@/components/invoices/report-range';
+import { XeroBooksLine } from '@/components/invoices/xero-books-line';
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
@@ -236,7 +237,10 @@ export default function InvoicesPage() {
             total={data.total}
             totalPages={data.totalPages}
           />
-          {data.jobberRead && !data.jobberRead.firstReadDone ? (
+          {/* Each company's books as Xero has them, once read (2026-11-12); Jobber's copies until then. */}
+          {data.xeroBooks?.length ? (
+            <XeroBooksLine books={data.xeroBooks} />
+          ) : data.jobberRead && !data.jobberRead.firstReadDone ? (
             <p className="text-muted-foreground mt-3 text-xs">
               Still reading Jobber&apos;s invoices for the first time; more appear every few minutes.
             </p>

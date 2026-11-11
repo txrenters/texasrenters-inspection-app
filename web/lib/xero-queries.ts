@@ -160,3 +160,16 @@ export function useReadXeroBooks(tenantId: string) {
     onError: () => void client.invalidateQueries({ queryKey: xeroBooksKey(tenantId) }),
   });
 }
+
+/**
+ * "Read invoices from Xero now" on the invoices page (2026-11-12): every company
+ * whose books are shown as Xero has them, two calls each, at most once a minute.
+ * The invoice pages are read again after.
+ */
+export function useReadAllXeroBooks() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ companies: number; problems: string[] }>(`${XERO}/books/read`, { method: 'POST' }),
+    onSettled: () => void client.invalidateQueries({ queryKey: ['admin', 'invoices'] }),
+  });
+}

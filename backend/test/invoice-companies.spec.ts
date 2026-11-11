@@ -94,6 +94,8 @@ const summaryRow = (id: string, number: string, xeroTenantId: string | null) => 
 
 function database() {
   const db = {
+    // Which companies' books are read from Xero (2026-11-12): none here.
+    xeroSettings: { findMany: jest.fn().mockResolvedValue([]) },
     invoice: {
       findFirst: jest.fn().mockResolvedValue(null),
       findMany: jest.fn().mockResolvedValue([]),

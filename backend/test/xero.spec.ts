@@ -528,6 +528,8 @@ describe('who may do what', () => {
     // The books read back from Xero (2026-11-12): seen with read, read again with manage.
     expect(permission('booksRead')).toEqual(['integrations:read']);
     expect(permission('readBooks')).toEqual(['integrations:manage']);
+    // Every read company at once, from the invoices page: whoever manages invoices.
+    expect(permission('readAllBooks')).toEqual(['invoices:manage']);
   });
 
   it('names an organisation only by Xero’s own id', async () => {
