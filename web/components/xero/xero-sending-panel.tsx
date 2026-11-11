@@ -28,7 +28,9 @@ import { useXeroSendingActions } from '@/lib/xero-queries';
  * what went, what Xero refused and why. Approved invoices, under each property
  * as a contact; Xero emails nobody. Nothing is sent while it is off. And the
  * payments recorded against them (phase 4 of the multi-company plan), each
- * into the account chosen for how it was paid.
+ * into the account chosen for how it was paid. Each invoice goes once
+ * (2026-11-12): one changed here after it went is listed, for the office to
+ * change in Xero too.
  */
 export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSendingView; sendFrom: string | null; canManage: boolean }) {
   const actions = useXeroSendingActions(view.tenantId);
@@ -69,7 +71,7 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
     >
       <p className="text-sm">
         {view.enabled
-          ? `On${view.changedAt ? ` since ${formatRelative(view.changedAt)}` : ''}. Invoices issued since ${since} ${how}, and each change follows within about ten minutes.`
+          ? `On${view.changedAt ? ` since ${formatRelative(view.changedAt)}` : ''}. Invoices issued since ${since} ${how}, each within about ten minutes. Each goes once: in Xero it is the office's, and a change made here after that is listed below, to make in Xero too.`
           : 'Off. Nothing is sent to Xero.'}{' '}
         <span className="text-muted-foreground">Xero emails nobody: invoices, follow-ups and receipts still go from the console.</span>
       </p>
@@ -89,6 +91,7 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
         <Count label="In Xero" value={view.counts.sent} />
         <Count label="Not sent yet" value={view.counts.notYet} />
         <Count label="Refused" tone={view.counts.failed ? 'warning' : undefined} value={view.counts.failed} />
+        {view.counts.changedHere ? <Count label="Changed here since" tone="warning" value={view.counts.changedHere} /> : null}
       </dl>
       <dl aria-label="Payments" className="grid grid-cols-3 gap-3 text-sm sm:max-w-md">
         <Count label="Payments in Xero" value={view.counts.payments.sent} />
@@ -169,6 +172,39 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
             ))}
           </TableBody>
         </Table>
+      ) : null}
+
+      {view.changedHere.length ? (
+        // Never sent again (2026-11-12): the office makes the same change in Xero.
+        <div className="space-y-2">
+          <p className="text-sm">
+            Changed here after they went to Xero. The console does not send them again, so Xero still has them as they went: make the same change in Xero.
+          </p>
+          <Table aria-label="Changed here since they went to Xero">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Invoice</TableHead>
+                <TableHead>Client</TableHead>
+                <TableHead>In Xero</TableHead>
+                <TableHead>Changed</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {view.changedHere.map((changed) => (
+                <TableRow key={changed.invoiceId}>
+                  <TableCell className="tabular-nums">
+                    <Link className="underline underline-offset-2" href={`/invoices/${changed.invoiceId}`}>
+                      {changed.number ? `#${changed.number}` : 'Open'}
+                    </Link>
+                  </TableCell>
+                  <TableCell>{changed.clientName}</TableCell>
+                  <TableCell>{changed.voided ? 'Voided here: void it in Xero too' : 'Make the same change in Xero'}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatRelative(changed.changedAt)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ) : null}
 
       {view.paymentFailures.length ? (
@@ -264,8 +300,8 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
             <AlertDialogDescription>
               {asking === 'on'
                 ? view.projectsEnabled
-                  ? `Invoices issued since ${since} go to Xero as drafts, each under its property as a contact and each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero. Every change after follows, and they are in the office's books from then on. Xero emails nobody.`
-                  : `Invoices issued since ${since} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them, and every change after follows. They are in the office's books from then on. Xero emails nobody.`
+                  ? `Invoices issued since ${since} go to Xero as drafts, each under its property as a contact and each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
+                  : `Invoices issued since ${since} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
                 : 'Nothing more goes to Xero until it is turned on again. What was sent stays in Xero.'}
             </AlertDialogDescription>
           </AlertDialogHeader>

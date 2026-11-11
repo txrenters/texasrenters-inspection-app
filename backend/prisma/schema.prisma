@@ -4941,6 +4941,10 @@ model XeroInvoiceSync {
   nextAttemptAt   DateTime?
   problem         String?
   sentAt          DateTime?
+  /// Sent once (2026-11-12): when it was first seen changed here after it went
+  /// -- it is never sent again, and the office makes the change in Xero. Null
+  /// while it says what went.
+  changedHereAt   DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
