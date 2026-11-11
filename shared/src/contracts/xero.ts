@@ -622,6 +622,8 @@ export interface XeroSendingView {
     writeOffs: { sent: number; failed: number };
     /** Visits' projects in Xero -- made here or found -- and those refused (2026-11-11). */
     projects: { done: number; failed: number };
+    /** In Xero, and changed here since it went (2026-11-12): never sent again, the office's to change in Xero. */
+    changedHere: number;
   };
   lastRunAt: string | null;
   lastRunProblem: string | null;
@@ -633,6 +635,23 @@ export interface XeroSendingView {
   writeOffFailures: XeroWriteOffFailure[];
   /** The latest visits' projects refused, newest first; at most 50 (2026-11-11). */
   projectFailures: XeroProjectFailure[];
+  /** The invoices changed here since they went, newest first; at most 50 (2026-11-12). */
+  changedHere: XeroChangedHere[];
+}
+
+/**
+ * An invoice changed here after it went to Xero (2026-11-12). Each goes once:
+ * once it is in Xero it is the office's there, and the console never
+ * overwrites it -- the office makes the same change in Xero.
+ */
+export interface XeroChangedHere {
+  invoiceId: string;
+  number: string | null;
+  clientName: string;
+  /** Voided here: void it in Xero too. */
+  voided: boolean;
+  /** When it was first seen changed. */
+  changedAt: string;
 }
 
 /** Why sending cannot run, in the order to fix them. */

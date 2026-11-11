@@ -8,7 +8,7 @@ import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroError } from '../src/integrations/xero/xero.errors';
 import { clientKeyOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero } from '../src/integrations/xero/xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero } from '../src/integrations/xero/xero-payment';
-import { MAX_INVOICES_PER_RUN, MAX_PAYMENT_DELETES_PER_RUN, XeroSenderService, invoiceForXero } from '../src/integrations/xero/xero-sender.service';
+import { MAX_INVOICES_PER_RUN, XeroSenderService, invoiceForXero } from '../src/integrations/xero/xero-sender.service';
 import { xeroWriteOffFrom } from '../src/integrations/xero/xero-write-off';
 import { remindersFrom } from '../src/integrations/xero/xero.service';
 
@@ -88,8 +88,7 @@ afterEach(() => {
 });
 
 describe('a console invoice, as Xero is sent it', () => {
-  const plan = (over: Partial<Fixture> = {}, xeroInvoiceId: string | null = null, settings = SETTINGS) =>
-    xeroInvoiceFrom(invoice(over), { settings, accounts: ACCOUNTS, contactId: 'contact-1', xeroInvoiceId });
+  const plan = (over: Partial<Fixture> = {}, settings = SETTINGS) => xeroInvoiceFrom(invoice(over), { settings, accounts: ACCOUNTS, contactId: 'contact-1' });
 
   it('goes approved, under its client, each line to its product’s account or the default, with the office’s tax type', () => {
     expect(plan()).toEqual({
@@ -111,9 +110,9 @@ describe('a console invoice, as Xero is sent it', () => {
     });
   });
 
-  it('updates the invoice Xero already has', () => {
-    const sent = plan({}, 'xero-inv-1');
-    expect(sent.kind === 'send' && sent.body.InvoiceID).toBe('xero-inv-1');
+  it('is always a new invoice: it never names one Xero has, to change it (2026-11-12)', () => {
+    const sent = plan();
+    expect(sent.kind === 'send' && 'InvoiceID' in sent.body).toBe(false);
   });
 
   it('takes a discount as a line below zero, to the default account', () => {
@@ -154,18 +153,17 @@ describe('a console invoice, as Xero is sent it', () => {
   });
 
   it('holds back a line whose chosen account Xero has archived', () => {
-    expect(plan({}, null, { ...SETTINGS, salesAccounts: { 'filter change': 'a-460' } })).toEqual({
+    expect(plan({}, { ...SETTINGS, salesAccounts: { 'filter change': 'a-460' } })).toEqual({
       kind: 'problem',
       problem: 'The account chosen for “Filter change” is not an active account in Xero. Choose again on the Xero page.',
     });
   });
 
-  it('voids in Xero what was sent, and sends nothing for what never was', () => {
-    expect(plan({ status: 'VOIDED' }, 'xero-inv-1')).toEqual({ kind: 'void', body: { InvoiceID: 'xero-inv-1', Status: 'VOIDED' } });
+  it('sends nothing for one voided before it reached Xero', () => {
     expect(plan({ status: 'VOIDED' })).toEqual({ kind: 'problem', problem: 'It was voided before it reached Xero, so it is not sent.' });
   });
 
-  it('is sent again only when what it says changes: not when it is paid, nor when an account is chosen anew', () => {
+  it('reads as changed here only when what it says changes: not when it is paid, nor when an account is chosen anew', () => {
     const before = invoiceFingerprint(invoice());
     expect(invoiceFingerprint(invoice({ status: 'PAID' }))).toBe(before);
     expect(invoiceFingerprint(invoice({ lines: [...invoice().lines].reverse() }))).toBe(before);
@@ -203,7 +201,6 @@ describe('a console invoice, as Xero is sent it', () => {
         trackingCategories: catalog.trackingCategories ?? [CATEGORY],
         items: catalog.items ?? ITEMS,
         contactId: 'contact-1',
-        xeroInvoiceId: null,
       });
 
     it('dates it on the visit’s day, due on the last day of that month, with the property as its reference', () => {
@@ -678,13 +675,12 @@ describe('bad debts, written off in the company’s books (2026-11-10)', () => {
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
     const { sender, client, writeOffRows } = harness({ invoices: [edited], writeOffRows: [writtenOff()], values: WRITING });
-    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, writeOffs: { sent: 0, failed: 0, reversed: 1 } });
+    // The invoice itself is not sent again (2026-11-12): only its write-off comes off.
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, unchanged: 1, writeOffs: { sent: 0, failed: 0, reversed: 1 } });
     expect(client.delete).toHaveBeenCalledWith(ORG, TENANT, '/CreditNotes/credit-old/Allocations/allocation-old', expect.anything());
     const [voided] = calls(client, '/CreditNotes');
     expect(voided![3]).toEqual({ CreditNotes: [{ CreditNoteID: 'credit-old', Status: 'VOIDED' }] });
-    // Before the invoice is changed: Xero changes no invoice with a credit on it.
-    const order = [...client.delete.mock.invocationCallOrder, ...client.post.mock.invocationCallOrder];
-    expect(client.delete.mock.invocationCallOrder[0]).toBe(Math.min(...order));
+    expect(calls(client, '/Invoices')).toHaveLength(0);
     expect(writeOffRows).toEqual([]);
   });
 
@@ -745,11 +741,11 @@ describe('already in Xero, made by Zapier or by hand (2026-11-11)', () => {
     expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ metadata: expect.objectContaining({ linked: 1 }) }) });
   });
 
-  it('makes a draft Xero has the console’s, approved', async () => {
+  it('links a draft Xero has as it is, sending nothing over it: the office may have put it on its project (2026-11-12)', async () => {
     const { sender, client, syncs } = harness({ inXero: [theirs({ Status: 'DRAFT' }) as never] });
-    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, linked: 0 });
-    expect((calls(client, '/Invoices')[0]![3] as { Invoices: { InvoiceID?: string; Status: string }[] }).Invoices[0]).toMatchObject({ InvoiceID: 'zap-1', Status: 'AUTHORISED' });
-    expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT' });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, linked: 1 });
+    expect(calls(client, '/Invoices')).toHaveLength(0);
+    expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'zap-1' });
   });
 
   it('holds one back whose number Xero gave another client, or two invoices', async () => {
@@ -823,10 +819,10 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
       status: 'VOIDED',
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
-    // The payment was removed, then the invoice voided: Xero voids no invoice with a payment on it.
+    // The payment was removed, then the invoice voided: the payment comes off in Xero; voiding the invoice there is the office's (2026-11-12).
     const { sender, client, paymentRows } = harness({ invoices: [voided], paymentRows: [sentRow({ paymentId: null })], values: PAYING });
-    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, payments: { sent: 0, failed: 0, removed: 1 } });
-    expect(client.post.mock.calls.map(([, , path]) => path)).toEqual(['/Payments/xero-payment-old', '/Invoices?summarizeErrors=false']);
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, payments: { sent: 0, failed: 0, removed: 1 } });
+    expect(client.post.mock.calls.map(([, , path]) => path)).toEqual(['/Payments/xero-payment-old']);
     expect(paymentRows).toEqual([]);
   });
 
@@ -837,49 +833,15 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
     expect(paymentRows[0]).toMatchObject({ status: 'FAILED', problem: 'Removed here, but Xero would not delete it: Payment is reconciled', nextAttemptAt: expect.any(Date) });
   });
 
-  it('takes the payments off an invoice changed here, changes it, and puts them back on', async () => {
+  it('leaves alone the payments on an invoice changed here after it went: the invoice is not changed in Xero (2026-11-12)', async () => {
     const edited = invoice({
       inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
       xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
     });
-    const { sender, client, paymentRows, syncs } = harness({ invoices: [edited], payments: [payment()], paymentRows: [sentRow()], values: PAYING });
-    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, payments: { sent: 1, failed: 0, removed: 0 } });
-    expect(client.post.mock.calls.map(([, , path]) => path).filter((path) => !(path as string).startsWith('/Contacts'))).toEqual([
-      '/Payments/xero-payment-old',
-      '/Invoices?summarizeErrors=false',
-      '/Payments?summarizeErrors=false',
-    ]);
-    expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT' });
-    expect(paymentRows).toEqual([expect.objectContaining({ paymentId: 'pay-1', xeroPaymentId: 'xero-payment-1', status: 'SENT' })]);
-  });
-
-  it('leaves an invoice unchanged when Xero will not take its payments off, saying why', async () => {
-    const edited = invoice({
-      inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
-      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
-    });
-    const { sender, client, syncs } = harness({ invoices: [edited], payments: [], paymentRows: [sentRow()], values: PAYING });
-    client.post.mockImplementation(async (_org: string, _tenant: string, path: string) =>
-      path.startsWith('/Payments/')
-        ? { Payments: [{ StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Payment is reconciled' }] }] }
-        : { Contacts: [{ ContactID: 'contact-1', StatusAttributeString: 'OK' }] },
-    );
-    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
-    expect(calls(client, '/Invoices')).toHaveLength(0);
-    expect(syncs.get('inv-1')).toMatchObject({ status: 'FAILED', problem: 'Its payments could not be taken off in Xero to change it: Payment is reconciled' });
-  });
-
-  it('changes no invoice whose payments are more than one run may delete: it waits, untouched, for the next', async () => {
-    const edited = invoice({
-      inspection: { scheduledAt: new Date('2026-12-01T00:00:00.000Z'), assignments: [] },
-      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
-    });
-    const many = Array.from({ length: MAX_PAYMENT_DELETES_PER_RUN + 1 }, (_, index) => sentRow({ id: `ps-${index}`, paymentId: `pay-${index}`, xeroPaymentId: `xero-payment-${index}` }));
-    const { sender, client, syncs } = harness({ invoices: [edited], payments: [], paymentRows: many, values: PAYING });
-    await sender.run(ORG, TENANT);
-    expect(calls(client, '/Payments')).toHaveLength(0);
-    expect(calls(client, '/Invoices')).toHaveLength(0);
-    expect(syncs.has('inv-1')).toBe(false);
+    const { sender, client, paymentRows } = harness({ invoices: [edited], payments: [payment()], paymentRows: [sentRow()], values: PAYING });
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, unchanged: 1, payments: { sent: 0, failed: 0, removed: 0 } });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(paymentRows).toEqual([expect.objectContaining({ paymentId: 'pay-1', xeroPaymentId: 'xero-payment-old', status: 'SENT' })]);
   });
 
   it('counts this organisation’s payments in Xero and refused, and lists the refused', async () => {
@@ -901,17 +863,11 @@ describe('payments, to the invoice’s company’s books (2026-11-10)', () => {
 
 describe('a company whose visits get projects (2026-11-11)', () => {
   const PROJECTS: XeroSettingsValues = { ...SETTINGS, paymentsToXero: false, projectsEnabled: true, projectUserId: 'user-1', labourRateCents: 3500, labourMinutes: 6 };
-  const plan = (xeroInvoiceId: string | null) =>
-    xeroInvoiceFrom(invoice(), { settings: PROJECTS, accounts: ACCOUNTS, contactId: 'contact-1', xeroInvoiceId, asDraft: true });
+  const plan = () => xeroInvoiceFrom(invoice(), { settings: PROJECTS, accounts: ACCOUNTS, contactId: 'contact-1', asDraft: true });
 
   it('sends a new invoice as a draft, for the office to put its line on the project and approve', () => {
-    const sent = plan(null);
+    const sent = plan();
     expect(sent.kind === 'send' && sent.body.Status).toBe('DRAFT');
-  });
-
-  it('changes one already in Xero without saying its status: approved by the office, it stays approved', () => {
-    const sent = plan('xero-inv-1');
-    expect(sent.kind === 'send' && 'Status' in sent.body).toBe(false);
   });
 
   it('sends drafts, then makes the projects, with the company’s choices and currency -- and sends no payment', async () => {
@@ -952,32 +908,27 @@ describe('a company whose visits get projects (2026-11-11)', () => {
     expect(calls(client, '/Invoices')[0]![3]).toMatchObject({ Invoices: [{ Status: 'AUTHORISED' }] });
   });
 
-  it('deletes a draft the office has not approved, voids one it has, and is done with one Xero no longer has', async () => {
+  it('deletes or voids nothing in Xero, draft or approved: voided here after it went, it is marked for the office (2026-11-12)', async () => {
     const voided = (id: string, number: string) =>
       invoice({
         id,
         number,
         status: 'VOIDED',
-        xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: 'before', xeroInvoiceId: `xero-${number}`, attempts: 0 },
+        xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice({ id, number })), xeroInvoiceId: `xero-${number}`, attempts: 0 },
       });
-    const { sender, client, syncs } = harness({
+    const { sender, client, prisma } = harness({
       values: PROJECTS,
-      invoices: [voided('inv-1', '8440'), voided('inv-2', '8441'), voided('inv-3', '8442')],
+      invoices: [voided('inv-1', '8440'), voided('inv-2', '8441')],
       inXero: [
         { InvoiceID: 'xero-8440', InvoiceNumber: '8440', Status: 'DRAFT' },
         { InvoiceID: 'xero-8441', InvoiceNumber: '8441', Status: 'AUTHORISED' },
       ],
     });
-    const result = await sender.run(ORG, TENANT);
-    expect(calls(client, '/Invoices')[0]![3]).toEqual({
-      Invoices: [
-        { InvoiceID: 'xero-8440', Status: 'DELETED' },
-        { InvoiceID: 'xero-8441', Status: 'VOIDED' },
-      ],
-    });
-    // Not in Xero any more: nothing left to void, and done without a call.
-    expect(syncs.get('inv-3')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'xero-8442' });
-    expect(result.sent).toBe(3);
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 0, unchanged: 2 });
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.get).not.toHaveBeenCalled();
+    for (const invoiceId of ['inv-1', 'inv-2'])
+      expect(prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({ where: { invoiceId }, data: expect.objectContaining({ status: 'SENT', changedHereAt: expect.any(Date) }) });
   });
 
   it('waits for a connection that may make projects', async () => {
@@ -1050,7 +1001,10 @@ describe('a run', () => {
     const same = harness({ invoices: [sent] });
     expect(await same.sender.run(ORG, TENANT)).toMatchObject({ sent: 0, unchanged: 1 });
     expect(same.client.post).not.toHaveBeenCalled();
-    expect(same.prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({ where: { invoiceId: 'inv-1' }, data: { seenUpdatedAt: UPDATED } });
+    expect(same.prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({
+      where: { invoiceId: 'inv-1' },
+      data: { status: 'SENT', seenUpdatedAt: UPDATED, attempts: 0, nextAttemptAt: null, problem: null, changedHereAt: null },
+    });
   });
 
   it('uses the contact it already has', async () => {
@@ -1116,15 +1070,69 @@ describe('a run', () => {
     expect(auth.requireReconnect).toHaveBeenCalledWith(ORG, 'Xero refused the stored sign-in. Connect again.');
   });
 
-  it('voids in Xero an invoice voided here after it was sent', async () => {
-    const voided = invoice({
-      status: 'VOIDED',
-      xeroSync: { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 },
+  describe('each invoice goes once (2026-11-12)', () => {
+    const SENT_ROW = { xeroTenantId: TENANT, status: 'SENT', sentFingerprint: invoiceFingerprint(invoice()), xeroInvoiceId: 'xero-8440', attempts: 0 };
+
+    it('never sends again one in Xero changed here since: it is marked, for the office to make the change in Xero', async () => {
+      const { sender, client, prisma } = harness({ invoices: [invoice({ clientName: '12 Example Lane, Unit B', xeroSync: SENT_ROW })] });
+      expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 0, linked: 0, unchanged: 1 });
+      expect(client.post).not.toHaveBeenCalled();
+      expect(client.get).not.toHaveBeenCalled();
+      expect(prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({
+        where: { invoiceId: 'inv-1' },
+        data: { status: 'SENT', seenUpdatedAt: UPDATED, attempts: 0, nextAttemptAt: null, problem: null, changedHereAt: new Date('2026-12-02T18:00:00.000Z') },
+      });
+      // Nothing happened in Xero: no audit entry for the run.
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
-    const { sender, client } = harness({ invoices: [voided] });
-    await sender.run(ORG, TENANT);
-    expect(calls(client, '/Contacts')).toHaveLength(0);
-    expect(calls(client, '/Invoices')[0]![3]).toEqual({ Invoices: [{ InvoiceID: 'xero-8440', Status: 'VOIDED' }] });
+
+    it('keeps when it was first seen changed, and unmarks it once it says again what went', async () => {
+      const since = new Date('2026-12-01T09:00:00.000Z');
+      const still = harness({ invoices: [invoice({ clientName: '12 Example Lane, Unit B', xeroSync: { ...SENT_ROW, changedHereAt: since } })] });
+      await still.sender.run(ORG, TENANT);
+      expect(still.prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({ where: { invoiceId: 'inv-1' }, data: expect.objectContaining({ changedHereAt: since }) });
+      const back = harness({ invoices: [invoice({ xeroSync: { ...SENT_ROW, changedHereAt: since } })] });
+      await back.sender.run(ORG, TENANT);
+      expect(back.prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({ where: { invoiceId: 'inv-1' }, data: expect.objectContaining({ changedHereAt: null }) });
+    });
+
+    it('voids nothing in Xero: one voided here after it went is marked, the office voids it there', async () => {
+      const { sender, client, prisma } = harness({ invoices: [invoice({ status: 'VOIDED', xeroSync: SENT_ROW })] });
+      await sender.run(ORG, TENANT);
+      expect(client.post).not.toHaveBeenCalled();
+      expect(prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({ where: { invoiceId: 'inv-1' }, data: expect.objectContaining({ changedHereAt: expect.any(Date) }) });
+    });
+
+    it('lets go of a refusal from before, when changes went: the invoice is in Xero, nothing is tried again', async () => {
+      const refused = { ...SENT_ROW, status: 'FAILED', attempts: 2, problem: 'Its payments could not be taken off in Xero to change it: Payment is reconciled', nextAttemptAt: new Date('2026-12-02T17:00:00.000Z') };
+      const { sender, client, prisma } = harness({ invoices: [invoice({ clientName: '12 Example Lane, Unit B', xeroSync: refused })] });
+      expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 0 });
+      expect(client.post).not.toHaveBeenCalled();
+      expect(prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({
+        where: { invoiceId: 'inv-1' },
+        data: expect.objectContaining({ status: 'SENT', attempts: 0, nextAttemptAt: null, problem: null, changedHereAt: expect.any(Date) }),
+      });
+    });
+
+    it('sends a new one with no id of Xero’s, and a fresh send is not marked', async () => {
+      const { sender, client, syncs } = harness();
+      await sender.run(ORG, TENANT);
+      expect((calls(client, '/Invoices')[0]![3] as { Invoices: Record<string, unknown>[] }).Invoices[0]).not.toHaveProperty('InvoiceID');
+      expect(syncs.get('inv-1')).toMatchObject({ status: 'SENT', changedHereAt: null });
+    });
+
+    it('counts and lists on the page the invoices changed here since they went, saying which were voided', async () => {
+      const { sender, prisma } = harness();
+      const rows = [{ invoiceId: 'inv-1', changedHereAt: new Date('2026-12-02T17:00:00.000Z'), invoice: { number: '8440', clientName: '12 Example Lane', status: 'VOIDED' } }];
+      prisma.xeroInvoiceSync.count.mockImplementation((async ({ where }: { where: { changedHereAt?: unknown } }) => (where.changedHereAt ? 1 : 0)) as never);
+      prisma.xeroInvoiceSync.findMany.mockImplementation((async ({ where }: { where: { changedHereAt?: unknown } }) => (where.changedHereAt ? rows : [])) as never);
+      const view = await sender.view(ORG, TENANT);
+      expect(view.counts.changedHere).toBe(1);
+      expect(view.changedHere).toEqual([{ invoiceId: 'inv-1', number: '8440', clientName: '12 Example Lane', voided: true, changedAt: '2026-12-02T17:00:00.000Z' }]);
+      expect(prisma.xeroInvoiceSync.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { organizationId: ORG, xeroTenantId: TENANT, status: 'SENT', changedHereAt: { not: null } }, take: 50 }),
+      );
+    });
   });
 
   it('does nothing while off, blocked, or already running elsewhere', async () => {

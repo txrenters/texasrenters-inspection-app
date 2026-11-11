@@ -25,20 +25,21 @@ const OFF: XeroSendingView = {
   canWrite: true,
   projectsEnabled: false,
   blockers: [],
-  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 0, failed: 0 } },
+  counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 0, failed: 0 }, changedHere: 0 },
   lastRunAt: null,
   lastRunProblem: null,
   failures: [],
   paymentFailures: [],
   writeOffFailures: [],
   projectFailures: [],
+  changedHere: [],
 };
 
 const ON: XeroSendingView = {
   ...OFF,
   enabled: true,
   changedAt: '2026-12-02T15:00:00.000Z',
-  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 }, writeOffs: { sent: 4, failed: 1 }, projects: { done: 0, failed: 0 } },
+  counts: { sent: 16, failed: 2, notYet: 0, noCompany: 3, payments: { sent: 9, failed: 1 }, writeOffs: { sent: 4, failed: 1 }, projects: { done: 0, failed: 0 }, changedHere: 0 },
   lastRunAt: '2026-12-02T17:50:00.000Z',
   failures: [
     {
@@ -165,6 +166,31 @@ describe('the sending panel', () => {
     expect(screen.queryByRole('button', { name: 'Send now' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Turn off' })).not.toBeInTheDocument();
     expect(screen.getByText('Invoice # must be unique.')).toBeInTheDocument();
+  });
+
+  it('says each invoice goes once, and lists those changed here since, to change in Xero (2026-11-12)', () => {
+    mount({
+      ...ON,
+      counts: { ...ON.counts, changedHere: 2 },
+      changedHere: [
+        { invoiceId: 'inv-5', number: '8444', clientName: '20 Example Lane', voided: false, changedAt: '2026-12-02T17:50:00.000Z' },
+        { invoiceId: 'inv-6', number: '8445', clientName: '22 Example Lane', voided: true, changedAt: '2026-12-02T17:40:00.000Z' },
+      ],
+    });
+    expect(screen.getByText(/Each goes once: in Xero it is the office's/)).toBeInTheDocument();
+    expect(screen.queryByText(/each change follows/)).not.toBeInTheDocument();
+    expect(screen.getByText('Changed here since').nextSibling).toHaveTextContent('2');
+    const table = screen.getByRole('table', { name: 'Changed here since they went to Xero' });
+    const changed = within(table).getByText('20 Example Lane').closest('tr')!;
+    expect(within(changed).getByRole('link', { name: '#8444' })).toHaveAttribute('href', '/invoices/inv-5');
+    expect(changed).toHaveTextContent('Make the same change in Xero');
+    expect(within(table).getByText('22 Example Lane').closest('tr')).toHaveTextContent('Voided here: void it in Xero too');
+  });
+
+  it('shows no changed-here list or count when nothing changed after it went', () => {
+    mount(ON);
+    expect(screen.queryByRole('table', { name: 'Changed here since they went to Xero' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Changed here since')).not.toBeInTheDocument();
   });
 
   describe('while each visit gets a project (2026-11-11)', () => {
