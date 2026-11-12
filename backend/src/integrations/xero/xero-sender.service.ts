@@ -117,7 +117,25 @@ const INVOICE_FIELDS = {
   // The console's own goes as a draft Xero numbers, under its property's contact (2026-11-12).
   origin: true,
   propertywareBuildingId: true,
-  lines: { select: { position: true, name: true, description: true, quantity: true, unitPriceCents: true, totalCents: true } },
+  // As the Xero-style form made it (2026-11-13): sent as it is.
+  xeroReference: true,
+  xeroTaxMode: true,
+  xeroDatesChosen: true,
+  lines: {
+    select: {
+      position: true,
+      name: true,
+      description: true,
+      quantity: true,
+      unitPriceCents: true,
+      totalCents: true,
+      discountRate: true,
+      xeroAccountId: true,
+      xeroItemCode: true,
+      xeroTaxType: true,
+      xeroTracking: true,
+    },
+  },
   xeroSync: true,
   // The visit it bills (2026-11-11): its day dates the invoice in Xero, and its technician tags the lines.
   inspection: {

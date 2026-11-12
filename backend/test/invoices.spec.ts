@@ -103,6 +103,7 @@ const finishedVisit = (over: Record<string, unknown> = {}) => ({
   scheduledAt: date('2020-02-01'),
   status: 'COMPLETED',
   jobberJobId: 'job-1',
+  assignments: [],
   servicesReport: {
     services: { filterChange: { done: true, reason: null, reschedule: false }, pestControl: { done: false, reason: 'Dog', reschedule: true } },
     filtersInstalled: ['20x25x1'],

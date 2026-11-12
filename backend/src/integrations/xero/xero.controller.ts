@@ -60,7 +60,9 @@ export class SetXeroSendingDto {
 
 /** "Create project" (2026-11-13): the visit's project, made in the company's books at once. The name is checked in full by the service. */
 export class MakeXeroProjectDto {
-  @IsUUID() inspectionId!: string;
+  /** The visit's; or (2026-11-13, PR B) the property's, for its invoice no visit covers. One of the two. */
+  @IsOptional() @IsUUID() inspectionId?: string;
+  @IsOptional() @IsUUID() propertyId?: string;
   @IsString() @MaxLength(200) name!: string;
   @Matches(/^\d{4}-\d{2}-\d{2}$/) deadlineOn!: string;
   @IsOptional() @IsInt() @Min(0) @Max(MAX_PROJECT_ESTIMATE_CENTS) estimateCents?: number | null;
@@ -108,7 +110,24 @@ export class XeroController {
   @Get('visits/:inspectionId/projects')
   @RequirePermissions('invoices:manage')
   visitProjects(@Req() request: AuthenticatedRequest, @Param('inspectionId', new ParseUUIDPipe()) inspectionId: string) {
-    return this.projects.visitProjects(request.user, inspectionId);
+    return this.projects.projectsFor(request.user, { inspectionId });
+  }
+
+  /** A property's projects, for its invoice no visit covers (2026-11-13, PR B). No call to Xero. */
+  @Get('properties/:propertyId/projects')
+  @RequirePermissions('invoices:manage')
+  propertyProjects(@Req() request: AuthenticatedRequest, @Param('propertyId', new ParseUUIDPipe()) propertyId: string) {
+    return this.projects.projectsFor(request.user, { propertyId });
+  }
+
+  /**
+   * Each connected company's lists and choices for the Xero-style New invoice (2026-11-13, PR B): its sales accounts,
+   * tax rates, tracking and items, and what each product's line is filled with. As last read: no call to Xero.
+   */
+  @Get('invoice-form')
+  @RequirePermissions('invoices:manage')
+  invoiceForm(@Req() request: AuthenticatedRequest) {
+    return this.settings.invoiceForm(request.user.organizationId);
   }
 
   /** "Create project": made in the company's books at once, In progress, and chosen for the visit. */

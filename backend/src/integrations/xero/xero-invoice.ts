@@ -6,7 +6,11 @@ import {
   productNameKey,
   soldItems,
   trackingOptionFor,
+  XERO_LINE_AMOUNT_TYPES,
+  XERO_TAX_MODES,
   type XeroAccount,
+  type XeroLineTracking,
+  type XeroTaxMode,
   type XeroItem,
   type XeroSettingsValues,
   type XeroTaxRate,
@@ -42,7 +46,21 @@ export interface InvoiceForXero {
   taxCents: number;
   discountCents: number;
   totalCents: number;
-  lines: { position: number; name: string; description: string | null; quantity: number; unitPriceCents: number; totalCents: number }[];
+  lines: {
+    position: number;
+    name: string;
+    description: string | null;
+    quantity: number;
+    unitPriceCents: number;
+    totalCents: number;
+    /** As the Xero-style form chose them (2026-11-13); null goes as its product's or company's choice. */
+    discountRate?: number | null;
+    xeroAccountId?: string | null;
+    xeroItemCode?: string | null;
+    xeroTaxType?: string | null;
+    /** `[{ trackingCategoryId, option }]`, as kept: an empty list is tracked in nothing. */
+    xeroTracking?: unknown;
+  }[];
   /** The day of the visit it bills (`YYYY-MM-DD`, as scheduled); null for one that bills no visit. */
   visitDay: string | null;
   /** The technician who did that visit; null when none is known. */
@@ -51,6 +69,10 @@ export interface InvoiceForXero {
   origin?: string;
   /** The property it bills: the console's own goes under that property's contact in Xero. */
   propertywareBuildingId?: string | null;
+  /** As the Xero-style form made it (2026-11-13): its reference, its tax, and whether its own days go to Xero. */
+  xeroReference?: string | null;
+  xeroTaxMode?: string | null;
+  xeroDatesChosen?: boolean;
 }
 
 export interface XeroLineItem {
@@ -58,9 +80,12 @@ export interface XeroLineItem {
   Description: string;
   Quantity: number;
   UnitAmount: number;
+  /** A percent off (2026-11-13). */
+  DiscountRate?: number;
   LineAmount: number;
   AccountCode: string;
-  TaxType: string;
+  /** Left out on an invoice with no tax (2026-11-13). */
+  TaxType?: string;
   Tracking?: { TrackingCategoryID: string; Name: string; Option: string }[];
 }
 
@@ -76,8 +101,8 @@ export interface XeroInvoiceBody {
   Reference: string;
   Date: string;
   DueDate: string;
-  /** Tax-inclusive for a company whose prices include its tax (2026-11-12); otherwise added on top. */
-  LineAmountTypes: 'Exclusive' | 'Inclusive';
+  /** Tax-inclusive for a company whose prices include its tax (2026-11-12); otherwise added on top; or (2026-11-13) as the form chose, no tax. */
+  LineAmountTypes: 'Exclusive' | 'Inclusive' | 'NoTax';
   /** Approved; or, for a company whose visits get projects (2026-11-11), a draft for the office to put on its project and approve. */
   Status: 'AUTHORISED' | 'DRAFT';
   LineItems: XeroLineItem[];
@@ -114,6 +139,34 @@ export function monthEndOf(value: string): string {
 const dollars = (cents: number) => Number((cents / 100).toFixed(2));
 const sortedLines = (invoice: InvoiceForXero) => [...invoice.lines].sort((a, b) => a.position - b.position);
 
+/** How the invoice's amounts carry tax: as the form chose (2026-11-13), else its company's way. */
+export function taxModeOf(invoice: Pick<InvoiceForXero, 'xeroTaxMode'>, settings: Pick<XeroSettingsValues, 'pricesIncludeTax'>): XeroTaxMode {
+  const chosen = XERO_TAX_MODES.find((mode) => mode === invoice.xeroTaxMode);
+  return chosen ?? (settings.pricesIncludeTax === true ? 'INCLUSIVE' : 'EXCLUSIVE');
+}
+
+/** A line's tracking as the form kept it; null when it chose none, so the technician's option goes as before. */
+function chosenTracking(value: unknown): XeroLineTracking[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((each: unknown) =>
+    each && typeof each === 'object' && typeof (each as XeroLineTracking).trackingCategoryId === 'string' && typeof (each as XeroLineTracking).option === 'string'
+      ? [{ trackingCategoryId: (each as XeroLineTracking).trackingCategoryId, option: (each as XeroLineTracking).option }]
+      : [],
+  );
+}
+
+/** The Xero-style form's choices on a line, only when it made any: a line from before hashes as it did. */
+function lineChoices(line: InvoiceForXero['lines'][number]) {
+  const choices = {
+    ...(line.discountRate ? { discountRate: line.discountRate } : {}),
+    ...(line.xeroAccountId ? { account: line.xeroAccountId } : {}),
+    ...(line.xeroItemCode ? { item: line.xeroItemCode } : {}),
+    ...(line.xeroTaxType ? { tax: line.xeroTaxType } : {}),
+    ...(chosenTracking(line.xeroTracking) ? { tracking: chosenTracking(line.xeroTracking) } : {}),
+  };
+  return Object.keys(choices).length ? [choices] : [];
+}
+
 /**
  * What the invoice says, as a hash, as it was when it went to Xero: one that
  * says something else now changed here after it went (2026-11-12), and the
@@ -131,7 +184,11 @@ export function invoiceFingerprint(invoice: InvoiceForXero): string {
     taxCents: invoice.taxCents,
     discountCents: invoice.discountCents,
     totalCents: invoice.totalCents,
-    lines: sortedLines(invoice).map((line) => [line.name, line.description, line.quantity, line.unitPriceCents, line.totalCents]),
+    lines: sortedLines(invoice).map((line) => [line.name, line.description, line.quantity, line.unitPriceCents, line.totalCents, ...lineChoices(line)]),
+    // What the Xero-style form chose (2026-11-13), only when it chose it: an invoice from before hashes as it did.
+    ...(invoice.xeroReference ? { reference: invoice.xeroReference } : {}),
+    ...(invoice.xeroTaxMode ? { taxMode: invoice.xeroTaxMode } : {}),
+    ...(invoice.xeroDatesChosen ? { dates: [invoice.issuedOn ? day(invoice.issuedOn) : null, invoice.dueOn ? day(invoice.dueOn) : null] } : {}),
   };
   return createHash('sha256').update(JSON.stringify(content)).digest('hex');
 }
@@ -167,17 +224,20 @@ export function xeroInvoiceFrom(
   if (invoice.status === 'DRAFT' && !consoleDraft) return { kind: 'problem', problem: 'It is a draft.' };
   if (!invoice.number && !consoleDraft) return { kind: 'problem', problem: 'It has no invoice number yet.' };
   if (!invoice.issuedOn) return { kind: 'problem', problem: 'It has no issue date.' };
-  // Prices that include the tax (2026-11-12): Xero takes it out of each line, and its total is the invoice's.
-  const inclusive = context.settings.pricesIncludeTax === true;
+  // Prices that include the tax (2026-11-12): Xero takes it out of each line, and its total is the invoice's. Or, as
+  // the Xero-style form chose (2026-11-13), no tax at all.
+  const mode = taxModeOf(invoice, context.settings);
+  const inclusive = mode === 'INCLUSIVE';
   if (invoice.taxCents !== 0 && !inclusive)
     return { kind: 'problem', problem: `It carries ${formatMoney(invoice.taxCents)} of sales tax, and the console sends Xero none. Enter it in Xero by hand.` };
   if (!invoice.lines.length) return { kind: 'problem', problem: 'It has no lines.' };
   const { settings } = context;
   if (!settings.salesTaxType) return { kind: 'problem', problem: 'No tax type is chosen for lines.' };
   // Prices that leave the tax out (2026-11-13): the console's total carries none, so a tax type with a rate would put it
-  // on top in Xero. Refused, rather than billed more than the console says.
-  if (!inclusive && context.taxRates) {
-    const rate = context.taxRates.find((each) => each.taxType === settings.salesTaxType)?.effectiveRate ?? 0;
+  // on top in Xero. Refused, rather than billed more than the console says. Each line's own type too.
+  const rateOf = (taxType: string) => context.taxRates?.find((each) => each.taxType === taxType)?.effectiveRate ?? 0;
+  if (mode === 'EXCLUSIVE' && context.taxRates) {
+    const rate = rateOf(settings.salesTaxType);
     if (rate > 0)
       return {
         kind: 'problem',
@@ -197,35 +257,71 @@ export function xeroInvoiceFrom(
     return { kind: 'problem', problem: 'The tracking category is not an active one in Xero. Choose again on the Xero page.' };
   const sold = new Set(soldItems(context.items ?? []).map((item) => item.code));
   const technician = invoice.technicianName?.trim() || null;
+  const active = activeTrackingCategories(context.trackingCategories ?? []);
+  // No tax (2026-11-13): Xero is told the invoice carries none, and no line names a tax type.
+  const taxTypeOf = (taxType: string) => (mode === 'NO_TAX' ? {} : { TaxType: taxType });
 
   const items: XeroLineItem[] = [];
   for (const line of sortedLines(invoice)) {
-    const chosen = settings.salesAccounts[productNameKey(line.name)];
+    // What the Xero-style form chose for the line (2026-11-13), else its product's choice, else the company's.
+    const chosen = line.xeroAccountId ?? settings.salesAccounts[productNameKey(line.name)];
     const code = chosen ? codes.get(chosen) : defaultCode;
-    if (!code) return { kind: 'problem', problem: `The account chosen for “${line.name}” is not an active account in Xero. Choose again on the Xero page.` };
-    const description = (line.description?.trim() ? `${line.name}\n${line.description.trim()}` : line.name).slice(0, 4000);
-    const itemCode = settings.itemCodes?.[productNameKey(line.name)];
-    if (itemCode && !sold.has(itemCode))
-      return { kind: 'problem', problem: `The item “${itemCode}” chosen for “${line.name}” is not one Xero sells. Choose again on the Xero page.` };
-    // The technician's option, when the line's product is tracked and the visit's technician is known.
-    const group = category ? settings.trackingGroups?.[productNameKey(line.name)] : undefined;
-    const option = category && group && technician ? trackingOptionFor(category, group, technician) : null;
-    if (category && group && technician && !option)
+    if (!code)
       return {
         kind: 'problem',
-        problem: `${category.name} has no option “${group}: ${technician.split(/\s+/)[0]}” for ${technician}. Add it in Xero, then read from Xero again.`,
+        problem: line.xeroAccountId
+          ? `The account chosen on the invoice for “${line.name}” is not an active account in Xero. Choose again on a new invoice, or enter it in Xero by hand.`
+          : `The account chosen for “${line.name}” is not an active account in Xero. Choose again on the Xero page.`,
       };
-    // Xero works a line out as quantity × unit price. When the stored total is not exactly that, the line goes as one of its total.
-    const exact = Number.isFinite(line.quantity) && line.quantity > 0 && Math.round(line.quantity * line.unitPriceCents) === line.totalCents;
+    const description = (line.description?.trim() ? `${line.name}\n${line.description.trim()}` : line.name).slice(0, 4000);
+    // A line made on the Xero-style form always names its account and tax rate: its item is what the form showed, none
+    // included -- never its product's in its place.
+    const madeOnForm = Boolean(line.xeroAccountId || line.xeroTaxType);
+    const itemCode = madeOnForm ? (line.xeroItemCode ?? undefined) : settings.itemCodes?.[productNameKey(line.name)];
+    if (itemCode && !sold.has(itemCode))
+      return { kind: 'problem', problem: `The item “${itemCode}” chosen for “${line.name}” is not one Xero sells. Choose again on the Xero page.` };
+    const taxType = line.xeroTaxType ?? settings.salesTaxType;
+    if (line.xeroTaxType && context.taxRates && !context.taxRates.some((each) => each.taxType === line.xeroTaxType && each.status === 'ACTIVE'))
+      return { kind: 'problem', problem: `The tax rate chosen for “${line.name}” is not an active one in Xero.` };
+    if (mode === 'EXCLUSIVE' && line.xeroTaxType && rateOf(line.xeroTaxType) > 0)
+      return { kind: 'problem', problem: `The tax rate chosen for “${line.name}” adds ${rateOf(line.xeroTaxType)}% on top, so Xero's total would be more than the console's.` };
+    let tracking: NonNullable<XeroLineItem['Tracking']> = [];
+    const picked = chosenTracking(line.xeroTracking);
+    if (picked) {
+      // As the form chose: an option in each category named, checked against what was last read.
+      for (const each of picked) {
+        const named = active.find((candidate) => candidate.trackingCategoryId === each.trackingCategoryId);
+        const option = named?.options.find((candidate) => candidate.status === 'ACTIVE' && candidate.name === each.option);
+        if (!named || !option)
+          return { kind: 'problem', problem: `“${each.option}”, chosen for “${line.name}”, is not an active tracking option in Xero. Add it in Xero, then read from Xero again.` };
+        tracking.push({ TrackingCategoryID: named.trackingCategoryId, Name: named.name, Option: option.name });
+      }
+    } else {
+      // The technician's option, when the line's product is tracked and the visit's technician is known.
+      const group = category ? settings.trackingGroups?.[productNameKey(line.name)] : undefined;
+      const option = category && group && technician ? trackingOptionFor(category, group, technician) : null;
+      if (category && group && technician && !option)
+        return {
+          kind: 'problem',
+          problem: `${category.name} has no option “${group}: ${technician.split(/\s+/)[0]}” for ${technician}. Add it in Xero, then read from Xero again.`,
+        };
+      if (category && option) tracking = [{ TrackingCategoryID: category.trackingCategoryId, Name: category.name, Option: option.name }];
+    }
+    // Xero works a line out as quantity × unit price, less its discount. When the stored total is not exactly that, the
+    // line goes as one of its total.
+    const discount = line.discountRate ?? 0;
+    const exact =
+      Number.isFinite(line.quantity) && line.quantity > 0 && Math.round(line.quantity * line.unitPriceCents * (1 - discount / 100)) === line.totalCents;
     items.push({
       ...(itemCode ? { ItemCode: itemCode } : {}),
       Description: exact ? description : `${description} (${line.quantity} × ${formatMoney(line.unitPriceCents)})`.slice(0, 4000),
       Quantity: exact ? line.quantity : 1,
       UnitAmount: exact ? dollars(line.unitPriceCents) : dollars(line.totalCents),
+      ...(exact && discount > 0 ? { DiscountRate: discount } : {}),
       LineAmount: dollars(line.totalCents),
       AccountCode: code,
-      TaxType: settings.salesTaxType,
-      ...(category && option ? { Tracking: [{ TrackingCategoryID: category.trackingCategoryId, Name: category.name, Option: option.name }] } : {}),
+      ...taxTypeOf(taxType),
+      ...(tracking.length ? { Tracking: tracking } : {}),
     });
   }
   if (invoice.discountCents > 0)
@@ -235,7 +331,7 @@ export function xeroInvoiceFrom(
       UnitAmount: -dollars(invoice.discountCents),
       LineAmount: -dollars(invoice.discountCents),
       AccountCode: defaultCode,
-      TaxType: settings.salesTaxType,
+      ...taxTypeOf(settings.salesTaxType),
     });
 
   const linesCents = invoice.lines.reduce((sum, line) => sum + line.totalCents, 0) - Math.max(invoice.discountCents, 0);
@@ -246,9 +342,12 @@ export function xeroInvoiceFrom(
     };
   if (invoice.totalCents < 0) return { kind: 'problem', problem: 'Its total is below zero; Xero takes that as a credit note, which phase 3 does not send.' };
 
-  // The property, as the office writes it: the contact's name.
-  const reference = contactNameOf(invoice);
-  const date = xeroDayOf(invoice)!;
+  // The property, as the office writes it: the contact's name -- or the reference the Xero-style form gave (2026-11-13).
+  const reference = invoice.xeroReference?.trim().slice(0, 255) || contactNameOf(invoice);
+  // The visit's day and the end of its month, as the office dates them; or the days the Xero-style form chose.
+  const chosenDays = invoice.xeroDatesChosen === true && invoice.dueOn !== null;
+  const date = chosenDays ? day(invoice.issuedOn) : xeroDayOf(invoice)!;
+  const dueDate = chosenDays ? day(invoice.dueOn!) : monthEndOf(date);
   return {
     kind: 'send',
     body: {
@@ -257,8 +356,8 @@ export function xeroInvoiceFrom(
       ...(invoice.number ? { InvoiceNumber: invoice.number } : {}),
       Reference: reference,
       Date: date,
-      DueDate: monthEndOf(date),
-      LineAmountTypes: inclusive ? 'Inclusive' : 'Exclusive',
+      DueDate: dueDate,
+      LineAmountTypes: XERO_LINE_AMOUNT_TYPES[mode],
       // As a draft (2026-11-11): approving it is the office's, in Xero.
       Status: context.asDraft || consoleDraft ? 'DRAFT' : 'AUTHORISED',
       LineItems: items,

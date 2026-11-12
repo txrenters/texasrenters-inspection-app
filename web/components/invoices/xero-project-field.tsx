@@ -1,6 +1,6 @@
 'use client';
 
-import { XERO_PROJECT_NAME_MAX, parseMoney, type XeroVisitCompanyProjects, type XeroVisitProjects } from '@texasrenters/shared';
+import { XERO_PROJECT_NAME_MAX, parseMoney, type XeroProjectOption, type XeroVisitCompanyProjects, type XeroVisitProjects } from '@texasrenters/shared';
 import { PlusIcon } from 'lucide-react';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
@@ -12,7 +12,11 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { newClientRequestId } from '@/lib/invoice-queries';
-import { useXeroProjectActions } from '@/lib/xero-queries';
+import { useXeroProjectActions, type XeroProjectsTarget } from '@/lib/xero-queries';
+
+/** Whose projects these are: the visit's, or (PR B) the property's for its invoice no visit covers. */
+export const projectsTargetOf = (visit: Pick<XeroVisitProjects, 'inspectionId' | 'propertyId'>): XeroProjectsTarget =>
+  visit.inspectionId ? { inspectionId: visit.inspectionId } : { propertyId: visit.propertyId };
 
 /** A contact's initials, as Xero badges one: "6510 Gardners Brk" is 6GB. */
 export const contactInitials = (name: string) =>
@@ -32,7 +36,7 @@ export const contactInitials = (name: string) =>
  */
 export function XeroProjectField({ visit, company }: { visit: XeroVisitProjects; company: XeroVisitCompanyProjects }) {
   const id = useId();
-  const actions = useXeroProjectActions(visit.inspectionId);
+  const actions = useXeroProjectActions(projectsTargetOf(visit));
   const [making, setMaking] = useState(false);
   const chosen = company.chosen;
   // The visit's own stays offered once closed in Xero, so the field still says which it is.
@@ -93,14 +97,17 @@ export function NewXeroProjectDialog({
   company,
   open,
   onClose,
+  onMade,
 }: {
   visit: XeroVisitProjects;
   company: XeroVisitCompanyProjects;
   open: boolean;
   onClose: () => void;
+  /** The project made or found, for the line it was made from (PR B). */
+  onMade?: (project: XeroProjectOption) => void;
 }) {
   const id = useId();
-  const actions = useXeroProjectActions(visit.inspectionId);
+  const actions = useXeroProjectActions(projectsTargetOf(visit));
   const [name, setName] = useState(visit.suggestedName ?? '');
   const [deadlineOn, setDeadlineOn] = useState(visit.deadlineOn);
   const [estimate, setEstimate] = useState('');
@@ -120,7 +127,7 @@ export function NewXeroProjectDialog({
 
   const estimateCents = estimate.trim() ? parseMoney(estimate) : null;
   const problem = !name.trim()
-    ? visit.suggestedName === null
+    ? visit.suggestedName === null && visit.inspectionId
       ? 'The visit has no technician: give the project its name.'
       : 'Give the project a name.'
     : name.trim().length > XERO_PROJECT_NAME_MAX
@@ -134,9 +141,19 @@ export function NewXeroProjectDialog({
   const create = () => {
     if (problem) return;
     actions.make.mutate(
-      { tenantId: company.tenantId, input: { inspectionId: visit.inspectionId, name: name.trim(), deadlineOn, estimateCents, clientRequestId: requestId } },
+      {
+        tenantId: company.tenantId,
+        input: {
+          ...(visit.inspectionId ? { inspectionId: visit.inspectionId } : { propertyId: visit.propertyId }),
+          name: name.trim(),
+          deadlineOn,
+          estimateCents,
+          clientRequestId: requestId,
+        },
+      },
       {
         onSuccess: ({ project, found }) => {
+          onMade?.(project);
           toast.success(found ? 'Already in Xero, and chosen' : 'Project created in Xero', { description: `${project.name} · ${company.name}` });
           onClose();
         },

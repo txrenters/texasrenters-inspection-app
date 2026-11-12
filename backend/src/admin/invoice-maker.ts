@@ -1,4 +1,4 @@
-import { invoiceTotals, splitByCompany, type InvoiceLineInput, type ProductCompany, type UninvoicedPart } from '@texasrenters/shared';
+import { invoiceTotals, splitByCompany, type InvoiceLineInput, type ProductCompany, type UninvoicedPart, type XeroTaxMode } from '@texasrenters/shared';
 import { InvoiceStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -29,6 +29,8 @@ export interface InvoiceToMake {
   lines: InvoiceLineInput[];
   /** Its key: a resend of the same request makes it once. */
   clientRequestId: string;
+  /** How its amounts carry tax in Xero, from the Xero-style form (2026-11-13); left out, its company's way. */
+  taxMode?: XeroTaxMode | null;
 }
 
 export interface MakeRequest {
@@ -40,6 +42,10 @@ export interface MakeRequest {
   /** `YYYY-MM-DD` */
   issuedOn: string;
   paymentTermsDays: number;
+  /** The due day the Xero-style form chose (2026-11-13), `YYYY-MM-DD`: Xero is sent it and the issue day as they are. */
+  dueOn?: string;
+  /** Xero's "Reference", from the Xero-style form; null or left out, the property's name. */
+  xeroReference?: string | null;
   clientMessage: string | null;
   contractDisclaimer: string | null;
   /** Kept as drafts though their companies do not send to Xero (before the switch only). */
@@ -92,6 +98,9 @@ export async function makeInvoices(tx: Db, user: AuthenticatedUser, state: Invoi
       jobberJobId: request.jobberJobId,
       issuedOn: request.issuedOn,
       paymentTermsDays: request.paymentTermsDays,
+      ...(request.dueOn ? { dueOn: request.dueOn } : {}),
+      ...(request.xeroReference ? { xeroReference: request.xeroReference } : {}),
+      ...(invoice.taxMode ? { xeroTaxMode: invoice.taxMode } : {}),
       lines: invoice.lines,
       clientMessage: request.clientMessage,
       contractDisclaimer: request.contractDisclaimer,

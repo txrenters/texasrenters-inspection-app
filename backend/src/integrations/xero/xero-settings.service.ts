@@ -1,17 +1,22 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  activeTrackingCategories,
   DEFAULT_LABOUR_MINUTES,
   DEFAULT_LABOUR_RATE_CENTS,
   formatMoney,
   PAYMENT_METHOD_LABEL,
   PAYMENT_METHODS,
   productNameKey,
+  revenueAccounts,
+  soldItems,
   xeroAccountLabel,
   xeroChecks,
   xeroSettingsProblem,
   type PaymentMethod,
   type SaveXeroSettingsInput,
   type XeroAccount,
+  type XeroInvoiceFormCompany,
+  type XeroOrganisation,
   type XeroSalesItem,
   type XeroSettingsValues,
   type XeroSettingsView,
@@ -197,6 +202,11 @@ export function settingsChanges(
 @Injectable()
 export class XeroSettingsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  /** Each connected company's lists and choices for the Xero-style New invoice (2026-11-13, PR B): no call to Xero. */
+  invoiceForm(organizationId: string): Promise<XeroInvoiceFormCompany[]> {
+    return xeroInvoiceFormCompanies(this.prisma, organizationId);
+  }
 
   async read(organizationId: string, tenantId: string): Promise<XeroSettingsView> {
     const today = businessDate();
@@ -400,3 +410,61 @@ export class XeroSettingsService {
 }
 
 const changed = () => new XeroError('Somebody changed these since they were opened. Look again, then save.', 'XERO_SETTINGS_CHANGED', 409);
+
+/** Xero puts at most two tracking categories on a line. */
+const MAX_CATEGORIES = 2;
+
+/**
+ * Each connected company's lists and choices for the Xero-style New invoice
+ * (2026-11-13, PR B), from the console's last read of its books -- no call to
+ * Xero: the sales accounts, tax rates, tracking categories and items a line can
+ * name, and what each product's line is filled with. The form shows them; the
+ * invoice's lines are checked against them before anything is made.
+ */
+export async function xeroInvoiceFormCompanies(db: Prisma.TransactionClient, organizationId: string): Promise<XeroInvoiceFormCompany[]> {
+  const [connection, rows, products] = await Promise.all([
+    db.xeroConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+    db.xeroSettings.findMany({
+      where: { organizationId, xeroOrganisation: { status: 'CONNECTED' } },
+      include: { xeroOrganisation: { select: { name: true, organisation: true, accounts: true, taxRates: true, trackingCategories: true, items: true } } },
+      orderBy: { xeroOrganisation: { name: 'asc' } },
+    }),
+    listedProducts(db, organizationId),
+  ]);
+  if (connection?.status !== 'CONNECTED') return [];
+  return rows.map(({ xeroOrganisation: books, ...row }) => {
+    const values = withProductChoices(
+      valuesFrom(row),
+      products.filter((product) => product.xeroTenantId === row.xeroTenantId),
+    );
+    const accounts = revenueAccounts((books.accounts as XeroAccount[] | null) ?? []);
+    const taxRates = ((books.taxRates as XeroTaxRate[] | null) ?? []).filter(
+      (rate) => rate.status === 'ACTIVE' && (rate.appliesToRevenue || rate.taxType === values.salesTaxType),
+    );
+    const tracking = activeTrackingCategories((books.trackingCategories as XeroTrackingCategory[] | null) ?? []).slice(0, MAX_CATEGORIES);
+    const keys = new Set([...Object.keys(values.salesAccounts), ...Object.keys(values.itemCodes ?? {}), ...Object.keys(values.trackingGroups ?? {})]);
+    return {
+      tenantId: row.xeroTenantId,
+      name: books.name,
+      currency: (books.organisation as XeroOrganisation | null)?.baseCurrency || 'USD',
+      accounts: accounts.map((account) => ({ accountId: account.accountId, code: account.code!, name: account.name })),
+      taxRates: taxRates.map((rate) => ({ taxType: rate.taxType, name: rate.name, rate: rate.effectiveRate ?? 0 })),
+      tracking: tracking.map((category) => ({
+        trackingCategoryId: category.trackingCategoryId,
+        name: category.name,
+        options: category.options.filter((option) => option.status === 'ACTIVE').map((option) => option.name),
+      })),
+      items: soldItems((books.items as XeroItem[] | null) ?? []).map((item) => ({ code: item.code, name: item.name })),
+      salesAccountId: values.salesAccountId,
+      salesTaxType: values.salesTaxType,
+      taxMode: values.pricesIncludeTax ? 'INCLUSIVE' : 'EXCLUSIVE',
+      trackingCategoryId: values.trackingCategoryId ?? null,
+      products: Object.fromEntries(
+        [...keys].map((key) => [
+          key,
+          { accountId: values.salesAccounts[key] ?? null, itemCode: values.itemCodes?.[key] ?? null, trackingGroup: values.trackingGroups?.[key] ?? null },
+        ]),
+      ),
+    };
+  });
+}

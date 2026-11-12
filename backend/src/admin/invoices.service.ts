@@ -13,7 +13,10 @@ import {
   paymentLockedReason,
   paymentProblem,
   paymentTermsLabel,
+  trackingPicked,
+  XERO_TAX_MODES,
   xeroInvoiceUrl,
+  xeroLinesProblem,
   type CreateInvoiceInput,
   type CreateInvoicesInput,
   type CreatedInvoices,
@@ -40,6 +43,7 @@ import {
   type RecordPaymentInput,
   type ReportableVisitService,
   type VisitServicesReport,
+  type XeroTaxMode,
 } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, JobberConnectionStatus, Prisma } from '@prisma/client';
 
@@ -47,6 +51,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { xeroInvoiceFormCompanies } from '../integrations/xero/xero-settings.service';
 import { billingBasis } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
 import { makeInvoices, visitInvoiced } from './invoice-maker';
@@ -654,6 +659,7 @@ export class InvoicesService {
             inspectionType: inspection.inspectionType,
             scheduledOn: day(inspection.scheduledAt)!,
             status: inspection.status,
+            technicianName: inspection.assignments[0]?.technician.displayName ?? null,
           }
         : null,
       property: property(place.building),
@@ -858,8 +864,8 @@ export class InvoicesService {
    * are refused.
    */
   async create(user: AuthenticatedUser, input: CreateInvoiceInput): Promise<InvoiceDetail> {
-    const { lineItems, xeroTenantId, ...form } = input;
-    const [made] = await this.make(user, form, [{ xeroTenantId, lineItems, clientRequestId: input.clientRequestId }]);
+    const { lineItems, xeroTenantId, taxMode, ...form } = input;
+    const [made] = await this.make(user, form, [{ xeroTenantId, lineItems, clientRequestId: input.clientRequestId, ...(taxMode ? { taxMode } : {}) }]);
     return this.one(user, made!.id);
   }
 
@@ -895,8 +901,8 @@ export class InvoicesService {
    */
   private async make(
     user: AuthenticatedUser,
-    form: Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId'>,
-    parts: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[]; clientRequestId: string }[],
+    form: Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId' | 'taxMode'>,
+    parts: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[]; clientRequestId: string; taxMode?: XeroTaxMode }[],
   ): Promise<{ id: string }[]> {
     // Where invoicing stands, worked out once (2026-11-13): the switch, the companies, which send to Xero and from when.
     const state = await invoicingState(this.prisma, user.organizationId);
@@ -915,8 +921,21 @@ export class InvoicesService {
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Give the day the invoice is issued.');
     if (form.issuedOn > today)
       throw new ApplicationError(422, 'INVOICE_INVALID', 'An invoice cannot be issued on a day still to come.');
-    if (!PAYMENT_TERMS.some((option) => option.days === form.paymentTermsDays))
+    // The Xero-style form's due day (2026-11-13), in place of the terms: Xero is sent it and the issue day as they are.
+    const dueOn = form.dueOn;
+    let termsDays = form.paymentTermsDays;
+    if (dueOn !== undefined) {
+      if (!DAY.test(dueOn) || Number.isNaN(dateOf(dueOn).getTime())) throw new ApplicationError(422, 'INVOICE_INVALID', 'Give the day the invoice is due.');
+      termsDays = Math.round((dateOf(dueOn).getTime() - dateOf(form.issuedOn).getTime()) / 86_400_000);
+      if (termsDays < 0) throw new ApplicationError(422, 'INVOICE_INVALID', 'An invoice cannot fall due before it is issued.');
+      if (termsDays > 365) throw new ApplicationError(422, 'INVOICE_INVALID', 'Make it due within a year of the day it is issued.');
+    } else if (!PAYMENT_TERMS.some((option) => option.days === form.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Pick the payment terms from the list.');
+    const reference = form.reference?.trim() || null;
+    if (reference && reference.length > 255) throw new ApplicationError(422, 'INVOICE_INVALID', 'Keep the reference to 255 characters.');
+    for (const part of parts)
+      if (part.taxMode !== undefined && !XERO_TAX_MODES.includes(part.taxMode))
+        throw new ApplicationError(422, 'INVOICE_INVALID', 'Say how its amounts carry tax: exclusive, inclusive, or no tax.');
 
     // Which company's books each goes to: its lines' products, else the company chosen for it.
     const products = await productCompanies(this.prisma, user.organizationId);
@@ -924,11 +943,18 @@ export class InvoicesService {
     const companyWords = (tenantId: string | null) => (tenantId ? nameOf(tenantId) : 'no company');
     const companies = new Set<string | null>();
     const invoices = parts.map((part) => {
-      const lines = part.lineItems.map((line) => ({
+      const lines: InvoiceLineInput[] = part.lineItems.map((line) => ({
         name: line.name.trim(),
         description: line.description?.trim() || null,
         quantity: line.quantity,
         unitPriceCents: line.unitPriceCents,
+        // As the Xero-style form chose them (2026-11-13); each left out goes as before.
+        ...(line.discountRate ? { discountRate: line.discountRate } : {}),
+        ...(line.xeroAccountId ? { xeroAccountId: line.xeroAccountId } : {}),
+        ...(line.xeroItemCode?.trim() ? { xeroItemCode: line.xeroItemCode.trim() } : {}),
+        ...(line.xeroTaxType ? { xeroTaxType: line.xeroTaxType } : {}),
+        ...(line.xeroTracking ? { xeroTracking: trackingPicked(line.xeroTracking) } : {}),
+        ...(line.xeroProjectId ? { xeroProjectId: line.xeroProjectId } : {}),
       }));
       const company = invoiceCompany(lines, products, part.xeroTenantId, nameOf);
       if (company.problem) throw new ApplicationError(422, 'INVOICE_INVALID', company.problem);
@@ -942,8 +968,9 @@ export class InvoicesService {
       if (companies.has(company.xeroTenantId))
         throw new ApplicationError(422, 'INVOICE_INVALID', `Two invoices go to ${companyWords(company.xeroTenantId)}: put their lines on one.`);
       companies.add(company.xeroTenantId);
-      return { lines, xeroTenantId: company.xeroTenantId, clientRequestId: part.clientRequestId };
+      return { lines, xeroTenantId: company.xeroTenantId, clientRequestId: part.clientRequestId, ...(part.taxMode ? { taxMode: part.taxMode } : {}) };
     });
+    await this.checkXeroChoices(user, invoices, parts.length > 1 ? companyWords : null);
 
     const visit = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = visit ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
@@ -960,7 +987,9 @@ export class InvoicesService {
             jobberJobId: visit?.jobberJobId ?? null,
             subject,
             issuedOn: form.issuedOn,
-            paymentTermsDays: form.paymentTermsDays,
+            paymentTermsDays: termsDays,
+            ...(dueOn ? { dueOn } : {}),
+            ...(reference ? { xeroReference: reference } : {}),
             clientMessage: form.clientMessage?.trim() || null,
             contractDisclaimer,
             asDraft: form.asDraft === true,
@@ -1118,6 +1147,40 @@ export class InvoicesService {
   }
 
   /** A finished visit with a property: the only kind an invoice is made for. */
+  /**
+   * What the Xero-style form chose for each invoice (2026-11-13) -- each line's
+   * account, item, tax rate and tracking, and how its amounts carry tax -- is
+   * one its company's books have, as last read; and each line's project is one
+   * of that company's. Nothing is asked of an invoice that chose nothing for
+   * Xero, as before.
+   */
+  private async checkXeroChoices(
+    user: AuthenticatedUser,
+    invoices: { lines: InvoiceLineInput[]; xeroTenantId: string | null; taxMode?: XeroTaxMode }[],
+    companyWords: ((tenantId: string | null) => string) | null,
+  ) {
+    const chose = (invoice: (typeof invoices)[number]) =>
+      invoice.taxMode !== undefined ||
+      invoice.lines.some((line) => line.xeroAccountId || line.xeroItemCode || line.xeroTaxType || line.xeroTracking || line.xeroProjectId);
+    if (!invoices.some(chose)) return;
+    const companies = await xeroInvoiceFormCompanies(this.prisma, user.organizationId);
+    for (const invoice of invoices) {
+      if (!chose(invoice)) continue;
+      const words = companyWords ? `The invoice for ${companyWords(invoice.xeroTenantId)}: ` : '';
+      const company = companies.find((each) => each.tenantId === invoice.xeroTenantId);
+      if (!company)
+        throw new ApplicationError(422, 'INVOICE_INVALID', `${words}its company’s books in Xero are not connected, so what was chosen for Xero cannot be kept.`);
+      const problem = xeroLinesProblem(invoice.lines, company, invoice.taxMode ?? company.taxMode);
+      if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', `${words}${problem}`);
+      const projects = [...new Set(invoice.lines.flatMap((line) => (line.xeroProjectId ? [line.xeroProjectId] : [])))];
+      if (!projects.length) continue;
+      const known = await this.prisma.xeroProject.count({
+        where: { organizationId: user.organizationId, xeroTenantId: company.tenantId, xeroProjectId: { in: projects } },
+      });
+      if (known !== projects.length) throw new ApplicationError(422, 'INVOICE_INVALID', `${words}a line’s project is not one of ${company.name}’s in Xero.`);
+    }
+  }
+
   private async invoiceableVisit(user: AuthenticatedUser, inspectionId: string) {
     const row = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId: user.organizationId },
@@ -1129,6 +1192,8 @@ export class InvoicesService {
         jobberJobId: true,
         servicesReport: true,
         propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
+        // Its technician (2026-11-13): the Xero-style form tags each line for them.
+        assignments: { where: { isCurrent: true }, orderBy: { assignedAt: 'asc' }, take: 1, select: { technician: { select: { displayName: true } } } },
       },
     });
     if (!row) throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'That visit was not found.');

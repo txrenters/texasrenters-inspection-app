@@ -43,7 +43,7 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: (defaults: object) => [defaults, vi.fn(), vi.fn()] }));
 // A visit's project (2026-11-13): the console's own copy of the company's projects, and making or choosing one.
-const xero = vi.hoisted(() => ({ useXeroVisitProjects: vi.fn(), useXeroProjectActions: vi.fn() }));
+const xero = vi.hoisted(() => ({ useXeroVisitProjects: vi.fn(), useXeroProjectActions: vi.fn(), useXeroProjects: vi.fn(), useXeroInvoiceForm: vi.fn() }));
 vi.mock('@/lib/xero-queries', () => xero);
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // The PDF itself is rendered in its own test (lib/receipt-pdf); here, only that the page asks for it.
@@ -160,6 +160,8 @@ beforeEach(() => {
   hooks.useInvoice.mockReturnValue(ready(DETAIL));
   hooks.useInvoiceDraft.mockReturnValue(ready(DRAFT));
   xero.useXeroVisitProjects.mockReturnValue({ data: undefined });
+  xero.useXeroProjects.mockReturnValue({ data: undefined });
+  xero.useXeroInvoiceForm.mockReturnValue({ isLoading: false, isError: false, data: [] });
   xero.useXeroProjectActions.mockReturnValue({ make: makeProject, choose: chooseProject });
 });
 afterEach(() => vi.useRealTimers());
@@ -604,15 +606,18 @@ describe('a new invoice for a finished visit', () => {
     expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('additional');
   });
 
-  it('asks no terms and offers no draft of its own once the console makes the invoices (2026-11-13): each is a draft in Xero', () => {
+  it('is laid out as Xero’s once the console makes the invoices (2026-11-13, PR B): no terms, no draft of its own, each a draft in Xero', () => {
     hooks.useInvoiceDraft.mockReturnValue(ready({ ...DRAFT, madeInConsole: true }));
     render(<NewInvoicePage />);
     expect(screen.queryByLabelText('Payment terms')).not.toBeInTheDocument();
-    expect(screen.getByText(/Xero dates it on its visit's day and makes it due on the last day of that month/)).toBeInTheDocument();
+    // Xero's own fields: dated on the visit's day, due at the end of that month, numbered by Xero.
+    expect(screen.getByLabelText('Issue date')).toHaveValue('2026-11-03');
+    expect(screen.getByLabelText('Due date')).toHaveValue('2026-11-30');
+    expect(screen.getByLabelText('Invoice number')).toHaveValue('Given by Xero');
     expect(screen.queryByRole('button', { name: 'Save as draft' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Each goes to its company's books in Xero as a draft, numbered there, for the office to approve\./)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Create invoice/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save draft in Xero/ }));
     expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('asDraft');
+    expect(create.mutate.mock.calls[0][0]).toMatchObject({ issuedOn: '2026-11-03', dueOn: '2026-11-30' });
   });
 
   it('is a permission of its own', () => {

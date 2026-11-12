@@ -466,7 +466,43 @@ export interface InvoiceLineInput {
   description?: string | null;
   quantity: number;
   unitPriceCents: number;
+  /**
+   * The line's discount, a percent off (2026-11-13), as Xero's "Disc." column
+   * has it; null or left out for none.
+   */
+  discountRate?: number | null;
+  /**
+   * What the line is sent to Xero with, as the Xero-style form shows it
+   * (2026-11-13): its account, item, tax rate and tracking. Each left out goes
+   * as its product's choice, or the company's -- as every line went before.
+   */
+  xeroAccountId?: string | null;
+  xeroItemCode?: string | null;
+  xeroTaxType?: string | null;
+  /** One option in each of up to two tracking categories; left out, the technician's option in the company's category. */
+  xeroTracking?: XeroLineTracking[] | null;
+  /**
+   * The project the line is for (2026-11-13), one of the company's in Xero.
+   * Kept here only: Xero's API cannot put a line on a project, so the office
+   * picks the same one on the draft in Xero.
+   */
+  xeroProjectId?: string | null;
 }
+
+/** A line's option in one of its company's tracking categories: "HVAC Inspection Income: Moses" in "Income by Employee". */
+export interface XeroLineTracking {
+  trackingCategoryId: string;
+  option: string;
+}
+
+/** How a Xero invoice's amounts carry tax, as Xero's "Tax" field has it (2026-11-13). */
+export type XeroTaxMode = 'EXCLUSIVE' | 'INCLUSIVE' | 'NO_TAX';
+export const XERO_TAX_MODES: readonly XeroTaxMode[] = ['EXCLUSIVE', 'INCLUSIVE', 'NO_TAX'];
+export const XERO_TAX_MODE_LABEL: Record<XeroTaxMode, string> = { EXCLUSIVE: 'Tax exclusive', INCLUSIVE: 'Tax inclusive', NO_TAX: 'No tax' };
+/** Xero's own words for each, as an invoice's `LineAmountTypes`. */
+export const XERO_LINE_AMOUNT_TYPES: Record<XeroTaxMode, 'Exclusive' | 'Inclusive' | 'NoTax'> = { EXCLUSIVE: 'Exclusive', INCLUSIVE: 'Inclusive', NO_TAX: 'NoTax' };
+/** A line's tracking: at most one option in each of Xero's two categories. */
+export const MAX_LINE_TRACKING = 2;
 
 /**
  * What a finished visit would be invoiced for, before anybody edits it: one
@@ -499,8 +535,12 @@ export interface InvoiceDraftProduct {
 }
 
 export interface InvoiceDraft {
-  /** The visit it bills; null for an invoice made out to a property directly. */
-  inspection: { id: string; inspectionType: string; scheduledOn: string; status: string } | null;
+  /**
+   * The visit it bills; null for an invoice made out to a property directly.
+   * Its technician (2026-11-13) tags each line for Xero: "HVAC Inspection
+   * Income: Moses"; null when none is known.
+   */
+  inspection: { id: string; inspectionType: string; scheduledOn: string; status: string; technicianName?: string | null } | null;
   property: InvoiceProperty | null;
   clientName: string;
   subject: string;
@@ -550,6 +590,16 @@ export interface CreateInvoiceInput {
   subject: string;
   issuedOn: string;
   paymentTermsDays: number;
+  /**
+   * The day it is due, chosen on the Xero-style form (2026-11-13), `YYYY-MM-DD`,
+   * in place of the terms. Xero is then sent this day and the issue day as
+   * they are, rather than the visit's day and the end of its month.
+   */
+  dueOn?: string;
+  /** Xero's "Reference" (2026-11-13); left out or null, the property, as the office writes it. */
+  reference?: string | null;
+  /** How the invoice's amounts carry tax in Xero (2026-11-13); left out, its company's way. */
+  taxMode?: XeroTaxMode;
   lineItems: InvoiceLineInput[];
   clientMessage?: string;
   /**
@@ -567,9 +617,9 @@ export interface CreateInvoiceInput {
  * of the multi-company plan): one per company, each with its own lines, made
  * together or not at all. One request key for all of them.
  */
-export interface CreateInvoicesInput extends Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId'> {
-  /** Each invoice: its company (null for none; left out, its lines' company) and its lines. */
-  invoices: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[] }[];
+export interface CreateInvoicesInput extends Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId' | 'taxMode'> {
+  /** Each invoice: its company (null for none; left out, its lines' company), its lines, and how they carry tax in Xero. */
+  invoices: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[]; taxMode?: XeroTaxMode }[];
 }
 
 export interface CreatedInvoices {
@@ -616,12 +666,12 @@ export function parseMoney(text: string): number | null {
   return Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
 }
 
-/** A line's total: quantity times price, in whole cents. */
-export const lineTotalCents = (line: Pick<InvoiceLineInput, 'quantity' | 'unitPriceCents'>) =>
-  Math.round(line.quantity * line.unitPriceCents);
+/** A line's total: quantity times price, less its discount (2026-11-13), in whole cents -- as Xero works out a line. */
+export const lineTotalCents = (line: Pick<InvoiceLineInput, 'quantity' | 'unitPriceCents' | 'discountRate'>) =>
+  Math.round(line.quantity * line.unitPriceCents * (1 - (line.discountRate ?? 0) / 100));
 
-/** The invoice's subtotal and total from its lines. No tax: the office's services carry none. */
-export function invoiceTotals(lines: readonly Pick<InvoiceLineInput, 'quantity' | 'unitPriceCents'>[]) {
+/** The invoice's subtotal and total from its lines. No tax on top: the office's prices include any they carry. */
+export function invoiceTotals(lines: readonly Pick<InvoiceLineInput, 'quantity' | 'unitPriceCents' | 'discountRate'>[]) {
   const subtotalCents = lines.reduce((sum, line) => sum + lineTotalCents(line), 0);
   return { subtotalCents, totalCents: subtotalCents };
 }
@@ -640,6 +690,9 @@ export function invoiceLinesProblem(lines: readonly InvoiceLineInput[]): string 
     if (!line.name.trim()) return 'Every line needs a name.';
     if (!Number.isFinite(line.quantity) || line.quantity <= 0) return `${line.name}: the quantity has to be more than 0.`;
     if (!Number.isInteger(line.unitPriceCents) || line.unitPriceCents < 0) return `${line.name}: give the price in dollars and cents.`;
+    const discount = line.discountRate ?? 0;
+    if (!Number.isFinite(discount) || discount < 0 || discount > 100) return `${line.name}: the discount is a percent from 0 to 100.`;
+    if ((line.xeroTracking?.length ?? 0) > MAX_LINE_TRACKING) return `${line.name}: a line is tracked in at most ${MAX_LINE_TRACKING} categories.`;
   }
   const { totalCents } = invoiceTotals(lines);
   if (totalCents <= 0) return 'The invoice comes to nothing.';
