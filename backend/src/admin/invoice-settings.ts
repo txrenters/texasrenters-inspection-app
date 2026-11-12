@@ -307,6 +307,19 @@ export function beforeXeroStart(
 }
 
 /**
+ * Once the console makes the invoices (2026-11-13), an invoice that would reach
+ * no books, in words -- of no company, or of one whose sending is off or that
+ * is not connected -- since it would get the console's own number and, its
+ * company's books read, be emailed by nobody. Null when it goes to Xero.
+ */
+export function reachesNoBooks(tenantId: string | null, toXero: ReadonlySet<string>, nameOf: (tenantId: string) => string): string | null {
+  if (tenantId && toXero.has(tenantId)) return null;
+  return tenantId
+    ? `${nameOf(tenantId)} does not send its invoices to Xero, so this one would reach no books. Turn its sending on, on the Xero page, first.`
+    : 'An invoice that goes to no company would reach no books. Choose the company whose books it goes to.';
+}
+
+/**
  * The companies whose invoices go to their books in Xero now (2026-11-12): sending
  * is on and the organisation is connected. Their invoices made here are drafts
  * with no number of the console's -- Xero numbers them, and the office approves

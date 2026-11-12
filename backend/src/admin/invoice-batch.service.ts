@@ -36,6 +36,7 @@ import {
   officeOrganisations,
   organisationName,
   productCompanies,
+  reachesNoBooks,
   xeroSendingCompanies,
   xeroStartDays,
 } from './invoice-settings';
@@ -101,6 +102,14 @@ export function batchParts(
   }));
 }
 
+/**
+ * The first of a visit's invoices that would reach no books (2026-11-13), in
+ * words: of no company, or of one that does not send to Xero.
+ */
+export function noBooksProblem(parts: readonly UninvoicedPart[], toXero: ReadonlySet<string>, nameOf: (tenantId: string) => string): string | null {
+  return parts.map((part) => reachesNoBooks(part.xeroTenantId, toXero, nameOf)).find(Boolean) ?? null;
+}
+
 @Injectable()
 export class InvoiceBatchService {
   constructor(
@@ -148,6 +157,7 @@ export class InvoiceBatchService {
       items: rows.slice(0, LIST_LIMIT).map((row): UninvoicedVisit => {
         const building = row.propertywareBuilding!;
         const lines = batchLines(row, basis);
+        const parts = batchParts(lines.lineItems, companies, nameOf, toXero);
         return {
           inspectionId: row.id,
           inspectionType: row.inspectionType,
@@ -156,7 +166,9 @@ export class InvoiceBatchService {
           property: { id: building.id, address: building.addressLine1 ?? building.name, city: building.city },
           clientName: building.addressLine1 ?? building.name,
           ...lines,
-          invoices: batchParts(lines.lineItems, companies, nameOf, toXero),
+          // Once the console makes the invoices (2026-11-13), a part that would reach no books holds the visit back.
+          problem: lines.problem ?? (switchedAt ? noBooksProblem(parts, toXero, nameOf) : null),
+          invoices: parts,
         };
       }),
       truncated: rows.length > LIST_LIMIT,
@@ -185,7 +197,7 @@ export class InvoiceBatchService {
     if (!PAYMENT_TERMS.some((terms) => terms.days === input.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Pick the payment terms from the list.');
 
-    const [defaults, basis, companies, organisations, toXero, startDays] = await Promise.all([
+    const [defaults, basis, companies, organisations, toXero, startDays, takenOver] = await Promise.all([
       this.invoices.officeDefaults(user),
       billingBasis(this.prisma, user.organizationId),
       productCompanies(this.prisma, user.organizationId),
@@ -194,6 +206,8 @@ export class InvoiceBatchService {
       xeroSendingCompanies(this.prisma, user.organizationId),
       // Never one issued before its company's start date (2026-11-13): it would reach no books.
       xeroStartDays(this.prisma, user.organizationId),
+      // Once the console makes the invoices (2026-11-13), never one for a company that does not send to Xero.
+      invoicingTakenOverAt(this.prisma, user.organizationId),
     ]);
     const nameOf = organisationName(organisations);
     const result: BatchInvoiceResult = { created: [], skipped: [] };
@@ -237,9 +251,11 @@ export class InvoiceBatchService {
       const building = visit.propertywareBuilding;
       // One invoice per company: each company's services, and those of none on one of their own.
       const parts = batchParts(lines.lineItems, companies, nameOf, toXero);
-      const early = parts.map((part) => beforeXeroStart(input.issuedOn, part.xeroTenantId, startDays, nameOf)).find(Boolean);
-      if (early) {
-        result.skipped.push({ inspectionId, reason: early });
+      const held =
+        (takenOver ? noBooksProblem(parts, toXero, nameOf) : null) ??
+        parts.map((part) => beforeXeroStart(input.issuedOn, part.xeroTenantId, startDays, nameOf)).find(Boolean);
+      if (held) {
+        result.skipped.push({ inspectionId, reason: held });
         continue;
       }
       try {

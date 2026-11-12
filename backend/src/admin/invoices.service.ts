@@ -55,9 +55,11 @@ import {
   beforeXeroStart,
   invoiceWritesOff,
   invoiceWritesOn,
+  invoicingTakenOverAt,
   newInvoiceDefaults,
   officeBrand,
   officeOrganisations,
+  reachesNoBooks,
   xeroSendingCompanies,
   xeroStartDays,
   officePrices,
@@ -987,11 +989,19 @@ export class InvoicesService {
           }
           const { contractDisclaimer } = await newInvoiceDefaults(tx, user.organizationId);
           // A company that sends to Xero gets a draft there (2026-11-12): Xero numbers it, and the office approves it.
-          const [toXero, startDays] = await Promise.all([xeroSendingCompanies(tx, user.organizationId), xeroStartDays(tx, user.organizationId)]);
-          // Never one issued before its company's start date (2026-11-13): it would reach no books.
+          const [toXero, startDays, takenOver] = await Promise.all([
+            xeroSendingCompanies(tx, user.organizationId),
+            xeroStartDays(tx, user.organizationId),
+            invoicingTakenOverAt(tx, user.organizationId),
+          ]);
           for (const invoice of invoices) {
-            const early = beforeXeroStart(form.issuedOn, invoice.xeroTenantId, startDays, nameOf);
-            if (early) throw new ApplicationError(422, 'INVOICE_INVALID', early);
+            // Once the console makes the invoices (2026-11-13), each goes to a company that sends it to Xero; and never
+            // one issued before that company's start date. Either would reach no books.
+            const problem =
+              (takenOver ? reachesNoBooks(invoice.xeroTenantId, toXero, nameOf) : null) ??
+              beforeXeroStart(form.issuedOn, invoice.xeroTenantId, startDays, nameOf);
+            // Each says its company itself.
+            if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', problem);
           }
           const made: { id: string }[] = [];
           for (const invoice of invoices)
