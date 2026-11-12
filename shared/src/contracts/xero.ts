@@ -1,3 +1,4 @@
+import type { InspectionType } from '../enums/index.js';
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethod } from './invoices.js';
 
 /**
@@ -234,21 +235,41 @@ export function labourOf(values: Pick<XeroSettingsValues, 'projectsEnabled' | 'l
 
 /** What a visit's project is named after (2026-11-11). */
 export interface XeroProjectVisit {
-  /** The visit's day, `YYYY-MM-DD`. */
+  /** The day the visit was finished, in Texas (2026-11-13: "the date it was completed"), `YYYY-MM-DD`; its scheduled day while it has none. */
   day: string;
   technicianName: string | null;
   /** The benefit-package quarter the visit belongs to -- its plan's, never its day's; null for any other visit. */
   packageQuarter: { year: number; quarter: number } | null;
-  /** What any other visit was, as its invoice's first line names it: "Move Out Inspection". */
+  /** What any other visit was, as the office names it: "Move Out Inspection" (`XERO_PROJECT_KIND`). */
   kind: string;
 }
+
+/** What each kind of visit is called in a project's name (2026-11-13), as Propertyware files its reports. */
+export const XERO_PROJECT_KIND: Record<InspectionType, string> = {
+  MOVE_IN: 'Move In Inspection',
+  MOVE_OUT: 'Move Out Inspection',
+  OCCUPIED: 'Occupied Inspection',
+  BACK_TO_MARKET: 'Back to Market Inspection',
+  HVAC: 'HVAC Inspection',
+  ROOF: 'Roof Inspection',
+  SUPRA_LOCKBOX_PLACEMENT: 'Supra Lockbox Placement',
+  SUPRA_LOCKBOX_REMOVAL: 'Supra Lockbox Removal',
+  AC_FILTER_DELIVERY: 'AC Filter Delivery',
+};
+
+/** A project's name in Xero: what the console's names come to, and the most the office may type. */
+export const XERO_PROJECT_NAME_MAX = 100;
+/** A project's estimate, at most: $1,000,000. */
+export const MAX_PROJECT_ESTIMATE_CENTS = 100_000_000;
 
 const QUARTER_WORDS = ['1st', '2nd', '3rd', '4th'] as const;
 
 /**
- * A visit's project, named as the office names them: the technician's first
- * name, then "Tenant Benefit Package - 4th Qtr - 2026" for a package visit, or
- * what any other visit was, then the visit's day as 11.10.2026. Null when the
+ * A visit's project, named as the office names them (2026-11-13): the
+ * technician's first name, then "Tenant Benefit Package" for a package visit or
+ * what any other visit was, then the quarter -- the package's, else the one the
+ * visit was finished in -- then the day it was finished as 11.10.2026:
+ * "Moses: Tenant Benefit Package - 4th Qtr - 2026 - 11.10.2026". Null when the
  * visit has no technician: the office's names always start with one.
  */
 export function xeroProjectName(visit: XeroProjectVisit): string | null {
@@ -256,10 +277,70 @@ export function xeroProjectName(visit: XeroProjectVisit): string | null {
   if (!first) return null;
   const [year, month, day] = visit.day.split('-');
   const dated = `${month}.${day}.${year}`;
-  const what = visit.packageQuarter
-    ? `Tenant Benefit Package - ${QUARTER_WORDS[visit.packageQuarter.quarter - 1] ?? `${visit.packageQuarter.quarter}th`} Qtr - ${visit.packageQuarter.year}`
-    : visit.kind.trim() || 'Visit';
-  return `${first}: ${what} - ${dated}`.slice(0, 100);
+  const quarter = visit.packageQuarter ?? { year: Number(year), quarter: Math.floor((Number(month) - 1) / 3) + 1 };
+  const what = visit.packageQuarter ? 'Tenant Benefit Package' : visit.kind.trim() || 'Visit';
+  return `${first}: ${what} - ${QUARTER_WORDS[quarter.quarter - 1] ?? `${quarter.quarter}th`} Qtr - ${quarter.year} - ${dated}`.slice(0, XERO_PROJECT_NAME_MAX);
+}
+
+/** A project's state in Xero: one in progress is offered on an invoice; a closed one is not. */
+export type XeroProjectStatus = 'INPROGRESS' | 'CLOSED';
+
+/** A project in a company's books (2026-11-13): one the console made, or one read from Xero. */
+export interface XeroProjectOption {
+  xeroProjectId: string;
+  name: string;
+  /** Its deadline, `YYYY-MM-DD`; null for none. */
+  deadlineOn: string | null;
+  status: XeroProjectStatus;
+  /** Made in the console, rather than read from Xero. */
+  madeHere: boolean;
+}
+
+/** A visit's project in one company's books, for the invoice form's Project field. */
+export interface XeroVisitCompanyProjects {
+  tenantId: string;
+  name: string;
+  /** The visit's project in this company; null for none yet. */
+  chosen: XeroProjectOption | null;
+  /** This company's projects in progress under the property's contact, latest deadline first; at most 50. */
+  projects: XeroProjectOption[];
+  /** Why no project can be made or chosen here now; null when one can. */
+  problem: string | null;
+  /** When this company's projects were last read from Xero; null for never. */
+  readAt: string | null;
+}
+
+/**
+ * A finished visit's projects (2026-11-13), from the console's own rows -- no
+ * call to Xero: for each company whose projects are on, what the visit has and
+ * what can be chosen; and what a new one starts as.
+ */
+export interface XeroVisitProjects {
+  inspectionId: string;
+  /** The contact a project goes under: the property, as its invoices are. */
+  contactName: string;
+  /** A new project's name as the office names them; null when the visit has no technician, for the office to type. */
+  suggestedName: string | null;
+  /** A new project's deadline: the day the visit was finished, `YYYY-MM-DD`. */
+  deadlineOn: string;
+  companies: XeroVisitCompanyProjects[];
+}
+
+/** "Create project" (2026-11-13): made in Xero at once, In progress, and chosen for the visit. */
+export interface MakeXeroProjectInput {
+  inspectionId: string;
+  name: string;
+  /** `YYYY-MM-DD`. */
+  deadlineOn: string;
+  /** Excluding tax; null or left out for none. */
+  estimateCents?: number | null;
+  /** One key for the dialog: a double click or a resend makes one project. */
+  clientRequestId: string;
+}
+
+/** A project already in the company's books, chosen as the visit's. */
+export interface ChooseXeroProjectInput {
+  xeroProjectId: string;
 }
 
 /** A name a line can carry: on the office's products list, or billed in the past six months. */

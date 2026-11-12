@@ -461,6 +461,7 @@ model Organization {
   xeroChecks       XeroCheck[]
   xeroWriteOffSyncs XeroWriteOffSync[]
   xeroProjectLinks  XeroProjectLink[]
+  xeroProjects      XeroProject[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -4890,6 +4891,8 @@ model XeroOrganisation {
   writeOffSyncs XeroWriteOffSync[]
   /// Each visit's project in its books (2026-11-11).
   projectLinks  XeroProjectLink[]
+  /// The projects in its books (2026-11-13): made in the console, or read from Xero.
+  projects      XeroProject[]
 
   @@unique([organizationId, xeroTenantId])
 }
@@ -4981,6 +4984,9 @@ model XeroSettings {
   booksReadAt         DateTime?
   booksLastRunAt      DateTime?
   booksLastRunProblem String?
+  /// When its projects in progress had last all been read from Xero (2026-11-13): read again six hours on, while
+  /// projects are on.
+  projectsReadAt      DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -5157,7 +5163,7 @@ model XeroProjectLink {
   madeHere        Boolean   @default(false)
   xeroTaskId      String?
   xeroTimeEntryId String?
-  /// DONE or FAILED (checked).
+  /// DONE, PENDING (made or chosen first, its labour still to log: 2026-11-13) or FAILED (checked).
   status          String
   attempts        Int       @default(0)
   lastAttemptAt   DateTime?
@@ -5174,4 +5180,40 @@ model XeroProjectLink {
   @@unique([organizationId, xeroTenantId, inspectionId])
   @@index([organizationId, xeroTenantId, status])
   @@index([inspectionId])
+}
+
+/// A project in one company's books in Xero (2026-11-13): made in the
+/// console's New project dialog, as the office makes one before the visit's
+/// invoice, or read from Xero -- the 700-odd the office made by hand among
+/// them -- so the invoice form offers them with no call to Xero. Xero's API
+/// cannot put an invoice line on a project: the office does that on the draft.
+model XeroProject {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  xeroTenantId    String
+  xeroProjectId   String
+  /// The Xero contact it is for: the property's, for the console's own.
+  xeroContactId   String?
+  name            String
+  /// INPROGRESS or CLOSED (checked). One no longer in Xero's list of those in progress reads as CLOSED.
+  status          String    @default("INPROGRESS")
+  deadlineOn      DateTime? @db.Date
+  /// Excluding tax.
+  estimateCents   Int?
+  /// Made in the console, by `madeByUserId`; otherwise read from Xero.
+  madeHere        Boolean   @default(false)
+  madeByUserId    String?   @db.Uuid
+  /// The dialog's key: a double click or a resend makes one project.
+  clientRequestId String?
+  /// When it was last seen in Xero: made, or found in a read.
+  seenAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: Cascade)
+
+  @@unique([organizationId, xeroTenantId, xeroProjectId])
+  @@unique([organizationId, clientRequestId])
+  @@index([organizationId, xeroTenantId, xeroContactId, status])
 }

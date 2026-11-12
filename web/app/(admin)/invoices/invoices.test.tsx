@@ -42,6 +42,9 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => params.search,
 }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: (defaults: object) => [defaults, vi.fn(), vi.fn()] }));
+// A visit's project (2026-11-13): the console's own copy of the company's projects, and making or choosing one.
+const xero = vi.hoisted(() => ({ useXeroVisitProjects: vi.fn(), useXeroProjectActions: vi.fn() }));
+vi.mock('@/lib/xero-queries', () => xero);
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // The PDF itself is rendered in its own test (lib/receipt-pdf); here, only that the page asks for it.
 const receipts = vi.hoisted(() => ({ downloadReceipt: vi.fn().mockResolvedValue(undefined) }));
@@ -71,6 +74,8 @@ const createPerCompany = { mutate: vi.fn(), isPending: false };
 const recordPayment = { mutate: vi.fn(), isPending: false };
 const changePayment = { mutate: vi.fn(), isPending: false };
 const removePayment = { mutate: vi.fn(), isPending: false };
+const makeProject = { mutate: vi.fn(), isPending: false };
+const chooseProject = { mutate: vi.fn(), isPending: false };
 
 const NOW = new Date('2026-11-05T18:00:00.000Z');
 const TODAY = '2026-11-05';
@@ -154,6 +159,8 @@ beforeEach(() => {
   hooks.useInvoices.mockReturnValue(ready(LIST));
   hooks.useInvoice.mockReturnValue(ready(DETAIL));
   hooks.useInvoiceDraft.mockReturnValue(ready(DRAFT));
+  xero.useXeroVisitProjects.mockReturnValue({ data: undefined });
+  xero.useXeroProjectActions.mockReturnValue({ make: makeProject, choose: chooseProject });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -717,6 +724,83 @@ describe('a new invoice, one per company (2026-11-10)', () => {
     render(<NewInvoicePage />);
     expect(within(section('Example Pest Co')).getByRole('status')).toHaveTextContent('This visit already has an invoice for Example Pest Co:');
     expect(within(section('Example Home Services')).queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  describe('the visit’s project, made first as in Xero (2026-11-13)', () => {
+    const NAME = 'Ada: Tenant Benefit Package - 4th Qtr - 2026 - 11.03.2026';
+    const BEFORE = {
+      xeroProjectId: 'b1000000-0000-4000-8000-000000000001',
+      name: 'Ada: Tenant Benefit Package - 3rd Qtr - 2026 - 08.04.2026',
+      deadlineOn: '2026-08-04',
+      status: 'INPROGRESS',
+      madeHere: false,
+    };
+    const homes = (over: object = {}) => ({ tenantId: HOMES, name: 'Example Home Services', chosen: null, projects: [BEFORE], problem: null, readAt: null, ...over });
+    const projects = (over: object = {}, company: object = {}) => ({
+      data: { inspectionId: 'insp-1', contactName: '1902 Mockup Dr', suggestedName: NAME, deadlineOn: '2026-11-03', companies: [homes(company)], ...over },
+    });
+    const field = (company: string) => within(section(company)).queryByRole('combobox', { name: `Project in ${company}` });
+
+    it('asks for the project on the invoice of each company whose projects are on, from the console’s own copy', () => {
+      xero.useXeroVisitProjects.mockReturnValue(projects());
+      render(<NewInvoicePage />);
+      expect(xero.useXeroVisitProjects).toHaveBeenCalledWith('insp-1', true);
+      expect(field('Example Home Services')).toBeInTheDocument();
+      expect(field('Example Pest Co')).not.toBeInTheDocument();
+      expect(within(section('Example Home Services')).getByText('Make the visit’s project first, as in Xero, or choose one already there.')).toBeInTheDocument();
+    });
+
+    it('chooses one already in Xero at once, and says to pick it on the draft there', () => {
+      xero.useXeroVisitProjects.mockReturnValue(projects());
+      const { rerender } = render(<NewInvoicePage />);
+      fireEvent.pointerDown(field('Example Home Services')!, { button: 0, pointerId: 1, pointerType: 'mouse' });
+      fireEvent.click(screen.getByRole('option', { name: BEFORE.name }));
+      expect(chooseProject.mutate).toHaveBeenCalledWith({ tenantId: HOMES, xeroProjectId: BEFORE.xeroProjectId }, expect.anything());
+
+      xero.useXeroVisitProjects.mockReturnValue(projects({}, { chosen: BEFORE }));
+      rerender(<NewInvoicePage />);
+      expect(within(section('Example Home Services')).getByText(/pick this project on the draft in Xero before you approve it/)).toBeInTheDocument();
+    });
+
+    it('makes a new one as Xero’s dialog does: the property, the office’s name for it, due the day the visit was finished', () => {
+      xero.useXeroVisitProjects.mockReturnValue(projects());
+      render(<NewInvoicePage />);
+      fireEvent.click(within(section('Example Home Services')).getByRole('button', { name: 'New project' }));
+      const dialog = screen.getByRole('dialog', { name: 'New in progress project' });
+      expect(within(dialog).getByLabelText(/Contact/)).toHaveValue('1902 Mockup Dr');
+      expect(within(dialog).getByText('1MD')).toBeInTheDocument();
+      expect(within(dialog).getByLabelText('Project name')).toHaveValue(NAME);
+      expect(within(dialog).getByLabelText('Deadline')).toHaveValue('2026-11-03');
+      fireEvent.change(within(dialog).getByLabelText('Estimate'), { target: { value: '64.50' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Create project' }));
+      expect(makeProject.mutate).toHaveBeenCalledWith(
+        {
+          tenantId: HOMES,
+          input: { inspectionId: 'insp-1', name: NAME, deadlineOn: '2026-11-03', estimateCents: 6450, clientRequestId: expect.stringMatching(/^web-/) },
+        },
+        expect.anything(),
+      );
+    });
+
+    it('asks the office for the name when the visit has no technician, and for an estimate it can read', () => {
+      xero.useXeroVisitProjects.mockReturnValue(projects({ suggestedName: null }));
+      render(<NewInvoicePage />);
+      fireEvent.click(within(section('Example Home Services')).getByRole('button', { name: 'New project' }));
+      const dialog = screen.getByRole('dialog', { name: 'New in progress project' });
+      expect(within(dialog).getByText('The visit has no technician: give the project its name.')).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Create project' })).toBeDisabled();
+      fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: 'Ada: Gate repair' } });
+      fireEvent.change(within(dialog).getByLabelText('Estimate'), { target: { value: 'about ten' } });
+      expect(within(dialog).getByText('Give the estimate in dollars and cents.')).toBeInTheDocument();
+      expect(makeProject.mutate).not.toHaveBeenCalled();
+    });
+
+    it('makes none while Xero cannot be reached for projects, and says why', () => {
+      xero.useXeroVisitProjects.mockReturnValue(projects({}, { problem: 'Connect again, so Xero lets the console make projects.' }));
+      render(<NewInvoicePage />);
+      expect(within(section('Example Home Services')).getByRole('button', { name: 'New project' })).toBeDisabled();
+      expect(within(section('Example Home Services')).getByText('Connect again, so Xero lets the console make projects.')).toBeInTheDocument();
+    });
   });
 });
 

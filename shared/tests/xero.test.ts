@@ -12,6 +12,7 @@ import {
   xeroCanWrite,
   xeroChecks,
   xeroProjectName,
+  XERO_PROJECT_KIND,
   xeroSendingBlockers,
   xeroSettingsProblem,
   type XeroAccount,
@@ -22,17 +23,24 @@ import {
 describe('a visit’s project in Xero (2026-11-11)', () => {
   const visit = { day: '2026-11-10', technicianName: 'Ada Lane', packageQuarter: { year: 2026, quarter: 4 }, kind: 'HVAC Inspection & Filter Change' };
 
-  it('is named as the office names them: the technician’s first name, the package’s quarter, the visit’s day', () => {
+  it('is named as the office names them: the technician’s first name, the package’s quarter, the day it was finished', () => {
     expect(xeroProjectName(visit)).toBe('Ada: Tenant Benefit Package - 4th Qtr - 2026 - 11.10.2026');
     expect(xeroProjectName({ ...visit, packageQuarter: { year: 2027, quarter: 1 } })).toBe('Ada: Tenant Benefit Package - 1st Qtr - 2027 - 11.10.2026');
     expect(xeroProjectName({ ...visit, packageQuarter: { year: 2027, quarter: 2 } })).toContain('2nd Qtr');
     expect(xeroProjectName({ ...visit, packageQuarter: { year: 2027, quarter: 3 } })).toContain('3rd Qtr');
   });
 
-  it('names any other visit by what it was, and none without a technician', () => {
-    expect(xeroProjectName({ ...visit, packageQuarter: null, kind: ' Move Out Inspection ' })).toBe('Ada: Move Out Inspection - 11.10.2026');
+  it('names any other visit by what it was, in the quarter it was finished (2026-11-13), and none without a technician', () => {
+    expect(xeroProjectName({ ...visit, packageQuarter: null, kind: ' Move Out Inspection ' })).toBe('Ada: Move Out Inspection - 4th Qtr - 2026 - 11.10.2026');
+    expect(xeroProjectName({ ...visit, day: '2027-03-31', packageQuarter: null, kind: 'Move In Inspection' })).toBe('Ada: Move In Inspection - 1st Qtr - 2027 - 03.31.2027');
+    expect(xeroProjectName({ ...visit, day: '2027-04-01', packageQuarter: null, kind: '' })).toBe('Ada: Visit - 2nd Qtr - 2027 - 04.01.2027');
     expect(xeroProjectName({ ...visit, technicianName: '  ' })).toBeNull();
     expect(xeroProjectName({ ...visit, technicianName: null })).toBeNull();
+  });
+
+  it('calls every kind of visit something, as Propertyware files its reports', () => {
+    expect(XERO_PROJECT_KIND.MOVE_OUT).toBe('Move Out Inspection');
+    expect(Object.values(XERO_PROJECT_KIND).every((kind) => kind.length > 0)).toBe(true);
   });
 
   it('logs the labour the office has been adding by hand, and none when projects are off or either part is 0', () => {

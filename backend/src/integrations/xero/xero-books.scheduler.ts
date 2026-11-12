@@ -5,6 +5,7 @@ import { BUSINESS_TIME_ZONE } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { withSystemTenant, withTenant } from '../../database/tenant-context';
 import { XeroBooksService } from './xero-books.service';
+import { XeroProjectsService } from './xero-projects.service';
 
 /** Hourly, at five past: between the sender's ten-minute runs. */
 const DEFAULT_CRON = '5 * * * *';
@@ -27,6 +28,7 @@ export class XeroBooksScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(XeroBooksService) private readonly books: XeroBooksService,
+    @Inject(XeroProjectsService) private readonly projects: XeroProjectsService,
   ) {}
 
   onModuleInit() {
@@ -63,6 +65,13 @@ export class XeroBooksScheduler implements OnModuleInit, OnModuleDestroy {
         } catch (error) {
           // One organisation's trouble never stops another's.
           this.logger.error({ event: 'xero_books_read_failed', organizationId, xeroTenantId, message: error instanceof Error ? error.message : String(error) });
+        }
+        // Its projects in progress (2026-11-13), every six hours while its projects are on: for the invoice form.
+        try {
+          const read = await withTenant(organizationId, () => this.projects.readIfDue(organizationId, xeroTenantId));
+          if (read) this.logger.log({ event: 'xero_projects_read', organizationId, xeroTenantId, ...read });
+        } catch (error) {
+          this.logger.error({ event: 'xero_projects_read_failed', organizationId, xeroTenantId, message: error instanceof Error ? error.message : String(error) });
         }
       }
     } catch (error) {

@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 
 import { InvoiceStatusBadge, formatInvoiceDay } from '@/components/invoices/invoice-parts';
 import { LineItemsEditor, readLines, toEditLine, type EditLine } from '@/components/invoices/line-items-editor';
+import { XeroProjectField } from '@/components/invoices/xero-project-field';
 import { PageHeader } from '@/components/page-header';
 import { SearchableSelect } from '@/components/searchable-select';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
@@ -33,6 +34,7 @@ import { usePermissions } from '@/lib/auth';
 import { newClientRequestId, useInvoice, useInvoiceActions, useInvoiceDraft } from '@/lib/invoice-queries';
 import { propertyOptionLabel } from '@/lib/property-label';
 import { usePropertyOptions } from '@/lib/queries';
+import { useXeroVisitProjects } from '@/lib/xero-queries';
 
 /**
  * A new invoice (the office, 2026-11-05): for a finished visit, a line for each
@@ -166,6 +168,9 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   // A visit invoiced already (2026-11-13), of any origin: another is made only when ticked, and the server asks the same.
   const [another, setAnother] = useState(false);
   const visit = draft.inspection;
+  // The visit's project in each company whose projects are on (2026-11-13): made first, as in Xero, then the invoice.
+  const visitProjects = useXeroVisitProjects(visit?.id ?? '', Boolean(visit));
+  const projectsOf = (tenantId: string | null) => (tenantId ? visitProjects.data?.companies.find((company) => company.tenantId === tenantId) : undefined);
   const invoicedAlready = Boolean(visit && draft.alreadyInvoiced);
   // The console makes the invoices (2026-11-13): each is a draft in its company's books in Xero, which Xero numbers and dates.
   const madeHere = draft.madeInConsole === true;
@@ -368,6 +373,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         const { part } = invoice;
         const name = companyWords(invoice.company);
         const existing = draft.existing.filter((row) => row.xeroTenantId === invoice.company);
+        const projects = projectsOf(invoice.company);
         return (
           <section aria-label={companies ? `Invoice for ${name}` : 'Products and services'} className="bg-card mt-6 rounded-lg border" key={part.key}>
             {companies ? (
@@ -416,6 +422,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
                 ) : null}
               </div>
             ) : null}
+            {projects && visitProjects.data ? <XeroProjectField company={projects} visit={visitProjects.data} /> : null}
             <LineItemsEditor
               lines={part.lines}
               onChange={(lines) => change(part.key, { lines })}

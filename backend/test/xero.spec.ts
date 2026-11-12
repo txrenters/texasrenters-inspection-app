@@ -530,10 +530,12 @@ describe('who may do what', () => {
     expect(permission('readBooks')).toEqual(['integrations:manage']);
     // Every read company at once, from the invoices page: whoever manages invoices.
     expect(permission('readAllBooks')).toEqual(['invoices:manage']);
+    // A visit's project, from the invoice form (2026-11-13): whoever manages invoices.
+    for (const name of ['visitProjects', 'makeProject', 'chooseProject'] as const) expect(permission(name)).toEqual(['invoices:manage']);
   });
 
   it('names an organisation only by Xero’s own id', async () => {
-    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    const controller = new XeroController({ read: jest.fn() } as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
     expect(() => controller.read({ user: office } as never, '../connections')).toThrow('not one of the office’s Xero organisations');
   });
 });

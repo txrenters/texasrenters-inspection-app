@@ -1,7 +1,17 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SaveXeroSettingsInput, XeroBooksView, XeroCheckView, XeroConnectionView, XeroSendingView, XeroSettingsView } from '@texasrenters/shared';
+import type {
+  MakeXeroProjectInput,
+  SaveXeroSettingsInput,
+  XeroBooksView,
+  XeroCheckView,
+  XeroConnectionView,
+  XeroProjectOption,
+  XeroSendingView,
+  XeroSettingsView,
+  XeroVisitProjects,
+} from '@texasrenters/shared';
 
 import { ApiError, api } from './api';
 
@@ -174,4 +184,54 @@ export function useReadAllXeroBooks() {
     mutationFn: () => api<{ companies: number; problems: string[] }>(`${XERO}/books/read`, { method: 'POST' }),
     onSettled: () => void client.invalidateQueries({ queryKey: ['admin', 'invoices'] }),
   });
+}
+
+export const xeroVisitProjectsKey = (inspectionId: string) => [...xeroKey, 'visit-projects', inspectionId] as const;
+
+/**
+ * A finished visit's projects, for the invoice form's Project field (2026-11-13): the console's own copy, so opening
+ * the form asks Xero nothing.
+ */
+export function useXeroVisitProjects(inspectionId: string, enabled = true) {
+  return useQuery({
+    queryKey: xeroVisitProjectsKey(inspectionId),
+    queryFn: ({ signal }) => api<XeroVisitProjects>(`${XERO}/visits/${encodeURIComponent(inspectionId)}/projects`, { signal }),
+    enabled: enabled && Boolean(inspectionId),
+  });
+}
+
+/** "Create project" and choosing one already in Xero: each answers with the project, put straight on the form. */
+export function useXeroProjectActions(inspectionId: string) {
+  const client = useQueryClient();
+  const chosen = (tenantId: string, project: XeroProjectOption) => {
+    client.setQueryData<XeroVisitProjects>(xeroVisitProjectsKey(inspectionId), (view) =>
+      view
+        ? {
+            ...view,
+            companies: view.companies.map((company) =>
+              company.tenantId === tenantId
+                ? {
+                    ...company,
+                    chosen: project,
+                    projects: company.projects.some((each) => each.xeroProjectId === project.xeroProjectId) ? company.projects : [project, ...company.projects],
+                  }
+                : company,
+            ),
+          }
+        : view,
+    );
+  };
+  return {
+    make: useMutation({
+      mutationFn: ({ tenantId, input }: { tenantId: string; input: MakeXeroProjectInput }) =>
+        api<{ project: XeroProjectOption; found: boolean }>(`${organisation(tenantId)}/projects`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: ({ project }, { tenantId }) => chosen(tenantId, project),
+    }),
+    choose: useMutation({
+      mutationFn: ({ tenantId, xeroProjectId }: { tenantId: string; xeroProjectId: string }) =>
+        api<XeroProjectOption>(`${organisation(tenantId)}/visits/${encodeURIComponent(inspectionId)}/project`, { method: 'PUT', body: JSON.stringify({ xeroProjectId }) }),
+      onSuccess: (project, { tenantId }) => chosen(tenantId, project),
+      onError: () => void client.invalidateQueries({ queryKey: xeroVisitProjectsKey(inspectionId) }),
+    }),
+  };
 }
