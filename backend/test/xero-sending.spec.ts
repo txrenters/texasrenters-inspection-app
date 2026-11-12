@@ -1362,3 +1362,34 @@ describe('the console’s own invoices, made once in Xero as drafts (2026-11-12)
     expect(values).toContain(false);
   });
 });
+
+describe('prices that include the tax (2026-11-12)', () => {
+  const pestLine = { position: 0, name: 'Pest Control', description: null, quantity: 1, unitPriceCents: 3900, totalCents: 3900 };
+  const inclusive = { settings: { ...SETTINGS, salesTaxType: 'TAX001', pricesIncludeTax: true }, accounts: ACCOUNTS, contactId: 'contact-1' };
+  const onTop = { ...inclusive, settings: { ...inclusive.settings, pricesIncludeTax: false } };
+
+  it('sends the lines tax-inclusive, so Xero’s total is the invoice’s; tax goes on top otherwise', () => {
+    const pest = invoice({ totalCents: 3900, lines: [pestLine] });
+    expect(xeroInvoiceFrom(pest, inclusive)).toMatchObject({
+      kind: 'send',
+      body: { LineAmountTypes: 'Inclusive', LineItems: [expect.objectContaining({ LineAmount: 39, UnitAmount: 39, TaxType: 'TAX001' })] },
+    });
+    expect(xeroInvoiceFrom(pest, onTop)).toMatchObject({ kind: 'send', body: { LineAmountTypes: 'Exclusive' } });
+  });
+
+  it('takes one whose tax is in its total, and still refuses one whose lines do not come to its total', () => {
+    const inside = invoice({ taxCents: 297, totalCents: 3900, lines: [pestLine] });
+    expect(xeroInvoiceFrom(inside, inclusive)).toMatchObject({ kind: 'send' });
+    expect(xeroInvoiceFrom(inside, onTop)).toMatchObject({ kind: 'problem', problem: expect.stringContaining('of sales tax') });
+    const added = invoice({ taxCents: 322, totalCents: 4222, lines: [pestLine] });
+    expect(xeroInvoiceFrom(added, inclusive)).toMatchObject({ kind: 'problem', problem: expect.stringContaining('Its lines come to $39.00 and its total is $42.22') });
+  });
+
+  it('writes a bad debt off the same way: what it still owes, tax and all', () => {
+    const context = { settings: { ...WRITING, salesTaxType: 'TAX001', pricesIncludeTax: true }, accounts: ACCOUNTS, contactId: 'contact-1', xeroInvoiceId: 'xero-1', day: '2026-12-02' };
+    expect(xeroWriteOffFrom({ number: 'INV-2963', balanceCents: 3900 }, context)).toMatchObject({
+      kind: 'send',
+      creditNote: { LineAmountTypes: 'Inclusive', LineItems: [expect.objectContaining({ LineAmount: 39, TaxType: 'TAX001' })] },
+    });
+  });
+});

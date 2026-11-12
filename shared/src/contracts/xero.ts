@@ -206,6 +206,13 @@ export interface XeroSettingsValues {
   labourRateCents?: number;
   /** The labour's minutes on each visit; left out reads as 6. 0 logs none. */
   labourMinutes?: number;
+  /**
+   * Its prices include its sales tax (2026-11-12): lines go to Xero
+   * tax-inclusive, at the tax type above, so Xero's total is the console's.
+   * Crystal Creek Pest's $39.00 is $36.03 and $2.97 of tax at 8.25%. Left out
+   * reads as off: tax, if any, is added on top.
+   */
+  pricesIncludeTax?: boolean;
 }
 
 /** The labour the office has been adding to each project by hand: $35.00 an hour, a tenth of an hour. */
@@ -445,6 +452,12 @@ export function xeroSettingsProblem(values: XeroSettingsValues, catalog: XeroCat
   if (values.labourMinutes !== undefined && !whole(values.labourMinutes, MAX_LABOUR_MINUTES)) return `The labour is from 0 to ${MAX_LABOUR_MINUTES} whole minutes.`;
   if (values.projectUserId && !(catalog.projectUsers ?? []).some((user) => user.userId === values.projectUserId))
     return 'That Xero user cannot log time on projects. Read from Xero again, then choose.';
+  // Prices that include tax (2026-11-12): the tax type must be a rate, or there is nothing in them to take out.
+  if (values.pricesIncludeTax !== undefined && typeof values.pricesIncludeTax !== 'boolean') return 'Say whether prices include sales tax.';
+  if (values.pricesIncludeTax && values.salesTaxType !== null) {
+    const rate = revenueTaxRates(catalog.taxRates).find((each) => each.taxType === values.salesTaxType)?.effectiveRate ?? 0;
+    if (!(rate > 0)) return 'Prices include sales tax, so choose the tax type with the rate they include, such as 8.25%.';
+  }
   if (projectsAreOn(values) && paymentsGoToXero(values))
     return 'Payments must stay out of Xero while each visit gets a project: its invoices go as drafts, and Xero takes no payment on a draft.';
   return null;

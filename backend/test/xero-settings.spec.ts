@@ -247,6 +247,8 @@ describe('saving the choices', () => {
         projectUserId: null,
         labourRateCents: 3500,
         labourMinutes: 6,
+        // Tax added on top, unless the office says its prices include it (2026-11-12).
+        pricesIncludeTax: false,
         // When the choices were saved: the page's guard, which sending runs do not move.
         choicesUpdatedAt: new Date('2026-11-20T18:00:00.000Z'),
       },
@@ -422,7 +424,7 @@ describe('the words', () => {
       paymentAccounts: {},
       badDebtAccountId: null,
       paymentsToXero: true, trackingCategoryId: null, trackingGroups: {}, itemCodes: {},
-      projectsEnabled: false, projectUserId: null, labourRateCents: 3500, labourMinutes: 6,
+      projectsEnabled: false, projectUserId: null, labourRateCents: 3500, labourMinutes: 6, pricesIncludeTax: false,
     });
   });
 
@@ -435,9 +437,15 @@ describe('the words', () => {
       paymentAccounts: {},
       badDebtAccountId: null,
       paymentsToXero: true, trackingCategoryId: null, trackingGroups: {}, itemCodes: {},
-      projectsEnabled: false, projectUserId: null, labourRateCents: 3500, labourMinutes: 6,
+      projectsEnabled: false, projectUserId: null, labourRateCents: 3500, labourMinutes: 6, pricesIncludeTax: false,
     });
     expect(valuesFrom({ ...valuesRow(), paymentAccounts: { CHECK: 'a-bank', NOPE: 'x' } }).paymentAccounts).toEqual({ CHECK: 'a-bank' });
+  });
+
+  it('says on the record when prices start or stop including the tax (2026-11-12)', () => {
+    const before = valuesFrom(null);
+    expect(settingsChanges(before, { ...before, pricesIncludeTax: true }, ACCOUNTS)).toEqual(['Prices: tax added on top → include the tax']);
+    expect(settingsChanges({ ...before, pricesIncludeTax: true }, before, ACCOUNTS)).toEqual(['Prices: include the tax → tax added on top']);
   });
 
   it('names an account Xero no longer lists without its id', () => {
@@ -469,6 +477,8 @@ describe('the request check (2026-11-11)', () => {
     projectUserId: 'user-1',
     labourRateCents: 3500,
     labourMinutes: 6,
+    // Prices that include the tax (2026-11-12).
+    pricesIncludeTax: true,
     expectedUpdatedAt: null,
   };
 
@@ -482,9 +492,10 @@ describe('the request check (2026-11-11)', () => {
       projectUserId: 'user-1',
       labourRateCents: 3500,
       labourMinutes: 6,
+      pricesIncludeTax: true,
     });
     // And what the page sent before tracking and items, and before projects, for a page still open from a release before.
-    const added = new Set(['paymentsToXero', 'trackingCategoryId', 'trackingGroups', 'itemCodes', 'projectsEnabled', 'projectUserId', 'labourRateCents', 'labourMinutes']);
+    const added = new Set(['paymentsToXero', 'trackingCategoryId', 'trackingGroups', 'itemCodes', 'projectsEnabled', 'projectUserId', 'labourRateCents', 'labourMinutes', 'pricesIncludeTax']);
     const before = Object.fromEntries(Object.entries(everything).filter(([key]) => !added.has(key)));
     await expect(check(before)).resolves.toBeInstanceOf(SaveXeroSettingsDto);
   });

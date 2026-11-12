@@ -174,6 +174,15 @@ describe('as the office finishes its invoices in Xero (2026-11-11)', () => {
     expect(save.mutate).toHaveBeenCalledWith(expect.objectContaining({ trackingCategoryId: null, trackingGroups: {} }), expect.anything());
   });
 
+  it('takes prices that include the tax with the switch, and says what Xero does with them (2026-11-12)', () => {
+    mountTagged();
+    expect(screen.getByText(/added on top of each line’s price/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: 'Prices include sales tax' }));
+    expect(screen.getByText(/already has the tax in it/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(save.mutate).toHaveBeenCalledWith(expect.objectContaining({ pricesIncludeTax: true }), expect.anything());
+  });
+
   it('keeps payments out of Xero with the switch, and then asks for no account for them', () => {
     mountTagged();
     fireEvent.click(screen.getByRole('switch', { name: 'Send payments to Xero' }));
