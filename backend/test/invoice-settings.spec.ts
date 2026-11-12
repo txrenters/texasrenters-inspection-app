@@ -320,6 +320,24 @@ describe('the products and services list', () => {
     });
   });
 
+  it('keeps its Xero choices through a new name, and clears them on a move to another company (2026-11-13)', async () => {
+    const chosen = { xeroTenantId: HOMES, xeroAccountId: 'a-410', xeroItemCode: 'FILTER', xeroTrackingGroup: 'Air Filter Income' };
+    const db = database();
+    const service = new InvoiceSettingsService(db as never);
+    db.invoiceProduct.findFirst.mockResolvedValue(product(chosen));
+
+    // Renamed: they go with it -- nothing of them is written.
+    await service.changeProduct(office, PRODUCT, { name: 'Air Filter', expectedUpdatedAt: SAVED_AT.toISOString() });
+    expect(db.invoiceProduct.updateMany.mock.calls[0]![0].data).toEqual(expect.objectContaining({ name: 'Air Filter', nameKey: 'air filter' }));
+    expect(db.invoiceProduct.updateMany.mock.calls[0]![0].data).not.toHaveProperty('xeroAccountId');
+
+    // Moved to another company's books: they are that company's to choose, and the record says so.
+    db.auditLog.create.mockClear();
+    await service.changeProduct(office, PRODUCT, { xeroTenantId: PEST, expectedUpdatedAt: SAVED_AT.toISOString() });
+    expect(db.invoiceProduct.updateMany.mock.calls[1]![0].data).toMatchObject({ xeroTenantId: PEST, xeroAccountId: null, xeroItemCode: null, xeroTrackingGroup: null });
+    expect(db.auditLog.create.mock.calls[0][0].data.metadata.changes).toContain('Its account, item and tracking in Xero: cleared, to be chosen for its new company');
+  });
+
   it('sends one to one of the office’s Xero organisations -- connected ones only -- on the record', async () => {
     const db = database();
     const service = new InvoiceSettingsService(db as never);
