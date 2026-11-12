@@ -526,6 +526,12 @@ export interface InvoiceDraft {
   products: InvoiceDraftProduct[];
   /** The office's Xero organisations, connected ones first (2026-11-10): what an invoice can go to. Empty until Xero is connected. */
   organisations: InvoiceProductOrganisation[];
+  /**
+   * The console makes the invoices (2026-11-13): each goes to its company's
+   * books in Xero as a draft Xero numbers and dates, so the form asks no
+   * payment terms and offers no draft of its own.
+   */
+  madeInConsole: boolean;
 }
 
 export interface CreateInvoiceInput {

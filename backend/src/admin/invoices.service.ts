@@ -49,23 +49,9 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { billingBasis } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
-import { insertConsoleInvoice } from './invoice-insert';
-import { lockInvoiceNumbers } from './invoice-numbers';
-import {
-  beforeXeroStart,
-  invoiceWritesOff,
-  invoiceWritesOn,
-  invoicingTakenOverAt,
-  newInvoiceDefaults,
-  officeBrand,
-  officeOrganisations,
-  reachesNoBooks,
-  xeroSendingCompanies,
-  xeroStartDays,
-  officePrices,
-  organisationName,
-  productCompanies,
-} from './invoice-settings';
+import { makeInvoices, visitInvoiced } from './invoice-maker';
+import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officeOrganisations, officePrices, productCompanies } from './invoice-settings';
+import { invoicingState } from './invoicing-state';
 import { KEPT_IN_XERO, keptInXero, officeXeroBooks, readCompanies, shownInvoices, shownPayments, type OfficeXeroBooks } from './shown-invoices';
 
 // Kept exported from here for the callers that already import them (phase 6 moved them).
@@ -638,7 +624,7 @@ export class InvoicesService {
     const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
     const read = await readCompanies(this.prisma, user.organizationId);
-    const [products, defaults, existing, companies, organisations, basis, invoicedAlready] = await Promise.all([
+    const [products, defaults, existing, companies, state, basis, invoicedAlready] = await Promise.all([
       officePrices(this.prisma, user.organizationId),
       // The office's settings, else its own wording and terms from the latest invoice it issued.
       newInvoiceDefaults(this.prisma, user.organizationId),
@@ -651,10 +637,11 @@ export class InvoicesService {
           })
         : [],
       productCompanies(this.prisma, user.organizationId),
-      officeOrganisations(this.prisma, user.organizationId),
+      // Where invoicing stands (2026-11-13): the companies, and whether the console makes the invoices.
+      invoicingState(this.prisma, user.organizationId),
       billingBasis(this.prisma, user.organizationId),
       // Every origin (2026-11-13): a Jobber copy kept out of sight behind Xero's is a visit invoiced all the same.
-      inspection ? this.visitInvoiced(this.prisma, user.organizationId, inspection.id) : false,
+      inspection ? visitInvoiced(this.prisma, user.organizationId, inspection.id) : false,
     ]);
     const lines = inspection
       ? billedLines({ inspectionType: inspection.inspectionType, services: servicesDone(inspection.servicesReport) }, basis.rules, basis.products).lineItems
@@ -684,21 +671,9 @@ export class InvoicesService {
       })),
       alreadyInvoiced: invoicedAlready,
       products,
-      organisations,
+      organisations: state.organisations,
+      madeInConsole: state.takenOverAt !== null,
     };
-  }
-
-  /**
-   * Whether a visit has an invoice that is not voided, of any origin
-   * (2026-11-13): the console's, Jobber's -- shown or kept out of sight
-   * behind Xero's -- or one read from Xero. What the batch asks too.
-   */
-  private async visitInvoiced(db: Prisma.TransactionClient | PrismaService, organizationId: string, inspectionId: string) {
-    const found = await db.invoice.findFirst({
-      where: { organizationId, inspectionId, status: { not: InvoiceStatus.VOIDED } },
-      select: { id: true },
-    });
-    return Boolean(found);
   }
 
   async payments(user: AuthenticatedUser, query: PaymentListQuery = {}): Promise<PaymentList> {
@@ -923,7 +898,9 @@ export class InvoicesService {
     form: Omit<CreateInvoiceInput, 'lineItems' | 'xeroTenantId'>,
     parts: { xeroTenantId?: string | null; lineItems: InvoiceLineInput[]; clientRequestId: string }[],
   ): Promise<{ id: string }[]> {
-    await this.requireWrites(user);
+    // Where invoicing stands, worked out once (2026-11-13): the switch, the companies, which send to Xero and from when.
+    const state = await invoicingState(this.prisma, user.organizationId);
+    if (!state.writesOn) throw invoiceWritesOff();
     if (Boolean(form.inspectionId) === Boolean(form.propertyId))
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Invoice either a finished visit or a property.');
     const target = { inspectionId: form.inspectionId ?? null, propertyId: form.propertyId ?? null };
@@ -942,11 +919,8 @@ export class InvoicesService {
       throw new ApplicationError(422, 'INVOICE_INVALID', 'Pick the payment terms from the list.');
 
     // Which company's books each goes to: its lines' products, else the company chosen for it.
-    const [products, organisations] = await Promise.all([
-      productCompanies(this.prisma, user.organizationId),
-      officeOrganisations(this.prisma, user.organizationId),
-    ]);
-    const nameOf = organisationName(organisations);
+    const products = await productCompanies(this.prisma, user.organizationId);
+    const { organisations, nameOf } = state;
     const companyWords = (tenantId: string | null) => (tenantId ? nameOf(tenantId) : 'no company');
     const companies = new Set<string | null>();
     const invoices = parts.map((part) => {
@@ -976,53 +950,32 @@ export class InvoicesService {
     try {
       return await this.prisma.$transaction(
         async (tx) => {
-          // A visit invoiced already -- here, in Jobber, in Xero, or by the batch a moment ago -- is billed again only on
-          // purpose (2026-11-13). Under the office's invoice lock, as the batch asks it, so the two never both make one.
-          if (visit && form.additional !== true) {
-            await lockInvoiceNumbers(tx, user.organizationId);
-            if (await this.visitInvoiced(tx, user.organizationId, visit.id))
-              throw new ApplicationError(
-                409,
-                'VISIT_ALREADY_INVOICED',
-                'This visit has an invoice already. Make another only if it bills something the first does not, and say so on the form.',
-              );
-          }
           const { contractDisclaimer } = await newInvoiceDefaults(tx, user.organizationId);
-          // A company that sends to Xero gets a draft there (2026-11-12): Xero numbers it, and the office approves it.
-          const [toXero, startDays, takenOver] = await Promise.all([
-            xeroSendingCompanies(tx, user.organizationId),
-            xeroStartDays(tx, user.organizationId),
-            invoicingTakenOverAt(tx, user.organizationId),
-          ]);
-          for (const invoice of invoices) {
-            // Once the console makes the invoices (2026-11-13), each goes to a company that sends it to Xero; and never
-            // one issued before that company's start date. Either would reach no books.
-            const problem =
-              (takenOver ? reachesNoBooks(invoice.xeroTenantId, toXero, nameOf) : null) ??
-              beforeXeroStart(form.issuedOn, invoice.xeroTenantId, startDays, nameOf);
-            // Each says its company itself.
-            if (problem) throw new ApplicationError(422, 'INVOICE_INVALID', problem);
-          }
-          const made: { id: string }[] = [];
-          for (const invoice of invoices)
-            made.push(
-              await insertConsoleInvoice(tx, user, {
-                subject,
-                clientName: place.clientName,
-                inspectionId: visit?.id ?? null,
-                propertywareBuildingId: place.building.id,
-                jobberJobId: visit?.jobberJobId ?? null,
-                issuedOn: form.issuedOn,
-                paymentTermsDays: form.paymentTermsDays,
-                lines: invoice.lines,
-                clientMessage: form.clientMessage?.trim() || null,
-                contractDisclaimer,
-                clientRequestId: invoice.clientRequestId,
-                asDraft: form.asDraft === true || (invoice.xeroTenantId !== null && toXero.has(invoice.xeroTenantId)),
-                xeroTenantId: invoice.xeroTenantId,
-              }),
+          // The one maker (2026-11-13), as the batch makes them: never one that reaches no books or comes before its
+          // company's start date, and a visit invoiced already only on purpose, under the office's invoice lock.
+          const outcome = await makeInvoices(tx, user, state, {
+            inspectionId: visit?.id ?? null,
+            propertywareBuildingId: place.building.id,
+            clientName: place.clientName,
+            jobberJobId: visit?.jobberJobId ?? null,
+            subject,
+            issuedOn: form.issuedOn,
+            paymentTermsDays: form.paymentTermsDays,
+            clientMessage: form.clientMessage?.trim() || null,
+            contractDisclaimer,
+            asDraft: form.asDraft === true,
+            additional: form.additional === true,
+            invoices,
+          });
+          if ('made' in outcome) return outcome.made;
+          if (outcome.refused === 'VISIT_INVOICED')
+            throw new ApplicationError(
+              409,
+              'VISIT_ALREADY_INVOICED',
+              'This visit has an invoice already. Make another only if it bills something the first does not, and say so on the form.',
             );
-          return made;
+          // Each says its company itself.
+          throw new ApplicationError(422, 'INVOICE_INVALID', outcome.problem);
         },
         // Each invoice is a few writes: room for several on a slow connection.
         { maxWait: 5_000, timeout: 20_000 },

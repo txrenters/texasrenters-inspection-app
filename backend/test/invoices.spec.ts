@@ -795,7 +795,8 @@ describe('making an invoice and recording a payment', () => {
 
     it('makes the invoice with totals worked out here, made out to the property, and puts it on the record', async () => {
       const db = database();
-      db.invoice.findFirst.mockResolvedValueOnce(null).mockResolvedValue(invoiceRow());
+      // The visit has no invoice yet; the office's latest invoice, and the one made, read as this one.
+      db.invoice.findFirst.mockImplementation(async ({ where }: { where?: { inspectionId?: string } } = {}) => (where?.inspectionId ? null : invoiceRow()));
 
       await serviceOver(db).create(office, create);
 

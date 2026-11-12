@@ -66,6 +66,7 @@ const PROPERTY_DRAFT: InvoiceDraft = {
   alreadyInvoiced: false,
   products: [{ name: 'Filter Change', unitPriceCents: 3999 }],
   organisations: [],
+  madeInConsole: false,
 };
 
 beforeEach(() => {

@@ -140,6 +140,7 @@ const DRAFT: InvoiceDraft = {
   alreadyInvoiced: false,
   products: [{ name: 'Flea Treatment', unitPriceCents: 3500 }],
   organisations: [],
+  madeInConsole: false,
 };
 
 const ready = (data: unknown) => ({ isLoading: false, isError: false, data, refetch: vi.fn() });
@@ -594,6 +595,17 @@ describe('a new invoice for a finished visit', () => {
     expect(screen.queryByRole('checkbox', { name: 'Add another invoice for this visit' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Create invoice/ }));
     expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('additional');
+  });
+
+  it('asks no terms and offers no draft of its own once the console makes the invoices (2026-11-13): each is a draft in Xero', () => {
+    hooks.useInvoiceDraft.mockReturnValue(ready({ ...DRAFT, madeInConsole: true }));
+    render(<NewInvoicePage />);
+    expect(screen.queryByLabelText('Payment terms')).not.toBeInTheDocument();
+    expect(screen.getByText(/Xero dates it on its visit's day and makes it due on the last day of that month/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save as draft' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Each goes to its company's books in Xero as a draft, numbered there, for the office to approve\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Create invoice/ }));
+    expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('asDraft');
   });
 
   it('is a permission of its own', () => {
