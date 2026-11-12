@@ -104,6 +104,23 @@ export function xeroDay(dayString: string | null | undefined, date: string | nul
 
 const cents = (amount: number | null | undefined) => Math.round((amount ?? 0) * 100);
 
+/** How far apart, at most, a Jobber invoice and Xero's under its number were issued when their totals differ. */
+export const TWIN_DAYS_APART = 31;
+
+/**
+ * Whether a Jobber invoice taken by its number alone can be Xero's invoice:
+ * the same total, or issued within a month of each other (2026-11-12). The
+ * office changed amounts and days in Xero after Zapier sent them; three of
+ * THMP's numbers, more than a year and many dollars apart, are other invoices.
+ * With a day missing -- a Jobber draft has none -- the days say nothing against it.
+ */
+export function agreesWithCopy(theirs: XeroBooksInvoice, copy: { totalCents: number; issuedOn: Date | null }): boolean {
+  if (cents(theirs.Total) === copy.totalCents) return true;
+  const day = xeroDay(theirs.DateString, theirs.Date);
+  if (!day || !copy.issuedOn) return true;
+  return Math.abs(Date.parse(`${day}T00:00:00Z`) - copy.issuedOn.getTime()) <= TWIN_DAYS_APART * 86_400_000;
+}
+
 /**
  * Xero's status as the console's. A bad debt is the console's own word: only
  * an invoice the console wrote off there is one; any other credit is a credit.

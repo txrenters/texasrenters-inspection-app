@@ -8,6 +8,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { buildAddressIndex, matchBuilding, normalizeAddressKey } from '../jobber/jobber.address';
 import { XeroAuthService } from './xero-auth.service';
 import {
+  agreesWithCopy,
   BOOKS_PAGE_SIZE,
   booksInvoicesPageSchema,
   booksPaymentsPageSchema,
@@ -443,7 +444,16 @@ export class XeroBooksService {
           number: { in: [...new Set(byNumber.map(numberOf))] },
           OR: [{ xeroTenantId: tenantId }, { xeroTenantId: null }],
         },
-        select: { id: true, number: true, xeroTenantId: true, clientName: true, inspectionId: true, propertywareBuildingId: true },
+        select: {
+          id: true,
+          number: true,
+          xeroTenantId: true,
+          clientName: true,
+          inspectionId: true,
+          propertywareBuildingId: true,
+          totalCents: true,
+          issuedOn: true,
+        },
       });
       type Copy = (typeof copies)[number];
       const fromCopy = (copy: Copy): Place => ({ inspectionId: copy.inspectionId, buildingId: copy.propertywareBuildingId, jobberCopyId: copy.id });
@@ -457,7 +467,7 @@ export class XeroBooksService {
         if (copy) put(theirs, fromCopy(copy));
         // Jobber named the client otherwise -- the tenant, where Xero has the
         // property or its owner -- so the number alone is tried (2026-11-12).
-        else if (!companys.length && ofNone.length === 1) lone.push({ theirs, copy: ofNone[0]! });
+        else if (!companys.length && ofNone.length === 1 && agreesWithCopy(theirs, ofNone[0]!)) lone.push({ theirs, copy: ofNone[0]! });
       }
       // Never for a company Jobber never billed for (Crystal Creek Pest): its
       // numbers meet Jobber's only by chance.

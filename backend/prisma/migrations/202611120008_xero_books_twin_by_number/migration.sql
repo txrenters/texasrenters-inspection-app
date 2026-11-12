@@ -4,8 +4,9 @@
 -- or its owner: 1,751 THMP invoices of 2022 to January 2026. The read now
 -- takes the number alone when it is the only Jobber invoice of no company
 -- under it and the only invoice under it in any company's books in Xero, in a
--- company Jobber billed for; the rows already read are given their copy the
--- same way. Then a row read from
+-- company Jobber billed for, with the same total or issued within a month; the
+-- rows already read are given their copy the same way (a preview read 1,746 of
+-- the 1,751). Then a row read from
 -- Xero on no visit or property takes its copy's, as the read does.
 -- Data only: no column, index or check changes.
 
@@ -29,8 +30,16 @@ UPDATE "Invoice" x
    SET "jobberCopyId" = c."jobberId"
   FROM lone_in_xero l
   JOIN lone_copies c ON c."organizationId" = l."organizationId" AND c."number" = l."number"
+  JOIN "Invoice" j ON j."id" = c."jobberId"
  WHERE x."id" = l."xeroId"
    AND x."jobberCopyId" IS NULL
+   -- The same total, or issued within a month of each other: three of THMP's
+   -- numbers, more than a year and many dollars apart, are other invoices. A
+   -- missing day (a Jobber draft's) says nothing against it.
+   AND (   x."totalCents" = j."totalCents"
+        OR x."issuedOn" IS NULL
+        OR j."issuedOn" IS NULL
+        OR abs(x."issuedOn" - j."issuedOn") <= 31)
    -- Never for a company Jobber never billed for (Crystal Creek Pest): its
    -- numbers meet Jobber's only by chance.
    AND EXISTS (

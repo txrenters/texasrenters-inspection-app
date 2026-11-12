@@ -2,6 +2,7 @@ import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import {
+  agreesWithCopy,
   BOOKS_OVERLAP_MS,
   invoiceFromXero,
   methodFromAccount,
@@ -436,6 +437,21 @@ describe('reading a company’s books', () => {
     // The copy already stands for another invoice.
     const taken = { id: 'xero-8', origin: 'XERO', number: '8000', xeroTenantId: TENANT, xeroInvoiceId: 'x-8000', jobberCopyId: 'jobber-9' };
     expect(await read({ invoices: [billed, lone('jobber-9', '9001'), taken], invoicePages: page('9001') })).toMatchObject({ 'x-9001-0': null });
+    // Another total, issued more than a month apart: another invoice under the same number.
+    const apart = { ...lone('jobber-9', '9001'), totalCents: 1000, issuedOn: new Date('2023-05-17T00:00:00Z') };
+    expect(await read({ invoices: [billed, apart], invoicePages: page('9001') })).toEqual({ 'x-9001-0': null });
+  });
+
+  it('takes a Jobber invoice by its number alone when the total or the day agrees', () => {
+    const copy = (totalCents: number, issuedOn: string | null) => ({ totalCents, issuedOn: issuedOn ? new Date(`${issuedOn}T00:00:00Z`) : null });
+    // Xero's: $75.00 on 2026-11-02.
+    expect(agreesWithCopy(theirs(), copy(7500, '2024-01-01'))).toBe(true);
+    expect(agreesWithCopy(theirs(), copy(1000, '2026-10-02'))).toBe(true);
+    expect(agreesWithCopy(theirs(), copy(1000, '2026-12-03'))).toBe(true);
+    expect(agreesWithCopy(theirs(), copy(1000, '2026-12-04'))).toBe(false);
+    expect(agreesWithCopy(theirs(), copy(1000, '2025-05-17'))).toBe(false);
+    // A Jobber draft has no day: nothing against it.
+    expect(agreesWithCopy(theirs(), copy(1000, null))).toBe(true);
   });
 
   it('puts one on its contact’s one property, through the property or Jobber’s client, and none over several', async () => {
