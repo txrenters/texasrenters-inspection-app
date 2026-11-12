@@ -63,6 +63,7 @@ export * from './admin.js';
 export * from './jobber-day.js';
 export * from './xero.js';
 export * from './xero-check.js';
+export * from './xero-invoice-form.js';
 export * from './ai-guidance.js';
 export * from './finding-match.js';
 export * from './api-gateway.js';

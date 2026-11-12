@@ -43,6 +43,7 @@ const visit = (over: Record<string, unknown> = {}) => ({
   scheduledAt: date('2026-11-02'),
   status: 'COMPLETED',
   jobberJobId: 'job-1',
+  assignments: [],
   servicesReport: report({ filterChange: true, pestControl: true }),
   propertywareBuilding: building,
   ...over,

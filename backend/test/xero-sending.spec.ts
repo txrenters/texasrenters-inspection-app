@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { UserRole, type XeroAccount, type XeroItem, type XeroSettingsValues, type XeroTrackingCategory } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
@@ -1448,5 +1450,137 @@ describe('each product keeps its own Xero choices (2026-11-13, PR 4 of the invoi
     const accountOf = (plan: ReturnType<typeof sent>) => (plan.kind === 'send' ? plan.body.LineItems[0]?.AccountCode : null);
     expect(accountOf(sent(SETTINGS, renamed))).toBe('400');
     expect(accountOf(sent(withProductChoices(SETTINGS, [product('air filter', 'a-410')]), renamed))).toBe('410');
+  });
+});
+
+describe('the Xero-style New invoice (2026-11-13, PR B): Xero is sent what the form shows', () => {
+  const CATEGORIES: XeroTrackingCategory[] = [
+    {
+      trackingCategoryId: 'cat-1',
+      name: 'Income by Employee',
+      status: 'ACTIVE',
+      options: [
+        { optionId: 'o-1', name: 'Air Filter Income: Moses', status: 'ACTIVE' },
+        { optionId: 'o-2', name: 'HVAC Inspection Income: Moses', status: 'ACTIVE' },
+      ],
+    },
+    { trackingCategoryId: 'cat-2', name: 'Expenses', status: 'ACTIVE', options: [{ optionId: 'e-1', name: 'Truck', status: 'ACTIVE' }] },
+  ];
+  const ITEMS: XeroItem[] = [{ itemId: 'i-1', code: 'HVAC', name: 'HVAC', isSold: true }];
+  const TAX_RATES = [
+    { name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true },
+    { name: 'Texas 8.25%', taxType: 'TAX001', status: 'ACTIVE', effectiveRate: 8.25, appliesToRevenue: true },
+  ];
+  const settings: XeroSettingsValues = { ...SETTINGS, trackingCategoryId: 'cat-1', trackingGroups: { 'filter change': 'Air Filter Income' } };
+  const context = { settings, accounts: ACCOUNTS, trackingCategories: CATEGORIES, items: ITEMS, taxRates: TAX_RATES, contactId: 'contact-1' };
+  const filter = { position: 1, name: 'Filter change', description: null, quantity: 1, unitPriceCents: 2500, totalCents: 2500 };
+  const visitInvoice = (over: Partial<Fixture> = {}) => invoice({ technicianName: 'Moses Example', visitDay: '2026-11-30', ...over });
+  const lineOf = (plan: ReturnType<typeof xeroInvoiceFrom>, index = 1) => (plan.kind === 'send' ? plan.body.LineItems[index] : plan.problem);
+
+  it('sends each line as the form chose: its account, item, tax rate, tracking in two categories, and discount', () => {
+    const chosen = {
+      ...filter,
+      totalCents: 2250,
+      discountRate: 10,
+      xeroAccountId: 'a-400',
+      xeroItemCode: 'HVAC',
+      xeroTaxType: 'NONE',
+      xeroTracking: [
+        { trackingCategoryId: 'cat-1', option: 'HVAC Inspection Income: Moses' },
+        { trackingCategoryId: 'cat-2', option: 'Truck' },
+      ],
+    };
+    const plan = xeroInvoiceFrom(visitInvoice({ totalCents: 17250, lines: [invoice().lines[0]!, chosen] }), context);
+    expect(lineOf(plan)).toEqual({
+      ItemCode: 'HVAC',
+      Description: 'Filter change',
+      Quantity: 1,
+      UnitAmount: 25,
+      DiscountRate: 10,
+      LineAmount: 22.5,
+      AccountCode: '400',
+      TaxType: 'NONE',
+      Tracking: [
+        { TrackingCategoryID: 'cat-1', Name: 'Income by Employee', Option: 'HVAC Inspection Income: Moses' },
+        { TrackingCategoryID: 'cat-2', Name: 'Expenses', Option: 'Truck' },
+      ],
+    });
+  });
+
+  it('sends a line it chose nothing for as before: its product’s account and the technician’s option -- and none when it chose no tracking', () => {
+    expect(lineOf(xeroInvoiceFrom(visitInvoice(), context))).toEqual({
+      Description: 'Filter change',
+      Quantity: 1,
+      UnitAmount: 25,
+      LineAmount: 25,
+      AccountCode: '410',
+      TaxType: 'NONE',
+      Tracking: [{ TrackingCategoryID: 'cat-1', Name: 'Income by Employee', Option: 'Air Filter Income: Moses' }],
+    });
+    const untracked = visitInvoice({ lines: [invoice().lines[0]!, { ...filter, xeroTracking: [] }] });
+    expect(lineOf(xeroInvoiceFrom(untracked, context))).not.toHaveProperty('Tracking');
+  });
+
+  it('sends no item for a line the form showed with none, though its product has one', () => {
+    const itemed: XeroSettingsValues = { ...settings, itemCodes: { 'filter change': 'HVAC' } };
+    expect(lineOf(xeroInvoiceFrom(visitInvoice(), { ...context, settings: itemed }))).toMatchObject({ ItemCode: 'HVAC' });
+    const none = visitInvoice({ lines: [invoice().lines[0]!, { ...filter, xeroAccountId: 'a-410', xeroTaxType: 'NONE', xeroItemCode: null }] });
+    expect(lineOf(xeroInvoiceFrom(none, { ...context, settings: itemed }))).not.toHaveProperty('ItemCode');
+  });
+
+  it('dates it, makes it due and refers to it as the form chose; otherwise on the visit’s day, due at its month’s end, the property', () => {
+    const asBefore = xeroInvoiceFrom(visitInvoice(), context);
+    expect(asBefore).toMatchObject({ kind: 'send', body: { Date: '2026-11-30', DueDate: '2026-11-30', Reference: '12 Example Lane' } });
+    const chosen = xeroInvoiceFrom(
+      visitInvoice({ xeroDatesChosen: true, issuedOn: new Date('2026-11-29T00:00:00.000Z'), dueOn: new Date('2026-12-15T00:00:00.000Z'), xeroReference: ' Unit B ' }),
+      context,
+    );
+    expect(chosen).toMatchObject({ kind: 'send', body: { Date: '2026-11-29', DueDate: '2026-12-15', Reference: 'Unit B' } });
+  });
+
+  it('goes with no tax when the form says so: no line names a tax type', () => {
+    const plan = xeroInvoiceFrom(visitInvoice({ xeroTaxMode: 'NO_TAX' }), context);
+    expect(plan).toMatchObject({ kind: 'send', body: { LineAmountTypes: 'NoTax' } });
+    expect(plan.kind === 'send' && plan.body.LineItems.every((line) => !('TaxType' in line))).toBe(true);
+    // Tax inclusive, chosen on the form for a company whose prices leave it out: the rate goes inside each line.
+    const inside = visitInvoice({ xeroTaxMode: 'INCLUSIVE', lines: [invoice().lines[0]!, { ...filter, xeroTaxType: 'TAX001' }] });
+    expect(xeroInvoiceFrom(inside, context)).toMatchObject({ kind: 'send', body: { LineAmountTypes: 'Inclusive' } });
+    expect(lineOf(xeroInvoiceFrom(inside, context))).toMatchObject({ TaxType: 'TAX001' });
+  });
+
+  it.each([
+    [{ xeroAccountId: 'a-460' }, 'The account chosen on the invoice for “Filter change” is not an active account in Xero'],
+    [{ xeroAccountId: 'a-410', xeroItemCode: 'GONE' }, 'The item “GONE” chosen for “Filter change” is not one Xero sells'],
+    [{ xeroTaxType: 'TAX001' }, 'adds 8.25% on top'],
+    [{ xeroTaxType: 'OLD' }, 'The tax rate chosen for “Filter change” is not an active one in Xero'],
+    [{ xeroTracking: [{ trackingCategoryId: 'cat-1', option: 'Air Filter Income: Nobody' }] }, '“Air Filter Income: Nobody”, chosen for “Filter change”, is not an active tracking option'],
+  ])('refuses what Xero does not have, or tax on top, saying which line (%#)', (chosen, problem) => {
+    const plan = xeroInvoiceFrom(visitInvoice({ lines: [invoice().lines[0]!, { ...filter, ...chosen }] }), context);
+    expect(plan).toMatchObject({ kind: 'problem', problem: expect.stringContaining(problem) });
+  });
+
+  it('hashes an invoice from before exactly as it did, so none is taken for changed here -- and one the form made with what it chose', () => {
+    const before = invoice();
+    const asItWas = createHash('sha256')
+      .update(
+        JSON.stringify({
+          number: '8440',
+          voided: false,
+          client: 'jobber:client-1',
+          clientName: '12 Example Lane',
+          day: '2026-12-02',
+          technician: null,
+          taxCents: 0,
+          discountCents: 0,
+          totalCents: 17500,
+          lines: before.lines.map((line) => [line.name, line.description, line.quantity, line.unitPriceCents, line.totalCents]),
+        }),
+      )
+      .digest('hex');
+    expect(invoiceFingerprint(before)).toBe(asItWas);
+    expect(invoiceFingerprint({ ...before, xeroReference: null, xeroTaxMode: null, xeroDatesChosen: false })).toBe(asItWas);
+    expect(invoiceFingerprint({ ...before, lines: before.lines.map((line) => ({ ...line, discountRate: null, xeroAccountId: null, xeroTracking: null })) })).toBe(asItWas);
+    expect(invoiceFingerprint({ ...before, xeroReference: 'Unit B' })).not.toBe(asItWas);
+    expect(invoiceFingerprint({ ...before, lines: [before.lines[0]!, { ...before.lines[1]!, xeroAccountId: 'a-400' }] })).not.toBe(asItWas);
   });
 });

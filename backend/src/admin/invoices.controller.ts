@@ -7,9 +7,12 @@ import {
   MAX_INVOICE_CENTS,
   MAX_INVOICE_LINES,
   MAX_INVOICES_PER_VISIT,
+  MAX_LINE_TRACKING,
   PAYMENT_METHODS,
+  XERO_TAX_MODES,
   type InvoiceFilter,
   type PaymentMethod,
+  type XeroTaxMode,
 } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -91,11 +94,29 @@ export class PaymentListQueryDto {
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) paidTo?: string;
 }
 
+/** A line's option in one of its company's tracking categories (2026-11-13). */
+export class XeroLineTrackingDto {
+  @IsString() @MinLength(1) @MaxLength(64) trackingCategoryId!: string;
+  @IsString() @MinLength(1) @MaxLength(100) option!: string;
+}
+
 export class InvoiceLineDto {
   @IsString() @MinLength(1) @MaxLength(200) name!: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string | null;
   @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @Min(0.01) @Max(10_000) quantity!: number;
   @IsInt() @Min(0) @Max(MAX_INVOICE_CENTS) unitPriceCents!: number;
+  /** What the Xero-style form chose for the line (2026-11-13), each checked against its company's books as last read. */
+  @IsOptional() @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @Min(0) @Max(100) discountRate?: number | null;
+  @IsOptional() @IsString() @MaxLength(64) xeroAccountId?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) xeroItemCode?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) xeroTaxType?: string | null;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_LINE_TRACKING)
+  @ValidateNested({ each: true })
+  @Type(() => XeroLineTrackingDto)
+  xeroTracking?: XeroLineTrackingDto[] | null;
+  @IsOptional() @IsUUID() xeroProjectId?: string | null;
 }
 
 export class CreateInvoiceDto {
@@ -116,6 +137,10 @@ export class CreateInvoiceDto {
   @IsOptional() @IsString() @MaxLength(2000) clientMessage?: string;
   /** The company's books it goes to; null for none, left out for its lines' company. */
   @IsOptional() @Matches(TENANT_ID) xeroTenantId?: string | null;
+  /** The Xero-style form's due day, reference and tax (2026-11-13). */
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) dueOn?: string;
+  @IsOptional() @IsString() @MaxLength(255) reference?: string | null;
+  @IsOptional() @IsIn(XERO_TAX_MODES) taxMode?: XeroTaxMode;
   @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
 }
 
@@ -128,6 +153,8 @@ export class InvoicePartDto {
   @ValidateNested({ each: true })
   @Type(() => InvoiceLineDto)
   lineItems!: InvoiceLineDto[];
+  /** How its amounts carry tax in Xero, from the Xero-style form (2026-11-13). */
+  @IsOptional() @IsIn(XERO_TAX_MODES) taxMode?: XeroTaxMode;
 }
 
 export class CreateInvoicesDto {
@@ -146,6 +173,9 @@ export class CreateInvoicesDto {
   @Type(() => InvoicePartDto)
   invoices!: InvoicePartDto[];
   @IsOptional() @IsString() @MaxLength(2000) clientMessage?: string;
+  /** The Xero-style form's due day and reference (2026-11-13), for every invoice it makes. */
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) dueOn?: string;
+  @IsOptional() @IsString() @MaxLength(255) reference?: string | null;
   @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
 }
 

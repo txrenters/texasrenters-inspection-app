@@ -531,7 +531,7 @@ describe('who may do what', () => {
     // Every read company at once, from the invoices page: whoever manages invoices.
     expect(permission('readAllBooks')).toEqual(['invoices:manage']);
     // A visit's project, from the invoice form (2026-11-13): whoever manages invoices.
-    for (const name of ['visitProjects', 'makeProject', 'chooseProject'] as const) expect(permission(name)).toEqual(['invoices:manage']);
+    for (const name of ['visitProjects', 'propertyProjects', 'makeProject', 'chooseProject', 'invoiceForm'] as const) expect(permission(name)).toEqual(['invoices:manage']);
   });
 
   it('names an organisation only by Xero’s own id', async () => {

@@ -71,6 +71,22 @@ export function InvoiceStatusBadge({ status }: { status: InvoiceStatus }) {
   return <Badge variant={STATUS_TONE[status]}>{INVOICE_STATUS_LABEL[status]}</Badge>;
 }
 
+/** The invoices a visit has already, each opening it: said on a new invoice's form, so a second is not made by mistake. */
+export function ExistingInvoices({ invoices }: { invoices: readonly { id: string; number: string | null; status: InvoiceStatus }[] }) {
+  return (
+    <>
+      {invoices.map((invoice) => (
+        <span className="inline-flex items-center gap-1.5" key={invoice.id}>
+          <Link className="font-semibold underline underline-offset-2" href={`/invoices/${invoice.id}`}>
+            {invoice.number ? `#${invoice.number}` : 'a draft'}
+          </Link>
+          <InvoiceStatusBadge status={invoice.status} />
+        </span>
+      ))}
+    </>
+  );
+}
+
 /** The invoice's record icon and its tone, for the record header. */
 export const INVOICE_RECORD = { icon: ReceiptTextIcon, tone: 'text-primary', label: 'Invoice' };
 export const PAYMENT_RECORD = { icon: BanknoteIcon, tone: 'text-success', label: 'Payment' };

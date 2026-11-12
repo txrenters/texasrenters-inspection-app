@@ -18,8 +18,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useId, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { InvoiceStatusBadge, formatInvoiceDay } from '@/components/invoices/invoice-parts';
+import { ExistingInvoices, formatInvoiceDay } from '@/components/invoices/invoice-parts';
 import { LineItemsEditor, readLines, toEditLine, type EditLine } from '@/components/invoices/line-items-editor';
+import { XeroInvoiceEditor } from '@/components/invoices/xero-invoice-editor';
 import { XeroProjectField } from '@/components/invoices/xero-project-field';
 import { PageHeader } from '@/components/page-header';
 import { SearchableSelect } from '@/components/searchable-select';
@@ -69,7 +70,9 @@ export default function NewInvoicePage() {
   if (draft.isLoading) return <PageSkeleton />;
   if (draft.isError || !draft.data) return <ErrorState error={draft.error} retry={() => void draft.refetch()} />;
   const start = similar.data && !inspectionId ? likeInvoice(draft.data, similar.data) : draft.data;
-  return <InvoiceEditor draft={start} key={`${draft.data.inspection?.id ?? draft.data.property?.id}:${similarId}`} />;
+  const key = `${draft.data.inspection?.id ?? draft.data.property?.id}:${similarId}`;
+  // Once the console makes the invoices (2026-11-13, PR B): laid out as Xero's, each a draft in its company's books.
+  return start.madeInConsole ? <XeroInvoiceEditor draft={start} key={key} /> : <InvoiceEditor draft={start} key={key} />;
 }
 
 /** A draft that starts as another invoice did: its subject, its lines at their prices, its company and its message. */
@@ -172,8 +175,6 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   const visitProjects = useXeroVisitProjects(visit?.id ?? '', Boolean(visit));
   const projectsOf = (tenantId: string | null) => (tenantId ? visitProjects.data?.companies.find((company) => company.tenantId === tenantId) : undefined);
   const invoicedAlready = Boolean(visit && draft.alreadyInvoiced);
-  // The console makes the invoices (2026-11-13): each is a draft in its company's books in Xero, which Xero numbers and dates.
-  const madeHere = draft.madeInConsole === true;
   const organisations = draft.organisations ?? [];
   const connected = organisations.filter((organisation) => organisation.connected);
   // The companies are asked about only once Xero has an organisation.
@@ -310,7 +311,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
           {elsewhere.length ? (
             <>
               This visit already has an invoice:
-              <Existing invoices={elsewhere} />
+              <ExistingInvoices invoices={elsewhere} />
             </>
           ) : draft.existing.length ? (
             'This visit already has an invoice, listed below.'
@@ -344,28 +345,22 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
             <FieldLabel htmlFor={`${id}-issued`}>Issued</FieldLabel>
             <Input id={`${id}-issued`} onChange={(event) => setIssuedOn(event.target.value)} type="date" value={issuedOn} />
           </Field>
-          {madeHere ? (
-            <p className="text-muted-foreground self-end text-sm">
-              Xero dates it on its visit&apos;s day and makes it due on the last day of that month.
-            </p>
-          ) : (
-            <Field>
-              <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
-              <Select onValueChange={setTerms} value={terms}>
-                <SelectTrigger className="w-full" id={`${id}-terms`}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAYMENT_TERMS.map((term) => (
-                    <SelectItem key={term.days} value={String(term.days)}>
-                      {term.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>Due {issuedOn ? formatInvoiceDay(dueOnFor(issuedOn, Number(terms))) : '—'}</FieldDescription>
-            </Field>
-          )}
+          <Field>
+            <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
+            <Select onValueChange={setTerms} value={terms}>
+              <SelectTrigger className="w-full" id={`${id}-terms`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAYMENT_TERMS.map((term) => (
+                  <SelectItem key={term.days} value={String(term.days)}>
+                    {term.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldDescription>Due {issuedOn ? formatInvoiceDay(dueOnFor(issuedOn, Number(terms))) : '—'}</FieldDescription>
+          </Field>
         </div>
       </div>
 
@@ -416,7 +411,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
                 {existing.length ? (
                   <p className="border-warning/30 bg-warning/10 flex w-full flex-wrap items-center gap-2 rounded-md border p-2 text-xs" role="status">
                     This visit already has an invoice for {name}:
-                    <Existing invoices={existing} />
+                    <ExistingInvoices invoices={existing} />
                     Make a second one only if it bills something the first does not.
                   </p>
                 ) : null}
@@ -468,24 +463,18 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
         <p aria-live="polite" className={problem ? 'text-destructive mr-auto text-sm' : 'text-muted-foreground mr-auto text-sm'}>
-          {problem ??
-            (madeHere
-              ? `Made out to ${draft.clientName}. Each goes to its company's books in Xero as a draft, numbered there, for the office to approve.`
-              : `Made out to ${draft.clientName}. A draft is numbered when it is marked sent.`)}
+          {problem ?? `Made out to ${draft.clientName}. A draft is numbered when it is marked sent.`}
         </p>
         <Button asChild variant="secondary">
           <Link href={cancelHref}>Cancel</Link>
         </Button>
-        {/* Each is a draft in Xero already once the console makes the invoices (2026-11-13): no draft of the console's own. */}
-        {madeHere ? null : (
-          <Button
-            disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending}
-            onClick={() => create(true)}
-            variant="outline"
-          >
-            {several ? 'Save as drafts' : 'Save as draft'}
-          </Button>
-        )}
+        <Button
+          disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending}
+          onClick={() => create(true)}
+          variant="outline"
+        >
+          {several ? 'Save as drafts' : 'Save as draft'}
+        </Button>
         <Button disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending} onClick={() => create(false)}>
           {actions.create.isPending || actions.createPerCompany.isPending
             ? 'Creating…'
@@ -504,18 +493,3 @@ function productsFor(products: readonly InvoiceDraftProduct[], company: string |
   return products.filter((product) => !product.xeroTenantId || product.xeroTenantId === company);
 }
 
-/** The invoices a visit has already, each opening it. */
-function Existing({ invoices }: { invoices: InvoiceDraft['existing'] }) {
-  return (
-    <>
-      {invoices.map((invoice) => (
-        <span className="inline-flex items-center gap-1.5" key={invoice.id}>
-          <Link className="font-semibold underline underline-offset-2" href={`/invoices/${invoice.id}`}>
-            {invoice.number ? `#${invoice.number}` : 'a draft'}
-          </Link>
-          <InvoiceStatusBadge status={invoice.status} />
-        </span>
-      ))}
-    </>
-  );
-}

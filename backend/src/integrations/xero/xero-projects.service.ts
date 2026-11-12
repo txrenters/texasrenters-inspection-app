@@ -93,6 +93,8 @@ const VISIT_FIELDS = {
   // The console's own goes under its property's contact (2026-11-12): its project too.
   origin: true,
   propertywareBuildingId: true,
+  // The project a line of it names (2026-11-13, PR B): the visit's, with no project made for it.
+  lines: { where: { xeroProjectId: { not: null } }, orderBy: { position: 'asc' }, take: 1, select: { xeroProjectId: true } },
   inspection: { select: INSPECTION_FIELDS },
 } satisfies Prisma.InvoiceSelect;
 type ProjectCandidate = Prisma.InvoiceGetPayload<{ select: typeof VISIT_FIELDS }>;
@@ -244,27 +246,42 @@ export class XeroProjectsService {
     const linkOf = new Map(links.map((link) => [link.inspectionId, link]));
     const contactOf = new Map(contacts.map((contact) => [contact.clientKey, contact.xeroContactId]));
     const labour = labourOf(values);
+    // The projects the invoices' lines name (2026-11-13, PR B), by their names here.
+    const onLines = [...new Set(due.flatMap((visit) => (visit.lines[0]?.xeroProjectId ? [visit.lines[0].xeroProjectId] : [])))];
+    const lineNames = new Map(
+      (onLines.length
+        ? await this.prisma.xeroProject.findMany({
+            where: { organizationId, xeroTenantId: tenantId, xeroProjectId: { in: onLines } },
+            select: { xeroProjectId: true, name: true },
+          })
+        : []
+      ).map((row) => [row.xeroProjectId, row.name]),
+    );
 
     for (const visit of due) {
       const inspectionId = visit.inspection.id;
       const before = linkOf.get(inspectionId) ?? null;
       const named = projectVisitOf(visit.inspection);
       const name = xeroProjectName(named);
+      // A project the invoice's line names is the visit's: none is made for it.
+      const onLine = before?.xeroProjectId ? null : (visit.lines[0]?.xeroProjectId ?? null);
       const progress: Progress = {
         // A project made or chosen first keeps the name it has.
-        name: (before?.xeroProjectId ? before.name : name) ?? before?.name ?? 'Unnamed visit',
-        xeroProjectId: before?.xeroProjectId ?? null,
+        name: (before?.xeroProjectId ? before.name : onLine ? (lineNames.get(onLine) ?? name) : name) ?? before?.name ?? 'Unnamed visit',
+        xeroProjectId: before?.xeroProjectId ?? onLine,
         madeHere: before?.madeHere ?? false,
         xeroTaskId: before?.xeroTaskId ?? null,
         xeroTimeEntryId: before?.xeroTimeEntryId ?? null,
       };
       const contactId = contactOf.get(clientKeyOf(visit));
+      // Labour is logged only on a project the console makes, or made.
+      const logsLabour = labour !== null && (!progress.xeroProjectId || progress.madeHere);
       const held =
         !progress.xeroProjectId && !name
           ? 'The visit has no technician, so its project cannot be named as the office names them. Assign one, then try again.'
           : !progress.xeroProjectId && !contactId
             ? 'Its client has no contact in Xero yet.'
-            : labour && !values.projectUserId
+            : logsLabour && !values.projectUserId
               ? 'Choose the Xero user the labour is logged under.'
               : null;
       if (held) {
@@ -309,12 +326,14 @@ export class XeroProjectsService {
   /**
    * A finished visit's projects for the invoice form (2026-11-13): for each
    * company whose projects are on, the visit's project and those in progress
-   * under the property's contact; and what a new one starts as. From the
-   * console's own rows: no call to Xero.
+   * under the property's contact; and what a new one starts as. Or (PR B) a
+   * property's, for its invoice no visit covers: those in progress under its
+   * contact. From the console's own rows: no call to Xero.
    */
-  async visitProjects(user: AuthenticatedUser, inspectionId: string): Promise<XeroVisitProjects> {
+  async projectsFor(user: AuthenticatedUser, target: { inspectionId?: string; propertyId?: string }): Promise<XeroVisitProjects> {
     const { organizationId } = user;
-    const visit = await this.visit(organizationId, inspectionId);
+    const place = await this.place(organizationId, target);
+    const inspectionId = place.inspection?.id ?? null;
     const [companies, connection] = await Promise.all([
       this.prisma.xeroSettings.findMany({
         where: { organizationId, projectsEnabled: true, xeroOrganisation: { status: 'CONNECTED' } },
@@ -327,13 +346,15 @@ export class XeroProjectsService {
     const [contacts, links] = tenants.length
       ? await Promise.all([
           this.prisma.xeroContactLink.findMany({
-            where: { organizationId, xeroTenantId: { in: tenants }, clientKey: visit.client.key },
+            where: { organizationId, xeroTenantId: { in: tenants }, clientKey: place.client.key },
             select: { xeroTenantId: true, xeroContactId: true },
           }),
-          this.prisma.xeroProjectLink.findMany({
-            where: { organizationId, xeroTenantId: { in: tenants }, inspectionId, xeroProjectId: { not: null } },
-            select: { xeroTenantId: true, xeroProjectId: true, name: true, madeHere: true },
-          }),
+          inspectionId
+            ? this.prisma.xeroProjectLink.findMany({
+                where: { organizationId, xeroTenantId: { in: tenants }, inspectionId, xeroProjectId: { not: null } },
+                select: { xeroTenantId: true, xeroProjectId: true, name: true, madeHere: true },
+              })
+            : [],
         ])
       : [[], []];
     const problem = connectionProblem(connection);
@@ -371,9 +392,10 @@ export class XeroProjectsService {
     );
     return {
       inspectionId,
-      contactName: visit.client.name,
-      suggestedName: xeroProjectName(projectVisitOf(visit.inspection)),
-      deadlineOn: finishedDayOf(visit.inspection),
+      propertyId: place.buildingId,
+      contactName: place.client.name,
+      suggestedName: place.inspection ? xeroProjectName(projectVisitOf(place.inspection)) : null,
+      deadlineOn: place.inspection ? finishedDayOf(place.inspection) : businessDate(),
       companies: rows,
     };
   }
@@ -407,10 +429,10 @@ export class XeroProjectsService {
       return { project: optionOf(prior), found: false };
     }
 
-    const visit = await this.visit(organizationId, input.inspectionId);
+    const place = await this.place(organizationId, input);
     const settings = await this.projectsOn(organizationId, tenantId, true);
-    const contacts = await xeroContacts(this.prisma, this.client, organizationId, tenantId, new Map([[visit.client.key, visit.client.name]]));
-    const contact = contacts.get(visit.client.key);
+    const contacts = await xeroContacts(this.prisma, this.client, organizationId, tenantId, new Map([[place.client.key, place.client.name]]));
+    const contact = contacts.get(place.client.key);
     if (!contact || 'problem' in contact) throw new XeroError(contact?.problem ?? 'The property could not be made a contact in Xero.', 'XERO_PROJECT_CONTACT', 422);
 
     // What is in progress under the contact now, kept here -- the office's made by hand among them.
@@ -450,16 +472,19 @@ export class XeroProjectsService {
       update: same ? { seenAt: now } : { ...fields, ...made },
       select: PROJECT_FIELDS,
     });
-    // Its labour, when the office logs any, is the next sending run's once the invoice is in Xero.
-    const labourToLog = !same && labourOf(settings) !== null;
-    await this.linkVisit(organizationId, tenantId, visit.inspection.id, { xeroProjectId, name: row.name, madeHere: !same }, labourToLog ? 'PENDING' : 'DONE');
+    // A visit's (a property's is only kept): its labour, when the office logs any, is the next sending run's once the
+    // invoice is in Xero.
+    if (place.inspection) {
+      const labourToLog = !same && labourOf(settings) !== null;
+      await this.linkVisit(organizationId, tenantId, place.inspection.id, { xeroProjectId, name: row.name, madeHere: !same }, labourToLog ? 'PENDING' : 'DONE');
+    }
     await this.prisma.auditLog.create({
       data: {
         organizationId,
         actorUserId: user.id,
         action: same ? 'XERO_PROJECT_CHOSEN' : 'XERO_PROJECT_MADE',
-        entityType: 'Inspection',
-        entityId: visit.inspection.id,
+        entityType: place.inspection ? 'Inspection' : 'PropertywareBuilding',
+        entityId: place.inspection?.id ?? place.buildingId,
         metadata: { tenantId, xeroProjectId, name: row.name, deadlineOn: input.deadlineOn, estimateCents, foundSameName: Boolean(same) },
       },
     });
@@ -596,7 +621,23 @@ export class XeroProjectsService {
     if (!row) throw new XeroError('That visit was not found.', 'INSPECTION_NOT_FOUND', 404);
     const building = row.propertywareBuilding;
     if (!building) throw new XeroError('This visit has no property, so its project would have no contact.', 'XERO_PROJECT_NO_PROPERTY', 422);
-    return { inspection: row, client: propertyClient(building.id, building.addressLine1 ?? building.name) };
+    return { inspection: row, buildingId: building.id, client: propertyClient(building.id, building.addressLine1 ?? building.name) };
+  }
+
+  /** A visit's place, or (2026-11-13, PR B) a property's for its invoice no visit covers: one of the two. */
+  private async place(
+    organizationId: string,
+    target: { inspectionId?: string; propertyId?: string },
+  ): Promise<{ inspection: ProjectInspection | null; buildingId: string; client: { key: string; name: string } }> {
+    if (Boolean(target.inspectionId) === Boolean(target.propertyId))
+      throw new XeroError('A project is for a visit or a property: one of the two.', 'XERO_PROJECT_TARGET_INVALID', 422);
+    if (target.inspectionId) return this.visit(organizationId, target.inspectionId);
+    const building = await this.prisma.propertywareBuilding.findFirst({
+      where: { id: target.propertyId, organizationId },
+      select: { id: true, name: true, addressLine1: true },
+    });
+    if (!building) throw new XeroError('That property was not found.', 'PROPERTY_NOT_FOUND', 404);
+    return { inspection: null, buildingId: building.id, client: propertyClient(building.id, building.addressLine1 ?? building.name) };
   }
 
   /** The company's projects are on -- and, to make one, its books can be reached with the projects permission. */

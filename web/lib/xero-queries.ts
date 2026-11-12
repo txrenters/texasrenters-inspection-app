@@ -7,6 +7,7 @@ import type {
   XeroBooksView,
   XeroCheckView,
   XeroConnectionView,
+  XeroInvoiceFormCompany,
   XeroProjectOption,
   XeroSendingView,
   XeroSettingsView,
@@ -186,25 +187,58 @@ export function useReadAllXeroBooks() {
   });
 }
 
-export const xeroVisitProjectsKey = (inspectionId: string) => [...xeroKey, 'visit-projects', inspectionId] as const;
+/** Whose projects (2026-11-13): a finished visit's, or -- for an invoice no visit covers (PR B) -- a property's. */
+export type XeroProjectsTarget = { inspectionId: string } | { propertyId: string };
+const targetOf = (target: XeroProjectsTarget | string): XeroProjectsTarget => (typeof target === 'string' ? { inspectionId: target } : target);
+const targetKey = (target: XeroProjectsTarget | null) =>
+  !target ? 'none' : 'inspectionId' in target ? `visit:${target.inspectionId}` : `property:${target.propertyId}`;
+export const xeroProjectsKey = (target: XeroProjectsTarget | null) => [...xeroKey, 'projects', targetKey(target)] as const;
+export const xeroVisitProjectsKey = (inspectionId: string) => xeroProjectsKey({ inspectionId });
 
 /**
- * A finished visit's projects, for the invoice form's Project field (2026-11-13): the console's own copy, so opening
- * the form asks Xero nothing.
+ * A finished visit's projects, or a property's, for the invoice form's Project field (2026-11-13): the console's own
+ * copy, so opening the form asks Xero nothing.
  */
-export function useXeroVisitProjects(inspectionId: string, enabled = true) {
+export function useXeroProjects(target: XeroProjectsTarget | null) {
   return useQuery({
-    queryKey: xeroVisitProjectsKey(inspectionId),
-    queryFn: ({ signal }) => api<XeroVisitProjects>(`${XERO}/visits/${encodeURIComponent(inspectionId)}/projects`, { signal }),
-    enabled: enabled && Boolean(inspectionId),
+    queryKey: xeroProjectsKey(target),
+    queryFn: ({ signal }) =>
+      api<XeroVisitProjects>(
+        target && 'inspectionId' in target
+          ? `${XERO}/visits/${encodeURIComponent(target.inspectionId)}/projects`
+          : `${XERO}/properties/${encodeURIComponent((target as { propertyId: string }).propertyId)}/projects`,
+        { signal },
+      ),
+    enabled: Boolean(target),
   });
 }
 
-/** "Create project" and choosing one already in Xero: each answers with the project, put straight on the form. */
-export function useXeroProjectActions(inspectionId: string) {
+export function useXeroVisitProjects(inspectionId: string, enabled = true) {
+  return useXeroProjects(enabled && inspectionId ? { inspectionId } : null);
+}
+
+/**
+ * Each connected company's lists and choices for the Xero-style New invoice (2026-11-13, PR B): its sales accounts, tax
+ * rates, tracking and items, as last read. Asks Xero nothing.
+ */
+export function useXeroInvoiceForm(enabled = true) {
+  return useQuery({
+    queryKey: [...xeroKey, 'invoice-form'] as const,
+    queryFn: ({ signal }) => api<XeroInvoiceFormCompany[]>(`${XERO}/invoice-form`, { signal }),
+    enabled,
+  });
+}
+
+/**
+ * "Create project" and choosing one already in Xero: each answers with the project, put straight on the form. Choosing
+ * keeps it as a visit's project, so only a visit's can be chosen here.
+ */
+export function useXeroProjectActions(target: XeroProjectsTarget | string) {
   const client = useQueryClient();
+  const whose = targetOf(target);
+  const key = xeroProjectsKey(whose);
   const chosen = (tenantId: string, project: XeroProjectOption) => {
-    client.setQueryData<XeroVisitProjects>(xeroVisitProjectsKey(inspectionId), (view) =>
+    client.setQueryData<XeroVisitProjects>(key, (view) =>
       view
         ? {
             ...view,
@@ -212,7 +246,8 @@ export function useXeroProjectActions(inspectionId: string) {
               company.tenantId === tenantId
                 ? {
                     ...company,
-                    chosen: project,
+                    // A visit's project is the one made or chosen; a property's has none of its own.
+                    chosen: view.inspectionId ? project : company.chosen,
                     projects: company.projects.some((each) => each.xeroProjectId === project.xeroProjectId) ? company.projects : [project, ...company.projects],
                   }
                 : company,
@@ -229,9 +264,14 @@ export function useXeroProjectActions(inspectionId: string) {
     }),
     choose: useMutation({
       mutationFn: ({ tenantId, xeroProjectId }: { tenantId: string; xeroProjectId: string }) =>
-        api<XeroProjectOption>(`${organisation(tenantId)}/visits/${encodeURIComponent(inspectionId)}/project`, { method: 'PUT', body: JSON.stringify({ xeroProjectId }) }),
+        'inspectionId' in whose
+          ? api<XeroProjectOption>(`${organisation(tenantId)}/visits/${encodeURIComponent(whose.inspectionId)}/project`, {
+              method: 'PUT',
+              body: JSON.stringify({ xeroProjectId }),
+            })
+          : Promise.reject(new Error('A property’s invoice keeps its project on its lines.')),
       onSuccess: (project, { tenantId }) => chosen(tenantId, project),
-      onError: () => void client.invalidateQueries({ queryKey: xeroVisitProjectsKey(inspectionId) }),
+      onError: () => void client.invalidateQueries({ queryKey: key }),
     }),
   };
 }

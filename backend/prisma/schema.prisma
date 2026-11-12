@@ -3299,6 +3299,13 @@ model Invoice {
   /// the one the console sent as it, or the one under its number -- shown no
   /// longer once its company's books are read. Only on a XERO row (checked).
   jobberCopyId           String?         @db.Uuid
+  /// As the Xero-style New invoice made it (2026-11-13): Xero's "Reference" -- null, the property's name, as
+  /// before -- and how its amounts carry tax there (EXCLUSIVE, INCLUSIVE or NO_TAX, checked; null, its company's
+  /// way). With `xeroDatesChosen`, Xero is sent its issue and due days as they are, rather than the visit's day and
+  /// the end of that month.
+  xeroReference          String?
+  xeroTaxMode            String?
+  xeroDatesChosen        Boolean         @default(false)
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 
@@ -3354,6 +3361,18 @@ model InvoiceLine {
   /// The product or service it was picked from in Jobber's list, and what kind.
   productName    String?
   category       String?
+  /// A percent off (2026-11-13), as Xero's "Disc." column; null for none. `totalCents` is after it.
+  discountRate   Float?
+  /// What the Xero-style New invoice chose for the line (2026-11-13): its account (Xero's id), item code, tax type
+  /// and tracking (`[{ trackingCategoryId, option }]`, at most two). Null goes as its product's or company's choice,
+  /// as every line went before.
+  xeroAccountId  String?
+  xeroItemCode   String?
+  xeroTaxType    String?
+  xeroTracking   Json?
+  /// The project the line is for, one of its company's in Xero. Kept here only: Xero's API cannot put a line on a
+  /// project, so the office picks the same one on the draft in Xero.
+  xeroProjectId  String?
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 

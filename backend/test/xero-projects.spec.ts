@@ -46,7 +46,14 @@ type Visit = {
   assignments: { technician: { displayName: string } }[];
   propertywareBuilding?: { id: string; name: string; addressLine1: string | null } | null;
 };
-type Candidate = { id: string; clientName: string; jobberClientId: string | null; inspection: Visit | null };
+type Candidate = {
+  id: string;
+  clientName: string;
+  jobberClientId: string | null;
+  /** Its first line that names a project (2026-11-13, PR B), if any. */
+  lines: { xeroProjectId: string | null }[];
+  inspection: Visit | null;
+};
 
 const aVisit = (over: Partial<Visit> = {}): Visit => ({
   id: 'visit-1',
@@ -64,6 +71,7 @@ const visitInvoice = (over: Partial<Candidate> = {}, visit: Partial<Visit> = {})
   id: 'inv-1',
   clientName: '12 Example Lane',
   jobberClientId: 'client-1',
+  lines: [],
   inspection: aVisit(visit),
   ...over,
 });
@@ -127,6 +135,12 @@ function harness(
         const visit = options.visit === undefined ? aVisit() : options.visit;
         return visit && visit.id === where.id ? visit : null;
       }),
+    },
+    // A property's projects, for its invoice no visit covers (PR B).
+    propertywareBuilding: {
+      findFirst: jest.fn(async ({ where }: { where: { id: string } }) =>
+        where.id === 'building-1' ? { id: 'building-1', name: '12 Example Lane', addressLine1: '12 Example Lane' } : null,
+      ),
     },
     xeroProjectLink: {
       findMany: jest.fn(async ({ where }: { where: Row & { inspectionId: unknown } }) => [...links.values()].filter((link) => matches(link, where))),
@@ -308,6 +322,17 @@ describe('a visit’s project, made by the sending run', () => {
     expect(posts('/Time')).toHaveLength(0);
   });
 
+  it('takes the project the invoice’s line names (PR B) as the visit’s, asking Xero nothing and logging no labour', async () => {
+    const { service, client, links } = harness({
+      invoices: [visitInvoice({ lines: [{ xeroProjectId: 'on-line' }] })],
+      projects: [{ xeroProjectId: 'on-line', name: 'Ada: picked on the invoice' }],
+    });
+    expect(await service.run(ORG, TENANT, SEND_FROM, VALUES, 'USD')).toEqual({ made: 0, linked: 1, failed: 0, names: ['Ada: picked on the invoice'] });
+    expect(client.projectsGet).not.toHaveBeenCalled();
+    expect(client.projectsPost).not.toHaveBeenCalled();
+    expect(links.get('visit-1')).toMatchObject({ status: 'DONE', xeroProjectId: 'on-line', madeHere: false, xeroTaskId: null });
+  });
+
   it('logs the labour on a project made first, keeping the name the office gave it', async () => {
     const { service, client, posts, links } = harness({
       links: [{ inspectionId: 'visit-1', name: 'Ada: typed by the office', status: 'PENDING', attempts: 0, xeroProjectId: 'made-first', madeHere: true, xeroTaskId: null, xeroTimeEntryId: null }],
@@ -452,10 +477,11 @@ describe('a visit’s projects on the invoice form (2026-11-13)', () => {
         inProgress('elsewhere', 'Another property', '2026-12-02', { xeroContactId: 'contact-9' }),
       ],
     });
-    const view = await service.visitProjects(OFFICE, 'visit-1');
+    const view = await service.projectsFor(OFFICE, { inspectionId: 'visit-1' });
     expect(calls()).toBe(0);
     expect(view).toEqual({
       inspectionId: 'visit-1',
+      propertyId: 'building-1',
       contactName: '12 Example Lane',
       suggestedName: 'Ada: Tenant Benefit Package - 4th Qtr - 2026 - 11.12.2026',
       deadlineOn: '2026-11-12',
@@ -476,14 +502,24 @@ describe('a visit’s projects on the invoice form (2026-11-13)', () => {
   });
 
   it('lists no company whose projects are off, and says when Xero cannot be reached for projects', async () => {
-    expect((await harness({ settings: { projectsEnabled: false } }).service.visitProjects(OFFICE, 'visit-1')).companies).toEqual([]);
-    const view = await harness({ connection: { status: 'CONNECTED', scopes: ['accounting.contacts'] } }).service.visitProjects(OFFICE, 'visit-1');
+    expect((await harness({ settings: { projectsEnabled: false } }).service.projectsFor(OFFICE, { inspectionId: 'visit-1' })).companies).toEqual([]);
+    const view = await harness({ connection: { status: 'CONNECTED', scopes: ['accounting.contacts'] } }).service.projectsFor(OFFICE, { inspectionId: 'visit-1' });
     expect(view.companies[0]!.problem).toBe('Connect again, so Xero lets the console make projects.');
   });
 
   it('leaves the name to the office for a visit with no technician', async () => {
-    const view = await harness({ visit: aVisit({ assignments: [] }) }).service.visitProjects(OFFICE, 'visit-1');
+    const view = await harness({ visit: aVisit({ assignments: [] }) }).service.projectsFor(OFFICE, { inspectionId: 'visit-1' });
     expect(view.suggestedName).toBeNull();
+  });
+
+  it('offers a property’s, for its invoice no visit covers (PR B): those under its contact, named by the office, due today', async () => {
+    const { service, calls } = harness({ projects: [inProgress('theirs', 'Allen: Gate repair', '2026-11-20')] });
+    const view = await service.projectsFor(OFFICE, { propertyId: 'building-1' });
+    expect(calls()).toBe(0);
+    expect(view).toMatchObject({ inspectionId: null, propertyId: 'building-1', contactName: '12 Example Lane', suggestedName: null, deadlineOn: '2026-11-11' });
+    expect(view.companies[0]).toMatchObject({ chosen: null, projects: [{ xeroProjectId: 'theirs' }] });
+    await expect(service.projectsFor(OFFICE, { propertyId: 'nowhere' })).rejects.toThrow('That property was not found.');
+    await expect(service.projectsFor(OFFICE, {})).rejects.toThrow('a visit or a property');
   });
 });
 
@@ -501,6 +537,20 @@ describe('“Create project” (2026-11-13)', () => {
     expect(projects.get('project-1')).toMatchObject({ madeHere: true, clientRequestId: 'dialog-key-1', estimateCents: 6450, xeroContactId: 'contact-1' });
     expect(links.get('visit-1')).toMatchObject({ status: 'DONE', xeroProjectId: 'project-1', name: NAME, madeHere: true });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_PROJECT_MADE', entityId: 'visit-1', actorUserId: expect.any(String) }) });
+  });
+
+  it('makes a property’s for its invoice no visit covers (PR B), keeping no visit’s project', async () => {
+    const { service, links, projects, prisma } = harness();
+    const answer = await service.make(OFFICE, TENANT, {
+      propertyId: 'building-1',
+      name: 'Allen: Gate repair',
+      deadlineOn: input.deadlineOn,
+      clientRequestId: input.clientRequestId,
+    });
+    expect(answer).toMatchObject({ project: { xeroProjectId: 'project-1', name: 'Allen: Gate repair' }, found: false });
+    expect(projects.get('project-1')).toMatchObject({ xeroContactId: 'contact-1', madeHere: true });
+    expect(links.size).toBe(0);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ entityType: 'PropertywareBuilding', entityId: 'building-1' }) });
   });
 
   it('leaves its labour to the sending run, once the invoice is in Xero, while the office logs any', async () => {

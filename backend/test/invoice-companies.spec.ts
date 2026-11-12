@@ -69,6 +69,7 @@ const visit = (over: Record<string, unknown> = {}) => ({
   scheduledAt: date('2026-11-02'),
   status: 'COMPLETED',
   jobberJobId: 'job-1',
+  assignments: [],
   servicesReport: report({ filterChange: true, pestControl: true }),
   propertywareBuilding: building,
   ...over,
@@ -541,5 +542,119 @@ describe('the list', () => {
 
     await service.list(office, { company: 'none' });
     expect(db.invoice.findMany.mock.calls[1][0].where.AND[0]).toMatchObject({ organizationId: ORG, xeroTenantId: null });
+  });
+});
+
+describe('the Xero-style New invoice (2026-11-13, PR B)', () => {
+  const PROJECT = 'b1000000-0000-4000-8000-000000000001';
+  /** Example Home Services' books, as last read: what a line can name. */
+  const BOOKS = {
+    organizationId: ORG,
+    xeroTenantId: HOMES,
+    salesAccountId: 'a-400',
+    salesTaxType: 'NONE',
+    salesAccounts: {},
+    paymentAccounts: {},
+    trackingCategoryId: 'cat-1',
+    trackingGroups: { 'filter change': 'Air Filter Income' },
+    itemCodes: {},
+    pricesIncludeTax: false,
+    xeroOrganisation: {
+      name: 'Example Home Services',
+      organisation: { baseCurrency: 'USD' },
+      accounts: [
+        { accountId: 'a-400', code: '400', name: 'Service revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false },
+        { accountId: 'a-410', code: '410', name: 'Filter revenue', type: 'REVENUE', class: 'REVENUE', status: 'ACTIVE', takesPayments: false },
+      ],
+      taxRates: [
+        { name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true },
+        { name: 'Texas 8.25%', taxType: 'TAX001', status: 'ACTIVE', effectiveRate: 8.25, appliesToRevenue: true },
+      ],
+      trackingCategories: [
+        { trackingCategoryId: 'cat-1', name: 'Income by Employee', status: 'ACTIVE', options: [{ optionId: 'o-1', name: 'Air Filter Income: Moses', status: 'ACTIVE' }] },
+      ],
+      items: [{ itemId: 'i-1', code: 'Filter Change', name: 'Filter Change', isSold: true }],
+    },
+  };
+  const formDatabase = (projects = 1) => {
+    const db = Object.assign(database(), {
+      xeroConnection: { findUnique: jest.fn().mockResolvedValue({ status: 'CONNECTED' }) },
+      xeroProject: { count: jest.fn().mockResolvedValue(projects) },
+    });
+    // The catalog is asked with its books included; every other question about the companies finds none read.
+    db.xeroSettings.findMany.mockImplementation(async (args: { include?: unknown }) => (args?.include ? [BOOKS] : []));
+    return db;
+  };
+  const chosen = {
+    ...filter,
+    discountRate: 10,
+    xeroAccountId: 'a-410',
+    xeroItemCode: 'Filter Change',
+    xeroTaxType: 'NONE',
+    xeroTracking: [{ trackingCategoryId: 'cat-1', option: 'Air Filter Income: Moses' }],
+    xeroProjectId: PROJECT,
+  };
+  const xeroForm = { ...form, dueOn: '2026-11-30', reference: ' Unit B ', taxMode: 'NO_TAX' as const };
+
+  it('keeps what the form chose: the due day and reference, how it carries tax, and each line’s account, item, tax, tracking, discount and project', async () => {
+    const db = formDatabase();
+    await new InvoicesService(db as never).create(office, { ...xeroForm, lineItems: [chosen] }).catch(() => undefined);
+    const data = db.invoice.create.mock.calls[0]![0].data;
+    expect(data).toMatchObject({
+      issuedOn: date('2026-11-03'),
+      dueOn: date('2026-11-30'),
+      paymentTermsDays: 27,
+      xeroReference: 'Unit B',
+      xeroTaxMode: 'NO_TAX',
+      xeroDatesChosen: true,
+      // $39.99 less 10%.
+      totalCents: 3599,
+    });
+    expect(data.lines.create).toEqual([
+      expect.objectContaining({
+        name: 'Filter Change',
+        discountRate: 10,
+        totalCents: 3599,
+        xeroAccountId: 'a-410',
+        xeroItemCode: 'Filter Change',
+        xeroTaxType: 'NONE',
+        xeroTracking: [{ trackingCategoryId: 'cat-1', option: 'Air Filter Income: Moses' }],
+        xeroProjectId: PROJECT,
+      }),
+    ]);
+    expect(db.xeroProject.count).toHaveBeenCalledWith({ where: { organizationId: ORG, xeroTenantId: HOMES, xeroProjectId: { in: [PROJECT] } } });
+  });
+
+  it('asks nothing of Xero’s lists for an invoice that chose nothing for Xero, and keeps none of it', async () => {
+    const db = formDatabase();
+    await new InvoicesService(db as never).create(office, { ...form, lineItems: [filter] }).catch(() => undefined);
+    expect(db.xeroConnection.findUnique).not.toHaveBeenCalled();
+    const data = db.invoice.create.mock.calls[0]![0].data;
+    expect(data).not.toHaveProperty('xeroReference');
+    expect(data).not.toHaveProperty('xeroDatesChosen');
+    expect(data.lines.create[0]).not.toHaveProperty('xeroAccountId');
+  });
+
+  it.each([
+    [{ lineItems: [{ ...chosen, xeroAccountId: 'a-999' }] }, 'Filter Change: that account is not one of Example Home Services’s sales accounts in Xero.'],
+    [{ lineItems: [{ ...chosen, xeroTaxType: 'TAX001' }], taxMode: 'EXCLUSIVE' as const }, 'Filter Change: 8.25% would go on top of the price'],
+    [{ lineItems: [{ ...chosen, xeroTracking: [{ trackingCategoryId: 'cat-1', option: 'Nobody' }] }] }, 'Income by Employee has no option “Nobody”'],
+    [{ lineItems: [chosen], dueOn: '2026-11-01' }, 'An invoice cannot fall due before it is issued.'],
+  ])('refuses what the company’s books do not have, making nothing (%#)', async (over, problem) => {
+    const db = formDatabase();
+    await expect(new InvoicesService(db as never).create(office, { ...xeroForm, ...over })).rejects.toThrow(problem);
+    expect(db.invoice.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a project that is not one of the company’s in Xero', async () => {
+    const db = formDatabase(0);
+    await expect(new InvoicesService(db as never).create(office, { ...xeroForm, lineItems: [chosen] })).rejects.toThrow('a line’s project is not one of Example Home Services’s in Xero.');
+    expect(db.invoice.create).not.toHaveBeenCalled();
+  });
+
+  it('gives the form the technician its lines are tagged for', async () => {
+    const db = formDatabase();
+    db.inspection.findFirst.mockResolvedValue(visit({ assignments: [{ technician: { displayName: 'Moses Example' } }] }));
+    expect((await new InvoicesService(db as never).draft(office, { inspectionId: VISIT })).inspection).toMatchObject({ technicianName: 'Moses Example' });
   });
 });

@@ -1,4 +1,4 @@
-import { dueOnFor, invoiceTotals, lineTotalCents, type InvoiceLineInput } from '@texasrenters/shared';
+import { dueOnFor, invoiceTotals, lineTotalCents, type InvoiceLineInput, type XeroTaxMode } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -20,6 +20,15 @@ export interface ConsoleInvoice {
   /** `YYYY-MM-DD` */
   issuedOn: string;
   paymentTermsDays: number;
+  /**
+   * `YYYY-MM-DD`: the due day the Xero-style form chose (2026-11-13), in place
+   * of the terms. Xero is then sent this day and the issue day as they are.
+   */
+  dueOn?: string;
+  /** Xero's "Reference", from the Xero-style form; null or left out, the property's name. */
+  xeroReference?: string | null;
+  /** How its amounts carry tax in Xero, from the Xero-style form; null or left out, its company's way. */
+  xeroTaxMode?: XeroTaxMode | null;
   lines: InvoiceLineInput[];
   clientMessage: string | null;
   /** The office's contract / disclaimer text at its foot, from its settings (2026-11-06). */
@@ -40,9 +49,18 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
     description: line.description?.trim() || null,
     quantity: line.quantity,
     unitPriceCents: line.unitPriceCents,
+    // What the Xero-style form chose for the line (2026-11-13); each left out goes as before.
+    ...(line.discountRate ? { discountRate: line.discountRate } : {}),
+    ...(line.xeroAccountId ? { xeroAccountId: line.xeroAccountId } : {}),
+    ...(line.xeroItemCode ? { xeroItemCode: line.xeroItemCode } : {}),
+    ...(line.xeroTaxType ? { xeroTaxType: line.xeroTaxType } : {}),
+    ...(line.xeroProjectId ? { xeroProjectId: line.xeroProjectId } : {}),
+    // An empty list is a line the office said is tracked in nothing; left out, the technician's option as before.
+    ...(line.xeroTracking ? { xeroTracking: line.xeroTracking.map(({ trackingCategoryId, option }) => ({ trackingCategoryId, option })) } : {}),
   }));
   const { subtotalCents, totalCents } = invoiceTotals(lines);
   const number = invoice.asDraft ? null : await nextInvoiceNumber(tx, user.organizationId);
+  const dueOn = invoice.dueOn ?? dueOnFor(invoice.issuedOn, invoice.paymentTermsDays);
   const created = await tx.invoice.create({
     data: {
       organizationId: user.organizationId,
@@ -55,8 +73,11 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
       propertywareBuildingId: invoice.propertywareBuildingId,
       jobberJobId: invoice.jobberJobId,
       issuedOn: dateOf(invoice.issuedOn),
-      dueOn: dateOf(dueOnFor(invoice.issuedOn, invoice.paymentTermsDays)),
+      dueOn: dateOf(dueOn),
       paymentTermsDays: invoice.paymentTermsDays,
+      ...(invoice.xeroReference?.trim() ? { xeroReference: invoice.xeroReference.trim() } : {}),
+      ...(invoice.xeroTaxMode ? { xeroTaxMode: invoice.xeroTaxMode } : {}),
+      ...(invoice.dueOn ? { xeroDatesChosen: true } : {}),
       subtotalCents,
       taxCents: 0,
       totalCents,
@@ -93,6 +114,8 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
         lineCount: lines.length,
         issuedOn: invoice.issuedOn,
         paymentTermsDays: invoice.paymentTermsDays,
+        ...(invoice.dueOn ? { dueOn: invoice.dueOn } : {}),
+        ...(invoice.xeroTaxMode ? { xeroTaxMode: invoice.xeroTaxMode } : {}),
         clientRequestId: invoice.clientRequestId,
         xeroTenantId: invoice.xeroTenantId ?? null,
         ...(invoice.batchKey ? { batch: invoice.batchKey } : {}),

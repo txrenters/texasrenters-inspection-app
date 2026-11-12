@@ -316,19 +316,30 @@ export interface XeroVisitCompanyProjects {
  * what can be chosen; and what a new one starts as.
  */
 export interface XeroVisitProjects {
-  inspectionId: string;
+  /** The visit; null for a property's invoice no visit covers (2026-11-13, PR B), whose projects are the property's. */
+  inspectionId: string | null;
+  /** The property the projects are for (a Propertyware building). */
+  propertyId: string;
   /** The contact a project goes under: the property, as its invoices are. */
   contactName: string;
-  /** A new project's name as the office names them; null when the visit has no technician, for the office to type. */
+  /**
+   * A new project's name as the office names them; null when the visit has no
+   * technician, or for a property's invoice, for the office to type.
+   */
   suggestedName: string | null;
-  /** A new project's deadline: the day the visit was finished, `YYYY-MM-DD`. */
+  /** A new project's deadline: the day the visit was finished, `YYYY-MM-DD`; today's for a property's invoice. */
   deadlineOn: string;
   companies: XeroVisitCompanyProjects[];
 }
 
-/** "Create project" (2026-11-13): made in Xero at once, In progress, and chosen for the visit. */
+/**
+ * "Create project" (2026-11-13): made in Xero at once, In progress -- for a
+ * visit, and chosen as its project; or (PR B) for a property's invoice no visit
+ * covers. One of the two.
+ */
 export interface MakeXeroProjectInput {
-  inspectionId: string;
+  inspectionId?: string;
+  propertyId?: string;
   name: string;
   /** `YYYY-MM-DD`. */
   deadlineOn: string;
