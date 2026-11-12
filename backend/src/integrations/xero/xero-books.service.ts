@@ -76,6 +76,8 @@ interface RunContext {
   addresses: Map<string, string[]> | null;
   /** Properties an invoice was put on this run: their contact is learned at the end. */
   touched: Set<string>;
+  /** Whether Jobber ever billed for the company, asked once, when a number alone is tried. */
+  jobberBilled?: boolean;
 }
 
 const emptyResult = (): XeroBooksRunResult => ({
@@ -408,7 +410,8 @@ export class XeroBooksService {
    * The visit and property of each invoice read from Xero, in order of how
    * sure: the Jobber invoice the console sent as it; a Jobber invoice under the
    * same number in the same company (Zapier's, in its day) -- or, in none, the
-   * only one for the same client; its contact, as linked to one property; its
+   * only one for the same client, else the only one at all when the number is
+   * this invoice's alone in Xero; its contact, as linked to one property; its
    * address, exactly as one property's. Anything else is on no property.
    */
   private async places(
@@ -430,23 +433,55 @@ export class XeroBooksService {
       if (jobber?.origin === InvoiceOrigin.JOBBER) put(theirs, { inspectionId: jobber.inspectionId, buildingId: jobber.propertywareBuildingId, jobberCopyId: jobber.id });
     }
 
-    const byNumber = invoices.filter((theirs) => !found.has(theirs.InvoiceID) && theirs.InvoiceNumber?.trim());
+    const numberOf = (theirs: XeroBooksInvoice) => theirs.InvoiceNumber?.trim() ?? '';
+    const byNumber = invoices.filter((theirs) => !found.has(theirs.InvoiceID) && numberOf(theirs));
     if (byNumber.length) {
       const copies = await this.prisma.invoice.findMany({
         where: {
           organizationId,
           origin: InvoiceOrigin.JOBBER,
-          number: { in: [...new Set(byNumber.map((theirs) => theirs.InvoiceNumber!.trim()))] },
+          number: { in: [...new Set(byNumber.map(numberOf))] },
           OR: [{ xeroTenantId: tenantId }, { xeroTenantId: null }],
         },
         select: { id: true, number: true, xeroTenantId: true, clientName: true, inspectionId: true, propertywareBuildingId: true },
       });
+      type Copy = (typeof copies)[number];
+      const fromCopy = (copy: Copy): Place => ({ inspectionId: copy.inspectionId, buildingId: copy.propertywareBuildingId, jobberCopyId: copy.id });
+      const lone: { theirs: XeroBooksInvoice; copy: Copy }[] = [];
       for (const theirs of byNumber) {
-        const same = copies.filter((copy) => copy.number === theirs.InvoiceNumber!.trim());
+        const same = copies.filter((copy) => copy.number === numberOf(theirs));
         const companys = same.filter((copy) => copy.xeroTenantId === tenantId);
-        const named = same.filter((copy) => copy.xeroTenantId === null && nameKey(copy.clientName) === nameKey(theirs.Contact?.Name));
+        const ofNone = same.filter((copy) => copy.xeroTenantId === null);
+        const named = ofNone.filter((copy) => nameKey(copy.clientName) === nameKey(theirs.Contact?.Name));
         const copy = companys.length === 1 ? companys[0] : !companys.length && named.length === 1 ? named[0] : null;
-        if (copy) put(theirs, { inspectionId: copy.inspectionId, buildingId: copy.propertywareBuildingId, jobberCopyId: copy.id });
+        if (copy) put(theirs, fromCopy(copy));
+        // Jobber named the client otherwise -- the tenant, where Xero has the
+        // property or its owner -- so the number alone is tried (2026-11-12).
+        else if (!companys.length && ofNone.length === 1) lone.push({ theirs, copy: ofNone[0]! });
+      }
+      // Never for a company Jobber never billed for (Crystal Creek Pest): its
+      // numbers meet Jobber's only by chance.
+      if (lone.length)
+        context.jobberBilled ??= Boolean(
+          await this.prisma.invoice.findFirst({ where: { organizationId, origin: InvoiceOrigin.JOBBER, xeroTenantId: tenantId }, select: { id: true } }),
+        );
+      if (lone.length && context.jobberBilled) {
+        // The number in any company's books but this invoice, or the copy
+        // standing for another invoice already, and it is not this one's.
+        const others = await this.prisma.invoice.findMany({
+          where: {
+            organizationId,
+            origin: InvoiceOrigin.XERO,
+            OR: [{ number: { in: [...new Set(lone.map(({ theirs }) => numberOf(theirs)))] } }, { jobberCopyId: { in: lone.map(({ copy }) => copy.id) } }],
+          },
+          select: { number: true, xeroTenantId: true, xeroInvoiceId: true, jobberCopyId: true },
+        });
+        for (const { theirs, copy } of lone) {
+          const another = others.filter((row) => row.xeroTenantId !== tenantId || row.xeroInvoiceId !== theirs.InvoiceID);
+          const twice =
+            invoices.filter((each) => numberOf(each) === numberOf(theirs)).length > 1 || another.some((row) => row.number === numberOf(theirs));
+          if (!twice && !another.some((row) => row.jobberCopyId === copy.id)) put(theirs, fromCopy(copy));
+        }
       }
     }
 
