@@ -37,6 +37,33 @@ const when = (value: Date | null) =>
       }).format(value)
     : null;
 
+/**
+ * The products whose invoices would reach no books once the console makes them
+ * (2026-11-13): of no company, of a company no longer connected, or of one
+ * whose sending is off. Such an invoice gets the console's own number and goes
+ * nowhere -- and, its company's books read, nobody emails it either. Grouped by
+ * why, in words.
+ */
+export function productsGoingNowhere(
+  products: { name: string; xeroTenantId: string | null }[],
+  companies: { xeroTenantId: string; name: string; status: string; settings: { sendingEnabled: boolean } | null }[],
+): string[] {
+  const byTenant = new Map(companies.map((company) => [company.xeroTenantId, company]));
+  const why = new Map<string, string[]>();
+  for (const product of products) {
+    const company = product.xeroTenantId ? byTenant.get(product.xeroTenantId) : undefined;
+    const reason = !product.xeroTenantId
+      ? 'no company'
+      : !company || company.status !== 'CONNECTED'
+        ? `${company?.name ?? 'a company'}, not connected`
+        : !company.settings?.sendingEnabled
+          ? `${company.name}, sending off`
+          : null;
+    if (reason) why.set(reason, [...(why.get(reason) ?? []), product.name]);
+  }
+  return [...why].map(([reason, names]) => `${names.join(', ')} (${reason})`);
+}
+
 const PROBLEM: Record<string, string> = {
   NOT_PERMITTED: 'Jobber refuses the console its invoices: the connection lacks the invoice permission.',
   FAILED: 'The last read of Jobber failed.',
@@ -77,7 +104,7 @@ export class InvoiceTakeoverService {
     });
     const unread = sending.filter((row) => !row.booksReadAt).map((row) => row.xeroOrganisation.name);
 
-    const [connection, files] = await Promise.all([
+    const [connection, files, products, companies] = await Promise.all([
       this.prisma.jobberConnection.findUnique({
         where: { organizationId: org },
         select: {
@@ -89,7 +116,13 @@ export class InvoiceTakeoverService {
         },
       }),
       fileCopyStatus(this.prisma, org),
+      this.prisma.invoiceProduct.findMany({ where: { organizationId: org, active: true }, select: { name: true, xeroTenantId: true }, orderBy: { name: 'asc' } }),
+      this.prisma.xeroOrganisation.findMany({
+        where: { organizationId: org },
+        select: { xeroTenantId: true, name: true, status: true, settings: { select: { sendingEnabled: true } } },
+      }),
     ]);
+    const nowhere = productsGoingNowhere(products, companies);
     const connected = connection?.status === JobberConnectionStatus.CONNECTED;
     // Jobber's checks hold the switch back only while Jobber is connected (2026-11-12): then it is read one last time,
     // for invoices made there just before. Not connected, the console makes invoices without it.
@@ -145,6 +178,15 @@ export class InvoiceTakeoverService {
         blocking: false,
         label: 'Company details are filled in',
         detail: settings?.companyName?.trim() ? null : "Invoices print the server's company details until they are.",
+      },
+      {
+        key: 'PRODUCTS_GO_TO_XERO',
+        ok: nowhere.length === 0,
+        blocking: true,
+        label: "Each product's company sends to Xero",
+        detail: nowhere.length
+          ? `${nowhere.join('; ')}. Turn sending on for its company on the Xero page, give the product a company in Invoices → Settings, or set it aside.`
+          : null,
       },
       {
         key: 'XERO_BOOKS_READ',

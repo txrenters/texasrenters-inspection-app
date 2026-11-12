@@ -102,6 +102,8 @@ export class CreateInvoiceDto {
   @IsOptional() @IsUUID() inspectionId?: string;
   @IsOptional() @IsUUID() propertyId?: string;
   @IsOptional() @IsBoolean() asDraft?: boolean;
+  /** Another invoice for a visit invoiced already, on purpose (2026-11-13). */
+  @IsOptional() @IsBoolean() additional?: boolean;
   @IsString() @MinLength(1) @MaxLength(200) subject!: string;
   @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedOn!: string;
   @IsInt() @Min(0) @Max(365) paymentTermsDays!: number;
@@ -132,6 +134,8 @@ export class CreateInvoicesDto {
   @IsOptional() @IsUUID() inspectionId?: string;
   @IsOptional() @IsUUID() propertyId?: string;
   @IsOptional() @IsBoolean() asDraft?: boolean;
+  /** Another invoice for a visit invoiced already, on purpose (2026-11-13). */
+  @IsOptional() @IsBoolean() additional?: boolean;
   @IsString() @MinLength(1) @MaxLength(200) subject!: string;
   @Matches(/^\d{4}-\d{2}-\d{2}$/) issuedOn!: string;
   @IsInt() @Min(0) @Max(365) paymentTermsDays!: number;

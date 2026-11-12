@@ -19,6 +19,12 @@ export type InvoiceTakeoverCheckKey =
   | 'FILES_COPIED'
   | 'FILES_FAILED'
   | 'COMPANY_DETAILS'
+  /**
+   * Each product the office offers goes to a company that sends to Xero
+   * (2026-11-13): else its invoices would get the console's own numbers and
+   * reach no books.
+   */
+  | 'PRODUCTS_GO_TO_XERO'
   /** Each company that sends to Xero has its books read back from there (2026-11-12). */
   | 'XERO_BOOKS_READ';
 

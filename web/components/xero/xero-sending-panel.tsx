@@ -302,7 +302,9 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
                 ? view.projectsEnabled
                   ? `Invoices issued since ${since} go to Xero as drafts, each under its property as a contact and each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
                   : `Invoices issued since ${since} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
-                : 'Nothing more goes to Xero until it is turned on again. What was sent stays in Xero.'}
+                : view.madeInConsole
+                  ? "Invoices are made in the console now. With sending off, this company's new invoices get the console's own numbers and reach no books, and nobody emails them. Turn it back on as soon as they can go again. What was sent stays in Xero."
+                  : 'Nothing more goes to Xero until it is turned on again. What was sent stays in Xero.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
