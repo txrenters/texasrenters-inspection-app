@@ -1,12 +1,13 @@
-import { Body, Controller, Get, Header, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Param, ParseUUIDPipe, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
-import { MAX_LABOUR_MINUTES, MAX_LABOUR_RATE_CENTS } from '@texasrenters/shared';
-import { IsBoolean, IsISO8601, IsInt, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import { MAX_LABOUR_MINUTES, MAX_LABOUR_RATE_CENTS, MAX_PROJECT_ESTIMATE_CENTS } from '@texasrenters/shared';
+import { IsBoolean, IsISO8601, IsInt, IsObject, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../../common/auth';
 import { XeroAuthService } from './xero-auth.service';
 import { XeroBooksService } from './xero-books.service';
 import { XeroCheckService } from './xero-check.service';
+import { XeroProjectsService } from './xero-projects.service';
 import { XeroSenderService } from './xero-sender.service';
 import { XeroSettingsService } from './xero-settings.service';
 import { XeroError } from './xero.errors';
@@ -57,6 +58,20 @@ export class SetXeroSendingDto {
   @IsOptional() @IsBoolean() confirmed?: boolean;
 }
 
+/** "Create project" (2026-11-13): the visit's project, made in the company's books at once. The name is checked in full by the service. */
+export class MakeXeroProjectDto {
+  @IsUUID() inspectionId!: string;
+  @IsString() @MaxLength(200) name!: string;
+  @Matches(/^\d{4}-\d{2}-\d{2}$/) deadlineOn!: string;
+  @IsOptional() @IsInt() @Min(0) @Max(MAX_PROJECT_ESTIMATE_CENTS) estimateCents?: number | null;
+  @IsString() @MinLength(8) @MaxLength(120) clientRequestId!: string;
+}
+
+/** A project already in the company's books, chosen as the visit's. */
+export class ChooseXeroProjectDto {
+  @IsUUID() xeroProjectId!: string;
+}
+
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /** A month of invoices to check against Xero (2026-11-10, phase 5): `YYYY-MM`. */
@@ -83,7 +98,37 @@ export class XeroController {
     @Inject(XeroSenderService) private readonly sender: XeroSenderService,
     @Inject(XeroCheckService) private readonly checks: XeroCheckService,
     @Inject(XeroBooksService) private readonly books: XeroBooksService,
+    @Inject(XeroProjectsService) private readonly projects: XeroProjectsService,
   ) {}
+
+  /**
+   * A finished visit's projects, for the invoice form's Project field (2026-11-13): for each company whose projects
+   * are on. From the console's own rows: no call to Xero.
+   */
+  @Get('visits/:inspectionId/projects')
+  @RequirePermissions('invoices:manage')
+  visitProjects(@Req() request: AuthenticatedRequest, @Param('inspectionId', new ParseUUIDPipe()) inspectionId: string) {
+    return this.projects.visitProjects(request.user, inspectionId);
+  }
+
+  /** "Create project": made in the company's books at once, In progress, and chosen for the visit. */
+  @Post('organisations/:tenantId/projects')
+  @RequirePermissions('invoices:manage')
+  makeProject(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: MakeXeroProjectDto) {
+    return this.projects.make(request.user, tenantOf(tenantId), body);
+  }
+
+  /** A project already in the company's books chosen as the visit's. No call to Xero. */
+  @Put('organisations/:tenantId/visits/:inspectionId/project')
+  @RequirePermissions('invoices:manage')
+  chooseProject(
+    @Req() request: AuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('inspectionId', new ParseUUIDPipe()) inspectionId: string,
+    @Body() body: ChooseXeroProjectDto,
+  ) {
+    return this.projects.choose(request.user, tenantOf(tenantId), inspectionId, body.xeroProjectId);
+  }
 
   /** What the page shows. Never a token. */
   @Get('connection')

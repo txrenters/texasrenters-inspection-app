@@ -33,6 +33,11 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 const params = vi.hoisted(() => ({ search: new URLSearchParams() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router, useSearchParams: () => params.search }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: (defaults: object) => [defaults, vi.fn(), vi.fn()] }));
+// A visit's project has its own tests (invoices.test.tsx); a property's invoice asks for none.
+vi.mock('@/lib/xero-queries', () => ({
+  useXeroVisitProjects: () => ({ data: undefined }),
+  useXeroProjectActions: () => ({ make: { mutate: vi.fn(), isPending: false }, choose: { mutate: vi.fn(), isPending: false } }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // Notes, files and the office's email words have their own tests (invoice-records.test.tsx).
 vi.mock('@/lib/invoice-record-queries', () => ({

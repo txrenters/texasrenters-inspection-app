@@ -20,7 +20,8 @@ import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { XeroAuthService } from './xero-auth.service';
-import { xeroValidationMessages, XeroClient } from './xero.client';
+import { XeroClient } from './xero.client';
+import { refused, said, xeroContacts, type XeroAnswer } from './xero-contacts';
 import { XeroError } from './xero.errors';
 import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody } from './xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
@@ -39,8 +40,6 @@ export const MAX_PAYMENTS_PER_RUN = 200;
 export const MAX_PAYMENT_DELETES_PER_RUN = 20;
 /** Bad debts written off, and write-offs taken back, in one run (2026-11-10): two calls each. */
 export const MAX_WRITE_OFFS_PER_RUN = 20;
-/** Contacts looked up by name in one run, after Xero said the name was taken. */
-const MAX_LOOKUPS_PER_RUN = 20;
 /**
  * The console's own drafts tried before and looked for in Xero in one run (2026-11-12): one call each. The rest wait
  * for the next run -- one is never sent again until it has been looked for.
@@ -54,9 +53,6 @@ const MANUAL_GAP_MS = 60_000;
 const BACKOFF_MS = [60, 360, 1440].map((minutes) => minutes * 60_000);
 
 const validationErrors = z.array(z.object({ Message: z.string() })).nullish();
-const contactsSchema = z.object({
-  Contacts: z.array(z.object({ ContactID: z.string().nullish(), Name: z.string().nullish(), StatusAttributeString: z.string().nullish(), ValidationErrors: validationErrors })),
-});
 const invoicesSchema = z.object({
   Invoices: z.array(
     z.object({
@@ -100,21 +96,9 @@ const creditNotesSchema = z.object({
 const allocationsSchema = z.object({
   Allocations: z.array(z.object({ AllocationID: z.string().nullish(), StatusAttributeString: z.string().nullish(), ValidationErrors: validationErrors })).nullish(),
 });
-type XeroAnswer = {
-  ContactID?: string | null;
-  InvoiceID?: string | null;
-  PaymentID?: string | null;
-  StatusAttributeString?: string | null;
-  ValidationErrors?: { Message: string }[] | null;
-};
-
-const refused = (answer: XeroAnswer) => answer.StatusAttributeString === 'ERROR' || Boolean(answer.ValidationErrors?.length);
-const said = (answer: XeroAnswer) => xeroValidationMessages({ ValidationErrors: answer.ValidationErrors ?? [] }) ?? 'Xero refused it without saying why.';
 const keyOf = (organizationId: string, path: string, body: unknown) => createHash('sha256').update(`${organizationId}|${path}|${JSON.stringify(body)}`).digest('hex');
 /** A day, `YYYY-MM-DD`, as Xero's `where` filter writes one: `DateTime(2026,11,5)`. */
 const xeroDateTime = (day: string) => `DateTime(${day.split('-').map(Number).join(',')})`;
-/** Xero's `where` filter: a name in double quotes, its own quotes and backslashes escaped. */
-const nameFilter = (name: string) => `Name=="${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 const INVOICE_FIELDS = {
   id: true,
@@ -871,69 +855,11 @@ export class XeroSenderService {
     return outgoing.filter((entry) => !held.has(entry.item.invoice.id));
   }
 
-  /**
-   * The Xero contact for each client: linked already, made now (50 a call), or
-   * -- when Xero says the name is taken, as it is for a contact the office made
-   * by hand -- found by its name and linked.
-   */
-  private async contacts(organizationId: string, tenantId: string, invoices: Candidate[]) {
-    const found = new Map<string, { id: string } | { problem: string }>();
+  /** The Xero contact for each invoice's client: linked already, made now, or found by its name (`xeroContacts`). */
+  private contacts(organizationId: string, tenantId: string, invoices: Candidate[]) {
     const byKey = new Map<string, string>();
     for (const invoice of invoices) byKey.set(clientKeyOf(invoice), contactNameOf(invoice));
-    if (!byKey.size) return found;
-    const links = await this.prisma.xeroContactLink.findMany({
-      where: { organizationId, xeroTenantId: tenantId, clientKey: { in: [...byKey.keys()] } },
-      select: { clientKey: true, xeroContactId: true },
-    });
-    for (const link of links) found.set(link.clientKey, { id: link.xeroContactId });
-    const missing = [...byKey.entries()].filter(([key]) => !found.has(key));
-    let lookups = 0;
-    for (let start = 0; start < missing.length; start += BATCH) {
-      const batch = missing.slice(start, start + BATCH);
-      const body = { Contacts: batch.map(([, name]) => ({ Name: name })) };
-      const path = '/Contacts?summarizeErrors=false';
-      let answers: XeroAnswer[];
-      try {
-        answers = (await this.client.post(organizationId, tenantId, path, body, contactsSchema, keyOf(`${organizationId}:${tenantId}`, path, body))).Contacts;
-      } catch (error) {
-        if (error instanceof XeroError && error.code === 'XERO_VALIDATION') {
-          for (const [key] of batch) found.set(key, { problem: error.message });
-          continue;
-        }
-        throw error;
-      }
-      for (const [index, [key, name]] of batch.entries()) {
-        const answer = answers[index];
-        if (answer?.ContactID && !refused(answer)) {
-          await this.link(organizationId, tenantId, key, answer.ContactID, name);
-          found.set(key, { id: answer.ContactID });
-          continue;
-        }
-        const reason = answer ? said(answer) : 'Xero did not answer for it.';
-        if (/already (assigned|exists|in use)/i.test(reason) && lookups < MAX_LOOKUPS_PER_RUN) {
-          lookups++;
-          const same = (await this.client.get(organizationId, tenantId, `/Contacts?where=${encodeURIComponent(nameFilter(name))}`, contactsSchema)).Contacts.filter(
-            (contact) => contact.ContactID,
-          );
-          if (same.length === 1) {
-            await this.link(organizationId, tenantId, key, same[0]!.ContactID!, name);
-            found.set(key, { id: same[0]!.ContactID! });
-            continue;
-          }
-          found.set(key, { problem: same.length ? `Xero has ${same.length} contacts named “${name}”: merge them in Xero.` : `Xero says “${name}” is taken but did not find it.` });
-          continue;
-        }
-        found.set(key, { problem: `Xero refused the contact “${name}”: ${reason}` });
-      }
-    }
-    return found;
-  }
-
-  private link(organizationId: string, tenantId: string, clientKey: string, xeroContactId: string, name: string) {
-    return this.prisma.xeroContactLink.createMany({
-      data: [{ organizationId, xeroTenantId: tenantId, clientKey, xeroContactId, name }],
-      skipDuplicates: true,
-    });
+    return xeroContacts(this.prisma, this.client, organizationId, tenantId, byKey);
   }
 
   private sent(organizationId: string, tenantId: string, item: { invoice: Candidate; fingerprint: string }, xeroInvoiceId: string) {
