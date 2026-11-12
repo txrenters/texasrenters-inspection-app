@@ -32,6 +32,7 @@ import {
   brandFrom,
   defaultsFrom,
   fallbackDefaults,
+  invoicingTakenOverAt,
   listedProducts,
   officeOrganisations,
   readInvoiceSettings,
@@ -87,11 +88,14 @@ export class InvoiceSettingsService {
 
   async read(user: AuthenticatedUser): Promise<InvoiceSettingsView> {
     const org = user.organizationId;
+    // Once the console makes the invoices (2026-11-12), the list is the office's own: what Jobber billed is no longer
+    // offered to add to it.
+    const switchedAt = await invoicingTakenOverAt(this.prisma, org);
     const [settings, fallback, products, billed, files, organisations, basis] = await Promise.all([
       readInvoiceSettings(this.prisma, org),
       fallbackDefaults(this.prisma, org),
       listedProducts(this.prisma, org),
-      billedPrices(this.prisma, org, businessDate()),
+      switchedAt ? [] : billedPrices(this.prisma, org, businessDate()),
       // Before the cutover every file must be kept (phase 7).
       fileCopyStatus(this.prisma, org),
       // The companies' books a product or service can go to.
