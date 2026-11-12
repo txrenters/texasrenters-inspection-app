@@ -455,7 +455,8 @@ export function InvoicesCard({
       <Button asChild size="sm" variant="outline">
         <Link href={createHref}>
           <PlusIcon />
-          New invoice
+          {/* A visit invoiced already (2026-11-13): another only on purpose. */}
+          {inspectionId && items.length ? 'Add another invoice' : 'New invoice'}
         </Link>
       </Button>
     ) : undefined;

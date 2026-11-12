@@ -167,6 +167,8 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   const [another, setAnother] = useState(false);
   const visit = draft.inspection;
   const invoicedAlready = Boolean(visit && draft.alreadyInvoiced);
+  // The console makes the invoices (2026-11-13): each is a draft in its company's books in Xero, which Xero numbers and dates.
+  const madeHere = draft.madeInConsole === true;
   const organisations = draft.organisations ?? [];
   const connected = organisations.filter((organisation) => organisation.connected);
   // The companies are asked about only once Xero has an organisation.
@@ -337,22 +339,28 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
             <FieldLabel htmlFor={`${id}-issued`}>Issued</FieldLabel>
             <Input id={`${id}-issued`} onChange={(event) => setIssuedOn(event.target.value)} type="date" value={issuedOn} />
           </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
-            <Select onValueChange={setTerms} value={terms}>
-              <SelectTrigger className="w-full" id={`${id}-terms`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PAYMENT_TERMS.map((term) => (
-                  <SelectItem key={term.days} value={String(term.days)}>
-                    {term.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <FieldDescription>Due {issuedOn ? formatInvoiceDay(dueOnFor(issuedOn, Number(terms))) : '—'}</FieldDescription>
-          </Field>
+          {madeHere ? (
+            <p className="text-muted-foreground self-end text-sm">
+              Xero dates it on its visit&apos;s day and makes it due on the last day of that month.
+            </p>
+          ) : (
+            <Field>
+              <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
+              <Select onValueChange={setTerms} value={terms}>
+                <SelectTrigger className="w-full" id={`${id}-terms`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_TERMS.map((term) => (
+                    <SelectItem key={term.days} value={String(term.days)}>
+                      {term.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>Due {issuedOn ? formatInvoiceDay(dueOnFor(issuedOn, Number(terms))) : '—'}</FieldDescription>
+            </Field>
+          )}
         </div>
       </div>
 
@@ -453,18 +461,24 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
         <p aria-live="polite" className={problem ? 'text-destructive mr-auto text-sm' : 'text-muted-foreground mr-auto text-sm'}>
-          {problem ?? `Made out to ${draft.clientName}. A draft is numbered when it is marked sent.`}
+          {problem ??
+            (madeHere
+              ? `Made out to ${draft.clientName}. Each goes to its company's books in Xero as a draft, numbered there, for the office to approve.`
+              : `Made out to ${draft.clientName}. A draft is numbered when it is marked sent.`)}
         </p>
         <Button asChild variant="secondary">
           <Link href={cancelHref}>Cancel</Link>
         </Button>
-        <Button
-          disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending}
-          onClick={() => create(true)}
-          variant="outline"
-        >
-          {several ? 'Save as drafts' : 'Save as draft'}
-        </Button>
+        {/* Each is a draft in Xero already once the console makes the invoices (2026-11-13): no draft of the console's own. */}
+        {madeHere ? null : (
+          <Button
+            disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending}
+            onClick={() => create(true)}
+            variant="outline"
+          >
+            {several ? 'Save as drafts' : 'Save as draft'}
+          </Button>
+        )}
         <Button disabled={Boolean(problem) || actions.create.isPending || actions.createPerCompany.isPending} onClick={() => create(false)}>
           {actions.create.isPending || actions.createPerCompany.isPending
             ? 'Creating…'
