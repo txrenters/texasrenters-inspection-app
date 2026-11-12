@@ -47,6 +47,7 @@ type Row = {
   projectUserId?: string | null;
   labourRateCents?: number;
   labourMinutes?: number;
+  pricesIncludeTax?: boolean;
 };
 
 const stringMap = (value: Prisma.JsonValue | undefined): Record<string, string> =>
@@ -72,6 +73,7 @@ export function valuesFrom(row: Row | null): XeroSettingsValues {
     projectUserId: row?.projectUserId ?? null,
     labourRateCents: row?.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
     labourMinutes: row?.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
+    pricesIncludeTax: row?.pricesIncludeTax ?? false,
   };
 }
 
@@ -96,6 +98,7 @@ export function valuesFromInput(input: SaveXeroSettingsInput): XeroSettingsValue
     projectUserId: blank(input.projectUserId),
     labourRateCents: input.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
     labourMinutes: input.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
+    pricesIncludeTax: input.pricesIncludeTax ?? false,
   };
 }
 
@@ -143,6 +146,8 @@ export function settingsChanges(
   // Projects (2026-11-11).
   if ((before.projectsEnabled ?? false) !== (after.projectsEnabled ?? false))
     changes.push(after.projectsEnabled ? 'Projects: none → one for each visit, invoices as drafts' : 'Projects: one for each visit → none, invoices approved');
+  if ((before.pricesIncludeTax ?? false) !== (after.pricesIncludeTax ?? false))
+    changes.push(after.pricesIncludeTax ? 'Prices: tax added on top → include the tax' : 'Prices: include the tax → tax added on top');
   const person = (id: string | null | undefined) => (id ? (projectUsers.find((user) => user.userId === id)?.name ?? 'a user Xero no longer lists') : 'none');
   if ((before.projectUserId ?? null) !== (after.projectUserId ?? null)) changes.push(`Labour logged as: ${person(before.projectUserId)} → ${person(after.projectUserId)}`);
   const rate = (cents: number | undefined) => formatMoney(cents ?? DEFAULT_LABOUR_RATE_CENTS);
@@ -265,6 +270,7 @@ export class XeroSettingsService {
       projectUserId: after.projectUserId ?? null,
       labourRateCents: after.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS,
       labourMinutes: after.labourMinutes ?? DEFAULT_LABOUR_MINUTES,
+      pricesIncludeTax: after.pricesIncludeTax === true,
       choicesUpdatedAt: new Date(),
     };
     try {

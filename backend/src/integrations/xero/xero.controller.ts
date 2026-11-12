@@ -38,6 +38,8 @@ export class SaveXeroSettingsDto {
   /** The labour on each project: cents an hour, and minutes. */
   @IsOptional() @IsInt() @Min(0) @Max(MAX_LABOUR_RATE_CENTS) labourRateCents?: number;
   @IsOptional() @IsInt() @Min(0) @Max(MAX_LABOUR_MINUTES) labourMinutes?: number;
+  /** Its prices include its sales tax (2026-11-12): lines go tax-inclusive. */
+  @IsOptional() @IsBoolean() pricesIncludeTax?: boolean;
   @IsOptional() @IsISO8601() expectedUpdatedAt!: string | null;
 }
 

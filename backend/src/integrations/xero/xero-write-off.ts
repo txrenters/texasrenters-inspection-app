@@ -12,7 +12,7 @@ export interface XeroCreditNoteBody {
   Contact: { ContactID: string };
   Date: string;
   Status: 'AUTHORISED';
-  LineAmountTypes: 'Exclusive';
+  LineAmountTypes: 'Exclusive' | 'Inclusive';
   Reference: string;
   LineItems: { Description: string; Quantity: 1; UnitAmount: number; LineAmount: number; AccountCode: string; TaxType: string }[];
 }
@@ -46,7 +46,8 @@ export function xeroWriteOffFrom(
       Contact: { ContactID: context.contactId },
       Date: context.day,
       Status: 'AUTHORISED',
-      LineAmountTypes: 'Exclusive',
+      // As the invoice's lines are (2026-11-12): what it still owes, tax and all when prices include it.
+      LineAmountTypes: context.settings.pricesIncludeTax === true ? 'Inclusive' : 'Exclusive',
       Reference: `Bad debt: ${label}`.slice(0, 255),
       LineItems: [
         {

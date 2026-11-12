@@ -141,6 +141,15 @@ describe('Xero choices', () => {
     expect(xeroSettingsProblem({ ...values, sendFrom: '2027-11-22' }, catalog, '2026-11-20')).toBe('The start date is more than a year away.');
   });
 
+  it('take prices that include tax only at a tax type with a rate in it (2026-11-12)', () => {
+    const taxed = { ...catalog, taxRates: [...catalog.taxRates, { name: 'Sales Tax', taxType: 'TAX001', status: 'ACTIVE', effectiveRate: 8.25, appliesToRevenue: true }] };
+    expect(xeroSettingsProblem({ ...values, pricesIncludeTax: true }, taxed, '2026-11-20')).toBe(
+      'Prices include sales tax, so choose the tax type with the rate they include, such as 8.25%.',
+    );
+    expect(xeroSettingsProblem({ ...values, salesTaxType: 'TAX001', pricesIncludeTax: true }, taxed, '2026-11-20')).toBeNull();
+    expect(xeroSettingsProblem({ ...values, salesTaxType: 'TAX001', pricesIncludeTax: false }, taxed, '2026-11-20')).toBeNull();
+  });
+
   it('write bad debts off only to an active expense account (2026-11-10)', () => {
     const withBadDebts = { ...catalog, accounts: [...catalog.accounts, account({ accountId: 'bad-debts', type: 'EXPENSE', class: 'EXPENSE', code: '480' })] };
     expect(xeroSettingsProblem({ ...values, badDebtAccountId: 'bad-debts' }, withBadDebts, '2026-11-20')).toBeNull();

@@ -4951,6 +4951,9 @@ model XeroSettings {
   /// The labour on each project the console makes: $35.00 an hour for 6 minutes. Either 0 logs none (checked ranges).
   labourRateCents    Int     @default(3500)
   labourMinutes      Int     @default(6)
+  /// Its prices include its sales tax (2026-11-12): lines go to Xero tax-inclusive, at the tax type above, so
+  /// Xero's total is the console's -- Crystal Creek Pest's $39.00 is $36.03 and $2.97 of tax at 8.25%.
+  pricesIncludeTax   Boolean @default(false)
   /// When somebody last saved the choices above (2026-11-11): the settings page's guard against overwriting a newer
   /// save. Not `updatedAt`, which turning sending on and every sending run also move.
   choicesUpdatedAt   DateTime @default(now())

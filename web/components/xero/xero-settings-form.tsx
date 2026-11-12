@@ -69,7 +69,8 @@ const sameValues = (a: XeroSettingsValues, b: XeroSettingsValues) => {
     projectsAreOn(a) === projectsAreOn(b) &&
     (a.projectUserId ?? null) === (b.projectUserId ?? null) &&
     (a.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) === (b.labourRateCents ?? DEFAULT_LABOUR_RATE_CENTS) &&
-    (a.labourMinutes ?? DEFAULT_LABOUR_MINUTES) === (b.labourMinutes ?? DEFAULT_LABOUR_MINUTES)
+    (a.labourMinutes ?? DEFAULT_LABOUR_MINUTES) === (b.labourMinutes ?? DEFAULT_LABOUR_MINUTES) &&
+    (a.pricesIncludeTax ?? false) === (b.pricesIncludeTax ?? false)
   );
 };
 
@@ -260,6 +261,25 @@ export function XeroSettingsForm({
             </Select>
             <FieldDescription>Every line carries it. With no sales tax on the invoices, that is the exempt one.</FieldDescription>
           </Field>
+          {/* Prices that include the tax (2026-11-12): Crystal Creek Pest's $39.00 is $36.03 and $2.97 of tax. */}
+          <div className="flex items-start gap-3 md:col-span-2">
+            <Switch
+              checked={values.pricesIncludeTax === true}
+              disabled={locked}
+              id={`${id}-inclusive`}
+              onCheckedChange={(checked) => setValues((current) => ({ ...current, pricesIncludeTax: checked }))}
+            />
+            <div className="grid gap-0.5">
+              <label className="text-sm font-medium" htmlFor={`${id}-inclusive`}>
+                Prices include sales tax
+              </label>
+              <p className="text-muted-foreground text-sm">
+                {values.pricesIncludeTax
+                  ? 'Each line’s price already has the tax in it: Xero takes it out at the tax type above, and its total is the invoice’s.'
+                  : 'Tax at the tax type above is added on top of each line’s price.'}
+              </p>
+            </div>
+          </div>
         </div>
         <p className="text-muted-foreground mt-4 text-sm">
           Each invoice goes to Xero under its client, which is the property, as in Jobber, with the property as its reference. It is dated on

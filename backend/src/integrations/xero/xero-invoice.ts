@@ -75,7 +75,8 @@ export interface XeroInvoiceBody {
   Reference: string;
   Date: string;
   DueDate: string;
-  LineAmountTypes: 'Exclusive';
+  /** Tax-inclusive for a company whose prices include its tax (2026-11-12); otherwise added on top. */
+  LineAmountTypes: 'Exclusive' | 'Inclusive';
   /** Approved; or, for a company whose visits get projects (2026-11-11), a draft for the office to put on its project and approve. */
   Status: 'AUTHORISED' | 'DRAFT';
   LineItems: XeroLineItem[];
@@ -163,7 +164,9 @@ export function xeroInvoiceFrom(
   if (invoice.status === 'DRAFT' && !consoleDraft) return { kind: 'problem', problem: 'It is a draft.' };
   if (!invoice.number && !consoleDraft) return { kind: 'problem', problem: 'It has no invoice number yet.' };
   if (!invoice.issuedOn) return { kind: 'problem', problem: 'It has no issue date.' };
-  if (invoice.taxCents !== 0)
+  // Prices that include the tax (2026-11-12): Xero takes it out of each line, and its total is the invoice's.
+  const inclusive = context.settings.pricesIncludeTax === true;
+  if (invoice.taxCents !== 0 && !inclusive)
     return { kind: 'problem', problem: `It carries ${formatMoney(invoice.taxCents)} of sales tax, and the console sends Xero none. Enter it in Xero by hand.` };
   if (!invoice.lines.length) return { kind: 'problem', problem: 'It has no lines.' };
   const { settings } = context;
@@ -242,7 +245,7 @@ export function xeroInvoiceFrom(
       Reference: reference,
       Date: date,
       DueDate: monthEndOf(date),
-      LineAmountTypes: 'Exclusive',
+      LineAmountTypes: inclusive ? 'Inclusive' : 'Exclusive',
       // As a draft (2026-11-11): approving it is the office's, in Xero.
       Status: context.asDraft || consoleDraft ? 'DRAFT' : 'AUTHORISED',
       LineItems: items,
