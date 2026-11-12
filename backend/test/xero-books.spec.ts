@@ -2,6 +2,7 @@ import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import {
+  agreesWithCopy,
   BOOKS_OVERLAP_MS,
   invoiceFromXero,
   methodFromAccount,
@@ -233,6 +234,7 @@ function harness(options: {
     xeroConnection: { findUnique: jest.fn(async () => (options.connection === undefined ? { status: 'CONNECTED' } : options.connection)) },
     invoice: {
       findMany: jest.fn(async ({ where }: { where: Row }) => invoices.filter((row) => matches(row, where))),
+      findFirst: jest.fn(async ({ where }: { where: Row }) => invoices.find((row) => matches(row, where)) ?? null),
       create: jest.fn(async ({ data }: { data: Row }) => {
         const row = { id: `made-${++ids}`, ...data };
         invoices.push(row);
@@ -385,7 +387,7 @@ describe('reading a company’s books', () => {
         { id: 'jobber-1', origin: 'JOBBER', number: '8440', xeroTenantId: TENANT, clientName: '12 Example Lane', inspectionId: VISIT, propertywareBuildingId: BUILDING },
         // Another company's 8441: never this one's.
         { id: 'jobber-2', origin: 'JOBBER', number: '8441', xeroTenantId: OTHER_TENANT, clientName: '14 Example Lane', propertywareBuildingId: BUILDING_2 },
-        // In no company: only for the same client.
+        // In no company: for the same client, or else the only one under a number Xero has once.
         { id: 'jobber-3', origin: 'JOBBER', number: '8442', xeroTenantId: null, clientName: '16 Example Lane', propertywareBuildingId: BUILDING_2 },
         { id: 'jobber-4', origin: 'JOBBER', number: '8443', xeroTenantId: null, clientName: 'Someone else', propertywareBuildingId: BUILDING_2 },
       ],
@@ -400,11 +402,56 @@ describe('reading a company’s books', () => {
     });
     const result = await books.run(ORG, TENANT);
     const placed = Object.fromEntries(fromXero(invoices).map((row) => [row.xeroInvoiceId, row.propertywareBuildingId ?? null]));
-    expect(placed).toEqual({ 'x-1': BUILDING, 'x-2': null, 'x-3': BUILDING_2, 'x-4': null });
+    expect(placed).toEqual({ 'x-1': BUILDING, 'x-2': null, 'x-3': BUILDING_2, 'x-4': BUILDING_2 });
     expect(fromXero(invoices).find((row) => row.xeroInvoiceId === 'x-1')).toMatchObject({ inspectionId: VISIT });
-    expect(result.invoices.unplaced).toBe(2);
+    expect(result.invoices.unplaced).toBe(1);
     const copies = Object.fromEntries(fromXero(invoices).map((row) => [row.xeroInvoiceId, row.jobberCopyId ?? null]));
-    expect(copies).toEqual({ 'x-1': 'jobber-1', 'x-2': null, 'x-3': 'jobber-3', 'x-4': null });
+    expect(copies).toEqual({ 'x-1': 'jobber-1', 'x-2': null, 'x-3': 'jobber-3', 'x-4': 'jobber-4' });
+  });
+
+  it('takes a Jobber invoice of no company by its number alone only when nothing else could be it', async () => {
+    const lone = (id: string, number: string) => ({ id, origin: 'JOBBER', number, xeroTenantId: null, clientName: 'A tenant', propertywareBuildingId: BUILDING_2 });
+    const page = (...numbers: string[]) => [
+      numbers.map((number, at) => theirs({ InvoiceID: `x-${number}-${at}`, InvoiceNumber: number, Contact: { ContactID: `contact-${at}`, Name: 'The owner' } })),
+    ];
+    const read = async (options: Parameters<typeof harness>[0]) => {
+      const { books, invoices } = harness(options);
+      await books.run(ORG, TENANT);
+      return Object.fromEntries(fromXero(invoices).map((row) => [row.xeroInvoiceId, row.jobberCopyId ?? null]));
+    };
+    const billed = { id: 'jobber-billed', origin: 'JOBBER', number: '1', xeroTenantId: TENANT, clientName: 'Anyone' };
+
+    // The one Jobber invoice of no company under a number this invoice alone has, in a company Jobber billed for.
+    expect(await read({ invoices: [billed, lone('jobber-9', '9001')], invoicePages: page('9001') })).toEqual({ 'x-9001-0': 'jobber-9' });
+    // A company Jobber never billed for (Crystal Creek Pest): its numbers meet Jobber's only by chance.
+    expect(await read({ invoices: [lone('jobber-9', '9001')], invoicePages: page('9001') })).toEqual({ 'x-9001-0': null });
+    // Two of no company under the number.
+    expect(await read({ invoices: [billed, lone('jobber-9', '9001'), lone('jobber-10', '9001')], invoicePages: page('9001') })).toEqual({
+      'x-9001-0': null,
+    });
+    // The number in another company's books too.
+    const elsewhere = { id: 'pest-1', origin: 'XERO', number: '9001', xeroTenantId: OTHER_TENANT, xeroInvoiceId: 'pest-x-1' };
+    expect(await read({ invoices: [billed, lone('jobber-9', '9001'), elsewhere], invoicePages: page('9001') })).toMatchObject({ 'x-9001-0': null });
+    // Twice in this company's books.
+    expect(await read({ invoices: [billed, lone('jobber-9', '9001')], invoicePages: page('9001', '9001') })).toEqual({ 'x-9001-0': null, 'x-9001-1': null });
+    // The copy already stands for another invoice.
+    const taken = { id: 'xero-8', origin: 'XERO', number: '8000', xeroTenantId: TENANT, xeroInvoiceId: 'x-8000', jobberCopyId: 'jobber-9' };
+    expect(await read({ invoices: [billed, lone('jobber-9', '9001'), taken], invoicePages: page('9001') })).toMatchObject({ 'x-9001-0': null });
+    // Another total, issued more than a month apart: another invoice under the same number.
+    const apart = { ...lone('jobber-9', '9001'), totalCents: 1000, issuedOn: new Date('2023-05-17T00:00:00Z') };
+    expect(await read({ invoices: [billed, apart], invoicePages: page('9001') })).toEqual({ 'x-9001-0': null });
+  });
+
+  it('takes a Jobber invoice by its number alone when the total or the day agrees', () => {
+    const copy = (totalCents: number, issuedOn: string | null) => ({ totalCents, issuedOn: issuedOn ? new Date(`${issuedOn}T00:00:00Z`) : null });
+    // Xero's: $75.00 on 2026-11-02.
+    expect(agreesWithCopy(theirs(), copy(7500, '2024-01-01'))).toBe(true);
+    expect(agreesWithCopy(theirs(), copy(1000, '2026-10-02'))).toBe(true);
+    expect(agreesWithCopy(theirs(), copy(1000, '2026-12-03'))).toBe(true);
+    expect(agreesWithCopy(theirs(), copy(1000, '2026-12-04'))).toBe(false);
+    expect(agreesWithCopy(theirs(), copy(1000, '2025-05-17'))).toBe(false);
+    // A Jobber draft has no day: nothing against it.
+    expect(agreesWithCopy(theirs(), copy(1000, null))).toBe(true);
   });
 
   it('puts one on its contact’s one property, through the property or Jobber’s client, and none over several', async () => {
