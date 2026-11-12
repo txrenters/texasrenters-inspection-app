@@ -25,33 +25,39 @@ import {
 import { PlusIcon, Trash2Icon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { ExistingInvoices, formatInvoiceDay } from '@/components/invoices/invoice-parts';
 import { NewXeroProjectDialog, contactInitials } from '@/components/invoices/xero-project-field';
 import { PageHeader } from '@/components/page-header';
+import { SearchableSelect } from '@/components/searchable-select';
 import { ErrorState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { businessToday } from '@/lib/clock';
 import { newClientRequestId, useInvoiceActions } from '@/lib/invoice-queries';
+import { cn } from '@/lib/utils';
 import { useXeroInvoiceForm, useXeroProjects } from '@/lib/xero-queries';
 
 /**
  * The New invoice laid out as Xero's (2026-11-13, PR B of the office's ask to
  * make invoices as they do in Xero), once the console makes the invoices:
- * the property as the contact, the issue and due days, the reference; and for
- * each company's invoice how it carries tax, then its lines -- item,
- * description, quantity, price, discount, account, tax rate and tax, tracking,
- * project and amount. Picking an item fills the rest of its line as Xero does;
- * every field stays the office's to change, and Xero is sent what is shown. The
- * project stays the office's to pick on the draft in Xero too: its API cannot
- * put a line on one.
+ * the property as the contact, the issue and due days, the reference and how
+ * amounts carry tax; then each company's lines -- item, description,
+ * quantity, price, discount, account, tax rate and tax, tracking, project and
+ * amount. Picking an item fills the rest of its line as Xero does; every field
+ * stays the office's to change, and Xero is sent what is shown. The project
+ * stays the office's to pick on the draft in Xero too: its API cannot put a
+ * line on one.
+ *
+ * As compact as Xero's (2026-11-13): small fields in a dense grid, the lines a
+ * ruled table of borderless cells, and every list a search box -- type a few
+ * letters of a technician, an account or a project instead of scrolling 150 of
+ * them. The company's own tracking category comes first, as in Xero.
  */
 
 /** A line as it is typed. Each Xero field left undefined is as its item fills it. */
@@ -106,6 +112,14 @@ const emptyLine = (key: string): XeroLine => ({ key, name: '', description: '', 
 const productsFor = (products: readonly InvoiceDraftProduct[], company: string | null) =>
   company ? products.filter((product) => !product.xeroTenantId || product.xeroTenantId === company) : products;
 
+/** A company's tracking categories, its own -- the one lines are tagged in for the technician -- first, as Xero shows them. */
+const trackingInOrder = (company: XeroInvoiceFormCompany | null) =>
+  company
+    ? [...company.tracking].sort(
+        (a, b) => Number(b.trackingCategoryId === company.trackingCategoryId) - Number(a.trackingCategoryId === company.trackingCategoryId),
+      )
+    : [];
+
 /** A line's amounts as typed: null while one is not a number yet. */
 function amountsOf(line: XeroLine) {
   const quantity = Number(line.quantity);
@@ -138,6 +152,37 @@ function lineInput(line: XeroLine, company: XeroInvoiceFormCompany | null, techn
       : filled.xeroTracking,
     xeroProjectId: project,
   };
+}
+
+/** A header field as Xero lays one out: a small label over a small field. */
+function HeaderField({ label, htmlFor, children, className }: { label: string; htmlFor: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={cn('grid gap-1', className)}>
+      <label className="text-heading text-xs font-semibold" htmlFor={htmlFor}>
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+const HEADER_INPUT = 'h-8 md:text-[13px]';
+
+/** How an invoice's amounts carry tax: exclusive, inclusive or no tax. */
+function TaxModeSelect({ id, value, companyName, onChange }: { id?: string; value: XeroTaxMode; companyName: string; onChange: (mode: XeroTaxMode) => void }) {
+  return (
+    <Select onValueChange={(next) => onChange(next as XeroTaxMode)} value={value}>
+      <SelectTrigger aria-label={`Tax on the invoice for ${companyName}`} className="h-8 w-full text-[13px]" id={id}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {XERO_TAX_MODES.map((each) => (
+          <SelectItem key={each} value={each}>
+            {XERO_TAX_MODE_LABEL[each]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
@@ -289,6 +334,8 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
 
   const currency = catalog.data?.find((company) => read.some((invoice) => invoice.tenantId === company.tenantId))?.currency ?? 'USD';
   const madeFor = making ? read.find((invoice) => invoice.part.key === making.part) : null;
+  // One invoice: its tax beside the other fields, as in Xero. Several: each says its own.
+  const single = !several ? read[0] : undefined;
 
   return (
     <>
@@ -310,7 +357,7 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       />
 
       {elsewhere.length || invoicedAlready ? (
-        <div className="border-warning/30 bg-warning/10 mb-4 flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm" role="status">
+        <div className="border-warning/30 bg-warning/10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm" role="status">
           {elsewhere.length ? (
             <>
               This visit already has an invoice:
@@ -331,24 +378,22 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         </div>
       ) : null}
 
-      <section aria-label="Invoice details" className="bg-card rounded-lg border p-4">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <Field>
-            <FieldLabel htmlFor={`${id}-contact`}>Contact</FieldLabel>
+      <section aria-label="Invoice details" className="bg-card rounded-lg border px-4 py-3">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2 md:grid-cols-4">
+          <HeaderField htmlFor={`${id}-contact`} label="Contact">
             <div className="relative">
-              <span aria-hidden="true" className="bg-warning/20 text-heading absolute top-1/2 left-1.5 -translate-y-1/2 rounded px-1.5 py-0.5 text-xs font-bold">
+              <span aria-hidden="true" className="bg-warning/20 text-heading absolute top-1/2 left-1 -translate-y-1/2 rounded px-1 py-px text-[11px] font-bold">
                 {contactInitials(draft.clientName)}
               </span>
-              <Input className="bg-muted pl-14" id={`${id}-contact`} readOnly value={draft.clientName} />
+              <Input className={cn(HEADER_INPUT, 'bg-muted pl-12')} id={`${id}-contact`} readOnly value={draft.clientName} />
             </div>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-issued`}>Issue date</FieldLabel>
-            <Input id={`${id}-issued`} max={today} onChange={(event) => changeIssued(event.target.value)} type="date" value={issuedOn} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-due`}>Due date</FieldLabel>
+          </HeaderField>
+          <HeaderField htmlFor={`${id}-issued`} label="Issue date">
+            <Input className={HEADER_INPUT} id={`${id}-issued`} max={today} onChange={(event) => changeIssued(event.target.value)} type="date" value={issuedOn} />
+          </HeaderField>
+          <HeaderField htmlFor={`${id}-due`} label="Due date">
             <Input
+              className={HEADER_INPUT}
               id={`${id}-due`}
               min={issuedOn}
               onChange={(event) => {
@@ -358,33 +403,44 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
               type="date"
               value={dueOn}
             />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-number`}>Invoice number</FieldLabel>
-            <Input className="bg-muted" id={`${id}-number`} readOnly value="Given by Xero" />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-reference`}>Reference</FieldLabel>
-            <Input id={`${id}-reference`} maxLength={255} onChange={(event) => setReference(event.target.value)} value={reference} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-payments`}>Online payments</FieldLabel>
-            <Input className="bg-muted" id={`${id}-payments`} readOnly value="As set in Xero" />
-            <FieldDescription>Card and ACH come with the invoice’s template in Xero.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-currency`}>Currency</FieldLabel>
-            <Input className="bg-muted" id={`${id}-currency`} readOnly value={currency} />
-          </Field>
+          </HeaderField>
+          <HeaderField htmlFor={`${id}-number`} label="Invoice number">
+            <Input className={cn(HEADER_INPUT, 'bg-muted')} id={`${id}-number`} readOnly value="Given by Xero" />
+          </HeaderField>
+          <HeaderField htmlFor={`${id}-reference`} label="Reference">
+            <Input className={HEADER_INPUT} id={`${id}-reference`} maxLength={255} onChange={(event) => setReference(event.target.value)} value={reference} />
+          </HeaderField>
+          <HeaderField htmlFor={`${id}-payments`} label="Online payments">
+            <Input
+              className={cn(HEADER_INPUT, 'bg-muted')}
+              id={`${id}-payments`}
+              readOnly
+              title="Card and ACH come with the invoice’s template in Xero."
+              value="As set in Xero"
+            />
+          </HeaderField>
+          <HeaderField htmlFor={`${id}-currency`} label="Currency">
+            <Input className={cn(HEADER_INPUT, 'bg-muted')} id={`${id}-currency`} readOnly value={currency} />
+          </HeaderField>
+          {single?.company ? (
+            <HeaderField htmlFor={`${id}-tax`} label="Tax">
+              <TaxModeSelect
+                companyName={companyWords(single.tenantId)}
+                id={`${id}-tax`}
+                onChange={(taxMode) => changePart(single.part.key, { taxMode })}
+                value={single.mode}
+              />
+            </HeaderField>
+          ) : null}
         </div>
       </section>
 
       {catalog.isError ? (
-        <div className="mt-6">
+        <div className="mt-4">
           <ErrorState error={catalog.error} retry={() => void catalog.refetch()} />
         </div>
       ) : catalog.isLoading ? (
-        <p className="text-muted-foreground mt-6 text-sm" role="status">
+        <p className="text-muted-foreground mt-4 text-sm" role="status">
           Reading each company’s accounts, tax rates and tracking…
         </p>
       ) : (
@@ -392,6 +448,7 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
           <XeroPartSection
             changeLine={changeLine}
             companyName={companyWords(invoice.tenantId)}
+            idPrefix={id}
             invoice={invoice}
             key={invoice.part.key}
             onAddLine={() => addLine(invoice.part.key)}
@@ -399,7 +456,7 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
             onLeaveOut={several ? () => setParts((current) => current.filter((part) => part.key !== invoice.part.key)) : null}
             onNewProject={(lineKey) => invoice.tenantId && setMaking({ part: invoice.part.key, line: lineKey, tenantId: invoice.tenantId })}
             onRemoveLine={(lineKey) => removeLine(invoice.part.key, lineKey)}
-            onTaxMode={(taxMode) => changePart(invoice.part.key, { taxMode })}
+            onTaxMode={several ? (taxMode) => changePart(invoice.part.key, { taxMode }) : null}
             organisations={organisations}
             products={productsFor(draft.products, invoice.tenantId)}
           />
@@ -407,9 +464,9 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       )}
 
       {others.length ? (
-        <div className="mt-3 flex justify-end">
+        <div className="mt-2 flex justify-end">
           <Select onValueChange={addPart} value="">
-            <SelectTrigger aria-label="Add an invoice for another company" className="h-8 w-auto gap-2">
+            <SelectTrigger aria-label="Add an invoice for another company" className="h-8 w-auto gap-2 text-[13px]">
               <SelectValue placeholder="Add an invoice for another company" />
             </SelectTrigger>
             <SelectContent>
@@ -423,7 +480,7 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         </div>
       ) : null}
 
-      <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
         <p aria-live="polite" className={problem ? 'text-destructive mr-auto text-sm' : 'text-muted-foreground mr-auto text-sm'}>
           {problem ??
             `Made out to ${draft.clientName}. ${several ? 'Each goes' : 'It goes'} to Xero as a draft, numbered there; pick each line’s project there before approving.`}
@@ -474,10 +531,23 @@ type ReadPart = {
   totalCents: number;
 };
 
-/** One company's invoice: how it carries tax, its lines as Xero's table has them, and its totals. */
+/** A cell of the lines table, ruled as Xero's: no padding, its field filling it. */
+const CELL = 'h-10 border-r p-0 align-middle jobber:py-0';
+const HEAD = 'text-heading h-11 border-r px-2 font-sans text-[13px] leading-tight font-semibold tracking-normal whitespace-normal normal-case';
+const CELL_INPUT =
+  'h-10 rounded-none border-0 bg-transparent px-2 text-[13px] shadow-none focus-visible:ring-2 focus-visible:ring-inset md:text-[13px] dark:bg-transparent';
+const CELL_PICKER = 'h-10 rounded-none border-0 px-2 text-[13px] focus-visible:ring-2 focus-visible:ring-inset dark:bg-transparent';
+/** A cell's list wider than the cell, to read a technician's or an account's whole name. */
+const CELL_LIST = 'min-w-72';
+
+/** Xero's column widths, in pixels: the table fits Xero's own width, and scrolls sideways below it. */
+const WIDTH = { item: 150, description: 200, quantity: 64, price: 88, discount: 64, account: 150, taxRate: 120, taxAmount: 84, tracking: 140, project: 150, amount: 96, remove: 40 };
+
+/** One company's invoice: its lines as Xero's table has them, and its totals. */
 function XeroPartSection({
   invoice,
   companyName,
+  idPrefix,
   organisations,
   products,
   changeLine,
@@ -490,62 +560,74 @@ function XeroPartSection({
 }: {
   invoice: ReadPart;
   companyName: string;
+  idPrefix: string;
   organisations: readonly { tenantId: string; name: string; connected: boolean }[];
   products: readonly InvoiceDraftProduct[];
   changeLine: (partKey: string, lineKey: string, patch: Partial<XeroLine>) => void;
   onAddLine: () => void;
   onRemoveLine: (lineKey: string) => void;
-  onTaxMode: (mode: XeroTaxMode) => void;
+  /** Its own tax select: only when the form makes several invoices. */
+  onTaxMode: ((mode: XeroTaxMode) => void) | null;
   onChoose: (tenantId: string | null) => void;
   onLeaveOut: (() => void) | null;
   onNewProject: (lineKey: string) => void;
 }) {
   const { part, company, companyProjects, mode } = invoice;
-  const tracking = company?.tracking ?? [];
+  const tracking = trackingInOrder(company);
   const change = (lineKey: string, patch: Partial<XeroLine>) => changeLine(part.key, lineKey, patch);
+  const minWidth =
+    WIDTH.item +
+    WIDTH.description +
+    WIDTH.quantity +
+    WIDTH.price +
+    WIDTH.discount +
+    WIDTH.amount +
+    WIDTH.remove +
+    (company ? WIDTH.account + WIDTH.taxRate + WIDTH.taxAmount : 0) +
+    tracking.length * WIDTH.tracking +
+    (companyProjects ? WIDTH.project : 0);
+  const productOptions = products.map((product) => ({ value: product.name, label: product.name }));
+  const accountOptions = (company?.accounts ?? []).map((account) => ({ value: account.accountId, label: `${account.code} · ${account.name}` }));
+  const rateOptions = (company?.taxRates ?? []).map((rate) => ({ value: rate.taxType, label: `${rate.name} (${rate.rate}%)` }));
+  const projectChosen = companyProjects?.chosen ?? null;
+  const projectList = companyProjects
+    ? projectChosen && !companyProjects.projects.some((project) => project.xeroProjectId === projectChosen.xeroProjectId)
+      ? [projectChosen, ...companyProjects.projects]
+      : companyProjects.projects
+    : [];
+  const projectOptions = [
+    ...projectList.map((project) => ({ value: project.xeroProjectId, label: project.name })),
+    ...(companyProjects && !companyProjects.problem ? [{ value: NEW_PROJECT, label: '+ New project…' }] : []),
+  ];
 
   return (
-    <section aria-label={`Invoice for ${companyName}`} className="bg-card mt-6 rounded-lg border">
-      <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
-        <div className="mr-auto">
-          <h2 className="text-heading text-base font-bold">Invoice for {companyName}</h2>
-          {invoice.said ? null : (
-            <Select onValueChange={(value) => onChoose(value === NONE ? null : value)} value={part.chosen ?? NONE}>
-              <SelectTrigger aria-label={`Company for the invoice for ${companyName}`} className="mt-1 h-8 w-auto gap-2">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NONE}>No company</SelectItem>
-                {organisations
-                  .filter((organisation) => organisation.connected || organisation.tenantId === part.chosen)
-                  .map((organisation) => (
-                    <SelectItem key={organisation.tenantId} value={organisation.tenantId}>
-                      {organisation.name}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-        {company ? (
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Tax</span>
-            <Select onValueChange={(value) => onTaxMode(value as XeroTaxMode)} value={mode}>
-              <SelectTrigger aria-label={`Tax on the invoice for ${companyName}`} className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {XERO_TAX_MODES.map((each) => (
-                  <SelectItem key={each} value={each}>
-                    {XERO_TAX_MODE_LABEL[each]}
+    <section aria-label={`Invoice for ${companyName}`} className="bg-card mt-3 overflow-hidden rounded-lg border">
+      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+        <h2 className="text-heading mr-auto text-sm font-semibold">Invoice for {companyName}</h2>
+        {invoice.said ? null : (
+          <Select onValueChange={(value) => onChoose(value === NONE ? null : value)} value={part.chosen ?? NONE}>
+            <SelectTrigger aria-label={`Company for the invoice for ${companyName}`} className="h-8 w-auto gap-2 text-[13px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>No company</SelectItem>
+              {organisations
+                .filter((organisation) => organisation.connected || organisation.tenantId === part.chosen)
+                .map((organisation) => (
+                  <SelectItem key={organisation.tenantId} value={organisation.tenantId}>
+                    {organisation.name}
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
+            </SelectContent>
+          </Select>
+        )}
+        {company && onTaxMode ? (
+          <div className="w-40">
+            <TaxModeSelect companyName={companyName} onChange={onTaxMode} value={mode} />
           </div>
         ) : null}
         {onLeaveOut ? (
-          <Button aria-label={`Leave out the invoice for ${companyName}`} onClick={onLeaveOut} size="sm" variant="ghost">
+          <Button aria-label={`Leave out the invoice for ${companyName}`} className="h-8" onClick={onLeaveOut} size="sm" variant="ghost">
             <Trash2Icon />
             Leave out
           </Button>
@@ -554,26 +636,54 @@ function XeroPartSection({
       </div>
 
       <div className="overflow-x-auto">
-        <Table className="min-w-[1500px] table-fixed">
+        <Table className="table-fixed text-[13px]" style={{ minWidth }}>
           {/* Not sticky: inside its own scroll box, a sticky header covers the first line. */}
           <TableHeader className="lg:static">
-            <TableRow>
-              <TableHead className="w-[200px]">Item</TableHead>
-              <TableHead className="w-[200px]">Description</TableHead>
-              <TableHead className="w-[72px] text-right">Qty.</TableHead>
-              <TableHead className="w-[100px] text-right">Price</TableHead>
-              <TableHead className="w-[72px] text-right">Disc.</TableHead>
-              {company ? <TableHead className="w-[200px]">Account</TableHead> : null}
-              {company ? <TableHead className="w-[150px]">Tax rate</TableHead> : null}
-              {company ? <TableHead className="w-[100px] text-right">Tax amount</TableHead> : null}
+            <TableRow className="hover:bg-transparent">
+              <TableHead className={HEAD} style={{ width: WIDTH.item }}>
+                Item
+              </TableHead>
+              <TableHead className={HEAD} style={{ width: WIDTH.description }}>
+                Description
+              </TableHead>
+              <TableHead className={cn(HEAD, 'text-right')} style={{ width: WIDTH.quantity }}>
+                Qty.
+              </TableHead>
+              <TableHead className={cn(HEAD, 'text-right')} style={{ width: WIDTH.price }}>
+                Price
+              </TableHead>
+              <TableHead className={cn(HEAD, 'text-right')} style={{ width: WIDTH.discount }}>
+                Disc.
+              </TableHead>
+              {company ? (
+                <TableHead className={HEAD} style={{ width: WIDTH.account }}>
+                  Account
+                </TableHead>
+              ) : null}
+              {company ? (
+                <TableHead className={HEAD} style={{ width: WIDTH.taxRate }}>
+                  Tax rate
+                </TableHead>
+              ) : null}
+              {company ? (
+                <TableHead className={cn(HEAD, 'text-right')} style={{ width: WIDTH.taxAmount }}>
+                  Tax amount
+                </TableHead>
+              ) : null}
               {tracking.map((category) => (
-                <TableHead className="w-[180px]" key={category.trackingCategoryId}>
+                <TableHead className={HEAD} key={category.trackingCategoryId} style={{ width: WIDTH.tracking }}>
                   {category.name}
                 </TableHead>
               ))}
-              {companyProjects ? <TableHead className="w-[220px]">Project</TableHead> : null}
-              <TableHead className="w-[110px] text-right">Amount {company?.currency ?? 'USD'}</TableHead>
-              <TableHead className="w-[48px]">
+              {companyProjects ? (
+                <TableHead className={HEAD} style={{ width: WIDTH.project }}>
+                  Project
+                </TableHead>
+              ) : null}
+              <TableHead className={cn(HEAD, 'text-right')} style={{ width: WIDTH.amount }}>
+                Amount {company?.currency ?? 'USD'}
+              </TableHead>
+              <TableHead className={cn(HEAD, 'border-r-0')} style={{ width: WIDTH.remove }}>
                 <span className="sr-only">Remove</span>
               </TableHead>
             </TableRow>
@@ -581,15 +691,21 @@ function XeroPartSection({
           <TableBody>
             {part.lines.map((line, index) => {
               const n = index + 1;
+              const cellId = `${idPrefix}-${part.key}-${line.key}`;
               const input = invoice.inputs[index] ?? null;
               const amountCents = input ? lineTotalCents(input) : null;
               const rate = company ? taxRateOf(company, input?.xeroTaxType) : 0;
-              const listed = products.some((product) => product.name === line.name);
+              const items = line.name && !products.some((product) => product.name === line.name) ? [{ value: line.name, label: line.name }, ...productOptions] : productOptions;
               return (
-                <TableRow key={line.key}>
-                  <TableCell className="align-top">
-                    <Select
-                      onValueChange={(name) => {
+                <TableRow className="hover:bg-transparent" key={line.key}>
+                  <TableCell className={CELL}>
+                    <SearchableSelect
+                      ariaLabel={`Line ${n}: item`}
+                      className={CELL_PICKER}
+                      contentClassName={CELL_LIST}
+                      emptyMessage="No product by that name."
+                      id={`${cellId}-item`}
+                      onChange={(name) => {
                         const product = products.find((each) => each.name === name);
                         // A new item fills its line again, as Xero does.
                         change(line.key, {
@@ -601,68 +717,44 @@ function XeroPartSection({
                           tracking: undefined,
                         });
                       }}
+                      options={items}
+                      optionsLabel="Products and services"
+                      placeholder="Item"
                       value={line.name}
-                    >
-                      <SelectTrigger aria-label={`Line ${n}: item`} className="w-full">
-                        <SelectValue placeholder="Choose an item" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {line.name && !listed ? <SelectItem value={line.name}>{line.name}</SelectItem> : null}
-                        {products.map((product) => (
-                          <SelectItem key={product.name} value={product.name}>
-                            {product.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {company && company.items.length ? (
-                      <Select onValueChange={(value) => change(line.key, { itemCode: value === NONE ? null : value })} value={input?.xeroItemCode ?? NONE}>
-                        <SelectTrigger aria-label={`Line ${n}: Xero item`} className="mt-1 h-7 w-full text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={NONE}>No Xero item</SelectItem>
-                          {company.items.map((item) => (
-                            <SelectItem key={item.code} value={item.code}>
-                              {item.code}
-                              {item.name && item.name !== item.code ? ` · ${item.name}` : ''}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : null}
+                    />
                   </TableCell>
-                  <TableCell className="align-top">
+                  <TableCell className={CELL}>
                     <Input
                       aria-label={`Line ${n}: description`}
+                      className={CELL_INPUT}
                       maxLength={2000}
                       onChange={(event) => change(line.key, { description: event.target.value })}
-                      placeholder={line.name || 'Description'}
+                      placeholder={line.name}
                       value={line.description}
                     />
                   </TableCell>
-                  <TableCell className="align-top">
+                  <TableCell className={CELL}>
                     <Input
                       aria-label={`Line ${n}: quantity`}
-                      className="text-right tabular-nums"
+                      className={cn(CELL_INPUT, 'text-right tabular-nums')}
                       inputMode="decimal"
                       onChange={(event) => change(line.key, { quantity: event.target.value })}
                       value={line.quantity}
                     />
                   </TableCell>
-                  <TableCell className="align-top">
+                  <TableCell className={CELL}>
                     <Input
                       aria-label={`Line ${n}: price`}
-                      className="text-right tabular-nums"
+                      className={cn(CELL_INPUT, 'text-right tabular-nums')}
                       inputMode="decimal"
                       onChange={(event) => change(line.key, { price: event.target.value })}
                       value={line.price}
                     />
                   </TableCell>
-                  <TableCell className="align-top">
+                  <TableCell className={CELL}>
                     <Input
                       aria-label={`Line ${n}: discount`}
-                      className="text-right tabular-nums"
+                      className={cn(CELL_INPUT, 'text-right tabular-nums')}
                       inputMode="decimal"
                       onChange={(event) => change(line.key, { discount: event.target.value })}
                       placeholder="%"
@@ -670,81 +762,87 @@ function XeroPartSection({
                     />
                   </TableCell>
                   {company ? (
-                    <TableCell className="align-top">
-                      <Select onValueChange={(accountId) => change(line.key, { accountId })} value={input?.xeroAccountId ?? ''}>
-                        <SelectTrigger aria-label={`Line ${n}: account`} className="w-full">
-                          <SelectValue placeholder="Choose an account" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {company.accounts.map((account) => (
-                            <SelectItem key={account.accountId} value={account.accountId}>
-                              {account.code} · {account.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                    <TableCell className={CELL}>
+                      <SearchableSelect
+                        ariaLabel={`Line ${n}: account`}
+                        className={CELL_PICKER}
+                        contentClassName={CELL_LIST}
+                        emptyMessage="No account by that name or code."
+                        id={`${cellId}-account`}
+                        onChange={(accountId) => change(line.key, { accountId })}
+                        options={accountOptions}
+                        optionsLabel="Sales accounts"
+                        placeholder="Account"
+                        value={input?.xeroAccountId ?? ''}
+                      />
                     </TableCell>
                   ) : null}
                   {company ? (
-                    <TableCell className="align-top">
-                      <Select onValueChange={(taxType) => change(line.key, { taxType })} value={input?.xeroTaxType ?? ''}>
-                        <SelectTrigger aria-label={`Line ${n}: tax rate`} className="w-full">
-                          <SelectValue placeholder="Choose a rate" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {company.taxRates.map((each) => (
-                            <SelectItem key={each.taxType} value={each.taxType}>
-                              {each.name} ({each.rate}%)
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                    <TableCell className={CELL}>
+                      <SearchableSelect
+                        ariaLabel={`Line ${n}: tax rate`}
+                        className={CELL_PICKER}
+                        contentClassName={CELL_LIST}
+                        emptyMessage="No tax rate by that name."
+                        id={`${cellId}-rate`}
+                        onChange={(taxType) => change(line.key, { taxType })}
+                        options={rateOptions}
+                        optionsLabel="Tax rates"
+                        placeholder="Tax rate"
+                        value={input?.xeroTaxType ?? ''}
+                      />
                     </TableCell>
                   ) : null}
                   {company ? (
-                    <TableCell className="text-muted-foreground pt-4 text-right align-top tabular-nums">
+                    <TableCell className={cn(CELL, 'text-muted-foreground px-2 text-right tabular-nums')}>
                       {amountCents === null ? '—' : formatMoney(lineTaxCents(amountCents, rate, mode))}
                     </TableCell>
                   ) : null}
                   {tracking.map((category) => {
-                    const picked = input?.xeroTracking?.find((each) => each.trackingCategoryId === category.trackingCategoryId)?.option ?? NONE;
+                    const picked = input?.xeroTracking?.find((each) => each.trackingCategoryId === category.trackingCategoryId)?.option ?? '';
                     return (
-                      <TableCell className="align-top" key={category.trackingCategoryId}>
-                        <Select
-                          onValueChange={(option) => {
+                      <TableCell className={CELL} key={category.trackingCategoryId}>
+                        <SearchableSelect
+                          ariaLabel={`Line ${n}: ${category.name}`}
+                          className={CELL_PICKER}
+                          clearLabel="No tracking"
+                          contentClassName={CELL_LIST}
+                          emptyMessage="No option by that name."
+                          id={`${cellId}-${category.trackingCategoryId}`}
+                          onChange={(option) => {
                             const current = Object.fromEntries((input?.xeroTracking ?? []).map((each) => [each.trackingCategoryId, each.option]));
-                            change(line.key, { tracking: { ...current, [category.trackingCategoryId]: option === NONE ? '' : option } });
+                            change(line.key, { tracking: { ...current, [category.trackingCategoryId]: option } });
                           }}
+                          options={category.options.map((option) => ({ value: option, label: option }))}
+                          optionsLabel={category.name}
+                          placeholder="No tracking"
                           value={picked}
-                        >
-                          <SelectTrigger aria-label={`Line ${n}: ${category.name}`} className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={NONE}>None</SelectItem>
-                            {category.options.map((option) => (
-                              <SelectItem key={option} value={option}>
-                                {option}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        />
                       </TableCell>
                     );
                   })}
                   {companyProjects ? (
-                    <TableCell className="align-top">
-                      <ProjectSelect
-                        company={companyProjects}
-                        label={`Line ${n}: project`}
-                        onChange={(value) => (value === NEW_PROJECT ? onNewProject(line.key) : change(line.key, { projectId: value === NONE ? null : value }))}
-                        value={input?.xeroProjectId ?? NONE}
+                    <TableCell className={CELL}>
+                      <SearchableSelect
+                        ariaLabel={`Line ${n}: project`}
+                        className={CELL_PICKER}
+                        clearLabel="No project"
+                        contentClassName={CELL_LIST}
+                        emptyMessage="No project in progress by that name."
+                        id={`${cellId}-project`}
+                        onChange={(value) => (value === NEW_PROJECT ? onNewProject(line.key) : change(line.key, { projectId: value || null }))}
+                        options={projectOptions}
+                        optionsLabel="Projects in progress"
+                        placeholder="No project"
+                        value={input?.xeroProjectId ?? ''}
                       />
                     </TableCell>
                   ) : null}
-                  <TableCell className="text-heading pt-4 text-right align-top font-semibold tabular-nums">{amountCents === null ? '—' : formatMoney(amountCents)}</TableCell>
-                  <TableCell className="align-top">
-                    <Button aria-label={`Remove line ${n}`} onClick={() => onRemoveLine(line.key)} size="icon" variant="ghost">
+                  <TableCell className={cn(CELL, 'text-heading px-2 text-right font-semibold tabular-nums')}>
+                    {amountCents === null ? '—' : formatMoney(amountCents)}
+                  </TableCell>
+                  <TableCell className={cn(CELL, 'border-r-0 text-center')}>
+                    <Button aria-label={`Remove line ${n}`} className="size-8" onClick={() => onRemoveLine(line.key)} size="icon" variant="ghost">
                       <Trash2Icon />
                     </Button>
                   </TableCell>
@@ -755,52 +853,20 @@ function XeroPartSection({
         </Table>
       </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-4 border-t px-4 py-3">
-        <Button onClick={onAddLine} size="sm" variant="outline">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-t px-3 py-2">
+        <Button className="h-8" onClick={onAddLine} size="sm" variant="outline">
           <PlusIcon />
           Add row
         </Button>
-        <dl className="grid grid-cols-[1fr_auto] gap-x-8 gap-y-1 text-sm sm:w-80">
+        <dl className="grid grid-cols-[1fr_auto] gap-x-8 gap-y-1 text-sm sm:w-72">
           <dt className="text-muted-foreground">Subtotal</dt>
           <dd className="text-right tabular-nums">{formatMoney(invoice.subtotalCents)}</dd>
           <dt className="text-muted-foreground">{mode === 'INCLUSIVE' ? 'Includes sales tax' : 'Total sales tax'}</dt>
           <dd className="text-right tabular-nums">{formatMoney(invoice.taxCents)}</dd>
-          <dt className="text-heading border-t pt-2 text-base font-bold">Total</dt>
-          <dd className="text-heading border-t pt-2 text-right text-base font-bold tabular-nums">{formatMoney(invoice.totalCents)}</dd>
+          <dt className="text-heading border-t pt-1 text-base font-bold">Total</dt>
+          <dd className="text-heading border-t pt-1 text-right text-base font-bold tabular-nums">{formatMoney(invoice.totalCents)}</dd>
         </dl>
       </div>
     </section>
-  );
-}
-
-/** A line's project: one in progress in the company's books under the property, none, or a new one. */
-function ProjectSelect({
-  company,
-  value,
-  label,
-  onChange,
-}: {
-  company: XeroVisitCompanyProjects;
-  value: string;
-  label: string;
-  onChange: (value: string) => void;
-}) {
-  const chosen = company.chosen;
-  const options = chosen && !company.projects.some((project) => project.xeroProjectId === chosen.xeroProjectId) ? [chosen, ...company.projects] : company.projects;
-  return (
-    <Select onValueChange={onChange} value={value}>
-      <SelectTrigger aria-label={label} className="w-full">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={NONE}>No project</SelectItem>
-        {options.map((project) => (
-          <SelectItem key={project.xeroProjectId} value={project.xeroProjectId}>
-            {project.name}
-          </SelectItem>
-        ))}
-        {company.problem ? null : <SelectItem value={NEW_PROJECT}>+ New project…</SelectItem>}
-      </SelectContent>
-    </Select>
   );
 }

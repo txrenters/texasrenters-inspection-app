@@ -32,6 +32,23 @@ export type SearchableSelectOption = {
 };
 
 /**
+ * What was typed matches an option when every word of it is in the option, in
+ * any order and any case (2026-11-13): "air moses" finds "Air Filter Income:
+ * Moses", and "4307" an account by its code. Command's own matcher scores
+ * letters in order anywhere, so "air filter mo" kept every Air Filter option.
+ */
+export function matchesWords(value: string, search: string): number {
+  const text = value.toLowerCase();
+  return search
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => text.includes(word))
+    ? 1
+    : 0;
+}
+
+/**
  * Combobox, built on the shadcn Popover + Command pair.
  *
  * A trigger button plus a popover-owned search field, rather than one `<input>`
@@ -58,6 +75,8 @@ export function SearchableSelect({
   loadingMoreLabel = 'Loading more options…',
   moreHint = 'Scroll for more options',
   className,
+  contentClassName,
+  ariaLabel,
   onChange,
   onSearch,
   onLoadMore,
@@ -77,6 +96,10 @@ export function SearchableSelect({
   loadingMoreLabel?: string;
   moreHint?: string;
   className?: string;
+  /** The list's own classes: a narrow table cell's list wider than the cell (2026-11-13). */
+  contentClassName?: string;
+  /** Its name, where no label names it -- a cell of a table row (2026-11-13). */
+  ariaLabel?: string;
   onChange: (value: string) => void;
   onSearch?: (query: string) => void;
   onLoadMore?: () => void;
@@ -155,6 +178,7 @@ export function SearchableSelect({
       <PopoverTrigger asChild>
         <button
           aria-expanded={open}
+          aria-label={ariaLabel}
           className={cn(
             'border-input flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm outline-none',
             'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
@@ -181,8 +205,8 @@ export function SearchableSelect({
           <ChevronsUpDownIcon aria-hidden className="ml-auto size-4 shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
-        <Command defaultValue={selected ? itemValue(selected) : undefined} shouldFilter={!onSearch}>
+      <PopoverContent align="start" className={cn('w-(--radix-popover-trigger-width) p-0', contentClassName)}>
+        <Command defaultValue={selected ? itemValue(selected) : undefined} filter={matchesWords} shouldFilter={!onSearch}>
           <CommandInput onValueChange={setQuery} placeholder={searchPlaceholder} value={query} />
           <CommandList onScroll={handleScroll}>
             <CommandEmpty>{emptyMessage}</CommandEmpty>

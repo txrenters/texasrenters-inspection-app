@@ -78,9 +78,21 @@ const DRAFT: InvoiceDraft = {
 const ready = (data: unknown) => ({ isLoading: false, isError: false, data, refetch: vi.fn() });
 const make = { mutate: vi.fn(), isPending: false };
 
+// The search lists (cmdk) measure and scroll themselves: jsdom has neither.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+globalThis.ResizeObserver ??= ResizeObserverStub as never;
+Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+
 const combobox = (name: string) => screen.getByRole('combobox', { name });
+/** A list opened and an option picked: the tax select opens on a press, the search lists on a click. */
 const pick = (name: string, option: string) => {
-  fireEvent.pointerDown(combobox(name), { button: 0, pointerId: 1, pointerType: 'mouse' });
+  const trigger = combobox(name);
+  if (trigger.dataset.slot === 'select-trigger') fireEvent.pointerDown(trigger, { button: 0, pointerId: 1, pointerType: 'mouse' });
+  else fireEvent.click(trigger);
   fireEvent.click(screen.getByRole('option', { name: option }));
 };
 
@@ -112,7 +124,6 @@ describe('the New invoice, laid out as Xero’s', () => {
   it('fills each line from its item, as Xero does: the product’s account and Xero item, the company’s rate, the technician’s option, the visit’s project', () => {
     render(<XeroInvoiceEditor draft={DRAFT} />);
     expect(combobox('Line 1: item')).toHaveTextContent(HVAC);
-    expect(combobox('Line 1: Xero item')).toHaveTextContent('HVAC');
     expect(combobox('Line 1: account')).toHaveTextContent('4305 · Service: HVAC Inspection & Filter Change');
     expect(combobox('Line 1: tax rate')).toHaveTextContent('Tax Exempt (0%)');
     expect(combobox('Line 1: Income by Employee')).toHaveTextContent('HVAC Inspection Income: Moses');
@@ -199,6 +210,34 @@ describe('the New invoice, laid out as Xero’s', () => {
     expect(make.mutate).toHaveBeenCalledWith(expect.objectContaining({ tenantId: HOMES, input: expect.objectContaining({ inspectionId: 'insp-1' }) }), expect.anything());
     fireEvent.click(screen.getByRole('button', { name: /^Save draft in Xero/ }));
     expect(actions.create.mutate.mock.calls[0]![0].lineItems[0]).toMatchObject({ xeroProjectId: made.xeroProjectId });
+  });
+
+  it('finds an option by typing, not by scrolling: a technician among a category’s many', () => {
+    render(<XeroInvoiceEditor draft={DRAFT} />);
+    fireEvent.click(combobox('Line 1: Income by Employee'));
+    // Every word typed, in any order: the technician and the kind of work.
+    fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'moses air' } });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Air Filter Income: Moses']);
+    fireEvent.click(screen.getByRole('option', { name: 'Air Filter Income: Moses' }));
+    expect(combobox('Line 1: Income by Employee')).toHaveTextContent('Air Filter Income: Moses');
+    // An account by its code.
+    fireEvent.click(combobox('Line 1: account'));
+    fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: '4307' } });
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['4307 · Service: Filter Change']);
+  });
+
+  it('puts the company’s own tracking category first, as Xero does, and lets a line be tracked in none', () => {
+    const expenses = { trackingCategoryId: 'cat-0', name: 'Expenses', options: ['Truck'] };
+    xero.useXeroInvoiceForm.mockReturnValue(ready([{ ...COMPANY, tracking: [expenses, ...COMPANY.tracking] }]));
+    render(<XeroInvoiceEditor draft={DRAFT} />);
+    const headers = within(screen.getByRole('region', { name: 'Invoice for Example Home Services' }))
+      .getAllByRole('columnheader')
+      .map((header) => header.textContent);
+    expect(headers.slice(8, 10)).toEqual(['Income by Employee', 'Expenses']);
+    expect(combobox('Line 1: Expenses')).toHaveTextContent('No tracking');
+    pick('Line 1: Income by Employee', 'No tracking');
+    fireEvent.click(screen.getByRole('button', { name: /^Save draft in Xero/ }));
+    expect(actions.create.mutate.mock.calls[0]![0].lineItems[0]).toMatchObject({ xeroTracking: [] });
   });
 
   it('asks for a property’s projects for an invoice no visit covers', () => {
