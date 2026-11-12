@@ -55,6 +55,7 @@ const VIEW: InvoiceSettingsView = {
     { tenantId: HOMES, name: 'Example Home Services', connected: true },
     { tenantId: PEST, name: 'Example Pest Co', connected: true },
   ],
+  madeInConsole: false,
 };
 
 const mount = (view: InvoiceSettingsView = VIEW, mayChange = true) => render(<BillingRulesSection mayChange={mayChange} view={view} />);

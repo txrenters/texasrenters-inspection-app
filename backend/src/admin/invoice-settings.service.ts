@@ -117,6 +117,7 @@ export class InvoiceSettingsService {
       suggestedRules: await suggestedBillingRules(this.prisma, org, businessDate(), basis),
       organisations,
       files,
+      madeInConsole: Boolean(switchedAt),
     };
   }
 

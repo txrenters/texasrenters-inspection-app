@@ -157,6 +157,9 @@ describe('the invoices list', () => {
     expect(screen.getByRole('group', { name: 'Issued' })).toBeInTheDocument();
     expect(hooks.useInvoices).toHaveBeenLastCalledWith(expect.objectContaining({ issuedFrom: undefined, issuedTo: undefined }));
     expect(screen.getByRole('link', { name: 'Batch deliver' })).toHaveAttribute('href', '/invoices/deliver');
+    // With none yet (2026-11-13): made from finished visits, with no word of Jobber's connection.
+    expect(screen.getByText('No invoices yet. Make them from the finished visits with Batch create.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Jobber connection' })).not.toBeInTheDocument();
     unmount();
 
     hooks.useInvoices.mockReturnValue(ready({ ...LIST, writesEnabled: false }));
@@ -225,6 +228,14 @@ describe('a batch', () => {
     ],
     truncated: false,
   };
+
+  it('asks no terms and offers no drafts once the console makes the invoices (2026-11-13): each is a draft in Xero, dated by Xero', () => {
+    batches.useUninvoicedVisits.mockReturnValue(ready({ ...VISITS, startsOn: '2026-11-01' }));
+    render(<BatchInvoicesPage />);
+    expect(screen.queryByLabelText('Payment terms')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Make them drafts, to look over first' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Xero dates it on its visit's day and makes it due on the last day of that month/)).toBeInTheDocument();
+  });
 
   it('reads the past week to start with, and ticks every visit that can be billed', () => {
     batches.useUninvoicedVisits.mockReturnValue(ready(VISITS));

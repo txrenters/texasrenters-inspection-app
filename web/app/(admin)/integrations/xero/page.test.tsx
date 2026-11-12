@@ -101,6 +101,8 @@ const settings = (tenantId: string): XeroSettingsView => ({
   checks: [{ key: 'sendFrom', label: 'A start date', ok: false, detail: 'Choose the first day whose invoices go to Xero.' }],
   ready: false,
   updatedAt: null,
+  booksRead: false,
+  madeInConsole: false,
 });
 
 function sending(tenantId: string): XeroSendingView {

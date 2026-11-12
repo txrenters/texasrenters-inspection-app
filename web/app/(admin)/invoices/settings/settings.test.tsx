@@ -66,6 +66,7 @@ const VIEW: InvoiceSettingsView = {
   suggestedRules: [],
   // No Xero organisation yet: the column is not shown.
   organisations: [],
+  madeInConsole: false,
 };
 
 /** The companies' books in Xero: two connected, one no longer. */
@@ -99,6 +100,17 @@ describe('the company details and new-invoice defaults', () => {
       { ...EMPTY_INVOICE_SETTINGS, companyName: 'Example Company', phone: '555-0199', expectedUpdatedAt: SAVED_AT },
       expect.anything(),
     );
+  });
+
+  it('asks no payment terms once the console makes the invoices (2026-11-13): Xero dates them and sets when they fall due', () => {
+    hooks.view.current = { ...VIEW, madeInConsole: true };
+    render(<InvoiceSettingsPage />);
+    expect(screen.queryByLabelText('Payment terms')).not.toBeInTheDocument();
+    expect(screen.getByText(/each invoice is dated on its visit’s day and falls due on the last day of that month/)).toBeInTheDocument();
+    // What a save sends is unchanged.
+    fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '555-0199' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    expect(hooks.save.mutate).toHaveBeenCalledWith(expect.objectContaining({ defaultTermsDays: EMPTY_INVOICE_SETTINGS.defaultTermsDays }), expect.anything());
   });
 
   it('says what is wrong before anything is saved', () => {

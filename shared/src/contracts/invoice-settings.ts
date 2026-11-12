@@ -120,6 +120,12 @@ export interface InvoiceSettingsView {
   suggestedRules: SuggestedBillingRule[];
   /** The office's Xero organisations, connected ones first: what each product or service can go to. Empty until Xero is connected. */
   organisations: InvoiceProductOrganisation[];
+  /**
+   * The console makes the invoices (2026-11-13): Xero dates them and sets when
+   * they fall due, and nothing is copied from Jobber any more, so neither is
+   * asked here.
+   */
+  madeInConsole: boolean;
   /** The console's copies of the files on Jobber's invoices (phase 7). */
   files?: InvoiceFileCopyStatus;
 }

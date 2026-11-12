@@ -140,6 +140,7 @@ describe('the copies before the cutover', () => {
     suggestedRules: [],
     organisations: [],
     files: status,
+    madeInConsole: false,
   });
 
   it('are counted on the settings page, with why the failed ones failed, and tried again when asked', () => {

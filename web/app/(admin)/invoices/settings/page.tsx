@@ -67,7 +67,8 @@ export default function InvoiceSettingsPage() {
       <InvoiceEmailsSection mayChange={mayChange} />
       <EmailTemplatesSection mayChange={mayChange} />
       <StatementSettingsSection mayChange={mayChange} />
-      {settings.data.files ? <FileCopiesSection files={settings.data.files} mayChange={mayChange} /> : null}
+      {/* Nothing is copied from Jobber once the console makes the invoices (2026-11-13). */}
+      {settings.data.files && !settings.data.madeInConsole ? <FileCopiesSection files={settings.data.files} mayChange={mayChange} /> : null}
       <InvoiceTakeoverSection />
     </>
   );
@@ -167,27 +168,31 @@ function SettingsForm({ view, mayChange }: { view: InvoiceSettingsView; mayChang
       <section aria-label="New invoices" className="bg-card mt-6 rounded-lg border p-4">
         <h2 className="text-heading text-lg font-bold">New invoices</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          What a new invoice starts with, one at a time or in a batch; each can still be changed on the invoice. A blank
-          field takes the latest invoice&apos;s.
+          {view.madeInConsole
+            ? // Xero dates them and sets when they fall due (2026-11-13): the console's terms would say otherwise.
+              'What the console’s own copy of a new invoice starts with. Xero takes its lines, not this wording, and sets its dates: each invoice is dated on its visit’s day and falls due on the last day of that month. A blank field takes the latest invoice’s.'
+            : 'What a new invoice starts with, one at a time or in a batch; each can still be changed on the invoice. A blank field takes the latest invoice’s.'}
         </p>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           {field('defaultSubject', 'Subject', fallback.subject)}
-          <Field>
-            <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
-            <Select disabled={!mayChange} onValueChange={setTerms} value={terms}>
-              <SelectTrigger className="w-full" id={`${id}-terms`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="latest">As the latest invoice ({termsLabel(fallback.termsDays)})</SelectItem>
-                {PAYMENT_TERMS.map((option) => (
-                  <SelectItem key={option.days} value={String(option.days)}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          {view.madeInConsole ? null : (
+            <Field>
+              <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
+              <Select disabled={!mayChange} onValueChange={setTerms} value={terms}>
+                <SelectTrigger className="w-full" id={`${id}-terms`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="latest">As the latest invoice ({termsLabel(fallback.termsDays)})</SelectItem>
+                  {PAYMENT_TERMS.map((option) => (
+                    <SelectItem key={option.days} value={String(option.days)}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
           {field('defaultClientMessage', 'Client message', fallback.clientMessage, true)}
           {field('defaultContractDisclaimer', 'Contract / disclaimer', fallback.contractDisclaimer, true)}
         </div>

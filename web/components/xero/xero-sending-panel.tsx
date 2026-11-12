@@ -32,7 +32,18 @@ import { useXeroSendingActions } from '@/lib/xero-queries';
  * (2026-11-12): one changed here after it went is listed, for the office to
  * change in Xero too.
  */
-export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSendingView; sendFrom: string | null; canManage: boolean }) {
+export function XeroSendingPanel({
+  view,
+  sendFrom,
+  canManage,
+  booksRead = false,
+}: {
+  view: XeroSendingView;
+  sendFrom: string | null;
+  canManage: boolean;
+  /** The company's books are read back from Xero (2026-11-13): Xero sends its emails, and the console none. */
+  booksRead?: boolean;
+}) {
   const actions = useXeroSendingActions(view.tenantId);
   const [asking, setAsking] = useState<'on' | 'off' | null>(null);
   const busy = actions.setEnabled.isPending || actions.run.isPending || actions.retry.isPending;
@@ -59,7 +70,10 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
   // A project for each visit (2026-11-11): drafts for the office to put on their projects and approve; no payments.
   const how = view.projectsEnabled
     ? `go to Xero as drafts, each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero`
-    : 'go to Xero as approved invoices, with the payments recorded against them';
+    : // The console makes the invoices (2026-11-13): its own go as drafts, for the office to approve there.
+      view.madeInConsole
+      ? 'go to Xero as drafts that Xero numbers, for the office to approve there'
+      : 'go to Xero as approved invoices, with the payments recorded against them';
 
   return (
     <Panel
@@ -73,7 +87,11 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
         {view.enabled
           ? `On${view.changedAt ? ` since ${formatRelative(view.changedAt)}` : ''}. Invoices issued since ${since} ${how}, each within about ten minutes. Each goes once: in Xero it is the office's, and a change made here after that is listed below, to make in Xero too.`
           : 'Off. Nothing is sent to Xero.'}{' '}
-        <span className="text-muted-foreground">Xero emails nobody: invoices, follow-ups and receipts still go from the console.</span>
+        <span className="text-muted-foreground">
+          {booksRead
+            ? 'The console emails nothing for this company: its invoices, reminders and receipts go from Xero, once approved there.'
+            : 'Xero emails nobody: invoices, follow-ups and receipts still go from the console.'}
+        </span>
       </p>
 
       {view.blockers.length ? (
@@ -301,7 +319,9 @@ export function XeroSendingPanel({ view, sendFrom, canManage }: { view: XeroSend
               {asking === 'on'
                 ? view.projectsEnabled
                   ? `Invoices issued since ${since} go to Xero as drafts, each under its property as a contact and each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
-                  : `Invoices issued since ${since} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
+                  : view.madeInConsole
+                    ? `Invoices issued since ${since} go to Xero as drafts, each under its property as a contact, for the office to approve there; Xero numbers them. Each goes once: a change made here after that is the office's to make in Xero.`
+                    : `Invoices issued since ${since} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
                 : view.madeInConsole
                   ? "Invoices are made in the console now. With sending off, this company's new invoices get the console's own numbers and reach no books, and nobody emails them. Turn it back on as soon as they can go again. What was sent stays in Xero."
                   : 'Nothing more goes to Xero until it is turned on again. What was sent stays in Xero.'}
