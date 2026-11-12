@@ -93,6 +93,10 @@ function EmailsForm({ view, mayChange }: { view: InvoiceEmailSettingsView; mayCh
           client.
         </p>
       )}
+      <p className="text-muted-foreground mt-2 text-sm">
+        A company whose invoices are kept in Xero has Xero send them, with their reminders, receipts and statements: these go
+        only for any other company&apos;s invoices.
+      </p>
 
       <div className="mt-4 grid gap-4">
         <div className="flex items-start gap-2">

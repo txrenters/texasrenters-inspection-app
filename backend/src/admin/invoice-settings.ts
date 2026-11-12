@@ -233,6 +233,9 @@ export async function jobberInvoiceCompany(
  * Returns how many changed.
  */
 export async function reassignJobberInvoiceCompanies(prisma: PrismaService, organizationId: string): Promise<number> {
+  // Once the console makes the invoices (2026-11-12), Jobber's copies are read no more and sent to Xero no more: what
+  // company each was is history, kept as it stood.
+  if (await invoicingTakenOverAt(prisma, organizationId)) return 0;
   const [, changed] = await prisma.$transaction([
     // Raw SQL does not pass through the client's tenant scope: set it here, as it does.
     prisma.$executeRaw`select set_config('app.organization_id', ${organizationId}, true)`,

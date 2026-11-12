@@ -208,7 +208,7 @@ export function InvoiceHistorySection({ invoiceId }: { invoiceId: string }) {
         </ol>
       ) : (
         <p className="text-muted-foreground mt-2 text-sm">
-          Nothing has been changed here yet. Jobber keeps no history the console can read, so it starts with the first change made in the console.
+          Nothing has been changed here yet. What was done to it in Jobber or Xero stays in their own history; this starts with the first change made in the console.
         </p>
       )}
       {history.data?.truncated ? <p className="text-muted-foreground mt-2 text-xs">Older changes are not listed.</p> : null}

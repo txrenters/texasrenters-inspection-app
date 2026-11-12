@@ -74,6 +74,8 @@ describe('reminders and receipts in the settings', () => {
     expect(within(section).getByLabelText('Email clients about unpaid invoices')).toBeChecked();
     expect(days()).toEqual(['On the due date', '4 days after it is due']);
     expect(section).toHaveTextContent('Nothing here is sent until the console takes over invoicing');
+    // A company whose invoices are kept in Xero has Xero send them (2026-11-12).
+    expect(section).toHaveTextContent('A company whose invoices are kept in Xero has Xero send them');
     expect(within(section).getByRole('button', { name: 'Save reminders and receipts' })).toBeDisabled();
   });
 

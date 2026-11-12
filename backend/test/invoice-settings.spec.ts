@@ -248,6 +248,16 @@ describe('saving the settings', () => {
     expect(view.products).toEqual([expect.objectContaining({ id: PRODUCT, name: 'Filter Change', unitPriceCents: 4500, active: true })]);
     expect(view.billed.map((price) => price.name)).toEqual(['Pest Control', 'Gate Repair']);
   });
+
+  it('offers nothing Jobber billed once the console makes the invoices (2026-11-12): the list is the office’s own', async () => {
+    const db = database();
+    db.invoiceSettings.findUnique.mockImplementation(async ({ select }: { select?: Record<string, unknown> }) =>
+      select && 'invoicingTakenOverAt' in select ? { invoicingTakenOverAt: new Date('2026-11-12T15:00:00.000Z') } : null,
+    );
+    const view = await new InvoiceSettingsService(db as never).read(office);
+    expect(view.billed).toEqual([]);
+    expect(db.invoiceLine.groupBy).not.toHaveBeenCalled();
+  });
 });
 
 describe('the products and services list', () => {
@@ -333,6 +343,17 @@ describe('the products and services list', () => {
     db.auditLog.create.mockClear();
     await service.changeProduct(office, PRODUCT, { xeroTenantId: null, expectedUpdatedAt: SAVED_AT.toISOString() });
     expect(db.auditLog.create.mock.calls[0][0].data).toMatchObject({ metadata: { changes: ['Xero organisation: Example Pest Co → none'] } });
+  });
+
+  it('leaves Jobber’s invoices with the companies they had once the console makes the invoices (2026-11-12)', async () => {
+    const db = database();
+    db.invoiceSettings.findUnique.mockImplementation(async ({ select }: { select?: Record<string, unknown> }) =>
+      select && 'invoicingTakenOverAt' in select ? { invoicingTakenOverAt: new Date('2026-11-12T15:00:00.000Z') } : null,
+    );
+    db.invoiceProduct.findFirst.mockResolvedValue(product());
+    await new InvoiceSettingsService(db as never).changeProduct(office, PRODUCT, { xeroTenantId: PEST, expectedUpdatedAt: SAVED_AT.toISOString() });
+    expect(db.invoiceProduct.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ xeroTenantId: PEST }) }));
+    expect(db.$executeRaw.mock.calls.some(([strings]) => strings.join('?').includes('UPDATE "Invoice"'))).toBe(false);
   });
 
   it('keeps a product with an organisation since disconnected, and names it', async () => {
