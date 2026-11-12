@@ -18,7 +18,9 @@ export type InvoiceTakeoverCheckKey =
   | 'PAYMENTS_READ'
   | 'FILES_COPIED'
   | 'FILES_FAILED'
-  | 'COMPANY_DETAILS';
+  | 'COMPANY_DETAILS'
+  /** Each company that sends to Xero has its books read back from there (2026-11-12). */
+  | 'XERO_BOOKS_READ';
 
 export interface InvoiceTakeoverCheck {
   key: InvoiceTakeoverCheckKey;
@@ -43,6 +45,12 @@ export interface InvoiceTakeoverView {
   ready: boolean;
   /** Files that could not be copied: the office says they can be left before taking over. */
   failedFiles: number;
+  /**
+   * Jobber is connected (2026-11-12): it is read one last time before the
+   * switch. Not connected, its checks are only something to know, and the
+   * switch is made without it.
+   */
+  jobberConnected?: boolean;
 }
 
 export interface TakeOverInvoicingInput {

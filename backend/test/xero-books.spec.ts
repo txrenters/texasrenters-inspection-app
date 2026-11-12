@@ -268,6 +268,8 @@ function harness(options: {
       count: jest.fn(async () => payments.filter((row) => row.origin === 'XERO').length),
     },
     xeroInvoiceSync: {
+      // A console draft found in Xero by the link back to it (2026-11-12): its send is done.
+      upsert: jest.fn(async ({ where, create }: { where: { invoiceId: string }; create: Row }) => ({ ...create, invoiceId: where.invoiceId })),
       findMany: jest.fn(async ({ where }: { where: Row }) =>
         (options.syncs ?? [])
           .filter((row) => matches({ organizationId: ORG, ...row }, where))
@@ -550,6 +552,23 @@ describe('reading a company’s books', () => {
     expect(payments.find((row) => row.id === 'paid-here')).toMatchObject({ xeroPaymentId: 'p-1', origin: 'CONSOLE' });
     expect(payments.find((row) => row.id === 'kept-here')).toBeDefined();
     expect(fromXero(payments)).toEqual([expect.objectContaining({ invoiceId: 'console-1', xeroPaymentId: 'p-2', amountCents: 50 })]);
+    expect(result.invoices).toMatchObject({ made: 0, updated: 1 });
+  });
+
+  it('finds the console’s draft whose answer was lost by the link back to it, and keeps it where it is: never twice (2026-11-12)', async () => {
+    const CONSOLE_ID = 'e1000000-0000-4000-8000-000000000001';
+    const { books, invoices, prisma } = harness({
+      invoices: [
+        { id: CONSOLE_ID, origin: 'CONSOLE', number: null, subject: 'Move-out inspection', xeroTenantId: TENANT, xeroInvoiceId: null, inspectionId: VISIT, propertywareBuildingId: BUILDING },
+      ],
+      invoicePages: [[theirs({ Status: 'DRAFT', InvoiceNumber: 'INV-0101', Url: `https://console.example.com/invoices/${CONSOLE_ID}` })]],
+    });
+    const result = await books.run(ORG, TENANT);
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0]).toMatchObject({ id: CONSOLE_ID, origin: 'CONSOLE', xeroInvoiceId: 'x-1', number: 'INV-0101', subject: 'Move-out inspection', inspectionId: VISIT });
+    expect(prisma.xeroInvoiceSync.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { invoiceId: CONSOLE_ID }, update: expect.objectContaining({ status: 'SENT', xeroInvoiceId: 'x-1' }) }),
+    );
     expect(result.invoices).toMatchObject({ made: 0, updated: 1 });
   });
 

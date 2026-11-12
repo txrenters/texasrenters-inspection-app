@@ -24,6 +24,7 @@ import { XeroError } from './xero.errors';
 import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody } from './xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
 import { xeroWriteOffFrom } from './xero-write-off';
+import { invoicingTakenOverAt } from '../../admin/invoice-settings';
 import { XeroProjectsService, type XeroProjectsResult } from './xero-projects.service';
 import { XeroSettingsService } from './xero-settings.service';
 
@@ -39,6 +40,11 @@ export const MAX_PAYMENT_DELETES_PER_RUN = 20;
 export const MAX_WRITE_OFFS_PER_RUN = 20;
 /** Contacts looked up by name in one run, after Xero said the name was taken. */
 const MAX_LOOKUPS_PER_RUN = 20;
+/**
+ * The console's own drafts tried before and looked for in Xero in one run (2026-11-12): one call each. The rest wait
+ * for the next run -- one is never sent again until it has been looked for.
+ */
+export const MAX_DRAFT_LOOKUPS_PER_RUN = 20;
 /** A run's claim on the office; longer than any run, short enough that a crashed one does not stop sending for long. */
 const CLAIM_MS = 15 * 60_000;
 /** Between one "Send now" and the next. */
@@ -51,7 +57,19 @@ const contactsSchema = z.object({
   Contacts: z.array(z.object({ ContactID: z.string().nullish(), Name: z.string().nullish(), StatusAttributeString: z.string().nullish(), ValidationErrors: validationErrors })),
 });
 const invoicesSchema = z.object({
-  Invoices: z.array(z.object({ InvoiceID: z.string().nullish(), StatusAttributeString: z.string().nullish(), ValidationErrors: validationErrors })),
+  Invoices: z.array(
+    z.object({
+      InvoiceID: z.string().nullish(),
+      // The number Xero gave a draft of the console's (2026-11-12).
+      InvoiceNumber: z.string().nullish(),
+      StatusAttributeString: z.string().nullish(),
+      ValidationErrors: validationErrors,
+    }),
+  ),
+});
+/** A contact's invoices on one day (2026-11-12): the console's draft among them is the one linked back to its page. */
+const draftsSchema = z.object({
+  Invoices: z.array(z.object({ InvoiceID: z.string(), InvoiceNumber: z.string().nullish(), Url: z.string().nullish(), Status: z.string().nullish() })),
 });
 /** Xero's invoices under some numbers (2026-11-11): what it has already, made by Zapier or by hand. */
 const numberedSchema = z.object({
@@ -92,6 +110,8 @@ type XeroAnswer = {
 const refused = (answer: XeroAnswer) => answer.StatusAttributeString === 'ERROR' || Boolean(answer.ValidationErrors?.length);
 const said = (answer: XeroAnswer) => xeroValidationMessages({ ValidationErrors: answer.ValidationErrors ?? [] }) ?? 'Xero refused it without saying why.';
 const keyOf = (organizationId: string, path: string, body: unknown) => createHash('sha256').update(`${organizationId}|${path}|${JSON.stringify(body)}`).digest('hex');
+/** A day, `YYYY-MM-DD`, as Xero's `where` filter writes one: `DateTime(2026,11,5)`. */
+const xeroDateTime = (day: string) => `DateTime(${day.split('-').map(Number).join(',')})`;
 /** Xero's `where` filter: a name in double quotes, its own quotes and backslashes escaped. */
 const nameFilter = (name: string) => `Name=="${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
@@ -109,6 +129,9 @@ const INVOICE_FIELDS = {
   discountCents: true,
   totalCents: true,
   updatedAt: true,
+  // The console's own goes as a draft Xero numbers, under its property's contact (2026-11-12).
+  origin: true,
+  propertywareBuildingId: true,
   lines: { select: { position: true, name: true, description: true, quantity: true, unitPriceCents: true, totalCents: true } },
   xeroSync: true,
   // The visit it bills (2026-11-11): its day dates the invoice in Xero, and its technician tags the lines.
@@ -229,7 +252,15 @@ export class XeroSenderService {
               origin: { not: InvoiceOrigin.XERO },
               xeroInvoiceId: null,
               issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
-              status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
+              // The console's drafts go too (2026-11-12): Xero numbers them.
+              AND: [
+                {
+                  OR: [
+                    { origin: InvoiceOrigin.CONSOLE, status: { not: InvoiceStatus.VOIDED } },
+                    { status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
+                  ],
+                },
+              ],
               OR: [{ xeroSync: { is: null } }, { xeroSync: { xeroTenantId: { not: tenant } } }],
             },
           })
@@ -473,7 +504,7 @@ export class XeroSenderService {
       // Payments removed here, and write-offs of invoices reopened here, first.
       await this.removePayments(organizationId, state.tenantId, result, budget);
       await this.reverseWriteOffs(organizationId, state.tenantId, result);
-      await this.send(organizationId, state.tenantId, state.sendFrom, state.catalog, result, sentNumbers, state.projectsEnabled);
+      await this.send(organizationId, state.tenantId, state.sendFrom, state.catalog, result, sentNumbers, state.projectsEnabled, state.jobberSends);
       // A project for each visit whose invoice is now in Xero (2026-11-11), the office's to put the line on.
       if (state.projectsEnabled) {
         // Filled as it goes: what was made before a stop still reaches the audit entry.
@@ -548,8 +579,10 @@ export class XeroSenderService {
     sentNumbers: string[],
     /** Its visits get projects (2026-11-11): new invoices go as drafts. */
     asDraft = false,
+    /** Jobber's invoices still go (2026-11-12): until the console makes the invoices. */
+    jobberSends = true,
   ) {
-    const ids = await this.candidates(organizationId, tenantId, sendFrom);
+    const ids = await this.candidates(organizationId, tenantId, sendFrom, jobberSends);
     if (!ids.length) return;
     const invoices = await this.prisma.invoice.findMany({ where: { organizationId, id: { in: ids } }, select: INVOICE_FIELDS });
     const values = (await this.settings.read(organizationId, tenantId)).values;
@@ -596,6 +629,8 @@ export class XeroSenderService {
         items: catalog.items,
         contactId: contact.id,
         asDraft,
+        // The console's own (2026-11-12): a complete draft, numbered by Xero, linked back to its page here.
+        ...(item.invoice.origin === InvoiceOrigin.CONSOLE ? { consoleUrl: consoleInvoiceUrl(item.invoice.id) } : {}),
       });
       if (plan.kind === 'problem') {
         // Held back by the console: tried again when the invoice, or the choices, change -- not on a timer.
@@ -605,6 +640,16 @@ export class XeroSenderService {
       }
       outgoing.push({ item, body: plan.body });
     }
+
+    // The console's own (2026-11-12): made in Xero once, by PUT, as drafts Xero numbers.
+    await this.sendDrafts(
+      organizationId,
+      tenantId,
+      outgoing.filter((entry) => entry.item.invoice.origin === InvoiceOrigin.CONSOLE),
+      result,
+      sentNumbers,
+    );
+    outgoing = outgoing.filter((entry) => entry.item.invoice.origin !== InvoiceOrigin.CONSOLE);
 
     // One never sent may be in Xero already (2026-11-11): made there by Zapier, or by hand, before the console sent
     // Jobber's invoices. Found by its number, it is linked as it is there -- draft or not -- never made twice.
@@ -638,6 +683,131 @@ export class XeroSenderService {
         result.sent++;
       }
     }
+  }
+
+  /**
+   * The console's own invoices (2026-11-12, PR 4 of the plan to make invoices
+   * in the console with Xero as the record): each made in Xero once, as a
+   * complete draft Xero numbers, by PUT -- which only ever creates. Each is
+   * written down as PENDING before the call. One tried before -- its answer
+   * lost, or refused -- is first looked for in Xero among its contact's
+   * invoices that day, by the link back to its page, and linked when found:
+   * never made twice. Past the run's lookups, it waits for the next run.
+   */
+  private async sendDrafts(
+    organizationId: string,
+    tenantId: string,
+    outgoing: { item: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }; body: XeroInvoiceBody }[],
+    result: XeroRunResult,
+    sentNumbers: string[],
+  ) {
+    if (!outgoing.length) return;
+    const fresh: typeof outgoing = [];
+    let lookups = 0;
+    for (const entry of outgoing) {
+      if (!entry.item.sync) {
+        fresh.push(entry);
+        continue;
+      }
+      if (lookups >= MAX_DRAFT_LOOKUPS_PER_RUN) continue;
+      lookups++;
+      const where = encodeURIComponent(`Date==${xeroDateTime(entry.body.Date)}`);
+      const path = `/Invoices?ContactIDs=${encodeURIComponent(entry.body.Contact.ContactID)}&where=${where}&Statuses=DRAFT,SUBMITTED,AUTHORISED,PAID,VOIDED`;
+      const theirs = (await this.client.get(organizationId, tenantId, path, draftsSchema)).Invoices.find((invoice) => invoice.Url === entry.body.Url);
+      if (theirs) {
+        // Made already, its answer lost: linked as it is there.
+        await this.draftSent(organizationId, tenantId, entry.item, theirs.InvoiceID, theirs.InvoiceNumber ?? null);
+        result.linked++;
+        continue;
+      }
+      fresh.push(entry);
+    }
+
+    const scope = `${organizationId}:${tenantId}`;
+    for (let start = 0; start < fresh.length; start += BATCH) {
+      const batch = fresh.slice(start, start + BATCH);
+      // Written down first: a run that stops before Xero answers leaves them PENDING, looked for next time.
+      for (const entry of batch) await this.pending(organizationId, tenantId, entry.item);
+      const body = { Invoices: batch.map((entry) => entry.body) };
+      const path = '/Invoices?summarizeErrors=false';
+      let answers: XeroAnswer[];
+      try {
+        answers = (await this.client.put(organizationId, tenantId, path, body, invoicesSchema, keyOf(scope, `PUT ${path}`, body))).Invoices;
+      } catch (error) {
+        if (error instanceof XeroError && error.code === 'XERO_VALIDATION') {
+          for (const entry of batch) await this.failed(organizationId, tenantId, entry.item, error.message, true);
+          result.failed += batch.length;
+          continue;
+        }
+        throw error;
+      }
+      for (const [index, entry] of batch.entries()) {
+        const answer = answers[index] as (XeroAnswer & { InvoiceNumber?: string | null }) | undefined;
+        if (!answer || refused(answer) || !answer.InvoiceID) {
+          await this.failed(organizationId, tenantId, entry.item, answer ? said(answer) : 'Xero did not answer for it.', true);
+          result.failed++;
+          continue;
+        }
+        await this.draftSent(organizationId, tenantId, entry.item, answer.InvoiceID, answer.InvoiceNumber ?? null);
+        if (answer.InvoiceNumber) sentNumbers.push(answer.InvoiceNumber);
+        result.sent++;
+      }
+    }
+  }
+
+  /** About to be sent (2026-11-12): written down before the call, so a lost answer is looked for, not sent again. */
+  private pending(organizationId: string, tenantId: string, item: { invoice: Candidate; sync: SyncRow | null }) {
+    const data = {
+      xeroTenantId: tenantId,
+      xeroInvoiceId: null,
+      status: 'PENDING',
+      seenUpdatedAt: item.invoice.updatedAt,
+      attempts: (item.sync?.attempts ?? 0) + 1,
+      lastAttemptAt: new Date(),
+      nextAttemptAt: null,
+      problem: null,
+    };
+    return this.prisma.xeroInvoiceSync.upsert({
+      where: { invoiceId: item.invoice.id },
+      create: { organizationId, invoiceId: item.invoice.id, ...data },
+      update: data,
+    });
+  }
+
+  /**
+   * In Xero (2026-11-12): the console's own takes Xero's number and id with the
+   * record of its send, in one write. From then on it is Xero's, read back
+   * from there.
+   */
+  private draftSent(
+    organizationId: string,
+    tenantId: string,
+    item: { invoice: Candidate; fingerprint: string },
+    xeroInvoiceId: string,
+    number: string | null,
+  ) {
+    const now = new Date();
+    const data = {
+      xeroTenantId: tenantId,
+      xeroInvoiceId,
+      status: 'SENT',
+      sentFingerprint: item.fingerprint,
+      seenUpdatedAt: item.invoice.updatedAt,
+      attempts: 0,
+      lastAttemptAt: now,
+      nextAttemptAt: null,
+      problem: null,
+      sentAt: now,
+      changedHereAt: null,
+    };
+    return this.prisma.$transaction([
+      this.prisma.invoice.update({ where: { id: item.invoice.id }, data: { xeroInvoiceId, xeroStatus: 'DRAFT', ...(number ? { number } : {}) } }),
+      this.prisma.xeroInvoiceSync.upsert({
+        where: { invoiceId: item.invoice.id },
+        create: { organizationId, invoiceId: item.invoice.id, ...data },
+        update: data,
+      }),
+    ]);
   }
 
   /**
@@ -1241,7 +1411,7 @@ export class XeroSenderService {
    * row -- one that never reached Xero is not sent to be voided. Oldest first,
    * at most 200.
    */
-  private async candidates(organizationId: string, tenantId: string, sendFrom: string): Promise<string[]> {
+  private async candidates(organizationId: string, tenantId: string, sendFrom: string, jobberSends = true): Promise<string[]> {
     const [, rows] = await this.prisma.$transaction([
       // Raw SQL does not pass through the client's tenant scope: set it here, as it does.
       this.prisma.$executeRaw`select set_config('app.organization_id', ${organizationId}, true)`,
@@ -1252,15 +1422,26 @@ export class XeroSenderService {
          WHERE i."organizationId" = ${organizationId}::uuid
            AND i."xeroTenantId" = ${tenantId}
            AND i."issuedOn" >= ${sendFrom}::date
-           AND i."status" <> 'DRAFT'
            -- Never one read from its books, nor one of the console's read back from there (2026-11-12): Xero has it.
            AND i."origin" <> 'XERO'
            AND i."xeroInvoiceId" IS NULL
            AND (
-                (s."id" IS NULL AND i."status" <> 'VOIDED')
-             OR (s."xeroTenantId" <> ${tenantId} AND i."status" <> 'VOIDED')
-             OR (s."xeroTenantId" = ${tenantId} AND (s."seenUpdatedAt" IS NULL OR i."updatedAt" > s."seenUpdatedAt"))
-             OR (s."xeroTenantId" = ${tenantId} AND s."status" = 'FAILED' AND s."nextAttemptAt" <= now())
+                -- The console's own (2026-11-12): drafts too -- Xero numbers them -- and one whose send is pending.
+                (i."origin" = 'CONSOLE' AND i."status" <> 'VOIDED' AND (
+                     s."id" IS NULL
+                  OR s."xeroTenantId" <> ${tenantId}
+                  OR s."status" = 'PENDING'
+                  OR s."seenUpdatedAt" IS NULL
+                  OR i."updatedAt" > s."seenUpdatedAt"
+                  OR (s."status" = 'FAILED' AND s."nextAttemptAt" <= now())
+                ))
+                -- Jobber's, as before, until the console makes the invoices.
+             OR (i."origin" = 'JOBBER' AND ${jobberSends} AND i."status" <> 'DRAFT' AND (
+                     (s."id" IS NULL AND i."status" <> 'VOIDED')
+                  OR (s."xeroTenantId" <> ${tenantId} AND i."status" <> 'VOIDED')
+                  OR (s."xeroTenantId" = ${tenantId} AND (s."seenUpdatedAt" IS NULL OR i."updatedAt" > s."seenUpdatedAt"))
+                  OR (s."xeroTenantId" = ${tenantId} AND s."status" = 'FAILED' AND s."nextAttemptAt" <= now())
+                ))
            )
          ORDER BY i."issuedOn", i."id"
          LIMIT ${MAX_INVOICES_PER_RUN}`,
@@ -1270,7 +1451,7 @@ export class XeroSenderService {
 
   /** Everything a run and the page need: the organisation's switch and choices, and the sign-in. No call to Xero. */
   private async state(organizationId: string, tenantId: string) {
-    const [row, connection, organisation, settings] = await Promise.all([
+    const [row, connection, organisation, settings, switchedAt] = await Promise.all([
       this.prisma.xeroSettings.findUnique({
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
         select: { sendingEnabled: true, sendingChangedAt: true, lastRunAt: true, lastRunProblem: true, sendFrom: true, booksReadAt: true },
@@ -1281,6 +1462,8 @@ export class XeroSenderService {
         select: { name: true, status: true, invoiceRemindersOn: true, accounts: true, trackingCategories: true, items: true, organisation: true },
       }),
       this.settings.read(organizationId, tenantId),
+      // The console makes the invoices (2026-11-12): Jobber's are sent no more.
+      invoicingTakenOverAt(this.prisma, organizationId),
     ]);
     const connected = connection?.status === 'CONNECTED' && organisation?.status === 'CONNECTED';
     const scopes = connected ? (connection?.scopes ?? []) : [];
@@ -1301,6 +1484,7 @@ export class XeroSenderService {
       } satisfies Catalog,
       paymentsToXero: paymentsGoToXero(settings.values) && !projectsEnabled && !booksRead,
       booksRead,
+      jobberSends: !switchedAt,
       projectsEnabled,
       values: settings.values,
       /** The labour's currency: the company's own, as Xero said it. */
@@ -1317,3 +1501,6 @@ export class XeroSenderService {
     };
   }
 }
+
+/** The console's own invoice's page (2026-11-12): the link Xero keeps on its draft, which also finds it there again. */
+export const consoleInvoiceUrl = (invoiceId: string) => `${(process.env.WEB_APP_ORIGIN ?? 'http://localhost:5454').replace(/\/$/, '')}/invoices/${invoiceId}`;

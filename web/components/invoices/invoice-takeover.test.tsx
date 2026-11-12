@@ -40,6 +40,8 @@ const BEFORE: InvoiceTakeoverView = {
     check('COMPANY_DETAILS', true, false),
   ] as InvoiceTakeoverView['checks'],
   ready: true,
+  // Jobber is read one last time before the switch (2026-11-12).
+  jobberConnected: true,
   failedFiles: 4,
 };
 
@@ -52,15 +54,15 @@ beforeEach(() => {
 describe('before the cutover', () => {
   it('lists what it waits on, and takes over only once asked, with the failed files left on purpose', () => {
     render(<InvoiceTakeoverSection />);
-    const list = screen.getByRole('list', { name: 'What the cutover waits on' });
+    const list = screen.getByRole('list', { name: 'What the switch waits on' });
     expect(within(list).getAllByRole('listitem')).toHaveLength(6);
     expect(list).toHaveTextContent('FILES_FAILED label (to know)');
     expect(list).toHaveTextContent('4 could not be copied.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Take over invoicing' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make invoices in the console' }));
     const dialog = screen.getByRole('alertdialog');
     expect(dialog).toHaveTextContent('The console reads Jobber one last time.');
-    const confirm = within(dialog).getByRole('button', { name: 'Take over invoicing' });
+    const confirm = within(dialog).getByRole('button', { name: 'Make invoices in the console' });
     // Four files could not be copied: not until the office says they can be left.
     expect(confirm).toBeDisabled();
     fireEvent.click(within(dialog).getByRole('checkbox', { name: /Leave the 4 files/ }));
@@ -71,7 +73,7 @@ describe('before the cutover', () => {
   it('cannot be pressed while something holds it back', () => {
     takeover.view.current = { ...BEFORE, ready: false, checks: [check('FILES_COPIED', false, true, '1,200 of 1,240 kept; 40 still to copy.')] as InvoiceTakeoverView['checks'] };
     render(<InvoiceTakeoverSection />);
-    expect(screen.getByRole('button', { name: 'Take over invoicing' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Make invoices in the console' })).toBeDisabled();
     expect(screen.getByText('FILES_COPIED label')).toBeInTheDocument();
     expect(screen.getByText('(not yet)', { exact: false })).toBeInTheDocument();
   });
@@ -79,8 +81,20 @@ describe('before the cutover', () => {
   it('is offered only to whoever both makes invoices and runs the integrations', () => {
     permissions.granted = new Set(['invoices:read', 'invoices:manage']);
     render(<InvoiceTakeoverSection />);
-    expect(screen.queryByRole('button', { name: 'Take over invoicing' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Make invoices in the console' })).not.toBeInTheDocument();
     expect(screen.getByText(/Only whoever both makes invoices and runs the integrations/)).toBeInTheDocument();
+  });
+});
+
+describe('without Jobber (2026-11-12)', () => {
+  it('says nothing more is read from Jobber, and that each company’s invoices go to Xero as drafts', () => {
+    takeover.view.current = { ...BEFORE, jobberConnected: false };
+    render(<InvoiceTakeoverSection />);
+    expect(screen.getByText(/Jobber is not connected, so nothing more is read from it/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Make invoices in the console' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Jobber is no longer read. Invoices are made here, and each company’s go to Xero as drafts.');
+    expect(dialog).not.toHaveTextContent('one last time');
   });
 });
 
@@ -98,8 +112,8 @@ describe('after the cutover', () => {
     takeover.view.current = after({ undoable: true });
     render(<InvoiceTakeoverSection />);
     // 22:00 UTC is 4:00 PM in Texas.
-    expect(screen.getByRole('region', { name: 'Take over invoicing' })).toHaveTextContent(
-      'The console has owned invoicing since Nov 6, 2026, 4:00 PM, taken over by System Admin.',
+    expect(screen.getByRole('region', { name: 'Make invoices in the console' })).toHaveTextContent(
+      'The console has made the invoices since Nov 6, 2026, 4:00 PM, switched by System Admin.',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Give it back' }));

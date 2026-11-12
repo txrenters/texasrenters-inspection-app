@@ -33,7 +33,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { nextInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
-import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies } from './invoice-settings';
+import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies, xeroSendingCompanies } from './invoice-settings';
 import { KEPT_IN_XERO, keptInXero, readCompanies, shownInvoices } from './shown-invoices';
 
 /**
@@ -92,7 +92,7 @@ const editSelect = {
   updatedAt: true,
   // The company's books it goes to, and whether it reached them (2026-11-10).
   xeroTenantId: true,
-  xeroSync: { select: { xeroInvoiceId: true } },
+  xeroSync: { select: { xeroInvoiceId: true, status: true } },
   lines: {
     orderBy: { position: 'asc' },
     select: { name: true, quantity: true, unitPriceCents: true, description: true, serviceOn: true, taxable: true },
@@ -380,6 +380,9 @@ export class InvoiceEditsService {
           : input.action === 'BAD_DEBT'
             ? { status: InvoiceStatus.BAD_DEBT }
             : await owing();
+      // A company that sends to Xero (2026-11-12): its draft goes there as one, and Xero numbers it, never the console.
+      if (input.action === 'MARK_SENT' && before.xeroTenantId && (await xeroSendingCompanies(tx, user.organizationId)).has(before.xeroTenantId))
+        throw new ApplicationError(409, 'INVOICE_GOES_TO_XERO', 'This draft goes to Xero as it is: Xero numbers it, and it is approved there.');
       // A draft sent with no number takes the office's next one (2026-11-06, phase 4).
       const number = input.action === 'MARK_SENT' && before.number === null ? await nextInvoiceNumber(tx, user.organizationId) : null;
       const { count } = await tx.invoice.updateMany({
@@ -455,7 +458,10 @@ export class InvoiceEditsService {
     const row = await tx.invoice.findFirst({ where: { id, organizationId: user.organizationId, ...shownInvoices(read) }, select: editSelect });
     if (!row) throw new ApplicationError(404, 'INVOICE_NOT_FOUND', 'That invoice was not found.');
     // Kept in Xero (2026-11-12): edited, voided and closed there, never here.
-    if (keptInXero(row, read)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
+    if (keptInXero(row)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
+    // On its way to Xero as a draft (2026-11-12): changed there once it arrives, never here meanwhile.
+    if (row.xeroSync?.status === 'PENDING')
+      throw new ApplicationError(409, 'INVOICE_GOING_TO_XERO', 'This invoice is on its way to Xero. Change it there once it arrives.');
     if (row.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.invoiceChanged();
     return row;
   }

@@ -275,6 +275,20 @@ export async function officeOrganisations(db: Db, organizationId: string): Promi
 export const organisationName = (organisations: readonly InvoiceProductOrganisation[]) => (tenantId: string) =>
   organisations.find((organisation) => organisation.tenantId === tenantId)?.name ?? 'an organisation no longer known';
 
+/**
+ * The companies whose invoices go to their books in Xero now (2026-11-12): sending
+ * is on and the organisation is connected. Their invoices made here are drafts
+ * with no number of the console's -- Xero numbers them, and the office approves
+ * them there.
+ */
+export async function xeroSendingCompanies(db: Pick<Db, 'xeroSettings'>, organizationId: string): Promise<Set<string>> {
+  const rows = await db.xeroSettings.findMany({
+    where: { organizationId, sendingEnabled: true, xeroOrganisation: { status: 'CONNECTED' } },
+    select: { xeroTenantId: true },
+  });
+  return new Set(rows.map((row) => row.xeroTenantId));
+}
+
 /** When the console took invoicing over from Jobber (2026-11-06, phase 8); null while Jobber holds it. */
 export async function invoicingTakenOverAt(db: Db, organizationId: string): Promise<Date | null> {
   const row = await db.invoiceSettings.findUnique({ where: { organizationId }, select: { invoicingTakenOverAt: true } });

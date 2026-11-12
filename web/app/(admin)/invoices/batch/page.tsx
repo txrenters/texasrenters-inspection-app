@@ -81,6 +81,8 @@ function BatchInvoices() {
   const chosenCents = chosen.reduce((sum, visit) => sum + visit.totalCents, 0);
   // What the batch makes: one invoice per company of each visit.
   const invoiceCount = chosen.reduce((sum, visit) => sum + partsOf(visit).length, 0);
+  // Of those, the ones made in a company's books in Xero as drafts (2026-11-12).
+  const toXeroCount = chosen.reduce((sum, visit) => sum + partsOf(visit).filter((part) => part.toXero).length, 0);
   const invoicesWord = `${invoiceCount} ${invoiceCount === 1 ? 'invoice' : 'invoices'}`;
   const tooMany = chosen.length > MAX_BATCH_INVOICES;
 
@@ -162,6 +164,11 @@ function BatchInvoices() {
                 <span className="text-muted-foreground">{items.length - billable.length} cannot be billed as they stand</span>
               ) : null}
               {visits.data?.truncated ? <span className="text-muted-foreground">More visits than are listed: narrow the days.</span> : null}
+              {visits.data?.startsOn ? (
+                <span className="text-muted-foreground">
+                  Visits from {formatInvoiceDay(visits.data.startsOn)}, when the console began making the invoices.
+                </span>
+              ) : null}
             </div>
             <ul className="divide-y">
               {items.map((visit) => (
@@ -190,6 +197,7 @@ function BatchInvoices() {
                           <li key={part.xeroTenantId ?? 'none'}>
                             <span className="text-foreground font-medium">{part.company ?? 'No company'}</span>:{' '}
                             {part.lineItems.map((line) => line.name).join(' · ')} · {formatMoney(part.totalCents)}
+                            {part.toXero ? ' · a draft in Xero' : ''}
                           </li>
                         ))}
                       </ul>
@@ -244,7 +252,14 @@ function BatchInvoices() {
             <AlertDialogDescription>
               {formatMoney(chosenCents)} in all, issued {formatInvoiceDay(issuedOn)}
               {invoiceCount > chosen.length ? `, for ${chosen.length} ${chosen.length === 1 ? 'visit' : 'visits'}: one for each company’s books` : ''}.{' '}
-              {asDraft ? 'They are kept as drafts, and numbered when each is marked sent.' : 'Each is numbered next and owed from now.'}
+              {toXeroCount
+                ? `${toXeroCount === invoiceCount ? 'Each goes' : `${toXeroCount} go`} to its company’s books in Xero as a draft: Xero numbers it, and it is approved there. `
+                : ''}
+              {toXeroCount === invoiceCount
+                ? ''
+                : asDraft
+                  ? 'They are kept as drafts, and numbered when each is marked sent.'
+                  : 'Each is numbered next and owed from now.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -56,6 +56,7 @@ import {
   newInvoiceDefaults,
   officeBrand,
   officeOrganisations,
+  xeroSendingCompanies,
   officePrices,
   organisationName,
   productCompanies,
@@ -276,7 +277,7 @@ function inXero(row: SummaryRow, books: OfficeXeroBooks | null) {
   return {
     status: row.xeroStatus ?? 'AUTHORISED',
     url: xeroInvoiceUrl(row.xeroInvoiceId, row.xeroStatus, books?.shortCodes.get(row.xeroTenantId) ?? null),
-    kept: keptInXero(row, books?.read ?? []),
+    kept: keptInXero(row),
   };
 }
 
@@ -769,7 +770,7 @@ export class InvoicesService {
       receipts: receipts.map(deliveryView),
       receiptTo: defaultRecipients(invoice.deliveries[0]?.recipients, invoice.clientEmails),
       // Read from Xero, or against an invoice kept there (2026-11-12): changed and receipted in Xero.
-      keptInXero: rest.origin === InvoiceOrigin.XERO || keptInXero(invoice, read),
+      keptInXero: rest.origin === InvoiceOrigin.XERO || keptInXero(invoice),
     };
   }
 
@@ -955,6 +956,8 @@ export class InvoicesService {
       return await this.prisma.$transaction(
         async (tx) => {
           const { contractDisclaimer } = await newInvoiceDefaults(tx, user.organizationId);
+          // A company that sends to Xero gets a draft there (2026-11-12): Xero numbers it, and the office approves it.
+          const toXero = await xeroSendingCompanies(tx, user.organizationId);
           const made: { id: string }[] = [];
           for (const invoice of invoices)
             made.push(
@@ -970,7 +973,7 @@ export class InvoicesService {
                 clientMessage: form.clientMessage?.trim() || null,
                 contractDisclaimer,
                 clientRequestId: invoice.clientRequestId,
-                asDraft: form.asDraft === true,
+                asDraft: form.asDraft === true || (invoice.xeroTenantId !== null && toXero.has(invoice.xeroTenantId)),
                 xeroTenantId: invoice.xeroTenantId,
               }),
             );
@@ -1012,7 +1015,7 @@ export class InvoicesService {
         });
         if (!invoice) throw this.notFound();
         // Its payments are recorded in Xero (2026-11-12), and read back from there.
-        if (keptInXero(invoice, read)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
+        if (keptInXero(invoice)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
         const status = invoiceStatusOn(invoice.status, day(invoice.dueOn), today);
         if (!acceptsPayment({ status, balanceCents: invoice.balanceCents }))
           throw new ApplicationError(409, 'INVOICE_NOT_PAYABLE', 'This invoice is not waiting for a payment.');
@@ -1216,7 +1219,7 @@ export class InvoicesService {
     });
     if (!found) throw this.paymentNotFound();
     // Against an invoice kept in Xero (2026-11-12): its payments are changed there.
-    if (keptInXero(found.invoice, read)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
+    if (keptInXero(found.invoice)) throw new ApplicationError(409, 'INVOICE_KEPT_IN_XERO', KEPT_IN_XERO);
     if (found.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) throw this.paymentChanged();
     const locked = paymentLockedReason({ amountCents: found.amountCents, invoiceStatus: found.invoice.status });
     if (locked) throw new ApplicationError(409, 'PAYMENT_LOCKED', locked);

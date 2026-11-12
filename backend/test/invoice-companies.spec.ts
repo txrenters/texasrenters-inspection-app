@@ -316,10 +316,45 @@ describe('a batch', () => {
     db.inspection.findMany.mockResolvedValue([visit()]);
     const list = await batchOver(db).uninvoiced(office, { from: '2026-11-01', to: '2026-11-07' });
     expect(list.items[0]!.invoices).toEqual([
-      { xeroTenantId: HOMES, company: 'Example Home Services', lineItems: [expect.objectContaining({ name: 'Filter Change' })], totalCents: 3999 },
-      { xeroTenantId: PEST, company: 'Example Pest Co', lineItems: [expect.objectContaining({ name: 'Pest Control' })], totalCents: 2500 },
+      { xeroTenantId: HOMES, company: 'Example Home Services', lineItems: [expect.objectContaining({ name: 'Filter Change' })], totalCents: 3999, toXero: false },
+      { xeroTenantId: PEST, company: 'Example Pest Co', lineItems: [expect.objectContaining({ name: 'Pest Control' })], totalCents: 2500, toXero: false },
     ]);
     expect(list.items[0]!.totalCents).toBe(6499);
+  });
+
+  it('makes the invoice of a company that sends to Xero a draft with no number of its own (2026-11-12): Xero numbers it there', async () => {
+    const db = database();
+    db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+    db.inspection.findMany.mockResolvedValue([visit()]);
+    const list = await batchOver(db).uninvoiced(office, { from: '2026-11-01', to: '2026-11-07' });
+    expect(list.items[0]!.invoices.map((part) => [part.company, part.toXero])).toEqual([
+      ['Example Home Services', true],
+      ['Example Pest Co', false],
+    ]);
+
+    const result = await batchOver(db).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0002' });
+    expect(result.created.map((made) => [made.company, made.number])).toEqual([
+      ['Example Home Services', null],
+      ['Example Pest Co', expect.stringMatching(/^\d+$/)],
+    ]);
+    expect(db.invoice.create.mock.calls.map((call) => [call[0].data.xeroTenantId, call[0].data.status, call[0].data.number])).toEqual([
+      [HOMES, 'DRAFT', null],
+      [PEST, 'AWAITING_PAYMENT', expect.stringMatching(/^\d+$/)],
+    ]);
+  });
+
+  it('lists visits only from the day the console began making the invoices (2026-11-12): those before were billed in Jobber or Xero', async () => {
+    const db = database();
+    db.invoiceSettings.findUnique.mockImplementation(async ({ select }: { select: Record<string, unknown> }) =>
+      'invoicingTakenOverAt' in select ? { invoicingTakenOverAt: new Date('2026-11-04T15:00:00.000Z') } : null,
+    );
+    db.inspection.findMany.mockResolvedValue([]);
+    const list = await batchOver(db).uninvoiced(office, { from: '2026-11-01', to: '2026-11-07' });
+    expect(list.startsOn).toBe('2026-11-04');
+    expect(db.inspection.findMany.mock.calls[0][0].where.scheduledAt).toEqual({
+      gte: new Date('2026-11-04T00:00:00.000Z'),
+      lt: new Date('2026-11-08T00:00:00.000Z'),
+    });
   });
 
   it('makes a visit’s invoices together, each to its company, keyed by its place', async () => {

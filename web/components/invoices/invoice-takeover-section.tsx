@@ -56,7 +56,7 @@ export function InvoiceTakeoverSection() {
         { acceptFailedFiles: leaveFailed },
         {
           onSuccess: () => {
-            toast.success('The console now owns invoicing', { description: 'Make and change invoices and payments here, not in Jobber.' });
+            toast.success('The console now makes the invoices', { description: 'Each company’s go to its books in Xero as drafts.' });
             setAsking(null);
           },
           onError: failed('Invoicing was not taken over'),
@@ -65,14 +65,14 @@ export function InvoiceTakeoverSection() {
   };
 
   return (
-    <section aria-label="Take over invoicing" className="bg-card mt-6 rounded-lg border p-4">
-      <h2 className="text-heading text-lg font-bold">Take over invoicing from Jobber</h2>
+    <section aria-label="Make invoices in the console" className="bg-card mt-6 rounded-lg border p-4">
+      <h2 className="text-heading text-lg font-bold">Make invoices in the console</h2>
       {view.takenOverAt ? (
         <>
           <p className="mt-2 text-sm">
-            The console has owned invoicing since <span className="font-semibold">{formatInvoiceMoment(view.takenOverAt)}</span>
-            {view.takenOverBy ? `, taken over by ${view.takenOverBy.displayName}` : ''}. Jobber&apos;s invoices and payments are no
-            longer read: make and change them here.
+            The console has made the invoices since <span className="font-semibold">{formatInvoiceMoment(view.takenOverAt)}</span>
+            {view.takenOverBy ? `, switched by ${view.takenOverBy.displayName}` : ''}. Jobber&apos;s invoices and payments are no longer
+            read. Each company&apos;s invoices go to its books in Xero as drafts, and are approved, changed and paid there.
           </p>
           {view.undoable ? (
             mayTake ? (
@@ -90,20 +90,21 @@ export function InvoiceTakeoverSection() {
       ) : (
         <>
           <p className="text-muted-foreground mt-1 text-sm">
-            The console reads Jobber one last time, then stops reading its invoices and payments, and from then on they are made
-            and changed here. Nothing is sent to Jobber. Stop working on invoices in Jobber first.
+            {view.jobberConnected
+              ? 'The console reads Jobber one last time, then stops reading its invoices and payments. From then on invoices are made here, and each company’s go to its books in Xero as drafts. Nothing is sent to Jobber. Stop making invoices in Jobber first.'
+              : 'Jobber is not connected, so nothing more is read from it. From the switch, invoices are made here, and each company’s go to its books in Xero as drafts.'}
           </p>
-          <ul aria-label="What the cutover waits on" className="mt-3 grid gap-2 text-sm">
+          <ul aria-label="What the switch waits on" className="mt-3 grid gap-2 text-sm">
             {view.checks.map((check) => (
               <CheckRow check={check} key={check.key} />
             ))}
           </ul>
           {mayTake ? (
             <Button className="mt-4" disabled={!view.ready || busy} onClick={() => setAsking('take')}>
-              Take over invoicing
+              Make invoices in the console
             </Button>
           ) : (
-            <p className="text-muted-foreground mt-3 text-sm">Only whoever both makes invoices and runs the integrations takes it over.</p>
+            <p className="text-muted-foreground mt-3 text-sm">Only whoever both makes invoices and runs the integrations makes the switch.</p>
           )}
         </>
       )}
@@ -111,11 +112,13 @@ export function InvoiceTakeoverSection() {
       <AlertDialog onOpenChange={(open) => (open ? undefined : setAsking(null))} open={asking !== null}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{asking === 'undo' ? 'Give invoicing back to Jobber?' : 'Take over invoicing from Jobber?'}</AlertDialogTitle>
+            <AlertDialogTitle>{asking === 'undo' ? 'Give invoicing back to Jobber?' : 'Make invoices in the console?'}</AlertDialogTitle>
             <AlertDialogDescription>
               {asking === 'undo'
                 ? 'Jobber is read again from where it stopped, and invoices are made and changed there until the console takes over again.'
-                : 'The console reads Jobber one last time. Then Jobber is no longer read, and invoices and payments are made and changed only here. It can be undone only until something is changed here.'}
+                : view.jobberConnected
+                  ? 'The console reads Jobber one last time. Then Jobber is no longer read, invoices are made here, and each company’s go to Xero as drafts. It can be undone only until something is changed here.'
+                  : 'Jobber is no longer read. Invoices are made here, and each company’s go to Xero as drafts. It can be undone only until something is changed here.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {asking === 'take' && view.failedFiles ? (
@@ -137,7 +140,15 @@ export function InvoiceTakeoverSection() {
                 confirm();
               }}
             >
-              {busy ? (asking === 'undo' ? 'Undoing…' : 'Reading Jobber one last time…') : asking === 'undo' ? 'Give it back' : 'Take over invoicing'}
+              {busy
+                ? asking === 'undo'
+                  ? 'Undoing…'
+                  : view.jobberConnected
+                    ? 'Reading Jobber one last time…'
+                    : 'Switching…'
+                : asking === 'undo'
+                  ? 'Give it back'
+                  : 'Make invoices in the console'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

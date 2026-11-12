@@ -69,6 +69,14 @@ export class InvoiceTakeoverService {
       };
     }
 
+    // The companies that send to Xero (2026-11-12): their books must be read back first, so their invoices show as Xero
+    // has them and the console sends them nothing Xero sends -- follow-ups start at the switch.
+    const sending = await this.prisma.xeroSettings.findMany({
+      where: { organizationId: org, sendingEnabled: true, xeroOrganisation: { status: 'CONNECTED' } },
+      select: { booksReadAt: true, xeroOrganisation: { select: { name: true } } },
+    });
+    const unread = sending.filter((row) => !row.booksReadAt).map((row) => row.xeroOrganisation.name);
+
     const [connection, files] = await Promise.all([
       this.prisma.jobberConnection.findUnique({
         where: { organizationId: org },
@@ -83,14 +91,16 @@ export class InvoiceTakeoverService {
       fileCopyStatus(this.prisma, org),
     ]);
     const connected = connection?.status === JobberConnectionStatus.CONNECTED;
+    // Jobber's checks hold the switch back only while Jobber is connected (2026-11-12): then it is read one last time,
+    // for invoices made there just before. Not connected, the console makes invoices without it.
     const checks: InvoiceTakeoverCheck[] = [
       {
         key: 'JOBBER_ANSWERS',
         ok: connected && !connection?.invoiceReadProblem,
-        blocking: true,
+        blocking: connected,
         label: 'Jobber is connected and answering',
         detail: !connected
-          ? 'Connect Jobber again under Integrations: the last read needs it.'
+          ? 'Jobber is not connected: the console makes invoices without a last read of it.'
           : connection?.invoiceReadProblem
             ? (PROBLEM[connection.invoiceReadProblem] ?? 'The last read of Jobber failed.')
             : connection?.invoiceReadCheckedAt
@@ -100,21 +110,21 @@ export class InvoiceTakeoverService {
       {
         key: 'INVOICES_READ',
         ok: Boolean(connection?.invoiceReadCompletedAt),
-        blocking: true,
         label: 'Every invoice has been read from Jobber',
+        blocking: connected,
         detail: connection?.invoiceReadCompletedAt ? null : 'The first read of every invoice is still going.',
       },
       {
         key: 'PAYMENTS_READ',
         ok: Boolean(connection?.paymentReadCompletedAt),
-        blocking: true,
+        blocking: connected,
         label: "Every payment's method has been read",
         detail: connection?.paymentReadCompletedAt ? null : "Jobber's payment list is still being read.",
       },
       {
         key: 'FILES_COPIED',
         ok: files.waiting === 0,
-        blocking: true,
+        blocking: connected,
         label: 'Every file has been copied, or tried',
         detail: `${files.kept.toLocaleString('en-US')} of ${files.total.toLocaleString('en-US')} kept${
           files.waiting ? `; ${files.waiting.toLocaleString('en-US')} still to copy` : ''
@@ -136,6 +146,13 @@ export class InvoiceTakeoverService {
         label: 'Company details are filled in',
         detail: settings?.companyName?.trim() ? null : "Invoices print the server's company details until they are.",
       },
+      {
+        key: 'XERO_BOOKS_READ',
+        ok: unread.length === 0,
+        blocking: true,
+        label: 'Each company that sends to Xero has its books read back from there',
+        detail: unread.length ? `Still being read: ${unread.join(', ')}. It reads every hour; or read now on the Xero page.` : null,
+      },
     ];
     return {
       takenOverAt: null,
@@ -145,6 +162,7 @@ export class InvoiceTakeoverService {
       checks,
       ready: checks.every((check) => check.ok || !check.blocking),
       failedFiles: files.failed,
+      jobberConnected: connected,
     };
   }
 
@@ -161,13 +179,14 @@ export class InvoiceTakeoverService {
         `${before.failedFiles} files could not be copied. Say they can be left before taking over.`,
       );
 
-    // One last read: what changed in Jobber since the scheduler's.
-    const read = await this.invoices.run(org);
-    const refusal = lastReadProblem(read);
+    // One last read, while Jobber is connected: what changed there since the scheduler's. Not connected (2026-11-12),
+    // there is nothing more to read.
+    const read = before.jobberConnected ? await this.invoices.run(org) : null;
+    const refusal = read ? lastReadProblem(read) : null;
     if (refusal) throw new ApplicationError(409, 'INVOICE_TAKEOVER_LAST_READ', `${refusal} Nothing was changed.`);
     // A file the last read found would never be copied after the cutover.
     const files = await fileCopyStatus(this.prisma, org);
-    if (files.waiting)
+    if (read && files.waiting)
       throw new ApplicationError(
         409,
         'INVOICE_TAKEOVER_NOT_READY',
@@ -194,7 +213,7 @@ export class InvoiceTakeoverService {
             entityType: 'InvoiceSettings',
             entityId: org,
             metadata: {
-              lastRead: { pages: read.pages, created: read.created, updated: read.updated, paymentPages: read.paymentPages },
+              lastRead: read ? { pages: read.pages, created: read.created, updated: read.updated, paymentPages: read.paymentPages } : null,
               files: { total: files.total, kept: files.kept, failed: files.failed },
               acceptedFailedFiles: files.failed > 0,
             },

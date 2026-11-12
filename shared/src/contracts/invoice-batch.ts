@@ -44,6 +44,8 @@ export interface UninvoicedPart {
   company: string | null;
   lineItems: InvoiceLineInput[];
   totalCents: number;
+  /** Its company sends to Xero (2026-11-12): made there as a draft, numbered by Xero, approved there. */
+  toXero?: boolean;
 }
 
 export interface UninvoicedVisitList {
@@ -52,6 +54,12 @@ export interface UninvoicedVisitList {
   truncated: boolean;
   /** The office's payment terms for a new invoice, from its settings (2026-11-06). */
   paymentTermsDays?: number;
+  /**
+   * The day the console began making the invoices (2026-11-12), `YYYY-MM-DD`:
+   * visits before it are not listed, billed as they were in Jobber or Xero.
+   * Null before the switch.
+   */
+  startsOn?: string | null;
 }
 
 export interface BatchInvoiceInput {
