@@ -279,6 +279,34 @@ export const organisationName = (organisations: readonly InvoiceProductOrganisat
   organisations.find((organisation) => organisation.tenantId === tenantId)?.name ?? 'an organisation no longer known';
 
 /**
+ * Each sending company's start date, `YYYY-MM-DD` (2026-11-13). Xero is sent
+ * only the invoices issued from it, so one issued before would reach no books,
+ * and the visit would still count as invoiced: it is refused when made.
+ */
+export async function xeroStartDays(db: Pick<Db, 'xeroSettings'>, organizationId: string): Promise<Map<string, string>> {
+  const rows = await db.xeroSettings.findMany({
+    where: { organizationId, sendingEnabled: true, xeroOrganisation: { status: 'CONNECTED' }, sendFrom: { not: null } },
+    select: { xeroTenantId: true, sendFrom: true },
+  });
+  return new Map(rows.filter((row) => row.sendFrom).map((row) => [row.xeroTenantId, row.sendFrom!.toISOString().slice(0, 10)]));
+}
+
+const longDay = (day: string) =>
+  new Intl.DateTimeFormat('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00.000Z`));
+
+/** An invoice issued before its company's start date, in words (2026-11-13); null when it is not. */
+export function beforeXeroStart(
+  issuedOn: string,
+  tenantId: string | null,
+  startDays: ReadonlyMap<string, string>,
+  nameOf: (tenantId: string) => string,
+): string | null {
+  const start = tenantId ? startDays.get(tenantId) : undefined;
+  if (!tenantId || !start || issuedOn >= start) return null;
+  return `${nameOf(tenantId)} sends Xero only invoices issued from ${longDay(start)}: issue it that day or later.`;
+}
+
+/**
  * The companies whose invoices go to their books in Xero now (2026-11-12): sending
  * is on and the organisation is connected. Their invoices made here are drafts
  * with no number of the console's -- Xero numbers them, and the office approves

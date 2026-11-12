@@ -29,6 +29,7 @@ import { insertConsoleInvoice } from './invoice-insert';
 import { lockInvoiceNumbers } from './invoice-numbers';
 import { InvoicesService, servicesDone } from './invoices.service';
 import {
+  beforeXeroStart,
   invoiceWritesOff,
   invoiceWritesOn,
   invoicingTakenOverAt,
@@ -36,6 +37,7 @@ import {
   organisationName,
   productCompanies,
   xeroSendingCompanies,
+  xeroStartDays,
 } from './invoice-settings';
 
 /**
@@ -183,13 +185,15 @@ export class InvoiceBatchService {
     if (!PAYMENT_TERMS.some((terms) => terms.days === input.paymentTermsDays))
       throw new ApplicationError(422, 'INVOICE_BATCH_INVALID', 'Pick the payment terms from the list.');
 
-    const [defaults, basis, companies, organisations, toXero] = await Promise.all([
+    const [defaults, basis, companies, organisations, toXero, startDays] = await Promise.all([
       this.invoices.officeDefaults(user),
       billingBasis(this.prisma, user.organizationId),
       productCompanies(this.prisma, user.organizationId),
       officeOrganisations(this.prisma, user.organizationId),
       // A company that sends to Xero gets a draft there (2026-11-12): Xero numbers it, and the office approves it.
       xeroSendingCompanies(this.prisma, user.organizationId),
+      // Never one issued before its company's start date (2026-11-13): it would reach no books.
+      xeroStartDays(this.prisma, user.organizationId),
     ]);
     const nameOf = organisationName(organisations);
     const result: BatchInvoiceResult = { created: [], skipped: [] };
@@ -233,6 +237,11 @@ export class InvoiceBatchService {
       const building = visit.propertywareBuilding;
       // One invoice per company: each company's services, and those of none on one of their own.
       const parts = batchParts(lines.lineItems, companies, nameOf, toXero);
+      const early = parts.map((part) => beforeXeroStart(input.issuedOn, part.xeroTenantId, startDays, nameOf)).find(Boolean);
+      if (early) {
+        result.skipped.push({ inspectionId, reason: early });
+        continue;
+      }
       try {
         const created = await this.prisma.$transaction(
           async (tx) => {

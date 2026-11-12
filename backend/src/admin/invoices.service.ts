@@ -50,13 +50,16 @@ import { PrismaService } from '../common/prisma.service';
 import { billingBasis } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
 import { insertConsoleInvoice } from './invoice-insert';
+import { lockInvoiceNumbers } from './invoice-numbers';
 import {
+  beforeXeroStart,
   invoiceWritesOff,
   invoiceWritesOn,
   newInvoiceDefaults,
   officeBrand,
   officeOrganisations,
   xeroSendingCompanies,
+  xeroStartDays,
   officePrices,
   organisationName,
   productCompanies,
@@ -633,7 +636,7 @@ export class InvoicesService {
     const place = inspection ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     const today = businessDate();
     const read = await readCompanies(this.prisma, user.organizationId);
-    const [products, defaults, existing, companies, organisations, basis] = await Promise.all([
+    const [products, defaults, existing, companies, organisations, basis, invoicedAlready] = await Promise.all([
       officePrices(this.prisma, user.organizationId),
       // The office's settings, else its own wording and terms from the latest invoice it issued.
       newInvoiceDefaults(this.prisma, user.organizationId),
@@ -648,6 +651,8 @@ export class InvoicesService {
       productCompanies(this.prisma, user.organizationId),
       officeOrganisations(this.prisma, user.organizationId),
       billingBasis(this.prisma, user.organizationId),
+      // Every origin (2026-11-13): a Jobber copy kept out of sight behind Xero's is a visit invoiced all the same.
+      inspection ? this.visitInvoiced(this.prisma, user.organizationId, inspection.id) : false,
     ]);
     const lines = inspection
       ? billedLines({ inspectionType: inspection.inspectionType, services: servicesDone(inspection.servicesReport) }, basis.rules, basis.products).lineItems
@@ -675,9 +680,23 @@ export class InvoicesService {
         status: invoiceStatusOn(row.status, day(row.dueOn), today),
         xeroTenantId: row.xeroTenantId,
       })),
+      alreadyInvoiced: invoicedAlready,
       products,
       organisations,
     };
+  }
+
+  /**
+   * Whether a visit has an invoice that is not voided, of any origin
+   * (2026-11-13): the console's, Jobber's -- shown or kept out of sight
+   * behind Xero's -- or one read from Xero. What the batch asks too.
+   */
+  private async visitInvoiced(db: Prisma.TransactionClient | PrismaService, organizationId: string, inspectionId: string) {
+    const found = await db.invoice.findFirst({
+      where: { organizationId, inspectionId, status: { not: InvoiceStatus.VOIDED } },
+      select: { id: true },
+    });
+    return Boolean(found);
   }
 
   async payments(user: AuthenticatedUser, query: PaymentListQuery = {}): Promise<PaymentList> {
@@ -955,9 +974,25 @@ export class InvoicesService {
     try {
       return await this.prisma.$transaction(
         async (tx) => {
+          // A visit invoiced already -- here, in Jobber, in Xero, or by the batch a moment ago -- is billed again only on
+          // purpose (2026-11-13). Under the office's invoice lock, as the batch asks it, so the two never both make one.
+          if (visit && form.additional !== true) {
+            await lockInvoiceNumbers(tx, user.organizationId);
+            if (await this.visitInvoiced(tx, user.organizationId, visit.id))
+              throw new ApplicationError(
+                409,
+                'VISIT_ALREADY_INVOICED',
+                'This visit has an invoice already. Make another only if it bills something the first does not, and say so on the form.',
+              );
+          }
           const { contractDisclaimer } = await newInvoiceDefaults(tx, user.organizationId);
           // A company that sends to Xero gets a draft there (2026-11-12): Xero numbers it, and the office approves it.
-          const toXero = await xeroSendingCompanies(tx, user.organizationId);
+          const [toXero, startDays] = await Promise.all([xeroSendingCompanies(tx, user.organizationId), xeroStartDays(tx, user.organizationId)]);
+          // Never one issued before its company's start date (2026-11-13): it would reach no books.
+          for (const invoice of invoices) {
+            const early = beforeXeroStart(form.issuedOn, invoice.xeroTenantId, startDays, nameOf);
+            if (early) throw new ApplicationError(422, 'INVOICE_INVALID', early);
+          }
           const made: { id: string }[] = [];
           for (const invoice of invoices)
             made.push(
@@ -983,8 +1018,9 @@ export class InvoicesService {
         { maxWait: 5_000, timeout: 20_000 },
       );
     } catch (error) {
-      // The same key, sent twice at once: the other request made them.
-      if (isUniqueViolation(error)) {
+      // The same key, sent twice at once: the other request made them -- seen as its key taken, or (2026-11-13) as the
+      // visit it invoiced a moment ago.
+      if (isUniqueViolation(error) || (error instanceof ApplicationError && error.code === 'VISIT_ALREADY_INVOICED')) {
         const made = await this.byInvoiceKeys(user, keys);
         if (made.length) return this.answerResend(made, keys, target);
       }

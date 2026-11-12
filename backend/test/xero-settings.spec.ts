@@ -155,8 +155,17 @@ describe('reading the choices', () => {
     expect(view.payments[0]).toEqual({ method: 'PROPERTYWARE_LEDGER', accountId: 'a-815', payments: 10 });
     expect(view.payments.find((item) => item.method === 'CHECK')).toEqual({ method: 'CHECK', accountId: null, payments: 2 });
     expect(view.invoicesToSend).toBe(12);
-    // Counted from the start date, on this organisation's invoices that are neither drafts nor voided (2026-11-10).
-    const invoices = { organizationId: ORG, xeroTenantId: TENANT, status: { notIn: ['DRAFT', 'VOIDED'] }, issuedOn: { gte: new Date('2026-12-01T00:00:00.000Z') } };
+    // Counted from the start date, on this organisation's invoices that are not voided (2026-11-10): the console's drafts
+    // too (2026-11-13), as they are sent; Jobber's drafts never.
+    const invoices = {
+      organizationId: ORG,
+      xeroTenantId: TENANT,
+      OR: [
+        { origin: 'CONSOLE', status: { not: 'VOIDED' } },
+        { status: { notIn: ['DRAFT', 'VOIDED'] } },
+      ],
+      issuedOn: { gte: new Date('2026-12-01T00:00:00.000Z') },
+    };
     expect(db.invoice.count).toHaveBeenCalledWith({ where: expect.objectContaining(invoices) });
     // And the payments by method, on the same invoices only.
     expect(db.invoicePayment.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { organizationId: ORG, invoice: expect.objectContaining(invoices) } }));
@@ -333,6 +342,30 @@ describe('saving the choices', () => {
       message,
     });
     expect(db.xeroSettings.create).not.toHaveBeenCalled();
+  });
+
+  it('matches the tax type to whether prices include the tax (2026-11-13): never a rate put on top of the console’s total', async () => {
+    const taxed = () =>
+      database({
+        organisation: {
+          name: 'Example Pest Co',
+          status: 'CONNECTED',
+          accounts: ACCOUNTS,
+          taxRates: [...TAX_RATES, { name: 'Texas 8.25%', taxType: 'TAX001', status: 'ACTIVE', effectiveRate: 8.25, appliesToRevenue: true }],
+          catalogReadAt: new Date('2026-11-20T15:00:00.000Z'),
+        },
+      });
+    await expect(service(taxed()).save(office, TENANT, input({ salesTaxType: 'TAX001', pricesIncludeTax: false }))).rejects.toMatchObject({
+      code: 'XERO_SETTINGS_INVALID',
+      message: 'Prices do not include sales tax, so choose a tax type with no tax, or say prices include it: otherwise Xero adds the tax on top of the console’s total.',
+    });
+    await expect(service(taxed()).save(office, TENANT, input({ salesTaxType: 'NONE', pricesIncludeTax: true }))).rejects.toMatchObject({
+      code: 'XERO_SETTINGS_INVALID',
+      message: 'Prices include sales tax, so choose the tax type with the rate they include, such as 8.25%.',
+    });
+    // The two that agree are saved.
+    await expect(service(taxed()).save(office, TENANT, input({ salesTaxType: 'TAX001', pricesIncludeTax: true }))).resolves.toBeDefined();
+    await expect(service(taxed()).save(office, TENANT, input({ salesTaxType: 'NONE', pricesIncludeTax: false }))).resolves.toBeDefined();
   });
 
   describe('a project for each visit (2026-11-11)', () => {

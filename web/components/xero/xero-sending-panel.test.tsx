@@ -24,6 +24,7 @@ const OFF: XeroSendingView = {
   changedAt: null,
   canWrite: true,
   projectsEnabled: false,
+  madeInConsole: false,
   blockers: [],
   counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 0, failed: 0 }, changedHere: 0 },
   lastRunAt: null,
@@ -157,8 +158,17 @@ describe('the sending panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try the refused again' }));
     expect(actions.retry.mutate).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Nothing more goes to Xero until it is turned on again.');
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Turn off' }));
     expect(actions.setEnabled.mutate).toHaveBeenCalledWith(false, expect.anything());
+  });
+
+  it('says, once the console makes the invoices, that with sending off they reach no books (2026-11-13)', () => {
+    mount({ ...ON, madeInConsole: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      "With sending off, this company's new invoices get the console's own numbers and reach no books, and nobody emails them.",
+    );
   });
 
   it('offers no buttons to whoever does not run the integrations', () => {

@@ -137,6 +137,7 @@ const DRAFT: InvoiceDraft = {
   ],
   clientMessage: 'Thank you for your business.',
   existing: [],
+  alreadyInvoiced: false,
   products: [{ name: 'Flea Treatment', unitPriceCents: 3500 }],
   organisations: [],
 };
@@ -563,11 +564,36 @@ describe('a new invoice for a finished visit', () => {
   });
 
   it('warns when the visit is already invoiced', () => {
-    hooks.useInvoiceDraft.mockReturnValue(ready({ ...DRAFT, existing: [{ id: 'inv-1', number: '8439', status: 'PAST_DUE', xeroTenantId: null }] }));
+    hooks.useInvoiceDraft.mockReturnValue(
+      ready({ ...DRAFT, alreadyInvoiced: true, existing: [{ id: 'inv-1', number: '8439', status: 'PAST_DUE', xeroTenantId: null }] }),
+    );
     render(<NewInvoicePage />);
 
     expect(screen.getByRole('status')).toHaveTextContent('This visit already has an invoice:');
     expect(screen.getByRole('link', { name: '#8439' })).toHaveAttribute('href', '/invoices/inv-1');
+  });
+
+  it('makes another for a visit invoiced already only when ticked (2026-11-13), even one whose invoice is not shown', () => {
+    // Jobber's copy, kept out of sight behind the invoice Xero has: none listed, the visit invoiced all the same.
+    hooks.useInvoiceDraft.mockReturnValue(ready({ ...DRAFT, alreadyInvoiced: true }));
+    render(<NewInvoicePage />);
+
+    expect(screen.getByText(/This visit already has an invoice, from Jobber or in Xero\./)).toBeInTheDocument();
+    const createButton = screen.getByRole('button', { name: /^Create invoice/ });
+    expect(createButton).toBeDisabled();
+    expect(screen.getByText(/tick “Add another invoice for this visit” to make one more/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Add another invoice for this visit' }));
+    expect(createButton).toBeEnabled();
+    fireEvent.click(createButton);
+    expect(create.mutate).toHaveBeenCalledWith(expect.objectContaining({ inspectionId: 'insp-1', additional: true }), expect.anything());
+  });
+
+  it('asks nothing of a visit with no invoice', () => {
+    render(<NewInvoicePage />);
+    expect(screen.queryByRole('checkbox', { name: 'Add another invoice for this visit' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Create invoice/ }));
+    expect(create.mutate.mock.calls[0][0]).not.toHaveProperty('additional');
   });
 
   it('is a permission of its own', () => {

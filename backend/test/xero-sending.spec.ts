@@ -1221,6 +1221,25 @@ describe('turning it on, and the office’s buttons', () => {
     expect(ready.prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_TURNED_OFF' }) });
   });
 
+  it('turns off, once the console makes the invoices, only when the office says it means it (2026-11-13)', async () => {
+    const on = { sendingEnabled: true, sendFrom: new Date('2026-12-01T00:00:00.000Z') };
+    const asked = harness({ takenOver: true, settingsRow: on });
+    await expect(asked.sender.setEnabled(office, TENANT, false)).rejects.toMatchObject({ code: 'XERO_SENDING_OFF_UNCONFIRMED' });
+    expect(asked.prisma.xeroSettings.update).not.toHaveBeenCalled();
+    expect(await asked.sender.view(ORG, TENANT)).toMatchObject({ madeInConsole: true });
+
+    const meant = harness({ takenOver: true, settingsRow: on });
+    await meant.sender.setEnabled(office, TENANT, false, true);
+    expect(meant.prisma.xeroSettings.update).toHaveBeenCalledWith(expect.objectContaining({ data: { sendingEnabled: false, sendingChangedAt: expect.any(Date) } }));
+    expect(meant.prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'XERO_SENDING_TURNED_OFF', actorUserId: office.id }) });
+
+    // Before the switch, off needs no more than the dialog.
+    const before = harness({ settingsRow: on });
+    await before.sender.setEnabled(office, TENANT, false);
+    expect(before.prisma.xeroSettings.update).toHaveBeenCalled();
+    expect(await before.sender.view(ORG, TENANT)).toMatchObject({ madeInConsole: false });
+  });
+
   it('sends now at most once a minute', async () => {
     const { sender } = harness({
       settingsRow: { sendingEnabled: true, lastRunAt: new Date('2026-12-02T17:59:30.000Z'), sendFrom: new Date('2026-12-01T00:00:00.000Z') },
@@ -1375,6 +1394,21 @@ describe('prices that include the tax (2026-11-12)', () => {
       body: { LineAmountTypes: 'Inclusive', LineItems: [expect.objectContaining({ LineAmount: 39, UnitAmount: 39, TaxType: 'TAX001' })] },
     });
     expect(xeroInvoiceFrom(pest, onTop)).toMatchObject({ kind: 'send', body: { LineAmountTypes: 'Exclusive' } });
+  });
+
+  it('never puts a tax type’s rate on top of prices that leave it out (2026-11-13): Xero’s total would be more than the console’s', () => {
+    const taxRates = [
+      { name: 'Texas 8.25%', taxType: 'TAX001', status: 'ACTIVE', effectiveRate: 8.25, appliesToRevenue: true },
+      { name: 'Tax Exempt', taxType: 'NONE', status: 'ACTIVE', effectiveRate: 0, appliesToRevenue: true },
+    ];
+    const filter = invoice({ totalCents: 3999, lines: [{ ...pestLine, name: 'Filter Change', unitPriceCents: 3999, totalCents: 3999 }] });
+    expect(xeroInvoiceFrom(filter, { ...onTop, taxRates })).toMatchObject({
+      kind: 'problem',
+      problem: expect.stringContaining('Its tax type adds 8.25% on top of prices that do not include it'),
+    });
+    // No tax in the tax type: sent as it is. Prices that include the rate: sent with it inside.
+    expect(xeroInvoiceFrom(filter, { ...onTop, settings: { ...onTop.settings, salesTaxType: 'NONE' }, taxRates })).toMatchObject({ kind: 'send' });
+    expect(xeroInvoiceFrom(filter, { ...inclusive, taxRates })).toMatchObject({ kind: 'send', body: { LineAmountTypes: 'Inclusive' } });
   });
 
   it('takes one whose tax is in its total, and still refuses one whose lines do not come to its total', () => {

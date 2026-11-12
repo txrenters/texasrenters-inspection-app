@@ -213,6 +213,49 @@ describe('making one invoice', () => {
     // The office's list, and only it (2026-11-12).
     expect(draft.products.map((product) => product.name)).toEqual(['Filter Change', 'Pest Control', 'Flea Treatment']);
   });
+
+  describe('a visit invoiced already (2026-11-13)', () => {
+    // An invoice on the visit of any origin -- here Jobber's copy, kept out of sight behind the one Xero has.
+    const invoiced = () => {
+      const db = database();
+      db.invoice.findFirst.mockImplementation(async ({ where }: { where?: { inspectionId?: string } } = {}) =>
+        where?.inspectionId === VISIT ? { id: 'jobber-copy' } : null,
+      );
+      return db;
+    };
+
+    it('is refused another, under the lock the batch takes, whatever origin the first is', async () => {
+      const db = invoiced();
+      await expect(invoicesOver(db).create(office, { ...create, inspectionId: VISIT })).rejects.toMatchObject({ code: 'VISIT_ALREADY_INVOICED' });
+      expect(db.invoice.create).not.toHaveBeenCalled();
+      expect(db.invoice.findFirst).toHaveBeenCalledWith({ where: { organizationId: ORG, inspectionId: VISIT, status: { not: 'VOIDED' } }, select: { id: true } });
+      expect((db.$queryRaw.mock.calls[0]![0] as string[]).join('?')).toContain('pg_advisory_xact_lock');
+      // Several companies' invoices from one form: none of them.
+      await expect(
+        invoicesOver(db).createPerCompany(office, { ...create, inspectionId: VISIT, invoices: [{ lineItems: create.lineItems }] }),
+      ).rejects.toMatchObject({ code: 'VISIT_ALREADY_INVOICED' });
+    });
+
+    it('gets another when the form says so on purpose', async () => {
+      const db = invoiced();
+      await invoicesOver(db).create(office, { ...create, inspectionId: VISIT, additional: true });
+      expect(db.invoice.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('is said on its draft, though the copy is not among the invoices shown', async () => {
+      const db = invoiced();
+      const draft = await new InvoicesService(db as never).draft(office, { inspectionId: VISIT });
+      expect(draft).toMatchObject({ existing: [], alreadyInvoiced: true });
+      // A property no visit covers is never asked.
+      expect(await new InvoicesService(database() as never).draft(office, { propertyId: BUILDING })).toMatchObject({ alreadyInvoiced: false });
+    });
+
+    it('a visit with none is invoiced as before', async () => {
+      const db = database();
+      await invoicesOver(db).create(office, { ...create, inspectionId: VISIT });
+      expect(db.invoice.create).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('marking a draft sent', () => {

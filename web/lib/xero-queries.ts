@@ -100,7 +100,9 @@ export function useXeroSendingActions(tenantId: string) {
   const refetch = () => void client.invalidateQueries({ queryKey: xeroSendingKey(tenantId) });
   return {
     setEnabled: useMutation({
-      mutationFn: (enabled: boolean) => api<XeroSendingView>(`${organisation(tenantId)}/sending`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
+      // Asked in the panel's dialog first: turning it off is meant (2026-11-13).
+      mutationFn: (enabled: boolean) =>
+        api<XeroSendingView>(`${organisation(tenantId)}/sending`, { method: 'PUT', body: JSON.stringify({ enabled, confirmed: true }) }),
       onSuccess: saved,
       onError: refetch,
     }),

@@ -516,6 +516,12 @@ export interface InvoiceDraft {
   clientMessage: string;
   /** What the visit is invoiced on already, newest first, so a second is not made by mistake. */
   existing: InvoiceDraftExisting[];
+  /**
+   * The visit has an invoice already, of any origin (2026-11-13) -- Jobber's
+   * copies kept out of sight behind Xero's too: another is made only when the
+   * form says so (`additional`).
+   */
+  alreadyInvoiced: boolean;
   /** The products the office sells, for a line added by hand: its own list first (2026-11-06), then what it billed. */
   products: InvoiceDraftProduct[];
   /** The office's Xero organisations, connected ones first (2026-11-10): what an invoice can go to. Empty until Xero is connected. */
@@ -529,6 +535,12 @@ export interface CreateInvoiceInput {
   propertyId?: string;
   /** Kept as a draft, unnumbered and owed by nobody until it is marked sent. */
   asDraft?: boolean;
+  /**
+   * Another invoice for a visit that has one already (2026-11-13), said on
+   * purpose: without it, a visit invoiced before -- here, in Jobber or in
+   * Xero -- is refused, so nothing is billed twice.
+   */
+  additional?: boolean;
   subject: string;
   issuedOn: string;
   paymentTermsDays: number;
