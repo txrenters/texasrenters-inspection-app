@@ -9,6 +9,7 @@ import {
   type XeroAccount,
   type XeroItem,
   type XeroSettingsValues,
+  type XeroTaxRate,
   type XeroTrackingCategory,
 } from '@texasrenters/shared';
 
@@ -148,6 +149,8 @@ export function xeroInvoiceFrom(
     /** As last read (2026-11-11); left out, no line is tagged or itemed. */
     trackingCategories?: readonly XeroTrackingCategory[];
     items?: readonly XeroItem[];
+    /** As last read (2026-11-13); left out, the tax type's rate is not asked. */
+    taxRates?: readonly XeroTaxRate[];
     contactId: string;
     /** Its company's visits get projects (2026-11-11): it goes as a draft. */
     asDraft?: boolean;
@@ -171,6 +174,16 @@ export function xeroInvoiceFrom(
   if (!invoice.lines.length) return { kind: 'problem', problem: 'It has no lines.' };
   const { settings } = context;
   if (!settings.salesTaxType) return { kind: 'problem', problem: 'No tax type is chosen for lines.' };
+  // Prices that leave the tax out (2026-11-13): the console's total carries none, so a tax type with a rate would put it
+  // on top in Xero. Refused, rather than billed more than the console says.
+  if (!inclusive && context.taxRates) {
+    const rate = context.taxRates.find((each) => each.taxType === settings.salesTaxType)?.effectiveRate ?? 0;
+    if (rate > 0)
+      return {
+        kind: 'problem',
+        problem: `Its tax type adds ${rate}% on top of prices that do not include it, so Xero's total would be more than the console's. Choose a tax type with no tax, or say prices include sales tax, on the Xero page.`,
+      };
+  }
 
   const codes = new Map(context.accounts.filter((account) => account.status === 'ACTIVE' && account.code).map((account) => [account.accountId, account.code!]));
   const defaultCode = settings.salesAccountId ? codes.get(settings.salesAccountId) : undefined;

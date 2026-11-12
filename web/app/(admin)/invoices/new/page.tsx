@@ -24,6 +24,7 @@ import { PageHeader } from '@/components/page-header';
 import { SearchableSelect } from '@/components/searchable-select';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -162,7 +163,10 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
   );
   // One key for this form: a double click or a resend makes no invoice twice.
   const [requestId] = useState(newClientRequestId);
+  // A visit invoiced already (2026-11-13), of any origin: another is made only when ticked, and the server asks the same.
+  const [another, setAnother] = useState(false);
   const visit = draft.inspection;
+  const invoicedAlready = Boolean(visit && draft.alreadyInvoiced);
   const organisations = draft.organisations ?? [];
   const connected = organisations.filter((organisation) => organisation.connected);
   // The companies are asked about only once Xero has an organisation.
@@ -190,7 +194,9 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         : partProblem.problem
       : twice
         ? `Two invoices go to ${companyWords(twice.company)}: put their lines on one.`
-        : null;
+        : invoicedAlready && !another
+          ? 'This visit has an invoice already: tick “Add another invoice for this visit” to make one more.'
+          : null;
   const totalCents = read.reduce((sum, invoice) => sum + invoice.totalCents, 0);
   const several = read.length > 1;
   const cancelHref = visit ? `/inspections/${visit.id}` : '/invoices';
@@ -228,6 +234,7 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
     const form = {
       ...(visit ? { inspectionId: visit.id } : { propertyId: draft.property?.id }),
       ...(asDraft ? { asDraft: true } : {}),
+      ...(invoicedAlready && another ? { additional: true } : {}),
       subject: subject.trim(),
       issuedOn,
       paymentTermsDays: Number(terms),
@@ -291,11 +298,26 @@ function InvoiceEditor({ draft }: { draft: InvoiceDraft }) {
         title="New invoice"
       />
 
-      {elsewhere.length ? (
+      {elsewhere.length || invoicedAlready ? (
         <div className="border-warning/30 bg-warning/10 mb-4 flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm" role="status">
-          This visit already has an invoice:
-          <Existing invoices={elsewhere} />
+          {elsewhere.length ? (
+            <>
+              This visit already has an invoice:
+              <Existing invoices={elsewhere} />
+            </>
+          ) : draft.existing.length ? (
+            'This visit already has an invoice, listed below.'
+          ) : (
+            // Kept out of sight behind the invoice Xero has (2026-11-13): Jobber's copy, or one on no visit there.
+            'This visit already has an invoice, from Jobber or in Xero.'
+          )}{' '}
           Make a second one only if it bills something the first does not.
+          {invoicedAlready ? (
+            <label className="flex w-full items-center gap-2 font-medium">
+              <Checkbox checked={another} onCheckedChange={(checked) => setAnother(checked === true)} />
+              Add another invoice for this visit
+            </label>
+          ) : null}
         </div>
       ) : null}
 

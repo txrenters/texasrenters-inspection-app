@@ -66,10 +66,15 @@ function setup({
   conn = connection() as unknown,
   // The companies that send to Xero, and whether their books are read back (2026-11-12).
   sending = [] as { booksReadAt: Date | null; xeroOrganisation: { name: string } }[],
+  // The products offered, and each Xero company with its sending (2026-11-13).
+  products = [] as { name: string; xeroTenantId: string | null }[],
+  companies = [] as { xeroTenantId: string; name: string; status: string; settings: { sendingEnabled: boolean } | null }[],
 } = {}) {
   const [total, kept, failed] = files;
   const db = {
     xeroSettings: { findMany: jest.fn().mockResolvedValue(sending) },
+    invoiceProduct: { findMany: jest.fn().mockResolvedValue(products) },
+    xeroOrganisation: { findMany: jest.fn().mockResolvedValue(companies) },
     invoiceSettings: {
       findUnique: jest.fn().mockResolvedValue(settings),
       create: jest.fn().mockResolvedValue({}),
@@ -103,6 +108,7 @@ describe('what the cutover waits on', () => {
       ['FILES_COPIED', true],
       ['FILES_FAILED', true],
       ['COMPANY_DETAILS', false],
+      ['PRODUCTS_GO_TO_XERO', true],
       ['XERO_BOOKS_READ', true],
     ]);
 
@@ -130,6 +136,37 @@ describe('the switch without Jobber (2026-11-12)', () => {
     }).service.view(admin);
     expect(view.ready).toBe(false);
     expect(view.checks.find((check) => check.key === 'XERO_BOOKS_READ')).toMatchObject({ ok: false, blocking: true, detail: expect.stringContaining('Example Pest Co') });
+  });
+
+  it('waits for each product to go to a company that sends to Xero (2026-11-13): else its invoices reach no books', async () => {
+    const companies = [
+      { xeroTenantId: 'tenant-home', name: 'Example Home Services', status: 'CONNECTED', settings: { sendingEnabled: true } },
+      { xeroTenantId: 'tenant-pest', name: 'Example Pest Co', status: 'CONNECTED', settings: { sendingEnabled: false } },
+      { xeroTenantId: 'tenant-air', name: 'Example Air', status: 'REMOVED', settings: { sendingEnabled: true } },
+      { xeroTenantId: 'tenant-new', name: 'Example New Co', status: 'CONNECTED', settings: null },
+    ];
+    const products = [
+      { name: 'Filter Change', xeroTenantId: 'tenant-home' },
+      { name: 'Flea Treatment', xeroTenantId: 'tenant-pest' },
+      { name: 'Pest Control', xeroTenantId: 'tenant-pest' },
+      { name: 'Duct Cleaning', xeroTenantId: 'tenant-air' },
+      { name: 'Gutter Check', xeroTenantId: 'tenant-new' },
+      { name: 'Key Copy', xeroTenantId: null },
+    ];
+    const { service } = setup({ products, companies });
+    const view = await service.view(admin);
+    expect(view.ready).toBe(false);
+    const check = view.checks.find((each) => each.key === 'PRODUCTS_GO_TO_XERO');
+    expect(check).toMatchObject({ ok: false, blocking: true });
+    expect(check?.detail).toBe(
+      'Flea Treatment, Pest Control (Example Pest Co, sending off); Duct Cleaning (Example Air, not connected); Gutter Check (Example New Co, sending off); Key Copy (no company). Turn sending on for its company on the Xero page, give the product a company in Invoices → Settings, or set it aside.',
+    );
+    await expect(service.takeOver(admin, {})).rejects.toMatchObject({ code: 'INVOICE_TAKEOVER_NOT_READY' });
+
+    // Every product's company sending: ready.
+    const ready = await setup({ products: products.slice(0, 1), companies }).service.view(admin);
+    expect(ready.checks.find((each) => each.key === 'PRODUCTS_GO_TO_XERO')).toMatchObject({ ok: true, detail: null });
+    expect(ready.ready).toBe(true);
   });
 
   it('is not held back by Jobber once it is disconnected, and reads nothing more from it', async () => {

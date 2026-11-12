@@ -466,6 +466,13 @@ export function xeroSettingsProblem(values: XeroSettingsValues, catalog: XeroCat
     const rate = revenueTaxRates(catalog.taxRates).find((each) => each.taxType === values.salesTaxType)?.effectiveRate ?? 0;
     if (!(rate > 0)) return 'Prices include sales tax, so choose the tax type with the rate they include, such as 8.25%.';
   }
+  // Prices that leave the tax out (2026-11-13): the console's totals carry none, so a tax type with a rate would put it on
+  // top in Xero -- $39.99 there would be $43.29.
+  if (!values.pricesIncludeTax && values.salesTaxType !== null) {
+    const rate = revenueTaxRates(catalog.taxRates).find((each) => each.taxType === values.salesTaxType)?.effectiveRate ?? 0;
+    if (rate > 0)
+      return 'Prices do not include sales tax, so choose a tax type with no tax, or say prices include it: otherwise Xero adds the tax on top of the console’s total.';
+  }
   if (projectsAreOn(values) && paymentsGoToXero(values))
     return 'Payments must stay out of Xero while each visit gets a project: its invoices go as drafts, and Xero takes no payment on a draft.';
   return null;
@@ -632,6 +639,11 @@ export interface XeroSendingView {
    * office to put each line on its project and approve in Xero.
    */
   projectsEnabled: boolean;
+  /**
+   * The console makes the invoices (2026-11-13): with sending off, this
+   * company's new invoices reach no books, so turning it off must be meant.
+   */
+  madeInConsole: boolean;
   /** Why it cannot run now, in words; empty when it can. */
   blockers: string[];
   counts: {

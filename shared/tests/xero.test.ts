@@ -147,7 +147,11 @@ describe('Xero choices', () => {
       'Prices include sales tax, so choose the tax type with the rate they include, such as 8.25%.',
     );
     expect(xeroSettingsProblem({ ...values, salesTaxType: 'TAX001', pricesIncludeTax: true }, taxed, '2026-11-20')).toBeNull();
-    expect(xeroSettingsProblem({ ...values, salesTaxType: 'TAX001', pricesIncludeTax: false }, taxed, '2026-11-20')).toBeNull();
+    // Prices that leave the tax out take a tax type with none (2026-11-13): a rate would be put on top of the console's total.
+    expect(xeroSettingsProblem({ ...values, salesTaxType: 'TAX001', pricesIncludeTax: false }, taxed, '2026-11-20')).toBe(
+      'Prices do not include sales tax, so choose a tax type with no tax, or say prices include it: otherwise Xero adds the tax on top of the console’s total.',
+    );
+    expect(xeroSettingsProblem({ ...values, pricesIncludeTax: false }, taxed, '2026-11-20')).toBeNull();
   });
 
   it('write bad debts off only to an active expense account (2026-11-10)', () => {

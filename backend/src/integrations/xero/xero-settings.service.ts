@@ -187,7 +187,11 @@ export class XeroSettingsService {
       xeroTenantId: tenantId,
       // The console's own and Jobber's: one read from Xero (2026-11-12) is never sent there.
       origin: { not: InvoiceOrigin.XERO },
-      status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
+      // The console's drafts go too (2026-11-13), as the sender sends them: Xero numbers them. Jobber's drafts never go.
+      OR: [
+        { origin: InvoiceOrigin.CONSOLE, status: { not: InvoiceStatus.VOIDED } },
+        { status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
+      ],
       issuedOn: { gte: new Date(`${since}T00:00:00.000Z`) },
     };
     const [invoicesToSend, byMethod] = await Promise.all([

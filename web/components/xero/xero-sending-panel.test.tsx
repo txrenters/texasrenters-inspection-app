@@ -24,6 +24,7 @@ const OFF: XeroSendingView = {
   changedAt: null,
   canWrite: true,
   projectsEnabled: false,
+  madeInConsole: false,
   blockers: [],
   counts: { sent: 0, failed: 0, notYet: 18, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 0, failed: 0 }, changedHere: 0 },
   lastRunAt: null,
@@ -157,15 +158,24 @@ describe('the sending panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try the refused again' }));
     expect(actions.retry.mutate).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Nothing more goes to Xero until it is turned on again.');
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Turn off' }));
     expect(actions.setEnabled.mutate).toHaveBeenCalledWith(false, expect.anything());
   });
 
   it('says, once the console makes the invoices and the books are read, that they go as drafts and Xero emails them (2026-11-13)', () => {
-    render(<XeroSendingPanel booksRead canManage madeInConsole sendFrom="2026-12-01" view={ON} />);
+    render(<XeroSendingPanel booksRead canManage sendFrom="2026-12-01" view={{ ...ON, madeInConsole: true }} />);
     expect(screen.getByText(/go to Xero as drafts that Xero numbers, for the office to approve there/)).toBeInTheDocument();
     expect(screen.getByText('The console emails nothing for this company: its invoices, reminders and receipts go from Xero, once approved there.')).toBeInTheDocument();
     expect(screen.queryByText(/still go from the console/)).not.toBeInTheDocument();
+  });
+
+  it('says, once the console makes the invoices, that with sending off they reach no books (2026-11-13)', () => {
+    mount({ ...ON, madeInConsole: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      "With sending off, this company's new invoices get the console's own numbers and reach no books, and nobody emails them.",
+    );
   });
 
   it('offers no buttons to whoever does not run the integrations', () => {

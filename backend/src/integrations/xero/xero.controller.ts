@@ -53,6 +53,8 @@ const tenantOf = (value: string) => {
 /** Sending on or off. */
 export class SetXeroSendingDto {
   @IsBoolean() enabled!: boolean;
+  /** Off once the console makes the invoices (2026-11-13): the office has said it means it. */
+  @IsOptional() @IsBoolean() confirmed?: boolean;
 }
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -146,7 +148,7 @@ export class XeroController {
   @Put('organisations/:tenantId/sending')
   @RequirePermissions('integrations:manage')
   setSending(@Req() request: AuthenticatedRequest, @Param('tenantId') tenantId: string, @Body() body: SetXeroSendingDto) {
-    return this.sender.setEnabled(request.user, tenantOf(tenantId), body.enabled);
+    return this.sender.setEnabled(request.user, tenantOf(tenantId), body.enabled, body.confirmed === true);
   }
 
   /** "Send now": one run at once, at most once a minute; only changed invoices reach Xero. */

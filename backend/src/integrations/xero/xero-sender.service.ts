@@ -10,6 +10,7 @@ import {
   type XeroItem,
   type XeroOrganisation,
   type XeroSendingView,
+  type XeroTaxRate,
   type XeroTrackingCategory,
 } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
@@ -159,6 +160,8 @@ interface Catalog {
   accounts: XeroAccount[];
   trackingCategories: XeroTrackingCategory[];
   items: XeroItem[];
+  /** As last read (2026-11-13): a tax type's rate, so none is put on top of prices that leave it out. */
+  taxRates: XeroTaxRate[];
 }
 
 const PAYMENT_FIELDS = {
@@ -349,6 +352,7 @@ export class XeroSenderService {
       changedAt: state.row?.sendingChangedAt?.toISOString() ?? null,
       canWrite: state.canWrite,
       projectsEnabled: state.projectsEnabled,
+      madeInConsole: !state.jobberSends,
       blockers: state.blockers,
       counts: {
         sent,
@@ -407,12 +411,23 @@ export class XeroSenderService {
     };
   }
 
-  /** On only when nothing blocks it; off at any time. Audited both ways. */
-  async setEnabled(user: AuthenticatedUser, tenantId: string, enabled: boolean): Promise<XeroSendingView> {
+  /**
+   * On only when nothing blocks it; off at any time -- once the console makes
+   * the invoices (2026-11-13), only when the office says it means it: from then
+   * the company's new invoices get the console's own numbers and reach no books.
+   * Audited both ways.
+   */
+  async setEnabled(user: AuthenticatedUser, tenantId: string, enabled: boolean, confirmed = false): Promise<XeroSendingView> {
     const organizationId = user.organizationId;
     const state = await this.state(organizationId, tenantId);
     if (enabled && state.blockers.length) throw new XeroError(state.blockers[0]!, 'XERO_SENDING_BLOCKED', 409);
     if (!state.row) throw new XeroError('Choose what goes where in Xero first.', 'XERO_SENDING_BLOCKED', 409);
+    if (!enabled && state.row.sendingEnabled && !state.jobberSends && !confirmed)
+      throw new XeroError(
+        "Invoices are made in the console now: with sending off, this company's new invoices get the console's own numbers and reach no books, and nobody emails them. Say you mean it to turn it off.",
+        'XERO_SENDING_OFF_UNCONFIRMED',
+        409,
+      );
     if (state.row.sendingEnabled !== enabled) {
       await this.prisma.xeroSettings.update({ where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } }, data: { sendingEnabled: enabled, sendingChangedAt: new Date() } });
       await this.prisma.auditLog.create({
@@ -627,6 +642,7 @@ export class XeroSenderService {
         accounts: catalog.accounts,
         trackingCategories: catalog.trackingCategories,
         items: catalog.items,
+        taxRates: catalog.taxRates,
         contactId: contact.id,
         asDraft,
         // The console's own (2026-11-12): a complete draft, numbered by Xero, linked back to its page here.
@@ -1459,7 +1475,7 @@ export class XeroSenderService {
       this.prisma.xeroConnection.findUnique({ where: { organizationId }, select: { status: true, scopes: true } }),
       this.prisma.xeroOrganisation.findUnique({
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } },
-        select: { name: true, status: true, invoiceRemindersOn: true, accounts: true, trackingCategories: true, items: true, organisation: true },
+        select: { name: true, status: true, invoiceRemindersOn: true, accounts: true, trackingCategories: true, items: true, taxRates: true, organisation: true },
       }),
       this.settings.read(organizationId, tenantId),
       // The console makes the invoices (2026-11-12): Jobber's are sent no more.
@@ -1481,6 +1497,7 @@ export class XeroSenderService {
         accounts: connected ? ((organisation?.accounts as XeroAccount[] | null) ?? []) : [],
         trackingCategories: connected ? ((organisation?.trackingCategories as XeroTrackingCategory[] | null) ?? []) : [],
         items: connected ? ((organisation?.items as XeroItem[] | null) ?? []) : [],
+        taxRates: connected ? ((organisation?.taxRates as XeroTaxRate[] | null) ?? []) : [],
       } satisfies Catalog,
       paymentsToXero: paymentsGoToXero(settings.values) && !projectsEnabled && !booksRead,
       booksRead,

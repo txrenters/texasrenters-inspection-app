@@ -112,6 +112,7 @@ function sending(tenantId: string): XeroSendingView {
     changedAt: null,
     canWrite: true,
     projectsEnabled: false,
+    madeInConsole: false,
     blockers: ['Finish “Before anything is sent”.'],
     counts: { sent: 0, failed: 0, notYet: 5, noCompany: 0, payments: { sent: 0, failed: 0 }, writeOffs: { sent: 0, failed: 0 }, projects: { done: 0, failed: 0 }, changedHere: 0 },
     lastRunAt: null,

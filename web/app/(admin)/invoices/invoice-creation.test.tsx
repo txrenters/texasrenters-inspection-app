@@ -63,6 +63,7 @@ const PROPERTY_DRAFT: InvoiceDraft = {
   invoices: [{ xeroTenantId: null, lineItems: [] }],
   clientMessage: '',
   existing: [],
+  alreadyInvoiced: false,
   products: [{ name: 'Filter Change', unitPriceCents: 3999 }],
   organisations: [],
 };

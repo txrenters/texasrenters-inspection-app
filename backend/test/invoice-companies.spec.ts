@@ -343,6 +343,77 @@ describe('a batch', () => {
     ]);
   });
 
+  describe('once the console makes the invoices (2026-11-13)', () => {
+    // Taken over on the 1st; Example Home Services sends to Xero, Example Pest Co does not.
+    const switched = () => {
+      const db = database();
+      db.invoiceSettings.findUnique.mockResolvedValue({ invoicingTakenOverAt: new Date('2026-11-01T14:00:00.000Z') });
+      db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+      db.inspection.findMany.mockResolvedValue([visit()]);
+      return db;
+    };
+    const PEST_HELD = 'Example Pest Co does not send its invoices to Xero, so this one would reach no books. Turn its sending on, on the Xero page, first.';
+
+    it('holds back a visit with an invoice for a company that does not send to Xero, on the list and in the batch', async () => {
+      const db = switched();
+      const list = await batchOver(db).uninvoiced(office, { from: '2026-11-01', to: '2026-11-07' });
+      expect(list.items[0]!.problem).toBe(PEST_HELD);
+
+      const result = await batchOver(db).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0005' });
+      expect(result).toEqual({ created: [], skipped: [{ inspectionId: VISIT, reason: PEST_HELD }] });
+      expect(db.invoice.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses on the form an invoice for a company that does not send, or for none; takes one that does', async () => {
+      const db = switched();
+      const service = new InvoicesService(db as never);
+      jest.spyOn(service, 'one').mockResolvedValue({} as never);
+      await expect(service.createPerCompany(office, { ...form, invoices: [{ lineItems: [filter] }, { lineItems: [pest] }] })).rejects.toMatchObject({
+        code: 'INVOICE_INVALID',
+        message: PEST_HELD,
+      });
+      await expect(service.create(office, { ...form, lineItems: [typed] })).rejects.toMatchObject({
+        code: 'INVOICE_INVALID',
+        message: 'An invoice that goes to no company would reach no books. Choose the company whose books it goes to.',
+      });
+      expect(db.invoice.create).not.toHaveBeenCalled();
+
+      await service.create(office, { ...form, lineItems: [filter] });
+      expect(db.invoice.create.mock.calls.map((call) => [call[0].data.xeroTenantId, call[0].data.status])).toEqual([[HOMES, 'DRAFT']]);
+    });
+
+    it('is asked nothing of before the switch: an invoice of no company is made as before', async () => {
+      const db = database();
+      const service = new InvoicesService(db as never);
+      jest.spyOn(service, 'one').mockResolvedValue({} as never);
+      await service.create(office, { ...form, lineItems: [typed] });
+      expect(db.invoice.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('never makes one issued before its sending company’s start date (2026-11-13): Xero would never be sent it', async () => {
+    const db = database();
+    db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES, sendFrom: date('2026-11-05') }]);
+    const early = await batchOver(db).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0003' });
+    expect(early).toEqual({
+      created: [],
+      skipped: [{ inspectionId: VISIT, reason: 'Example Home Services sends Xero only invoices issued from November 5, 2026: issue it that day or later.' }],
+    });
+    expect(db.invoice.create).not.toHaveBeenCalled();
+    // The visit's own form says the same, and makes none of its invoices.
+    const service = new InvoicesService(db as never);
+    jest.spyOn(service, 'one').mockResolvedValue({} as never);
+    await expect(service.createPerCompany(office, { ...form, invoices: [{ lineItems: [filter] }, { lineItems: [pest] }] })).rejects.toMatchObject({
+      code: 'INVOICE_INVALID',
+      message: 'Example Home Services sends Xero only invoices issued from November 5, 2026: issue it that day or later.',
+    });
+    expect(db.invoice.create).not.toHaveBeenCalled();
+
+    // From the start date on, both are made.
+    const onTime = await batchOver(db).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-05', paymentTermsDays: 30, clientRequestId: 'web-batch-0004' });
+    expect(onTime.created.map((made) => made.company)).toEqual(['Example Home Services', 'Example Pest Co']);
+  });
+
   it('lists visits only from the day the console began making the invoices (2026-11-12): those before were billed in Jobber or Xero', async () => {
     const db = database();
     db.invoiceSettings.findUnique.mockImplementation(async ({ select }: { select: Record<string, unknown> }) =>

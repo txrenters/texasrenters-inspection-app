@@ -340,7 +340,6 @@ function OrganisationTab({
         <XeroSendingPanel
           booksRead={settings.data?.booksRead ?? false}
           canManage={canManage}
-          madeInConsole={settings.data?.madeInConsole ?? false}
           sendFrom={settings.data?.values.sendFrom ?? null}
           view={sending.data}
         />
