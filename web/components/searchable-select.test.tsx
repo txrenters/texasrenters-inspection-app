@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { createElement, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { SearchableSelect } from './searchable-select';
+import { SearchableSelect, matchesWords } from './searchable-select';
 
 const options = [
   { value: 'one', label: '1150 LLC' },
@@ -317,5 +317,15 @@ describe('an option carrying a badge', () => {
     openMenu();
     fireEvent.click(screen.getByText('Demo Property 1'));
     expect(onChange).toHaveBeenCalledWith('demo');
+  });
+});
+
+describe('matching what was typed (2026-11-13)', () => {
+  it('needs every word typed in the option, in any order and any case', () => {
+    expect(matchesWords('Air Filter Income: Moses', 'moses air')).toBe(1);
+    expect(matchesWords('Air Filter Income: Moses', 'AIR filter MO')).toBe(1);
+    expect(matchesWords('Air Filter Income: Amy', 'air moses')).toBe(0);
+    expect(matchesWords('4307 · Service: Filter Change', '4307')).toBe(1);
+    expect(matchesWords('Anything', '   ')).toBe(1);
   });
 });
