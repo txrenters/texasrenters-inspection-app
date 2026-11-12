@@ -2,7 +2,7 @@ import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { makeInvoices, visitParts, type MakeRequest } from '../src/admin/invoice-maker';
-import { goesToXero, invoiceProblem, invoicingState, type InvoicingState } from '../src/admin/invoicing-state';
+import { goesToXero, invoiceProblem, invoicingState, sentFrom, type InvoicingState } from '../src/admin/invoicing-state';
 
 /**
  * Where invoicing stands, and the one maker of invoices (2026-11-13, PR 3 of
@@ -80,14 +80,24 @@ describe('where invoicing stands', () => {
     expect(invoiceProblem(state(), PEST, '2026-11-13')).toBe(
       'Example Pest Co does not send its invoices to Xero, so this one would reach no books. Turn its sending on, on the Xero page, first.',
     );
-    // Never one issued before its sending company's start date.
+    // Never one made before its sending company's start date has come (2026-11-13): the day it is dated does not matter.
     expect(invoiceProblem(state(), HOMES, '2026-11-04')).toBe(
-      'Example Home Services sends Xero only invoices issued from November 5, 2026: issue it that day or later.',
+      'Example Home Services sends its invoices to Xero from November 5, 2026: one made before then would never reach its books. Make it that day or later, or move the start date on the Xero page.',
     );
     expect(invoiceProblem(state(), HOMES, '2026-11-05')).toBeNull();
     expect(goesToXero(state(), HOMES)).toBe(true);
     expect(goesToXero(state(), PEST)).toBe(false);
     expect(goesToXero(state(), null)).toBe(false);
+  });
+
+  it('sends a company the console’s invoices made from its start date in Texas, whatever day each is dated, and Jobber’s issued from it (2026-11-13)', () => {
+    // November 5 begins at 06:00 UTC in Texas (CST).
+    expect(sentFrom('2026-11-05')).toEqual({
+      OR: [
+        { origin: 'CONSOLE', createdAt: { gte: new Date('2026-11-05T06:00:00.000Z') } },
+        { origin: { not: 'CONSOLE' }, issuedOn: { gte: new Date('2026-11-05T00:00:00.000Z') } },
+      ],
+    });
   });
 
   it('lists a visit’s invoices, one per company, with what holds the visit back', () => {

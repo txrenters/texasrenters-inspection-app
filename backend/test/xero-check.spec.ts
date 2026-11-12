@@ -5,6 +5,7 @@ import { PERMISSIONS_METADATA_KEY } from '../src/common/auth';
 import { compareMonth, monthWhere, type ConsoleInvoiceForCheck, type XeroInvoiceForCheck } from '../src/integrations/xero/xero-check';
 import { XeroCheckService } from '../src/integrations/xero/xero-check.service';
 import { XeroController } from '../src/integrations/xero/xero.controller';
+import { sentFrom } from '../src/admin/invoicing-state';
 
 /**
  * Checking a month of a company's invoices against its books in Xero
@@ -170,8 +171,16 @@ describe('checking a month', () => {
       // What the console sent, never what it read back from Xero (2026-11-12).
       origin: { not: 'XERO' },
       status: { not: 'DRAFT' },
-      issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z') },
-      OR: [{ inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } }, { inspectionId: null, issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } }],
+      AND: [
+        // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+        sentFrom('2026-11-01'),
+        {
+          OR: [
+            { inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } },
+            { inspectionId: null, issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } },
+          ],
+        },
+      ],
     });
     expect(view).toMatchObject({ month: '2026-11', ranBy: 'Office Coordinator', calls: 1, truncated: false, counts: { console: 1, xero: 1, matching: 1 }, differences: [] });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
@@ -210,13 +219,14 @@ describe('checking a month', () => {
     expect(view.counts).toMatchObject({ console: 0, onlyInXero: 1 });
   });
 
-  it('counts an invoice issued from the start date in the month of its visit, even an earlier one', async () => {
-    // Issued on or after December 1 for a November visit: dated November in Xero, so November's.
+  it('counts an invoice from the start date in the month of its visit, even an earlier one', async () => {
+    // Made on or after December 1 for a November visit (2026-11-13: whatever day it is dated): dated November in Xero,
+    // so November's.
     const { checks, prisma } = harness({ sendFrom: new Date('2026-12-01T00:00:00.000Z') });
     await checks.run(office, TENANT, '2026-11');
-    const where = prisma.invoice.findMany.mock.calls[0]![0].where;
-    expect(where.issuedOn).toEqual({ gte: new Date('2026-12-01T00:00:00.000Z') });
-    expect((where.OR as unknown[])[0]).toEqual({ inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } });
+    const [from, month] = prisma.invoice.findMany.mock.calls[0]![0].where.AND as [unknown, { OR: unknown[] }];
+    expect(from).toEqual(sentFrom('2026-12-01'));
+    expect(month.OR[0]).toEqual({ inspection: { is: { scheduledAt: { gte: new Date('2026-11-01T00:00:00.000Z'), lt: new Date('2026-12-01T00:00:00.000Z') } } } });
   });
 
   it('leaves what is paid in Xero alone when payments stay out of it', async () => {

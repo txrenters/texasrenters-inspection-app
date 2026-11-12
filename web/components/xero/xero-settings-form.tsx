@@ -216,7 +216,7 @@ export function XeroSettingsForm({
             />
             <FieldDescription>
               {view.madeInConsole
-                ? 'Invoices issued on or after it go to Xero; one issued before it never does.'
+                ? 'Invoices made in the console on or after it go to Xero, whatever day each is dated; one made before it never does.'
                 : 'Invoices issued on or after it go to Xero. One Xero already has under the same number, made through Zapier or by hand, is linked rather than made twice. Turn the Zap off before sending is turned on.'}
             </FieldDescription>
           </Field>

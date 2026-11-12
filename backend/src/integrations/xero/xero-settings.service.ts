@@ -28,6 +28,7 @@ import {
 import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
 import { billedPrices, invoicingTakenOverAt, listedProducts } from '../../admin/invoice-settings';
+import { sentFrom } from '../../admin/invoicing-state';
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
@@ -235,7 +236,8 @@ export class XeroSettingsService {
         { origin: InvoiceOrigin.CONSOLE, status: { not: InvoiceStatus.VOIDED } },
         { status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },
       ],
-      issuedOn: { gte: new Date(`${since}T00:00:00.000Z`) },
+      // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+      AND: [sentFrom(since)],
     };
     const [invoicesToSend, byMethod] = await Promise.all([
       this.prisma.invoice.count({ where: invoices }),

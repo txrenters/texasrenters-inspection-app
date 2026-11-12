@@ -6,6 +6,7 @@ import { ValidationPipe } from '@nestjs/common';
 
 import { SaveXeroSettingsDto, XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroSettingsService, settingsChanges, valuesFrom, valuesFromInput } from '../src/integrations/xero/xero-settings.service';
+import { sentFrom } from '../src/admin/invoicing-state';
 
 /**
  * The office's choices for sending to Xero (2026-11-10, phase 2 of the Xero
@@ -179,7 +180,8 @@ describe('reading the choices', () => {
         { origin: 'CONSOLE', status: { not: 'VOIDED' } },
         { status: { notIn: ['DRAFT', 'VOIDED'] } },
       ],
-      issuedOn: { gte: new Date('2026-12-01T00:00:00.000Z') },
+      // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+      AND: [sentFrom('2026-12-01')],
     };
     expect(db.invoice.count).toHaveBeenCalledWith({ where: expect.objectContaining(invoices) });
     // And the payments by method, on the same invoices only.
