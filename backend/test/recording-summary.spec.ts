@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 import {
   acceptedSummary,
   grounded,
@@ -333,6 +335,59 @@ describe('summarizing one room', () => {
     await expect(service.summarizeArea('org-2', 'inspection-1', 'area-1', 'user-1')).rejects.toMatchObject({
       code: 'INSPECTION_NOT_FOUND',
     });
+  });
+});
+
+/**
+ * A re-run transcribed a recording again, because its stored transcript held
+ * lines whisper invented over silence (2026-11-12).
+ */
+describe('a room whose recording was transcribed again', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  it('writes the summary again from the new transcript, as the pipeline', async () => {
+    const { service, prisma } = harness();
+    prisma.inspectionArea.findFirst.mockResolvedValue({ recordingSummaryAt: new Date('2026-11-10T15:00:00Z') });
+
+    await service.afterRetranscription('org-1', 'inspection-1', 'area-1');
+
+    expect(prisma.inspectionArea.update.mock.calls[0][0].data.recordingSummary.mediaIds).toEqual(['media-1']);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ actorUserId: null, metadata: expect.objectContaining({ trigger: 'PIPELINE' }) }),
+    });
+  });
+
+  it('takes the old summary away when nothing was said after all', async () => {
+    const { service, prisma, fetchMock } = harness({ media: [] });
+    prisma.inspectionArea.findFirst.mockResolvedValue({ recordingSummaryAt: new Date('2026-11-10T15:00:00Z') });
+
+    await service.afterRetranscription('org-1', 'inspection-1', 'area-1');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(prisma.inspectionArea.update).toHaveBeenCalledWith({
+      where: { id: 'area-1' },
+      data: { recordingSummary: Prisma.DbNull, recordingSummaryAt: null },
+    });
+  });
+
+  it('writes nothing for a room that never had a summary: review writes that one', async () => {
+    const { service, prisma, fetchMock } = harness();
+    prisma.inspectionArea.findFirst.mockResolvedValue({ recordingSummaryAt: null });
+
+    await service.afterRetranscription('org-1', 'inspection-1', 'area-1');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(prisma.inspectionArea.update).not.toHaveBeenCalled();
+  });
+
+  it('never fails the re-run that asked for it', async () => {
+    const { service, prisma } = harness();
+    prisma.inspectionArea.findFirst.mockRejectedValue(new Error('database unreachable'));
+
+    await expect(service.afterRetranscription('org-1', 'inspection-1', 'area-1')).resolves.toBeUndefined();
   });
 });
 

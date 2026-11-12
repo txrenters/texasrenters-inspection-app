@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   AreaChecklistItemKind,
   ChecklistResponseType,
+  Prisma,
   TranscriptionStatus,
   VideoRecordingType,
 } from '@prisma/client';
@@ -98,6 +99,57 @@ export class RecordingSummaryService {
         `Recording summary skipped for ${inspectionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
       ),
     );
+  }
+
+  /**
+   * One room again, after a re-run transcribed its recording a second time.
+   *
+   * A summary goes stale only when the room's set of recordings changes, so a
+   * new transcript of the same recording would leave the old summary current
+   * and printed: lines the old transcript invented included (2026-11-12). Only
+   * a room that already has a summary is written again; one with none gets it
+   * when the inspection reaches review. Never throws.
+   */
+  async afterRetranscription(organizationId: string, inspectionId: string, inspectionAreaId: string) {
+    try {
+      const area = await this.prisma.inspectionArea.findFirst({
+        where: { id: inspectionAreaId, inspectionId },
+        select: { recordingSummaryAt: true },
+      });
+      if (!area?.recordingSummaryAt) return;
+      const inspection = await this.inspection(organizationId, inspectionId);
+      const configuration = await this.aiSettings.resolve(organizationId);
+      const { outcome, view } = await this.summarizeOne(
+        organizationId,
+        inspection,
+        inspectionAreaId,
+        configuration,
+      );
+      // Nothing was said there after all. The old summary is of lines that no
+      // longer exist; left in place it would sit in the summaries tab, stale,
+      // with nothing to write in its place.
+      if (!view)
+        await this.prisma.inspectionArea.update({
+          where: { id: inspectionAreaId },
+          data: { recordingSummary: Prisma.DbNull, recordingSummaryAt: null },
+        });
+      await this.audit(
+        organizationId,
+        inspectionId,
+        null,
+        'PIPELINE',
+        configuration,
+        [outcome],
+        inspection.finalizedAt,
+      );
+    } catch (error) {
+      // The room keeps its last summary; the console offers to write it again.
+      this.logger.warn(
+        `Recording summary skipped after re-transcription of area ${inspectionAreaId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   /** One room now; answers with the summary, or null when nothing was said there. */

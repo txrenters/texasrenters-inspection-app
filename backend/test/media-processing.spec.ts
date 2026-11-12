@@ -434,6 +434,10 @@ function reanalysisHarness(
     guidance?: { current: jest.Mock; lessons: jest.Mock };
     /** Frames the AI filed under findings this re-run replaces. */
     orphans?: Array<{ id: string; storageKey: string }>;
+    /** Cloudflare, for a re-run that transcribes the recording again. */
+    stream?: { ensureDownloadUrl: jest.Mock };
+    /** The report's room summaries; absent unless a test is about them. */
+    recordingSummary?: { afterRetranscription: jest.Mock };
   } = {},
 ) {
   const media = {
@@ -544,9 +548,11 @@ function reanalysisHarness(
     storage as never,
     aiSettings as never,
     comparison as never,
-    undefined,
+    opts.stream as never,
     opts.visualReview as never,
     opts.guidance as never,
+    undefined,
+    opts.recordingSummary as never,
   );
   /** The analysis prompt, as sent. */
   const prompt = () => {
@@ -680,6 +686,79 @@ describe('re-running the analysis on a recording', () => {
     ]);
     expect(harness.prisma.transcriptionJob.upsert).not.toHaveBeenCalled();
     expect(harness.events()).toEqual(['REANALYSIS_STARTED', 'REANALYSIS_COMPLETED']);
+  });
+
+  it('does not pay to transcribe a silent room again', async () => {
+    const harness = reanalysisHarness({ storedSegments: [] });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.prisma.transcriptionJob.upsert).not.toHaveBeenCalled();
+    expect(harness.events()).toEqual(['REANALYSIS_STARTED', 'REANALYSIS_COMPLETED']);
+  });
+
+  /**
+   * Transcripts stored before invented lines were dropped. The stock lines are
+   * only what shows: the rest reads as speech, so the recording is transcribed
+   * again, and the room's report summary written from the new transcript.
+   */
+  it('transcribes again a narration holding lines whisper invented, then rewrites the room summary', async () => {
+    const recordingSummary = { afterRetranscription: jest.fn().mockResolvedValue(undefined) };
+    const harness = reanalysisHarness({
+      storedSegments: [
+        { startSeconds: 0, endSeconds: 10, text: 'Special thanks to the cast and crew.' },
+        { startSeconds: 14, endSeconds: 16, text: 'Thanks for watching.' },
+        { startSeconds: 16, endSeconds: 18, text: 'Rest in peace.' },
+      ],
+      stream: {
+        ensureDownloadUrl: jest
+          .fn()
+          .mockResolvedValue('https://customer-abc.cloudflarestream.com/uid-1/downloads/default.mp4'),
+      },
+      recordingSummary,
+    });
+    global.fetch = jest.fn(async (url: string) => {
+      if (url.includes('cloudflarestream.com'))
+        return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(4) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          text: 'Thanks for watching. Rest in peace.',
+          segments: [
+            { start: 14, end: 16, text: ' Thanks for watching.', no_speech_prob: 0.9 },
+            { start: 16, end: 18, text: ' Rest in peace.', no_speech_prob: 0.9 },
+          ],
+        }),
+      };
+    }) as unknown as typeof fetch;
+    // ffmpeg is real time, which `settled` does not wait for; the audio is not what is tested.
+    jest
+      .spyOn(harness.service as unknown as { extractAudio: () => Promise<unknown> }, 'extractAudio')
+      .mockResolvedValue({ bytes: Buffer.from([0]), name: 'audio.m4a', type: 'audio/mp4' });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(harness.events()).toEqual(['REANALYSIS_STARTED', 'REANALYSIS_COMPLETED']);
+    expect(harness.prisma.transcriptionJob.upsert).toHaveBeenCalledTimes(1);
+    expect(harness.prisma.transcriptSegment.createMany).toHaveBeenCalledWith({ data: [] });
+    expect(recordingSummary.afterRetranscription).toHaveBeenCalledWith(
+      ORGANIZATION_ID,
+      'move-out-1',
+      'inspection-area-1',
+    );
+  });
+
+  it('leaves the room summary alone when the stored narration was reused', async () => {
+    const recordingSummary = { afterRetranscription: jest.fn() };
+    const harness = reanalysisHarness({ storedSegments: TIMED_NARRATION, recordingSummary });
+
+    harness.service.reanalyze('media-1', ORGANIZATION_ID);
+    await harness.settled();
+
+    expect(recordingSummary.afterRetranscription).not.toHaveBeenCalled();
   });
 
   it('tells the model what the office already decided, and replaces only what it has not', async () => {
@@ -1078,7 +1157,14 @@ describe('a retry pays for the narration once', () => {
   const NARRATION = 'There is a scuff mark on the wall near the window.';
 
   /** A recording whose analysis keeps failing, with a database that remembers. */
-  function pipeline({ analysisFails = true }: { analysisFails?: boolean } = {}) {
+  function pipeline({
+    analysisFails = true,
+    transcription = { text: NARRATION },
+  }: {
+    analysisFails?: boolean;
+    /** What the transcription endpoint answers. */
+    transcription?: unknown;
+  } = {}) {
     let job: { status: string; segments: { startSeconds: number; endSeconds: number; text: string }[] } | null =
       null;
     let written: { startSeconds: number; endSeconds: number; text: string }[] = [];
@@ -1144,7 +1230,7 @@ describe('a retry pays for the narration once', () => {
     };
     const fetch = jest.fn(async (url: string) => {
       if (String(url).includes('/audio/transcriptions'))
-        return { ok: true, status: 200, json: async () => ({ text: NARRATION }) };
+        return { ok: true, status: 200, json: async () => transcription };
       if (analysisFails) return { ok: false, status: 500, json: async () => ({ error: { message: 'unavailable' } }) };
       return {
         ok: true,
@@ -1163,7 +1249,14 @@ describe('a retry pays for the narration once', () => {
     );
     const transcriptions = () => fetch.mock.calls.filter(([url]) => String(url).includes('/audio/transcriptions')).length;
     const analyses = () => fetch.mock.calls.filter(([url]) => String(url).includes('/v1/responses')).length;
-    return { service, prisma, transcriptions, analyses, setJob: (next: typeof job) => (job = next) };
+    return {
+      service,
+      prisma,
+      transcriptions,
+      analyses,
+      setJob: (next: typeof job) => (job = next),
+      stored: () => written,
+    };
   }
 
   it('transcribes once however often a failing analysis is tried again', async () => {
@@ -1212,6 +1305,62 @@ describe('a retry pays for the narration once', () => {
     await harness.service.process('media-1', ORGANIZATION_ID);
 
     expect(harness.transcriptions()).toBe(1);
+  });
+
+  /**
+   * A hallway at a move-out, 2026-11-12: nobody spoke, and whisper wrote video
+   * credits, "Rest in peace" and a sentence about a time of death over it.
+   */
+  it('keeps what whisper wrote over silence out of the narration', async () => {
+    const harness = pipeline({
+      analysisFails: false,
+      transcription: {
+        text: 'Special thanks to the cast and crew. Thanks for watching. Rest in peace. The time was approximately 19.',
+        segments: [
+          { start: 0, end: 10, text: ' Special thanks to the cast and crew.', no_speech_prob: 0.82 },
+          { start: 10, end: 14, text: ' Thanks for watching.', no_speech_prob: 0.82 },
+          { start: 14, end: 16, text: ' Rest in peace.', no_speech_prob: 0.82 },
+          { start: 16, end: 27, text: ' The time was approximately 19.', no_speech_prob: 0.82 },
+        ],
+      },
+    });
+
+    await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.stored()).toEqual([]);
+    // Nothing was said, so the room is summarized without asking the model.
+    expect(harness.analyses()).toBe(0);
+  });
+
+  it('drops a stock ending the model was sure of, and keeps the narration around it', async () => {
+    const harness = pipeline({
+      analysisFails: false,
+      transcription: {
+        text: `${NARRATION} Thank you for watching.`,
+        segments: [
+          { start: 2, end: 8, text: ` ${NARRATION}`, no_speech_prob: 0.02 },
+          // Confident, over speech-free tail: the silence estimate alone misses it.
+          { start: 80, end: 82, text: ' Thank you for watching.', no_speech_prob: 0.3 },
+        ],
+      },
+    });
+
+    await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.stored()).toEqual([{ startSeconds: 2, endSeconds: 8, text: NARRATION }]);
+    expect(harness.analyses()).toBe(1);
+  });
+
+  it('takes a stock ending out of a transcript that came back without lines', async () => {
+    // gpt-4o-mini-transcribe, when whisper-1 is refused: text alone.
+    const harness = pipeline({
+      analysisFails: false,
+      transcription: { text: `${NARRATION} Thanks for watching!` },
+    });
+
+    await harness.service.process('media-1', ORGANIZATION_ID);
+
+    expect(harness.stored().map((line) => line.text)).toEqual([NARRATION]);
   });
 });
 

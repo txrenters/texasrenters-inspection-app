@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ApplicationError } from '../common/errors';
+import { isInventedLine, withoutInventedSentences } from './invented-speech';
 
 /**
  * Transcription via Deepgram.
@@ -86,8 +87,12 @@ export function parseDeepgramResponse(payload: unknown, durationSeconds: number)
 
   const channel = parsed.data.results.channels[0]!;
   const utterances = parsed.data.results.utterances ?? [];
-  const segments = utterances
-    .filter((utterance) => utterance.transcript.trim().length > 0)
+  const said = utterances.filter((utterance) => utterance.transcript.trim().length > 0);
+  // The same stock endings whisper invents (see `invented-speech.ts`). Dropped
+  // here too, so a stored transcript never holds one: a re-run transcribes
+  // again when it finds one, and must not find it again.
+  const kept = said.filter((utterance) => !isInventedLine(utterance.transcript));
+  const segments = kept
     .map((utterance) => ({
       // Clamped to the recording: a provider timestamp past the end would place
       // a finding at a moment the player cannot seek to.
@@ -98,8 +103,12 @@ export function parseDeepgramResponse(payload: unknown, durationSeconds: number)
 
   return {
     // The channel alternative is the authoritative full text; joining utterances
-    // would drop anything Deepgram did not group into one.
-    text: channel.alternatives[0]!.transcript.trim(),
+    // would drop anything Deepgram did not group into one. Unless a line was
+    // dropped: the full text still holds it.
+    text:
+      kept.length < said.length
+        ? segments.map((segment) => segment.text).join(' ')
+        : withoutInventedSentences(channel.alternatives[0]!.transcript),
     segments: segments.length ? segments : null,
     language: channel.detected_language ?? null,
     provider: 'deepgram',
