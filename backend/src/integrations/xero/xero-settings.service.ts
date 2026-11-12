@@ -102,6 +102,35 @@ export function valuesFromInput(input: SaveXeroSettingsInput): XeroSettingsValue
   };
 }
 
+/** A product of one company, with the Xero choices kept on it (2026-11-13). */
+export interface ProductChoices {
+  nameKey: string;
+  xeroAccountId: string | null;
+  xeroItemCode: string | null;
+  xeroTrackingGroup: string | null;
+}
+
+/**
+ * The company's choices with each of its products' own (2026-11-13, PR 4 of
+ * the invoicing audit). A product's account, item and tracking option are kept
+ * on the product, so they go with it when it is renamed; the settings' maps,
+ * keyed by name, keep only names no product of this company has. The maps
+ * keep their shape -- by name -- for the page and the invoices sent: what Xero
+ * is sent does not change.
+ */
+export function withProductChoices(values: XeroSettingsValues, products: readonly ProductChoices[]): XeroSettingsValues {
+  const named = new Set(products.map((product) => product.nameKey));
+  const others = (map: Record<string, string> | undefined) => Object.fromEntries(Object.entries(map ?? {}).filter(([nameKey]) => !named.has(nameKey)));
+  const own = (pick: (product: ProductChoices) => string | null) =>
+    Object.fromEntries(products.flatMap((product) => (pick(product) ? [[product.nameKey, pick(product)!]] : [])));
+  return {
+    ...values,
+    salesAccounts: { ...others(values.salesAccounts), ...own((product) => product.xeroAccountId) },
+    itemCodes: { ...others(values.itemCodes), ...own((product) => product.xeroItemCode) },
+    trackingGroups: { ...others(values.trackingGroups), ...own((product) => product.xeroTrackingGroup) },
+  };
+}
+
 /** The audit trail's lines for what changed, in the office's words. */
 export function settingsChanges(
   before: XeroSettingsValues,
@@ -178,7 +207,11 @@ export class XeroSettingsService {
       billedPrices(this.prisma, organizationId, today),
       invoicingTakenOverAt(this.prisma, organizationId),
     ]);
-    const values = valuesFrom(row);
+    // Each product's own choices, kept on it (2026-11-13): what the page shows and what each line is sent with.
+    const values = withProductChoices(
+      valuesFrom(row),
+      listed.filter((product) => product.xeroTenantId === tenantId),
+    );
     // The invoices that would be sent: from the start date, or -- before one is chosen -- the past year, to show what is in use.
     // This organisation's only (2026-11-10): each company's invoices, and the payments against them, go to its own books.
     const since = values.sendFrom ?? new Date(Date.parse(`${today}T00:00:00.000Z`) - 365 * DAY_MS).toISOString().slice(0, 10);
@@ -285,12 +318,27 @@ export class XeroSettingsService {
     };
     try {
       await this.prisma.$transaction(async (tx) => {
-        const row = await tx.xeroSettings.findUnique({ where });
+        const [row, listed] = await Promise.all([tx.xeroSettings.findUnique({ where }), listedProducts(tx, org)]);
         // Against the choices as they were last saved (2026-11-11): a sending run in between changes none of them.
         const expected = input.expectedUpdatedAt ? new Date(input.expectedUpdatedAt).toISOString() : null;
         if ((row?.choicesUpdatedAt.toISOString() ?? null) !== expected) throw changed();
-        const changes = settingsChanges(valuesFrom(row), after, catalog.accounts, catalog.trackingCategories, catalog.projectUsers);
+        // This company's products, whose own choices are kept on them (2026-11-13).
+        const own = listed.filter((product) => product.xeroTenantId === tenantId);
+        const changes = settingsChanges(withProductChoices(valuesFrom(row), own), after, catalog.accounts, catalog.trackingCategories, catalog.projectUsers);
         if (!changes.length) return;
+        for (const product of own) {
+          const chosen = {
+            xeroAccountId: after.salesAccounts[product.nameKey] ?? null,
+            xeroItemCode: after.itemCodes?.[product.nameKey] ?? null,
+            xeroTrackingGroup: after.trackingGroups?.[product.nameKey] ?? null,
+          };
+          if (
+            chosen.xeroAccountId !== product.xeroAccountId ||
+            chosen.xeroItemCode !== product.xeroItemCode ||
+            chosen.xeroTrackingGroup !== product.xeroTrackingGroup
+          )
+            await tx.invoiceProduct.updateMany({ where: { id: product.id, organizationId: org }, data: chosen });
+        }
         if (row) {
           // Only over the choices as they were read: a save in between makes this one change nothing.
           const { count } = await tx.xeroSettings.updateMany({

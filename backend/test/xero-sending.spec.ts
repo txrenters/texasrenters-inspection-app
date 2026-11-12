@@ -11,6 +11,7 @@ import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero } from '../src
 import { MAX_INVOICES_PER_RUN, XeroSenderService, invoiceForXero } from '../src/integrations/xero/xero-sender.service';
 import { xeroWriteOffFrom } from '../src/integrations/xero/xero-write-off';
 import { remindersFrom } from '../src/integrations/xero/xero.service';
+import { withProductChoices } from '../src/integrations/xero/xero-settings.service';
 
 /**
  * Sending invoices to Xero (2026-11-10, phase 3 of the Xero plan): approved,
@@ -1425,5 +1426,27 @@ describe('prices that include the tax (2026-11-12)', () => {
       kind: 'send',
       creditNote: { LineAmountTypes: 'Inclusive', LineItems: [expect.objectContaining({ LineAmount: 39, TaxType: 'TAX001' })] },
     });
+  });
+});
+
+describe('each product keeps its own Xero choices (2026-11-13, PR 4 of the invoicing audit)', () => {
+  const sent = (settings: XeroSettingsValues, over: Partial<Fixture> = {}) => xeroInvoiceFrom(invoice(over), { settings, accounts: ACCOUNTS, contactId: 'contact-1' });
+  const product = (nameKey: string, xeroAccountId: string | null) => ({ nameKey, xeroAccountId, xeroItemCode: null, xeroTrackingGroup: null });
+
+  it('sends Xero the very same invoice whether a product’s account was kept by its name or on the product', () => {
+    // As the settings kept it, by name; and as the migration copies it onto the product.
+    const byName = { ...SETTINGS, salesAccounts: { 'filter change': 'a-410', 'move-out inspection': 'a-400' } };
+    const onProduct = withProductChoices({ ...SETTINGS, salesAccounts: {} }, [product('filter change', 'a-410'), product('move-out inspection', 'a-400')]);
+    expect(onProduct.salesAccounts).toEqual(byName.salesAccounts);
+    expect(sent(onProduct)).toEqual(sent(byName));
+  });
+
+  it('keeps a renamed product’s account: by name alone it went to the default account', () => {
+    // "Filter change" renamed "Air filter": the settings' map still says the old name.
+    const line = { position: 0, name: 'Air filter', description: null, quantity: 1, unitPriceCents: 2500, totalCents: 2500 };
+    const renamed = { lines: [line], totalCents: 2500 };
+    const accountOf = (plan: ReturnType<typeof sent>) => (plan.kind === 'send' ? plan.body.LineItems[0]?.AccountCode : null);
+    expect(accountOf(sent(SETTINGS, renamed))).toBe('400');
+    expect(accountOf(sent(withProductChoices(SETTINGS, [product('air filter', 'a-410')]), renamed))).toBe('410');
   });
 });

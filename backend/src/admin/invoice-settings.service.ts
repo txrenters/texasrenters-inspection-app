@@ -295,9 +295,18 @@ export class InvoiceSettingsService {
           after.xeroTenantId !== before.xeroTenantId ? `Xero organisation: ${orgName(before.xeroTenantId)} → ${orgName(after.xeroTenantId)}` : null,
         ].filter((change): change is string => change !== null);
         if (!changes.length) return;
+        // Its Xero choices are kept on it (2026-11-13), so a new name keeps them; another company's books have other
+        // accounts, items and tracking, so a move leaves them to be chosen there.
+        const moved = after.xeroTenantId !== before.xeroTenantId;
+        if (moved && (before.xeroAccountId || before.xeroItemCode || before.xeroTrackingGroup))
+          changes.push('Its account, item and tracking in Xero: cleared, to be chosen for its new company');
         const { count } = await tx.invoiceProduct.updateMany({
           where: { id, organizationId: org, updatedAt: before.updatedAt },
-          data: { ...after, nameKey: productNameKey(after.name) },
+          data: {
+            ...after,
+            nameKey: productNameKey(after.name),
+            ...(moved ? { xeroAccountId: null, xeroItemCode: null, xeroTrackingGroup: null } : {}),
+          },
         });
         if (count !== 1) throw this.changed();
         await this.audit(tx, user, 'INVOICE_PRODUCT_CHANGED', 'InvoiceProduct', id, { name: after.name, changes });

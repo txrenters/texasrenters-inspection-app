@@ -3479,6 +3479,12 @@ model InvoiceProduct {
   active         Boolean      @default(true)
   /// The Xero organisation -- the company's books -- it goes to (2026-11-10, phase 2 of the multi-company plan). Null until the office chooses.
   xeroTenantId   String?
+  /// Its account in its company's books (2026-11-13): kept with the product, so a rename keeps it. Null for the company's default.
+  xeroAccountId     String?
+  /// The Xero item its lines carry (2026-11-13); null for none.
+  xeroItemCode      String?
+  /// What it is tracked as in its company's tracking category (2026-11-13); null for untracked.
+  xeroTrackingGroup String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

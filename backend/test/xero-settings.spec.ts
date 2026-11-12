@@ -53,7 +53,14 @@ const TAX_RATES: XeroTaxRate[] = [
 const UPDATED = new Date('2026-11-19T15:00:00.000Z');
 
 function database(
-  options: { settings?: Record<string, unknown> | null; organisation?: Record<string, unknown> | null; signedIn?: boolean; takenOver?: boolean } = {},
+  options: {
+    settings?: Record<string, unknown> | null;
+    organisation?: Record<string, unknown> | null;
+    signedIn?: boolean;
+    takenOver?: boolean;
+    /** A product's own Xero choices, by its id (2026-11-13). */
+    productChoices?: Record<string, { xeroAccountId?: string | null; xeroItemCode?: string | null; xeroTrackingGroup?: string | null }>;
+  } = {},
 ) {
   let settings = options.settings === undefined ? null : options.settings;
   const organisation =
@@ -79,14 +86,18 @@ function database(
     // Whether the console makes the invoices (2026-11-13).
     invoiceSettings: { findUnique: jest.fn(async () => (options.takenOver ? { invoicingTakenOverAt: new Date('2026-11-12T14:14:00.000Z') } : null)) },
     invoiceProduct: {
-      findMany: jest.fn(async () => [
-        { id: 'p1', name: 'Move-out inspection', nameKey: 'move-out inspection', description: null, unitPriceCents: 15000, active: true, xeroTenantId: TENANT, updatedAt: UPDATED },
-        { id: 'p2', name: 'Retired service', nameKey: 'retired service', description: null, unitPriceCents: 5000, active: false, xeroTenantId: TENANT, updatedAt: UPDATED },
-        // Another company's books.
-        { id: 'p3', name: 'Pest control', nameKey: 'pest control', description: null, unitPriceCents: 6500, active: true, xeroTenantId: 'a2000000-0000-4000-8000-000000000002', updatedAt: UPDATED },
-        // Not chosen yet.
-        { id: 'p4', name: 'Gate repair', nameKey: 'gate repair', description: null, unitPriceCents: 12000, active: true, xeroTenantId: null, updatedAt: UPDATED },
-      ]),
+      // Each with its own Xero choices, kept on it (2026-11-13): none chosen here unless a test says.
+      findMany: jest.fn(async () =>
+        [
+          { id: 'p1', name: 'Move-out inspection', nameKey: 'move-out inspection', description: null, unitPriceCents: 15000, active: true, xeroTenantId: TENANT, updatedAt: UPDATED },
+          { id: 'p2', name: 'Retired service', nameKey: 'retired service', description: null, unitPriceCents: 5000, active: false, xeroTenantId: TENANT, updatedAt: UPDATED },
+          // Another company's books.
+          { id: 'p3', name: 'Pest control', nameKey: 'pest control', description: null, unitPriceCents: 6500, active: true, xeroTenantId: 'a2000000-0000-4000-8000-000000000002', updatedAt: UPDATED },
+          // Not chosen yet.
+          { id: 'p4', name: 'Gate repair', nameKey: 'gate repair', description: null, unitPriceCents: 12000, active: true, xeroTenantId: null, updatedAt: UPDATED },
+        ].map((product) => ({ xeroAccountId: null, xeroItemCode: null, xeroTrackingGroup: null, ...product, ...options.productChoices?.[product.id] })),
+      ),
+      updateMany: jest.fn(async () => ({ count: 1 })),
     },
     invoiceLine: {
       groupBy: jest.fn(async () => [
@@ -217,6 +228,27 @@ describe('reading the choices', () => {
     expect(read.checks.find((check) => check.key === 'payments')).toEqual({ key: 'payments', label: 'Payments are recorded in Xero', ok: true, detail: null });
   });
 
+  it('shows each product’s own choices, kept on it (2026-11-13); the settings keep only names no product has', async () => {
+    const db = database({
+      settings: {
+        sendFrom: new Date('2026-12-01T00:00:00.000Z'),
+        salesAccountId: 'a-400',
+        salesTaxType: 'NONE',
+        // By name, as before: the product's own choice wins; "filter change" is no product's, and stays.
+        salesAccounts: { 'move-out inspection': 'a-400', 'filter change': 'a-410' },
+        paymentAccounts: {},
+        updatedAt: UPDATED,
+        choicesUpdatedAt: UPDATED,
+      },
+      productChoices: { p1: { xeroAccountId: 'a-410' }, p3: { xeroAccountId: 'a-410' } },
+    });
+    const view = await service(db).read(ORG, TENANT);
+    expect(view.values.salesAccounts).toEqual({ 'move-out inspection': 'a-410', 'filter change': 'a-410' });
+    expect(view.products.find((product) => product.nameKey === 'move-out inspection')).toMatchObject({ accountId: 'a-410', listed: true });
+    // Another company's product is not this one's.
+    expect(view.values.salesAccounts).not.toHaveProperty('pest control');
+  });
+
   it('flags a chosen account Xero has since archived', async () => {
     const db = database({
       settings: {
@@ -250,6 +282,18 @@ describe('reading the choices', () => {
 });
 
 describe('saving the choices', () => {
+  it('keeps a product’s account, item and tracking on the product (2026-11-13), and writes only what changed', async () => {
+    const db = database({ productChoices: { p2: { xeroItemCode: 'RETIRED' } } });
+    await service(db).save(office, TENANT, input({ salesAccounts: { 'filter change': 'a-410', 'move-out inspection': 'a-410' }, itemCodes: {} }));
+    // Move-out inspection gets its account; Retired service loses its item; another company's product is not touched.
+    expect(db.invoiceProduct.updateMany.mock.calls).toEqual([
+      [{ where: { id: 'p1', organizationId: ORG }, data: { xeroAccountId: 'a-410', xeroItemCode: null, xeroTrackingGroup: null } }],
+      [{ where: { id: 'p2', organizationId: ORG }, data: { xeroAccountId: null, xeroItemCode: null, xeroTrackingGroup: null } }],
+    ]);
+    // The settings keep their own copy, as before, for a release before this one.
+    expect(db.xeroSettings.create).toHaveBeenCalledWith({ data: expect.objectContaining({ salesAccounts: { 'filter change': 'a-410', 'move-out inspection': 'a-410' } }) });
+  });
+
   it('saves the first time, says what changed on the audit trail, and reads back', async () => {
     const db = database();
     const view = await service(db).save(office, TENANT, input());
