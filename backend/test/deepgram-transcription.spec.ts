@@ -65,6 +65,27 @@ describe('parsing a Deepgram response', () => {
     expect(result.segments).toBeNull();
   });
 
+  it('drops the stock endings whisper invents, and the full text with them', () => {
+    // Never stored, so a re-run that transcribes again on finding one never
+    // finds it again.
+    const result = parseDeepgramResponse(
+      payload({
+        channels: [
+          { alternatives: [{ transcript: 'The kitchen sink is leaking. Thanks for watching.' }] },
+        ],
+        utterances: [
+          { start: 1.2, end: 4.8, transcript: 'The kitchen sink is leaking.' },
+          { start: 50, end: 52, transcript: 'Thanks for watching.' },
+        ],
+      }),
+      60,
+    );
+    expect(result.segments).toEqual([
+      { startSeconds: 1.2, endSeconds: 4.8, text: 'The kitchen sink is leaking.' },
+    ]);
+    expect(result.text).toBe('The kitchen sink is leaking.');
+  });
+
   it('falls back to no segments when utterances are absent', () => {
     // The caller then stores one whole-recording segment, exactly as the OpenAI
     // path always did.

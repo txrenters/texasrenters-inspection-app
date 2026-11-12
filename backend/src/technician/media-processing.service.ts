@@ -35,6 +35,7 @@ import {
   requestDeepgramTranscription,
   requestDeepgramTranscriptionFromUrl,
 } from './deepgram-transcription';
+import { isInventedLine, isLikelySilence, withoutInventedSentences } from './invented-speech';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { captureTimeForFrame } from '../common/photo-capture-time';
 import { fetchStreamFrame, markerPhotoKey, readFrameMarkers, readMarkers } from './marker-frames';
@@ -644,10 +645,10 @@ export class MediaProcessingService implements OnModuleInit {
       try {
         // The stored narration when it has its timings: transcribing again
         // costs a download of the whole video and a second bill for the same
-        // words. One without timings is transcribed again to get them.
-        const transcript =
-          (await this.storedTranscript(media.id, media.durationSeconds)) ??
-          (await this.transcribe(media, organizationId));
+        // words. One without timings is transcribed again to get them, and so
+        // is one holding lines whisper invented.
+        const stored = await this.storedTranscript(media.id, media.durationSeconds);
+        const transcript = stored ?? (await this.transcribe(media, organizationId));
         const findingCount = await this.analyze(media, transcript, organizationId);
         await this.lookAtTheVideo(media.id, organizationId);
         // An analysis that had failed is now done; Cloudflare's own failure is
@@ -667,6 +668,16 @@ export class MediaProcessingService implements OnModuleInit {
           media.inspectionArea.inspection.inspectionType,
         );
         await this.event(media.id, REANALYSIS_COMPLETED_EVENT, { findingCount });
+        // A new transcript leaves the room's report summary written from the
+        // old one; see `RecordingSummaryService.afterRetranscription`. After
+        // the completion is told: a summary call can take two minutes, and the
+        // findings are what the reviewer is waiting on.
+        if (!stored && this.recordingSummary)
+          await this.recordingSummary.afterRetranscription(
+            organizationId,
+            media.inspectionId,
+            media.inspectionAreaId,
+          );
       } catch (error) {
         const message =
           error instanceof ApplicationError ? error.message : 'The analysis could not be run again.';
@@ -702,8 +713,15 @@ export class MediaProcessingService implements OnModuleInit {
     });
     if (job?.status !== TranscriptionStatus.COMPLETED) return null;
     // Completed with no lines is a recording nobody spoke in: an answer, and
-    // the same answer a second transcription would give.
-    if (!job.segments.length) return requireTimings ? null : transcriptFrom([], durationSeconds);
+    // the same answer a second transcription would give. Timed or not, so a
+    // re-run on a silent room does not pay to transcribe its silence again.
+    if (!job.segments.length) return transcriptFrom([], durationSeconds);
+    // Stored before invented lines were dropped (`invented-speech.ts`): the
+    // stock lines are only what shows. The rest of what whisper made up over
+    // that silence reads as real speech ("Rest in peace", on 2026-11-12), so
+    // the whole recording is transcribed again rather than trimmed. That
+    // transcription drops what it invents, so this happens once.
+    if (job.segments.some((segment) => isInventedLine(segment.text))) return null;
     const transcript = transcriptFrom(transcriptLines(job.segments, durationSeconds), durationSeconds);
     return transcript.timed || !requireTimings ? transcript : null;
   }
@@ -1351,7 +1369,14 @@ export class MediaProcessingService implements OnModuleInit {
           .object({
             text: z.string(),
             segments: z
-              .array(z.object({ start: z.number(), end: z.number(), text: z.string() }))
+              .array(
+                z.object({
+                  start: z.number(),
+                  end: z.number(),
+                  text: z.string(),
+                  no_speech_prob: z.number().nullish(),
+                }),
+              )
               .optional(),
           })
           .safeParse(payload);
@@ -1361,7 +1386,26 @@ export class MediaProcessingService implements OnModuleInit {
             'TRANSCRIPTION_FAILED',
             'The transcription provider returned an unreadable response.',
           );
-        return { text: parsed.data.text, segments: parsed.data.segments ?? [] };
+        const segments = parsed.data.segments;
+        if (!segments) return { text: withoutInventedSentences(parsed.data.text), segments: [] };
+        // What whisper wrote over silence never reaches the narration. See
+        // `invented-speech.ts`.
+        const spoken = segments.filter(
+          (segment) => !isLikelySilence(segment) && !isInventedLine(segment.text),
+        );
+        if (spoken.length < segments.length)
+          this.logger.log({
+            event: 'invented_transcript_lines_dropped',
+            dropped: segments.length - spoken.length,
+            kept: spoken.length,
+          });
+        // The text again from what was kept. Left as the model's full text, a
+        // recording where every line was dropped would fall back to one
+        // whole-recording line holding all of it.
+        return {
+          text: spoken.map((segment) => segment.text.trim()).join(' '),
+          segments: spoken.map(({ start, end, text }) => ({ start, end, text })),
+        };
       }
       const message =
         (payload as { error?: { message?: string } } | null)?.error?.message ?? 'unknown error';
