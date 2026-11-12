@@ -52,7 +52,9 @@ const TAX_RATES: XeroTaxRate[] = [
 
 const UPDATED = new Date('2026-11-19T15:00:00.000Z');
 
-function database(options: { settings?: Record<string, unknown> | null; organisation?: Record<string, unknown> | null; signedIn?: boolean } = {}) {
+function database(
+  options: { settings?: Record<string, unknown> | null; organisation?: Record<string, unknown> | null; signedIn?: boolean; takenOver?: boolean } = {},
+) {
   let settings = options.settings === undefined ? null : options.settings;
   const organisation =
     options.organisation === undefined
@@ -74,6 +76,8 @@ function database(options: { settings?: Record<string, unknown> | null; organisa
     },
     xeroConnection: { findUnique: jest.fn(async () => ({ status: options.signedIn === false ? 'DISCONNECTED' : 'CONNECTED' })) },
     xeroOrganisation: { findUnique: jest.fn(async () => organisation) },
+    // Whether the console makes the invoices (2026-11-13).
+    invoiceSettings: { findUnique: jest.fn(async () => (options.takenOver ? { invoicingTakenOverAt: new Date('2026-11-12T14:14:00.000Z') } : null)) },
     invoiceProduct: {
       findMany: jest.fn(async () => [
         { id: 'p1', name: 'Move-out inspection', nameKey: 'move-out inspection', description: null, unitPriceCents: 15000, active: true, xeroTenantId: TENANT, updatedAt: UPDATED },
@@ -190,6 +194,18 @@ describe('reading the choices', () => {
     const view = await service(db).read(ORG, TENANT);
     expect(view.checks.filter((check) => !check.ok)).toEqual([]);
     expect(view.ready).toBe(true);
+  });
+
+  it('asks no account for payments once the company’s books are read back from Xero (2026-11-13): they are recorded there', async () => {
+    const unmapped = { sendFrom: new Date('2026-12-01T00:00:00.000Z'), salesAccountId: 'a-400', salesTaxType: 'NONE', salesAccounts: {}, paymentAccounts: {}, updatedAt: UPDATED, choicesUpdatedAt: UPDATED };
+    // Before: an account for each payment method in use is asked for.
+    const before = await service(database({ settings: unmapped })).read(ORG, TENANT);
+    expect(before).toMatchObject({ ready: false, booksRead: false, madeInConsole: false });
+    expect(before.checks.find((check) => check.key === 'payments')).toMatchObject({ ok: false });
+
+    const read = await service(database({ settings: { ...unmapped, booksReadAt: new Date('2026-11-12T00:05:00.000Z') }, takenOver: true })).read(ORG, TENANT);
+    expect(read).toMatchObject({ ready: true, booksRead: true, madeInConsole: true });
+    expect(read.checks.find((check) => check.key === 'payments')).toEqual({ key: 'payments', label: 'Payments are recorded in Xero', ok: true, detail: null });
   });
 
   it('flags a chosen account Xero has since archived', async () => {

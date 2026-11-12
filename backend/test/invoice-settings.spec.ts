@@ -257,6 +257,9 @@ describe('saving the settings', () => {
     const view = await new InvoiceSettingsService(db as never).read(office);
     expect(view.billed).toEqual([]);
     expect(db.invoiceLine.groupBy).not.toHaveBeenCalled();
+    // And says so (2026-11-13): the page asks no payment terms and keeps no files from Jobber.
+    expect(view.madeInConsole).toBe(true);
+    expect((await new InvoiceSettingsService(database() as never).read(office)).madeInConsole).toBe(false);
   });
 });
 

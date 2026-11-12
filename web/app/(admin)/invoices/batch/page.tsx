@@ -68,6 +68,8 @@ function BatchInvoices() {
   const [pickedTerms, setTerms] = useState<string | null>(null);
   const terms = pickedTerms ?? String(visits.data?.paymentTermsDays ?? 30);
   const [asDraft, setAsDraft] = useState(false);
+  // The console makes the invoices (2026-11-13): each goes to Xero as a draft, which Xero dates and sets due itself.
+  const madeHere = Boolean(visits.data?.startsOn);
   // Unticked by hand; every billable visit is ticked otherwise.
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const [asking, setAsking] = useState(false);
@@ -100,7 +102,7 @@ function BatchInvoices() {
         inspectionIds: chosen.map((visit) => visit.inspectionId),
         issuedOn,
         paymentTermsDays: Number(terms),
-        ...(asDraft ? { asDraft: true } : {}),
+        ...(asDraft && !madeHere ? { asDraft: true } : {}),
         clientRequestId: requestId,
       },
       {
@@ -216,25 +218,34 @@ function BatchInvoices() {
               <FieldLabel htmlFor={`${id}-issued`}>Issued</FieldLabel>
               <Input id={`${id}-issued`} max={today} onChange={(event) => setIssuedOn(event.target.value)} type="date" value={issuedOn} />
             </Field>
-            <Field className="w-auto">
-              <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
-              <Select onValueChange={setTerms} value={terms}>
-                <SelectTrigger className="w-44" id={`${id}-terms`}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAYMENT_TERMS.map((term) => (
-                    <SelectItem key={term.days} value={String(term.days)}>
-                      {term.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <label className="flex items-center gap-2 pb-2 text-sm">
-              <Checkbox checked={asDraft} onCheckedChange={(checked) => setAsDraft(checked === true)} />
-              Make them drafts, to look over first
-            </label>
+            {madeHere ? (
+              <p className="text-muted-foreground max-w-md pb-2 text-sm">
+                Each goes to its company&apos;s books in Xero as a draft, for the office to approve there. Xero dates it on its
+                visit&apos;s day and makes it due on the last day of that month.
+              </p>
+            ) : (
+              <>
+                <Field className="w-auto">
+                  <FieldLabel htmlFor={`${id}-terms`}>Payment terms</FieldLabel>
+                  <Select onValueChange={setTerms} value={terms}>
+                    <SelectTrigger className="w-44" id={`${id}-terms`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAYMENT_TERMS.map((term) => (
+                        <SelectItem key={term.days} value={String(term.days)}>
+                          {term.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <label className="flex items-center gap-2 pb-2 text-sm">
+                  <Checkbox checked={asDraft} onCheckedChange={(checked) => setAsDraft(checked === true)} />
+                  Make them drafts, to look over first
+                </label>
+              </>
+            )}
             <div className="ml-auto flex flex-wrap items-center gap-3">
               {tooMany ? <span className="text-destructive text-sm">At most {MAX_BATCH_INVOICES} visits at a time.</span> : null}
               <Button disabled={!chosen.length || tooMany || batch.isPending} onClick={() => setAsking(true)}>

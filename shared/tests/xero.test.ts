@@ -167,6 +167,12 @@ describe('Xero choices', () => {
     expect(missing.find((check) => check.key === 'payments')?.detail).toBe('None yet for Cash.');
   });
 
+  it('ask for no payment account once the books are read back from Xero (2026-11-13): payments are recorded there', () => {
+    const read = xeroChecks({ connected: true, readAt: '2026-11-20T15:00:00.000Z', values, catalog, paymentsByMethod: { CASH: 1 }, booksRead: true });
+    expect(read.find((check) => check.key === 'payments')).toEqual({ key: 'payments', label: 'Payments are recorded in Xero', ok: true, detail: null });
+    expect(read.every((check) => check.ok)).toBe(true);
+  });
+
   it('ask for no payment account while payments stay out of Xero (2026-11-11)', () => {
     const out = xeroChecks({ connected: true, readAt: '2026-11-20T15:00:00.000Z', values: { ...values, paymentsToXero: false }, catalog, paymentsByMethod: { CASH: 1 } });
     expect(out.find((check) => check.key === 'payments')).toEqual({ key: 'payments', label: 'Payments stay out of Xero', ok: true, detail: null });

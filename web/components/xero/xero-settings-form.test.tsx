@@ -42,6 +42,8 @@ const VIEW: XeroSettingsView = {
   ],
   ready: false,
   updatedAt: '2026-11-19T15:00:00.000Z',
+  booksRead: false,
+  madeInConsole: false,
 };
 
 const pick = (combobox: string, option: RegExp | string) => {
@@ -190,6 +192,28 @@ describe('as the office finishes its invoices in Xero (2026-11-11)', () => {
     expect(screen.getByText(/Payments stay out of Xero/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(save.mutate).toHaveBeenCalledWith(expect.objectContaining({ paymentsToXero: false }), expect.anything());
+  });
+});
+
+describe('once the console makes the invoices and the books are read (2026-11-13)', () => {
+  it('asks nothing about payments or bad debts: they are recorded in Xero', () => {
+    mount({ ...VIEW, booksRead: true, madeInConsole: true });
+    expect(screen.queryByRole('switch', { name: 'Send payments to Xero' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Written off to')).not.toBeInTheDocument();
+    expect(screen.getByText(/This company's books are read back from there every hour, its payments and credit notes with them/)).toBeInTheDocument();
+  });
+
+  it('says the start date as it is now, with no Zap, and that invoices go as drafts', () => {
+    mount({ ...VIEW, madeInConsole: true });
+    expect(screen.getByText('Invoices issued on or after it go to Xero; one issued before it never does.')).toBeInTheDocument();
+    expect(screen.queryByText(/Zap/)).not.toBeInTheDocument();
+    expect(screen.getByText('No projects are made. Invoices still go as drafts, for the office to approve in Xero.')).toBeInTheDocument();
+  });
+
+  it('still asks where payments land while the books are not read', () => {
+    mount();
+    expect(screen.getByRole('switch', { name: 'Send payments to Xero' })).toBeInTheDocument();
+    expect(screen.getByText(/made through Zapier or by hand/)).toBeInTheDocument();
   });
 });
 
