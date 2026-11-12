@@ -205,7 +205,7 @@ describe('once the console makes the invoices and the books are read (2026-11-13
 
   it('says the start date as it is now, with no Zap, and that invoices go as drafts', () => {
     mount({ ...VIEW, madeInConsole: true });
-    expect(screen.getByText('Invoices issued on or after it go to Xero; one issued before it never does.')).toBeInTheDocument();
+    expect(screen.getByText('Invoices made in the console on or after it go to Xero, whatever day each is dated; one made before it never does.')).toBeInTheDocument();
     expect(screen.queryByText(/Zap/)).not.toBeInTheDocument();
     expect(screen.getByText('No projects are made. Invoices still go as drafts, for the office to approve in Xero.')).toBeInTheDocument();
   });

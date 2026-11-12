@@ -2,6 +2,7 @@ import { invoiceTotals, splitByCompany, type InvoiceLineInput, type ProductCompa
 import { InvoiceStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
+import { businessDate } from '../common/business-day';
 import { insertConsoleInvoice } from './invoice-insert';
 import { lockInvoiceNumbers } from './invoice-numbers';
 import { goesToXero, invoiceProblem, type InvoicingState } from './invoicing-state';
@@ -81,7 +82,8 @@ export async function visitInvoiced(db: Pick<Db, 'invoice'>, organizationId: str
 
 export async function makeInvoices(tx: Db, user: AuthenticatedUser, state: InvoicingState, request: MakeRequest): Promise<MakeOutcome> {
   for (const invoice of request.invoices) {
-    const problem = invoiceProblem(state, invoice.xeroTenantId, request.issuedOn);
+    // Made today (2026-11-13): the day it is dated may come before its company's start date.
+    const problem = invoiceProblem(state, invoice.xeroTenantId);
     if (problem) return { refused: 'PROBLEM', problem };
   }
   if (request.inspectionId && !request.additional) {
@@ -124,7 +126,8 @@ export function visitParts(
   lineItems: readonly InvoiceLineInput[],
   companies: readonly ProductCompany[],
   state: Pick<InvoicingState, 'takenOverAt' | 'sending' | 'startDays' | 'nameOf'>,
-  issuedOn: string,
+  /** The Texas day they would be made: a company's start date is about that day, not the one each is dated. */
+  today: string = businessDate(),
 ): { parts: UninvoicedPart[]; problem: string | null } {
   const parts = splitByCompany(lineItems, companies).map((part) => ({
     xeroTenantId: part.xeroTenantId,
@@ -133,5 +136,5 @@ export function visitParts(
     totalCents: invoiceTotals(part.lineItems).totalCents,
     toXero: goesToXero(state, part.xeroTenantId),
   }));
-  return { parts, problem: parts.map((part) => invoiceProblem(state, part.xeroTenantId, issuedOn)).find(Boolean) ?? null };
+  return { parts, problem: parts.map((part) => invoiceProblem(state, part.xeroTenantId, today)).find(Boolean) ?? null };
 }

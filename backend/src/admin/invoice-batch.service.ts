@@ -116,7 +116,7 @@ export class InvoiceBatchService {
       items: rows.slice(0, LIST_LIMIT).map((row): UninvoicedVisit => {
         const building = row.propertywareBuilding!;
         const lines = batchLines(row, basis);
-        // As the one maker would make them, issued today (2026-11-13): what would hold the visit back is said here.
+        // As the one maker would make them, today (2026-11-13): what would hold the visit back is said here.
         const { parts, problem } = visitParts(lines.lineItems, companies, state, today);
         return {
           inspectionId: row.id,
@@ -204,7 +204,7 @@ export class InvoiceBatchService {
       }
       const building = visit.propertywareBuilding;
       // One invoice per company: each company's services, and those of none on one of their own.
-      const { parts } = visitParts(lines.lineItems, companies, state, input.issuedOn);
+      const { parts } = visitParts(lines.lineItems, companies, state);
       try {
         // The one maker (2026-11-13), as the visit's form makes them: what reaches no books, or comes before its
         // company's start date, is not made; a visit invoiced by somebody else a moment ago is seen under the lock.

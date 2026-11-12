@@ -9,6 +9,7 @@ import {
   finishedDayOf,
   packageQuarterOf,
 } from '../src/integrations/xero/xero-projects.service';
+import { sentFrom } from '../src/admin/invoicing-state';
 
 /**
  * A Xero project for each visit (2026-11-11), as the office keeps one in a
@@ -422,7 +423,8 @@ describe('a visit’s project, made by the sending run', () => {
         where: expect.objectContaining({
           organizationId: ORG,
           xeroTenantId: TENANT,
-          issuedOn: { gte: new Date('2026-11-01T00:00:00.000Z') },
+          // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+          OR: sentFrom(SEND_FROM).OR,
           xeroSync: { is: { xeroTenantId: TENANT, status: 'SENT' } },
         }),
         orderBy: [{ issuedOn: 'asc' }, { id: 'asc' }],

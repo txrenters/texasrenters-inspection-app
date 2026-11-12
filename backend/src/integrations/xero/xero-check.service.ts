@@ -9,6 +9,7 @@ import {
 import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 
+import { sentFrom } from '../../admin/invoicing-state';
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
@@ -146,9 +147,12 @@ export class XeroCheckService {
         // What the console sent, not what it read back from Xero (2026-11-12): that is Xero's own.
         origin: { not: InvoiceOrigin.XERO },
         status: { not: InvoiceStatus.DRAFT },
-        issuedOn: { gte: settings.sendFrom },
-        // The month Xero files it in (2026-11-11): dated on its visit's day, else the day it was issued.
-        OR: [{ inspection: { is: { scheduledAt: { gte: first, lt: next } } } }, { inspectionId: null, issuedOn: { gte: first, lt: next } }],
+        AND: [
+          // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+          sentFrom(settings.sendFrom.toISOString().slice(0, 10)),
+          // The month Xero files it in (2026-11-11): dated on its visit's day, else the day it was issued.
+          { OR: [{ inspection: { is: { scheduledAt: { gte: first, lt: next } } } }, { inspectionId: null, issuedOn: { gte: first, lt: next } }] },
+        ],
       },
       orderBy: [{ issuedOn: 'asc' }, { number: 'asc' }],
       select: {

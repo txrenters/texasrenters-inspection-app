@@ -396,7 +396,7 @@ export interface XeroSettingsView {
   withoutOrganisation: number;
   /** Every payment method, in the console's order. */
   payments: XeroPaymentItem[];
-  /** Invoices issued on or after the start date, not drafts or voided; with no start date, the past year's. */
+  /** Invoices from the start date -- the console's own made from it (2026-11-13), Jobber's issued from it -- not voided; with no start date, the past year's. */
   invoicesToSend: number;
   checks: XeroCheck[];
   /** Every check passes: phase 3 may send. */

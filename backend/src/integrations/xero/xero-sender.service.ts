@@ -17,7 +17,7 @@ import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../../common/auth';
-import { businessDate } from '../../common/business-day';
+import { businessDate, businessInstant } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { XeroAuthService } from './xero-auth.service';
 import { XeroClient } from './xero.client';
@@ -27,6 +27,7 @@ import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type I
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
 import { xeroWriteOffFrom } from './xero-write-off';
 import { invoicingTakenOverAt } from '../../admin/invoice-settings';
+import { sentFrom } from '../../admin/invoicing-state';
 import { XeroProjectsService, type XeroProjectsResult } from './xero-projects.service';
 import { XeroSettingsService } from './xero-settings.service';
 
@@ -202,7 +203,7 @@ interface DeleteBudget {
 /**
  * Sends the office's invoices to Xero (2026-11-10, phase 3 of the Xero plan).
  *
- * Only while it is turned on, and only invoices issued from the start date.
+ * Only while it is turned on, and only invoices from the start date: the console's own made from it, whatever day each is dated (2026-11-13).
  * Each goes once (2026-11-12): an invoice in Xero is the office's there, and
  * is never sent again -- one changed here after it went is marked, for the
  * office to make the change in Xero too. Nothing calls Xero for it. Contacts
@@ -256,9 +257,10 @@ export class XeroSenderService {
               // Never one read from its books (2026-11-12), nor one of the console's that Xero already has.
               origin: { not: InvoiceOrigin.XERO },
               xeroInvoiceId: null,
-              issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
               // The console's drafts go too (2026-11-12): Xero numbers them.
               AND: [
+                // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+                sentFrom(state.sendFrom),
                 {
                   OR: [
                     { origin: InvoiceOrigin.CONSOLE, status: { not: InvoiceStatus.VOIDED } },
@@ -277,7 +279,7 @@ export class XeroSenderService {
               organizationId,
               xeroTenantId: null,
               origin: { not: InvoiceOrigin.XERO },
-              issuedOn: { gte: new Date(`${state.sendFrom}T00:00:00.000Z`) },
+              ...sentFrom(state.sendFrom),
               status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] },
             },
           })
@@ -1365,8 +1367,9 @@ export class XeroSenderService {
   }
 
   /**
-   * The invoices worth looking at: this organisation's (2026-11-10), issued
-   * from the start date, not drafts, and either never sent to it, changed since
+   * The invoices worth looking at: this organisation's (2026-11-10), from the
+   * start date -- the console's own made from it, whatever day each is dated
+   * (2026-11-13); Jobber's issued from it -- not drafts, and either never sent to it, changed since
    * last seen, or due a retry. A voided one is looked at only once it has a
    * row -- one that never reached Xero is not sent to be voided. Oldest first,
    * at most 200.
@@ -1381,7 +1384,10 @@ export class XeroSenderService {
           LEFT JOIN "XeroInvoiceSync" s ON s."invoiceId" = i."id"
          WHERE i."organizationId" = ${organizationId}::uuid
            AND i."xeroTenantId" = ${tenantId}
-           AND i."issuedOn" >= ${sendFrom}::date
+           -- From the start date (2026-11-13): the console's own made from it in Texas, whatever day each is dated --
+           -- "createdAt" holds UTC, read as such whatever the session's time zone -- and Jobber's issued from it.
+           AND CASE WHEN i."origin" = 'CONSOLE' THEN (i."createdAt" AT TIME ZONE 'UTC') >= ${businessInstant(sendFrom, '00:00:00')}
+                    ELSE i."issuedOn" >= ${sendFrom}::date END
            -- Never one read from its books, nor one of the console's read back from there (2026-11-12): Xero has it.
            AND i."origin" <> 'XERO'
            AND i."xeroInvoiceId" IS NULL

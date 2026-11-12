@@ -23,6 +23,7 @@ import { z } from 'zod';
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
+import { sentFrom } from '../../admin/invoicing-state';
 import { TBP_TITLE_MARKER } from '../../planning/tbp-plan.service';
 import { CALLS_KEPT_FOR_SENDING } from './xero-books.service';
 import { xeroContacts } from './xero-contacts';
@@ -217,7 +218,8 @@ export class XeroProjectsService {
         xeroTenantId: tenantId,
         // The console's sends only: an invoice read from Xero (2026-11-12) is the office's there, project and all.
         origin: { not: InvoiceOrigin.XERO },
-        issuedOn: { gte: new Date(`${sendFrom}T00:00:00.000Z`) },
+        // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
+        ...sentFrom(sendFrom),
         // Once its invoice is in Xero, whatever its state there (2026-11-12): the console's own go as drafts.
         status: { not: InvoiceStatus.VOIDED },
         xeroSync: { is: { xeroTenantId: tenantId, status: 'SENT' } },
