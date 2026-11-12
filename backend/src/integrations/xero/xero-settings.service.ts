@@ -22,7 +22,7 @@ import {
 } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
-import { billedPrices, listedProducts } from '../../admin/invoice-settings';
+import { billedPrices, invoicingTakenOverAt, listedProducts } from '../../admin/invoice-settings';
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
@@ -171,11 +171,12 @@ export class XeroSettingsService {
 
   async read(organizationId: string, tenantId: string): Promise<XeroSettingsView> {
     const today = businessDate();
-    const [row, connection, listed, billed] = await Promise.all([
+    const [row, connection, listed, billed, switchedAt] = await Promise.all([
       this.prisma.xeroSettings.findUnique({ where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } } }),
       this.catalog(organizationId, tenantId),
       listedProducts(this.prisma, organizationId),
       billedPrices(this.prisma, organizationId, today),
+      invoicingTakenOverAt(this.prisma, organizationId),
     ]);
     const values = valuesFrom(row);
     // The invoices that would be sent: from the start date, or -- before one is chosen -- the past year, to show what is in use.
@@ -234,6 +235,8 @@ export class XeroSettingsService {
       values,
       catalog: connection,
       paymentsByMethod,
+      // Its books read back (2026-11-13): payments are recorded in Xero, and no account is asked for them.
+      booksRead: Boolean(row?.booksReadAt),
     });
     return {
       tenantId,
@@ -246,6 +249,9 @@ export class XeroSettingsService {
       ready: checks.every((check) => check.ok),
       // When the choices were last saved (2026-11-11): not the row's updatedAt, which every sending run moves.
       updatedAt: row?.choicesUpdatedAt.toISOString() ?? null,
+      // Its books read back from Xero (2026-11-13): payments and bad debts are recorded there; and whether the console makes the invoices.
+      booksRead: Boolean(row?.booksReadAt),
+      madeInConsole: Boolean(switchedAt),
     };
   }
 

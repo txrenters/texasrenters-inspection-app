@@ -94,8 +94,9 @@ export default function PaymentsPage() {
       <PageHeader
         info={
           <p>
-            Payments are recorded by hand once the charge has posted to the tenant&apos;s ledger in Propertyware, here or
-            in Jobber. Nothing on this page takes money.
+            Payments are recorded by hand once the charge has posted to the tenant&apos;s ledger in Propertyware: in Xero for
+            a company whose books are read back from there, every hour; the older ones here or in Jobber. Nothing on this page
+            takes money.
           </p>
         }
         infoLabel="How payments are recorded"

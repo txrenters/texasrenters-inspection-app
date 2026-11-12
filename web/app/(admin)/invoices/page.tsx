@@ -134,16 +134,30 @@ export default function InvoicesPage() {
           </>
         }
         info={
-          <>
-            <p>
-              The office&apos;s invoices in Jobber, one for each visit billed: made out to the property, a line for
-              each service done.
-            </p>
-            <p>
-              A payment is recorded here once the charge has posted to the tenant&apos;s ledger in Propertyware, and
-              the invoice is marked paid in Jobber. No card is charged.
-            </p>
-          </>
+          // Once the console makes the invoices (2026-11-13): where they are made and where they are kept.
+          data?.writesEnabled ? (
+            <>
+              <p>
+                Invoices are made here from finished visits, one for each company&apos;s books, and go to Xero as drafts. Xero
+                numbers them; the office approves and sends them there.
+              </p>
+              <p>
+                Xero is the record. Each company&apos;s invoices and payments are read back from it every hour, so a payment is
+                recorded in Xero, not here. No card is charged.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                The office&apos;s invoices in Jobber, one for each visit billed: made out to the property, a line for
+                each service done.
+              </p>
+              <p>
+                A payment is recorded here once the charge has posted to the tenant&apos;s ledger in Propertyware, and
+                the invoice is marked paid in Jobber. No card is charged.
+              </p>
+            </>
+          )
         }
         infoLabel="Where invoices come from"
         title="Invoices"
@@ -208,7 +222,9 @@ export default function InvoicesPage() {
           description={
             filtered
               ? 'No invoice matches. Try another status, other days, another company or a shorter search.'
-              : noInvoicesYet(data?.jobberRead)
+              : data?.writesEnabled
+                ? 'No invoices yet. Make them from the finished visits with Batch create.'
+                : noInvoicesYet(data?.jobberRead)
           }
           title="No invoices"
         >
@@ -216,7 +232,8 @@ export default function InvoicesPage() {
             <Button onClick={reset} variant="outline">
               Clear filters
             </Button>
-          ) : (
+          ) : data?.writesEnabled ? null : (
+            // Made here, Batch create is in the header; Jobber's copies, until then, come through its connection.
             <Button asChild variant="outline">
               <Link href="/integrations/jobber">Jobber connection</Link>
             </Button>

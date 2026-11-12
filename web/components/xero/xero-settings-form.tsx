@@ -215,8 +215,9 @@ export function XeroSettingsForm({
               value={values.sendFrom ?? ''}
             />
             <FieldDescription>
-              Invoices issued on or after it go to Xero. One Xero already has under the same number, made through Zapier or by hand, is
-              linked rather than made twice. Turn the Zap off before sending is turned on.
+              {view.madeInConsole
+                ? 'Invoices issued on or after it go to Xero; one issued before it never does.'
+                : 'Invoices issued on or after it go to Xero. One Xero already has under the same number, made through Zapier or by hand, is linked rather than made twice. Turn the Zap off before sending is turned on.'}
             </FieldDescription>
           </Field>
           <Field>
@@ -282,8 +283,8 @@ export function XeroSettingsForm({
           </div>
         </div>
         <p className="text-muted-foreground mt-4 text-sm">
-          Each invoice goes to Xero under its client, which is the property, as in Jobber, with the property as its reference. It is dated on
-          the day of its visit and falls due on the last day of that month.
+          Each invoice goes to Xero under its client, which is the property, with the property as its reference. It is dated on the day of
+          its visit and falls due on the last day of that month.
         </p>
       </Panel>
 
@@ -337,7 +338,9 @@ export function XeroSettingsForm({
             <p className="text-muted-foreground text-sm">
               {projects
                 ? 'Each visit gets a project under its property, named as the office names them (“Moses: Tenant Benefit Package - 4th Qtr - 2026 - 11.10.2026”) and due on the visit’s day, with the labour below on it. Xero cannot be told which project an invoice line is on, so invoices go as drafts: in Xero, put each line on its project, then approve it.'
-                : 'No projects are made, and invoices go to Xero approved.'}
+                : view.madeInConsole
+                  ? 'No projects are made. Invoices still go as drafts, for the office to approve in Xero.'
+                  : 'No projects are made, and invoices go to Xero approved.'}
             </p>
           </div>
         </div>
@@ -523,6 +526,16 @@ export function XeroSettingsForm({
         ) : null}
       </Panel>
 
+      {/* Its books read back from Xero (2026-11-13): payments and bad debts are the office's to record there, and are read back. */}
+      {view.booksRead ? (
+        <Panel bodyClassName="p-4" title="Payments and bad debts">
+          <p className="text-muted-foreground text-sm">
+            Recorded in Xero. This company&apos;s books are read back from there every hour, its payments and credit notes with them, so
+            nothing here sends them and no account is asked for.
+          </p>
+        </Panel>
+      ) : (
+        <>
       <Panel title="Where payments land">
         <div className="flex items-start gap-3 border-b px-4 py-3">
           <Switch
@@ -612,6 +625,8 @@ export function XeroSettingsForm({
           </Field>
         </div>
       </Panel>
+        </>
+      )}
 
       {canManage ? (
         // Kept in view only while there is something to save; otherwise it would sit over the fields for nothing.

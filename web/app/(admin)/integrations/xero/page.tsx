@@ -337,7 +337,12 @@ function OrganisationTab({
       )}
 
       {sending.data ? (
-        <XeroSendingPanel canManage={canManage} sendFrom={settings.data?.values.sendFrom ?? null} view={sending.data} />
+        <XeroSendingPanel
+          booksRead={settings.data?.booksRead ?? false}
+          canManage={canManage}
+          sendFrom={settings.data?.values.sendFrom ?? null}
+          view={sending.data}
+        />
       ) : sending.isError ? (
         <ErrorState error={sending.error} retry={() => void sending.refetch()} />
       ) : null}

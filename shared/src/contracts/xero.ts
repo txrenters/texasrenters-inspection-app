@@ -311,6 +311,14 @@ export interface XeroSettingsView {
   ready: boolean;
   /** When the choices were last saved (2026-11-11): what a save names as `expectedUpdatedAt`. Sending runs do not move it. */
   updatedAt: string | null;
+  /**
+   * The company's books are read back from Xero in full (2026-11-13): its
+   * payments and bad debts are recorded there, and Xero sends its emails, so
+   * the choices for those are not asked.
+   */
+  booksRead: boolean;
+  /** The console makes the invoices (2026-11-13): the console's own go to Xero as drafts, and Jobber's no more. */
+  madeInConsole: boolean;
 }
 
 export interface SaveXeroSettingsInput extends XeroSettingsValues {
@@ -480,13 +488,19 @@ export function xeroChecks(input: {
   values: XeroSettingsValues;
   catalog: XeroCatalog;
   paymentsByMethod: Partial<Record<PaymentMethod, number>>;
+  /**
+   * Its books are read back from Xero (2026-11-13): payments are recorded
+   * there, so none go and no account is asked for them -- the page no longer
+   * shows where they would land.
+   */
+  booksRead?: boolean;
 }): XeroCheck[] {
   const { values, catalog } = input;
   const byId = new Map(catalog.accounts.map((account) => [account.accountId, account]));
   const sales = new Set(revenueAccounts(catalog.accounts).map((account) => account.accountId));
   const takes = new Set(paymentAccounts(catalog.accounts).map((account) => account.accountId));
   const taxTypes = new Set(revenueTaxRates(catalog.taxRates).map((rate) => rate.taxType));
-  const payments = paymentsGoToXero(values);
+  const payments = paymentsGoToXero(values) && !input.booksRead;
   const unmapped = payments ? PAYMENT_METHODS.filter((method) => (input.paymentsByMethod[method] ?? 0) > 0 && !values.paymentAccounts[method]) : [];
   // A choice Xero no longer has, or no longer takes for that use: archived, deleted, or another organisation's.
   const gone = new Set<string>();
@@ -545,7 +559,7 @@ export function xeroChecks(input: {
           ok: unmapped.length === 0,
           detail: unmapped.length ? `None yet for ${unmapped.map((method) => PAYMENT_METHOD_LABEL[method]).join(', ')}.` : null,
         }
-      : { key: 'payments', label: 'Payments stay out of Xero', ok: true, detail: null },
+      : { key: 'payments', label: input.booksRead ? 'Payments are recorded in Xero' : 'Payments stay out of Xero', ok: true, detail: null },
     {
       key: 'stillInXero',
       label: 'Every chosen account is still active in Xero',

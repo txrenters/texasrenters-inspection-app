@@ -163,6 +163,13 @@ describe('the sending panel', () => {
     expect(actions.setEnabled.mutate).toHaveBeenCalledWith(false, expect.anything());
   });
 
+  it('says, once the console makes the invoices and the books are read, that they go as drafts and Xero emails them (2026-11-13)', () => {
+    render(<XeroSendingPanel booksRead canManage sendFrom="2026-12-01" view={{ ...ON, madeInConsole: true }} />);
+    expect(screen.getByText(/go to Xero as drafts that Xero numbers, for the office to approve there/)).toBeInTheDocument();
+    expect(screen.getByText('The console emails nothing for this company: its invoices, reminders and receipts go from Xero, once approved there.')).toBeInTheDocument();
+    expect(screen.queryByText(/still go from the console/)).not.toBeInTheDocument();
+  });
+
   it('says, once the console makes the invoices, that with sending off they reach no books (2026-11-13)', () => {
     mount({ ...ON, madeInConsole: true });
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
