@@ -130,6 +130,15 @@ describe('the New invoice, laid out as Xero’s', () => {
     expect(combobox('Line 1: project')).toHaveTextContent(VISIT_PROJECT.name);
   });
 
+  it('shows each line whole, as Xero does: its lists wrap and its description grows, so the row is as tall as its longest field', () => {
+    render(<XeroInvoiceEditor draft={DRAFT} />);
+    for (const name of ['item', 'account', 'tax rate', 'Income by Employee', 'project'])
+      expect(within(combobox(`Line 1: ${name}`)).getByText(/./, { selector: 'span' })).toHaveClass('whitespace-normal');
+    const description = screen.getByRole('textbox', { name: 'Line 1: description' });
+    expect(description.tagName).toBe('TEXTAREA');
+    expect(description).toHaveAttribute('rows', '1');
+  });
+
   it('sends Xero what it shows: the days, reference and tax, and each line’s account, item, rate, tracking and project', () => {
     render(<XeroInvoiceEditor draft={DRAFT} />);
     fireEvent.click(screen.getByRole('button', { name: 'Save draft in Xero · $64.50' }));
