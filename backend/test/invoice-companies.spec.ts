@@ -383,6 +383,19 @@ describe('a batch', () => {
       expect(db.invoice.create.mock.calls.map((call) => [call[0].data.xeroTenantId, call[0].data.status])).toEqual([[HOMES, 'DRAFT']]);
     });
 
+    it('sends what the form makes to Xero now (2026-11-13), not at the next ten-minute run', async () => {
+      const db = switched();
+      const sender = { sendSoon: jest.fn() };
+      const service = new InvoicesService(db as never, sender as never);
+      jest.spyOn(service, 'one').mockResolvedValue({} as never);
+      await service.create(office, { ...form, lineItems: [filter] });
+      expect(sender.sendSoon).toHaveBeenCalledWith(office.organizationId, [HOMES]);
+      // Refused: nothing made, nothing to send.
+      sender.sendSoon.mockClear();
+      await service.create(office, { ...form, lineItems: [typed] }).catch(() => undefined);
+      expect(sender.sendSoon).not.toHaveBeenCalled();
+    });
+
     it('is asked nothing of before the switch: an invoice of no company is made as before', async () => {
       const db = database();
       const service = new InvoicesService(db as never);
@@ -398,6 +411,16 @@ describe('a batch', () => {
     const early = await batchOver(db).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0003' });
     expect(early.skipped).toEqual([]);
     expect(early.created.map((made) => made.company)).toEqual(['Example Home Services', 'Example Pest Co']);
+  });
+
+  it('sends a batch’s invoices to Xero once it is done (2026-11-13): only those of a company that sends', async () => {
+    const db = database();
+    db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES, sendFrom: date('2026-11-05') }]);
+    const sender = { sendSoon: jest.fn() };
+    const invoices = new InvoicesService(db as never, sender as never);
+    await new InvoiceBatchService(db as never, invoices).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0007' });
+    expect(sender.sendSoon).toHaveBeenCalledTimes(1);
+    expect(sender.sendSoon).toHaveBeenCalledWith(office.organizationId, [HOMES]);
   });
 
   it('makes none before its company’s start date has come: Xero would never be sent it', async () => {

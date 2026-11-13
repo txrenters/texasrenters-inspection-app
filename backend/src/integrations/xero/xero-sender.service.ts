@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import {
   paymentsGoToXero,
   projectsAreOn,
@@ -19,6 +19,7 @@ import { z } from 'zod';
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate, businessInstant } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
+import { withTenant } from '../../database/tenant-context';
 import { XeroAuthService } from './xero-auth.service';
 import { XeroClient } from './xero.client';
 import { refused, said, xeroContacts, type XeroAnswer } from './xero-contacts';
@@ -50,6 +51,12 @@ export const MAX_DRAFT_LOOKUPS_PER_RUN = 20;
 const CLAIM_MS = 15 * 60_000;
 /** Between one "Send now" and the next. */
 const MANUAL_GAP_MS = 60_000;
+/** From an invoice saved here to its company's run (2026-11-13): invoices saved within it share the run. */
+export const SEND_SOON_MS = 3_000;
+/** A run that found the company held by another tries once more after this; past that, the scheduled run sends it. */
+export const SEND_SOON_RETRY_MS = 30_000;
+/** What a run says when another one holds the company. */
+const ANOTHER_RUN = 'Another run is sending to Xero, or reading from it.';
 /** Xero refused it: tried again after an hour, six, then daily -- and at once when the invoice changes. */
 const BACKOFF_MS = [60, 360, 1440].map((minutes) => minutes * 60_000);
 
@@ -214,8 +221,10 @@ interface DeleteBudget {
  * carries sales tax) is held with the reason until it changes.
  */
 @Injectable()
-export class XeroSenderService {
+export class XeroSenderService implements OnModuleDestroy {
   private readonly logger = new Logger(XeroSenderService.name);
+  /** Each company's run coming after a save, by `organizationId:tenantId`. */
+  private readonly soon = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -224,6 +233,45 @@ export class XeroSenderService {
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
     @Inject(XeroProjectsService) private readonly projects: XeroProjectsService,
   ) {}
+
+  onModuleDestroy() {
+    for (const timer of this.soon.values()) clearTimeout(timer);
+    this.soon.clear();
+  }
+
+  /**
+   * The invoices just made here go to their companies' books in Xero now
+   * (2026-11-13), not at the next ten-minute run: the office was told "Draft
+   * made in Xero" and looked there before it was. One run per company, a moment
+   * after the save, so invoices saved together share it. It sends what of the
+   * company is due, as the scheduled run would, with the same calls -- only
+   * sooner; a company with sending off, or nothing due, costs no call. A company
+   * another run holds is tried once more half a minute later, and past that the
+   * scheduled run sends it. Never waited on: the save has answered by then.
+   */
+  sendSoon(organizationId: string, tenantIds: Iterable<string | null>): void {
+    if (process.env.XERO_SENDING_ENABLED === 'false') return;
+    for (const tenantId of new Set(tenantIds)) if (tenantId) this.runSoon(organizationId, tenantId, SEND_SOON_MS, true);
+  }
+
+  private runSoon(organizationId: string, tenantId: string, delayMs: number, tryAgain: boolean) {
+    const key = `${organizationId}:${tenantId}`;
+    // One coming already sends this one too.
+    if (this.soon.has(key)) return;
+    const timer = setTimeout(() => {
+      this.soon.delete(key);
+      withTenant(organizationId, () => this.run(organizationId, tenantId)).then(
+        (result) => {
+          if (result.problem === ANOTHER_RUN && tryAgain) this.runSoon(organizationId, tenantId, SEND_SOON_RETRY_MS, false);
+          else if (result.problem) this.logger.warn({ event: 'xero_send_soon_stopped', organizationId, xeroTenantId: tenantId, problem: result.problem });
+        },
+        (error: unknown) =>
+          this.logger.error({ event: 'xero_send_soon_failed', organizationId, xeroTenantId: tenantId, message: error instanceof Error ? error.message : String(error) }),
+      );
+    }, delayMs);
+    timer.unref?.();
+    this.soon.set(key, timer);
+  }
 
   async view(organizationId: string, tenantId: string): Promise<XeroSendingView> {
     const state = await this.state(organizationId, tenantId);
@@ -515,7 +563,7 @@ export class XeroSenderService {
       data: { sendingClaimedUntil: new Date(now.getTime() + CLAIM_MS) },
     });
     // A read of the company's books holds the same claim (2026-11-12).
-    if (!claimed.count) return { ...result, problem: 'Another run is sending to Xero, or reading from it.' };
+    if (!claimed.count) return { ...result, problem: ANOTHER_RUN };
 
     const sentNumbers: string[] = [];
     const budget: DeleteBudget = { left: MAX_PAYMENT_DELETES_PER_RUN };

@@ -283,6 +283,13 @@ export interface InvoiceDetail extends InvoiceSummary {
   deliveries?: InvoiceDeliveryView[];
   /** Jobber's "Client view" (2026-11-10): what the client sees on the PDF and the email. */
   clientView?: InvoiceClientView;
+  /**
+   * Made here for a company that sends to Xero, and not in Xero yet
+   * (2026-11-13): on its way, or -- with `problem` -- refused by Xero for that
+   * reason, to be put right and tried again from the Xero page. Null once Xero
+   * has it (see `xero`), or when it is not going there.
+   */
+  toXero?: { problem: string | null } | null;
 }
 
 /** The rest of what Jobber keeps on an invoice. */

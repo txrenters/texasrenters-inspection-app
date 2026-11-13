@@ -175,6 +175,8 @@ export class InvoiceBatchService {
           company: row.xeroTenantId ? nameOf(row.xeroTenantId) : null,
         });
     };
+    // Made by this request: to Xero once the batch is done (2026-11-13), one run per company.
+    const fresh: { xeroTenantId: string | null }[] = [];
     for (const inspectionId of ids) {
       const keys = Array.from({ length: MAX_INVOICES_PER_VISIT }, (_, index) => `${input.clientRequestId}:${inspectionId}:${index + 1}`);
       const made = await this.byKeys(user, keys);
@@ -228,7 +230,10 @@ export class InvoiceBatchService {
           // A visit's invoices are a few writes each: room for several on a slow connection.
           { maxWait: 5_000, timeout: 20_000 },
         );
-        if ('made' in outcome) madeFor(inspectionId, outcome.made);
+        if ('made' in outcome) {
+          madeFor(inspectionId, outcome.made);
+          fresh.push(...outcome.made);
+        }
         else
           result.skipped.push({
             inspectionId,
@@ -242,6 +247,7 @@ export class InvoiceBatchService {
         madeFor(inspectionId, other);
       }
     }
+    this.invoices.sendToXeroSoon(user.organizationId, fresh, state);
     return result;
   }
 

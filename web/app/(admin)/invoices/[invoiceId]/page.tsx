@@ -113,6 +113,9 @@ export default function InvoicePage() {
           <>
             <InvoiceStatusBadge status={data.status} />
             {data.xero ? <Badge variant="outline">{XERO_INVOICE_STATUS_LABEL[data.xero.status] ?? 'In Xero'}</Badge> : null}
+            {data.toXero ? (
+              <Badge variant={data.toXero.problem ? 'destructive' : 'outline'}>{data.toXero.problem ? 'Xero refused it' : 'Going to Xero'}</Badge>
+            ) : null}
           </>
         }
         record={INVOICE_RECORD}
@@ -122,6 +125,24 @@ export default function InvoicePage() {
       <RecordLayout
         aside={
           <>
+            {data.toXero ? (
+              // On its way, or refused (2026-11-13): until Xero has it, the number is Xero's to give.
+              <AsideCard title={data.toXero.problem ? 'Xero refused it' : 'Going to Xero'}>
+                <p className="text-muted-foreground text-sm">
+                  {data.toXero.problem ? (
+                    <>
+                      {data.toXero.problem} Put it right, then press Try again on the{' '}
+                      <Link className="underline" href="/integrations/xero">
+                        Xero page
+                      </Link>
+                      .
+                    </>
+                  ) : (
+                    `On its way to ${data.company?.name ?? 'its company'}’s books in Xero as a draft. Xero numbers it in a moment.`
+                  )}
+                </p>
+              </AsideCard>
+            ) : null}
             {kept ? (
               <AsideCard title="Kept in Xero">
                 <p className="text-muted-foreground text-sm">

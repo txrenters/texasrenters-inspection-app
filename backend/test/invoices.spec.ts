@@ -350,6 +350,33 @@ describe('an invoice', () => {
     expect((await serviceOver(db).one(office, INVOICE)).details).toMatchObject({ discountCents: 500, discountPercent: null, customFields: [] });
   });
 
+  it('says an invoice made here is on its way to its company’s Xero, or why Xero refused it (2026-11-13)', async () => {
+    const HOMES = 'b1000000-0000-4000-8000-000000000001';
+    const db = database();
+    const sync = { findUnique: jest.fn().mockResolvedValue({ status: 'PENDING', problem: null }) };
+    const settings = { findUnique: jest.fn().mockResolvedValue({ sendingEnabled: true, sendFrom: date('2026-11-12') }) };
+    Object.assign(db, { xeroInvoiceSync: sync, xeroSettings: { ...db.xeroSettings, ...settings } });
+    db.invoice.aggregate.mockResolvedValue({ _sum: { balanceCents: 0 } });
+    const made = { origin: 'CONSOLE', status: 'DRAFT', number: null, xeroTenantId: HOMES, xeroInvoiceId: null, createdAt: new Date('2026-11-13T20:26:13.000Z') };
+    const toXero = async (over: Record<string, unknown> = {}) => {
+      db.invoice.findFirst.mockResolvedValue(invoiceRow({ ...made, ...over }));
+      return (await serviceOver(db).one(office, INVOICE)).toXero;
+    };
+
+    expect(await toXero()).toEqual({ problem: null });
+    sync.findUnique.mockResolvedValue({ status: 'FAILED', problem: 'Xero has invoice 8733 for another client: renumber one of them.' });
+    expect(await toXero()).toEqual({ problem: 'Xero has invoice 8733 for another client: renumber one of them.' });
+
+    // In Xero already, Jobber's, voided, or made before the company's start date: nothing on its way.
+    expect(await toXero({ xeroInvoiceId: 'xero-invoice-1', xeroStatus: 'DRAFT' })).toBeNull();
+    expect(await toXero({ origin: 'JOBBER' })).toBeNull();
+    expect(await toXero({ status: 'VOIDED' })).toBeNull();
+    expect(await toXero({ createdAt: new Date('2026-11-11T20:00:00.000Z') })).toBeNull();
+    // A company that does not send.
+    settings.findUnique.mockResolvedValue({ sendingEnabled: false, sendFrom: date('2026-11-12') });
+    expect(await toXero()).toBeNull();
+  });
+
   it("is not found in another office's organization", async () => {
     await expect(serviceOver(database()).one(office, INVOICE)).rejects.toMatchObject({ code: 'INVOICE_NOT_FOUND' });
   });

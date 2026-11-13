@@ -12,6 +12,7 @@ import { AccountProfileService } from './account-profile.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { RoutingModule } from '../routing/routing.module';
+import { XeroModule } from '../integrations/xero/xero.module';
 import { PropertyGeocodeScheduler } from './property-geocode.scheduler';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianTimelineService } from '../technician/technician-timeline.service';
@@ -72,7 +73,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
   // TechnicianModule for the location service the console's map reads. Safe in
   // this direction only — that module must never import this one, which is why
   // AreaChecklistAiService is provided there rather than imported from here.
-  imports: [RealtimeModule, MailModule, AuthModule, MediaModule, TechnicianModule, RoutingModule],
+  // XeroModule (2026-11-13): an invoice made here goes to its company's Xero at once, through the sender.
+  imports: [RealtimeModule, MailModule, AuthModule, MediaModule, TechnicianModule, RoutingModule, XeroModule],
   controllers: [
     AdminController,
     AccessController,
