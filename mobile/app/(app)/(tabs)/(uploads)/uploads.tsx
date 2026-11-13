@@ -375,7 +375,7 @@ export default function UploadsScreen() {
               )}
             </View>
 
-            {/* Videos held for Wi-Fi or a charger in Low Power Mode. Said here,
+            {/* Videos held for Wi-Fi or a charger in Low Power Mode, under 20%. Said here,
                 beside the count it holds back, with the one tap that sends them
                 anyway -- a move-out cannot be submitted until they arrive. */}
             {gate.allowed && !videoHold.allowed && pendingCount > 0 ? (

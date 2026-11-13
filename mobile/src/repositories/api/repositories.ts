@@ -67,7 +67,9 @@ import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { noteUploading } from '../../lib/session-breadcrumb';
 import { isCaptureActive } from '../../media/capture-activity';
+import { createUploadSlots, platformStartsTransfersNow, uploadPlan } from '../../media/upload-slots';
 import { videoGate } from '../../media/video-hold';
+import { nativeWholeFileSender } from '../../media/whole-file-upload';
 import { releaseUploadedRecording } from '../../media/local-recordings';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { roomRecordingStillUploading } from '../../media/room-recording-upload';
@@ -1725,7 +1727,8 @@ export class ApiMediaRepository implements MediaRepository {
   }
 }
 
-let uploadInFlight = false;
+/** The recordings being sent; see `upload-slots`. */
+const uploadSlots = createUploadSlots();
 
 export class ApiUploadRepository implements UploadRepository {
   async list() {
@@ -1850,21 +1853,44 @@ export class ApiUploadRepository implements UploadRepository {
 
   // Push one durable local recording per pass. A global foreground runner calls
   // this independently of the Uploads screen, so field work can continue while
-  // transfers happen and interrupted uploads recover when the app resumes.
+  // transfers happen and interrupted uploads recover when the app resumes. Up
+  // to two run at once, each its own call; see `upload-slots`.
   tick = async (): Promise<boolean> => {
-    // Nothing goes up while a room is being filmed; see `capture-activity`.
-    // Nor in Low Power Mode on mobile data, unless the technician said send
-    // now; see `video-hold`.
-    if (uploadInFlight || isCaptureActive() || !videoGate().allowed) return false;
+    // Nothing goes up in Low Power Mode on a low battery over mobile data,
+    // unless the technician said send now; see `video-hold`.
+    if (!videoGate().allowed) return false;
+    const conditions = { filming: isCaptureActive(), handOverNow: platformStartsTransfersNow() };
+    const nativeUploader = nativeWholeFileSender() !== undefined;
     const now = Date.now();
-    const pending = localUploads().find(
-      (item) =>
-        item.status === 'UPLOADING' ||
-        (item.status === 'PENDING' &&
-          (!item.nextAttemptAt || new Date(item.nextAttemptAt).getTime() <= now)),
-    );
-    if (!pending) return false;
-    uploadInFlight = true;
+    /**
+     * The first recording that is due and may start beside what is already
+     * going: during a take, or beside another upload, only one sent whole.
+     * Chosen and claimed with nothing awaited in between, so a second tick
+     * running alongside never takes the same one.
+     */
+    const next = localUploads()
+      .filter(
+        (item) =>
+          !uploadSlots.holds(item.id) &&
+          (item.status === 'UPLOADING' ||
+            (item.status === 'PENDING' &&
+              (!item.nextAttemptAt || new Date(item.nextAttemptAt).getTime() <= now))),
+      )
+      .map((item) => ({
+        item,
+        plan: uploadPlan(
+          {
+            sizeBytes: item.fileSize ?? Math.round(item.estimatedSizeMb * 1024 * 1024),
+            uploadedBytes: item.uploadedBytes,
+            lastError: item.lastError,
+          },
+          nativeUploader,
+        ),
+      }))
+      .find(({ plan }) => uploadSlots.mayStart(plan, conditions));
+    if (!next) return false;
+    const pending = next.item;
+    uploadSlots.start(pending.id, next.plan);
     noteUploading(true);
     const store = useDemoStore.getState();
     try {
@@ -1918,7 +1944,10 @@ export class ApiUploadRepository implements UploadRepository {
         mimeType: 'video/mp4',
         filename: `${pending.roomName || 'recording'}.mp4`.replace(/\s+/g, '-').toLowerCase(),
         signal: undefined,
-        shouldPause: () => isCaptureActive() || !videoGate().allowed,
+        // Held videos wait, whichever way they go. Chunks also wait for a take
+        // to end, and for any other upload; a whole file is let go during one.
+        shouldPause: (path) =>
+          !videoGate().allowed || (path === 'chunks' && !uploadSlots.mayChunk(pending.id, isCaptureActive())),
         createSession: async () =>
           createStreamUploadSession({
             baseUrl,
@@ -1955,7 +1984,7 @@ export class ApiUploadRepository implements UploadRepository {
       }
       if (streamOutcome.kind === 'paused') {
         // Waiting, not failing: no attempt spent, no backoff, no error shown.
-        // False, so the runner's drain stops here until the take ends.
+        // False, so this drain stops here until the take ends or the hold lifts.
         store.updateUpload(pending.id, { status: 'PENDING', lastError: undefined });
         return false;
       }
@@ -2083,8 +2112,8 @@ export class ApiUploadRepository implements UploadRepository {
       );
       return true;
     } finally {
-      uploadInFlight = false;
-      noteUploading(false);
+      uploadSlots.finish(pending.id);
+      noteUploading(uploadSlots.size > 0);
     }
   };
 

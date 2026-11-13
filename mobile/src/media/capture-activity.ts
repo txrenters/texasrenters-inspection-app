@@ -5,9 +5,15 @@
  * films one room while the last room's video is still going up, and the two
  * fought over the same phone -- the encoder and the camera's buffers on one
  * side, the upload's memory and the radio on the other. Technicians on iPhones
- * saw the app freeze and then close, worst in Low Power Mode. Uploads now run
- * between rooms: the queue stops at the next chunk boundary when a take starts
- * and carries on from Cloudflare's offset when it ends.
+ * saw the app freeze and then close, worst in Low Power Mode. Chunked uploads
+ * run between rooms: the queue stops at the next chunk boundary when a take
+ * starts and carries on from Cloudflare's offset when it ends. Photographs wait
+ * too.
+ *
+ * Since 2026-11-14 a recording sent whole, by the platform's own uploader, may
+ * start during a take (`upload-slots`). It reads the file from disk without
+ * JavaScript, and the freeze came from the chunks' base64 step in JavaScript,
+ * which is gone.
  *
  * Module state rather than a store, because nothing renders from it: the camera
  * writes it and the upload queue reads it, and neither should re-render the

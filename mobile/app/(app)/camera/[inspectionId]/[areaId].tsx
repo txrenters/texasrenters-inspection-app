@@ -82,9 +82,12 @@ import { PHOTO_REVIEW_WINDOW_MS, reviewWindowEnd } from '@/src/media/snapshot-up
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
 import {
+  MAX_RECORDING_BYTES,
   MAX_RECORDING_SECONDS,
+  RECORDING_VIDEO_BITRATE,
   recordingTimeLeft,
   stoppedByLimit,
+  stoppedBySizeLimit,
 } from '@/src/capture/recording-limit';
 
 registerIcons(
@@ -107,9 +110,6 @@ registerIcons(
  * again after a mode change is the native module's business, not a promise.
  */
 const CAMERA_REBIND_TIMEOUT_MS = 1_500;
-
-/** The walkthrough's bitrate: about 30 MB a minute at 720p. See the camera's props. */
-const VIDEO_BITRATE = 4_000_000;
 
 /**
  * How far two fingers must spread or close before it counts as a pinch.
@@ -852,14 +852,19 @@ export default function RoomCameraScreen() {
       stopRequestedRef.current = false;
       const result = await camera.recordAsync({
         maxDuration: MAX_RECORDING_SECONDS,
+        // Kept to what the phone's background uploader sends in one request;
+        // both platforms stop and keep the take there, as at `maxDuration`.
+        maxFileSize: MAX_RECORDING_BYTES,
         ...(Platform.OS === 'ios' ? { codec: 'avc1' as const } : {}),
       });
       if (!result || !mountedRef.current) return;
-      // The camera stopped itself at the limit: said, so the review screen
+      const stored = persistRecording(result.uri, inspectionId, areaId);
+      // The camera stopped itself at a limit: said, so the review screen
       // opening mid-room is not a surprise. What was filmed is kept either way.
       if (stoppedByLimit(secondsRef.current, stopRequestedRef.current))
         announce(`The ${MAX_RECORDING_SECONDS / 60}-minute limit was reached. The recording was saved.`);
-      const stored = persistRecording(result.uri, inspectionId, areaId);
+      else if (stoppedBySizeLimit(stored.sizeBytes, stopRequestedRef.current))
+        announce('The video reached its size limit. The recording was saved.');
       // The moments marked on Android travel with the recording, and the
       // server files each one as a photo from Cloudflare once the video is
       // encoded. The phone used to decode the video here, once per marker,
@@ -1439,14 +1444,13 @@ export default function RoomCameraScreen() {
         mute={false}
         videoQuality="720p"
         /**
-         * 4 Mbps, the office's choice (2026-10-06). Unset, each phone used its
-         * own default for 720p, typically 8 to 12 Mbps -- a three-minute room
-         * of 120 to 220 MB, every byte encoded, stored and sent over mobile
-         * data on a move-out's battery. 4 Mbps keeps a nail hole sharp in a
-         * walkthrough filmed at walking pace. On iOS it applies only because
+         * 2.5 Mbps (`RECORDING_VIDEO_BITRATE`). Unset, each phone used its own
+         * default for 720p, typically 8 to 12 Mbps -- a three-minute room of
+         * 120 to 220 MB, every byte encoded, stored and sent over mobile data
+         * on a move-out's battery. On iOS it applies only because
          * `recordAsync` names the codec (`avc1`).
          */
-        videoBitrate={VIDEO_BITRATE}
+        videoBitrate={RECORDING_VIDEO_BITRATE}
         /**
          * Capture at roughly 2048 on the long edge, not at the sensor's full
          * twelve megapixels. Undefined until the camera has told us what it

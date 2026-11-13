@@ -26,15 +26,19 @@ export async function currentBatteryPercent(
   read: () => Promise<number> = Battery.getBatteryLevelAsync,
 ): Promise<number | null> {
   try {
-    const level = await read();
-    // Not `level < 0`: NaN fails every comparison, so ask what is in range.
-    if (!(level >= 0 && level <= 1)) return null;
-    return Math.round(level * 100);
+    return batteryPercentOf(await read());
   } catch {
     // Never throws into the location task. A missing battery reading is a
     // missing diagnostic; losing the fix it was attached to is losing evidence.
     return null;
   }
+}
+
+/** A level as expo-battery reports it (0 to 1, or -1 for unknown), as a whole percentage or null. */
+export function batteryPercentOf(level: number | null | undefined): number | null {
+  // Not `level < 0`: NaN fails every comparison, so ask what is in range.
+  if (typeof level !== 'number' || !(level >= 0 && level <= 1)) return null;
+  return Math.round(level * 100);
 }
 
 let lastRead: { at: number; percent: number | null } | null = null;

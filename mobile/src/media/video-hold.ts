@@ -5,14 +5,30 @@ import { currentPowerState, subscribeToPowerState, type PowerState } from '../li
 import { useNetworkStore } from '../stores/network.store';
 
 /**
- * Videos wait for Wi-Fi or a charger in Low Power Mode (the office,
- * 2026-10-06), unless the technician says send them now.
+ * Below this charge, in Low Power Mode on mobile data, videos wait.
+ *
+ * From 2026-10-06 they waited in Low Power Mode at any charge, and the office
+ * said (2026-11-13) that slow video uploads were holding up its work: a
+ * move-in or move-out cannot be submitted until its videos arrive, and Low
+ * Power Mode is on for much of a technician's day. Now they go, unless the
+ * battery is nearly flat.
+ */
+export const VIDEO_HOLD_BELOW_PERCENT = 20;
+
+/**
+ * Videos wait for Wi-Fi or a charger in Low Power Mode with the battery below
+ * 20% (the office, 2026-10-06 and 2026-11-14), unless the technician says send
+ * them now.
  *
  * A walkthrough is tens of megabytes over cellular, on a phone whose owner has
- * just told it the battery matters most. Photographs are not held: they are
- * small, and an area waits on them. A move-out cannot be submitted until its
- * videos have arrived, which is why "Send now" exists -- one tap, for as long as
- * Low Power Mode stays on.
+ * told it the battery matters most. Photographs are not held: they are small,
+ * and an area waits on them. A charge the phone will not report holds nothing,
+ * as before the hold existed. "Send now" is one tap, for as long as Low Power
+ * Mode stays on.
+ *
+ * Every video, whatever the job: the queue does not know a recording's job
+ * type, and the videos it holds are move-in and move-out walkthroughs (an
+ * occupied visit films only when the technician chooses to, HVAC never).
  */
 export function evaluateVideoGate(input: {
   power: PowerState;
@@ -21,9 +37,10 @@ export function evaluateVideoGate(input: {
 }): UploadGate {
   const { power, connectivity, sendNow } = input;
   if (sendNow || !power.lowPower || power.charging || !connectivity.isMetered) return { allowed: true };
+  if (power.batteryPercent === null || power.batteryPercent >= VIDEO_HOLD_BELOW_PERCENT) return { allowed: true };
   return {
     allowed: false,
-    reason: 'Low Power Mode is on, so videos wait for Wi-Fi or a charger. Send them now to use mobile data.',
+    reason: `Low Power Mode is on and the battery is under ${VIDEO_HOLD_BELOW_PERCENT}%, so videos wait for Wi-Fi or a charger. Send them now to use mobile data.`,
   };
 }
 

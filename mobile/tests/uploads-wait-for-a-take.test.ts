@@ -121,8 +121,10 @@ describe('an upload Cloudflare has finished', () => {
 });
 
 describe('the queue while a room is being filmed', () => {
-  it('sends nothing, and spends no attempt on the waiting recording', async () => {
-    const waiting = sent({ status: 'PENDING', progress: 0, serverVideoId: undefined });
+  // A fresh take may go whole during a take since 2026-11-14; see
+  // videos-go-up-sooner.test.ts. One Cloudflare has part of goes in chunks.
+  it('sends no chunks, and spends no attempt on the waiting recording', async () => {
+    const waiting = sent({ status: 'PENDING', progress: 30, serverVideoId: undefined, uploadedBytes: 4 * 1024 * 1024 });
     useDemoStore.setState({ uploads: [waiting] });
     globalThis.fetch = (async () => {
       throw new Error('nothing may be sent during a take');
