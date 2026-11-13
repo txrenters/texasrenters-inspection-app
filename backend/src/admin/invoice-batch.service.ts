@@ -20,7 +20,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { billingBasis, type BillingBasis } from './invoice-billing-rules';
+import { billingBasis, buildingAreaSqFt, type BillingBasis } from './invoice-billing-rules';
 import { makeInvoices, visitParts } from './invoice-maker';
 import { invoiceWritesOff, productCompanies } from './invoice-settings';
 import { InvoicesService, servicesDone } from './invoices.service';
@@ -51,22 +51,28 @@ const LIST_LIMIT = 200;
 const dateOf = (value: string) => new Date(`${value}T00:00:00.000Z`);
 const day = (date: Date) => date.toISOString().slice(0, 10);
 
-const visitSelect = {
+/** A visit as it is billed; the automatic drafts (2026-11-13) read the same. */
+export const visitSelect = {
   id: true,
   inspectionType: true,
   scheduledAt: true,
   status: true,
   jobberJobId: true,
   servicesReport: true,
-  propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
+  // Its floor area too (2026-11-13): a rule may bill another product from a size of property on.
+  propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true, totalArea: true, manualTotalArea: true } },
 } satisfies Prisma.InspectionSelect;
 
 type VisitRow = Prisma.InspectionGetPayload<{ select: typeof visitSelect }>;
 
 /** A visit's invoice as the batch would make it, by the office's rules, and why it cannot be made, in words. */
-export function batchLines(row: Pick<VisitRow, 'servicesReport'> & { inspectionType: string }, basis: BillingBasis) {
+export function batchLines(
+  row: Pick<VisitRow, 'servicesReport'> & { inspectionType: string; propertywareBuilding?: { totalArea?: number | null; manualTotalArea?: number | null } | null },
+  basis: BillingBasis,
+) {
   const services = servicesDone(row.servicesReport as unknown as VisitServicesReport | null);
-  const { lineItems, problem } = billedLines({ inspectionType: row.inspectionType, services }, basis.rules, basis.products);
+  const areaSqFt = buildingAreaSqFt(row.propertywareBuilding);
+  const { lineItems, problem } = billedLines({ inspectionType: row.inspectionType, services, areaSqFt }, basis.rules, basis.products);
   return { lineItems, totalCents: invoiceTotals(lineItems).totalCents, problem };
 }
 

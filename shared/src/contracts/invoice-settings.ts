@@ -177,3 +177,26 @@ export function invoiceProductProblem(product: { name: string; unitPriceCents: n
   if (product.unitPriceCents > MAX_PRODUCT_PRICE_CENTS) return 'Give a price of $1,000,000.00 or less.';
   return null;
 }
+
+/**
+ * Draft invoices automatically (2026-11-13): once on, each visit finished from
+ * then is invoiced by itself within about ten minutes, by the office's rules,
+ * and goes to its company's books in Xero as a draft for accounting to check.
+ * A visit no rule covers, or whose company does not send to Xero, is left for
+ * the office on Create invoices, with the reason.
+ */
+export interface InvoiceAutoDraftsView {
+  on: boolean;
+  /** When it was turned on: visits finished from then are drafted. Null while off. */
+  since: string | null;
+  /** When it was last turned on or off; sent back with a change, so two people cannot both win. */
+  updatedAt: string | null;
+  /** Whether the console makes the invoices yet: until it does, nothing is drafted. */
+  takenOver: boolean;
+}
+
+export interface SaveInvoiceAutoDraftsInput {
+  on: boolean;
+  /** `updatedAt` as it was read; null when it was never set. */
+  expectedUpdatedAt: string | null;
+}

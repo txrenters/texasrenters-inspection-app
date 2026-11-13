@@ -15,6 +15,7 @@ import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
 import { BillingRulesSection } from '@/components/invoices/billing-rules-section';
+import { InvoiceAutoDraftsSection } from '@/components/invoices/invoice-auto-drafts-section';
 import { EmailTemplatesSection } from '@/components/invoices/email-templates-section';
 import { InvoiceEmailsSection } from '@/components/invoices/invoice-emails-section';
 import { StatementSettingsSection } from '@/components/invoices/statement-settings-section';
@@ -64,6 +65,7 @@ export default function InvoiceSettingsPage() {
       <SettingsForm key={settings.data.updatedAt ?? 'never'} mayChange={mayChange} view={settings.data} />
       <ProductsSection mayChange={mayChange} view={settings.data} />
       <BillingRulesSection mayChange={mayChange} view={settings.data} />
+      <InvoiceAutoDraftsSection mayChange={mayChange} />
       <InvoiceEmailsSection mayChange={mayChange} />
       <EmailTemplatesSection mayChange={mayChange} />
       <StatementSettingsSection mayChange={mayChange} />

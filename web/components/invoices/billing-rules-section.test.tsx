@@ -44,8 +44,8 @@ const VIEW: InvoiceSettingsView = {
   ],
   billed: [],
   billingRules: [
-    { id: 'rule-1', inspectionType: null, service: 'pestControl', productId: 'p3' },
-    { id: 'rule-2', inspectionType: 'ROOF', service: null, productId: 'p4' },
+    { id: 'rule-1', inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: null, largeProductId: null },
+    { id: 'rule-2', inspectionType: 'ROOF', service: null, productId: 'p4', largeFromSqFt: null, largeProductId: null },
   ],
   suggestedRules: [
     { inspectionType: 'OCCUPIED', productId: 'p1', seen: 468, of: 470 },
@@ -108,7 +108,32 @@ describe('what a visit bills', () => {
     expect(screen.queryByRole('option', { name: /Occupied Inspection/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: 'Filter Change · $39.99' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
-    expect(hooks.addBillingRules.mutate).toHaveBeenCalledWith({ rules: [{ inspectionType: 'HVAC', service: 'filterChange', productId: 'p1' }] }, expect.anything());
+    expect(hooks.addBillingRules.mutate).toHaveBeenCalledWith(
+      { rules: [{ inspectionType: 'HVAC', service: 'filterChange', productId: 'p1', largeFromSqFt: null, largeProductId: null }] },
+      expect.anything(),
+    );
+  });
+
+  it('adds one that bills another product from a size of property on (2026-11-13), and lists it with its size', () => {
+    const large = product('p5', 'Pest Control: House over 2,000 sq ft', 3900, PEST);
+    mount({
+      ...VIEW,
+      products: [...VIEW.products, large],
+      billingRules: [{ id: 'rule-3', inspectionType: null, service: 'fleaTreatment', productId: 'p3', largeFromSqFt: 2000, largeProductId: 'p5' }],
+    });
+    expect(screen.getByRole('row', { name: /Visits with flea treatment done/ })).toHaveTextContent('From 2,000 sq ft: Pest Control: House over 2,000 sq ft');
+
+    pick('Service done', 'Pest control');
+    pick('Bills', 'Pest Control · $39.00');
+    fireEvent.change(screen.getByRole('textbox', { name: 'From a size on (optional)' }), { target: { value: '2,000' } });
+    // A size with no other product is not a rule yet.
+    expect(screen.getByText('Give both the size and the product billed from it, or neither.')).toBeInTheDocument();
+    pick('Bills instead', 'Pest Control: House over 2,000 sq ft · $39.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
+    expect(hooks.addBillingRules.mutate).toHaveBeenCalledWith(
+      { rules: [{ inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: 2000, largeProductId: 'p5' }] },
+      expect.anything(),
+    );
   });
 
   it('will not add a rule for every visit at once', () => {

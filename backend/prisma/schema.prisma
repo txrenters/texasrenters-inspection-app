@@ -3472,6 +3472,11 @@ model InvoiceSettings {
   receiptsAutomatic         Boolean      @default(false)
   /// When those were last saved: separate from `updatedAt`, which the invoice settings form keys on.
   emailSettingsUpdatedAt    DateTime?
+  /// Draft invoices automatically (2026-11-13): each visit finished from this moment is invoiced by itself, by the
+  /// office's rules, within about ten minutes. Null: off, and the office makes them.
+  autoDraftsFrom            DateTime?
+  /// When that was last turned on or off: separate from `updatedAt`, which the invoice settings form keys on.
+  autoDraftsUpdatedAt       DateTime?
   /// Jobber's statement settings (2026-11-10): the billing history newest first,
   /// or oldest; and the text at the foot of every statement.
   statementNewestFirst       Boolean   @default(true)
@@ -3513,7 +3518,9 @@ model InvoiceProduct {
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   xeroOrganisation XeroOrganisation? @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
-  billingRules   InvoiceBillingRule[]
+  billingRules   InvoiceBillingRule[] @relation("BilledByRule")
+  /// The rules that bill it on a property from their size on (2026-11-13).
+  largeBillingRules InvoiceBillingRule[] @relation("BilledByRuleWhenLarge")
 
   @@unique([organizationId, nameKey])
   /// What a billing rule points at: a product of its own office (2026-11-12).
@@ -3540,12 +3547,18 @@ model InvoiceBillingRule {
   /// filterChange, pestControl or fleaTreatment (checked); null for whatever was done. One of the two is always given (checked).
   service        String?
   productId      String          @db.Uuid
+  /// From this much of the property's floor area, in square feet (2026-11-13), the rule bills `largeProductId`
+  /// instead: pest control on a house of 2,000 sq ft or more. Both or neither, from 1 to 100,000 (checked).
+  largeFromSqFt  Int?
+  largeProductId String?         @db.Uuid
   createdAt      DateTime        @default(now())
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  product      InvoiceProduct @relation(fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      InvoiceProduct  @relation("BilledByRule", fields: [organizationId, productId], references: [organizationId, id], onDelete: Cascade)
+  largeProduct InvoiceProduct? @relation("BilledByRuleWhenLarge", fields: [organizationId, largeProductId], references: [organizationId, id], onDelete: Cascade)
 
   @@index([productId])
+  @@index([largeProductId])
 }
 
 /// An invoice sent to the client from the console (2026-11-06, phase 5 of taking

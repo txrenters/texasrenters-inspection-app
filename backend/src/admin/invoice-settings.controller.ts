@@ -5,6 +5,7 @@ import {
   MAX_BILLING_RULES,
   MAX_PRODUCT_PRICE_CENTS,
   MAX_PRODUCTS_PER_ADD,
+  MAX_RULE_SQFT,
   PAYMENT_TERMS,
   REPORTABLE_VISIT_SERVICES,
   type ReportableVisitService,
@@ -76,6 +77,9 @@ export class NewBillingRuleDto {
   /** A service reported done; null for whatever was done. */
   @IsOptional() @IsIn([...REPORTABLE_VISIT_SERVICES]) service!: ReportableVisitService | null;
   @IsUUID() productId!: string;
+  /** From this size of property on, in square feet, it bills `largeProductId` instead (2026-11-13). Both or neither. */
+  @IsOptional() @IsInt() @Min(1) @Max(MAX_RULE_SQFT) largeFromSqFt?: number | null;
+  @IsOptional() @IsUUID() largeProductId?: string | null;
 }
 
 export class AddBillingRulesDto {

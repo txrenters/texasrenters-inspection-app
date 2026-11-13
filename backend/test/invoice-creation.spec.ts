@@ -31,7 +31,7 @@ const office: AuthenticatedUser = {
   principalType: 'USER',
 } as AuthenticatedUser;
 
-const building = { id: BUILDING, name: 'Building 12', addressLine1: '100 Example Way', city: 'Sampletown' };
+const building = { id: BUILDING, name: 'Building 12', addressLine1: '100 Example Way', city: 'Sampletown', totalArea: null, manualTotalArea: null };
 const report = (done: Record<string, boolean>) => ({
   services: Object.fromEntries(Object.entries(done).map(([service, yes]) => [service, { done: yes, reason: null, reschedule: false }])),
   filtersInstalled: [],
@@ -67,9 +67,9 @@ const product = (id: string, name: string, unitPriceCents: number, over: Record<
 });
 const PRODUCTS = [product('product-filter', 'Filter Change', 3999), product('product-pest', 'Pest Control', 2500), product('product-flea', 'Flea Treatment', 0)];
 const RULES = [
-  { id: 'rule-1', inspectionType: 'OCCUPIED' as const, service: null, productId: 'product-filter' },
-  { id: 'rule-2', inspectionType: null, service: 'pestControl' as const, productId: 'product-pest' },
-  { id: 'rule-3', inspectionType: null, service: 'fleaTreatment' as const, productId: 'product-flea' },
+  { id: 'rule-1', inspectionType: 'OCCUPIED' as const, service: null, productId: 'product-filter', largeFromSqFt: null, largeProductId: null },
+  { id: 'rule-2', inspectionType: null, service: 'pestControl' as const, productId: 'product-pest', largeFromSqFt: null, largeProductId: null },
+  { id: 'rule-3', inspectionType: null, service: 'fleaTreatment' as const, productId: 'product-flea', largeFromSqFt: null, largeProductId: null },
 ];
 const BASIS = { rules: RULES, products: PRODUCTS };
 

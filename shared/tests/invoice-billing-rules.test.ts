@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { billedLines, billingRuleProblem, billingRuleWhen, type BillingProduct, type NewBillingRule } from '../src/contracts/invoice-billing-rules.js';
+import { billedLines, billingRuleProblem, billingRuleSize, billingRuleWhen, type BillingProduct, type NewBillingRule } from '../src/contracts/invoice-billing-rules.js';
 
 /**
  * What a finished visit bills (2026-11-12): the office's rules, as THMP's six
@@ -80,5 +80,43 @@ describe('a rule, in words', () => {
   it('must be for some visits in particular', () => {
     expect(billingRuleProblem({ inspectionType: null, service: null })).toBe('Say which visits it is for: their type, a service done, or both.');
     expect(billingRuleProblem({ inspectionType: 'HVAC', service: null })).toBeNull();
+  });
+});
+
+/**
+ * From a size of property on, another product (2026-11-13): Crystal Creek
+ * Pest's books keep pest control on a house of 2,000 sq ft or more as an item
+ * of its own, at the same $39.00.
+ */
+describe('a rule that bills another product from a size of property on', () => {
+  const pest: BillingProduct[] = [
+    { id: 'small', name: 'Pest Control: House under 2,000 sq. ft', unitPriceCents: 3900, active: true, description: 'One time treatment, roaches, ants, spiders' },
+    { id: 'large', name: 'Pest Control: House over 2,000 sq ft', unitPriceCents: 3900, active: true, description: '  ' },
+  ];
+  const rule = { inspectionType: null, service: 'pestControl' as const, productId: 'small', largeFromSqFt: 2000, largeProductId: 'large' };
+  const visit = (areaSqFt: number | null) => ({ inspectionType: 'OCCUPIED', services: ['pestControl' as const], areaSqFt });
+
+  it('bills the larger one from its size on, the rule’s own below it or when the size is not known', () => {
+    expect(billedLines(visit(2887), [rule], pest).lineItems).toEqual([{ name: 'Pest Control: House over 2,000 sq ft', description: null, quantity: 1, unitPriceCents: 3900 }]);
+    expect(billedLines(visit(2000), [rule], pest).lineItems[0]!.name).toBe('Pest Control: House over 2,000 sq ft');
+    expect(billedLines(visit(1999), [rule], pest).lineItems).toEqual([
+      { name: 'Pest Control: House under 2,000 sq. ft', description: 'One time treatment, roaches, ants, spiders', quantity: 1, unitPriceCents: 3900 },
+    ]);
+    expect(billedLines(visit(null), [rule], pest).lineItems[0]!.name).toBe('Pest Control: House under 2,000 sq. ft');
+    expect(billedLines({ inspectionType: 'OCCUPIED', services: ['pestControl'] }, [rule], pest).lineItems[0]!.name).toBe('Pest Control: House under 2,000 sq. ft');
+  });
+
+  it('needs both the size and the other product, a size a house can have, and another product', () => {
+    expect(billingRuleProblem({ ...rule, largeProductId: null })).toBe('Give both the size and the product billed from it, or neither.');
+    expect(billingRuleProblem({ ...rule, largeFromSqFt: null })).toBe('Give both the size and the product billed from it, or neither.');
+    expect(billingRuleProblem({ ...rule, largeFromSqFt: 0 })).toBe('Give the size in whole square feet, from 1 to 100,000.');
+    expect(billingRuleProblem({ ...rule, largeFromSqFt: 2000.5 })).toBe('Give the size in whole square feet, from 1 to 100,000.');
+    expect(billingRuleProblem({ ...rule, largeProductId: 'small' })).toBe('Choose another product for the larger properties, or leave the size out.');
+    expect(billingRuleProblem(rule)).toBeNull();
+  });
+
+  it('says its size in words', () => {
+    expect(billingRuleSize(rule, pest)).toBe('from 2,000 sq ft: Pest Control: House over 2,000 sq ft');
+    expect(billingRuleSize({ largeFromSqFt: null, largeProductId: null }, pest)).toBeNull();
   });
 });
