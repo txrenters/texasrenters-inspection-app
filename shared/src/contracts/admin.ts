@@ -564,6 +564,11 @@ export interface AdminInspection {
   startedAt?: string | null;
   submittedAt?: string | null;
   /**
+   * Submitted with room videos still on their way from the phone (2026-11-14):
+   * review waits for them until this moment. Null when nothing is awaited.
+   */
+  lateVideosUntil?: string | null;
+  /**
    * The inspection itself, apart from the job's other tasks: its first
    * photograph or recording to its last, on the phone's own clock where the
    * phone gave one. Null before there are two moments to measure between.

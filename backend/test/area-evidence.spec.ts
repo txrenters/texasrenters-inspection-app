@@ -1106,3 +1106,59 @@ describe('how a re-run of the AI is reported', () => {
     ).toEqual({ status: 'COMPLETED', at: at(1).toISOString() });
   });
 });
+
+/**
+ * A room's video still on its way from the phone, or lost on it (2026-11-14):
+ * said as such, not counted as a recording, and not read as "Analysing" with a
+ * Play button over nothing.
+ */
+describe('a room whose video is still arriving', () => {
+  const video = (over: Record<string, unknown>) => ({
+    inspectionAreaId: 'a1',
+    recordingType: 'PRIMARY_AREA',
+    processingStatus: 'PENDING',
+    uploadStatus: 'SESSION_CREATED',
+    readyAt: null,
+    failureCode: null,
+    createdAt: new Date('2026-11-14T15:00:00Z'),
+    ...over,
+  });
+  async function summaryWith(media: unknown[], lateVideosUntil: Date | null = null) {
+    const prisma = summaryPrisma({
+      inspection: { findFirst: jest.fn().mockResolvedValue({ id: INSPECTION, inspectionType: 'MOVE_OUT', lateVideosUntil }) },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue(media) },
+    });
+    return service(prisma).summary(user, INSPECTION);
+  }
+
+  it('reads Video arriving, with nothing counted as a recording yet', async () => {
+    const until = new Date('2026-11-15T15:00:00Z');
+    const summary = await summaryWith([video({})], until);
+    expect(summary.areas[0]).toMatchObject({
+      reviewStatus: 'VIDEO_ARRIVING',
+      counts: { recordings: 0 },
+      evidence: { primaryRecordingAvailable: false },
+    });
+    expect(summary.totals).toMatchObject({ recordings: 0, videosArriving: 1, videosNeverArrived: 0 });
+    expect(summary.lateVideosUntil).toBe(until.toISOString());
+  });
+
+  it('reads Video never arrived once the wait gave up on it', async () => {
+    const summary = await summaryWith([video({ processingStatus: 'FAILED', failureCode: 'VIDEO_NEVER_ARRIVED' })]);
+    expect(summary.areas[0].reviewStatus).toBe('VIDEO_NEVER_ARRIVED');
+    expect(summary.totals).toMatchObject({ videosArriving: 0, videosNeverArrived: 1 });
+  });
+
+  it('is read by the video that is here, not a retake still on its way', async () => {
+    const summary = await summaryWith([
+      video({ processingStatus: 'READY', uploadStatus: 'UPLOADED', readyAt: new Date() }),
+      video({}),
+    ]);
+    expect(summary.areas[0]).toMatchObject({ reviewStatus: 'EVIDENCE_READY', counts: { recordings: 1 } });
+  });
+
+  it('counts a video that has landed and is being analysed as Analysing, as before', async () => {
+    const summary = await summaryWith([video({ processingStatus: 'PROCESSING', uploadStatus: 'UPLOADED' })]);
+    expect(summary.areas[0].reviewStatus).toBe('ANALYSIS_PROCESSING');
+  });
+});

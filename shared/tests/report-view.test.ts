@@ -524,3 +524,25 @@ describe('the report’s type', () => {
     expect(REPORT_TYPE.bodyPt).toBe(12);
   });
 });
+
+/**
+ * A walked room whose video is still on its way from the phone, or never came
+ * (2026-11-14): printed as such, not as "Not inspected", and not counted as
+ * inspected until its video is here.
+ */
+describe('a room whose video is away', () => {
+  it('prints where its video is', () => {
+    const view = buildReportView(
+      report({
+        rooms: [
+          { ...ROOM, completionStatus: 'VIDEO_ARRIVING' },
+          { ...ROOM, id: 'area-2', name: 'Garage', completionStatus: 'VIDEO_NEVER_ARRIVED' },
+        ],
+      }),
+    );
+    expect(view.rooms.map((room) => [room.statusLabel, room.inspected])).toEqual([
+      ['Video still arriving', false],
+      ['Video never arrived', false],
+    ]);
+  });
+});

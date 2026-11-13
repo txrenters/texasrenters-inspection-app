@@ -8,6 +8,7 @@ import {
   InspectionAreaCompletionStatus,
   ReportShareKind,
   TranscriptionStatus,
+  VideoRecordingType,
 } from '@prisma/client';
 import {
   checklistKindFor,
@@ -33,6 +34,7 @@ import { REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MailService } from '../mail/mail.service';
 import { ComparisonReportService } from './comparison-report.service';
+import { PRIMARY_VIDEO_STATE, reportRoomStatus } from './report-room-status';
 import { ComparisonService } from './comparison.service';
 
 const SHARE_LIFETIME_DAYS = 30;
@@ -726,6 +728,14 @@ export class ReportShareService {
       inspectedAreas(inspection.inspectionType, inspection.areas),
       (area) => area.propertyArea.name,
     );
+    // Each room's own video, to say where one still on its way, or lost on it,
+    // is (2026-11-14). Apart from the area read: that one reads the room's
+    // transcribed recordings only.
+    const primaryVideos = await this.prisma.inspectionMedia.findMany({
+      where: { inspectionId, recordingType: VideoRecordingType.PRIMARY_AREA },
+      select: { inspectionAreaId: true, ...PRIMARY_VIDEO_STATE.select },
+    });
+    const videosOf = (areaId: string) => primaryVideos.filter((video) => video.inspectionAreaId === areaId);
     // Findings carry the catalog area id; rooms are per-inspection areas. Map
     // one to the other so the view model can group without guessing by name.
     const roomIdByPropertyArea = new Map(areas.map((area) => [area.propertyAreaId, area.id]));
@@ -802,7 +812,7 @@ export class ReportShareService {
         id: area.id,
         name: area.propertyArea.name,
         floorName: area.propertyArea.floor?.name ?? null,
-        completionStatus: area.completionStatus,
+        completionStatus: reportRoomStatus(area.completionStatus, videosOf(area.id)),
         skipReason: area.skipReason,
         completedAt: area.completedAt,
         // Nulls are carried through rather than coerced: the report prints an

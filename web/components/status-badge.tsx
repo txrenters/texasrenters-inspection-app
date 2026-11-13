@@ -74,6 +74,8 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   ANALYSIS_PROCESSING: { label: 'Analysing', tone: 'default', glyph: 'processing' },
   FINDINGS_NEED_REVIEW: { label: 'Findings need review', tone: 'warning', glyph: 'warning' },
   REVIEWED: { label: 'Reviewed', tone: 'success', glyph: 'success' },
+  VIDEO_ARRIVING: { label: 'Video arriving', tone: 'default', glyph: 'processing' },
+  VIDEO_NEVER_ARRIVED: { label: 'Video never arrived', tone: 'warning', glyph: 'warning' },
 
   // Media
   PENDING: { label: 'Pending', tone: 'muted', glyph: 'pending' },
@@ -83,6 +85,10 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   FAILED: { label: 'Failed', tone: 'destructive', glyph: 'destructive' },
   // The recording plays; only the AI's transcript and suggestions are missing.
   ANALYSIS_FAILED: { label: 'Analysis failed', tone: 'warning', glyph: 'warning' },
+  // Its upload was opened and has not landed, or the wait for it ran out
+  // (2026-11-14): there is nothing to play yet.
+  ARRIVING: { label: 'Still arriving', tone: 'default', glyph: 'processing' },
+  NEVER_ARRIVED: { label: 'Never arrived', tone: 'warning', glyph: 'warning' },
 
   // Review decisions. Findings and estimates are deliberately separate axes —
   // a valid finding may still have an unapproved amount.

@@ -80,6 +80,9 @@ const ROOM_STATUS_LABEL: Record<string, string> = {
   IN_PROGRESS: 'Partly inspected',
   SKIPPED: 'Skipped',
   BLOCKED: 'Could not access',
+  // Walked, its video still on its way from the phone or lost on it (2026-11-14).
+  VIDEO_ARRIVING: 'Video still arriving',
+  VIDEO_NEVER_ARRIVED: 'Video never arrived',
 };
 
 /** Plain-language readings of the AI comparison verdicts. */

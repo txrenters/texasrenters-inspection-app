@@ -32,6 +32,7 @@ import { inspectedAreas } from '../common/inspected-areas';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { STREAM_ENCODING_FAILED } from '../media/inspection-video.service';
+import { VIDEO_NEVER_ARRIVED } from '../technician/media-processing.service';
 import { isAiFiled } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import {
@@ -92,10 +93,39 @@ export function reanalysisState(
  * Read as one, three move-out walkthroughs on 2026-10-01 showed Failed on a
  * room marked Failed, though Cloudflare held every one of them ready to play.
  */
-function recordingState(row: { processingStatus: string; failureCode: string | null }) {
+function recordingState(row: MediaState) {
+  // Not a failure of the recording but of its journey (2026-11-14): one still
+  // on its way from the phone, or one the wait gave up on.
+  if (row.failureCode === VIDEO_NEVER_ARRIVED) return 'NEVER_ARRIVED';
+  if (videoStillArriving(row)) return 'ARRIVING';
   if (row.processingStatus !== 'FAILED') return row.processingStatus;
   return row.failureCode === STREAM_ENCODING_FAILED ? 'FAILED' : 'ANALYSIS_FAILED';
 }
+
+/** What decides a recording's state: its processing, its failure, and whether it is here. */
+interface MediaState {
+  processingStatus: string;
+  failureCode: string | null;
+  uploadStatus: string;
+  readyAt: Date | null;
+}
+
+/**
+ * A recording whose upload was opened and has not landed (2026-11-14): not yet
+ * a video anyone can watch, or one the AI has started on. Kept apart from
+ * "Analysing", which it used to read as, with a Play button and nothing to play.
+ */
+function videoStillArriving(row: MediaState) {
+  return (
+    row.processingStatus === 'PENDING' &&
+    row.uploadStatus !== 'UPLOADED' &&
+    !row.readyAt &&
+    row.failureCode !== VIDEO_NEVER_ARRIVED
+  );
+}
+
+/** A recording that is here: arrived, whatever has become of its analysis. */
+const videoHere = (row: MediaState) => !videoStillArriving(row) && row.failureCode !== VIDEO_NEVER_ARRIVED;
 
 /** The latest of some moments, or null when there are none. */
 function latest(moments: (Date | null | undefined)[]): Date | null {
@@ -298,6 +328,10 @@ export class AreaEvidenceService {
     hasPrimaryRecording: boolean;
     processingFailed: boolean;
     processingPending: boolean;
+    /** Its walkthrough is still on its way from the phone, and none is here yet (2026-11-14). */
+    videoArriving: boolean;
+    /** Its walkthrough never arrived, and none is here. */
+    videoNeverArrived: boolean;
     findings: number;
     unreviewedFindings: number;
     followUpFindings: number;
@@ -306,6 +340,8 @@ export class AreaEvidenceService {
   }): AreaReviewStatus {
     if (input.processingFailed) return 'FAILED';
     if (input.completionStatus === 'FAILED') return 'FAILED';
+    // Nothing to review yet, whatever was marked: the video is still coming.
+    if (input.videoArriving) return 'VIDEO_ARRIVING';
     // A reviewer's mark settles the area -- a skip they accepted, photographs
     // without a walkthrough they judged enough, an area with nothing wrong in
     // it -- but never over work still open: a finding awaiting a decision, a
@@ -322,6 +358,10 @@ export class AreaEvidenceService {
     // by definition, so every downstream rule would report it as incomplete and
     // bury the fact that skipping was a decision with a reason attached.
     if (input.completionStatus === 'SKIPPED') return 'SKIPPED';
+    // Said plainly rather than as "not started" or "incomplete": the room was
+    // walked, and its video was lost on the way. A reviewer's mark above can
+    // still settle it, on the photographs.
+    if (input.videoNeverArrived) return 'VIDEO_NEVER_ARRIVED';
     if (!input.recordings && !input.photos) return 'NOT_STARTED';
     if (input.followUpFindings) return 'FOLLOW_UP_REQUIRED';
     if (input.processingPending) return 'ANALYSIS_PROCESSING';
@@ -399,7 +439,10 @@ export class AreaEvidenceService {
           photos: 0,
           findings: 0,
           unreviewedFindings: 0,
+          videosArriving: 0,
+          videosNeverArrived: 0,
         },
+        lateVideosUntil: inspection.lateVideosUntil?.toISOString() ?? null,
         areas: [],
         unassigned: { recordings: 0, photos: 0 },
       };
@@ -426,6 +469,9 @@ export class AreaEvidenceService {
             processingStatus: true,
             // Which failure a FAILED is; see `recordingState`.
             failureCode: true,
+            // Whether it is here at all (2026-11-14); see `videoStillArriving`.
+            uploadStatus: true,
+            readyAt: true,
             createdAt: true,
           },
         }),
@@ -493,7 +539,18 @@ export class AreaEvidenceService {
     const summaryAreas = new Set(summaryFindings.map((row) => row.propertyAreaId));
     const itemsById = new Map(checklistItems.map((item) => [item.id, item]));
     const items = areas.map((area) => {
-      const areaMedia = media.filter((row) => row.inspectionAreaId === area.id);
+      const areaVideos = media.filter((row) => row.inspectionAreaId === area.id);
+      // Only what is here counts as a recording; one still on its way, or lost
+      // on it, is said as such (2026-11-14).
+      const areaMedia = areaVideos.filter(videoHere);
+      const hasPrimary = areaMedia.some((row) => row.recordingType === VideoRecordingType.PRIMARY_AREA);
+      const primaryAway = (lost: boolean) =>
+        !hasPrimary &&
+        areaVideos.some(
+          (row) =>
+            row.recordingType === VideoRecordingType.PRIMARY_AREA &&
+            (lost ? row.failureCode === VIDEO_NEVER_ARRIVED : videoStillArriving(row)),
+        );
       const areaPhotos = photoGroups.filter((row) => row.inspectionAreaId === area.id);
       const areaFindings = findingGroups.filter(
         (row) => row.propertyAreaId === area.propertyArea.id,
@@ -565,9 +622,9 @@ export class AreaEvidenceService {
           requiresRecording,
           recordings: areaMedia.length,
           photos,
-          hasPrimaryRecording: areaMedia.some(
-            (row) => row.recordingType === VideoRecordingType.PRIMARY_AREA,
-          ),
+          hasPrimaryRecording: hasPrimary,
+          videoArriving: primaryAway(false),
+          videoNeverArrived: primaryAway(true),
           processingFailed: areaMedia.some((row) => recordingState(row) === 'FAILED'),
           processingPending: areaMedia.some(
             (row) => row.processingStatus === 'PENDING' || row.processingStatus === 'PROCESSING',
@@ -580,9 +637,7 @@ export class AreaEvidenceService {
         review,
         counts: { recordings: areaMedia.length, photos, findings, unreviewedFindings },
         evidence: {
-          primaryRecordingAvailable: areaMedia.some(
-            (row) => row.recordingType === VideoRecordingType.PRIMARY_AREA,
-          ),
+          primaryRecordingAvailable: hasPrimary,
           overviewPhotoAvailable: areaPhotos.some(
             (row) => row.captureType === PhotoCaptureType.AREA_OVERVIEW && row._count._all > 0,
           ),
@@ -607,7 +662,10 @@ export class AreaEvidenceService {
           (total, area) => total + area.counts.unreviewedFindings,
           0,
         ),
+        videosArriving: media.filter(videoStillArriving).length,
+        videosNeverArrived: media.filter((row) => row.failureCode === VIDEO_NEVER_ARRIVED).length,
       },
+      lateVideosUntil: inspection.lateVideosUntil?.toISOString() ?? null,
       areas: items,
       // Both relations are NOT NULL today, so this is a guard rather than a
       // migration path: evidence must never disappear from the screen because
@@ -680,6 +738,7 @@ export class AreaEvidenceService {
           processingStatus: true,
           // Which failure a FAILED is; see `recordingState`.
           failureCode: true,
+          readyAt: true,
           createdAt: true,
           // Where the technician tapped the shutter during the walkthrough.
           // Android cannot photograph while recording, so the shutter stores a
@@ -954,13 +1013,22 @@ export class AreaEvidenceService {
           completionStatus: area.completionStatus,
           isRequired: area.propertyArea.isRequired,
           requiresRecording: inspectionRequiresAreaRecording(inspection.inspectionType),
-          recordings: recordings.length,
+          // As the summary reads it (2026-11-14): only what is here is a recording.
+          recordings: recordings.filter(videoHere).length,
           photos: photos.length,
           hasPrimaryRecording: recordings.some(
-            (row) => row.recordingType === VideoRecordingType.PRIMARY_AREA,
+            (row) => videoHere(row) && row.recordingType === VideoRecordingType.PRIMARY_AREA,
           ),
+          videoArriving:
+            !recordings.some((row) => videoHere(row) && row.recordingType === VideoRecordingType.PRIMARY_AREA) &&
+            recordings.some((row) => row.recordingType === VideoRecordingType.PRIMARY_AREA && videoStillArriving(row)),
+          videoNeverArrived:
+            !recordings.some((row) => videoHere(row) && row.recordingType === VideoRecordingType.PRIMARY_AREA) &&
+            recordings.some(
+              (row) => row.recordingType === VideoRecordingType.PRIMARY_AREA && row.failureCode === VIDEO_NEVER_ARRIVED,
+            ),
           processingFailed: recordings.some((row) => recordingState(row) === 'FAILED'),
-          processingPending: recordings.some(
+          processingPending: recordings.filter(videoHere).some(
             (row) => row.processingStatus === 'PENDING' || row.processingStatus === 'PROCESSING',
           ),
           findings: findings.length,
@@ -1256,7 +1324,7 @@ export class AreaEvidenceService {
       // carries both item sets once it is marked as having a unit, and the
       // reviewer must be shown the one the technician was actually asked.
       // `finalizedAt` because a finalized inspection's checklist is frozen.
-      select: { id: true, inspectionType: true, finalizedAt: true },
+      select: { id: true, inspectionType: true, finalizedAt: true, lateVideosUntil: true },
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');

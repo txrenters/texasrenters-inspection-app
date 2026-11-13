@@ -53,7 +53,19 @@ export type AreaReviewStatus =
   /** A reviewer asked for re-inspection of something in this area. */
   | 'FOLLOW_UP_REQUIRED'
   /** Media processing failed; the evidence cannot be analysed as it stands. */
-  | 'FAILED';
+  | 'FAILED'
+  /**
+   * The area's video is still on its way from the technician's phone
+   * (2026-11-14): its upload was opened and has not landed. A move-in or
+   * move-out may be submitted with videos still sending; review waits for them.
+   */
+  | 'VIDEO_ARRIVING'
+  /**
+   * The area's video never reached the server: the inspection's wait for it ran
+   * out and it went to review without it (2026-11-14). It is still taken should
+   * the phone send it after all.
+   */
+  | 'VIDEO_NEVER_ARRIVED';
 
 export interface AreaEvidenceCounts {
   recordings: number;
@@ -128,7 +140,20 @@ export interface AreaEvidenceSummaryItem {
 
 export interface AreaEvidenceSummary {
   inspectionId: string;
-  totals: AreaEvidenceCounts & { areas: number; areasReviewed: number };
+  totals: AreaEvidenceCounts & {
+    areas: number;
+    areasReviewed: number;
+    /** Videos still on their way from the technician's phone (2026-11-14). Absent from an older server. */
+    videosArriving?: number;
+    /** Videos given up on when the wait for them ran out. */
+    videosNeverArrived?: number;
+  };
+  /**
+   * Submitted with videos still sending: review waits for them until this
+   * moment, then goes ahead without those that never arrived. Null when
+   * nothing is awaited.
+   */
+  lateVideosUntil?: string | null;
   areas: AreaEvidenceSummaryItem[];
   /**
    * Media whose area link is missing. The schema requires an area on every

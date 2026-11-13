@@ -128,6 +128,9 @@ const ROOM_STATUS: Record<string, string> = {
   RECORDING: 'Not inspected',
   FAILED: 'Not inspected',
   SKIPPED: 'Skipped',
+  // Walked, its video still on its way from the phone or lost on it (2026-11-14).
+  VIDEO_ARRIVING: 'Video still arriving',
+  VIDEO_NEVER_ARRIVED: 'Video never arrived',
 };
 
 const SEVERITY: Record<string, { label: string; tone: ComparisonToneName }> = {

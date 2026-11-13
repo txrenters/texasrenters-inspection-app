@@ -1617,6 +1617,8 @@ export class AdminService {
       },
       priority: true,
       scheduledAt: true,
+      // Submitted with videos still on their way from the phone (2026-11-14).
+      lateVideosUntil: true,
       // What says which quarter of the programme a visit belongs to.
       jobberVisitTitle: true,
       // Jobber's number for the job, as the office calls it (2026-11-06).

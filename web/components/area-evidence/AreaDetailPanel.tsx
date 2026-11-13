@@ -146,7 +146,20 @@ function RecordingCard({
       </header>
       {reanalyze ? <ReanalyzeStatus recording={recording} /> : null}
 
-      {active ? (
+      {notHereYet(recording) ? (
+        // Nothing to play (2026-11-14): said, rather than a Play button over an
+        // empty player.
+        <p
+          className={cn(
+            'bg-muted text-muted-foreground grid place-content-center rounded-lg px-4 text-center text-sm',
+            recordingFrame(portrait),
+          )}
+        >
+          {recording.processingStatus === 'NEVER_ARRIVED'
+            ? 'This video never arrived from the technician’s phone. It is added if the phone sends it later.'
+            : 'This video is still on its way from the technician’s phone.'}
+        </p>
+      ) : active ? (
         <div className="relative">
           <RecordingSurface
             autoplay={startSeconds != null}
@@ -249,7 +262,12 @@ function RecordingCard({
  * answers the same cases; this only keeps the button off them.
  */
 function canDownload(recording: AreaRecording) {
-  return recording.processingStatus !== 'PENDING' && recording.processingStatus !== 'FAILED';
+  return recording.processingStatus !== 'PENDING' && recording.processingStatus !== 'FAILED' && !notHereYet(recording);
+}
+
+/** Still on its way from the phone, or given up on: nothing to play or save (2026-11-14). */
+function notHereYet(recording: AreaRecording) {
+  return recording.processingStatus === 'ARRIVING' || recording.processingStatus === 'NEVER_ARRIVED';
 }
 
 /** Filmed upright, by Cloudflare's measure. Unknown sizes are treated as landscape. */

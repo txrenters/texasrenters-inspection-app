@@ -32,6 +32,8 @@ describe('inspection report shares', () => {
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1' }) },
       $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
     };
@@ -56,6 +58,8 @@ describe('inspection report shares', () => {
 
   it('rejects share creation for inspections outside the organization', async () => {
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspection: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     };
@@ -80,6 +84,8 @@ describe('inspection report shares', () => {
       revokedAt: null,
     };
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionReportShare: {
         findUnique: jest.fn().mockResolvedValueOnce(revoked).mockResolvedValueOnce(expired),
       },
@@ -98,6 +104,8 @@ describe('inspection report shares', () => {
 
   it('builds the public report from approved findings only, without internal fields', async () => {
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionReportShare: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionId: 'inspection-1',
@@ -321,6 +329,8 @@ describe('inspection report shares', () => {
     });
     const reportWith = async (media: unknown[]) => {
       const prisma = {
+        // Each room's own video, for where one still arriving is (2026-11-14).
+        inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
         inspectionReportShare: {
           findUnique: jest.fn().mockResolvedValue({
             inspectionId: 'inspection-1',
@@ -365,6 +375,8 @@ describe('inspection report shares', () => {
 
   it('withholds only the photos of a finding nobody approved', async () => {
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionReportShare: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionId: 'inspection-1',
@@ -415,6 +427,8 @@ describe('inspection report shares', () => {
 
   it('scopes shared photo reads to the share inspection and re-applies the visibility rule', async () => {
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionReportShare: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionId: 'inspection-1',
@@ -451,6 +465,8 @@ describe('inspection report shares', () => {
 
   it('refuses a photo that belongs to another inspection', async () => {
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionReportShare: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionId: 'inspection-1',
@@ -484,6 +500,8 @@ describe('inspection report shares', () => {
       createdAt: new Date(),
     };
     const prisma = {
+      // Each room's own video, for where one still arriving is (2026-11-14).
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionReportShare: { findFirst: jest.fn().mockResolvedValue(share) },
       $transaction: jest.fn(),
     };
