@@ -4,6 +4,7 @@ import {
   looseAddressKey,
   matchBuildingWithFallback,
   normalizeAddressKey,
+  sameStreetLine,
 } from '../src/integrations/jobber/jobber.address';
 
 /**
@@ -134,5 +135,29 @@ describe('what the looser key must never do', () => {
       looseAddressKey('77 Elm St', '77004'),
     );
     expect(result).toEqual({ outcome: 'AMBIGUOUS', buildingIds: ['a', 'b'] });
+  });
+});
+
+/**
+ * A Xero invoice's Reference against the address of the visit found on its
+ * day (2026-11-13): the same house, written either way, and nothing that is
+ * not an address.
+ */
+describe('the same street line, with no ZIP', () => {
+  it('matches the same house however the street is written', () => {
+    expect(sameStreetLine('10339 Solitude Way', '10339 Solitude Way')).toBe(true);
+    expect(sameStreetLine('19334 N Cottonwood Green Lane', '19334 N Cottonwood Green Ln')).toBe(true);
+    expect(sameStreetLine('2318 Madeup Ridge', '2318 Madeup Ridge Ln')).toBe(true);
+    expect(sameStreetLine('1508B Creekside Ln', '1508B Creekside Ln, Nacogdoches, Texas 75964')).toBe(true);
+    expect(sameStreetLine('5200 Weslayan Street Unit #A201', '5200 Weslayan St Unit A201')).toBe(true);
+  });
+
+  it('refuses another house, another unit, and anything that is not an address', () => {
+    expect(sameStreetLine('10339 Solitude Way', '10341 Solitude Way')).toBe(false);
+    expect(sameStreetLine('10 Example Way', '10 Other Street')).toBe(false);
+    expect(sameStreetLine('5200 Weslayan Street Unit #A201', '5200 Weslayan Street Unit #A202')).toBe(false);
+    expect(sameStreetLine('WO#44511', 'WO#44511')).toBe(false);
+    expect(sameStreetLine('Invoice 8735', 'Invoice 8735')).toBe(false);
+    expect(sameStreetLine('', null)).toBe(false);
   });
 });

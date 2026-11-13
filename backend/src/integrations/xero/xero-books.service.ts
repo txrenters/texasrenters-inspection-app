@@ -5,7 +5,7 @@ import { InvoiceOrigin, InvoicePaymentMethod, InvoiceStatus, JobberLinkStatus, t
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
-import { buildAddressIndex, matchBuilding, normalizeAddressKey } from '../jobber/jobber.address';
+import { buildAddressIndex, matchBuilding, normalizeAddressKey, sameStreetLine } from '../jobber/jobber.address';
 import { XeroAuthService } from './xero-auth.service';
 import {
   agreesWithCopy,
@@ -34,6 +34,8 @@ export const MAX_BOOKS_CALLS_PER_RUN = 6;
 export const MANUAL_BOOKS_CALLS = 2;
 /** The calls a day the read leaves to sending, projects and the month check, under the console's ceiling. */
 export const CALLS_KEPT_FOR_SENDING = 100;
+/** Invoices and visits a run weighs for each other, newest first (2026-11-13); those placed drop out by the next. */
+const MAX_VISIT_CANDIDATES = 2000;
 /** A run's claim on the organisation -- the sender's own -- so a read and a send never overlap. */
 const CLAIM_MS = 15 * 60_000;
 /** Between one "Read now" and the next. */
@@ -55,7 +57,8 @@ const updatedOf = (entry: unknown) =>
     : null;
 
 export interface XeroBooksRunResult {
-  invoices: { made: number; updated: number; unchanged: number; unreadable: number; unplaced: number };
+  /** `onVisits`: the office's invoices put on the visit they bill by its day and address (2026-11-13). */
+  invoices: { made: number; updated: number; unchanged: number; unreadable: number; unplaced: number; onVisits: number };
   payments: { made: number; updated: number; removed: number; unplaced: number };
   /** Calls to Xero this run made. */
   calls: number;
@@ -71,6 +74,16 @@ interface Place {
   jobberCopyId: string | null;
 }
 
+/** An invoice on no visit and a visit on its day at the house its Reference starts with. */
+interface VisitOnItsDay {
+  invoiceId: string;
+  subject: string;
+  visitId: string;
+  buildingId: string;
+  buildingLine: string | null;
+  unitLine: string | null;
+}
+
 /** What one run keeps between pages. */
 interface RunContext {
   /** The office's buildings by address, built once, when an invoice first needs it. */
@@ -82,7 +95,7 @@ interface RunContext {
 }
 
 const emptyResult = (): XeroBooksRunResult => ({
-  invoices: { made: 0, updated: 0, unchanged: 0, unreadable: 0, unplaced: 0 },
+  invoices: { made: 0, updated: 0, unchanged: 0, unreadable: 0, unplaced: 0, onVisits: 0 },
   payments: { made: 0, updated: 0, removed: 0, unplaced: 0 },
   calls: 0,
   caughtUp: false,
@@ -103,7 +116,9 @@ const emptyResult = (): XeroBooksRunResult => ({
  * Xero wins. Its invoice is kept as a row of its own (origin XERO), put on the
  * visit and property it is for when the console can tell: the console's own
  * invoice it is, the Jobber invoice the console sent as it, a Jobber invoice
- * under the same number in that company, its contact, its address. Nothing is
+ * under the same number in that company, its contact, its address -- and on
+ * no visit still, the visit on its day at the address its Reference names
+ * (2026-11-13). Nothing is
  * written onto Jobber's copies, and nothing is written to Xero. The rows stay
  * out of the invoice pages until they show Xero's books (PR 3).
  */
@@ -270,6 +285,7 @@ export class XeroBooksService {
         payments = next.cursor;
         if (next.done) break;
       }
+      result.invoices.onVisits = await this.onTheirVisits(organizationId, tenantId);
       await this.learnContacts(organizationId, tenantId, context.touched);
     } catch (error) {
       result.problem = error instanceof XeroError ? error.message : 'The read stopped on an unexpected error.';
@@ -292,7 +308,7 @@ export class XeroBooksService {
     }
 
     const { invoices: read, payments: paid } = result;
-    if (options.manual || read.made || read.updated || paid.made || paid.updated || paid.removed || (readAt && !settings.booksReadAt))
+    if (options.manual || read.made || read.updated || read.onVisits || paid.made || paid.updated || paid.removed || (readAt && !settings.booksReadAt))
       await this.prisma.auditLog.create({
         data: {
           organizationId,
@@ -701,6 +717,71 @@ export class XeroBooksService {
       });
       result.payments.made++;
     }
+  }
+
+  /**
+   * The office's invoices in Xero put on the visit they bill (2026-11-13).
+   *
+   * Since the console took invoicing over from Jobber (2026-11-12) it reads no
+   * Jobber invoice, so one the office still makes from a job -- Zapier's draft,
+   * approved in Xero -- has no Jobber copy to tell its visit, and Crystal Creek
+   * Pest's never had one. Each tells it all the same: it is dated the day of
+   * the visit, and its Reference is the property's address. A work order's
+   * Reference is "WO#…", and it stays where it is.
+   *
+   * So an invoice on no visit goes on the one visit, not cancelled, on its day
+   * at the address its Reference names -- and on that property, when it was on
+   * none -- if the company has no invoice on that visit yet and no other
+   * invoice would go there. Anything less sure stays as it is. Every run, so a
+   * visit booked or an invoice changed later is found then; only the console's
+   * rows change, and nothing is asked of Xero.
+   */
+  private async onTheirVisits(organizationId: string, tenantId: string): Promise<number> {
+    const [, found] = await this.prisma.$transaction([
+      // Raw SQL does not pass through the client's tenant scope: set it here, as it does.
+      this.prisma.$executeRaw`select set_config('app.organization_id', ${organizationId}, true)`,
+      this.prisma.$queryRaw<VisitOnItsDay[]>`
+        SELECT i."id"::text AS "invoiceId", i."subject", v."id"::text AS "visitId", v."propertywareBuildingId"::text AS "buildingId",
+               b."addressLine1" AS "buildingLine", u."addressLine1" AS "unitLine"
+          FROM "Invoice" i
+          JOIN "Inspection" v ON v."organizationId" = i."organizationId" AND v."scheduledAt" = i."issuedOn"
+          JOIN propertyware_buildings b ON b."id" = v."propertywareBuildingId"
+          LEFT JOIN propertyware_units u ON u."id" = v."propertywareUnitId"
+         WHERE i."organizationId" = ${organizationId}::uuid
+           AND i."xeroTenantId" = ${tenantId}
+           AND i."origin" = 'XERO'
+           AND i."inspectionId" IS NULL
+           AND i."status" <> 'VOIDED'
+           AND v."status" <> 'CANCELLED'
+           AND (i."propertywareBuildingId" IS NULL OR i."propertywareBuildingId" = v."propertywareBuildingId")
+           -- The Reference starts with the visit's house number; the rest of the street is compared after.
+           AND btrim(i."subject") ~ '^[0-9]'
+           AND lower(split_part(btrim(i."subject"), ' ', 1)) IN (lower(split_part(btrim(b."addressLine1"), ' ', 1)), lower(split_part(btrim(u."addressLine1"), ' ', 1)))
+           AND NOT EXISTS (SELECT 1 FROM "Invoice" o WHERE o."inspectionId" = v."id" AND o."xeroTenantId" = ${tenantId} AND o."status" <> 'VOIDED')
+         ORDER BY i."issuedOn" DESC
+         LIMIT ${MAX_VISIT_CANDIDATES}`,
+    ]);
+    const visitsOf = new Map<string, Set<string>>();
+    const invoicesOn = new Map<string, Set<string>>();
+    const buildingOf = new Map<string, string>();
+    for (const pair of found as VisitOnItsDay[]) {
+      if (!sameStreetLine(pair.subject, pair.unitLine) && !sameStreetLine(pair.subject, pair.buildingLine)) continue;
+      visitsOf.set(pair.invoiceId, (visitsOf.get(pair.invoiceId) ?? new Set()).add(pair.visitId));
+      invoicesOn.set(pair.visitId, (invoicesOn.get(pair.visitId) ?? new Set()).add(pair.invoiceId));
+      buildingOf.set(pair.visitId, pair.buildingId);
+    }
+    let put = 0;
+    for (const [invoiceId, visits] of visitsOf) {
+      const [visitId] = [...visits];
+      // Two visits there that day, or two invoices for the one: the office tells which.
+      if (visits.size !== 1 || invoicesOn.get(visitId!)?.size !== 1) continue;
+      const { count } = await this.prisma.invoice.updateMany({
+        where: { id: invoiceId, organizationId, origin: InvoiceOrigin.XERO, inspectionId: null },
+        data: { inspectionId: visitId!, propertywareBuildingId: buildingOf.get(visitId!)! },
+      });
+      put += count;
+    }
+    return put;
   }
 
   /**
