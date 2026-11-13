@@ -13,7 +13,9 @@ import {
   InspectionStatus,
   InspectionType,
   MediaProcessingStatus,
+  MediaUploadStatus,
   PhotoCaptureType,
+  type Prisma,
   TranscriptionStatus,
 } from '@prisma/client';
 import { findingRestatesChecklist } from '@texasrenters/shared';
@@ -43,6 +45,7 @@ import { removeOrphanedAiFrames } from './ai-filed-frames';
 import { houseRulesLines } from './house-rules';
 import { ROOM_SUMMARY_TITLE, ROOM_SUMMARY_WHERE } from './room-summary';
 import { VisualReviewService } from './visual-review.service';
+import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { ChecklistPrefillService } from './checklist-prefill.service';
 import { RecordingSummaryService } from './recording-summary.service';
 
@@ -189,6 +192,34 @@ export const PROCESSING_STARTED_EVENT = 'PROCESSING_STARTED';
  * starts, because a run the restart cut short leaves no failure behind).
  */
 export const MAX_ANALYSIS_ATTEMPTS = 3;
+
+/**
+ * A room video the technician's phone never finished sending, given up on once
+ * the inspection's wait for it ran out (2026-11-14). Taken again should it turn
+ * up later; see `InspectionVideoService.settleOverdueLateVideos`.
+ */
+export const VIDEO_NEVER_ARRIVED = 'VIDEO_NEVER_ARRIVED';
+
+/** How long a submitted inspection waits for videos its phone was still sending (the office, 2026-11-14). */
+export const LATE_VIDEO_WAIT_MS = 24 * 60 * 60_000;
+
+/**
+ * A recording whose bytes have not reached the server: no upload confirmed, not
+ * encoded, and nothing started on it. What a submitted inspection is still
+ * waiting for from the phone.
+ */
+export const undeliveredVideoWhere = {
+  uploadStatus: { not: MediaUploadStatus.UPLOADED },
+  readyAt: null,
+  processingStatus: MediaProcessingStatus.PENDING,
+} satisfies Prisma.InspectionMediaWhereInput;
+
+/** Where the office has taken a submitted inspection on by hand, past where the pipeline moves it. */
+const REVIEW_STATUSES_BY_HAND: InspectionStatus[] = [
+  InspectionStatus.UNDER_REVIEW,
+  InspectionStatus.TBD,
+  InspectionStatus.FOLLOW_UP_REQUIRED,
+];
 
 /** Recordings a restart picks up again at most. */
 const RECOVERED_PER_RESTART = 25;
@@ -365,6 +396,10 @@ export class MediaProcessingService implements OnModuleInit {
     @Optional()
     @Inject(RecordingSummaryService)
     private readonly recordingSummary?: RecordingSummaryService,
+    // The office told once a submitted inspection's late videos are settled.
+    @Optional()
+    @Inject(TechnicianEventsGateway)
+    private readonly events?: TechnicianEventsGateway,
   ) {}
 
   /**
@@ -497,6 +532,8 @@ export class MediaProcessingService implements OnModuleInit {
         mimeType: true,
         durationSeconds: true,
         processingStatus: true,
+        // Whether Cloudflare encoded it, which decides if a failed run is tried again.
+        readyAt: true,
         // Needed to cut technician-marked frames out of the video below.
         captureSummary: true,
         // And to say when each of those frames was: the take's end, less its
@@ -566,7 +603,9 @@ export class MediaProcessingService implements OnModuleInit {
           where: { id: media.id },
           data: { processingStatus: MediaProcessingStatus.READY },
         });
-        await this.advanceInspection(media.inspectionId);
+        // Never throws: the recording is processed whatever happens next, and
+        // this catch would otherwise call it failed.
+        await this.afterVideoProcessed(organizationId, media.inspectionId, media.inspectionAreaId);
       } catch (error) {
         const message =
           error instanceof ApplicationError
@@ -581,6 +620,17 @@ export class MediaProcessingService implements OnModuleInit {
           data: { processingStatus: MediaProcessingStatus.FAILED },
         });
         await this.event(media.id, PROCESSING_FAILED_EVENT, { message });
+        /**
+         * When nothing will run it again, the inspection stops waiting on it
+         * (2026-11-14). The five-minute retry only takes a recording Cloudflare
+         * encoded, up to `MAX_ANALYSIS_ATTEMPTS` runs; past that, or for one it
+         * never takes, this was the last word -- and as the last recording of a
+         * submitted inspection it left that inspection submitted for good. One a
+         * retry will take up is left to it, as before.
+         */
+        // Unsure means a retry is coming: the inspection waits, as it always did.
+        if (!(await this.retryComes(media).catch(() => true)))
+          await this.afterVideoGivenUp(organizationId, media.inspectionId);
       }
     } finally {
       this.inFlight.delete(mediaId);
@@ -2168,26 +2218,174 @@ export class MediaProcessingService implements OnModuleInit {
         data: { status: InspectionStatus.REVIEW_REQUIRED },
       });
       if (count === 0) return;
-      // Every recording is transcribed: fill the condition rows the technician
-      // did not tick from what they said (2026-10-07). In the background, and
-      // never over a person's answer; see ChecklistPrefillService.
-      if (this.checklistPrefill)
-        await this.checklistPrefill.afterSubmission(inspection.organizationId, inspectionId);
-      // And the report's summary of each room's recordings, also in the
-      // background; until it lands the report prints the narration verbatim.
-      if (this.recordingSummary)
-        await this.recordingSummary.afterSubmission(inspection.organizationId, inspectionId);
-      // Now that move-out findings are ready, draft the move-in vs move-out
-      // comparison (spec §12). Best-effort: a failure never blocks review.
-      if (inspection.inspectionType === InspectionType.MOVE_OUT && this.comparison)
-        await this.comparison.generate(inspectionId).catch((error) => {
-          this.logger.warn(
-            `Comparison generation skipped for ${inspectionId}: ${
-              error instanceof Error ? error.message : 'unknown error'
-            }`,
-          );
-        });
+      await this.afterReviewStarts(inspection.organizationId, inspectionId, inspection.inspectionType);
     }
+  }
+
+  /** What a submitted inspection is given once its recordings are in: run as it reaches review. */
+  private async afterReviewStarts(organizationId: string, inspectionId: string, inspectionType: InspectionType) {
+    // Every recording is transcribed: fill the condition rows the technician
+    // did not tick from what they said (2026-10-07). In the background, and
+    // never over a person's answer; see ChecklistPrefillService.
+    if (this.checklistPrefill) await this.checklistPrefill.afterSubmission(organizationId, inspectionId);
+    // And the report's summary of each room's recordings, also in the
+    // background; until it lands the report prints the narration verbatim.
+    if (this.recordingSummary) await this.recordingSummary.afterSubmission(organizationId, inspectionId);
+    // Now that move-out findings are ready, draft the move-in vs move-out
+    // comparison (spec §12). Best-effort: a failure never blocks review.
+    if (inspectionType === InspectionType.MOVE_OUT && this.comparison)
+      await this.comparison.generate(inspectionId).catch((error) => {
+        this.logger.warn(
+          `Comparison generation skipped for ${inspectionId}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      });
+  }
+
+  /**
+   * One recording processed: move its inspection on, and catch its room up if
+   * the inspection had already moved on without it (2026-11-14).
+   *
+   * A video can land after review started: sent after End job, after the wait
+   * for it ran out, or analysed again after a failure. Review's summary and
+   * checklist pre-fill ran once, for the rooms there then, so this room gets
+   * its own -- and a move-out's comparison is drawn again with it. Never throws.
+   */
+  private async afterVideoProcessed(organizationId: string, inspectionId: string, inspectionAreaId: string) {
+    try {
+      const before = await this.prisma.inspection.findUnique({
+        where: { id: inspectionId },
+        select: { status: true, inspectionType: true },
+      });
+      await this.advanceInspection(inspectionId);
+      const late =
+        before &&
+        before.status !== InspectionStatus.IN_PROGRESS &&
+        before.status !== InspectionStatus.SCHEDULED &&
+        before.status !== InspectionStatus.TECHNICIAN_SUBMITTED &&
+        before.status !== InspectionStatus.PROCESSING &&
+        before.status !== InspectionStatus.CANCELLED;
+      if (late) {
+        await this.recordingSummary?.afterLateVideo(organizationId, inspectionId, inspectionAreaId);
+        await this.checklistPrefill?.afterLateVideo(organizationId, inspectionId, inspectionAreaId);
+        await this.refreshComparison(inspectionId, before.inspectionType);
+      }
+      await this.settleWhenNothingAwaited(organizationId, inspectionId);
+    } catch (error) {
+      this.logger.warn(
+        `After processing ${inspectionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+  }
+
+  /** Whether the five-minute retry will run a failed recording again (`InspectionVideoService.retryFailedAnalysis`). */
+  private async retryComes(media: { id: string; readyAt: Date | null }) {
+    if (media.readyAt === null) return false;
+    const failures = await this.prisma.mediaProcessingEvent.count({
+      where: { inspectionMediaId: media.id, eventType: PROCESSING_FAILED_EVENT },
+    });
+    return failures < MAX_ANALYSIS_ATTEMPTS;
+  }
+
+  /**
+   * A recording nothing will process: its inspection no longer waits on it
+   * (2026-11-14) -- Cloudflare could not encode it, or its analysis failed for
+   * the last time. Never throws.
+   */
+  async afterVideoGivenUp(organizationId: string, inspectionId: string) {
+    try {
+      await this.advanceInspection(inspectionId);
+      await this.settleWhenNothingAwaited(organizationId, inspectionId);
+    } catch (error) {
+      this.logger.warn(
+        `After giving up a recording of ${inspectionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+  }
+
+  /** Settles the wait for late videos once none is still on its way or being analysed. */
+  private async settleWhenNothingAwaited(organizationId: string, inspectionId: string) {
+    const [inspection, unfinished] = await Promise.all([
+      this.prisma.inspection.findUnique({ where: { id: inspectionId }, select: { lateVideosUntil: true } }),
+      this.prisma.inspectionMedia.count({
+        where: {
+          inspectionId,
+          processingStatus: { in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING] },
+        },
+      }),
+    ]);
+    if (inspection?.lateVideosUntil && unfinished === 0) await this.settleLateVideos(organizationId, inspectionId);
+  }
+
+  /**
+   * Ends a submitted inspection's wait for the videos its phone was still
+   * sending (2026-11-14): when the last of them is in, or when the wait ran out
+   * and what was missing was flagged (`InspectionVideoService.settleOverdueLateVideos`).
+   *
+   * Once only: the wait is claimed by clearing it, and the call that clears it
+   * does the rest. It moves the inspection to review; if the office had already
+   * taken it on by hand, gives it what review would have (the summaries, the
+   * checklist pre-fill, the comparison); and tells the office in one
+   * notification, naming any rooms whose video never arrived. Answers whether
+   * it was this call that settled it.
+   */
+  async settleLateVideos(organizationId: string, inspectionId: string): Promise<boolean> {
+    const { count } = await this.prisma.inspection.updateMany({
+      where: { id: inspectionId, lateVideosUntil: { not: null } },
+      data: { lateVideosUntil: null },
+    });
+    if (count === 0) return false;
+    await this.advanceInspection(inspectionId);
+    const [inspection, missing] = await Promise.all([
+      this.prisma.inspection.findUnique({
+        where: { id: inspectionId },
+        select: {
+          status: true,
+          inspectionType: true,
+          propertywareBuilding: { select: { name: true } },
+          propertywareUnit: { select: { name: true } },
+        },
+      }),
+      this.prisma.inspectionMedia.findMany({
+        where: { inspectionId, failureCode: VIDEO_NEVER_ARRIVED },
+        select: { inspectionArea: { select: { propertyArea: { select: { name: true } } } } },
+      }),
+    ]);
+    if (!inspection) return true;
+    if (REVIEW_STATUSES_BY_HAND.includes(inspection.status))
+      await this.afterReviewStarts(organizationId, inspectionId, inspection.inspectionType);
+    const rooms = [...new Set(missing.map((media) => media.inspectionArea.propertyArea.name))];
+    const property = inspection.propertywareBuilding?.name ?? inspection.propertywareUnit?.name ?? null;
+    void this.events?.publishOrganizationNotification(
+      organizationId,
+      rooms.length
+        ? {
+            kind: 'LATE_VIDEOS_MISSING',
+            title: rooms.length === 1 ? 'A video never arrived' : `${rooms.length} videos never arrived`,
+            body: [property, `Not sent from the phone: ${rooms.join(', ')}`].filter(Boolean).join(' · '),
+            inspectionId,
+          }
+        : {
+            kind: 'LATE_VIDEOS_ARRIVED',
+            title: 'Late videos arrived',
+            body: [property, 'Every video from the phone is in'].filter(Boolean).join(' · '),
+            inspectionId,
+          },
+    );
+    await this.prisma.auditLog
+      .create({
+        data: {
+          organizationId,
+          actorUserId: null,
+          action: rooms.length ? 'LATE_VIDEOS_MISSING' : 'LATE_VIDEOS_ARRIVED',
+          entityType: 'Inspection',
+          entityId: inspectionId,
+          metadata: { rooms },
+        },
+      })
+      .catch(() => undefined);
+    return true;
   }
 
   private event(inspectionMediaId: string, eventType: string, payloadSummary: object) {

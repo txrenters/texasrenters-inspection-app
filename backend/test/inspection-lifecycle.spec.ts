@@ -48,7 +48,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       ...extra,
     };
     const prisma: {
-      inspection: { findFirst: jest.Mock; update: jest.Mock };
+      inspection: { findFirst: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
       jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
       inspectionArea: { count: jest.Mock };
       rescheduleRequest: ReturnType<typeof rescheduleRequestDelegate>;
@@ -57,6 +57,8 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspection: {
         findFirst: jest.fn().mockResolvedValue(record),
         update: jest.fn().mockResolvedValue({ ...record, status: InspectionStatus.TECHNICIAN_SUBMITTED }),
+        // Submitted once (2026-11-14): the claim on an inspection still in progress.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       inspectionArea: { count: jest.fn().mockResolvedValue(0) },
       jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
@@ -114,7 +116,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     const advanceInspection = jest.fn().mockResolvedValue(undefined);
     // Annotated because $transaction refers to `prisma` itself.
     const prisma: {
-      inspection: { findFirst: jest.Mock; update: jest.Mock };
+      inspection: { findFirst: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
       jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
       inspectionArea: { count: jest.Mock };
       rescheduleRequest: ReturnType<typeof rescheduleRequestDelegate>;
@@ -125,6 +127,7 @@ describe('inspection status lifecycle (spec §11)', () => {
         update: jest
           .fn()
           .mockResolvedValue({ ...record, status: InspectionStatus.TECHNICIAN_SUBMITTED }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       inspectionArea: { count: jest.fn().mockResolvedValue(0) },
       jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },

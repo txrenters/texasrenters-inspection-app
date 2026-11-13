@@ -287,6 +287,28 @@ export class ChecklistPrefillService {
     });
   }
 
+  /**
+   * One room whose video landed after review started (2026-11-14): filled from
+   * its narration now, by the pipeline, as review filled the rooms it had.
+   * Never over a person's answer (`fillOne`), and never throws: an inspection
+   * finalized meanwhile, or with no room checklist, is left as it is.
+   */
+  async afterLateVideo(organizationId: string, inspectionId: string, inspectionAreaId: string) {
+    try {
+      const inspection = await this.fillableInspection(organizationId, inspectionId);
+      const configuration = await this.aiSettings.resolve(organizationId);
+      const outcome = await this.fillOne(organizationId, inspection, inspectionAreaId, configuration);
+      await this.audit(organizationId, inspectionId, null, 'PIPELINE', configuration, [outcome]);
+    } catch (error) {
+      if (!(error instanceof ApplicationError))
+        this.logger.warn(
+          `Checklist pre-fill skipped for late video in area ${inspectionAreaId}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+    }
+  }
+
   /** Fill one room now and answer with what was filled. */
   async fillArea(
     organizationId: string,

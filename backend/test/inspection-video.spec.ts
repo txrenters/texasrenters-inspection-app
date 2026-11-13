@@ -100,14 +100,33 @@ describe('upload session authorization', () => {
     );
   });
 
-  it('refuses to attach evidence to an inspection that is not in progress', async () => {
-    const { service } = build({
-      area: { ...areaRecord, inspection: { ...areaRecord.inspection, status: 'COMPLETED' } },
+  // A room's video is never refused for when it arrives (2026-11-14): only a
+  // cancelled visit, or evidence the office finalized, says no.
+  it.each([
+    ['cancelled', { status: 'CANCELLED' }],
+    ['finalized', { status: 'COMPLETED', finalizedAt: new Date('2026-11-13T12:00:00Z') }],
+  ])('refuses a video only for an inspection %s', async (_label, inspection) => {
+    const { service, stream } = build({
+      area: { ...areaRecord, inspection: { ...areaRecord.inspection, ...inspection } },
     });
     await expect(service.createUploadSession(technician, validInput)).rejects.toMatchObject({
-      code: 'INSPECTION_NOT_IN_PROGRESS',
+      code: 'INSPECTION_CLOSED_TO_EVIDENCE',
     });
+    expect(stream.createDirectUpload).not.toHaveBeenCalled();
   });
+
+  it.each(['TECHNICIAN_SUBMITTED', 'REVIEW_REQUIRED', 'COMPLETED'])(
+    'takes a new video for an inspection already %s',
+    async (status) => {
+      const { service, stream } = build({
+        area: { ...areaRecord, inspection: { ...areaRecord.inspection, status, finalizedAt: null } },
+      });
+      await expect(service.createUploadSession(technician, validInput)).resolves.toMatchObject({
+        uploadUrl: expect.any(String),
+      });
+      expect(stream.createDirectUpload).toHaveBeenCalled();
+    },
+  );
 
   it('never contacts Cloudflare for a request it will reject', async () => {
     // Validation before the provider call: a rejected request must not create a
@@ -306,18 +325,46 @@ describe('a session asked for again (2026-10-02)', () => {
     await expect(service.createUploadSession(technician, validInput)).resolves.toMatchObject({ uploaded: true });
   });
 
-  it('does not renew an undelivered one once the inspection is submitted', async () => {
+  // Sent after End job, or after the phone sat locked past the link's hour
+  // (2026-11-14): it used to be refused, and the video was stranded on the phone.
+  it('renews an undelivered one after the inspection is submitted', async () => {
     const { service, stream } = build({
       area: { ...areaRecord, inspection: { ...areaRecord.inspection, status: 'TECHNICIAN_SUBMITTED' } },
       existing: pending,
       stream: withStream(cloudflare('pendingupload')),
     });
 
-    await expect(service.createUploadSession(technician, validInput)).rejects.toMatchObject({
-      code: 'INSPECTION_NOT_IN_PROGRESS',
+    await expect(service.createUploadSession(technician, validInput)).resolves.toMatchObject({
+      videoId: 'media-1',
+      uploadUrl: expect.any(String),
     });
-    expect(stream.createDirectUpload).not.toHaveBeenCalled();
-    expect((stream as unknown as { deleteVideo: jest.Mock }).deleteVideo).not.toHaveBeenCalled();
+    expect(stream.createDirectUpload).toHaveBeenCalled();
+    expect((stream as unknown as { deleteVideo: jest.Mock }).deleteVideo).toHaveBeenCalledWith('uid-old');
+  });
+
+  it('takes back a video given up on when it is sent after all', async () => {
+    const { service, prisma } = build({
+      area: { ...areaRecord, inspection: { ...areaRecord.inspection, status: 'REVIEW_REQUIRED' } },
+      existing: { ...pending, processingStatus: 'FAILED', failureCode: 'VIDEO_NEVER_ARRIVED' },
+      stream: withStream(cloudflare('pendingupload')),
+    });
+
+    await service.createUploadSession(technician, validInput);
+    expect(prisma.inspectionMedia.update).toHaveBeenCalledWith({
+      where: { id: 'media-1' },
+      data: expect.objectContaining({ processingStatus: 'PENDING', failureCode: null, failedAt: null }),
+    });
+  });
+
+  it('lets the technician who filmed it send it after the job went to someone else', async () => {
+    const { service, prisma } = build({
+      existing: { ...pending, technicianId: technician.id },
+      stream: withStream(cloudflare('pendingupload')),
+    });
+
+    await service.createUploadSession(technician, validInput);
+    const where = prisma.inspectionArea.findFirst.mock.calls[0][0].where;
+    expect(where.inspection).toEqual({ organizationId: technician.organizationId });
   });
 });
 
@@ -360,6 +407,18 @@ describe('stream webhook', () => {
     // Cloudflare holding the bytes is proof the transfer finished, whatever the
     // device managed to report before it lost signal.
     expect(data.uploadStatus).toBe('UPLOADED');
+  });
+
+  // The last recording of a submitted inspection used to leave it submitted for
+  // good when Cloudflare could not encode it (2026-11-14).
+  it('stops the inspection waiting on a video Cloudflare could not encode', async () => {
+    const mediaProcessing = { queue: jest.fn(), afterVideoGivenUp: jest.fn().mockResolvedValue(undefined) };
+    const { service, prisma } = build({ mediaProcessing });
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('PROCESSING'));
+
+    await service.applyWebhook({ uid: 'uid-1', status: { state: 'error', errorReasonText: 'bad file' } });
+    expect(mediaProcessing.afterVideoGivenUp).toHaveBeenCalledWith('org-1', 'insp-1');
+    expect(mediaProcessing.queue).not.toHaveBeenCalled();
   });
 
   it('does not move readyAt when the same event arrives again', async () => {

@@ -96,6 +96,7 @@ import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import {
+  LATE_VIDEO_WAIT_MS,
   MediaProcessingService,
   ROOM_SUMMARY_TITLE,
   ROOM_SUMMARY_WHERE,
@@ -1370,8 +1371,26 @@ export class TechnicianService {
         'INSPECTION_NOT_COMPLETABLE',
         'Only an inspection in progress can be completed.',
       );
+    /**
+     * The room videos the phone is still sending (2026-11-14).
+     *
+     * A room counts as done once its video reaches the server, so a technician
+     * used to wait out every upload -- with the app open -- before End job
+     * would go through. The phone now names the videos still on their way; a
+     * room whose own video is among them counts as done, and the inspection
+     * waits for them (`lateVideosUntil`) before it goes to review.
+     */
+    const sending = await this.videosStillSending(id, input.videosStillSending);
+    const sendingRooms = [
+      ...new Set(
+        sending
+          .filter((video) => video.recordingType === VideoRecordingType.PRIMARY_AREA)
+          .map((video) => video.inspectionAreaId),
+      ),
+    ];
     const unfinished: Prisma.InspectionAreaWhereInput = {
       inspectionId: id,
+      ...(sendingRooms.length ? { id: { notIn: sendingRooms } } : {}),
       // Same rule as the summary: the type can override the per-area flag.
       ...(inspectionRequiresEveryArea(inspection.inspectionType)
         ? {}
@@ -1415,11 +1434,33 @@ export class TechnicianService {
       await this.resolveJobPhotos(id, input.servicesReport),
     );
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Once (2026-11-14): a double tap, or the request replayed after the first
+      // went through, finds the inspection submitted already.
+      const claimed = await tx.inspection.updateMany({
+        where: { id, status: InspectionStatus.IN_PROGRESS },
+        data: { status: InspectionStatus.TECHNICIAN_SUBMITTED },
+      });
+      if (claimed.count === 0)
+        throw new ApplicationError(409, 'INSPECTION_NOT_COMPLETABLE', 'Only an inspection in progress can be completed.');
+      // A room whose video is still on its way reads as recorded, not as never
+      // walked. Only forward: its video may have landed while this ran.
+      if (sendingRooms.length)
+        await tx.inspectionArea.updateMany({
+          where: {
+            id: { in: sendingRooms },
+            completionStatus: {
+              in: [InspectionAreaCompletionStatus.PENDING, InspectionAreaCompletionStatus.RECORDING],
+            },
+          },
+          data: { completionStatus: InspectionAreaCompletionStatus.RECORDED },
+        });
       const row = await tx.inspection.update({
         where: { id },
         data: {
           status: InspectionStatus.TECHNICIAN_SUBMITTED,
           submittedAt: new Date(),
+          // How long review waits for the videos still on their way.
+          ...(sending.length ? { lateVideosUntil: new Date(Date.now() + LATE_VIDEO_WAIT_MS) } : {}),
           /**
            * The visit is complete when the technician submits it.
            *
@@ -1539,11 +1580,75 @@ export class TechnicianService {
         title: 'Inspection submitted',
         // Middot, not an em-dash: this string is rendered verbatim in the console
         // toast, the notification bell and the operating system's own alert.
-        body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' · '),
+        body: [
+          property,
+          `Submitted by ${user.displayName}`,
+          sending.length ? `${sending.length === 1 ? '1 video' : `${sending.length} videos`} still sending` : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
         inspectionId: id,
       });
+      if (sending.length)
+        void this.prisma.auditLog
+          .create({
+            data: {
+              organizationId: user.organizationId,
+              actorUserId: user.id,
+              action: 'INSPECTION_SUBMITTED_WITH_VIDEOS_SENDING',
+              entityType: 'Inspection',
+              entityId: id,
+              metadata: { rooms: [...new Set(sending.map((video) => video.room))], videos: sending.length },
+            },
+          })
+          .catch(() => undefined);
     }
     return this.mapInspection(updated, user.id);
+  }
+
+  /**
+   * The videos End job says are still on their way (2026-11-14): each must be a
+   * recording of this inspection whose upload was opened -- the phone opens
+   * every one before it asks -- and those already here are not waited for. A
+   * key the server has never seen is a video it could never take, so End job
+   * is refused rather than waiting a day for nothing.
+   */
+  private async videosStillSending(inspectionId: string, keys: readonly string[] | undefined) {
+    const wanted = [...new Set(keys ?? [])];
+    if (!wanted.length) return [];
+    const rows = await this.prisma.inspectionMedia.findMany({
+      where: { inspectionId, providerMediaId: { in: wanted } },
+      select: {
+        providerMediaId: true,
+        inspectionAreaId: true,
+        recordingType: true,
+        uploadStatus: true,
+        readyAt: true,
+        processingStatus: true,
+        inspectionArea: { select: { propertyArea: { select: { name: true } } } },
+      },
+    });
+    const unknown = wanted.filter((key) => !rows.some((row) => row.providerMediaId === key));
+    if (unknown.length)
+      throw new ApplicationError(
+        422,
+        'VIDEOS_NOT_STARTED',
+        `${unknown.length === 1 ? 'A video' : `${unknown.length} videos`} on the phone never started sending. Keep the app open with signal for a moment and try again.`,
+        unknown.map((key) => ({ key })),
+      );
+    // Those already here are not waited for: the same test as `undeliveredVideoWhere`.
+    return rows
+      .filter(
+        (row) =>
+          row.uploadStatus !== MediaUploadStatus.UPLOADED &&
+          row.readyAt === null &&
+          row.processingStatus === MediaProcessingStatus.PENDING,
+      )
+      .map((row) => ({
+        inspectionAreaId: row.inspectionAreaId,
+        recordingType: row.recordingType,
+        room: row.inspectionArea.propertyArea.name,
+      }));
   }
 
   async property(user: AuthenticatedUser, id: string) {

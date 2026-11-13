@@ -2986,6 +2986,9 @@ export class AdminService {
           // overwrites it, and until then it records when the work last left
           // the field.
           completionBlockedReason: null,
+          // Back in the technician's hands, nothing is awaited from the last
+          // submission (2026-11-14); the next one starts its own wait.
+          lateVideosUntil: null,
           /**
            * Stored where the technician can read it.
            *
