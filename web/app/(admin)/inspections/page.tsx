@@ -238,15 +238,20 @@ function columnsFor(type: string, jobber?: Map<string, JobberDayRow>): Array<Col
        * layout snapshotted onto it, so an area count says a plan existed -- not
        * that anybody walked the property.
        */
-      cell: (row) =>
-        row.evidence && row.evidence.photos > 0 ? (
-          <span className="font-mono text-xs tabular-nums">
-            {formatCount(row.evidence.photos)}
-            <span className="text-muted-foreground font-sans"> photos</span>
-          </span>
-        ) : (
-          <span className="text-muted-foreground text-xs">Empty</span>
-        ),
+      cell: (row) => (
+        <span className="grid gap-0.5">
+          {row.evidence && row.evidence.photos > 0 ? (
+            <span className="font-mono text-xs tabular-nums">
+              {formatCount(row.evidence.photos)}
+              <span className="text-muted-foreground font-sans"> photos</span>
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-xs">Empty</span>
+          )}
+          {/* Submitted with videos still on their way from the phone (2026-11-14). */}
+          {row.lateVideosUntil ? <span className="text-xs text-info">Videos arriving</span> : null}
+        </span>
+      ),
     },
     jobber
       ? {

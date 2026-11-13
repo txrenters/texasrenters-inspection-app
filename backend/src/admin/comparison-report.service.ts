@@ -38,6 +38,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { inspectedAreas } from '../common/inspected-areas';
 import { PrismaService } from '../common/prisma.service';
 import { REPORT_VISIBLE_PHOTO } from '../common/report-visible-photo';
+import { PRIMARY_VIDEO_STATE, reportRoomStatus } from './report-room-status';
 import { ROOM_SUMMARY_WHERE } from '../technician/room-summary';
 import type { ComparedItem } from './comparison-items';
 
@@ -216,6 +217,8 @@ export class ComparisonReportService {
             propertyAreaId: true,
             completionStatus: true,
             skipReason: true,
+            // Whether its video is still on its way, or never came (2026-11-14).
+            media: PRIMARY_VIDEO_STATE,
             // source with the name: whether the area is the inspection's at all.
             propertyArea: { select: { name: true, source: true, floor: { select: { name: true } } } },
             checklistResponses: {
@@ -292,7 +295,7 @@ export class ComparisonReportService {
         roomId: area.id,
         name: area.propertyArea.name,
         floorName: area.propertyArea.floor?.name ?? null,
-        completionStatus: area.completionStatus,
+        completionStatus: reportRoomStatus(area.completionStatus, area.media),
         skipReason: area.skipReason,
         checklist: area.checklistResponses.map((response) => ({
           id: response.checklistItem.id,

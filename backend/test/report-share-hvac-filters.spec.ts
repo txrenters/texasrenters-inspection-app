@@ -65,6 +65,8 @@ const SERVICES_REPORT = {
 
 function build(areas: unknown[], over: Record<string, unknown> = {}) {
   const prisma = {
+    // Each room's own video, for where one still arriving is (2026-11-14).
+    inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
     // The comments' notes (every finding not rejected); none here.
     inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
     inspectionReportShare: {

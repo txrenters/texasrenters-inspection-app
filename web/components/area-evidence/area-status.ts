@@ -22,4 +22,8 @@ export const STATUS_META: Record<
   REVIEWED: { label: 'Reviewed', variant: 'success' },
   FOLLOW_UP_REQUIRED: { label: 'Follow-up required', variant: 'destructive' },
   FAILED: { label: 'Failed', variant: 'destructive' },
+  // The room was walked; its video is still on its way from the phone, or was
+  // lost on it (2026-11-14). Neither is the room's fault, nor a failed analysis.
+  VIDEO_ARRIVING: { label: 'Video arriving', variant: 'info' },
+  VIDEO_NEVER_ARRIVED: { label: 'Video never arrived', variant: 'warning' },
 };

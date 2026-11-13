@@ -26,6 +26,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented';
 import { usePermissions } from '@/lib/auth';
+import { formatDateTime } from '@/lib/format';
 import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
@@ -56,6 +57,8 @@ const STATUS_FILTERS = [
   { value: 'SKIPPED', label: 'Skipped' },
   { value: 'NOT_STARTED', label: 'Not started' },
   { value: 'REVIEWED', label: 'Reviewed' },
+  { value: 'VIDEO_ARRIVING', label: 'Video arriving' },
+  { value: 'VIDEO_NEVER_ARRIVED', label: 'Video never arrived' },
 ] as const;
 
 function countLabel(count: number, singular: string, plural = `${singular}s`) {
@@ -223,6 +226,11 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
 
   const totals = summary.data!.totals;
   const unassigned = summary.data!.unassigned;
+  // Videos still on their way from the phone, and those the wait gave up on
+  // (2026-11-14); absent from an older server.
+  const arriving = totals.videosArriving ?? 0;
+  const neverArrived = totals.videosNeverArrived ?? 0;
+  const lateVideosUntil = summary.data!.lateVideosUntil ?? null;
   const requiresRecording = inspectionRequiresAreaRecording(inspection?.inspectionType);
   // The open area's neighbours in the list as filtered, for moving on from an
   // area once it is reviewed without going back to the list for the next one.
@@ -375,6 +383,28 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           </Alert>
         ) : null}
 
+        {arriving ? (
+          <Alert variant="info">
+            <AlertDescription>
+              {arriving === 1 ? '1 video is' : `${arriving} videos are`} still arriving from the
+              technician’s phone.
+              {lateVideosUntil
+                ? ` The job goes to review when ${arriving === 1 ? 'it lands' : 'they land'}, or on ${formatDateTime(lateVideosUntil)} without ${arriving === 1 ? 'it' : 'any still missing'}.`
+                : ' They upload while the app is open with signal.'}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {neverArrived ? (
+          <Alert variant="warning">
+            <AlertDescription>
+              {neverArrived === 1 ? '1 video' : `${neverArrived} videos`} never arrived from the
+              technician’s phone. Reopen the job to have them sent or filmed again, or review those
+              rooms from their photographs. A video that turns up later is still added.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         {view === 'sheet' ? (
           <div className="space-y-3">
             {filters}
@@ -415,9 +445,12 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                   const contents = [
                     area.counts.recordings
                       ? countLabel(area.counts.recordings, 'video')
-                      : requiresRecording
-                        ? 'No video'
-                        : null,
+                      : // Its badge says where the video is (2026-11-14).
+                        area.reviewStatus === 'VIDEO_ARRIVING' || area.reviewStatus === 'VIDEO_NEVER_ARRIVED'
+                        ? null
+                        : requiresRecording
+                          ? 'No video'
+                          : null,
                     countLabel(area.counts.photos, 'photo'),
                     area.counts.findings ? countLabel(area.counts.findings, 'finding') : null,
                     area.floorName,
