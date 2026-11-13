@@ -189,6 +189,9 @@ function harness(options: {
   contactLinks?: Row[];
   propertyLinks?: Row[];
   buildings?: Row[];
+  /** The office's visits: `scheduledAt` a day at UTC midnight, as the column is. */
+  visits?: Row[];
+  units?: Row[];
   payments?: Row[];
   paymentSyncs?: Row[];
   settings?: Row | null;
@@ -218,6 +221,29 @@ function harness(options: {
       : options.settings;
   const invoicePages = [...(options.invoicePages ?? [[]])];
   const paymentPages = [...(options.paymentPages ?? [[]])];
+  // The query's joins, as SQL makes them: an invoice on no visit, a visit on its day whose house number its Reference
+  // starts with, the visit with no invoice in the company yet.
+  const dayOf = (value: unknown) => (value instanceof Date ? value.toISOString().slice(0, 10) : null);
+  const houseOf = (line: unknown) => (typeof line === 'string' ? line.trim().split(' ')[0]!.toLowerCase() : null);
+  const visitsOnTheirDays = (tenantId: string) =>
+    invoices.flatMap((row) => {
+      if (row.xeroTenantId !== tenantId || row.origin !== 'XERO' || row.inspectionId || row.status === 'VOIDED') return [];
+      if (!/^[0-9]/.test(String(row.subject ?? '').trim())) return [];
+      return (options.visits ?? []).flatMap((visit) => {
+        const building = (options.buildings ?? []).find((each) => each.id === visit.propertywareBuildingId);
+        const unit = (options.units ?? []).find((each) => each.id === visit.propertywareUnitId);
+        const fits =
+          building &&
+          visit.status !== 'CANCELLED' &&
+          dayOf(visit.scheduledAt) === dayOf(row.issuedOn) &&
+          (!row.propertywareBuildingId || row.propertywareBuildingId === visit.propertywareBuildingId) &&
+          [houseOf(building.addressLine1), houseOf(unit?.addressLine1)].includes(houseOf(row.subject)) &&
+          !invoices.some((other) => other.inspectionId === visit.id && other.xeroTenantId === tenantId && other.status !== 'VOIDED');
+        return fits
+          ? [{ invoiceId: row.id, subject: row.subject, visitId: visit.id, buildingId: visit.propertywareBuildingId, buildingLine: building.addressLine1 ?? null, unitLine: unit?.addressLine1 ?? null }]
+          : [];
+      });
+    });
   const prisma: Record<string, unknown> = {
     xeroSettings: {
       findUnique: jest.fn(async () => settings),
@@ -241,6 +267,11 @@ function harness(options: {
         return row;
       }),
       update: jest.fn(async ({ where, data }: { where: { id: string }; data: Row }) => Object.assign(invoices.find((row) => row.id === where.id)!, data)),
+      updateMany: jest.fn(async ({ where, data }: { where: Row; data: Row }) => {
+        const hit = invoices.filter((row) => matches(row, where));
+        for (const row of hit) Object.assign(row, data);
+        return { count: hit.length };
+      }),
       count: jest.fn(async ({ where }: { where: Row }) => invoices.filter((row) => matches(row, where)).length),
       aggregate: jest.fn(async ({ where }: { where: Row }) => ({
         _sum: { balanceCents: invoices.filter((row) => matches(row, where)).reduce((sum, row) => sum + (row.balanceCents as number), 0) },
@@ -295,8 +326,9 @@ function harness(options: {
     propertywareBuilding: { findMany: jest.fn(async () => options.buildings ?? []) },
     auditLog: { create: jest.fn() },
     $executeRaw: jest.fn(async () => 1),
-    // The newest invoice of each property the run touched, with its contact.
-    $queryRaw: jest.fn(async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+    $queryRaw: jest.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join('?').includes('"Inspection"')) return visitsOnTheirDays(values[1] as string);
+      // The newest invoice of each property the run touched, with its contact.
       const touched = values.find(Array.isArray) as string[];
       const newest = new Map<string, Row>();
       for (const row of invoices)
@@ -506,6 +538,100 @@ describe('reading a company’s books', () => {
     await books.run(ORG, TENANT);
     const placed = Object.fromEntries(fromXero(invoices).map((row) => [row.xeroInvoiceId, row.propertywareBuildingId ?? null]));
     expect(placed).toEqual({ 'x-1': BUILDING, 'x-2': null });
+  });
+
+  describe('the office’s invoice for a visit, with no Jobber copy to tell it (2026-11-13)', () => {
+    const NOV_11 = new Date('2026-11-11T00:00:00.000Z');
+    const buildings = [
+      { id: BUILDING, addressLine1: '10 Example Way', postalCode: '75964' },
+      { id: BUILDING_2, addressLine1: '14 Example Lane, Nacogdoches, Texas 75964', postalCode: '75964' },
+    ];
+    const visit = (id: string, over: Row = {}) => ({ id, scheduledAt: NOV_11, status: 'REVIEW_REQUIRED', propertywareBuildingId: BUILDING, ...over });
+    const row = (id: string, over: Row = {}) => ({
+      id,
+      origin: 'XERO',
+      xeroTenantId: TENANT,
+      status: 'AWAITING_PAYMENT',
+      subject: '10 Example Way',
+      issuedOn: NOV_11,
+      inspectionId: null,
+      propertywareBuildingId: null,
+      ...over,
+    });
+    /** Each invoice's visit after a run that reads nothing new. */
+    const visitsAfter = async (options: Parameters<typeof harness>[0]) => {
+      const { books, invoices, prisma } = harness({ buildings, ...options });
+      const result = await books.run(ORG, TENANT);
+      const on = Object.fromEntries(invoices.filter((each) => each.origin === 'XERO').map((each) => [each.id, each.inspectionId ?? null]));
+      return { on, result, invoices, prisma };
+    };
+
+    it('puts it on the visit that day at the address its Reference names, and on that property when it was on none', async () => {
+      const { on, result, invoices, prisma } = await visitsAfter({
+        visits: [visit('visit-1'), visit('visit-2', { propertywareBuildingId: BUILDING_2 })],
+        invoices: [
+          // Zapier's draft, approved in Xero: on its property by its contact already.
+          row('thmp-8735', { propertywareBuildingId: BUILDING }),
+          // Crystal Creek Pest's, on no property: "Ln" for "Lane", the town after a comma.
+          row('pest-2995', { xeroTenantId: TENANT, subject: '14 Example Ln' }),
+          // A work order there that day: its Reference is the order.
+          row('wo-44511', { subject: 'WO#44511', propertywareBuildingId: BUILDING }),
+          // The same house another day, and the same house number on another street.
+          row('next-day', { issuedOn: new Date('2026-11-12T00:00:00.000Z') }),
+          row('other-street', { subject: '10 Other Street' }),
+        ],
+      });
+      expect(on).toEqual({ 'thmp-8735': 'visit-1', 'pest-2995': 'visit-2', 'wo-44511': null, 'next-day': null, 'other-street': null });
+      expect(invoices.find((each) => each.id === 'pest-2995')).toMatchObject({ propertywareBuildingId: BUILDING_2 });
+      expect(result.invoices.onVisits).toBe(2);
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ action: 'XERO_BOOKS_READ', metadata: expect.objectContaining({ invoices: expect.objectContaining({ onVisits: 2 }) }) }),
+      });
+    });
+
+    it('finds a unit by its own address', async () => {
+      const { on } = await visitsAfter({
+        buildings: [{ id: BUILDING, addressLine1: '5200 Weslayan St', postalCode: '77005' }],
+        units: [{ id: 'unit-a201', addressLine1: '5200 Weslayan Street Unit #A201' }],
+        visits: [visit('visit-1', { propertywareUnitId: 'unit-a201' })],
+        invoices: [row('pest-1', { subject: '5200 Weslayan Street Unit #A201' })],
+      });
+      expect(on).toEqual({ 'pest-1': 'visit-1' });
+    });
+
+    it('leaves it where it is when a person must tell', async () => {
+      // Two visits there that day.
+      expect((await visitsAfter({ visits: [visit('visit-1'), visit('visit-2')], invoices: [row('r-1')] })).on).toEqual({ 'r-1': null });
+      // Two invoices for the one visit.
+      expect((await visitsAfter({ visits: [visit('visit-1')], invoices: [row('r-1'), row('r-2')] })).on).toEqual({ 'r-1': null, 'r-2': null });
+      // The visit was cancelled.
+      expect((await visitsAfter({ visits: [visit('visit-1', { status: 'CANCELLED' })], invoices: [row('r-1')] })).on).toEqual({ 'r-1': null });
+      // On another property already.
+      expect((await visitsAfter({ visits: [visit('visit-1')], invoices: [row('r-1', { propertywareBuildingId: BUILDING_2 })] })).on).toEqual({ 'r-1': null });
+      // Voided.
+      expect((await visitsAfter({ visits: [visit('visit-1')], invoices: [row('r-1', { status: 'VOIDED' })] })).on).toEqual({ 'r-1': null });
+    });
+
+    it('never puts a second invoice of a company on a visit it has invoiced, but one of another company goes on all the same', async () => {
+      const { on, result } = await visitsAfter({
+        visits: [visit('visit-1')],
+        invoices: [
+          row('thmp-8247', { inspectionId: 'visit-1', propertywareBuildingId: BUILDING }),
+          row('thmp-again'),
+          row('pest-1', { xeroTenantId: OTHER_TENANT }),
+        ],
+      });
+      expect(on).toEqual({ 'thmp-8247': 'visit-1', 'thmp-again': null, 'pest-1': null });
+      expect(result.invoices.onVisits).toBe(0);
+      // The other company's own run puts its invoice on the visit.
+      const { books, invoices } = harness({
+        buildings,
+        visits: [visit('visit-1')],
+        invoices: [row('thmp-8247', { inspectionId: 'visit-1' }), row('pest-1', { xeroTenantId: OTHER_TENANT })],
+      });
+      await books.run(ORG, OTHER_TENANT);
+      expect(invoices.find((each) => each.id === 'pest-1')).toMatchObject({ inspectionId: 'visit-1', propertywareBuildingId: BUILDING });
+    });
   });
 
   it('learns each property’s contact from its newest invoice', async () => {

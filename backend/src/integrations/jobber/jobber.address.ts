@@ -205,6 +205,21 @@ export function looseAddressKey(
   return `${withoutStreetType(street)}|${postal}`;
 }
 
+/**
+ * Whether two street lines name the same house, with no ZIP to go on: a Xero
+ * invoice's Reference against the address of a visit already found another way
+ * (2026-11-13). Never a search on its own -- without the ZIP one line can be
+ * two houses in two towns. Both must start with a house number, so "WO#44511"
+ * names nothing; the street type may be missing from one, as `looseAddressKey`
+ * allows.
+ */
+export function sameStreetLine(a: string | null | undefined, b: string | null | undefined): boolean {
+  const left = normalizeWords(streetPart(a));
+  const right = normalizeWords(streetPart(b));
+  if (!/^\d/.test(left) || !/^\d/.test(right)) return false;
+  return left === right || withoutStreetType(left) === withoutStreetType(right);
+}
+
 export interface AddressCandidate {
   id: string;
   addressLine1: string | null;
