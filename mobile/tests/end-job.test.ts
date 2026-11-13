@@ -1,4 +1,4 @@
-import { planEndJob } from '../src/utils/end-job';
+import { jobEndedMessage, planEndJob } from '../src/utils/end-job';
 import type { JobTask } from '../src/utils/job-tasks';
 
 /**
@@ -52,8 +52,11 @@ describe('what End job settles first', () => {
    * Moses, 2026-10-12: every room of a move-out submitted, the last three
    * videos still on the phone, and End job refused by the server with "Complete
    * or provide an authorized skip reason" -- the phone had said 15 of 15.
+   *
+   * Since 2026-11-14 a room whose video is still sending does not stop End job
+   * at all: the job goes with those videos named, and the server waits for them.
    */
-  it('says a submitted area whose video is still sending is sending, not unfinished', () => {
+  it('lets a submitted area whose video is still sending go with the job, and names it beside work left', () => {
     const inspection = task({ key: 'inspection', kind: 'INSPECTION', state: 'PART', title: 'Move-out inspection' });
     const sending = (id: string, name: string, uploadStatus: string) => ({
       id,
@@ -67,14 +70,7 @@ describe('what End job settles first', () => {
       canSubmit: false,
       incompleteRequiredRooms: [sending('a', 'Bedroom 1', 'UPLOADING'), sending('b', 'Bathroom 1', 'PENDING')],
     });
-    expect(onlySending.blockers).toEqual([
-      {
-        opens: 'INSPECTION',
-        title: 'Videos are still sending',
-        message:
-          'Bedroom 1, Bathroom 1 are still sending from this phone. Keep the app open with signal; End job works once they have arrived.',
-      },
-    ]);
+    expect(onlySending.blockers).toEqual([]);
 
     // A video that failed is work for the technician again, not a wait.
     const mixed = planEndJob([inspection], {
@@ -109,5 +105,19 @@ describe('what End job settles first', () => {
     const plan = planEndJob([pest, task({ key: 'fleaTreatment', kind: 'SERVICE', state: 'NOT_DONE' })], ready);
 
     expect(plan).toEqual({ blockers: [], unticked: [pest] });
+  });
+});
+
+/** What the phone says once the job is ended (2026-11-14). */
+describe('the job ended', () => {
+  it('says nothing of videos when none is still sending', () => {
+    expect(jobEndedMessage(0)).toBe('It is with the office. Any photos still sending keep uploading.');
+  });
+
+  it('says the videos still sending need the app open, and that the review waits for them', () => {
+    expect(jobEndedMessage(1)).toBe(
+      'It is with the office. 1 room video is still sending: keep the app open with signal until it has gone. The office\u2019s review waits for it.'.replace('\u2019', "'"),
+    );
+    expect(jobEndedMessage(3)).toContain('3 room videos are still sending: keep the app open with signal until they have gone.');
   });
 });
