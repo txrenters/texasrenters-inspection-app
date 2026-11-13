@@ -93,11 +93,18 @@ export function useInvoices(query: InvoiceQuery, enabled = true) {
   });
 }
 
+/** How often an invoice on its way to Xero is looked at again, and for how many looks: about two minutes. */
+export const TO_XERO_POLL_MS = 3_000;
+const TO_XERO_POLLS = 40;
+
 export function useInvoice(id: string) {
   return useQuery({
     queryKey: invoiceKeys.detail(id),
     queryFn: ({ signal }) => api<InvoiceDetail>(`${INVOICES}/${encodeURIComponent(id)}`, { signal }),
     enabled: Boolean(id),
+    // On its way to Xero (2026-11-13): read again until Xero has numbered it -- the console's own page, no call to Xero.
+    refetchInterval: (query) =>
+      query.state.data?.toXero && !query.state.data.toXero.problem && query.state.dataUpdateCount < TO_XERO_POLLS ? TO_XERO_POLL_MS : false,
   });
 }
 

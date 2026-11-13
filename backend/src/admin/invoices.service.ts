@@ -48,15 +48,16 @@ import {
 import { InvoiceOrigin, InvoiceStatus, JobberConnectionStatus, Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
-import { businessDate } from '../common/business-day';
+import { businessDate, businessInstant } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { XeroSenderService } from '../integrations/xero/xero-sender.service';
 import { xeroInvoiceFormCompanies } from '../integrations/xero/xero-settings.service';
 import { billingBasis } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
 import { makeInvoices, visitInvoiced } from './invoice-maker';
 import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officeOrganisations, officePrices, productCompanies } from './invoice-settings';
-import { invoicingState } from './invoicing-state';
+import { goesToXero, invoicingState, type InvoicingState } from './invoicing-state';
 import { KEPT_IN_XERO, keptInXero, officeXeroBooks, readCompanies, shownInvoices, shownPayments, type OfficeXeroBooks } from './shown-invoices';
 
 // Kept exported from here for the callers that already import them (phase 6 moved them).
@@ -498,7 +499,21 @@ const isUniqueViolation = (error: unknown) =>
 
 @Injectable()
 export class InvoicesService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    // Required where Nest builds it; left out only by unit tests that make invoices nowhere near Xero.
+    @Inject(XeroSenderService) private readonly xeroSender?: XeroSenderService,
+  ) {}
+
+  /**
+   * What was just made for a company that sends to Xero goes there now, as a
+   * draft Xero numbers within seconds (2026-11-13), rather than at the next
+   * ten-minute run. Called after the write has committed, never waited on.
+   */
+  sendToXeroSoon(organizationId: string, made: readonly { xeroTenantId: string | null }[], state: Pick<InvoicingState, 'sending'>) {
+    const tenants = made.flatMap((invoice) => (goesToXero(state, invoice.xeroTenantId) ? [invoice.xeroTenantId] : []));
+    if (tenants.length) this.xeroSender?.sendSoon(organizationId, tenants);
+  }
 
   async list(user: AuthenticatedUser, query: InvoiceListQuery = {}): Promise<InvoiceList> {
     const today = businessDate();
@@ -975,7 +990,7 @@ export class InvoicesService {
     const visit = target.inspectionId ? await this.invoiceableVisit(user, target.inspectionId) : null;
     const place = visit ?? (await this.invoiceableProperty(user, target.propertyId ?? ''));
     try {
-      return await this.prisma.$transaction(
+      const made = await this.prisma.$transaction(
         async (tx) => {
           const { contractDisclaimer } = await newInvoiceDefaults(tx, user.organizationId);
           // The one maker (2026-11-13), as the batch makes them: never one that reaches no books or comes before its
@@ -1009,6 +1024,9 @@ export class InvoicesService {
         // Each invoice is a few writes: room for several on a slow connection.
         { maxWait: 5_000, timeout: 20_000 },
       );
+      // Committed: to Xero now, not at the next run.
+      this.sendToXeroSoon(user.organizationId, made, state);
+      return made;
     } catch (error) {
       // The same key, sent twice at once: the other request made them -- seen as its key taken, or (2026-11-13) as the
       // visit it invoiced a moment ago.
@@ -1143,7 +1161,32 @@ export class InvoicesService {
       // For its PDF and its sending (2026-11-06, phase 5), from the office's settings (phase 6).
       brand: await officeBrand(this.prisma, user.organizationId),
       deliveries: row.deliveries.map(deliveryView),
+      toXero: await this.toXero(user.organizationId, row),
     };
+  }
+
+  /**
+   * On its way to its company's books in Xero, or refused there (2026-11-13):
+   * an invoice made here, for a company sending to Xero from on or before the
+   * day it was made, that Xero has not given its id yet. Two reads; no call to
+   * Xero.
+   */
+  private async toXero(
+    organizationId: string,
+    row: Pick<DetailRow, 'id' | 'origin' | 'status' | 'xeroTenantId' | 'xeroInvoiceId' | 'createdAt'>,
+  ): Promise<InvoiceDetail['toXero']> {
+    if (row.origin !== InvoiceOrigin.CONSOLE || !row.xeroTenantId || row.xeroInvoiceId || row.status === InvoiceStatus.VOIDED) return null;
+    const [settings, sync] = await Promise.all([
+      this.prisma.xeroSettings.findUnique({
+        where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: row.xeroTenantId } },
+        select: { sendingEnabled: true, sendFrom: true },
+      }),
+      this.prisma.xeroInvoiceSync.findUnique({ where: { invoiceId: row.id }, select: { status: true, problem: true } }),
+    ]);
+    if (!settings?.sendingEnabled || !settings.sendFrom) return null;
+    // Made before its company's start date: it never goes (`sentFrom`).
+    if (row.createdAt < businessInstant(settings.sendFrom.toISOString().slice(0, 10), '00:00:00')) return null;
+    return { problem: sync?.status === 'FAILED' ? (sync.problem ?? 'Xero refused it.') : null };
   }
 
   /** A finished visit with a property: the only kind an invoice is made for. */

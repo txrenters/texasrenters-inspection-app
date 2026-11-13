@@ -125,6 +125,21 @@ describe("an invoice's page", () => {
     expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument();
   });
 
+  it('says one made here is on its way to Xero until Xero numbers it, or why Xero refused it (2026-11-13)', () => {
+    const going = { ...DETAIL, status: 'DRAFT' as const, number: null, company: { tenantId: 't-1', name: 'Example Home Services' }, toXero: { problem: null } };
+    hooks.useInvoice.mockReturnValue(ready(going));
+    const { unmount } = render(<InvoicePage />);
+    expect(screen.getAllByText('Going to Xero').length).toBeGreaterThan(0);
+    expect(screen.getByText('On its way to Example Home Services’s books in Xero as a draft. Xero numbers it in a moment.')).toBeInTheDocument();
+    unmount();
+
+    hooks.useInvoice.mockReturnValue(ready({ ...going, toXero: { problem: 'Xero has invoice 8733 for another client: renumber one of them.' } }));
+    render(<InvoicePage />);
+    expect(screen.getAllByText('Xero refused it').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Xero has invoice 8733 for another client: renumber one of them\. Put it right, then press Try again on the/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Xero page' })).toHaveAttribute('href', '/integrations/xero');
+  });
+
   it('voids an invoice only once asked, against the invoice as it was read', async () => {
     render(<InvoicePage />);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false });

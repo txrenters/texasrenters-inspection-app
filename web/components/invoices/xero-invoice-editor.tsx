@@ -303,9 +303,10 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       clientRequestId: requestId,
     };
     const failed = (error: Error) => toast.error(several ? 'No invoice was created' : 'The invoice was not created', { description: error.message });
+    // Saved here, and on its way to Xero (2026-11-13): it lands there a few seconds later, not as the save answers.
     const made = (count: number, total: number) =>
-      toast.success(count > 1 ? `${count} drafts made in Xero` : 'Draft made in Xero', {
-        description: `${formatMoney(total)} to ${draft.clientName}. Xero numbers ${count > 1 ? 'them' : 'it'}; approve there.`,
+      toast.success(count > 1 ? `${count} drafts going to Xero` : 'Draft going to Xero', {
+        description: `${formatMoney(total)} to ${draft.clientName}. Xero numbers ${count > 1 ? 'them' : 'it'} in a moment; approve there.`,
       });
     if (!several) {
       const only = read[0]!;
