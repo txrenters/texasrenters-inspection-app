@@ -41,7 +41,7 @@ import {
   EMPTY_CLOSING_COMMENTS,
   type ClosingComments,
 } from '@/src/utils/closing-comments';
-import { planEndJob } from '@/src/utils/end-job';
+import { jobEndedMessage, planEndJob } from '@/src/utils/end-job';
 import { formatTimer, formatWorked, jobElapsed } from '@/src/utils/job-clock';
 import { isJobRemoved } from '@/src/utils/job-removed';
 import {
@@ -264,6 +264,9 @@ export default function JobScreen() {
   const submit = () => {
     if (!ending) return;
     setEndError(null);
+    // Rooms whose video is still on its way go with the job (2026-11-14); the
+    // technician is told the app still has to send them.
+    const stillSending = sendingRooms;
     actions.complete.mutate(
       {
         servicesReport: withJobNote(ending.report, noteDraft) ?? undefined,
@@ -274,7 +277,7 @@ export default function JobScreen() {
           setEnding(null);
           setClosingComments(EMPTY_CLOSING_COMMENTS);
           setJobNote(null);
-          Alert.alert('Job ended', 'It is with the office. Any photos still sending keep uploading.', [
+          Alert.alert('Job ended', jobEndedMessage(stillSending), [
             { text: 'Done', onPress: () => router.replace('/(app)/(tabs)/(jobs)/inspections') },
           ]);
         },

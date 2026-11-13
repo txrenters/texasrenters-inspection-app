@@ -13,6 +13,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import type { Inspection } from '../domain/models';
 import { registerIcons } from '../lib/icons';
+import { useVideosStillSending } from '../media/videos-still-sending';
 import {
   INSPECTION_STATUS_TONE_CLASS,
   inspectionStatusPresentation,
@@ -55,6 +56,8 @@ const TONE_ICON: Record<InspectionStatusTone, typeof ClipboardListIcon> = {
  */
 export function JobRow({ item, showDay = true }: { item: Inspection; showDay?: boolean }) {
   const urgency = useInspectionUrgency(item);
+  // Its videos still going from this phone, End job or not (2026-11-14).
+  const sending = useVideosStillSending(item.id);
   const visitWindow = formatVisitWindow(item);
   const presentation = inspectionStatusPresentation(item.status);
   const tone = INSPECTION_STATUS_TONE_CLASS[presentation.tone];
@@ -71,6 +74,7 @@ export function JobRow({ item, showDay = true }: { item: Inspection; showDay?: b
         item.property.cityStateZip,
         kind,
         `${item.progress.completed} of ${item.progress.total} rooms complete`,
+        sending ? `${sending} ${sending === 1 ? 'video' : 'videos'} still sending` : '',
         presentation.label,
         // Carried in the row's own label: the badge below sits inside a hidden
         // subtree, so this is the only way it reaches a screen reader.
@@ -98,6 +102,7 @@ export function JobRow({ item, showDay = true }: { item: Inspection; showDay?: b
           </Text>
           <Text numberOfLines={2} className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
             {kind} · {item.progress.completed} of {item.progress.total} rooms complete
+            {sending ? ` · ${sending} ${sending === 1 ? 'video' : 'videos'} sending` : ''}
           </Text>
           <View className="mt-2 flex-row flex-wrap items-center gap-2">
             <View className={`flex-row items-center gap-1 rounded-full px-2.5 py-0.5 ${tone.bg}`}>

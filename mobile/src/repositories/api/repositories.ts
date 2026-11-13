@@ -73,6 +73,7 @@ import { nativeWholeFileSender } from '../../media/whole-file-upload';
 import { releaseUploadedRecording } from '../../media/local-recordings';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { roomRecordingStillUploading } from '../../media/room-recording-upload';
+import { STILL_SENDING } from '../../media/videos-still-sending';
 import {
   runStreamUpload,
   sessionRefusalRetryable,
@@ -1172,15 +1173,32 @@ export class ApiInspectionRepository implements InspectionRepository {
      * submitted either, and says so below.
      */
     await drainOfflineWrites(sendQueuedWrite).catch(() => undefined);
+    // The videos this phone is still sending, each with an upload the server
+    // knows of (2026-11-14): their rooms count as done, and the server waits
+    // for them before the job goes to review.
+    const stillSending = await videosStillSending(id);
     // The closing comments sit beside the services report on the body, as the
-    // API reads them; neither is sent when there is nothing to say.
-    const body =
-      servicesReport || closingComments
-        ? { ...(servicesReport ? { servicesReport } : {}), ...closingComments }
+    // API reads them; none of it is sent when there is nothing to say.
+    const bodyWith = (videos: readonly string[]) =>
+      servicesReport || closingComments || videos.length
+        ? {
+            ...(servicesReport ? { servicesReport } : {}),
+            ...closingComments,
+            ...(videos.length ? { videosStillSending: videos } : {}),
+          }
         : undefined;
-    const inspection = inspectionSchema.parse(
-      await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`, 'POST', body),
-    );
+    const path = `/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`;
+    const sent = await writeJson(path, 'POST', bodyWith(stillSending)).catch((error: unknown) => {
+      /**
+       * A server from before late videos refuses the field (a 400). Asked once
+       * more without it, its own answer -- the rooms still sending, by name --
+       * is what the technician sees, as before.
+       */
+      if (stillSending.length && error instanceof ApiRefusalError && error.status === 400)
+        return writeJson(path, 'POST', bodyWith([]));
+      throw error;
+    });
+    const inspection = inspectionSchema.parse(sent);
     await Promise.all([
       storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
       updateExistingApiRecord(`inspection-context:${id}`, inspectionContextSchema, (current) => ({
@@ -2141,6 +2159,66 @@ function localUploads() {
   return state.uploads.filter(
     (item) => item.id.startsWith('local-upload-') && item.ownerUserId === state.selectedUserId,
   );
+}
+
+/**
+ * The upload keys of a job's videos still on this phone, for End job to name
+ * (2026-11-14).
+ *
+ * The server waits for a video it knows: one whose upload was opened. The queue
+ * opens one only as it reaches each video, so a video further back has none
+ * yet; it is opened here, and kept on its queue item exactly as the queue keeps
+ * one, so the queue goes on to send it without asking again. Never for a video
+ * the queue is sending this moment -- asking again would replace the very
+ * upload it is filling -- nor for a recording whose file is gone, which will
+ * never arrive and is left to the server's own check. An answer that cannot be
+ * had -- no signal, no session -- ends End job here, as no signal always did.
+ */
+async function videosStillSending(inspectionId: string): Promise<string[]> {
+  const waiting = localUploads().filter(
+    (item) => item.inspectionId === inspectionId && STILL_SENDING.has(item.status),
+  );
+  if (!waiting.length) return [];
+  const store = useDemoStore.getState();
+  const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
+  const keys: string[] = [];
+  for (const item of waiting) {
+    const media = store.media.find((entry) => entry.id === item.mediaId);
+    if (!media?.uri) continue;
+    if (!item.serverVideoId) {
+      if (uploadSlots.holds(item.id) || !baseUrl) continue;
+      const fileInfo = await LegacyFileSystem.getInfoAsync(media.uri);
+      if (!fileInfo.exists) continue;
+      const session = await getSession();
+      if (!session) throw new SessionExpiredError();
+      const recordingType = item.recordingType ?? 'PRIMARY_AREA';
+      const opened = await createStreamUploadSession({
+        baseUrl,
+        accessToken: session.accessToken,
+        inspectionAreaId: item.roomId,
+        recordingType,
+        filename: `${item.roomName || 'recording'}.mp4`,
+        mimeType: 'video/mp4',
+        fileSize: fileInfo.size ?? 0,
+        durationSeconds: Math.max(1, Math.round(media.durationSeconds)),
+        localQueueId: item.id,
+        idempotencyKey: media.id,
+        recordedAt: media.recordedAt,
+        capture: streamCaptureOf(media, recordingType),
+      });
+      // A server with no Stream takes videos only as they arrive: nothing to name.
+      if (!opened) continue;
+      store.updateUpload(item.id, {
+        serverVideoId: opened.videoId,
+        streamUid: opened.streamUid,
+        uploadUrl: opened.uploadUrl ?? undefined,
+        uploadUrlExpiresAt: opened.expiresAt ?? undefined,
+        fileSize: fileInfo.size ?? undefined,
+      });
+    }
+    keys.push(media.id);
+  }
+  return keys;
 }
 
 /**
