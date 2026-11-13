@@ -5,9 +5,15 @@ import {
   sessionRefusalRetryable,
   StreamSessionError,
   uploadUrlUsable,
+  WHOLE_FILE_LINK_MIN_LIFE_MS,
   type StreamUploadSession,
 } from '../src/media/stream-upload-runner';
-import { CONSTRAINED_CHUNK_BYTES, DEFAULT_CHUNK_BYTES, TusUploadError } from '../src/media/tus-upload';
+import {
+  CONSTRAINED_CHUNK_BYTES,
+  DEFAULT_CHUNK_BYTES,
+  TusUploadError,
+  UploadPausedError,
+} from '../src/media/tus-upload';
 
 // Prefixed `mock` so jest permits the hoisted factory below to reference it.
 const mockUpload = jest.fn();
@@ -162,6 +168,37 @@ describe('session reuse', () => {
     expect(createSession).toHaveBeenCalled();
   });
 
+  describe('for a whole take, sent in one request (2026-11-14)', () => {
+    const held = (minutesLeft: number, patch: Partial<UploadItem> = {}) =>
+      item({
+        streamUid: 'uid-1',
+        serverVideoId: 'video-1',
+        uploadUrl: 'https://upload/held',
+        uploadUrlExpiresAt: new Date(Date.now() + minutesLeft * 60_000).toISOString(),
+        ...patch,
+      });
+
+    it('asks for a new link rather than send it to one with under half an hour left', async () => {
+      const createSession = jest.fn().mockResolvedValue(session);
+      await run({ item: held(20), createSession }).promise;
+      expect(createSession).toHaveBeenCalledTimes(1);
+      expect(mockUpload.mock.calls[0][0].uploadUrl).toBe(session.uploadUrl);
+    });
+
+    it('keeps a held link with half an hour or more', async () => {
+      const createSession = jest.fn();
+      await run({ item: held(WHOLE_FILE_LINK_MIN_LIFE_MS / 60_000 + 5), createSession }).promise;
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it('still resumes chunks on a held link with minutes left, and keeps the minute rule without the uploader', async () => {
+      const createSession = jest.fn();
+      await run({ item: held(5, { uploadedBytes: 5_000_000 }), createSession }).promise;
+      await run({ item: held(5), createSession, wholeFile: null }).promise;
+      expect(createSession).not.toHaveBeenCalled();
+    });
+  });
+
   it('persists the session so a restart can resume', async () => {
     const { promise, persisted } = run({});
     await promise;
@@ -270,5 +307,19 @@ describe('a take starting mid-upload (2026-10-06)', () => {
     mockUpload.mockRejectedValue(new TusUploadError('Chunk rejected (500).', 'retryable', 500));
     const { promise } = run({ shouldPause: () => false });
     await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: true });
+  });
+
+  it('is an ordinary failure during a take too, now a whole file may be sent in one (2026-11-14)', async () => {
+    // Paused, it would be tried again at once, every few seconds, while the
+    // room is filmed; failed, it waits out its backoff.
+    mockUpload.mockRejectedValue(new TusUploadError('The upload could not reach Cloudflare.', 'retryable'));
+    const { promise } = run({ shouldPause: (path) => path === 'chunks' });
+    await expect(promise).resolves.toMatchObject({ kind: 'failed', retryable: true });
+  });
+
+  it('waits whenever the upload stopped because it was asked to', async () => {
+    mockUpload.mockRejectedValue(new UploadPausedError());
+    const { promise } = run({ shouldPause: () => false });
+    await expect(promise).resolves.toEqual({ kind: 'paused' });
   });
 });

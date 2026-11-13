@@ -1,8 +1,11 @@
 import { useSyncExternalStore } from 'react';
 import * as Battery from 'expo-battery';
 
+import { batteryPercentOf } from '../location/battery';
+
 /**
- * Whether the phone is saving power, and whether it is plugged in.
+ * Whether the phone is saving power, whether it is plugged in, and how much
+ * charge it has.
  *
  * Read by the work that can afford to wait when the battery cannot (the office,
  * 2026-10-06): location slows to a fix every half minute in Low Power Mode, and
@@ -18,9 +21,16 @@ import * as Battery from 'expo-battery';
 export interface PowerState {
   lowPower: boolean;
   charging: boolean;
+  /**
+   * The charge as a whole percentage; null when the phone will not say. Read
+   * with the rest, and announced by iOS at most once a minute -- but by
+   * Android only around its low-battery warning, so it is as fresh as the
+   * last `readPowerState`, which the upload queue asks for every minute.
+   */
+  batteryPercent: number | null;
 }
 
-const UNKNOWN: PowerState = { lowPower: false, charging: false };
+const UNKNOWN: PowerState = { lowPower: false, charging: false, batteryPercent: null };
 
 let state: PowerState = UNKNOWN;
 let readAt = 0;
@@ -28,7 +38,12 @@ let reading: Promise<PowerState> | null = null;
 const listeners = new Set<() => void>();
 
 function set(next: PowerState) {
-  if (next.lowPower === state.lowPower && next.charging === state.charging) return;
+  if (
+    next.lowPower === state.lowPower &&
+    next.charging === state.charging &&
+    next.batteryPercent === state.batteryPercent
+  )
+    return;
   state = next;
   listeners.forEach((listener) => listener());
 }
@@ -50,8 +65,12 @@ export function readPowerState(maxAgeMs = 60_000, now = Date.now()): Promise<Pow
   if (now - readAt < maxAgeMs) return Promise.resolve(state);
   reading ??= (async () => {
     try {
-      const { lowPowerMode, batteryState } = await Battery.getPowerStateAsync();
-      set({ lowPower: Boolean(lowPowerMode), charging: isCharging(batteryState) });
+      const { lowPowerMode, batteryState, batteryLevel } = await Battery.getPowerStateAsync();
+      set({
+        lowPower: Boolean(lowPowerMode),
+        charging: isCharging(batteryState),
+        batteryPercent: batteryPercentOf(batteryLevel),
+      });
     } catch {
       // Unanswerable: keep what was known. Never the reason a caller fails.
     } finally {
@@ -75,6 +94,9 @@ export function followPowerState(): () => void {
     subscriptions.push(
       Battery.addLowPowerModeListener(({ lowPowerMode }) => set({ ...state, lowPower: Boolean(lowPowerMode) })),
       Battery.addBatteryStateListener(({ batteryState }) => set({ ...state, charging: isCharging(batteryState) })),
+      Battery.addBatteryLevelListener(({ batteryLevel }) =>
+        set({ ...state, batteryPercent: batteryPercentOf(batteryLevel) }),
+      ),
     );
   } catch {
     // A platform with no battery events still has `readPowerState`.

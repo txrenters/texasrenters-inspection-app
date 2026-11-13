@@ -4,9 +4,11 @@ import {
   DEFAULT_CHUNK_BYTES,
   sessionExpired,
   TusUploadError,
+  UploadPausedError,
   uploadFileInChunks,
+  type UploadPath,
 } from './tus-upload';
-import { nativeWholeFileSender, type WholeFileSender } from './whole-file-upload';
+import { nativeWholeFileSender, WHOLE_FILE_MAX_BYTES, type WholeFileSender } from './whole-file-upload';
 
 /**
  * Sends one queued recording straight to Cloudflare Stream.
@@ -61,24 +63,46 @@ export type StreamUploadOutcome =
   /** No Stream credentials on this deployment — the caller keeps its old path. */
   | { kind: 'unavailable' }
   /**
-   * Stopped between chunks because the camera started recording. Not a
-   * failure: nothing went wrong, and it carries on from Cloudflare's offset
-   * once the take ends.
+   * Stopped before a chunk because the camera started recording, or before
+   * anything because videos are held. Not a failure: nothing went wrong, and it
+   * carries on from Cloudflare's offset once the take ends or the hold lifts.
    */
   | { kind: 'paused' }
   | { kind: 'failed'; retryable: boolean; message: string };
 
+/** What the queue says when an upload link lapsed before the video arrived; the retry starts over with a new one. */
+export const UPLOAD_LINK_EXPIRED_MESSAGE =
+  'The upload link expired before the video was sent. Starting it again with a new one.';
+
 /**
  * Whether a stored upload URL is still worth using.
  *
- * A minute of headroom, so a URL does not lapse midway through a chunk that was
- * fine when it started.
+ * A minute of headroom by default, so a URL does not lapse midway through a
+ * chunk that was fine when it started.
  */
-export function uploadUrlUsable(item: Pick<UploadItem, 'uploadUrl' | 'uploadUrlExpiresAt'>, now = Date.now()) {
+export function uploadUrlUsable(
+  item: Pick<UploadItem, 'uploadUrl' | 'uploadUrlExpiresAt'>,
+  now = Date.now(),
+  headroomMs = 60_000,
+) {
   if (!item.uploadUrl) return false;
   if (!item.uploadUrlExpiresAt) return true;
-  return new Date(item.uploadUrlExpiresAt).getTime() - 60_000 > now;
+  return new Date(item.uploadUrlExpiresAt).getTime() - headroomMs > now;
 }
+
+/**
+ * The life a held upload link must have left to carry a whole recording.
+ *
+ * Cloudflare's links last about 55 minutes from when the upload starts, and a
+ * recording waiting its turn in the queue holds none. A whole take meets a
+ * held link only when an earlier attempt failed before Cloudflare had any of
+ * it -- often a phone that lost signal, and came back much later. A whole
+ * file needs the link for the whole transfer, which is one request: 195 MiB
+ * at 1 Mbps is about 27 minutes. With less left a new link is asked for
+ * first, rather than sending the whole take to a link that lapses before the
+ * end of it.
+ */
+export const WHOLE_FILE_LINK_MIN_LIFE_MS = 30 * 60_000;
 
 /**
  * Smaller chunks on a connection that keeps dropping.
@@ -99,8 +123,8 @@ export async function runStreamUpload(options: {
   filename: string;
   unstableConnection?: boolean;
   signal?: AbortSignal;
-  /** True while the upload must wait; checked between chunks. See `capture-activity`. */
-  shouldPause?: () => boolean;
+  /** True while the upload must wait, by path; see `uploadFileInChunks` and `upload-slots`. */
+  shouldPause?: (path: UploadPath) => boolean;
   /** Asks the backend for a session; resolves null when Stream is unconfigured. */
   createSession: () => Promise<StreamUploadSession | null>;
   /** Persists resume state after every confirmed chunk. */
@@ -112,8 +136,12 @@ export async function runStreamUpload(options: {
   wholeFile?: WholeFileSender | null;
 }): Promise<StreamUploadOutcome> {
   let session: StreamUploadSession | null = null;
+  const wholeFile = options.wholeFile === undefined ? nativeWholeFileSender() : (options.wholeFile ?? undefined);
+  const goesWhole =
+    Boolean(wholeFile) && !options.item.uploadedBytes && options.fileSize > 0 && options.fileSize <= WHOLE_FILE_MAX_BYTES;
+  const linkUsable = uploadUrlUsable(options.item, Date.now(), goesWhole ? WHOLE_FILE_LINK_MIN_LIFE_MS : undefined);
 
-  if (uploadUrlUsable(options.item) && options.item.streamUid && options.item.serverVideoId) {
+  if (linkUsable && options.item.streamUid && options.item.serverVideoId) {
     // Resume against the session already held. Asking for a new one would mint
     // a second Cloudflare video for a recording that is half sent.
     session = {
@@ -160,7 +188,7 @@ export async function runStreamUpload(options: {
       chunkBytes: chunkSizeFor({ unstable: Boolean(options.unstableConnection) }),
       signal: options.signal,
       shouldPause: options.shouldPause,
-      wholeFile: options.wholeFile === undefined ? nativeWholeFileSender() : (options.wholeFile ?? undefined),
+      wholeFile,
       onProgress: ({ uploadedBytes, totalBytes }) => {
         // Written after every confirmed chunk, because the interesting failures
         // — a force-quit, the OS reclaiming the app — leave no chance to save
@@ -173,8 +201,11 @@ export async function runStreamUpload(options: {
       },
     });
   } catch (error) {
-    // Asked to wait, and whatever the last chunk did, the next one waits too.
-    if (options.shouldPause?.()) return { kind: 'paused' };
+    // Asked to wait. Or videos were held while the last request was out:
+    // whatever it did, the next one waits too. A request that fails during a
+    // take is a failure like any other, retried after its backoff -- a whole
+    // file may be sent while a room is filmed.
+    if (error instanceof UploadPausedError || options.shouldPause?.('whole-file')) return { kind: 'paused' };
     if (error instanceof TusUploadError) {
       // A dead session must not be retried against the same URL. Clearing it
       // makes the next attempt ask for a replacement while keeping the queue
@@ -190,12 +221,7 @@ export async function runStreamUpload(options: {
        * replacement, which it mints. Only a recording that is itself gone or
        * empty, or a chunk Cloudflare refuses outright, still waits for a person.
        */
-      if (sessionExpired(error))
-        return {
-          kind: 'failed',
-          retryable: true,
-          message: 'The upload link expired before the video was sent. Starting it again with a new one.',
-        };
+      if (sessionExpired(error)) return { kind: 'failed', retryable: true, message: UPLOAD_LINK_EXPIRED_MESSAGE };
       return { kind: 'failed', retryable: error.kind === 'retryable', message: error.message };
     }
     return {

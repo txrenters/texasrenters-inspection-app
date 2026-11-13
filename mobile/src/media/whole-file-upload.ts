@@ -24,8 +24,9 @@ import { Platform } from 'react-native';
  *
  * Every other chunk must be a multiple of 256 KiB, but "the final chunk of an
  * upload that fits within a single chunk is exempt" -- so a whole file this size
- * or smaller goes in one PATCH. About six and a half minutes of video at the
- * 4 Mbps cap; a longer take is sent in chunks as before.
+ * or smaller goes in one PATCH. Every take since 2026-11-14 fits: the camera
+ * stops one at `MAX_RECORDING_BYTES`. A larger one, filmed before at 4 Mbps,
+ * is sent in chunks as before.
  */
 export const WHOLE_FILE_MAX_BYTES = 209_715_200;
 

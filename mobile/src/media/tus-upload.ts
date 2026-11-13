@@ -51,6 +51,24 @@ export class TusUploadError extends Error {
 }
 
 /**
+ * Stopped because it was asked to wait -- a take, or the video hold -- rather
+ * than because anything failed. Retryable, as every pause always was; the
+ * queue spends no attempt on it.
+ */
+export class UploadPausedError extends TusUploadError {
+  constructor() {
+    super('Upload was paused.', 'retryable');
+    this.name = 'UploadPausedError';
+  }
+}
+
+/**
+ * The two ways a recording goes: whole, in one request through the platform's
+ * uploader, or in chunks read by JavaScript.
+ */
+export type UploadPath = 'whole-file' | 'chunks';
+
+/**
  * Whether the upload link itself is what died -- expired, unknown, or refused
  * -- as opposed to the recording or the chunk being at fault. A new link cures
  * the first; nothing automatic cures the second.
@@ -101,13 +119,16 @@ export async function uploadFileInChunks(options: {
   chunkBytes?: number;
   signal?: AbortSignal;
   /**
-   * Asked before every chunk; true stops the upload at that boundary.
+   * Asked with `whole-file` before a whole file is handed to the platform, and
+   * with `chunks` before every chunk; true stops the upload there.
    *
-   * A boundary rather than an abort, because the chunk already in flight costs
-   * the phone nothing more to finish -- the bytes are in native hands -- and
-   * cutting it off would only mean sending it again.
+   * Asked by path because the two differ during a take: the platform's
+   * uploader may start while a room is filmed, the chunks may not (see
+   * `upload-slots`). A boundary rather than an abort, because a request
+   * already in flight costs the phone nothing more to finish -- the bytes are
+   * in native hands -- and cutting it off would only mean sending it again.
    */
-  shouldPause?: () => boolean;
+  shouldPause?: (path: UploadPath) => boolean;
   onProgress?: (progress: TusProgress) => void;
   /**
    * Sends a fresh recording that fits one request through the platform's own
@@ -130,11 +151,10 @@ export async function uploadFileInChunks(options: {
   options.onProgress?.({ uploadedBytes: offset, totalBytes });
 
   if (options.wholeFile && offset === 0 && totalBytes <= WHOLE_FILE_MAX_BYTES) {
-    // Not started during a take, nor while videos are held -- but once handed
-    // to the platform it is let finish: it costs JavaScript nothing, and
-    // stopping it would only mean sending the rest again in chunks.
-    if (options.signal?.aborted || options.shouldPause?.())
-      throw new TusUploadError('Upload was paused.', 'retryable');
+    // Not started while videos are held -- but once handed to the platform it
+    // is let finish: it costs JavaScript nothing, and stopping it would only
+    // mean sending the rest again in chunks.
+    if (options.signal?.aborted || options.shouldPause?.('whole-file')) throw new UploadPausedError();
     offset = await sendWholeFile(options.wholeFile, options.uploadUrl, options.localUri, totalBytes, options.onProgress);
     if (offset >= totalBytes) return offset;
   }
@@ -142,8 +162,7 @@ export async function uploadFileInChunks(options: {
   const handle = file.open();
   try {
     while (offset < totalBytes) {
-      if (options.signal?.aborted || options.shouldPause?.())
-        throw new TusUploadError('Upload was paused.', 'retryable');
+      if (options.signal?.aborted || options.shouldPause?.('chunks')) throw new UploadPausedError();
 
       handle.offset = offset;
       const chunk = handle.readBytes(Math.min(chunkBytes, totalBytes - offset));
@@ -236,7 +255,7 @@ async function sendWholeFile(
     // byte, on both), so this is a lost connection, worth another attempt.
     throw unreachable(uploadUrl, error);
   }
-  if (!response) throw new TusUploadError('Upload was paused.', 'retryable');
+  if (!response) throw new UploadPausedError();
   if (response.status === 404 || response.status === 410 || response.status === 403)
     throw new TusUploadError('Upload session expired before it finished.', 'permanent', response.status);
 
@@ -331,7 +350,7 @@ async function request(
     // signal, not the error's name: Expo's fetch reports a cancelled request
     // as a plain `FetchError`, never an `AbortError`.
     if (controller.signal.aborted || (error as { name?: string }).name === 'AbortError')
-      throw new TusUploadError('Upload was paused.', 'retryable');
+      throw new UploadPausedError();
     throw unreachable(url, error);
   } finally {
     clearTimeout(timer);

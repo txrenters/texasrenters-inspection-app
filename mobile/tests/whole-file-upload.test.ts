@@ -1,4 +1,4 @@
-import { TusUploadError, uploadFileInChunks } from '../src/media/tus-upload';
+import { TusUploadError, UploadPausedError, uploadFileInChunks } from '../src/media/tus-upload';
 import { WHOLE_FILE_MAX_BYTES, type WholeFileSender } from '../src/media/whole-file-upload';
 
 /**
@@ -79,14 +79,53 @@ describe('a fresh recording that fits one request', () => {
     expect(mockFile.open).not.toHaveBeenCalled();
   });
 
-  it('is not started during a take, or while videos are held', async () => {
+  it('is not started while videos are held', async () => {
     cloudflare(() => 0);
     const wholeFile = jest.fn();
 
     await expect(
       uploadFileInChunks({ uploadUrl: URL, localUri: 'file:///take.mp4', wholeFile, shouldPause: () => true }),
-    ).rejects.toMatchObject({ kind: 'retryable', message: 'Upload was paused.' });
+    ).rejects.toBeInstanceOf(UploadPausedError);
     expect(wholeFile).not.toHaveBeenCalled();
+  });
+
+  it('is started during a take, when only the chunks must wait (2026-11-14)', async () => {
+    const chunks = cloudflare(() => 0);
+    const wholeFile = jest.fn<ReturnType<WholeFileSender>, Parameters<WholeFileSender>>(async () => ({
+      status: 204,
+      headers: { 'upload-offset': String(mockFile.size) },
+    }));
+
+    await expect(
+      uploadFileInChunks({
+        uploadUrl: URL,
+        localUri: 'file:///take.mp4',
+        wholeFile,
+        shouldPause: (path) => path === 'chunks',
+      }),
+    ).resolves.toBe(mockFile.size);
+    expect(wholeFile).toHaveBeenCalledTimes(1);
+    expect(chunks).toEqual([]);
+  });
+
+  it('leaves what it could not finish during a take for after it, without sending a chunk', async () => {
+    let offset = 0;
+    const chunks = cloudflare(() => offset);
+    // Cloudflare took 12 MiB of it, then refused the rest.
+    const wholeFile: WholeFileSender = async () => {
+      offset = 12 * 1024 * 1024;
+      return { status: 500, headers: {} };
+    };
+
+    await expect(
+      uploadFileInChunks({
+        uploadUrl: URL,
+        localUri: 'file:///take.mp4',
+        wholeFile,
+        shouldPause: (path) => path === 'chunks',
+      }),
+    ).rejects.toBeInstanceOf(UploadPausedError);
+    expect(chunks).toEqual([]);
   });
 
   it('is let finish once started, whatever the camera does meanwhile', async () => {

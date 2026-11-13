@@ -3,9 +3,10 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { queryKeys } from '../features/queries';
-import { followPowerState } from '../lib/power-state';
+import { followPowerState, readPowerState } from '../lib/power-state';
 import { isCaptureActive, subscribeToCaptureActivity } from '../media/capture-activity';
 import { sweepReleasedRecordings } from '../media/recording-cleanup';
+import { MAX_UPLOADS_AT_ONCE } from '../media/upload-slots';
 import { subscribeToVideoGate, videoGate } from '../media/video-hold';
 import { snapshotsAwaitingUpload, uploadSnapshotNow } from '../media/snapshot-upload';
 import { useDemoStore } from '../stores/demo.store';
@@ -54,27 +55,41 @@ export function UploadQueueRunner() {
   const flush = useCallback(async () => {
     // Deliberately not gated on AppState: on Android, where JS can keep running
     // for a while after backgrounding, refusing to start the next item just
-    // wasted that window. `running` still prevents overlapping drains.
+    // wasted that window. `running` still prevents overlapping drains. The
+    // queue itself keeps an iPhone's background transfers for the foreground
+    // (`platformStartsTransfersNow`).
     //
-    // A recording sent to Cloudflare is *not* a background transfer -- its
-    // chunks are ordinary requests, which stop when the phone is locked. It
-    // picks up from Cloudflare's confirmed offset when the app is next open,
-    // and with a fresh upload link if the old one lapsed while it waited.
+    // A fresh recording goes to Cloudflare whole, through the platform, and
+    // carries on with the phone locked. Anything else goes in chunks, ordinary
+    // requests that stop when the phone is locked, and picks up from
+    // Cloudflare's confirmed offset when the app is next open -- with a fresh
+    // upload link if the old one lapsed while it waited.
     if (!allowed || running.current) return;
     running.current = true;
+    // The charge, for the video hold: at most one question to the phone a
+    // minute, since Android announces it only near its low-battery warning.
+    void readPowerState();
     try {
       // Drain, rather than one recording per interval. `tick()` uploads at most
       // one item, so a technician who finished ten rooms used to watch the
       // queue idle for up to four seconds between each — 40 seconds of doing
       // nothing on top of the transfers themselves.
-      let uploaded = 0;
-      for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
-        if (!(await repositories.uploads.tick())) break;
-        uploaded += 1;
-        // Refresh the list between items so the screen shows each one land,
-        // instead of jumping at the end of the whole batch.
-        client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
-      }
+      const drainRecordings = async () => {
+        let sent = 0;
+        for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
+          if (!(await repositories.uploads.tick())) break;
+          sent += 1;
+          // Refresh the list between items so the screen shows each one land,
+          // instead of jumping at the end of the whole batch.
+          client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
+        }
+        return sent;
+      };
+      // Side by side, up to the queue's limit. Each `tick()` takes a recording
+      // nobody else holds, and only one that may go beside the others; a drain
+      // that finds none stops, and the other carries on.
+      const sent = await Promise.all(Array.from({ length: MAX_UPLOADS_AT_ONCE }, drainRecordings));
+      let uploaded = sent.reduce((total, count) => total + count, 0);
       /**
        * Photographs, after the recordings — and drained, not one per tick.
        *

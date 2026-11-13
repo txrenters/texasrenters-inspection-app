@@ -7,7 +7,8 @@ import {
   type Motion,
 } from '../src/location/tracking-profile';
 import { releasedRecordings, RELEASE_AFTER_MS } from '../src/media/recording-cleanup';
-import { evaluateVideoGate } from '../src/media/video-hold';
+import type { PowerState } from '../src/lib/power-state';
+import { evaluateVideoGate, VIDEO_HOLD_BELOW_PERCENT } from '../src/media/video-hold';
 
 /**
  * Battery, phase 2 (the office, 2026-10-06): location slows on site and in Low
@@ -62,28 +63,36 @@ describe('how hard the phone records where it is', () => {
 });
 
 describe('a video in Low Power Mode', () => {
-  const saving = { lowPower: true, charging: false };
+  /** A phone saving power, unplugged, at this charge. */
+  const saving = (batteryPercent: number | null): PowerState => ({ lowPower: true, charging: false, batteryPercent });
+  const onMobileData = (power: PowerState, sendNow = false) =>
+    evaluateVideoGate({ power, connectivity: { isMetered: true }, sendNow });
 
-  it('waits for Wi-Fi or a charger on mobile data', () => {
-    expect(evaluateVideoGate({ power: saving, connectivity: { isMetered: true }, sendNow: false })).toMatchObject({
-      allowed: false,
-    });
+  it('goes over mobile data while the battery has 20% or more (2026-11-14)', () => {
+    expect(onMobileData(saving(80)).allowed).toBe(true);
+    expect(onMobileData(saving(VIDEO_HOLD_BELOW_PERCENT)).allowed).toBe(true);
   });
 
-  it('goes on Wi-Fi, on a charger, or when the technician says send now', () => {
-    expect(evaluateVideoGate({ power: saving, connectivity: { isMetered: false }, sendNow: false }).allowed).toBe(true);
-    expect(
-      evaluateVideoGate({ power: { lowPower: true, charging: true }, connectivity: { isMetered: true }, sendNow: false })
-        .allowed,
-    ).toBe(true);
-    expect(evaluateVideoGate({ power: saving, connectivity: { isMetered: true }, sendNow: true }).allowed).toBe(true);
+  it('waits for Wi-Fi or a charger on mobile data once the battery is under 20%, and says why', () => {
+    const gate = onMobileData(saving(VIDEO_HOLD_BELOW_PERCENT - 1));
+    expect(gate.allowed).toBe(false);
+    expect(gate).toMatchObject({ reason: expect.stringContaining('under 20%') });
   });
 
-  it('is never held with the battery at ease', () => {
+  it('goes on Wi-Fi, on a charger, or when the technician says send now, however low the battery', () => {
     expect(
-      evaluateVideoGate({ power: { lowPower: false, charging: false }, connectivity: { isMetered: true }, sendNow: false })
-        .allowed,
+      evaluateVideoGate({ power: saving(5), connectivity: { isMetered: false }, sendNow: false }).allowed,
     ).toBe(true);
+    expect(onMobileData({ lowPower: true, charging: true, batteryPercent: 5 }).allowed).toBe(true);
+    expect(onMobileData(saving(5), true).allowed).toBe(true);
+  });
+
+  it('is not held when the phone will not say its charge', () => {
+    expect(onMobileData(saving(null)).allowed).toBe(true);
+  });
+
+  it('is never held with Low Power Mode off, however low the battery', () => {
+    expect(onMobileData({ lowPower: false, charging: false, batteryPercent: 3 }).allowed).toBe(true);
   });
 });
 

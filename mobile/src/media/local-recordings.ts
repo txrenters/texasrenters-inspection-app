@@ -3,10 +3,11 @@ import { Platform } from 'react-native';
 
 import type { FrameMarker, LocalMedia, VideoRecordingType } from '../domain/models';
 import type { GuidedCaptureSummary } from '../capture/guided-capture';
+import { RECORDING_VIDEO_BITRATE } from '../capture/recording-limit';
 
 const RECORDINGS_FOLDER = 'inspection-recordings';
-/** 4 Mbps of video plus the sound, when the file's own size is unknown. */
-const FALLBACK_MEGABYTES_PER_SECOND = 0.52;
+/** The video's bitrate plus the sound, in MiB a second, when the file's own size is unknown. */
+const FALLBACK_MEGABYTES_PER_SECOND = (RECORDING_VIDEO_BITRATE / 8 + 24_000) / (1024 * 1024);
 
 type RecordingDraftInput = {
   ownerUserId?: string;
