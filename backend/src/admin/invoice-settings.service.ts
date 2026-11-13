@@ -4,6 +4,7 @@ import {
   MAX_INVOICE_PRODUCTS,
   PAYMENT_TERMS,
   billingRuleProblem,
+  billingRuleSize,
   billingRuleWhen,
   formatMoney,
   invoiceProductProblem,
@@ -129,7 +130,14 @@ export class InvoiceSettingsService {
    */
   async addBillingRules(user: AuthenticatedUser, input: AddBillingRulesInput): Promise<InvoiceSettingsView> {
     const org = user.organizationId;
-    const rules = input.rules.map((rule) => ({ inspectionType: rule.inspectionType ?? null, service: rule.service ?? null, productId: rule.productId }));
+    const rules = input.rules.map((rule) => ({
+      inspectionType: rule.inspectionType ?? null,
+      service: rule.service ?? null,
+      productId: rule.productId,
+      // From a size of property on, another product (2026-11-13): pest control on a house of 2,000 sq ft or more.
+      largeFromSqFt: rule.largeFromSqFt ?? null,
+      largeProductId: rule.largeProductId ?? null,
+    }));
     for (const rule of rules) {
       const problem = billingRuleProblem(rule);
       if (problem) throw new ApplicationError(422, 'INVOICE_BILLING_RULE_INVALID', problem);
@@ -137,14 +145,18 @@ export class InvoiceSettingsService {
     const keyOf = (rule: { inspectionType: string | null; service: string | null; productId: string }) => `${rule.inspectionType}|${rule.service}|${rule.productId}`;
     await this.prisma.$transaction(async (tx) => {
       const [products, existing] = await Promise.all([
-        tx.invoiceProduct.findMany({ where: { organizationId: org, id: { in: [...new Set(rules.map((rule) => rule.productId))] } }, select: { id: true, name: true, unitPriceCents: true, active: true } }),
+        tx.invoiceProduct.findMany({
+          where: { organizationId: org, id: { in: [...new Set(rules.flatMap((rule) => (rule.largeProductId ? [rule.productId, rule.largeProductId] : [rule.productId])))] } },
+          select: { id: true, name: true, unitPriceCents: true, active: true },
+        }),
         tx.invoiceBillingRule.findMany({ where: { organizationId: org }, select: { inspectionType: true, service: true, productId: true } }),
       ]);
-      for (const rule of rules) {
-        const product = products.find((each) => each.id === rule.productId);
-        if (!product) throw new ApplicationError(404, 'INVOICE_PRODUCT_NOT_FOUND', 'That product or service was not found.');
-        if (!product.active) throw new ApplicationError(422, 'INVOICE_BILLING_RULE_INVALID', `${product.name} is set aside. Offer it again first.`);
-      }
+      for (const rule of rules)
+        for (const id of rule.largeProductId ? [rule.productId, rule.largeProductId] : [rule.productId]) {
+          const product = products.find((each) => each.id === id);
+          if (!product) throw new ApplicationError(404, 'INVOICE_PRODUCT_NOT_FOUND', 'That product or service was not found.');
+          if (!product.active) throw new ApplicationError(422, 'INVOICE_BILLING_RULE_INVALID', `${product.name} is set aside. Offer it again first.`);
+        }
       const kept = new Set(existing.map(keyOf));
       const fresh = [...new Map(rules.filter((rule) => !kept.has(keyOf(rule))).map((rule) => [keyOf(rule), rule])).values()];
       if (!fresh.length) return;
@@ -155,7 +167,8 @@ export class InvoiceSettingsService {
       await this.audit(tx, user, 'INVOICE_BILLING_RULES_ADDED', 'InvoiceSettings', org, {
         rules: fresh.map((rule) => {
           const product = products.find((each) => each.id === rule.productId)!;
-          return `${billingRuleWhen(rule)} → ${product.name} (${formatMoney(product.unitPriceCents)})`;
+          const size = billingRuleSize(rule, products);
+          return `${billingRuleWhen(rule)} → ${product.name} (${formatMoney(product.unitPriceCents)})${size ? `; ${size}` : ''}`;
         }),
       });
     });

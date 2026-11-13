@@ -28,6 +28,8 @@ vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (key: string) => pe
 // The cutover is tested in invoice-takeover.test.tsx.
 vi.mock('@/components/invoices/invoice-takeover-section', () => ({ InvoiceTakeoverSection: () => null }));
 vi.mock('@/components/invoices/invoice-emails-section', () => ({ InvoiceEmailsSection: () => null }));
+// Drafting automatically has its own tests (invoice-auto-drafts-section.test.tsx).
+vi.mock('@/components/invoices/invoice-auto-drafts-section', () => ({ InvoiceAutoDraftsSection: () => null }));
 vi.mock('@/components/invoices/statement-settings-section', () => ({ StatementSettingsSection: () => null }));
 vi.mock('@/components/invoices/email-templates-section', () => ({ EmailTemplatesSection: () => null }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));

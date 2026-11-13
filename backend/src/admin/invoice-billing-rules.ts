@@ -33,9 +33,20 @@ export async function billingRules(db: Db, organizationId: string): Promise<Invo
   const rows = await db.invoiceBillingRule.findMany({
     where: { organizationId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, inspectionType: true, service: true, productId: true },
+    select: { id: true, inspectionType: true, service: true, productId: true, largeFromSqFt: true, largeProductId: true },
   });
   return rows.map((row) => ({ ...row, service: row.service as ReportableVisitService | null }));
+}
+
+/**
+ * A property's floor area in square feet, as its page shows it (2026-11-13):
+ * Propertyware's, else the one an administrator gave; null when neither has one.
+ * A rule that bills another product from a size on bills its own without it.
+ */
+export function buildingAreaSqFt(building: { totalArea?: number | null; manualTotalArea?: number | null } | null | undefined): number | null {
+  if (building?.totalArea && building.totalArea > 0) return building.totalArea;
+  if (building?.manualTotalArea && building.manualTotalArea > 0) return building.manualTotalArea;
+  return null;
 }
 
 /** What a visit is billed from: the rules, and every product on the list -- set aside or not, so a rule's can be named. */
@@ -47,7 +58,7 @@ export interface BillingBasis {
 export async function billingBasis(db: Db, organizationId: string): Promise<BillingBasis> {
   const [rules, products] = await Promise.all([
     billingRules(db, organizationId),
-    db.invoiceProduct.findMany({ where: { organizationId }, select: { id: true, name: true, unitPriceCents: true, active: true } }),
+    db.invoiceProduct.findMany({ where: { organizationId }, select: { id: true, name: true, unitPriceCents: true, active: true, description: true } }),
   ]);
   return { rules, products };
 }

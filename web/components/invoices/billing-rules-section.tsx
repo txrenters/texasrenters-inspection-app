@@ -5,6 +5,7 @@ import {
   REPORTABLE_VISIT_SERVICES,
   VISIT_SERVICE_LABEL,
   billingRuleProblem,
+  billingRuleSize,
   billingRuleWhen,
   formatMoney,
   inspectionWords,
@@ -17,12 +18,15 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useInvoiceSettingsEdits } from '@/lib/invoice-settings-queries';
 
 /** "Any visit" and "whatever was done": a Select item cannot have an empty value. */
 const ANY = 'any';
+/** No other product for the larger properties. */
+const NONE = 'none';
 
 /**
  * What a finished visit bills (2026-11-12, PR 1 of making invoices in the
@@ -37,6 +41,9 @@ export function BillingRulesSection({ view, mayChange }: { view: InvoiceSettings
   const [type, setType] = useState<string>(ANY);
   const [service, setService] = useState<string>(ANY);
   const [productId, setProductId] = useState<string>('');
+  // From a size of property on, another product (2026-11-13): pest control on a house of 2,000 sq ft or more.
+  const [largeFrom, setLargeFrom] = useState('');
+  const [largeProductId, setLargeProductId] = useState<string>(NONE);
 
   const product = (wanted: string) => view.products.find((each) => each.id === wanted);
   const company = (tenantId: string | null) => (tenantId ? (view.organisations.find((each) => each.tenantId === tenantId)?.name ?? 'Unknown') : null);
@@ -46,8 +53,10 @@ export function BillingRulesSection({ view, mayChange }: { view: InvoiceSettings
     inspectionType: type === ANY ? null : (type as InspectionType),
     service: service === ANY ? null : (service as ReportableVisitService),
     productId,
+    largeFromSqFt: largeFrom.trim() ? Number(largeFrom.replace(/,/g, '')) : null,
+    largeProductId: largeProductId === NONE ? null : largeProductId,
   };
-  const problem = type === ANY && service === ANY ? billingRuleProblem(rule) : null;
+  const problem = billingRuleProblem(rule);
 
   const add = (rules: NewBillingRule[], done: string, after?: () => void) =>
     edits.addBillingRules.mutate(
@@ -138,6 +147,9 @@ export function BillingRulesSection({ view, mayChange }: { view: InvoiceSettings
                   <TableCell className="font-medium">
                     {billed.name}
                     {billed.aside ? <span className="text-warning block text-xs font-normal">Set aside: it bills nothing until offered again.</span> : null}
+                    {billingRuleSize(each, view.products) ? (
+                      <span className="text-muted-foreground block text-xs font-normal">{billingRuleSize(each, view.products)!.replace(/^from/, 'From')}</span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{billed.price}</TableCell>
                   {view.organisations.length ? (
@@ -160,7 +172,7 @@ export function BillingRulesSection({ view, mayChange }: { view: InvoiceSettings
       )}
 
       {mayChange ? (
-        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_1.5fr_auto] md:items-end">
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_1.5fr] md:items-end">
           <Field>
             <FieldLabel htmlFor={`${id}-type`}>Visit type</FieldLabel>
             <Select onValueChange={setType} value={type}>
@@ -208,20 +220,43 @@ export function BillingRulesSection({ view, mayChange }: { view: InvoiceSettings
               </SelectContent>
             </Select>
           </Field>
+          <Field>
+            <FieldLabel htmlFor={`${id}-large-from`}>From a size on (optional)</FieldLabel>
+            <Input id={`${id}-large-from`} inputMode="numeric" onChange={(event) => setLargeFrom(event.target.value)} placeholder="sq ft, e.g. 2,000" value={largeFrom} />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${id}-large-product`}>Bills instead</FieldLabel>
+            <Select disabled={!offered.length} onValueChange={setLargeProductId} value={largeProductId}>
+              <SelectTrigger className="w-full" id={`${id}-large-product`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>The same, whatever the size</SelectItem>
+                {offered.map((each) => (
+                  <SelectItem key={each.id} value={each.id}>
+                    {each.name} · {formatMoney(each.unitPriceCents)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
           <Button
+            className="md:justify-self-start"
             disabled={!productId || Boolean(problem) || busy}
             onClick={() =>
               add([rule], 'Rule added', () => {
                 setType(ANY);
                 setService(ANY);
                 setProductId('');
+                setLargeFrom('');
+                setLargeProductId(NONE);
               })
             }
           >
             Add rule
           </Button>
           {problem ? (
-            <FieldDescription aria-live="polite" className="text-destructive md:col-span-4">
+            <FieldDescription aria-live="polite" className="text-destructive md:col-span-3">
               {problem}
             </FieldDescription>
           ) : null}

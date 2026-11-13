@@ -492,8 +492,8 @@ describe('what a finished visit bills (2026-11-12)', () => {
     });
     expect(db.invoiceBillingRule.createMany).toHaveBeenCalledWith({
       data: [
-        { organizationId: ORG, inspectionType: 'OCCUPIED', service: null, productId: PRODUCT },
-        { organizationId: ORG, inspectionType: null, service: 'pestControl', productId: 'p3' },
+        { organizationId: ORG, inspectionType: 'OCCUPIED', service: null, productId: PRODUCT, largeFromSqFt: null, largeProductId: null },
+        { organizationId: ORG, inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: null, largeProductId: null },
       ],
       skipDuplicates: true,
     });
@@ -510,6 +510,32 @@ describe('what a finished visit bills (2026-11-12)', () => {
     await new InvoiceSettingsService(again as never).addBillingRules(office, { rules: [{ inspectionType: 'OCCUPIED', service: null, productId: PRODUCT }] });
     expect(again.invoiceBillingRule.createMany).not.toHaveBeenCalled();
     expect(again.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rule that bills another product from a size of property on (2026-11-13), and refuses one set aside', async () => {
+    const LARGE = { ...PEST_PRODUCT, id: 'p9', name: 'Pest Control: House over 2,000 sq ft' };
+    const db = database();
+    db.invoiceProduct.findMany.mockResolvedValue([PEST_PRODUCT, LARGE]);
+    await new InvoiceSettingsService(db as never).addBillingRules(office, {
+      rules: [{ inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: 2000, largeProductId: 'p9' }],
+    });
+    expect(db.invoiceBillingRule.createMany.mock.calls[0][0].data).toEqual([
+      { organizationId: ORG, inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: 2000, largeProductId: 'p9' },
+    ]);
+    expect(db.auditLog.create.mock.calls[0][0].data.metadata.rules).toEqual([
+      'Visits with pest control done → Pest Control ($39.00); from 2,000 sq ft: Pest Control: House over 2,000 sq ft',
+    ]);
+
+    const aside = database();
+    aside.invoiceProduct.findMany.mockResolvedValue([PEST_PRODUCT, { ...LARGE, active: false }]);
+    await expect(
+      new InvoiceSettingsService(aside as never).addBillingRules(office, {
+        rules: [{ inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: 2000, largeProductId: 'p9' }],
+      }),
+    ).rejects.toMatchObject({ code: 'INVOICE_BILLING_RULE_INVALID', message: 'Pest Control: House over 2,000 sq ft is set aside. Offer it again first.' });
+    await expect(
+      new InvoiceSettingsService(aside as never).addBillingRules(office, { rules: [{ inspectionType: null, service: 'pestControl', productId: 'p3', largeFromSqFt: 2000 }] }),
+    ).rejects.toMatchObject({ code: 'INVOICE_BILLING_RULE_INVALID', message: 'Give both the size and the product billed from it, or neither.' });
   });
 
   it('refuses a rule for no visits in particular, for a product set aside, or for one not on its own list', async () => {

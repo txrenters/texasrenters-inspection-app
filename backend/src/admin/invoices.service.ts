@@ -53,7 +53,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { XeroSenderService } from '../integrations/xero/xero-sender.service';
 import { xeroInvoiceFormCompanies } from '../integrations/xero/xero-settings.service';
-import { billingBasis } from './invoice-billing-rules';
+import { billingBasis, buildingAreaSqFt } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
 import { makeInvoices, visitInvoiced } from './invoice-maker';
 import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officeOrganisations, officePrices, productCompanies } from './invoice-settings';
@@ -664,7 +664,11 @@ export class InvoicesService {
       inspection ? visitInvoiced(this.prisma, user.organizationId, inspection.id) : false,
     ]);
     const lines = inspection
-      ? billedLines({ inspectionType: inspection.inspectionType, services: servicesDone(inspection.servicesReport) }, basis.rules, basis.products).lineItems
+      ? billedLines(
+          { inspectionType: inspection.inspectionType, services: servicesDone(inspection.servicesReport), areaSqFt: buildingAreaSqFt(inspection.building) },
+          basis.rules,
+          basis.products,
+        ).lineItems
       : [];
     const parts = splitByCompany(lines, companies);
     return {
@@ -1234,7 +1238,8 @@ export class InvoicesService {
         status: true,
         jobberJobId: true,
         servicesReport: true,
-        propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true } },
+        // Its floor area too (2026-11-13): a rule may bill another product from a size of property on.
+        propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true, totalArea: true, manualTotalArea: true } },
         // Its technician (2026-11-13): the Xero-style form tags each line for them.
         assignments: { where: { isCurrent: true }, orderBy: { assignedAt: 'asc' }, take: 1, select: { technician: { select: { displayName: true } } } },
       },
