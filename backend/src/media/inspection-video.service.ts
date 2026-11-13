@@ -17,7 +17,7 @@ import { ApplicationError } from '../common/errors';
 import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import type { RecordingCaptureDto } from './inspection-video.dto';
-import { enterTenant, withSystemTenant } from '../database/tenant-context';
+import { enterTenant, withSystemTenant, withTenant } from '../database/tenant-context';
 import { CloudflareStreamService, saveFileName } from './cloudflare-stream.service';
 import { isAiFiled } from '../technician/ai-filed-frames';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
@@ -26,6 +26,8 @@ import {
   MAX_ANALYSIS_ATTEMPTS,
   MediaProcessingService,
   PROCESSING_FAILED_EVENT,
+  undeliveredVideoWhere,
+  VIDEO_NEVER_ARRIVED,
 } from '../technician/media-processing.service';
 
 /**
@@ -733,6 +735,21 @@ export class InspectionVideoService {
     const recordingType = input.recordingType ?? VideoRecordingType.PRIMARY_AREA;
     this.validate(input);
 
+    // A retried request — a lost response, a double tap, an app relaunch mid
+    // queue — must not create a second Cloudflare video. The client's key is
+    // stored as providerMediaId, which is unique, so this is also enforced by
+    // the database and not only by this read.
+    const existing = await this.prisma.inspectionMedia.findUnique({
+      where: { providerMediaId: input.idempotencyKey },
+      select: { id: true, streamUid: true, uploadStatus: true, inspectionAreaId: true, technicianId: true, failureCode: true },
+    });
+    // Its own recording still reaches the technician who filmed it after the job
+    // is handed to someone else (2026-11-14): the video is on their phone, and
+    // nobody else can send it.
+    const ownRecording = Boolean(
+      existing && existing.technicianId === user.id && existing.inspectionAreaId === input.inspectionAreaId,
+    );
+
     // Authorization and area lookup in one query: an area only resolves if it
     // belongs to an inspection currently assigned to this technician, inside
     // their own organization. A caller supplying someone else's area id gets a
@@ -742,13 +759,13 @@ export class InspectionVideoService {
         id: input.inspectionAreaId,
         inspection: {
           organizationId: user.organizationId,
-          assignments: { some: { technicianId: user.id, isCurrent: true } },
+          ...(ownRecording ? {} : { assignments: { some: { technicianId: user.id, isCurrent: true } } }),
         },
       },
       select: {
         id: true,
         inspectionId: true,
-        inspection: { select: { id: true, status: true, propertyId: true } },
+        inspection: { select: { id: true, status: true, propertyId: true, finalizedAt: true } },
       },
     });
     if (!area)
@@ -758,14 +775,6 @@ export class InspectionVideoService {
         'Assigned room was not found.',
       );
 
-    // A retried request — a lost response, a double tap, an app relaunch mid
-    // queue — must not create a second Cloudflare video. The client's key is
-    // stored as providerMediaId, which is unique, so this is also enforced by
-    // the database and not only by this read.
-    const existing = await this.prisma.inspectionMedia.findUnique({
-      where: { providerMediaId: input.idempotencyKey },
-      select: { id: true, streamUid: true, uploadStatus: true, inspectionAreaId: true },
-    });
     if (existing && existing.inspectionAreaId !== area.id)
       throw new ApplicationError(
         409,
@@ -787,11 +796,24 @@ export class InspectionVideoService {
       if (delivered) return delivered;
     }
 
-    if (area.inspection.status !== InspectionStatus.IN_PROGRESS)
+    /**
+     * A room's video is never refused for when it arrives (2026-11-14).
+     *
+     * Everything on a move-in or move-out runs on its videos -- the transcript,
+     * the room summaries, the findings, the comparison and the report -- and a
+     * video refused here is stranded on the phone. Only "in progress" used to be
+     * let through, so a recording still sending when the job was submitted, a
+     * link that lapsed while the phone was locked, or a job the office closed
+     * by hand, lost its video for good. Now only a cancelled visit, or evidence
+     * the office has finalized, says no.
+     */
+    if (area.inspection.status === InspectionStatus.CANCELLED || area.inspection.finalizedAt)
       throw new ApplicationError(
         409,
-        'INSPECTION_NOT_IN_PROGRESS',
-        'Evidence can only be uploaded while the inspection is in progress.',
+        'INSPECTION_CLOSED_TO_EVIDENCE',
+        area.inspection.status === InspectionStatus.CANCELLED
+          ? 'This inspection was cancelled, so it takes no more videos.'
+          : 'This inspection’s evidence is final, so it takes no more videos.',
       );
 
     // The Cloudflare URL from the original session may well have expired, so
@@ -1343,6 +1365,10 @@ export class InspectionVideoService {
       });
 
     if (encoded && !media.readyAt) this.mediaProcessing?.queue(media.id, media.organizationId);
+    // Cloudflare could not encode it, and nothing will try again: the inspection
+    // no longer waits on it (2026-11-14). It used to stay submitted for good when
+    // this was its last recording.
+    if (failed) await this.mediaProcessing?.afterVideoGivenUp(media.organizationId, media.inspectionId);
 
     this.logger.log({
       event: 'stream_webhook_applied',
@@ -1407,7 +1433,10 @@ export class InspectionVideoService {
         // upload in progress is not polled needlessly.
         createdAt: { lt: new Date(Date.now() - 10 * 60_000) },
       },
-      orderBy: { createdAt: 'asc' },
+      // Least recently looked at first (2026-11-14): oldest by creation kept
+      // asking about the same 25 uploads a phone never finished, every five
+      // minutes, while a lost webhook behind them waited.
+      orderBy: { updatedAt: 'asc' },
       take: limit,
       select: { id: true, streamUid: true },
     });
@@ -1426,6 +1455,57 @@ export class InspectionVideoService {
       if (applied.accepted) reconciled += 1;
     }
     return { checked: stuck.length, reconciled };
+  }
+
+  /**
+   * The inspections whose wait for late videos ran out (2026-11-14).
+   *
+   * End job may now be pressed while a phone is still sending room videos; the
+   * inspection then waits for them until `lateVideosUntil`, a day on. Past it,
+   * each video still missing is asked about at Cloudflare first -- the bytes may
+   * have landed with the webhook lost -- and what is still not there is flagged
+   * as never arrived, so the inspection goes to review without it and the
+   * office is told which rooms. A video flagged here that turns up later is
+   * still taken (`renewSession`) and analysed then.
+   *
+   * Bounded per run, and costs nothing when no wait has run out: one indexed
+   * query. Cloudflare is asked at most once per missing video, here.
+   */
+  async settleOverdueLateVideos(limit = 20) {
+    if (!this.mediaProcessing) return { checked: 0, settled: 0 };
+    const due = await withSystemTenant(() =>
+      this.prisma.inspection.findMany({
+        where: { lateVideosUntil: { lt: new Date() } },
+        orderBy: { lateVideosUntil: 'asc' },
+        take: limit,
+        select: { id: true, organizationId: true },
+      }),
+    );
+    let settled = 0;
+    for (const inspection of due) {
+      const done = await withTenant(inspection.organizationId, async () => {
+        const missing = await this.prisma.inspectionMedia.findMany({
+          where: { inspectionId: inspection.id, ...undeliveredVideoWhere },
+          select: { id: true, streamUid: true },
+        });
+        for (const media of missing)
+          if (media.streamUid) await this.refreshFromStream(media.streamUid);
+        // Only what is still missing after asking: never over a video that
+        // landed while this ran.
+        await this.prisma.inspectionMedia.updateMany({
+          where: { id: { in: missing.map((media) => media.id) }, ...undeliveredVideoWhere },
+          data: {
+            processingStatus: MediaProcessingStatus.FAILED,
+            failedAt: new Date(),
+            failureCode: VIDEO_NEVER_ARRIVED,
+            failureMessage: 'This video never reached the server from the technician’s phone.',
+          },
+        });
+        return this.mediaProcessing!.settleLateVideos(inspection.organizationId, inspection.id);
+      });
+      if (done) settled += 1;
+    }
+    return { checked: due.length, settled };
   }
 
   /**
@@ -1493,7 +1573,7 @@ export class InspectionVideoService {
    * past its URL's expiry, so starting over is the only way forward.
    */
   private async renewSession(
-    existing: { id: string; streamUid: string | null },
+    existing: { id: string; streamUid: string | null; failureCode?: string | null },
     area: { id: string; inspectionId: string },
     user: AuthenticatedUser,
     input: UploadSessionInput,
@@ -1533,6 +1613,16 @@ export class InspectionVideoService {
         // A session first asked for by an app from before the capture was sent
         // learns it here, when the updated app asks again.
         ...(input.capture ? { captureSummary: captureSummaryOf(input.capture) } : {}),
+        // Given up on after the wait (2026-11-14), and on its way after all: it
+        // is awaited again, and analysed when it lands like any other.
+        ...(existing.failureCode === VIDEO_NEVER_ARRIVED
+          ? {
+              processingStatus: MediaProcessingStatus.PENDING,
+              failedAt: null,
+              failureCode: null,
+              failureMessage: null,
+            }
+          : {}),
       },
     });
     this.logger.log({

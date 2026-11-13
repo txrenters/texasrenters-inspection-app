@@ -63,6 +63,8 @@ export class StreamReconcileScheduler implements OnModuleInit, OnModuleDestroy {
       // After, and on its own: it needs nothing from Cloudflare's API, so an
       // outage that failed the reconcile is no reason to skip it.
       await this.retryAnalysis();
+      // And the inspections whose wait for late videos ran out (2026-11-14).
+      await this.settleLateVideos();
     } finally {
       this.running = false;
     }
@@ -84,6 +86,23 @@ export class StreamReconcileScheduler implements OnModuleInit, OnModuleDestroy {
       // the process down, and a failed sweep is not worth an outage.
       this.logger.error({
         event: 'stream_reconcile_failed',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async settleLateVideos() {
+    try {
+      const result = await this.videos.settleOverdueLateVideos();
+      if (result.settled > 0)
+        this.logger.warn({
+          event: 'late_videos_settled',
+          ...result,
+          detail: 'Inspections sent to review after their wait for videos still on the phone ran out.',
+        });
+    } catch (error) {
+      this.logger.error({
+        event: 'late_videos_settle_failed',
         message: error instanceof Error ? error.message : String(error),
       });
     }

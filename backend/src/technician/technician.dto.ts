@@ -713,4 +713,14 @@ export class TechnicianCompleteInspectionDto {
   @IsOptional() @IsString() @MaxLength(1000) nextInspectionAlert?: string;
   @IsOptional() @IsString() @MaxLength(4000) maintenanceComments?: string;
   @IsOptional() @IsString() @MaxLength(4000) generalComments?: string;
+
+  /**
+   * The room videos the phone is still sending as End job is pressed
+   * (2026-11-14): the upload key of each (`idempotencyKey` when its upload was
+   * opened). A room whose video is among them counts as done, and the
+   * inspection waits for them before it goes to review. Sent only when there
+   * are some, so a server without it is not given a field it would refuse.
+   */
+  @IsOptional() @IsArray() @ArrayMaxSize(100) @IsString({ each: true }) @MaxLength(200, { each: true })
+  videosStillSending?: string[];
 }

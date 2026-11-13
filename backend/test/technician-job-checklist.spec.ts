@@ -76,7 +76,7 @@ const ANOTHER_JOBS_PHOTO = '30000000-0000-4000-8000-0000000000ff';
 
 function build(record = job()) {
   const prisma: Record<string, never> & {
-    inspection: { findFirst: jest.Mock; update: jest.Mock };
+    inspection: { findFirst: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     inspectionArea: { count: jest.Mock; upsert: jest.Mock };
     inspectionPhoto: { findMany: jest.Mock };
     propertyArea: { findFirst: jest.Mock; create: jest.Mock };
@@ -90,6 +90,8 @@ function build(record = job()) {
     inspection: {
       findFirst: jest.fn().mockResolvedValue(record),
       update: jest.fn().mockImplementation(({ data }) => ({ ...record, ...data })),
+      // Submitted once (2026-11-14): the claim on an inspection still in progress.
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     inspectionArea: {
       count: jest.fn().mockResolvedValue(0),

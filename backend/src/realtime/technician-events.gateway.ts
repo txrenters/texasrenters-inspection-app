@@ -85,8 +85,12 @@ export interface TechnicianInspectionEvent {
  */
 export interface OrganizationNotification {
   id: string;
-  /** RESCHEDULE_REQUESTED: a technician asked for a visit to be booked again (2026-10-21). */
-  kind: 'INSPECTION_SUBMITTED' | 'AREA_ADDED' | 'RESCHEDULE_REQUESTED';
+  /**
+   * RESCHEDULE_REQUESTED: a technician asked for a visit to be booked again (2026-10-21).
+   * LATE_VIDEOS_ARRIVED / LATE_VIDEOS_MISSING: the room videos a phone was still
+   * sending at End job all landed, or the wait for them ran out (2026-11-14).
+   */
+  kind: 'INSPECTION_SUBMITTED' | 'AREA_ADDED' | 'RESCHEDULE_REQUESTED' | 'LATE_VIDEOS_ARRIVED' | 'LATE_VIDEOS_MISSING';
   title: string;
   body: string;
   /** Where the console should navigate when the notification is opened. */

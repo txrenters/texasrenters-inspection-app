@@ -1444,6 +1444,10 @@ model Inspection {
   startedAt                  DateTime?
   // Technician submission (≠ completion). Only a human administrator finalizes.
   submittedAt                DateTime?
+  /// Submitted with room videos still on the phone (2026-11-14): review waits
+  /// for them until this moment, then goes ahead without those that never
+  /// arrived. Null when nothing is awaited.
+  lateVideosUntil            DateTime?
   completedAt                DateTime?
   finalizedAt                DateTime?
   finalizedById              String?                 @db.Uuid

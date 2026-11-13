@@ -152,6 +152,27 @@ export class RecordingSummaryService {
     }
   }
 
+  /**
+   * One room whose video landed after review started (2026-11-14): sent after
+   * End job, or after the wait for it ran out. Review summarized the rooms it
+   * had, so this one is summarized now, by the pipeline. Never throws.
+   */
+  async afterLateVideo(organizationId: string, inspectionId: string, inspectionAreaId: string) {
+    try {
+      const inspection = await this.inspection(organizationId, inspectionId);
+      const configuration = await this.aiSettings.resolve(organizationId);
+      const { outcome } = await this.summarizeOne(organizationId, inspection, inspectionAreaId, configuration);
+      await this.audit(organizationId, inspectionId, null, 'PIPELINE', configuration, [outcome], inspection.finalizedAt);
+    } catch (error) {
+      // Left as it is; the console offers to write it.
+      this.logger.warn(
+        `Recording summary skipped for late video in area ${inspectionAreaId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+  }
+
   /** One room now; answers with the summary, or null when nothing was said there. */
   async summarizeArea(
     organizationId: string,
