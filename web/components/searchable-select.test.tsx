@@ -329,3 +329,22 @@ describe('matching what was typed (2026-11-13)', () => {
     expect(matchesWords('Anything', '   ')).toBe(1);
   });
 });
+
+describe('a long label (2026-11-13)', () => {
+  const long = [{ value: 'p', label: 'Moses: Tenant Benefit Package - 4th Qtr - 2026 - 11.11.2026' }];
+  const labelOf = (element: HTMLElement) => within(element).getByText(long[0]!.label);
+
+  it('is cut short on one line by default', () => {
+    render(createElement(SearchableSelect, { id: 'project', value: 'p', options: long, placeholder: 'Project', onChange: vi.fn() }));
+    expect(labelOf(screen.getByRole('combobox'))).toHaveClass('truncate');
+  });
+
+  it('wraps onto as many lines as it needs when asked, on the trigger and in the list, so a table row grows to fit it', () => {
+    render(createElement(SearchableSelect, { id: 'project', value: 'p', options: long, placeholder: 'Project', onChange: vi.fn(), wrap: true }));
+    const trigger = screen.getByRole('combobox');
+    expect(labelOf(trigger)).toHaveClass('whitespace-normal', 'text-left');
+    expect(labelOf(trigger)).not.toHaveClass('truncate');
+    fireEvent.click(trigger);
+    expect(labelOf(screen.getByRole('option'))).toHaveClass('whitespace-normal');
+  });
+});

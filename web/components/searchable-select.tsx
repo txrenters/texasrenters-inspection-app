@@ -77,6 +77,7 @@ export function SearchableSelect({
   className,
   contentClassName,
   ariaLabel,
+  wrap = false,
   onChange,
   onSearch,
   onLoadMore,
@@ -100,6 +101,12 @@ export function SearchableSelect({
   contentClassName?: string;
   /** Its name, where no label names it -- a cell of a table row (2026-11-13). */
   ariaLabel?: string;
+  /**
+   * The chosen label, and each in the list, on as many lines as it needs
+   * instead of cut short (2026-11-13): a table row grows to fit it, as Xero's
+   * invoice lines do.
+   */
+  wrap?: boolean;
   onChange: (value: string) => void;
   onSearch?: (query: string) => void;
   onLoadMore?: () => void;
@@ -125,6 +132,8 @@ export function SearchableSelect({
   }, [availableOptions, value]);
 
   const searching = query.trim().length > 0;
+  // A button centres its text: a label on several lines reads from the left.
+  const labelClass = wrap ? 'min-w-0 text-left break-words whitespace-normal' : 'min-w-0 truncate';
 
   /**
    * The rows actually rendered.
@@ -194,7 +203,7 @@ export function SearchableSelect({
         >
           {/* min-w-0 is what makes `truncate` actually take effect: without it
               the flex item cannot shrink below its content width. */}
-          <span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
+          <span className={labelClass}>{selected?.label ?? placeholder}</span>
           {selected?.badge ? (
             <Badge className="shrink-0" variant="warning">
               {selected.badge}
@@ -202,7 +211,7 @@ export function SearchableSelect({
           ) : null}
           {/* `ml-auto` so the chevron stays at the right edge once a badge sits
               between it and the label. */}
-          <ChevronsUpDownIcon aria-hidden className="ml-auto size-4 shrink-0 opacity-50" />
+          <ChevronsUpDownIcon aria-hidden className={cn('ml-auto size-4 shrink-0 opacity-50', wrap && 'mt-0.5')} />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className={cn('w-(--radix-popover-trigger-width) p-0', contentClassName)}>
@@ -224,7 +233,7 @@ export function SearchableSelect({
                     aria-hidden
                     className={cn('size-4', option.value === value ? 'opacity-100' : 'opacity-0')}
                   />
-                  <span className="min-w-0 truncate">{option.label}</span>
+                  <span className={labelClass}>{option.label}</span>
                   {option.badge ? (
                     <Badge className="shrink-0" variant="warning">
                       {option.badge}

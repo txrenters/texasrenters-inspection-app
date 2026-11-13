@@ -38,6 +38,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 import { businessToday } from '@/lib/clock';
 import { newClientRequestId, useInvoiceActions } from '@/lib/invoice-queries';
 import { cn } from '@/lib/utils';
@@ -531,12 +532,23 @@ type ReadPart = {
   totalCents: number;
 };
 
-/** A cell of the lines table, ruled as Xero's: no padding, its field filling it. */
-const CELL = 'h-10 border-r p-0 align-middle jobber:py-0';
+/**
+ * A cell of the lines table, ruled as Xero's: no padding, its field filling it.
+ * A line is as tall as its longest field, as Xero's are (2026-11-13): an item,
+ * a description or a technician's name wraps instead of being cut short, and
+ * every cell starts at the top.
+ */
+const CELL = 'h-10 border-r p-0 align-top jobber:py-0';
+/** Words in a cell -- its tax and its amount -- level with the fields' first line. */
+const CELL_TEXT = 'px-2 py-2.5 leading-5 jobber:py-2.5';
 const HEAD = 'text-heading h-11 border-r px-2 font-sans text-[13px] leading-tight font-semibold tracking-normal whitespace-normal normal-case';
 const CELL_INPUT =
   'h-10 rounded-none border-0 bg-transparent px-2 text-[13px] shadow-none focus-visible:ring-2 focus-visible:ring-inset md:text-[13px] dark:bg-transparent';
-const CELL_PICKER = 'h-10 rounded-none border-0 px-2 text-[13px] focus-visible:ring-2 focus-visible:ring-inset dark:bg-transparent';
+/** A description grows a line at a time as it is written, as Xero's does. */
+const CELL_TEXTAREA =
+  'min-h-10 resize-none rounded-none border-0 bg-transparent px-2 py-2.5 text-[13px] leading-5 shadow-none focus-visible:ring-2 focus-visible:ring-inset md:text-[13px] dark:bg-transparent';
+const CELL_PICKER =
+  'h-auto min-h-10 items-start rounded-none border-0 px-2 py-2.5 text-[13px] leading-5 focus-visible:ring-2 focus-visible:ring-inset dark:bg-transparent';
 /** A cell's list wider than the cell, to read a technician's or an account's whole name. */
 const CELL_LIST = 'min-w-72';
 
@@ -721,15 +733,17 @@ function XeroPartSection({
                       optionsLabel="Products and services"
                       placeholder="Item"
                       value={line.name}
+                      wrap
                     />
                   </TableCell>
                   <TableCell className={CELL}>
-                    <Input
+                    <Textarea
                       aria-label={`Line ${n}: description`}
-                      className={CELL_INPUT}
+                      className={CELL_TEXTAREA}
                       maxLength={2000}
                       onChange={(event) => change(line.key, { description: event.target.value })}
                       placeholder={line.name}
+                      rows={1}
                       value={line.description}
                     />
                   </TableCell>
@@ -774,6 +788,7 @@ function XeroPartSection({
                         optionsLabel="Sales accounts"
                         placeholder="Account"
                         value={input?.xeroAccountId ?? ''}
+                        wrap
                       />
                     </TableCell>
                   ) : null}
@@ -790,11 +805,12 @@ function XeroPartSection({
                         optionsLabel="Tax rates"
                         placeholder="Tax rate"
                         value={input?.xeroTaxType ?? ''}
+                        wrap
                       />
                     </TableCell>
                   ) : null}
                   {company ? (
-                    <TableCell className={cn(CELL, 'text-muted-foreground px-2 text-right tabular-nums')}>
+                    <TableCell className={cn(CELL, CELL_TEXT, 'text-muted-foreground text-right tabular-nums')}>
                       {amountCents === null ? '—' : formatMoney(lineTaxCents(amountCents, rate, mode))}
                     </TableCell>
                   ) : null}
@@ -817,6 +833,7 @@ function XeroPartSection({
                           optionsLabel={category.name}
                           placeholder="No tracking"
                           value={picked}
+                          wrap
                         />
                       </TableCell>
                     );
@@ -835,13 +852,14 @@ function XeroPartSection({
                         optionsLabel="Projects in progress"
                         placeholder="No project"
                         value={input?.xeroProjectId ?? ''}
+                        wrap
                       />
                     </TableCell>
                   ) : null}
-                  <TableCell className={cn(CELL, 'text-heading px-2 text-right font-semibold tabular-nums')}>
+                  <TableCell className={cn(CELL, CELL_TEXT, 'text-heading text-right font-semibold tabular-nums')}>
                     {amountCents === null ? '—' : formatMoney(amountCents)}
                   </TableCell>
-                  <TableCell className={cn(CELL, 'border-r-0 text-center')}>
+                  <TableCell className={cn(CELL, 'border-r-0 py-1 text-center jobber:py-1')}>
                     <Button aria-label={`Remove line ${n}`} className="size-8" onClick={() => onRemoveLine(line.key)} size="icon" variant="ghost">
                       <Trash2Icon />
                     </Button>
