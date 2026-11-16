@@ -507,7 +507,7 @@ export class InvoicesService {
 
   /**
    * What was just made for a company that sends to Xero goes there now, as a
-   * draft Xero numbers within seconds (2026-11-13), rather than at the next
+   * draft within seconds (2026-11-13), rather than at the next
    * ten-minute run. Called after the write has committed, never waited on.
    */
   sendToXeroSoon(organizationId: string, made: readonly { xeroTenantId: string | null }[], state: Pick<InvoicingState, 'sending'>) {

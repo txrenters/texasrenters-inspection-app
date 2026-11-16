@@ -134,7 +134,8 @@ describe('the one maker', () => {
     invoices: [{ xeroTenantId: HOMES, lines: [{ name: 'Filter Change', quantity: 1, unitPriceCents: 3999 }], clientRequestId: 'key:1' }],
     ...over,
   });
-  const tx = (invoiced = false) => {
+  /** `highest`: the company's highest number in its sequence in Xero, as the console knows it; null for none known. */
+  const tx = (invoiced = false, highest: { prefix: string; digits: string } | null = { prefix: 'INV-', digits: '5405' }) => {
     let made = 0;
     return {
       invoice: {
@@ -142,17 +143,39 @@ describe('the one maker', () => {
         create: jest.fn<Promise<{ id: string }>, [{ data: Record<string, unknown> }]>(async () => ({ id: `made-${++made}` })),
       },
       auditLog: { create: jest.fn() },
-      $queryRaw: jest.fn().mockResolvedValue([{ highest: '8439' }]),
+      $queryRaw: jest.fn(async (strings: TemplateStringsArray) =>
+        strings.join('?').includes('WITH numbered') ? (highest ? [{ tenant: HOMES, ...highest }] : []) : [{ highest: '8439' }],
+      ),
     };
   };
 
-  it('makes a sending company’s invoice a draft Xero numbers, under the lock, after asking whether the visit is invoiced', async () => {
+  it('makes a sending company’s invoice a draft under its next number in Xero, under the lock, after asking whether the visit is invoiced', async () => {
     const db = tx();
     const outcome = await makeInvoices(db as never, office, state(), request());
-    expect(outcome).toEqual({ made: [expect.objectContaining({ id: 'made-1', number: null, xeroTenantId: HOMES })] });
-    expect((db.$queryRaw.mock.calls[0]![0] as string[]).join('?')).toContain('pg_advisory_xact_lock');
+    expect(outcome).toEqual({ made: [expect.objectContaining({ id: 'made-1', number: 'INV-5406', xeroTenantId: HOMES })] });
+    expect((db.$queryRaw.mock.calls[0]![0] as unknown as string[]).join('?')).toContain('pg_advisory_xact_lock');
     expect(db.invoice.findFirst).toHaveBeenCalledWith({ where: { organizationId: ORG, inspectionId: VISIT, status: { not: 'VOIDED' } }, select: { id: true } });
-    expect(db.invoice.create.mock.calls[0]?.[0].data).toMatchObject({ status: 'DRAFT', number: null, xeroTenantId: HOMES });
+    expect(db.invoice.create.mock.calls[0]?.[0].data).toMatchObject({ status: 'DRAFT', number: 'INV-5406', xeroTenantId: HOMES });
+    // Its own company's sequence (2026-11-16): asked by its tenant, never the office's plain numbers.
+    const [asked, , tenants] = db.$queryRaw.mock.calls.find(([strings]) => strings.join('?').includes('WITH numbered'))! as unknown as [string[], string, string[]];
+    expect(asked.join('?')).toContain('"xeroTenantId" = ANY(');
+    expect(tenants).toEqual([HOMES]);
+  });
+
+  it('leaves the number to Xero for a company none of whose numbers the console knows yet (2026-11-16)', async () => {
+    const db = tx(false, null);
+    const outcome = await makeInvoices(db as never, office, state(), request());
+    expect(outcome).toEqual({ made: [expect.objectContaining({ number: null })] });
+    expect(db.invoice.create.mock.calls[0]?.[0].data).toMatchObject({ status: 'DRAFT', number: null });
+  });
+
+  it('keeps the width of the sequence, and grows it past its last number (2026-11-16)', async () => {
+    const padded = tx(false, { prefix: 'INV-', digits: '0038' });
+    await makeInvoices(padded as never, office, state(), request());
+    expect(padded.invoice.create.mock.calls[0]?.[0].data).toMatchObject({ number: 'INV-0039' });
+    const full = tx(false, { prefix: 'INV-', digits: '9999' });
+    await makeInvoices(full as never, office, state(), request());
+    expect(full.invoice.create.mock.calls[0]?.[0].data).toMatchObject({ number: 'INV-10000' });
   });
 
   it('refuses before anything is written: what reaches no books, then a visit invoiced already unless asked on purpose', async () => {

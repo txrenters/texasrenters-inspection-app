@@ -27,6 +27,7 @@ import { XeroError } from './xero.errors';
 import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody } from './xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
 import { xeroWriteOffFrom } from './xero-write-off';
+import { nextXeroInvoiceNumber } from '../../admin/invoice-numbers';
 import { invoicingTakenOverAt } from '../../admin/invoice-settings';
 import { sentFrom } from '../../admin/invoicing-state';
 import { XeroProjectsService, type XeroProjectsResult } from './xero-projects.service';
@@ -47,6 +48,13 @@ export const MAX_WRITE_OFFS_PER_RUN = 20;
  * for the next run -- one is never sent again until it has been looked for.
  */
 export const MAX_DRAFT_LOOKUPS_PER_RUN = 20;
+/**
+ * Times one of the console's drafts takes the company's next number in one run, when Xero has its number already
+ * (2026-11-16): made there by hand since the books were last read. One call each time; past it, the next run goes on.
+ */
+export const MAX_RENUMBERS_PER_RUN = 3;
+/** Xero's word for a number it has already. */
+const NUMBER_TAKEN = /invoice # must be unique/i;
 /** A run's claim on the office; longer than any run, short enough that a crashed one does not stop sending for long. */
 const CLAIM_MS = 15 * 60_000;
 /** Between one "Send now" and the next. */
@@ -122,7 +130,7 @@ const INVOICE_FIELDS = {
   discountCents: true,
   totalCents: true,
   updatedAt: true,
-  // The console's own goes as a draft Xero numbers, under its property's contact (2026-11-12).
+  // The console's own goes as a draft, under its property's contact (2026-11-12).
   origin: true,
   propertywareBuildingId: true,
   // As the Xero-style form made it (2026-11-13): sent as it is.
@@ -305,7 +313,7 @@ export class XeroSenderService implements OnModuleDestroy {
               // Never one read from its books (2026-11-12), nor one of the console's that Xero already has.
               origin: { not: InvoiceOrigin.XERO },
               xeroInvoiceId: null,
-              // The console's drafts go too (2026-11-12): Xero numbers them.
+              // The console's drafts go too (2026-11-12).
               AND: [
                 // From the start date (2026-11-13): the console's own made from it, whatever day each is dated.
                 sentFrom(state.sendFrom),
@@ -697,7 +705,7 @@ export class XeroSenderService implements OnModuleDestroy {
         taxRates: catalog.taxRates,
         contactId: contact.id,
         asDraft,
-        // The console's own (2026-11-12): a complete draft, numbered by Xero, linked back to its page here.
+        // The console's own (2026-11-12): a complete draft under its number, linked back to its page here.
         ...(item.invoice.origin === InvoiceOrigin.CONSOLE ? { consoleUrl: consoleInvoiceUrl(item.invoice.id) } : {}),
       });
       if (plan.kind === 'problem') {
@@ -709,7 +717,7 @@ export class XeroSenderService implements OnModuleDestroy {
       outgoing.push({ item, body: plan.body });
     }
 
-    // The console's own (2026-11-12): made in Xero once, by PUT, as drafts Xero numbers.
+    // The console's own (2026-11-12): made in Xero once, by PUT, as drafts under their own numbers (2026-11-16).
     await this.sendDrafts(
       organizationId,
       tenantId,
@@ -756,7 +764,7 @@ export class XeroSenderService implements OnModuleDestroy {
   /**
    * The console's own invoices (2026-11-12, PR 4 of the plan to make invoices
    * in the console with Xero as the record): each made in Xero once, as a
-   * complete draft Xero numbers, by PUT -- which only ever creates. Each is
+   * complete draft under its number, by PUT -- which only ever creates. Each is
    * written down as PENDING before the call. One tried before -- its answer
    * lost, or refused -- is first looked for in Xero among its contact's
    * invoices that day, by the link back to its page, and linked when found:
@@ -792,35 +800,94 @@ export class XeroSenderService implements OnModuleDestroy {
     }
 
     const scope = `${organizationId}:${tenantId}`;
-    for (let start = 0; start < fresh.length; start += BATCH) {
-      const batch = fresh.slice(start, start + BATCH);
-      // Written down first: a run that stops before Xero answers leaves them PENDING, looked for next time.
-      for (const entry of batch) await this.pending(organizationId, tenantId, entry.item);
-      const body = { Invoices: batch.map((entry) => entry.body) };
-      const path = '/Invoices?summarizeErrors=false';
-      let answers: XeroAnswer[];
-      try {
-        answers = (await this.client.put(organizationId, tenantId, path, body, invoicesSchema, keyOf(scope, `PUT ${path}`, body))).Invoices;
-      } catch (error) {
-        if (error instanceof XeroError && error.code === 'XERO_VALIDATION') {
-          for (const entry of batch) await this.failed(organizationId, tenantId, entry.item, error.message, true);
-          result.failed += batch.length;
-          continue;
+    // Each round sends what the last one could not because Xero had its number (2026-11-16), under the next.
+    let round = fresh;
+    for (let renumbered = 0; round.length; renumbered++) {
+      const clashed: typeof fresh = [];
+      for (let start = 0; start < round.length; start += BATCH) {
+        const batch = round.slice(start, start + BATCH);
+        // Written down first: a run that stops before Xero answers leaves them PENDING, looked for next time.
+        for (const entry of batch) await this.pending(organizationId, tenantId, entry.item);
+        const body = { Invoices: batch.map((entry) => entry.body) };
+        const path = '/Invoices?summarizeErrors=false';
+        let answers: XeroAnswer[];
+        try {
+          answers = (await this.client.put(organizationId, tenantId, path, body, invoicesSchema, keyOf(scope, `PUT ${path}`, body))).Invoices;
+        } catch (error) {
+          if (error instanceof XeroError && error.code === 'XERO_VALIDATION') {
+            for (const entry of batch) await this.failed(organizationId, tenantId, entry.item, error.message, true);
+            result.failed += batch.length;
+            continue;
+          }
+          throw error;
         }
-        throw error;
-      }
-      for (const [index, entry] of batch.entries()) {
-        const answer = answers[index] as (XeroAnswer & { InvoiceNumber?: string | null }) | undefined;
-        if (!answer || refused(answer) || !answer.InvoiceID) {
-          await this.failed(organizationId, tenantId, entry.item, answer ? said(answer) : 'Xero did not answer for it.', true);
-          result.failed++;
-          continue;
+        for (const [index, entry] of batch.entries()) {
+          const answer = answers[index] as (XeroAnswer & { InvoiceNumber?: string | null }) | undefined;
+          if (!answer || refused(answer) || !answer.InvoiceID) {
+            const problem = answer ? said(answer) : 'Xero did not answer for it.';
+            // Its number is in Xero already (2026-11-16): made there by hand since the books were last read. Never made
+            // twice -- Xero refuses it -- so it takes the company's next number and goes again.
+            const next =
+              answer && entry.item.invoice.number && NUMBER_TAKEN.test(problem) && renumbered < MAX_RENUMBERS_PER_RUN
+                ? await this.renumber(organizationId, tenantId, entry)
+                : null;
+            if (next) {
+              clashed.push(next);
+              continue;
+            }
+            await this.failed(organizationId, tenantId, entry.item, problem, true);
+            result.failed++;
+            continue;
+          }
+          await this.draftSent(organizationId, tenantId, entry.item, answer.InvoiceID, answer.InvoiceNumber ?? null);
+          if (answer.InvoiceNumber) sentNumbers.push(answer.InvoiceNumber);
+          result.sent++;
         }
-        await this.draftSent(organizationId, tenantId, entry.item, answer.InvoiceID, answer.InvoiceNumber ?? null);
-        if (answer.InvoiceNumber) sentNumbers.push(answer.InvoiceNumber);
-        result.sent++;
       }
+      round = clashed;
     }
+  }
+
+  /**
+   * One of the console's drafts whose number Xero has already (2026-11-16):
+   * given the company's next, above its own, behind the office's invoice lock,
+   * with a line in its history -- or null when it has no next to take, or it
+   * changed meanwhile. What goes to Xero then carries the new number.
+   */
+  private async renumber<T extends { item: { invoice: Candidate; sync: SyncRow | null; fingerprint: string }; body: XeroInvoiceBody }>(
+    organizationId: string,
+    tenantId: string,
+    entry: T,
+  ): Promise<T | null> {
+    const from = entry.item.invoice.number!;
+    const changed = await this.prisma.$transaction(async (tx) => {
+      const to = await nextXeroInvoiceNumber(tx, organizationId, tenantId);
+      if (!to || to === from) return null;
+      const { count } = await tx.invoice.updateMany({
+        where: { id: entry.item.invoice.id, organizationId, number: from, xeroInvoiceId: null },
+        data: { number: to },
+      });
+      if (!count) return null;
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          actorUserId: null,
+          action: 'INVOICE_RENUMBERED',
+          entityType: 'Invoice',
+          entityId: entry.item.invoice.id,
+          metadata: { from, to, tenantId, reason: 'XERO_HAS_NUMBER' },
+        },
+      });
+      const { updatedAt } = await tx.invoice.findUniqueOrThrow({ where: { id: entry.item.invoice.id }, select: { updatedAt: true } });
+      return { to, updatedAt };
+    });
+    if (!changed) return null;
+    const invoice = { ...entry.item.invoice, number: changed.to, updatedAt: changed.updatedAt };
+    return {
+      ...entry,
+      item: { ...entry.item, invoice, fingerprint: invoiceFingerprint(invoiceForXero(invoice)) },
+      body: { ...entry.body, InvoiceNumber: changed.to },
+    };
   }
 
   /** About to be sent (2026-11-12): written down before the call, so a lost answer is looked for, not sent again. */
@@ -843,7 +910,7 @@ export class XeroSenderService implements OnModuleDestroy {
   }
 
   /**
-   * In Xero (2026-11-12): the console's own takes Xero's number and id with the
+   * In Xero (2026-11-12): the console's own takes Xero's id -- and its number, when Xero gave it one -- with the
    * record of its send, in one write. From then on it is Xero's, read back
    * from there.
    */
@@ -1440,7 +1507,7 @@ export class XeroSenderService implements OnModuleDestroy {
            AND i."origin" <> 'XERO'
            AND i."xeroInvoiceId" IS NULL
            AND (
-                -- The console's own (2026-11-12): drafts too -- Xero numbers them -- and one whose send is pending.
+                -- The console's own (2026-11-12): drafts too, and one whose send is pending.
                 (i."origin" = 'CONSOLE' AND i."status" <> 'VOIDED' AND (
                      s."id" IS NULL
                   OR s."xeroTenantId" <> ${tenantId}

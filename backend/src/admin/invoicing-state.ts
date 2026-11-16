@@ -21,7 +21,7 @@ export interface InvoicingState {
   writesOn: boolean;
   /** The office's Xero companies, connected ones first. */
   organisations: InvoiceProductOrganisation[];
-  /** The connected companies whose sending is on: their invoices made here go to their books in Xero, as drafts Xero numbers. */
+  /** The connected companies whose sending is on: their invoices made here go to their books in Xero, as drafts. */
   sending: ReadonlySet<string>;
   /** Each sending company's start date, `YYYY-MM-DD`: Xero is sent the invoices made here from it (`sentFrom`). */
   startDays: ReadonlyMap<string, string>;
@@ -49,7 +49,7 @@ export async function invoicingState(db: Db, organizationId: string): Promise<In
   };
 }
 
-/** An invoice of this company goes to its books in Xero, as a draft Xero numbers and the office approves there. */
+/** An invoice of this company goes to its books in Xero, as a draft the office approves there. */
 export const goesToXero = (state: Pick<InvoicingState, 'sending'>, tenantId: string | null) => tenantId !== null && state.sending.has(tenantId);
 
 const longDay = (day: string) =>

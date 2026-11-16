@@ -27,7 +27,8 @@ import {
 } from '@texasrenters/shared';
 import { InvoiceOrigin, InvoiceStatus, Prisma } from '@prisma/client';
 
-import { billedPrices, invoicingTakenOverAt, listedProducts } from '../../admin/invoice-settings';
+import { nextXeroInvoiceNumbers } from '../../admin/invoice-numbers';
+import { billedPrices, invoicingTakenOverAt, listedProducts, xeroSendingCompanies } from '../../admin/invoice-settings';
 import { sentFrom } from '../../admin/invoicing-state';
 import type { AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
@@ -205,8 +206,15 @@ export class XeroSettingsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   /** Each connected company's lists and choices for the Xero-style New invoice (2026-11-13, PR B): no call to Xero. */
-  invoiceForm(organizationId: string): Promise<XeroInvoiceFormCompany[]> {
-    return xeroInvoiceFormCompanies(this.prisma, organizationId);
+  async invoiceForm(organizationId: string): Promise<XeroInvoiceFormCompany[]> {
+    const [companies, sending] = await Promise.all([xeroInvoiceFormCompanies(this.prisma, organizationId), xeroSendingCompanies(this.prisma, organizationId)]);
+    // The number each company's next invoice takes (2026-11-16): shown on the form before it is saved. No call to Xero.
+    const next = await nextXeroInvoiceNumbers(
+      this.prisma,
+      organizationId,
+      companies.filter((company) => sending.has(company.tenantId)).map((company) => company.tenantId),
+    );
+    return companies.map((company) => ({ ...company, nextNumber: next.get(company.tenantId) ?? null }));
   }
 
   async read(organizationId: string, tenantId: string): Promise<XeroSettingsView> {
@@ -231,7 +239,7 @@ export class XeroSettingsService {
       xeroTenantId: tenantId,
       // The console's own and Jobber's: one read from Xero (2026-11-12) is never sent there.
       origin: { not: InvoiceOrigin.XERO },
-      // The console's drafts go too (2026-11-13), as the sender sends them: Xero numbers them. Jobber's drafts never go.
+      // The console's drafts go too (2026-11-13), as the sender sends them. Jobber's drafts never go.
       OR: [
         { origin: InvoiceOrigin.CONSOLE, status: { not: InvoiceStatus.VOIDED } },
         { status: { notIn: [InvoiceStatus.DRAFT, InvoiceStatus.VOIDED] } },

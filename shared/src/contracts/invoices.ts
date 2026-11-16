@@ -575,7 +575,7 @@ export interface InvoiceDraft {
   organisations: InvoiceProductOrganisation[];
   /**
    * The console makes the invoices (2026-11-13): each goes to its company's
-   * books in Xero as a draft Xero numbers and dates, so the form asks no
+   * books in Xero as a draft Xero dates, so the form asks no
    * payment terms and offers no draft of its own.
    */
   madeInConsole: boolean;

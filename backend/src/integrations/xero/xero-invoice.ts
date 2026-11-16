@@ -65,7 +65,7 @@ export interface InvoiceForXero {
   visitDay: string | null;
   /** The technician who did that visit; null when none is known. */
   technicianName: string | null;
-  /** JOBBER or CONSOLE (2026-11-12): the console's own goes as a draft Xero numbers. */
+  /** JOBBER or CONSOLE (2026-11-12): the console's own goes as a draft. */
   origin?: string;
   /** The property it bills: the console's own goes under that property's contact in Xero. */
   propertywareBuildingId?: string | null;
@@ -97,7 +97,7 @@ export interface XeroLineItem {
 export interface XeroInvoiceBody {
   Type: 'ACCREC';
   Contact: { ContactID: string };
-  /** Left out for the console's own draft (2026-11-12): Xero numbers it. */
+  /** The console's own draft's, its company's next (2026-11-16); left out when the console knows none, and Xero numbers it. */
   InvoiceNumber?: string;
   Reference: string;
   Date: string;
@@ -214,8 +214,8 @@ export function xeroInvoiceFrom(
     asDraft?: boolean;
     /**
      * The console's own (2026-11-12): its page here. It goes as a complete
-     * draft, numbered by Xero, for the office to approve there -- a draft
-     * here is what it is meant to be.
+     * draft under its own number (2026-11-16), for the office to approve
+     * there -- a draft here is what it is meant to be.
      */
     consoleUrl?: string;
   },

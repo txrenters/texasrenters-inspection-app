@@ -31,7 +31,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { nextInvoiceNumber } from './invoice-numbers';
+import { nextInvoiceNumber, nextXeroInvoiceNumber } from './invoice-numbers';
 import { InvoicesService } from './invoices.service';
 import { invoiceWritesOff, invoiceWritesOn, officeOrganisations, organisationName, productCompanies, xeroSendingCompanies } from './invoice-settings';
 import { KEPT_IN_XERO, keptInXero, readCompanies, shownInvoices } from './shown-invoices';
@@ -235,6 +235,13 @@ export function historyEvent(
         lines: [`${cents(removed.amountCents)} by ${method(removed.method)}, paid ${dayWords(removed.paidOn as string)}`, `Balance ${cents(meta.balanceCents)}`],
       };
     }
+    // Its number was in Xero already (2026-11-16): made there by hand before this one arrived.
+    case 'INVOICE_RENUMBERED':
+      return {
+        ...base,
+        title: 'Number changed',
+        lines: [`${String(meta.from ?? '')} → ${String(meta.to ?? '')}`, `Xero had ${String(meta.from ?? 'that number')} already.`],
+      };
     // Sent from the console by email (2026-11-06, phase 5).
     case 'INVOICE_SENT': {
       const to = Array.isArray(meta.to) ? meta.to.map(String) : [];
@@ -297,6 +304,14 @@ export class InvoiceEditsService {
         if (taken) throw new ApplicationError(409, 'INVOICE_NUMBER_TAKEN', `Invoice #${clean.number} is another invoice already.`);
       }
       const company = await this.companyAfterEdit(tx, user, before, clean.lineItems);
+      // Its lines moved it to another company that sends to Xero (2026-11-16): the number it kept was not in that
+      // company's sequence, so it takes the company's next -- or Xero's, when the console knows none of its numbers.
+      const renumbered =
+        company.xeroTenantId &&
+        company.xeroTenantId !== before.xeroTenantId &&
+        clean.number === before.number &&
+        (await xeroSendingCompanies(tx, user.organizationId)).has(company.xeroTenantId);
+      const number = renumbered ? await nextXeroInvoiceNumber(tx, user.organizationId, company.xeroTenantId!) : clean.number;
 
       const amounts = invoiceAmounts(clean.lineItems, clean.discount, clean.tax);
       const balanceCents = amounts.totalCents - paidCents;
@@ -306,7 +321,7 @@ export class InvoiceEditsService {
         where: { id, organizationId: user.organizationId, updatedAt: before.updatedAt },
         data: {
           subject: clean.subject,
-          number: clean.number,
+          number,
           issuedOn: dateOf(clean.issuedOn),
           dueOn: dateOf(clean.dueOn),
           paymentTermsDays: Math.round((dateOf(clean.dueOn).getTime() - dateOf(clean.issuedOn).getTime()) / DAY_MS),
@@ -345,7 +360,7 @@ export class InvoiceEditsService {
         })),
       });
       await this.audit(tx, user, id, 'INVOICE_EDITED', {
-        changes: [...invoiceChanges(before, clean, amounts), ...company.changes] as unknown as Prisma.InputJsonValue,
+        changes: [...invoiceChanges(before, { ...clean, number }, amounts), ...company.changes] as unknown as Prisma.InputJsonValue,
         totalCents: amounts.totalCents,
         balanceCents,
       });
@@ -380,9 +395,9 @@ export class InvoiceEditsService {
           : input.action === 'BAD_DEBT'
             ? { status: InvoiceStatus.BAD_DEBT }
             : await owing();
-      // A company that sends to Xero (2026-11-12): its draft goes there as one, and Xero numbers it, never the console.
+      // A company that sends to Xero (2026-11-12): its draft goes there as one, and it is approved there.
       if (input.action === 'MARK_SENT' && before.xeroTenantId && (await xeroSendingCompanies(tx, user.organizationId)).has(before.xeroTenantId))
-        throw new ApplicationError(409, 'INVOICE_GOES_TO_XERO', 'This draft goes to Xero as it is: Xero numbers it, and it is approved there.');
+        throw new ApplicationError(409, 'INVOICE_GOES_TO_XERO', 'This draft goes to Xero as it is, and it is approved there.');
       // A draft sent with no number takes the office's next one (2026-11-06, phase 4).
       const number = input.action === 'MARK_SENT' && before.number === null ? await nextInvoiceNumber(tx, user.organizationId) : null;
       const { count } = await tx.invoice.updateMany({

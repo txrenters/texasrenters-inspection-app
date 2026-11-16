@@ -130,6 +130,19 @@ describe('the New invoice, laid out as Xero’s', () => {
     expect(combobox('Line 1: project')).toHaveTextContent(VISIT_PROJECT.name);
   });
 
+  it('shows the number the invoice takes when saved: the company’s next in Xero (2026-11-16)', async () => {
+    xero.useXeroInvoiceForm.mockReturnValue(ready([{ ...COMPANY, nextNumber: 'INV-5406' }]));
+    render(<XeroInvoiceEditor draft={DRAFT} />);
+    expect(screen.getByLabelText('Invoice number')).toHaveValue('INV-5406');
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft in Xero · $64.50' }));
+    // The toast names the number it was saved under, as the server gave it.
+    const [, handlers] = actions.create.mutate.mock.calls[0]! as [unknown, { onSuccess: (invoice: unknown) => void }];
+    handlers.onSuccess({ id: 'inv-1', number: 'INV-5406', totalCents: 6450 });
+    const { toast } = await import('sonner');
+    expect(toast.success).toHaveBeenCalledWith('Draft INV-5406 going to Xero', { description: '$64.50 to 6510 Example Brk. Approve it in Xero.' });
+    expect(router.push).toHaveBeenCalledWith('/invoices/inv-1');
+  });
+
   it('shows a row of words in its description with no item, and sends it so (2026-11-16: "on the description only not the item")', () => {
     const words = 'Serviced by: Clinton Bass (0557779) and Moses Example (1000001)';
     const draft = {

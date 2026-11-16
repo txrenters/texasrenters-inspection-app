@@ -293,9 +293,9 @@ export const organisationName = (organisations: readonly InvoiceProductOrganisat
 
 /**
  * The companies whose invoices go to their books in Xero now (2026-11-12): sending
- * is on and the organisation is connected. Their invoices made here are drafts
- * with no number of the console's -- Xero numbers them, and the office approves
- * them there.
+ * is on and the organisation is connected. Their invoices made here are drafts,
+ * numbered next in the company's sequence in Xero (2026-11-16), and the office
+ * approves them there.
  */
 export async function xeroSendingCompanies(db: Pick<Db, 'xeroSettings'>, organizationId: string): Promise<Set<string>> {
   const rows = await db.xeroSettings.findMany({
