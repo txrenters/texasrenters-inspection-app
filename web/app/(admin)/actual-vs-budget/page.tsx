@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { BudgetsDialog, DailySheet, ProjectionSheet, TrackerSheet } from '@/components/actual-vs-budget/daily-sheets';
 import { MoneyColumnsDialog } from '@/components/actual-vs-budget/money-columns-dialog';
+import { MonthlySheet, WeeklySheet } from '@/components/actual-vs-budget/period-sheets';
 import { TechnicianLog } from '@/components/actual-vs-budget/technician-log';
 import { PageHeader } from '@/components/page-header';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -18,7 +19,8 @@ import { useUrlState } from '@/lib/url-state';
  * Actual vs Budget (2026-11-17): the office's "THMP Scheduling Actual Vs
  * Budget 2026.xlsx" in the console, one tab for each kind of sheet in it. PR 1
  * brought the technician log; PR 2 the three daily sheets -- next day's
- * projection, the daily actual vs projected report and the revenue tracker.
+ * projection, the daily actual vs projected report and the revenue tracker;
+ * PR 3 the weekly and monthly reports.
  * Every sheet is a spreadsheet: the cells the console knows come filled, the
  * rest are typed into where they are.
  */
@@ -28,6 +30,8 @@ const VIEWS = [
   { key: 'projection', label: "Next day's projection" },
   { key: 'daily', label: 'Actual vs projected' },
   { key: 'tracker', label: 'Revenue tracker' },
+  { key: 'weekly', label: 'Weekly' },
+  { key: 'monthly', label: 'Monthly' },
 ] as const;
 type View = (typeof VIEWS)[number]['key'];
 
@@ -90,8 +94,12 @@ export default function ActualVsBudgetPage() {
         <ProjectionSheet canEdit={canEdit} date={query.next} onDate={(next) => setQuery({ next })} />
       ) : view === 'daily' ? (
         <DailySheet canEdit={canEdit} date={query.date} onDate={(date) => setQuery({ date })} />
-      ) : (
+      ) : view === 'tracker' ? (
         <TrackerSheet canEdit={canEdit} date={query.date} onDate={(date) => setQuery({ date })} />
+      ) : view === 'weekly' ? (
+        <WeeklySheet canEdit={canEdit} date={query.date} onDate={(date) => setQuery({ date })} />
+      ) : (
+        <MonthlySheet canEdit={canEdit} date={query.date} onDate={(date) => setQuery({ date })} />
       )}
       {dialog === 'columns' ? <MoneyColumnsDialog onClose={() => setDialog(null)} /> : null}
       {dialog === 'budgets' ? <BudgetsDialog onClose={() => setDialog(null)} /> : null}

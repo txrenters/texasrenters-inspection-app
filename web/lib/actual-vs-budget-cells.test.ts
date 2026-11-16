@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { dollars, readCell, readClock, readCents, readDay, readRow, readWorkTime } from './actual-vs-budget-cells';
+import { accounting, dollars, readCell, readClock, readCents, readDay, readRow, readWorkTime } from './actual-vs-budget-cells';
 
 describe("the log's cells take the workbook's own formats", () => {
   it('reads dates', () => {
@@ -55,6 +55,12 @@ describe('the daily sheets', () => {
     expect(dollars(-15798)).toBe('-$157.98');
     expect(dollars(-7535, { negative: 'brackets' })).toBe('($75.35)');
     expect(dollars(293342, { decimals: 0 })).toBe('$2,933');
+  });
+
+  it('write the weekly reports as accounting figures', () => {
+    expect(accounting(355000)).toBe('3,550.00');
+    expect(accounting(-119186)).toBe('(1,191.86)');
+    expect(accounting(0)).toBe('-');
   });
 
   it('read hours worked', () => {

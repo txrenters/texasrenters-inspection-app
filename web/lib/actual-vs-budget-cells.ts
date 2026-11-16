@@ -183,5 +183,12 @@ export function readWorkTime(text: string): number | null {
   return (Number(words[1] ?? 0) * 60 + minutes) * 60;
 }
 
+/** The weekly and monthly reports' _(* #,##0.00_): "3,550.00", "(1,191.86)", and "-" for nothing. */
+export function accounting(cents: number): string {
+  if (cents === 0) return '-';
+  const text = (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return cents < 0 ? `(${text})` : text;
+}
+
 /** The first word of a name: the projection's "Amy", "Kevin". */
 export const firstName = (name: string) => name.trim().split(/\s+/)[0] ?? name;

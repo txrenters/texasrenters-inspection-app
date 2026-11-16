@@ -407,3 +407,112 @@ export function hoursAndMinutesValue(text: string | null | undefined): number {
 
 /** A share as the workbook writes it, 0.00%: "82.20%". */
 export const percentText = (share: number | null) => (share === null || !Number.isFinite(share) ? '' : `${(share * 100).toFixed(2)}%`);
+
+// ── PR 3: the weekly and monthly reports ─────────────────────────────────────
+//
+// The workbook's weekly tabs ("Nov. 2-6", "Oct 1-2", "Weekly rEVENUE
+// Report_Aug 31") cover a working week inside one month: a week that crosses
+// into the next month is two tabs. Its "Month of" tabs add up their weeks.
+
+/** One technician's week: TARGET REVENUE, ACTUAL REVENUE and REMARKS; the rest is worked out from them. */
+export interface RevenueWeekRow {
+  technician: RevenueLogTechnician;
+  /** The daily budget for each day worked (=610*4), or what the office typed. */
+  targetCents: number;
+  /** The week's days' Labor Hours Income plus Service Call Fee, or what the office typed. */
+  actualCents: number;
+  /** The days the console counted as worked. */
+  daysWorked: number;
+  typed: { target: boolean; actual: boolean };
+  remarks: string | null;
+}
+
+export interface RevenueWeek {
+  /** The first and last day it covers, Monday to Sunday inside its month. */
+  from: string;
+  to: string;
+  technicians: RevenueWeekRow[];
+}
+
+export interface RevenueMonthRow {
+  technician: RevenueLogTechnician;
+  targetCents: number;
+  actualCents: number;
+  remarks: string | null;
+}
+
+export interface RevenueMonthReport {
+  /** "2026-11". */
+  month: string;
+  weeks: RevenueWeek[];
+  technicians: RevenueMonthRow[];
+}
+
+export interface SaveRevenueWeekInput {
+  targetCents?: number | null;
+  actualCents?: number | null;
+  remarks?: string | null;
+}
+
+export interface SaveRevenueMonthInput {
+  remarks?: string | null;
+}
+
+const weekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay();
+const isWorkday = (day: string) => weekday(day) >= 1 && weekday(day) <= 5;
+const shift = (day: string, days: number) => dayText(dayNumber(day) + days);
+
+/** The month's last day. */
+export function monthEnd(month: string): string {
+  const [year, number] = month.split('-').map(Number) as [number, number];
+  return new Date(Date.UTC(year, number, 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * A month's weeks, as the workbook's weekly tabs divide it: Monday to Sunday,
+ * cut at the month's edges. Days before the month's first Monday-to-Friday day
+ * -- a weekend it opens on -- belong to its first week.
+ */
+export function monthWeeks(month: string): { from: string; to: string }[] {
+  const first = `${month}-01`;
+  const last = monthEnd(month);
+  const weeks: { from: string; to: string }[] = [];
+  let from = first;
+  while (from <= last) {
+    const sunday = shift(from, (7 - weekday(from)) % 7);
+    const to = sunday < last ? sunday : last;
+    weeks.push({ from, to });
+    from = shift(to, 1);
+  }
+  // A weekend the month opens on has no working day of its own: it joins the next week.
+  if (weeks.length > 1 && !hasWorkday(weeks[0]!)) weeks.splice(0, 2, { from: weeks[0]!.from, to: weeks[1]!.to });
+  return weeks;
+}
+
+function hasWorkday(week: { from: string; to: string }) {
+  for (let day = week.from; day <= week.to; day = shift(day, 1)) if (isWorkday(day)) return true;
+  return false;
+}
+
+/** The week of a month a day falls in. */
+export function weekOf(date: string): { from: string; to: string } {
+  return monthWeeks(date.slice(0, 7)).find((week) => week.from <= date && date <= week.to)!;
+}
+
+/**
+ * The weekly report's heading, as the workbook writes it: "PERIOD COVERED:
+ * NOVEMBER 2-6, 2026" -- its working days, Monday to Friday.
+ */
+export function weekWords(week: { from: string; to: string }): string {
+  let first = week.from;
+  while (first < week.to && !isWorkday(first)) first = shift(first, 1);
+  let last = week.to;
+  while (last > first && !isWorkday(last)) last = shift(last, -1);
+  const month = new Date(`${first}T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' }).toUpperCase();
+  const days = first === last ? `${Number(first.slice(8))}` : `${Number(first.slice(8))}-${Number(last.slice(8))}`;
+  return `${month} ${days}, ${first.slice(0, 4)}`;
+}
+
+/** The monthly report's heading: "Month of October". */
+export const monthWords = (month: string) =>
+  `Month of ${new Date(`${month}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })}`;

@@ -2,7 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import type { SaveRevenueBudgetsInput, SaveRevenueDayInput, SaveRevenueLogEntryInput } from '@texasrenters/shared';
 
-import { SaveRevenueBudgetsDto, SaveRevenueDayDto, SaveRevenueLogEntryDto } from '../src/admin/actual-vs-budget.controller';
+import { SaveRevenueBudgetsDto, SaveRevenueDayDto, SaveRevenueLogEntryDto, SaveRevenueWeekDto } from '../src/admin/actual-vs-budget.controller';
 import { ActualVsBudgetService } from '../src/admin/actual-vs-budget.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
@@ -60,7 +60,8 @@ const emptyEntry = {
   serviceCallFeeCents: null, materialsCents: null, invoiceNumber: null, postedInPw: null, notes: null,
 };
 
-function database(state: { visits?: unknown[]; entries?: Record<string, unknown>[]; segments?: unknown[]; products?: unknown[]; budgets?: unknown[]; days?: Record<string, unknown>[] } = {}) {
+function database(state: { visits?: unknown[]; entries?: Record<string, unknown>[]; segments?: unknown[]; products?: unknown[]; budgets?: unknown[]; days?: Record<string, unknown>[]; weeks?: Record<string, unknown>[]; months?: Record<string, unknown>[] } = {}) {
+  const weeks = state.weeks ?? [];
   const days = state.days ?? [];
   const audits: Record<string, unknown>[] = [];
   const entries = state.entries ?? [];
@@ -111,10 +112,20 @@ function database(state: { visits?: unknown[]; entries?: Record<string, unknown>
         return days[0];
       }),
     },
+    revenueWeekEntry: {
+      findMany: jest.fn(async () => weeks),
+      findUnique: jest.fn(async () => (weeks[0] ? { ...weeks[0] } : null)),
+      upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        if (weeks[0]) Object.assign(weeks[0], update);
+        else weeks.push({ ...create });
+        return weeks[0];
+      }),
+    },
+    revenueMonthEntry: { findMany: jest.fn(async () => state.months ?? []), findUnique: jest.fn(async () => null), upsert: jest.fn() },
     auditLog: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => audits.push(data)) },
     $transaction: jest.fn(async (work: (tx: unknown) => unknown): Promise<unknown> => work(db)),
   };
-  return { db, audits, entries, days };
+  return { db, audits, entries, days, weeks };
 }
 
 const service = (db: unknown) => new ActualVsBudgetService(db as never);
@@ -329,5 +340,60 @@ describe('the daily sheets', () => {
     };
     await expect(pipe.transform(budgetsBody, { type: 'body', metatype: SaveRevenueBudgetsDto })).resolves.toBeDefined();
     await expect(pipe.transform({ technicians: [{ technicianId: TECH, dailyBudgetCents: -1, otRateCents: 0 }] }, { type: 'body', metatype: SaveRevenueBudgetsDto })).rejects.toBeDefined();
+  });
+});
+
+describe('the weekly and monthly reports', () => {
+  // A technician on $610 a day who worked one day, Wednesday 11/11, in the week of November 9-15.
+  const budgets = [{ technicianId: TECH, dailyBudgetCents: 61000, otRateCents: 8500, technician: { displayName: 'Sample Technician' } }];
+  const visits = [
+    visit(1, { invoices: [{ number: 'INV-1', lines: [line('Repair', 42500), line('Service Call', 5000)] }] }),
+    visit(2, { invoices: [{ number: 'INV-2', lines: [line('Repair', 17000)] }] }),
+  ];
+  const products = [{ nameKey: 'service call', revenueColumn: 'SERVICE_CALL_FEE' }];
+  const worked = [
+    { technicianId: TECH, inspectionId: id(1), buildingId: null, category: 'ONSITE', startedAt: new Date('2026-11-11T14:00:00.000Z'), endedAt: new Date('2026-11-11T20:00:00.000Z'), durationSeconds: 6 * 3600 },
+  ];
+
+  it("divide the month into its weeks, each worked day's budget the target and its revenue the actual", async () => {
+    const { db } = database({ budgets, visits, products, segments: worked });
+    const report = await service(db).month(office, '2026-11');
+    expect(report.weeks.map((week) => week.from)).toEqual(['2026-11-01', '2026-11-09', '2026-11-16', '2026-11-23', '2026-11-30']);
+    expect(report.weeks[0]!.technicians[0]).toMatchObject({ targetCents: 0, actualCents: 0, daysWorked: 0 });
+    expect(report.weeks[1]!.technicians[0]).toMatchObject({ targetCents: 61000, actualCents: 64500, daysWorked: 1, typed: { target: false, actual: false } });
+    expect(report.technicians[0]).toMatchObject({ targetCents: 61000, actualCents: 64500 });
+  });
+
+  it("take the office's target and actual for a week, and add them into the month", async () => {
+    const { db } = database({
+      budgets,
+      visits,
+      products,
+      segments: worked,
+      weeks: [{ technicianId: TECH, weekStart: day('2026-11-09'), targetCents: 122000, actualCents: 274500, remarks: 'Job at Aurora Creek billed apart' }],
+      months: [{ technicianId: TECH, remarks: 'Strong month' }],
+    });
+    const report = await service(db).month(office, '2026-11');
+    expect(report.weeks[1]!.technicians[0]).toMatchObject({ targetCents: 122000, actualCents: 274500, typed: { target: true, actual: true }, remarks: 'Job at Aurora Creek billed apart' });
+    expect(report.technicians[0]).toMatchObject({ targetCents: 122000, actualCents: 274500, remarks: 'Strong month' });
+  });
+
+  it("save a week's cells only on the first day of one of the month's weeks", async () => {
+    const { db, audits, weeks } = database({ budgets });
+    await service(db).saveWeek(office, TECH, '2026-11-09', { targetCents: 244000, remarks: ' Day off Friday ' });
+    expect(weeks[0]).toMatchObject({ targetCents: 244000, remarks: 'Day off Friday' });
+    expect(audits[0]).toMatchObject({ action: 'REVENUE_WEEK_EDITED' });
+    await expect(service(db).saveWeek(office, TECH, '2026-11-10', { remarks: 'x' })).rejects.toMatchObject({ code: 'BAD_DATES' });
+  });
+
+  it('refuse a month that is not one', async () => {
+    const { db } = database({ budgets });
+    await expect(service(db).month(office, '2026-13')).rejects.toMatchObject({ code: 'BAD_DATES' });
+  });
+
+  it("take every field of a week's request", async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    await expect(pipe.transform({ targetCents: 244000, actualCents: 346500, remarks: 'a' }, { type: 'body', metatype: SaveRevenueWeekDto })).resolves.toBeDefined();
+    await expect(pipe.transform({ targetCents: -1 }, { type: 'body', metatype: SaveRevenueWeekDto })).rejects.toBeDefined();
   });
 });

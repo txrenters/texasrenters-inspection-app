@@ -405,6 +405,8 @@ model Organization {
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
+  revenueWeekEntries RevenueWeekEntry[]
+  revenueMonthEntries RevenueMonthEntry[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -620,6 +622,8 @@ model UserProfile {
   revenueLogEntriesEdited    RevenueLogEntry[]   @relation("RevenueLogEditedBy")
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
+  revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
+  revenueMonths              RevenueMonthEntry[] @relation("RevenueMonthTechnician")
   inspectionNotesWritten     InspectionNote[]    @relation("InspectionNoteAuthor")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
@@ -5374,4 +5378,45 @@ model RevenueSettings {
   updatedAt          DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// What the office typed for one technician's week on the weekly report (2026-11-17, PR 3): the target and the
+/// actual revenue when the console's figures are not the week's -- the workbook typed "=610*4" for a day off and
+/// added "+2100" for a job billed apart -- and the week's remarks. A week runs Monday to Sunday inside its month,
+/// so it is named by its first day. Null is "as the console works it out".
+model RevenueWeekEntry {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  technicianId   String   @db.Uuid
+  weekStart      DateTime @db.Date
+  targetCents    Int?
+  actualCents    Int?
+  remarks        String?
+  updatedAt      DateTime @updatedAt
+  updatedById    String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueWeekTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, weekStart])
+  @@index([organizationId, weekStart])
+}
+
+/// The remarks the office typed for one technician's month on the monthly report (2026-11-17, PR 3). The month's
+/// figures are its weeks', added up, as the workbook's "Month of" tabs add up their weekly tabs.
+model RevenueMonthEntry {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  technicianId   String   @db.Uuid
+  /// The month's first day.
+  month          DateTime @db.Date
+  remarks        String?
+  updatedAt      DateTime @updatedAt
+  updatedById    String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueMonthTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, month])
+  @@index([organizationId, month])
 }

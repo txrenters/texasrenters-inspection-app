@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { RevenueDay, RevenueDayTechnician, RevenueLog, RevenueLogRow } from '@texasrenters/shared';
+import type { RevenueDay, RevenueDayTechnician, RevenueLog, RevenueLogRow, RevenueMonthReport } from '@texasrenters/shared';
+import { weekOf } from '@texasrenters/shared';
 import { revenueLogTotals } from '@texasrenters/shared';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { businessToday } from '@/lib/clock';
 
 import ActualVsBudgetPage from './page';
 
@@ -19,6 +22,8 @@ const queries = vi.hoisted(() => ({
   useRevenueProducts: vi.fn(),
   useRevenueDay: vi.fn(),
   useRevenueBudgets: vi.fn(),
+  useRevenueMonth: vi.fn(),
+  saveWeek: vi.fn(),
   save: vi.fn(),
   saveDay: vi.fn(),
 }));
@@ -28,6 +33,8 @@ vi.mock('@/lib/actual-vs-budget-queries', () => ({
   useRevenueProducts: queries.useRevenueProducts,
   useRevenueDay: queries.useRevenueDay,
   useRevenueBudgets: queries.useRevenueBudgets,
+  useRevenueMonth: queries.useRevenueMonth,
+  useRevenuePeriodEdits: () => ({ saveWeek: { mutateAsync: queries.saveWeek }, saveMonth: { mutateAsync: vi.fn() } }),
   useRevenueDayEdits: () => ({
     saveDay: { mutateAsync: queries.saveDay, isPending: false },
     saveBudgets: { mutate: vi.fn(), isPending: false },
@@ -112,6 +119,32 @@ const DAY: RevenueDay = {
     tech('thomas', 'Thomas Allen Kivi', { driveTime: '35–50 min', billableTime: '7h 00m', projectedCents: 72000, actualCents: 59500, workSeconds: 40740 }),
   ],
 };
+// The workbook's "Nov. 2-6" figures, shown as whatever week today falls in.
+const thisWeek = weekOf(businessToday());
+const person = (id: string, name: string, targetCents: number, actualCents: number) => ({
+  technician: { id, name },
+  targetCents,
+  actualCents,
+  daysWorked: 5,
+  typed: { target: false, actual: false },
+  remarks: null,
+});
+const WEEK_ROWS = [
+  person('amy', 'Amy Wilson', 200000, 80814),
+  person('emanuel', 'Emanuel Hall', 305000, 379941),
+  person('kevin', 'Kevin Granados', 244000, 257096),
+  person('moses', 'Moses Rodriguez', 355000, 540930),
+  person('thomas', 'Thomas Allen Kivi', 244000, 348500),
+];
+const MONTH: RevenueMonthReport = {
+  month: thisWeek.from.slice(0, 7),
+  weeks: [{ ...thisWeek, technicians: WEEK_ROWS }],
+  // The workbook's "Month of October".
+  technicians: [
+    { technician: { id: 'amy', name: 'Amy Wilson' }, targetCents: 880000, actualCents: 705753, remarks: null },
+    { technician: { id: 'moses', name: 'Moses Rodriguez' }, targetCents: 1562000, actualCents: 1867736, remarks: null },
+  ],
+};
 const open = (name: string) => fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0 });
 const rowOf = (name: string) => screen.getByDisplayValue(name).closest('tr')!;
 const values = (row: HTMLElement) => within(row).getAllByRole('textbox').map((cell) => (cell as HTMLTextAreaElement).value);
@@ -124,6 +157,8 @@ beforeEach(() => {
   queries.save.mockReset();
   queries.saveDay.mockReset();
   queries.useRevenueDay.mockReturnValue(ready(DAY));
+  queries.useRevenueMonth.mockReturnValue(ready(MONTH));
+  queries.saveWeek.mockReset();
   queries.useRevenueBudgets.mockReturnValue(ready({ payrollPeriodStart: '2026-11-02', payrollPeriodDays: 14, technicians: [] }));
 });
 
@@ -261,5 +296,45 @@ describe('the daily sheets', () => {
     fireEvent.change(work, { target: { value: '9h 10m' } });
     fireEvent.blur(work);
     expect(queries.saveDay).toHaveBeenCalledWith({ technicianId: 'amy', date: expect.any(String), input: { workSeconds: 33000 } });
+  });
+});
+
+describe('the weekly and monthly reports', () => {
+  it("total the week as the workbook's Nov. 2-6 does", () => {
+    render(<ActualVsBudgetPage />);
+    open('Weekly');
+    expect(screen.getByText(/^PERIOD COVERED: [A-Z]+ \d/)).toBeInTheDocument();
+    expect(values(rowOf('AMY WILSON'))).toEqual(['AMY WILSON', '2,000.00', '808.14', '(1,191.86)', '40.41%', '']);
+    expect(values(rowOf('MOSES RODRIGUEZ')).slice(1, 5)).toEqual(['3,550.00', '5,409.30', '1,859.30', '152.37%']);
+    const total = screen.getByText('TOTAL').closest('tr')!;
+    expect(within(total).getByText('13,480.00')).toBeInTheDocument();
+    expect(within(total).getByText('16,072.81')).toBeInTheDocument();
+    expect(within(total).getByText('2,592.81')).toBeInTheDocument();
+    expect(within(total).getByText('119.23%')).toBeInTheDocument();
+  });
+
+  it("take a week's target typed over the console's, as the workbook's =610*4", () => {
+    queries.saveWeek.mockResolvedValue({ saved: true });
+    render(<ActualVsBudgetPage />);
+    open('Weekly');
+    const target = within(rowOf('KEVIN GRANADOS')).getAllByRole('textbox')[1]!;
+    fireEvent.focus(target);
+    fireEvent.change(target, { target: { value: '2,440.00' } });
+    fireEvent.blur(target);
+    expect(queries.saveWeek).not.toHaveBeenCalled();
+    fireEvent.focus(target);
+    fireEvent.change(target, { target: { value: '1830' } });
+    fireEvent.blur(target);
+    expect(queries.saveWeek).toHaveBeenCalledWith({ technicianId: 'kevin', weekStart: thisWeek.from, input: { targetCents: 183000 } });
+  });
+
+  it("add up the month as the workbook's Month of October, with only the remarks typed", () => {
+    render(<ActualVsBudgetPage />);
+    open('Monthly');
+    expect(screen.getByText(/PERIOD COVERED: Month of/)).toBeInTheDocument();
+    const moses = within(rowOf('MOSES RODRIGUEZ')).getAllByRole('textbox');
+    expect(moses.map((cell) => (cell as HTMLTextAreaElement).value)).toEqual(['MOSES RODRIGUEZ', '15,620.00', '18,677.36', '3,057.36', '119.57%', '']);
+    expect(moses[1]).toHaveAttribute('readonly');
+    expect(moses[5]).not.toHaveAttribute('readonly');
   });
 });
