@@ -48,6 +48,8 @@ const ON: XeroSendingView = {
       number: '8440',
       clientName: '12 Example Lane',
       problem: 'Invoice # must be unique.',
+      heldBack: false,
+      waitsOnXero: false,
       attempts: 1,
       lastAttemptAt: '2026-12-02T17:50:00.000Z',
       nextAttemptAt: '2026-12-02T18:50:00.000Z',
@@ -57,7 +59,21 @@ const ON: XeroSendingView = {
       number: '8441',
       clientName: '14 Example Lane',
       problem: 'Its lines come to $175.00 and its total is $180.00, so it is not sent.',
+      heldBack: true,
+      waitsOnXero: false,
       attempts: 1,
+      lastAttemptAt: '2026-12-02T17:50:00.000Z',
+      nextAttemptAt: null,
+    },
+    {
+      // Held back for what the company's books lacked as last read (2026-11-17): looked for in Xero again within the hour.
+      invoiceId: 'inv-5',
+      number: 'INV-5416',
+      clientName: '20 Example Lane',
+      problem: 'Income by Employee has no option “HVAC Inspection Income: Kevin” for Kevin Example. Add it in Xero, and the console sends the invoice within the hour.',
+      heldBack: true,
+      waitsOnXero: true,
+      attempts: 2,
       lastAttemptAt: '2026-12-02T17:50:00.000Z',
       nextAttemptAt: null,
     },
@@ -120,6 +136,21 @@ describe('the sending panel', () => {
     expect(within(refused).getByText('#8440')).toBeInTheDocument();
     const held = screen.getByText(/Its lines come to \$175.00/).closest('tr')!;
     expect(within(held).getByText('When it changes')).toBeInTheDocument();
+  });
+
+  it('says which the console held back itself and which Xero refused, and when a hold for what Xero lacked goes (2026-11-17)', () => {
+    mount(ON);
+    expect(screen.getByText('Held or refused').nextSibling).toHaveTextContent('2');
+    const table = screen.getByRole('table', { name: 'Invoices held back or refused' });
+    const refused = within(table).getByText('Invoice # must be unique.').closest('tr')!;
+    expect(within(refused).getByText('Xero refused it')).toBeInTheDocument();
+    expect(within(refused).queryByText('Held back')).not.toBeInTheDocument();
+    const short = within(table).getByText(/Its lines come to/).closest('tr')!;
+    expect(within(short).getByText('Held back')).toBeInTheDocument();
+    expect(within(short).queryByText('Xero refused it')).not.toBeInTheDocument();
+    const lacking = within(table).getByText(/has no option/).closest('tr')!;
+    expect(within(lacking).getByText('Held back')).toBeInTheDocument();
+    expect(within(lacking).getByText('Once it is in Xero, within the hour')).toBeInTheDocument();
   });
 
   it('shows the payments in Xero and those refused, with why (2026-11-10)', () => {

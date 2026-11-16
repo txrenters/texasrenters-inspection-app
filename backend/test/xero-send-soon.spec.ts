@@ -12,7 +12,7 @@ const PEST = '22222222-2222-4222-8222-222222222222';
 const BUSY = 'Another run is sending to Xero, or reading from it.';
 
 function sender() {
-  const service = new XeroSenderService({} as never, {} as never, {} as never, {} as never, {} as never);
+  const service = new XeroSenderService({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
   const run = jest.spyOn(service, 'run').mockResolvedValue({ problem: null } as never);
   return { service, run };
 }

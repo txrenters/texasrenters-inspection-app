@@ -10,6 +10,7 @@ import {
   type XeroItem,
   type XeroOrganisation,
   type XeroSendingView,
+  type XeroSettingsValues,
   type XeroTaxRate,
   type XeroTrackingCategory,
 } from '@texasrenters/shared';
@@ -24,7 +25,18 @@ import { XeroAuthService } from './xero-auth.service';
 import { XeroClient } from './xero.client';
 import { refused, said, xeroContacts, type XeroAnswer } from './xero-contacts';
 import { XeroError } from './xero.errors';
-import { clientKeyOf, contactNameOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroInvoiceBody } from './xero-invoice';
+import {
+  clientKeyOf,
+  contactNameOf,
+  invoiceFingerprint,
+  XERO_CATALOG_PARTS,
+  xeroInvoiceFrom,
+  type InvoiceForXero,
+  type XeroCatalog,
+  type XeroCatalogPart,
+  type XeroInvoiceBody,
+  type XeroInvoicePlan,
+} from './xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero, type XeroPaymentBody } from './xero-payment';
 import { xeroWriteOffFrom } from './xero-write-off';
 import { nextXeroInvoiceNumber } from '../../admin/invoice-numbers';
@@ -32,6 +44,7 @@ import { invoicingTakenOverAt } from '../../admin/invoice-settings';
 import { sentFrom } from '../../admin/invoicing-state';
 import { XeroProjectsService, type XeroProjectsResult } from './xero-projects.service';
 import { XeroSettingsService } from './xero-settings.service';
+import { XeroService } from './xero.service';
 
 /** Xero takes up to 50 of a kind in one call. */
 const BATCH = 50;
@@ -174,13 +187,7 @@ export function invoiceForXero(invoice: Candidate): InvoiceForXero {
 }
 
 /** What an organisation's lines are posted to, tagged and itemed with, as last read. */
-interface Catalog {
-  accounts: XeroAccount[];
-  trackingCategories: XeroTrackingCategory[];
-  items: XeroItem[];
-  /** As last read (2026-11-13): a tax type's rate, so none is put on top of prices that leave it out. */
-  taxRates: XeroTaxRate[];
-}
+type Catalog = XeroCatalog;
 
 const PAYMENT_FIELDS = {
   id: true,
@@ -215,6 +222,12 @@ interface DeleteBudget {
   left: number;
 }
 
+/** A run's read again of what held invoices wait on (2026-11-17): the parts read, the invoices waiting, and those put up again. */
+type Rechecked = { parts: XeroCatalogPart[]; held: number; released: number };
+
+/** No longer held back by the console: sent, about to be, or Xero's. */
+const NOT_HELD = { heldBack: false, waitsOn: [] as string[] };
+
 /**
  * Sends the office's invoices to Xero (2026-11-10, phase 3 of the Xero plan).
  *
@@ -226,7 +239,9 @@ interface DeleteBudget {
  * console's daily ceiling. Approved, or drafts, never emailed by Xero. A
  * refusal is kept with Xero's reason and tried again later; an invoice the
  * console will not send as it is (its lines do not come to its total, it
- * carries sales tax) is held with the reason until it changes.
+ * carries sales tax) is held back with the reason until it changes -- or,
+ * held for what its company's books lacked as last read (2026-11-17), until
+ * a read of them again, within the hour, has it.
  */
 @Injectable()
 export class XeroSenderService implements OnModuleDestroy {
@@ -240,6 +255,8 @@ export class XeroSenderService implements OnModuleDestroy {
     @Inject(XeroAuthService) private readonly auth: XeroAuthService,
     @Inject(XeroSettingsService) private readonly settings: XeroSettingsService,
     @Inject(XeroProjectsService) private readonly projects: XeroProjectsService,
+    /** Reads again what held invoices wait on (2026-11-17). */
+    @Inject(XeroService) private readonly xero: XeroService,
   ) {}
 
   onModuleDestroy() {
@@ -351,6 +368,8 @@ export class XeroSenderService implements OnModuleDestroy {
               attempts: true,
               lastAttemptAt: true,
               nextAttemptAt: true,
+              heldBack: true,
+              waitsOn: true,
               invoice: { select: { number: true, clientName: true } },
             },
           })
@@ -431,6 +450,9 @@ export class XeroSenderService implements OnModuleDestroy {
         number: row.invoice.number,
         clientName: row.invoice.clientName,
         problem: row.problem ?? 'Not sent.',
+        // The console's own hold, not Xero's refusal (2026-11-17); and one it clears by itself once Xero has what it lacked.
+        heldBack: row.heldBack,
+        waitsOnXero: row.waitsOn.length > 0,
         attempts: row.attempts,
         lastAttemptAt: row.lastAttemptAt?.toISOString() ?? null,
         nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
@@ -575,11 +597,15 @@ export class XeroSenderService implements OnModuleDestroy {
 
     const sentNumbers: string[] = [];
     const budget: DeleteBudget = { left: MAX_PAYMENT_DELETES_PER_RUN };
+    let rechecked: Rechecked | null = null;
     try {
       // Payments removed here, and write-offs of invoices reopened here, first.
       await this.removePayments(organizationId, state.tenantId, result, budget);
       await this.reverseWriteOffs(organizationId, state.tenantId, result);
-      await this.send(organizationId, state.tenantId, state.sendFrom, state.catalog, result, sentNumbers, state.projectsEnabled, state.jobberSends);
+      // What was held back for lacking in the books, as last read (2026-11-17): read again at most hourly, and sent below once there.
+      const held = await this.heldForXero(organizationId, state.tenantId, state.values, state.catalog, state.projectsEnabled, state.jobberSends);
+      rechecked = held.rechecked;
+      await this.send(organizationId, state.tenantId, state.sendFrom, held.catalog, result, sentNumbers, state.projectsEnabled, state.jobberSends);
       // A project for each visit whose invoice is now in Xero (2026-11-11), the office's to put the line on.
       if (state.projectsEnabled) {
         // Filled as it goes: what was made before a stop still reaches the audit entry.
@@ -638,11 +664,89 @@ export class XeroSenderService implements OnModuleDestroy {
             payments,
             writeOffs,
             projects: { ...projects, names: projectNames.slice(0, 50) },
+            // Read again for invoices held back (2026-11-17): which parts, and how many it put up again.
+            ...(rechecked ? { rechecked } : {}),
             problem: result.problem,
           },
         },
       });
     return result;
+  }
+
+  /**
+   * Invoices the console held back for something their company's books lacked
+   * as last read -- the technician's tracking option, an account, an item, a
+   * tax rate (2026-11-17). One waited days for an option the office had added
+   * in Xero already, until somebody pressed "Read from Xero". Now the parts
+   * they wait on are read again by themselves, at most once an hour
+   * (`XeroService.recheckCatalog`: one call a part), and each one the books now
+   * have what it needs for is put up again, to go in this run. One still
+   * lacking stays held, and costs nothing more. Nothing is read while nothing
+   * waits -- nor for an invoice no run would send.
+   */
+  private async heldForXero(
+    organizationId: string,
+    tenantId: string,
+    values: XeroSettingsValues,
+    catalog: Catalog,
+    asDraft: boolean,
+    jobberSends: boolean,
+  ): Promise<{ catalog: Catalog; rechecked: Rechecked | null }> {
+    const held = await this.prisma.xeroInvoiceSync.findMany({
+      where: {
+        organizationId,
+        xeroTenantId: tenantId,
+        status: 'FAILED',
+        heldBack: true,
+        nextAttemptAt: null,
+        waitsOn: { isEmpty: false },
+        // Only what a run still sends: the console's own, and Jobber's until the console makes the invoices.
+        invoice: {
+          xeroTenantId: tenantId,
+          xeroInvoiceId: null,
+          status: { not: InvoiceStatus.VOIDED },
+          origin: jobberSends ? { not: InvoiceOrigin.XERO } : InvoiceOrigin.CONSOLE,
+        },
+      },
+      orderBy: [{ lastAttemptAt: 'asc' }],
+      take: MAX_INVOICES_PER_RUN,
+      select: { invoiceId: true, problem: true, waitsOn: true },
+    });
+    if (!held.length) return { catalog, rechecked: null };
+    const parts = XERO_CATALOG_PARTS.filter((part) => held.some((row) => row.waitsOn.includes(part)));
+    const read = await this.xero.recheckCatalog(organizationId, tenantId, parts);
+    if (!read) return { catalog, rechecked: null };
+    const fresh: Catalog = { ...catalog, ...read };
+    const invoices = await this.prisma.invoice.findMany({ where: { organizationId, id: { in: held.map((row) => row.invoiceId) } }, select: INVOICE_FIELDS });
+    const ready = invoices.filter((invoice) => {
+      // No contact is needed to know: only what goes under it.
+      const plan = this.plan(invoice, values, fresh, asDraft, '');
+      const before = held.find((row) => row.invoiceId === invoice.id)?.problem ?? null;
+      // It goes now; or it is held for something else, which the run says.
+      return plan.kind === 'send' || plan.problem.slice(0, 1000) !== before;
+    });
+    if (ready.length)
+      await this.prisma.xeroInvoiceSync.updateMany({
+        where: { organizationId, xeroTenantId: tenantId, invoiceId: { in: ready.map((invoice) => invoice.id) }, status: 'FAILED', heldBack: true },
+        data: { nextAttemptAt: new Date() },
+      });
+    this.logger.log({ event: 'xero_held_rechecked', organizationId, xeroTenantId: tenantId, parts, held: held.length, released: ready.length });
+    return { catalog: fresh, rechecked: { parts, held: held.length, released: ready.length } };
+  }
+
+  /** What Xero would be sent of an invoice, or why the console holds it back. Pure: no call. */
+  private plan(invoice: Candidate, values: XeroSettingsValues, catalog: Catalog, asDraft: boolean, contactId: string): XeroInvoicePlan {
+    return xeroInvoiceFrom(invoiceForXero(invoice), {
+      settings: values,
+      accounts: catalog.accounts,
+      trackingCategories: catalog.trackingCategories,
+      items: catalog.items,
+      taxRates: catalog.taxRates,
+      contactId,
+      asDraft,
+      // The console's own (2026-11-12): a complete draft under its number, linked back to its page here.
+      ...(invoice.origin === InvoiceOrigin.CONSOLE ? { consoleUrl: consoleInvoiceUrl(invoice.id) } : {}),
+    });
   }
 
   private async send(
@@ -697,20 +801,11 @@ export class XeroSenderService implements OnModuleDestroy {
         result.failed++;
         continue;
       }
-      const plan = xeroInvoiceFrom(invoiceForXero(item.invoice), {
-        settings: values,
-        accounts: catalog.accounts,
-        trackingCategories: catalog.trackingCategories,
-        items: catalog.items,
-        taxRates: catalog.taxRates,
-        contactId: contact.id,
-        asDraft,
-        // The console's own (2026-11-12): a complete draft under its number, linked back to its page here.
-        ...(item.invoice.origin === InvoiceOrigin.CONSOLE ? { consoleUrl: consoleInvoiceUrl(item.invoice.id) } : {}),
-      });
+      const plan = this.plan(item.invoice, values, catalog, asDraft, contact.id);
       if (plan.kind === 'problem') {
-        // Held back by the console: tried again when the invoice, or the choices, change -- not on a timer.
-        await this.failed(organizationId, tenantId, item, plan.problem, false);
+        // Held back by the console: tried again when the invoice, or the choices, change -- not on a timer -- or, held for
+        // what the books lacked (2026-11-17), once a read of them again has it.
+        await this.failed(organizationId, tenantId, item, plan.problem, false, plan.waitsOn);
         result.failed++;
         continue;
       }
@@ -901,6 +996,7 @@ export class XeroSenderService implements OnModuleDestroy {
       lastAttemptAt: new Date(),
       nextAttemptAt: null,
       problem: null,
+      ...NOT_HELD,
     };
     return this.prisma.xeroInvoiceSync.upsert({
       where: { invoiceId: item.invoice.id },
@@ -934,6 +1030,7 @@ export class XeroSenderService implements OnModuleDestroy {
       problem: null,
       sentAt: now,
       changedHereAt: null,
+      ...NOT_HELD,
     };
     return this.prisma.$transaction([
       this.prisma.invoice.update({ where: { id: item.invoice.id }, data: { xeroInvoiceId, xeroStatus: 'DRAFT', ...(number ? { number } : {}) } }),
@@ -1011,6 +1108,7 @@ export class XeroSenderService implements OnModuleDestroy {
       problem: null,
       sentAt: now,
       changedHereAt: null,
+      ...NOT_HELD,
     };
     return this.prisma.xeroInvoiceSync.upsert({
       where: { invoiceId: item.invoice.id },
@@ -1036,6 +1134,7 @@ export class XeroSenderService implements OnModuleDestroy {
         nextAttemptAt: null,
         problem: null,
         changedHereAt: changed ? (sync.changedHereAt ?? new Date()) : null,
+        ...NOT_HELD,
       },
     });
   }
@@ -1458,8 +1557,18 @@ export class XeroSenderService implements OnModuleDestroy {
     });
   }
 
-  /** Kept with the reason. `retry`: Xero's refusal, tried again later; otherwise the console's, tried when it changes. */
-  private failed(organizationId: string, tenantId: string, item: { invoice: Candidate; sync: SyncRow | null }, problem: string, retry: boolean) {
+  /**
+   * Kept with the reason. `retry`: Xero's refusal, tried again later; otherwise the console's own hold (2026-11-17: held
+   * back, said so), tried when it changes -- or, for what the books lacked as last read, once a read of them again has it.
+   */
+  private failed(
+    organizationId: string,
+    tenantId: string,
+    item: { invoice: Candidate; sync: SyncRow | null },
+    problem: string,
+    retry: boolean,
+    waitsOn: readonly XeroCatalogPart[] = [],
+  ) {
     const now = new Date();
     const attempts = (item.sync?.attempts ?? 0) + 1;
     const data = {
@@ -1473,6 +1582,8 @@ export class XeroSenderService implements OnModuleDestroy {
       lastAttemptAt: now,
       nextAttemptAt: retry ? new Date(now.getTime() + BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length) - 1]!) : null,
       problem: problem.slice(0, 1000),
+      heldBack: !retry,
+      waitsOn: retry ? [] : [...waitsOn],
     };
     return this.prisma.xeroInvoiceSync.upsert({
       where: { invoiceId: item.invoice.id },

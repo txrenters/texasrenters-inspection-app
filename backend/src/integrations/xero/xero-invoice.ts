@@ -111,7 +111,29 @@ export interface XeroInvoiceBody {
   Url?: string;
 }
 
-export type XeroInvoicePlan = { kind: 'send'; body: XeroInvoiceBody } | { kind: 'problem'; problem: string };
+/** What a company's lines are posted to, tagged, itemed and taxed with in Xero, as last read. */
+export interface XeroCatalog {
+  accounts: XeroAccount[];
+  trackingCategories: XeroTrackingCategory[];
+  items: XeroItem[];
+  /** As last read (2026-11-13): a tax type's rate, so none is put on top of prices that leave it out. */
+  taxRates: XeroTaxRate[];
+}
+
+/**
+ * The parts of a company's books in Xero, as last read, that an invoice can be held back for lacking (2026-11-17): the
+ * console reads each again by itself, one call, at most once an hour.
+ */
+export const XERO_CATALOG_PARTS = ['ACCOUNTS', 'TRACKING', 'ITEMS', 'TAX_RATES'] as const;
+export type XeroCatalogPart = (typeof XERO_CATALOG_PARTS)[number];
+
+/** Why it is held back; and, when it is for something the books lacked as last read (2026-11-17), what part of them. */
+export type XeroInvoicePlan = { kind: 'send'; body: XeroInvoiceBody } | { kind: 'problem'; problem: string; waitsOn?: XeroCatalogPart[] };
+
+/** Held back for what its company's books lacked as last read: the part read again within the hour. */
+const lacking = (part: XeroCatalogPart, problem: string): XeroInvoicePlan => ({ kind: 'problem', problem, waitsOn: [part] });
+/** Said of a hold the console clears by itself (2026-11-17): no "read from Xero again" -- it reads again within the hour. */
+const ADD_IN_XERO = 'Add it in Xero, and the console sends the invoice within the hour.';
 
 /** The client is the property, as in Jobber: by Jobber's id, or -- for one Jobber did not name -- by its name. */
 export const clientKeyOf = (invoice: Pick<InvoiceForXero, 'jobberClientId' | 'clientName' | 'origin' | 'propertywareBuildingId'>) =>
@@ -248,14 +270,13 @@ export function xeroInvoiceFrom(
 
   const codes = new Map(context.accounts.filter((account) => account.status === 'ACTIVE' && account.code).map((account) => [account.accountId, account.code!]));
   const defaultCode = settings.salesAccountId ? codes.get(settings.salesAccountId) : undefined;
-  if (!defaultCode) return { kind: 'problem', problem: 'The default sales account is not an active account in Xero. Choose again on the Xero page.' };
+  if (!defaultCode) return lacking('ACCOUNTS', 'The default sales account is not an active account in Xero. Choose again on the Xero page.');
 
   // The category lines are tagged in, and the items they name (2026-11-11): as last read, active.
   const category = settings.trackingCategoryId
     ? activeTrackingCategories(context.trackingCategories ?? []).find((each) => each.trackingCategoryId === settings.trackingCategoryId)
     : null;
-  if (settings.trackingCategoryId && !category)
-    return { kind: 'problem', problem: 'The tracking category is not an active one in Xero. Choose again on the Xero page.' };
+  if (settings.trackingCategoryId && !category) return lacking('TRACKING', 'The tracking category is not an active one in Xero. Choose again on the Xero page.');
   const sold = new Set(soldItems(context.items ?? []).map((item) => item.code));
   const technician = invoice.technicianName?.trim() || null;
   const active = activeTrackingCategories(context.trackingCategories ?? []);
@@ -286,18 +307,17 @@ export function xeroInvoiceFrom(
     const chosen = line.xeroAccountId ?? settings.salesAccounts[productNameKey(line.name)];
     const code = chosen ? codes.get(chosen) : defaultCode;
     if (!code)
-      return {
-        kind: 'problem',
-        problem: line.xeroAccountId
+      return lacking(
+        'ACCOUNTS',
+        line.xeroAccountId
           ? `The account chosen on the invoice for “${line.name}” is not an active account in Xero. Choose again on a new invoice, or enter it in Xero by hand.`
           : `The account chosen for “${line.name}” is not an active account in Xero. Choose again on the Xero page.`,
-      };
-    if (itemCode && !sold.has(itemCode))
-      return { kind: 'problem', problem: `The item “${itemCode}” chosen for “${line.name}” is not one Xero sells. Choose again on the Xero page.` };
+      );
+    if (itemCode && !sold.has(itemCode)) return lacking('ITEMS', `The item “${itemCode}” chosen for “${line.name}” is not one Xero sells. Choose again on the Xero page.`);
     // A row at no price -- the insecticide used -- carries no tax (2026-11-16), as on the office's own invoices.
     const taxType = line.xeroTaxType ?? (line.unitPriceCents === 0 ? 'NONE' : settings.salesTaxType);
     if (line.xeroTaxType && context.taxRates && !context.taxRates.some((each) => each.taxType === line.xeroTaxType && each.status === 'ACTIVE'))
-      return { kind: 'problem', problem: `The tax rate chosen for “${line.name}” is not an active one in Xero.` };
+      return lacking('TAX_RATES', `The tax rate chosen for “${line.name}” is not an active one in Xero.`);
     if (mode === 'EXCLUSIVE' && line.xeroTaxType && rateOf(line.xeroTaxType) > 0)
       return { kind: 'problem', problem: `The tax rate chosen for “${line.name}” adds ${rateOf(line.xeroTaxType)}% on top, so Xero's total would be more than the console's.` };
     let tracking: NonNullable<XeroLineItem['Tracking']> = [];
@@ -308,7 +328,7 @@ export function xeroInvoiceFrom(
         const named = active.find((candidate) => candidate.trackingCategoryId === each.trackingCategoryId);
         const option = named?.options.find((candidate) => candidate.status === 'ACTIVE' && candidate.name === each.option);
         if (!named || !option)
-          return { kind: 'problem', problem: `“${each.option}”, chosen for “${line.name}”, is not an active tracking option in Xero. Add it in Xero, then read from Xero again.` };
+          return lacking('TRACKING', `“${each.option}”, chosen for “${line.name}”, is not an active tracking option in Xero. ${ADD_IN_XERO}`);
         tracking.push({ TrackingCategoryID: named.trackingCategoryId, Name: named.name, Option: option.name });
       }
     } else {
@@ -316,10 +336,7 @@ export function xeroInvoiceFrom(
       const group = category ? settings.trackingGroups?.[productNameKey(line.name)] : undefined;
       const option = category && group && technician ? trackingOptionFor(category, group, technician) : null;
       if (category && group && technician && !option)
-        return {
-          kind: 'problem',
-          problem: `${category.name} has no option “${group}: ${technician.split(/\s+/)[0]}” for ${technician}. Add it in Xero, then read from Xero again.`,
-        };
+        return lacking('TRACKING', `${category.name} has no option “${group}: ${technician.split(/\s+/)[0]}” for ${technician}. ${ADD_IN_XERO}`);
       if (category && option) tracking = [{ TrackingCategoryID: category.trackingCategoryId, Name: category.name, Option: option.name }];
     }
     // Xero works a line out as quantity × unit price, less its discount. When the stored total is not exactly that, the

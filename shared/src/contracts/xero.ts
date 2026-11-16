@@ -672,6 +672,14 @@ export interface XeroSendingFailure {
   number: string | null;
   clientName: string;
   problem: string;
+  /** Held back by the console's own check (2026-11-17), not refused by Xero. */
+  heldBack: boolean;
+  /**
+   * Held back for something its company's books lacked as last read -- a
+   * tracking option, an account, an item, a tax rate (2026-11-17): the console
+   * reads Xero again within the hour, and sends it once it is there.
+   */
+  waitsOnXero: boolean;
   attempts: number;
   lastAttemptAt: string | null;
   /** When it is tried again on its own; null until the invoice changes or somebody presses "Try again". */

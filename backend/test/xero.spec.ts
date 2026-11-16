@@ -61,16 +61,17 @@ afterEach(() => {
 
 type Row = Record<string, unknown>;
 
-/** Enough of Prisma's `where` for these tests: equals, not, notIn, lt and OR. */
+/** Enough of Prisma's `where` for these tests: equals, not, notIn, lt, lte (a time) and OR. */
 function matches(row: Row, where: Row): boolean {
   return Object.entries(where).every(([field, wanted]) => {
     if (field === 'OR') return (wanted as Row[]).some((branch) => matches(row, branch));
     const value = row[field] ?? null;
     if (wanted && typeof wanted === 'object' && !(wanted instanceof Date)) {
-      const test = wanted as { not?: unknown; notIn?: unknown[]; lt?: number };
+      const test = wanted as { not?: unknown; notIn?: unknown[]; lt?: number; lte?: Date };
       if ('not' in test) return value !== test.not;
       if ('notIn' in test) return !test.notIn!.includes(value);
       if ('lt' in test) return typeof value === 'number' && value < test.lt!;
+      if ('lte' in test) return value instanceof Date && value <= test.lte!;
     }
     return value === wanted;
   });
@@ -420,6 +421,75 @@ describe('connecting the office’s organisations', () => {
     const { xero } = service(signedIn(), [{ xeroTenantId: HOMES, name: 'Example Home Services', catalogReadAt: new Date('2026-11-20T17:58:00.000Z') }], []);
     await expect(xero.read(ORG, HOMES)).rejects.toMatchObject({ code: 'XERO_READ_TOO_SOON' });
     await expect(xero.read(ORG, PEST)).rejects.toMatchObject({ code: 'XERO_ORGANISATION_UNKNOWN', status: 404 });
+  });
+
+  describe('what held invoices wait on, read again with no button pressed (2026-11-17)', () => {
+    const apiCalls = (fetch: jest.SpyInstance) => fetch.mock.calls.map(([url]) => String(url)).filter((url) => url.includes('/api.xro/'));
+    const READ_BY_HAND = new Date('2026-11-17T15:00:00.000Z');
+
+    it('reads only the parts they wait on, one call each, keeps them, and leaves the rest of the read by hand as it was', async () => {
+      const { db, xero, fetch } = service(
+        signedIn(),
+        [{ xeroTenantId: HOMES, name: 'Example Home Services', catalogReadAt: READ_BY_HAND, trackingCategories: [], accounts: [{ accountId: 'kept' }], invoiceRemindersOn: false }],
+        [],
+      );
+      const read = await xero.recheckCatalog(ORG, HOMES, ['TRACKING']);
+      const tracking = [{ trackingCategoryId: 'tc-1', name: 'Income by Employee', status: 'ACTIVE', options: [{ optionId: 'to-1', name: 'Air Filter Income: Ada', status: 'ACTIVE' }] }];
+      expect(read).toEqual({ trackingCategories: tracking });
+      expect(apiCalls(fetch)).toEqual([expect.stringMatching(/\/TrackingCategories$/)]);
+      expect(db.organisation(HOMES)).toMatchObject({
+        callsUsed: 1,
+        trackingCategories: tracking,
+        catalogRecheckedAt: new Date('2026-11-20T18:00:00.000Z'),
+        // The read by hand's time, accounts and reminders are its own.
+        catalogReadAt: READ_BY_HAND,
+        accounts: [{ accountId: 'kept' }],
+        invoiceRemindersOn: false,
+      });
+
+      // Several parts: one call each.
+      const more = service(signedIn(), [{ xeroTenantId: PEST, name: 'Example Pest Co' }], []);
+      more.fetch.mockClear();
+      expect(Object.keys((await more.xero.recheckCatalog(ORG, PEST, ['ACCOUNTS', 'ITEMS', 'TAX_RATES']))!)).toEqual(['accounts', 'items', 'taxRates']);
+      expect(apiCalls(more.fetch).map((url) => url.split('/').pop())).toEqual(['Accounts', 'Items', 'TaxRates']);
+    });
+
+    it('reads nothing within the hour of its last, nor of a read by hand, nor past half the day’s calls -- the sending’s', async () => {
+      const { db, xero, fetch } = service(
+        signedIn(),
+        [
+          // Its own read 59 minutes ago, and one by hand half an hour ago.
+          { xeroTenantId: HOMES, name: 'Example Home Services', catalogRecheckedAt: new Date('2026-11-20T17:01:00.000Z') },
+          { xeroTenantId: PEST, name: 'Example Pest Co', catalogReadAt: new Date('2026-11-20T17:30:00.000Z') },
+          // 149 of 300 used today: one call more is half, two are past it.
+          { xeroTenantId: AIR, name: 'Example Air Co', callsDay: '2026-11-20', callsUsed: 149 },
+        ],
+        [],
+      );
+      expect(await xero.recheckCatalog(ORG, HOMES, ['TRACKING'])).toBeNull();
+      expect(await xero.recheckCatalog(ORG, PEST, ['TRACKING'])).toBeNull();
+      expect(await xero.recheckCatalog(ORG, AIR, ['TRACKING', 'ITEMS'])).toBeNull();
+      expect(await xero.recheckCatalog(ORG, AIR, [])).toBeNull();
+      expect(apiCalls(fetch)).toEqual([]);
+      expect(db.organisation(AIR)).toMatchObject({ callsUsed: 149 });
+      // An hour on from its last, it reads again -- and once only, however many runs ask.
+      db.organisation(HOMES)!.catalogRecheckedAt = new Date('2026-11-20T17:00:00.000Z');
+      expect(await xero.recheckCatalog(ORG, HOMES, ['TRACKING'])).not.toBeNull();
+      expect(await xero.recheckCatalog(ORG, HOMES, ['TRACKING'])).toBeNull();
+      expect(await xero.recheckCatalog(ORG, AIR, ['TRACKING'])).not.toBeNull();
+      expect(apiCalls(fetch)).toHaveLength(2);
+    });
+
+    it('keeps what Xero did not say as it was, and stops on trouble with the connection without trying again every run', async () => {
+      const { db, xero, fetch } = service(signedIn(), [{ xeroTenantId: AIR, name: 'Example Air Co', items: [{ itemId: 'old' }] }, { xeroTenantId: HOMES, name: 'Example Home Services' }], []);
+      // Its items answer 404.
+      expect(await xero.recheckCatalog(ORG, AIR, ['ITEMS'])).toEqual({});
+      expect(db.organisation(AIR)).toMatchObject({ items: [{ itemId: 'old' }] });
+      fetch.mockImplementationOnce(async () => json({}, 429, { 'retry-after': '60' }));
+      await expect(xero.recheckCatalog(ORG, HOMES, ['TRACKING'])).rejects.toMatchObject({ code: 'XERO_RATE_LIMITED' });
+      // The hour is taken all the same.
+      expect(await xero.recheckCatalog(ORG, HOMES, ['TRACKING'])).toBeNull();
+    });
   });
 
   it('disconnects one organisation at Xero, keeping the others', async () => {

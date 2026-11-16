@@ -8,7 +8,7 @@ import { XeroClient, xeroValidationMessages } from '../src/integrations/xero/xer
 import { XERO_SEND_SCOPES, getXeroConfig } from '../src/integrations/xero/xero.config';
 import { XeroController } from '../src/integrations/xero/xero.controller';
 import { XeroError } from '../src/integrations/xero/xero.errors';
-import { clientKeyOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero } from '../src/integrations/xero/xero-invoice';
+import { clientKeyOf, invoiceFingerprint, xeroInvoiceFrom, type InvoiceForXero, type XeroCatalog } from '../src/integrations/xero/xero-invoice';
 import { paymentFingerprint, xeroPaymentFrom, type PaymentForXero } from '../src/integrations/xero/xero-payment';
 import { MAX_INVOICES_PER_RUN, XeroSenderService, invoiceForXero } from '../src/integrations/xero/xero-sender.service';
 import { xeroWriteOffFrom } from '../src/integrations/xero/xero-write-off';
@@ -159,6 +159,8 @@ describe('a console invoice, as Xero is sent it', () => {
     expect(plan({}, { ...SETTINGS, salesAccounts: { 'filter change': 'a-460' } })).toEqual({
       kind: 'problem',
       problem: 'The account chosen for “Filter change” is not an active account in Xero. Choose again on the Xero page.',
+      // What the books lacked as last read (2026-11-17): read again within the hour.
+      waitsOn: ['ACCOUNTS'],
     });
   });
 
@@ -249,13 +251,19 @@ describe('a console invoice, as Xero is sent it', () => {
     it('holds it back when Xero has no option for the technician -- an archived one is none', () => {
       expect(tagged({ technicianName: 'Bea Stone' })).toEqual({
         kind: 'problem',
-        problem: 'Income by Employee has no option “Move Out Inspection Income: Bea” for Bea Stone. Add it in Xero, then read from Xero again.',
+        // No button to press (2026-11-17): the console reads the tracking categories again within the hour.
+        problem: 'Income by Employee has no option “Move Out Inspection Income: Bea” for Bea Stone. Add it in Xero, and the console sends the invoice within the hour.',
+        waitsOn: ['TRACKING'],
       });
     });
 
     it('holds it back when the category or an item is no longer in Xero', () => {
-      expect(tagged({ technicianName: 'Ada Lane' }, TAGGED, { trackingCategories: [] })).toMatchObject({ kind: 'problem', problem: expect.stringContaining('tracking category') });
-      expect(tagged({}, TAGGED, { items: [] })).toMatchObject({ kind: 'problem', problem: expect.stringContaining('The item “Filter Change”') });
+      expect(tagged({ technicianName: 'Ada Lane' }, TAGGED, { trackingCategories: [] })).toMatchObject({
+        kind: 'problem',
+        problem: expect.stringContaining('tracking category'),
+        waitsOn: ['TRACKING'],
+      });
+      expect(tagged({}, TAGGED, { items: [] })).toMatchObject({ kind: 'problem', problem: expect.stringContaining('The item “Filter Change”'), waitsOn: ['ITEMS'] });
     });
 
     it('reads the visit’s day and technician from the invoice’s visit', () => {
@@ -348,6 +356,8 @@ function harness(options: {
   takenOver?: boolean;
   /** Xero's invoices of a contact on a day, as a lookup for a console draft finds them (2026-11-12). */
   drafts?: { InvoiceID: string; InvoiceNumber?: string; Url?: string; Status?: string }[];
+  /** What a read again of the books finds for invoices held back (2026-11-17); null, not due. */
+  recheck?: Partial<XeroCatalog> | null;
 } = {}) {
   const writeOffRows: Record<string, unknown>[] = (options.writeOffRows ?? []).map((row) => ({ ...row }));
   const invoices = options.invoices ?? [invoice()];
@@ -551,9 +561,11 @@ function harness(options: {
     summary: jest.fn(async () => ({ done: 0, failed: 0, failures: [] })),
     retry: jest.fn(async () => 0),
   };
+  // The books read again for invoices held back (2026-11-17): tested on its own in xero.spec.ts.
+  const xero = { recheckCatalog: jest.fn<Promise<Partial<XeroCatalog> | null>, unknown[]>(async () => options.recheck ?? null) };
   self.db = prisma;
-  const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never, projects as never);
-  return { sender, prisma, client, auth, projects, syncs, paymentRows, writeOffRows, settingsRow: () => settingsRow };
+  const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never, projects as never, xero as never);
+  return { sender, prisma, client, auth, projects, xero, syncs, paymentRows, writeOffRows, settingsRow: () => settingsRow };
 }
 
 const calls = (client: { post: jest.Mock }, prefix: string) => client.post.mock.calls.filter(([, , path]) => (path as string).startsWith(prefix));
@@ -1053,7 +1065,7 @@ describe('a run', () => {
     expect(same.client.post).not.toHaveBeenCalled();
     expect(same.prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({
       where: { invoiceId: 'inv-1' },
-      data: { status: 'SENT', seenUpdatedAt: UPDATED, attempts: 0, nextAttemptAt: null, problem: null, changedHereAt: null },
+      data: { status: 'SENT', seenUpdatedAt: UPDATED, attempts: 0, nextAttemptAt: null, problem: null, changedHereAt: null, heldBack: false, waitsOn: [] },
     });
   });
 
@@ -1130,7 +1142,16 @@ describe('a run', () => {
       expect(client.get).not.toHaveBeenCalled();
       expect(prisma.xeroInvoiceSync.update).toHaveBeenCalledWith({
         where: { invoiceId: 'inv-1' },
-        data: { status: 'SENT', seenUpdatedAt: UPDATED, attempts: 0, nextAttemptAt: null, problem: null, changedHereAt: new Date('2026-12-02T18:00:00.000Z') },
+        data: {
+          status: 'SENT',
+          seenUpdatedAt: UPDATED,
+          attempts: 0,
+          nextAttemptAt: null,
+          problem: null,
+          changedHereAt: new Date('2026-12-02T18:00:00.000Z'),
+          heldBack: false,
+          waitsOn: [],
+        },
       });
       // Nothing happened in Xero: no audit entry for the run.
       expect(prisma.auditLog.create).not.toHaveBeenCalled();
@@ -1714,5 +1735,187 @@ describe('the Xero-style New invoice (2026-11-13, PR B): Xero is sent what the f
     expect(invoiceFingerprint({ ...before, lines: before.lines.map((line) => ({ ...line, discountRate: null, xeroAccountId: null, xeroTracking: null })) })).toBe(asItWas);
     expect(invoiceFingerprint({ ...before, xeroReference: 'Unit B' })).not.toBe(asItWas);
     expect(invoiceFingerprint({ ...before, lines: [before.lines[0]!, { ...before.lines[1]!, xeroAccountId: 'a-400' }] })).not.toBe(asItWas);
+  });
+});
+
+describe('held back for what the books lacked, read again with no button pressed (2026-11-17)', () => {
+  // As on 2026-11-17: the technician's option was added in Xero after the company's books were last read here.
+  const STALE: XeroTrackingCategory = {
+    trackingCategoryId: 'tc-1',
+    name: 'Income by Employee',
+    status: 'ACTIVE',
+    options: [{ optionId: 'to-1', name: 'Air Filter Income: Ada', status: 'ACTIVE' }],
+  };
+  const FRESH: XeroTrackingCategory = { ...STALE, options: [...STALE.options, { optionId: 'to-9', name: 'Air Filter Income: Kevin', status: 'ACTIVE' }] };
+  const VALUES: XeroSettingsValues = { ...SETTINGS, trackingCategoryId: 'tc-1', trackingGroups: { 'filter change': 'Air Filter Income' } };
+  const LINES = [{ position: 0, name: 'Filter change', description: null, quantity: 1, unitPriceCents: 2500, totalCents: 2500 }];
+  const reason = (technician: string) =>
+    `Income by Employee has no option “Air Filter Income: ${technician.split(' ')[0]}” for ${technician}. Add it in Xero, and the console sends the invoice within the hour.`;
+  /** One of the console's drafts, for a visit by the technician. */
+  const draft = (id: string, number: string, technician: string, over: Record<string, unknown> = {}) =>
+    invoice({
+      id,
+      number,
+      origin: 'CONSOLE',
+      status: 'DRAFT',
+      jobberClientId: null,
+      propertywareBuildingId: `building-${id}`,
+      clientName: `${id} Example Lane`,
+      totalCents: 2500,
+      lines: LINES,
+      inspection: { scheduledAt: new Date('2026-12-02T00:00:00.000Z'), assignments: [{ technician: { displayName: technician } }] },
+      ...over,
+    } as Partial<Fixture>);
+  /** Held back by the console on an earlier run, waiting on what the books lacked. */
+  const heldRow = (problem: string, waitsOn: string[]) => ({
+    xeroTenantId: TENANT,
+    xeroInvoiceId: null,
+    status: 'FAILED',
+    attempts: 3,
+    seenUpdatedAt: UPDATED,
+    nextAttemptAt: null,
+    problem,
+    heldBack: true,
+    waitsOn,
+  });
+  type Held = { heldBack?: boolean; waitsOn?: string[]; nextAttemptAt?: Date | null; problem?: string } | null;
+
+  /** The company once the console makes the invoices, with the database asked as the run asks it. */
+  function held(options: Parameters<typeof harness>[0] & { invoices: Fixture[] }) {
+    const h = harness({
+      takenOver: true,
+      values: VALUES,
+      trackingCategories: [STALE],
+      links: options.invoices.map((each) => ({ clientKey: `property:building-${each.id}`, xeroContactId: `contact-${each.id}` })),
+      drafts: [],
+      ...options,
+    });
+    const due = new Set<string>();
+    // Those held for what the books lacked, and not due: held back, waiting on a part.
+    h.prisma.xeroInvoiceSync.findMany.mockImplementation((async ({ where }: { where: { heldBack?: boolean } }) =>
+      where.heldBack
+        ? options.invoices
+            .filter((each) => {
+              const row = each.xeroSync as Held;
+              return row?.heldBack && row.waitsOn?.length && !row.nextAttemptAt && !due.has(each.id);
+            })
+            .map((each) => ({ invoiceId: each.id, problem: (each.xeroSync as Held)!.problem, waitsOn: (each.xeroSync as Held)!.waitsOn }))
+        : []) as never);
+    // Put up again: due now.
+    h.prisma.xeroInvoiceSync.updateMany.mockImplementation((async ({ where }: { where: { invoiceId?: { in: string[] } } }) => {
+      for (const id of where.invoiceId?.in ?? []) due.add(id);
+      return { count: where.invoiceId?.in.length ?? 0 };
+    }) as never);
+    // The run's invoices: those due again, as the database's now() finds them.
+    const asked = h.prisma.$queryRaw.getMockImplementation()!;
+    h.prisma.$queryRaw.mockImplementation((async (strings: TemplateStringsArray) => {
+      const sql = strings.join('?');
+      return sql.includes('"InvoicePayment"') || sql.includes('WITH numbered') ? asked(strings) : [...due].map((id) => ({ id }));
+    }) as never);
+    return { ...h, due };
+  }
+
+  it('sends several held invoices once the books, read again, have their technician’s option -- and holds the rest as they were', async () => {
+    const kevin = ['console-1', 'console-2', 'console-3'].map((id, index) =>
+      draft(id, `INV-541${6 + index}`, 'Kevin Example', { xeroSync: heldRow(reason('Kevin Example'), ['TRACKING']) }),
+    );
+    // Still lacking in Xero after the read.
+    const bea = draft('console-4', 'INV-5419', 'Bea Stone', { xeroSync: heldRow(reason('Bea Stone'), ['TRACKING']) });
+    // Held for itself, not for Xero: never a reason to read the books.
+    const short = draft('console-5', 'INV-5420', 'Ada Lane', {
+      totalCents: 9900,
+      xeroSync: heldRow('Its lines come to $25.00 and its total is $99.00, so it is not sent. Correct it here, or enter it in Xero by hand.', []),
+    });
+    const { sender, xero, client, prisma, syncs } = held({ invoices: [...kevin, bea, short], recheck: { trackingCategories: [FRESH] } });
+
+    expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 3, failed: 0, problem: null });
+    // One read, of the one part they wait on.
+    expect(xero.recheckCatalog).toHaveBeenCalledTimes(1);
+    expect(xero.recheckCatalog).toHaveBeenCalledWith(ORG, TENANT, ['TRACKING']);
+    // Kevin's three put up again; Bea's left held, still waiting.
+    expect(prisma.xeroInvoiceSync.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.xeroInvoiceSync.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: ORG, xeroTenantId: TENANT, invoiceId: { in: ['console-1', 'console-2', 'console-3'] }, status: 'FAILED', heldBack: true },
+      data: { nextAttemptAt: expect.any(Date) },
+    });
+    // Made in Xero in one call, each under its own number, tagged for Kevin.
+    expect(client.put).toHaveBeenCalledTimes(1);
+    const made = (client.put.mock.calls[0]![3] as { Invoices: { InvoiceNumber: string; LineItems: { Tracking?: { Option: string }[] }[] }[] }).Invoices;
+    expect(made.map((each) => [each.InvoiceNumber, each.LineItems[0]!.Tracking?.[0]?.Option])).toEqual([
+      ['INV-5416', 'Air Filter Income: Kevin'],
+      ['INV-5417', 'Air Filter Income: Kevin'],
+      ['INV-5418', 'Air Filter Income: Kevin'],
+    ]);
+    for (const id of ['console-1', 'console-2', 'console-3']) expect(syncs.get(id)).toMatchObject({ status: 'SENT', heldBack: false, waitsOn: [] });
+    expect(syncs.has('console-4')).toBe(false);
+    expect(syncs.has('console-5')).toBe(false);
+    // Beside the read: each, tried before, looked for among its contact's invoices that day -- never made twice -- and the PUT.
+    expect(client.get.mock.calls.map(([, , path]) => (path as string).split('?')[0])).toEqual(['/Invoices', '/Invoices', '/Invoices']);
+    expect(client.post).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'XERO_INVOICES_SENT',
+        metadata: expect.objectContaining({ sent: 3, rechecked: { parts: ['TRACKING'], held: 4, released: 3 } }),
+      }),
+    });
+  });
+
+  it('reads the books for nothing while nothing waits on them -- and when the hour is not up, sends nothing held and asks Xero nothing', async () => {
+    const quiet = harness();
+    await quiet.sender.run(ORG, TENANT);
+    expect(quiet.xero.recheckCatalog).not.toHaveBeenCalled();
+
+    const notYet = held({ invoices: [draft('console-1', 'INV-5416', 'Kevin Example', { xeroSync: heldRow(reason('Kevin Example'), ['TRACKING']) })], recheck: null });
+    expect(await notYet.sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 0, problem: null });
+    expect(notYet.xero.recheckCatalog).toHaveBeenCalledWith(ORG, TENANT, ['TRACKING']);
+    expect(notYet.prisma.xeroInvoiceSync.updateMany).not.toHaveBeenCalled();
+    expect(notYet.client.get).not.toHaveBeenCalled();
+    expect(notYet.client.put).not.toHaveBeenCalled();
+  });
+
+  it('asks only after what a run still sends: the console’s own once it makes the invoices, Jobber’s too until then', async () => {
+    const own = held({ invoices: [] });
+    await own.sender.run(ORG, TENANT);
+    expect(own.prisma.xeroInvoiceSync.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          heldBack: true,
+          nextAttemptAt: null,
+          waitsOn: { isEmpty: false },
+          invoice: { xeroTenantId: TENANT, xeroInvoiceId: null, status: { not: 'VOIDED' }, origin: 'CONSOLE' },
+        }),
+        take: MAX_INVOICES_PER_RUN,
+      }),
+    );
+    const before = held({ invoices: [], takenOver: false });
+    await before.sender.run(ORG, TENANT);
+    expect(before.prisma.xeroInvoiceSync.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ invoice: expect.objectContaining({ origin: { not: 'XERO' } }) }) }),
+    );
+  });
+
+  it('marks its own hold apart from Xero’s refusal, with what of the books it waits on, and shows both on the page', async () => {
+    const stale = harness({ invoices: [draft('console-4', 'INV-5419', 'Bea Stone')], takenOver: true, values: VALUES, trackingCategories: [STALE] });
+    expect(await stale.sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
+    expect(stale.client.put).not.toHaveBeenCalled();
+    expect(stale.syncs.get('console-4')).toMatchObject({ status: 'FAILED', problem: reason('Bea Stone'), nextAttemptAt: null, heldBack: true, waitsOn: ['TRACKING'] });
+
+    const refused = harness({ invoices: [draft('console-1', 'INV-5416', 'Ada Lane')], takenOver: true, values: VALUES, trackingCategories: [STALE] });
+    refused.client.put.mockResolvedValueOnce({
+      Invoices: [{ InvoiceID: '00000000-0000-0000-0000-000000000000', StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Account code 999 is not valid.' }] }],
+    });
+    expect(await refused.sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
+    expect(refused.syncs.get('console-1')).toMatchObject({ status: 'FAILED', problem: 'Account code 999 is not valid.', nextAttemptAt: expect.any(Date), heldBack: false, waitsOn: [] });
+
+    const rows = [
+      { invoiceId: 'console-4', problem: reason('Bea Stone'), heldBack: true, waitsOn: ['TRACKING'], attempts: 1, lastAttemptAt: null, nextAttemptAt: null, invoice: { number: 'INV-5419', clientName: 'Example' } },
+      { invoiceId: 'console-1', problem: 'Account code 999 is not valid.', heldBack: false, waitsOn: [], attempts: 1, lastAttemptAt: null, nextAttemptAt: null, invoice: { number: 'INV-5416', clientName: 'Example' } },
+    ];
+    refused.prisma.xeroInvoiceSync.findMany.mockImplementation((async ({ where }: { where: { status?: string } }) => (where.status === 'FAILED' ? rows : [])) as never);
+    const view = await refused.sender.view(ORG, TENANT);
+    expect(view.failures.map((each) => [each.invoiceId, each.heldBack, each.waitsOnXero])).toEqual([
+      ['console-4', true, true],
+      ['console-1', false, false],
+    ]);
   });
 });

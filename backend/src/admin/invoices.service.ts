@@ -1176,7 +1176,7 @@ export class InvoicesService {
   }
 
   /**
-   * On its way to its company's books in Xero, or refused there (2026-11-13):
+   * On its way to its company's books in Xero, held back here (2026-11-17), or refused there (2026-11-13):
    * an invoice made here, for a company sending to Xero from on or before the
    * day it was made, that Xero has not given its id yet. Two reads; no call to
    * Xero.
@@ -1191,12 +1191,18 @@ export class InvoicesService {
         where: { organizationId_xeroTenantId: { organizationId, xeroTenantId: row.xeroTenantId } },
         select: { sendingEnabled: true, sendFrom: true },
       }),
-      this.prisma.xeroInvoiceSync.findUnique({ where: { invoiceId: row.id }, select: { status: true, problem: true } }),
+      this.prisma.xeroInvoiceSync.findUnique({ where: { invoiceId: row.id }, select: { status: true, problem: true, heldBack: true, waitsOn: true } }),
     ]);
     if (!settings?.sendingEnabled || !settings.sendFrom) return null;
     // Made before its company's start date: it never goes (`sentFrom`).
     if (row.createdAt < businessInstant(settings.sendFrom.toISOString().slice(0, 10), '00:00:00')) return null;
-    return { problem: sync?.status === 'FAILED' ? (sync.problem ?? 'Xero refused it.') : null };
+    if (sync?.status !== 'FAILED') return { problem: null, heldBack: false, waitsOnXero: false };
+    // Held back by the console itself (2026-11-17), not refused by Xero: said apart, so the office looks in the right place.
+    return {
+      problem: sync.problem ?? (sync.heldBack ? 'The console held it back.' : 'Xero refused it.'),
+      heldBack: sync.heldBack,
+      waitsOnXero: sync.waitsOn.length > 0,
+    };
   }
 
   /** A finished visit with a property: the only kind an invoice is made for. */
