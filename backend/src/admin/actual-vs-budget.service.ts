@@ -12,6 +12,9 @@ import {
   type RevenueBudgets,
   type RevenueDay,
   type RevenueDayTechnician,
+  type RevenueHistoryImport,
+  type RevenueHistoryList,
+  type RevenueHistorySheetView,
   type RevenueMonthReport,
   type RevenueWeek,
   type RevenueWeekRow,
@@ -39,6 +42,17 @@ import { businessClockTime, businessDate, businessDayBounds, businessDayFromQuer
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { readCompanies, shownInvoices } from './shown-invoices';
+import { WorkbookError, readWorkbook, technicianLog, type WorkbookSheet } from './workbook-reader';
+
+/** The workbook as uploaded: what the upload hands the service. */
+export interface UploadedWorkbook {
+  originalname: string;
+  size: number;
+  buffer: Buffer;
+}
+
+/** The office's workbook is 1.2 MB; this leaves room and no more. */
+export const MAX_WORKBOOK_BYTES = 20_000_000;
 
 /**
  * Actual vs Budget's technician log (2026-11-17, PR 1 of rebuilding the
@@ -755,6 +769,77 @@ export class ActualVsBudgetService {
         });
     });
     return this.budgets(user);
+  }
+
+  // ── PR 4: past technicians' logs ─────────────────────────────────────────
+
+  /**
+   * Read the workbook the office uploads and keep its past technicians' logs:
+   * every hidden tab laid out as a technician's log, as the text it showed.
+   * The tabs still in use are the console's own now and are left alone.
+   * Importing again replaces a tab of the same name; nothing else is touched.
+   */
+  async importHistory(user: AuthenticatedUser, file: UploadedWorkbook | undefined): Promise<RevenueHistoryImport> {
+    if (!file?.buffer?.length) throw new ApplicationError(422, 'NO_WORKBOOK', 'Choose the workbook to import.');
+    if (file.size > MAX_WORKBOOK_BYTES) throw new ApplicationError(413, 'WORKBOOK_TOO_LARGE', 'That workbook is larger than 20 MB.');
+    let sheets: WorkbookSheet[];
+    try {
+      sheets = readWorkbook(file.buffer);
+    } catch (error) {
+      if (error instanceof WorkbookError) throw new ApplicationError(422, 'NOT_A_WORKBOOK', error.message);
+      throw error;
+    }
+    const logs = sheets
+      .filter((sheet) => sheet.hidden)
+      .map((sheet) => ({ name: sheet.name.trim().slice(0, 100), log: technicianLog(sheet) }))
+      .filter((sheet): sheet is { name: string; log: NonNullable<ReturnType<typeof technicianLog>> } => Boolean(sheet.name && sheet.log));
+    if (!logs.length) throw new ApplicationError(422, 'NO_PAST_LOGS', 'That workbook has no hidden technician tabs to import.');
+    const organizationId = user.organizationId;
+    const fileName = (file.originalname || 'workbook.xlsx').slice(0, 200);
+    await this.prisma.$transaction(async (tx) => {
+      for (const { name, log } of logs) {
+        const data = { headers: log.headers, rows: log.rows, rowCount: log.rows.length, fileName, importedAt: new Date(), importedById: auditActor(user).actorUserId };
+        await tx.revenueHistorySheet.upsert({
+          where: { organizationId_name: { organizationId, name } },
+          create: { organizationId, name, ...data },
+          update: data,
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          ...auditActor(user),
+          action: 'REVENUE_HISTORY_IMPORTED',
+          entityType: 'RevenueHistorySheet',
+          entityId: organizationId,
+          metadata: { fileName, tabs: logs.map(({ name, log }) => ({ name, rows: log.rows.length })) },
+        },
+      });
+    });
+    return { imported: logs.map(({ name, log }) => ({ name, rowCount: log.rows.length })) };
+  }
+
+  async historyList(user: AuthenticatedUser): Promise<RevenueHistoryList> {
+    const sheets = await this.prisma.revenueHistorySheet.findMany({
+      where: { organizationId: user.organizationId },
+      select: { id: true, name: true, rowCount: true, importedAt: true },
+      orderBy: { name: 'asc' },
+    });
+    return { sheets: sheets.map((sheet) => ({ ...sheet, importedAt: sheet.importedAt.toISOString() })) };
+  }
+
+  async historySheet(user: AuthenticatedUser, id: string): Promise<RevenueHistorySheetView> {
+    const sheet = await this.prisma.revenueHistorySheet.findFirst({ where: { id, organizationId: user.organizationId } });
+    if (!sheet) throw new ApplicationError(404, 'HISTORY_NOT_FOUND', 'That log is not in the console any more.');
+    return {
+      id: sheet.id,
+      name: sheet.name,
+      rowCount: sheet.rowCount,
+      importedAt: sheet.importedAt.toISOString(),
+      fileName: sheet.fileName,
+      headers: sheet.headers as string[],
+      rows: sheet.rows as string[][],
+    };
   }
 
   private async payrollSettings(organizationId: string, db: Pick<Prisma.TransactionClient, 'revenueSettings'> = this.prisma) {

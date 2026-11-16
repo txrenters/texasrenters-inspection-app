@@ -407,6 +407,7 @@ model Organization {
   revenueSettings RevenueSettings?
   revenueWeekEntries RevenueWeekEntry[]
   revenueMonthEntries RevenueMonthEntry[]
+  revenueHistorySheets RevenueHistorySheet[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -624,6 +625,7 @@ model UserProfile {
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
   revenueMonths              RevenueMonthEntry[] @relation("RevenueMonthTechnician")
+  revenueHistoryImported     RevenueHistorySheet[] @relation("RevenueHistoryImportedBy")
   inspectionNotesWritten     InspectionNote[]    @relation("InspectionNoteAuthor")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
@@ -5419,4 +5421,28 @@ model RevenueMonthEntry {
 
   @@unique([technicianId, month])
   @@index([organizationId, month])
+}
+
+/// A past technician's log as the office's workbook kept it (2026-11-17, PR 4 of Actual vs Budget): one of its
+/// hidden technician tabs -- Nathan, Carlos, Aliyah and the rest -- read from the workbook the office uploads, and
+/// kept as it was, to read. Every cell is the text the workbook showed, in its own format, and nothing is worked
+/// out from it. Importing the workbook again replaces a tab of the same name.
+model RevenueHistorySheet {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  /// The tab's name in the workbook: "Nathan".
+  name           String
+  /// The tab's own headings, in order: older tabs say "Labor Revenue Budget" and "Trip Charge".
+  headers        Json
+  /// Every row under the headings, a list of cell texts in the headings' order.
+  rows           Json
+  rowCount       Int
+  fileName       String
+  importedAt     DateTime @default(now())
+  importedById   String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  importedBy   UserProfile? @relation("RevenueHistoryImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, name])
 }

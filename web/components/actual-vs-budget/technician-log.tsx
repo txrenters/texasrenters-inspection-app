@@ -22,7 +22,7 @@ import {
   sheetWholeDollars,
   type LogColumnField,
 } from '@/lib/actual-vs-budget-cells';
-import { useRevenueLog, useRevenueLogEdits } from '@/lib/actual-vs-budget-queries';
+import { useRevenueHistoryList, useRevenueHistorySheet, useRevenueLog, useRevenueLogEdits } from '@/lib/actual-vs-budget-queries';
 
 /**
  * The technician log (2026-11-17, PR 1): one technician's visits day by day in
@@ -35,6 +35,9 @@ const SOURCE: Record<RevenueLogSource, string> = {
   TIMESHEET: 'From the timesheet',
   INVOICE: "From the visit's invoice",
 };
+
+/** The technician list's value for a past technician's log: "history:" and its id. */
+const HISTORY = 'history:';
 
 /** Worked out from the row, never typed: Actual Time, and a visit's day, which is the visit's. */
 const readOnlyFor = (row: RevenueLogRow, field: LogColumnField) => field === 'actualSeconds' || (field === 'date' && Boolean(row.inspectionId));
@@ -54,8 +57,11 @@ export function TechnicianLog({
   to: string;
   onChange: (patch: { technician?: string; from?: string; to?: string }) => void;
 }) {
+  // A past technician's log, as the workbook kept it (PR 4), is chosen from the same list.
+  const history = useRevenueHistoryList();
+  const historyId = technicianId.startsWith(HISTORY) ? technicianId.slice(HISTORY.length) : '';
   const rangeProblem = logRangeProblem(from, to);
-  const log = useRevenueLog(technicianId, rangeProblem ? '' : from, rangeProblem ? '' : to);
+  const log = useRevenueLog(historyId ? '' : technicianId, rangeProblem ? '' : from, rangeProblem ? '' : to);
   const width = LOG_COLUMNS.length + (canEdit ? 1 : 0);
   return (
     <div className="space-y-4">
@@ -64,15 +70,24 @@ export function TechnicianLog({
           allLabel="Choose a technician"
           label="Technician"
           onChange={(next) => onChange({ technician: next })}
-          options={technicians.map((technician) => ({ value: technician.id, label: technician.name }))}
+          options={[
+            ...technicians.map((technician) => ({ value: technician.id, label: technician.name })),
+            ...(history.data?.sheets ?? []).map((sheet) => ({ value: `${HISTORY}${sheet.id}`, label: `${sheet.name} (workbook)` })),
+          ]}
           value={technicianId}
         />
-        <DatePicker aria-label="First day" className="w-56" max={to} onChange={(next) => onChange({ from: next })} value={from} />
-        <span className="text-muted-foreground text-sm">to</span>
-        <DatePicker aria-label="Last day" className="w-56" min={from} onChange={(next) => onChange({ to: next })} value={to} />
+        {historyId ? null : (
+          <>
+            <DatePicker aria-label="First day" className="w-56" max={to} onChange={(next) => onChange({ from: next })} value={from} />
+            <span className="text-muted-foreground text-sm">to</span>
+            <DatePicker aria-label="Last day" className="w-56" min={from} onChange={(next) => onChange({ to: next })} value={to} />
+          </>
+        )}
       </div>
-      {rangeProblem ? <p className="text-destructive text-sm">{rangeProblem}</p> : null}
-      {!technicianId ? (
+      {rangeProblem && !historyId ? <p className="text-destructive text-sm">{rangeProblem}</p> : null}
+      {historyId ? (
+        <HistorySheet id={historyId} />
+      ) : !technicianId ? (
         <EmptyState title="No technicians" description="The office has no technicians to keep a log for." />
       ) : log.isPending ? (
         <PageSkeleton cards={0} />
@@ -232,5 +247,45 @@ function NewRow({ technicianId, date }: { technicianId: string; date: string }) 
       ))}
       <TableCell className="w-8 p-0" />
     </TableRow>
+  );
+}
+
+// ── A past technician's log ─────────────────────────────────────────────────
+
+/**
+ * A past technician's log as the office's workbook kept it (PR 4): the tab's
+ * own headings and every row, as the text it showed, its Total rows where it
+ * had them. To read: nothing in it is worked out or typed into.
+ */
+function HistorySheet({ id }: { id: string }) {
+  const sheet = useRevenueHistorySheet(id);
+  if (sheet.isPending) return <PageSkeleton cards={0} />;
+  if (sheet.isError) return <ErrorState error={sheet.error} retry={() => void sheet.refetch()} />;
+  const { headers, rows } = sheet.data;
+  return (
+    <Sheet>
+      <TableHeader className="text-muted-foreground lg:static">
+        <TableRow>
+          {headers.map((header, index) => (
+            <SheetHead key={index}>{header}</SheetHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row, index) => {
+          // "Total" closes a day in the newer tabs, "Sub-total" in the older ones.
+          const total = /^(sub-?\s*)?total$/i.test(row[0]?.trim() ?? '');
+          return (
+            <TableRow className={total ? 'bg-muted hover:bg-muted font-semibold' : 'hover:bg-transparent'} key={index}>
+              {headers.map((_, column) => (
+                <TableCell className="text-muted-foreground max-w-[22rem] border-r px-2 py-1.5 align-top whitespace-pre-wrap" key={column}>
+                  {row[column] ?? ''}
+                </TableCell>
+              ))}
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Sheet>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 import { BudgetsDialog, DailySheet, ProjectionSheet, TrackerSheet } from '@/components/actual-vs-budget/daily-sheets';
 import { MoneyColumnsDialog } from '@/components/actual-vs-budget/money-columns-dialog';
@@ -11,7 +12,7 @@ import { ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
-import { useRevenueTechnicians } from '@/lib/actual-vs-budget-queries';
+import { useRevenueHistoryImport, useRevenueTechnicians } from '@/lib/actual-vs-budget-queries';
 import { businessToday, shiftDay } from '@/lib/clock';
 import { useUrlState } from '@/lib/url-state';
 
@@ -49,6 +50,19 @@ export default function ActualVsBudgetPage() {
   });
   const technicians = useRevenueTechnicians();
   const [dialog, setDialog] = useState<'columns' | 'budgets' | null>(null);
+  // The past technicians' logs come from the office's workbook, uploaded here (PR 4).
+  const workbook = useRef<HTMLInputElement>(null);
+  const importHistory = useRevenueHistoryImport();
+  const upload = (file: File | undefined) => {
+    if (!file) return;
+    importHistory.mutate(file, {
+      onSuccess: (result) => {
+        const rows = result.imported.reduce((sum, sheet) => sum + sheet.rowCount, 0);
+        toast.success(`Imported ${result.imported.length} past logs`, { description: `${result.imported.map((sheet) => sheet.name).join(', ')} · ${rows.toLocaleString('en-US')} rows` });
+      },
+      onError: (error) => toast.error('Not imported', { description: error.message }),
+    });
+  };
   const view: View = VIEWS.some((entry) => entry.key === query.view) ? (query.view as View) : 'log';
 
   if (technicians.isPending) return <PageSkeleton />;
@@ -62,6 +76,20 @@ export default function ActualVsBudgetPage() {
         actions={
           canEdit ? (
             <>
+              <input
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                aria-label="The Actual vs Budget workbook"
+                className="hidden"
+                onChange={(event) => {
+                  upload(event.target.files?.[0]);
+                  event.target.value = '';
+                }}
+                ref={workbook}
+                type="file"
+              />
+              <Button disabled={importHistory.isPending} onClick={() => workbook.current?.click()} size="sm" variant="outline">
+                {importHistory.isPending ? 'Importing…' : 'Import workbook'}
+              </Button>
               <Button onClick={() => setDialog('budgets')} size="sm" variant="outline">
                 Budgets
               </Button>

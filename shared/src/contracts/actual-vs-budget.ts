@@ -516,3 +516,32 @@ export function weekWords(week: { from: string; to: string }): string {
 /** The monthly report's heading: "Month of October". */
 export const monthWords = (month: string) =>
   `Month of ${new Date(`${month}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })}`;
+
+// ── PR 4: past technicians' logs ─────────────────────────────────────────────
+//
+// The workbook's hidden technician tabs -- Nathan, Carlos, Aliyah and the rest
+// -- read from the workbook the office uploads, kept as they were, to read.
+
+/** A past technician's log in the list: its tab's name, and how many rows. */
+export interface RevenueHistorySummary {
+  id: string;
+  name: string;
+  rowCount: number;
+  importedAt: string;
+}
+
+export interface RevenueHistoryList {
+  sheets: RevenueHistorySummary[];
+}
+
+/** A past technician's log: the tab's own headings and every row under them, as the text the workbook showed. */
+export interface RevenueHistorySheetView extends RevenueHistorySummary {
+  headers: string[];
+  rows: string[][];
+  fileName: string;
+}
+
+/** What importing the workbook did: each tab read, with its rows. */
+export interface RevenueHistoryImport {
+  imported: { name: string; rowCount: number }[];
+}
