@@ -156,3 +156,39 @@ export function readRow(texts: Partial<Record<RevenueLogField, string>>): { inpu
   }
   return { input: input as SaveRevenueLogEntryInput };
 }
+
+// ── PR 2: the daily sheets ──────────────────────────────────────────────────
+
+/**
+ * Dollars as the daily sheets write them: "$400", "$347.98", and a negative as
+ * "-$157.98" (the daily report) or "($75.35)" (the tracker, and every Total).
+ */
+export function dollars(cents: number, options: { decimals?: 0 | 2; negative?: 'minus' | 'brackets' } = {}): string {
+  const decimals = options.decimals ?? 2;
+  const amount = Math.abs(cents) / 100;
+  const text = `$${amount.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+  if (cents >= 0 || text === `$${(0).toFixed(decimals)}`) return text;
+  return options.negative === 'brackets' ? `(${text})` : `-${text}`;
+}
+
+/** "8h 25m", "8h", "25m" or "8:25" as seconds; null for anything else. */
+export function readWorkTime(text: string): number | null {
+  const value = text.trim().toLowerCase();
+  const clock = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (clock) return Number(clock[2]) < 60 ? (Number(clock[1]) * 60 + Number(clock[2])) * 60 : null;
+  const words = /^(?:(\d{1,2})\s*h)?\s*(?:(\d{1,2})\s*m)?$/.exec(value);
+  if (!words || (!words[1] && !words[2])) return null;
+  const minutes = Number(words[2] ?? 0);
+  if (minutes > 59) return null;
+  return (Number(words[1] ?? 0) * 60 + minutes) * 60;
+}
+
+/** The weekly and monthly reports' _(* #,##0.00_): "3,550.00", "(1,191.86)", and "-" for nothing. */
+export function accounting(cents: number): string {
+  if (cents === 0) return '-';
+  const text = (Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return cents < 0 ? `(${text})` : text;
+}
+
+/** The first word of a name: the projection's "Amy", "Kevin". */
+export const firstName = (name: string) => name.trim().split(/\s+/)[0] ?? name;

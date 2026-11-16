@@ -289,3 +289,259 @@ export function logRangeProblem(from: string, to: string): string | null {
   if (span > MAX_LOG_DAYS) return `Choose ${MAX_LOG_DAYS} days or fewer.`;
   return null;
 }
+
+// ── PR 2: the daily sheets ───────────────────────────────────────────────────
+//
+// Three of the workbook's tabs read one day across the technicians: "Next
+// Day's Projected Productivity", the daily "ACTUAL VS PROJECTED REVENUE" and
+// the "REVENUE TRACKER". Each technician's figures come from their log -- the
+// day's Total row -- and the timesheet; the budgets and the remarks are the
+// office's.
+
+/** A regular day: past it, the hours are overtime ("Budgeted Daily Revenue (Regular 8 hour-work)"). */
+export const REGULAR_DAY_SECONDS = 8 * 3600;
+
+/** One technician on one day, as all three sheets read them. */
+export interface RevenueDayTechnician {
+  technician: RevenueLogTechnician;
+  /** The usual: "Budgeted Daily Revenue (Regular 8 hour-work)", and the overtime rate. */
+  dailyBudgetCents: number;
+  otRateCents: number;
+  /** The day's budget: the usual, or what the office typed for the day. */
+  budgetCents: number;
+  /** The log's Total row for the day. */
+  driveTime: string;
+  billableTime: string;
+  projectedCents: number;
+  /** The day's Labor Hours Income plus Service Call Fee; materials are not revenue. */
+  actualCents: number;
+  /** Tech's Work Time: the timesheet's hours, or the office's. Null when neither has any. */
+  workSeconds: number | null;
+  /** Which of these the office typed over what the console works out. */
+  typed: { budget: boolean; work: boolean };
+  projectionRemarks: string | null;
+  dailyRemarks: string | null;
+  trackerRemarks: string | null;
+  /** The payroll period so far, through this day. */
+  period: { regularSeconds: number; overtimeSeconds: number; budgetedCents: number; actualCents: number };
+}
+
+export interface RevenueDay {
+  date: string;
+  /** The payroll period the day falls in. */
+  payrollPeriod: { from: string; to: string };
+  technicians: RevenueDayTechnician[];
+}
+
+/** What the office types for a technician's day. Left out stays; null goes back to what the console works out. */
+export interface SaveRevenueDayInput {
+  budgetCents?: number | null;
+  workSeconds?: number | null;
+  projectionRemarks?: string | null;
+  dailyRemarks?: string | null;
+  trackerRemarks?: string | null;
+}
+
+/** Each technician's budget and overtime rate, and the payroll periods. */
+export interface RevenueBudgets {
+  payrollPeriodStart: string;
+  payrollPeriodDays: number;
+  technicians: { id: string; name: string; dailyBudgetCents: number | null; otRateCents: number | null }[];
+}
+
+export interface SaveRevenueBudgetsInput {
+  payrollPeriodStart?: string;
+  payrollPeriodDays?: number;
+  /** A null budget takes the technician off the daily sheets. */
+  technicians?: { technicianId: string; dailyBudgetCents: number | null; otRateCents: number | null }[];
+}
+
+/** Where the workbook's periods ran from: November 2-15, 2026, then every fortnight. */
+export const DEFAULT_PAYROLL_PERIOD = { start: '2026-11-02', days: 14 } as const;
+
+const dayNumber = (day: string) => Date.parse(`${day}T00:00:00Z`) / 86_400_000;
+const dayText = (n: number) => new Date(n * 86_400_000).toISOString().slice(0, 10);
+
+/** The payroll period a day falls in, counting periods of `days` from `start` both ways. */
+export function payrollPeriodOf(date: string, start: string, days: number): { from: string; to: string } {
+  const offset = Math.floor((dayNumber(date) - dayNumber(start)) / days);
+  const from = dayNumber(start) + offset * days;
+  return { from: dayText(from), to: dayText(from + days - 1) };
+}
+
+/** "November 2-15", "November 30 - December 13": as the tracker's heading names its period. */
+export function payrollPeriodWords(period: { from: string; to: string }): string {
+  const month = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+  const date = (day: string) => Number(day.slice(8));
+  return month(period.from) === month(period.to)
+    ? `${month(period.from)} ${date(period.from)}-${date(period.to)}`
+    : `${month(period.from)} ${date(period.from)} - ${month(period.to)} ${date(period.to)}`;
+}
+
+/** Tech's OT: the work past a regular day. */
+export const overtimeSeconds = (workSeconds: number | null) => Math.max(0, (workSeconds ?? 0) - REGULAR_DAY_SECONDS);
+
+/**
+ * The revenue tracker's day for one technician, as the workbook works it out:
+ * OT Budget Add-On = the rate x the overtime's hours (=85*183/60); Final Budget
+ * = budget + add-on; Actual - Final Budget; % of Budget = actual / final budget.
+ */
+export function trackerFigures(row: Pick<RevenueDayTechnician, 'budgetCents' | 'otRateCents' | 'actualCents' | 'workSeconds'>) {
+  const overtime = overtimeSeconds(row.workSeconds);
+  const addOnCents = Math.round((row.otRateCents * overtime) / 3600);
+  const finalBudgetCents = row.budgetCents + addOnCents;
+  return {
+    overtimeSeconds: overtime,
+    addOnCents,
+    finalBudgetCents,
+    overCents: row.actualCents - finalBudgetCents,
+    share: finalBudgetCents ? row.actualCents / finalBudgetCents : null,
+  };
+}
+
+/** "5h 40m" (or the first of "6h 00m – 7h 00m") in minutes; nothing readable is none. */
+export function hoursAndMinutesValue(text: string | null | undefined): number {
+  const match = /(\d+)h\s*(\d+)m/.exec(text ?? '');
+  return match ? Number(match[1]) * 60 + Number(match[2]) : 0;
+}
+
+/** A share as the workbook writes it, 0.00%: "82.20%". */
+export const percentText = (share: number | null) => (share === null || !Number.isFinite(share) ? '' : `${(share * 100).toFixed(2)}%`);
+
+// ── PR 3: the weekly and monthly reports ─────────────────────────────────────
+//
+// The workbook's weekly tabs ("Nov. 2-6", "Oct 1-2", "Weekly rEVENUE
+// Report_Aug 31") cover a working week inside one month: a week that crosses
+// into the next month is two tabs. Its "Month of" tabs add up their weeks.
+
+/** One technician's week: TARGET REVENUE, ACTUAL REVENUE and REMARKS; the rest is worked out from them. */
+export interface RevenueWeekRow {
+  technician: RevenueLogTechnician;
+  /** The daily budget for each day worked (=610*4), or what the office typed. */
+  targetCents: number;
+  /** The week's days' Labor Hours Income plus Service Call Fee, or what the office typed. */
+  actualCents: number;
+  /** The days the console counted as worked. */
+  daysWorked: number;
+  typed: { target: boolean; actual: boolean };
+  remarks: string | null;
+}
+
+export interface RevenueWeek {
+  /** The first and last day it covers, Monday to Sunday inside its month. */
+  from: string;
+  to: string;
+  technicians: RevenueWeekRow[];
+}
+
+export interface RevenueMonthRow {
+  technician: RevenueLogTechnician;
+  targetCents: number;
+  actualCents: number;
+  remarks: string | null;
+}
+
+export interface RevenueMonthReport {
+  /** "2026-11". */
+  month: string;
+  weeks: RevenueWeek[];
+  technicians: RevenueMonthRow[];
+}
+
+export interface SaveRevenueWeekInput {
+  targetCents?: number | null;
+  actualCents?: number | null;
+  remarks?: string | null;
+}
+
+export interface SaveRevenueMonthInput {
+  remarks?: string | null;
+}
+
+const weekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay();
+const isWorkday = (day: string) => weekday(day) >= 1 && weekday(day) <= 5;
+const shift = (day: string, days: number) => dayText(dayNumber(day) + days);
+
+/** The month's last day. */
+export function monthEnd(month: string): string {
+  const [year, number] = month.split('-').map(Number) as [number, number];
+  return new Date(Date.UTC(year, number, 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * A month's weeks, as the workbook's weekly tabs divide it: Monday to Sunday,
+ * cut at the month's edges. Days before the month's first Monday-to-Friday day
+ * -- a weekend it opens on -- belong to its first week.
+ */
+export function monthWeeks(month: string): { from: string; to: string }[] {
+  const first = `${month}-01`;
+  const last = monthEnd(month);
+  const weeks: { from: string; to: string }[] = [];
+  let from = first;
+  while (from <= last) {
+    const sunday = shift(from, (7 - weekday(from)) % 7);
+    const to = sunday < last ? sunday : last;
+    weeks.push({ from, to });
+    from = shift(to, 1);
+  }
+  // A weekend the month opens on has no working day of its own: it joins the next week.
+  if (weeks.length > 1 && !hasWorkday(weeks[0]!)) weeks.splice(0, 2, { from: weeks[0]!.from, to: weeks[1]!.to });
+  return weeks;
+}
+
+function hasWorkday(week: { from: string; to: string }) {
+  for (let day = week.from; day <= week.to; day = shift(day, 1)) if (isWorkday(day)) return true;
+  return false;
+}
+
+/** The week of a month a day falls in. */
+export function weekOf(date: string): { from: string; to: string } {
+  return monthWeeks(date.slice(0, 7)).find((week) => week.from <= date && date <= week.to)!;
+}
+
+/**
+ * The weekly report's heading, as the workbook writes it: "PERIOD COVERED:
+ * NOVEMBER 2-6, 2026" -- its working days, Monday to Friday.
+ */
+export function weekWords(week: { from: string; to: string }): string {
+  let first = week.from;
+  while (first < week.to && !isWorkday(first)) first = shift(first, 1);
+  let last = week.to;
+  while (last > first && !isWorkday(last)) last = shift(last, -1);
+  const month = new Date(`${first}T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' }).toUpperCase();
+  const days = first === last ? `${Number(first.slice(8))}` : `${Number(first.slice(8))}-${Number(last.slice(8))}`;
+  return `${month} ${days}, ${first.slice(0, 4)}`;
+}
+
+/** The monthly report's heading: "Month of October". */
+export const monthWords = (month: string) =>
+  `Month of ${new Date(`${month}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })}`;
+
+// ── PR 4: past technicians' logs ─────────────────────────────────────────────
+//
+// The workbook's hidden technician tabs -- Nathan, Carlos, Aliyah and the rest
+// -- read from the workbook the office uploads, kept as they were, to read.
+
+/** A past technician's log in the list: its tab's name, and how many rows. */
+export interface RevenueHistorySummary {
+  id: string;
+  name: string;
+  rowCount: number;
+  importedAt: string;
+}
+
+export interface RevenueHistoryList {
+  sheets: RevenueHistorySummary[];
+}
+
+/** A past technician's log: the tab's own headings and every row under them, as the text the workbook showed. */
+export interface RevenueHistorySheetView extends RevenueHistorySummary {
+  headers: string[];
+  rows: string[][];
+  fileName: string;
+}
+
+/** What importing the workbook did: each tab read, with its rows. */
+export interface RevenueHistoryImport {
+  imported: { name: string; rowCount: number }[];
+}
