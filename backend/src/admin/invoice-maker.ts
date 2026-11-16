@@ -17,8 +17,9 @@ import { goesToXero, invoiceProblem, type InvoicingState } from './invoicing-sta
  * - A visit invoiced already -- by the console, in Jobber, or read back from
  *   Xero -- is invoiced again only when asked to on purpose, under the
  *   office's invoice lock so two makers never both make one.
- * - An invoice of a company that sends to Xero is a draft with no number of
- *   the console's: Xero numbers it, and the office approves it there.
+ * - An invoice of a company that sends to Xero is a draft, numbered next in
+ *   that company's sequence there (2026-11-16) -- or by Xero, when the console
+ *   knows none of its numbers yet -- and the office approves it there.
  *
  * Run in the caller's transaction: every invoice of the visit, or none.
  */
@@ -92,6 +93,7 @@ export async function makeInvoices(tx: Db, user: AuthenticatedUser, state: Invoi
   }
   const made: MadeInvoice[] = [];
   for (const invoice of request.invoices) {
+    const toXero = goesToXero(state, invoice.xeroTenantId);
     const row = await insertConsoleInvoice(tx, user, {
       subject: request.subject,
       clientName: request.clientName,
@@ -107,7 +109,8 @@ export async function makeInvoices(tx: Db, user: AuthenticatedUser, state: Invoi
       clientMessage: request.clientMessage,
       contractDisclaimer: request.contractDisclaimer,
       clientRequestId: invoice.clientRequestId,
-      asDraft: request.asDraft || goesToXero(state, invoice.xeroTenantId),
+      asDraft: request.asDraft || toXero,
+      numberedForXero: toXero,
       ...(request.batchKey ? { batchKey: request.batchKey } : {}),
       xeroTenantId: invoice.xeroTenantId,
     });

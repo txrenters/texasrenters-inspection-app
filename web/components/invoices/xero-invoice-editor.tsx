@@ -306,17 +306,25 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
     };
     const failed = (error: Error) => toast.error(several ? 'No invoice was created' : 'The invoice was not created', { description: error.message });
     // Saved here, and on its way to Xero (2026-11-13): it lands there a few seconds later, not as the save answers.
-    const made = (count: number, total: number) =>
-      toast.success(count > 1 ? `${count} drafts going to Xero` : 'Draft going to Xero', {
-        description: `${formatMoney(total)} to ${draft.clientName}. Xero numbers ${count > 1 ? 'them' : 'it'} in a moment; approve there.`,
+    // Numbered as it is saved (2026-11-16): the toast says which; one the console had no number for, Xero numbers.
+    const made = (invoices: readonly { number: string | null; totalCents: number }[]) => {
+      const numbers = invoices.flatMap((invoice) => (invoice.number ? [invoice.number] : []));
+      const total = invoices.reduce((sum, invoice) => sum + invoice.totalCents, 0);
+      const title = invoices.length > 1 ? `${invoices.length} drafts going to Xero` : numbers[0] ? `Draft ${numbers[0]} going to Xero` : 'Draft going to Xero';
+      toast.success(title, {
+        description:
+          numbers.length === invoices.length
+            ? `${invoices.length > 1 ? `${numbers.join(', ')}: ` : ''}${formatMoney(total)} to ${draft.clientName}. Approve ${invoices.length > 1 ? 'them' : 'it'} in Xero.`
+            : `${formatMoney(total)} to ${draft.clientName}. Xero numbers ${invoices.length > 1 ? 'them' : 'it'} in a moment; approve there.`,
       });
+    };
     if (!several) {
       const only = read[0]!;
       actions.create.mutate(
         { ...form, lineItems: only.ready, ...(only.tenantId ? { xeroTenantId: only.tenantId } : {}), ...(only.company ? { taxMode: only.mode } : {}) },
         {
           onSuccess: (invoice) => {
-            made(1, invoice.totalCents);
+            made([invoice]);
             router.push(`/invoices/${invoice.id}`);
           },
           onError: failed,
@@ -328,7 +336,7 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       { ...form, invoices: read.map((invoice) => ({ xeroTenantId: invoice.tenantId, lineItems: invoice.ready, ...(invoice.company ? { taxMode: invoice.mode } : {}) })) },
       {
         onSuccess: ({ invoices }) => {
-          made(invoices.length, invoices.reduce((sum, invoice) => sum + invoice.totalCents, 0));
+          made(invoices);
           router.push(visit ? `/inspections/${visit.id}` : `/invoices/${invoices[0]!.id}`);
         },
         onError: failed,
@@ -409,7 +417,14 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
             />
           </HeaderField>
           <HeaderField htmlFor={`${id}-number`} label="Invoice number">
-            <Input className={cn(HEADER_INPUT, 'bg-muted')} id={`${id}-number`} readOnly value="Given by Xero" />
+            {/* The company's next (2026-11-16), taken as it is saved; Xero's when the console knows none of its numbers yet. */}
+            <Input
+              className={cn(HEADER_INPUT, 'bg-muted')}
+              id={`${id}-number`}
+              readOnly
+              title="Given as it is saved: the next of the company’s numbers in Xero."
+              value={read.map((invoice) => invoice.company?.nextNumber ?? 'Given by Xero').join(', ')}
+            />
           </HeaderField>
           <HeaderField htmlFor={`${id}-reference`} label="Reference">
             <Input className={HEADER_INPUT} id={`${id}-reference`} maxLength={255} onChange={(event) => setReference(event.target.value)} value={reference} />
@@ -487,7 +502,7 @@ export function XeroInvoiceEditor({ draft }: { draft: InvoiceDraft }) {
       <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
         <p aria-live="polite" className={problem ? 'text-destructive mr-auto text-sm' : 'text-muted-foreground mr-auto text-sm'}>
           {problem ??
-            `Made out to ${draft.clientName}. ${several ? 'Each goes' : 'It goes'} to Xero as a draft, numbered there; pick each line’s project there before approving.`}
+            `Made out to ${draft.clientName}. ${several ? 'Each goes' : 'It goes'} to Xero as a draft; pick each line’s project there before approving.`}
         </p>
         <Button asChild variant="secondary">
           <Link href={cancelHref}>Cancel</Link>

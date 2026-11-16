@@ -2,13 +2,14 @@ import { dueOnFor, invoiceTotals, lineTotalCents, type InvoiceLineInput, type Xe
 import { InvoiceOrigin, InvoiceStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
-import { nextInvoiceNumber } from './invoice-numbers';
+import { nextInvoiceNumber, nextXeroInvoiceNumber } from './invoice-numbers';
 
 /**
  * One invoice made in the console, its lines and its record (2026-11-06): for
  * a visit, for a property no visit covers, or one of a batch. Totals worked
  * out from the lines; numbered next in the office's sequence unless it is a
- * draft, which is numbered when it is marked sent. Run in the caller's
+ * draft, which is numbered when it is marked sent -- or, one its company
+ * sends to Xero, next in that company's sequence there. Run in the caller's
  * transaction, so the number, the invoice and its record are one write.
  */
 export interface ConsoleInvoice {
@@ -35,6 +36,12 @@ export interface ConsoleInvoice {
   contractDisclaimer?: string | null;
   clientRequestId: string;
   asDraft: boolean;
+  /**
+   * Its company sends it to Xero (2026-11-16): numbered next in that company's
+   * sequence in Xero ("INV-5406") though it is a draft -- or left for Xero to
+   * number when the console knows none of the company's numbers yet.
+   */
+  numberedForXero?: boolean;
   /** The batch it was made in, for its record. */
   batchKey?: string;
   /** The company's books it goes to (2026-11-10): an organisation of the office, decided by the caller; null or left out for none. */
@@ -59,7 +66,12 @@ export async function insertConsoleInvoice(tx: Prisma.TransactionClient, user: A
     ...(line.xeroTracking ? { xeroTracking: line.xeroTracking.map(({ trackingCategoryId, option }) => ({ trackingCategoryId, option })) } : {}),
   }));
   const { subtotalCents, totalCents } = invoiceTotals(lines);
-  const number = invoice.asDraft ? null : await nextInvoiceNumber(tx, user.organizationId);
+  const number =
+    invoice.numberedForXero && invoice.xeroTenantId
+      ? await nextXeroInvoiceNumber(tx, user.organizationId, invoice.xeroTenantId)
+      : invoice.asDraft
+        ? null
+        : await nextInvoiceNumber(tx, user.organizationId);
   const dueOn = invoice.dueOn ?? dueOnFor(invoice.issuedOn, invoice.paymentTermsDays);
   const created = await tx.invoice.create({
     data: {

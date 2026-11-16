@@ -287,7 +287,7 @@ describe('once the console owns invoicing', () => {
       expect(covered.invoice.updateMany.mock.calls[0][0].data).toEqual({ status: 'PAID', balanceCents: 0, paidOn: date('2026-11-03') });
     });
 
-    it('leaves a draft for a company that sends to Xero to go there as it is (2026-11-12): Xero numbers it', async () => {
+    it('leaves a draft for a company that sends to Xero to go there as it is (2026-11-12): approved there', async () => {
       const HOMES = 'b1000000-0000-4000-8000-000000000001';
       const db = database(stored({ status: 'DRAFT', number: null, origin: 'CONSOLE', xeroTenantId: HOMES, xeroInvoiceId: null }));
       db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
@@ -371,6 +371,10 @@ describe("an invoice's history", () => {
     expect(
       historyEvent({ id: 'b', action: 'INVOICE_EDITED', createdAt: at, metadata: { changes: [{ field: 'Subject', from: 'A', to: 'B' }] } }, null).lines,
     ).toEqual(['Subject: A → B']);
+    // Xero had its number already (2026-11-16): the sender gave it the next.
+    expect(
+      historyEvent({ id: 'c', action: 'INVOICE_RENUMBERED', createdAt: at, metadata: { from: 'INV-5406', to: 'INV-5407', reason: 'XERO_HAS_NUMBER' } }, null),
+    ).toMatchObject({ title: 'Number changed', lines: ['INV-5406 → INV-5407', 'Xero had INV-5406 already.'] });
   });
 
   it('names lines added and taken off', () => {

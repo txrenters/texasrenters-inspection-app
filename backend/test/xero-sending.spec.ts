@@ -370,6 +370,8 @@ function harness(options: {
       ? { status: 'CONNECTED', xeroTenantId: TENANT, scopes: XERO_SEND_SCOPES.split(' '), invoiceRemindersOn: false, accounts: ACCOUNTS }
       : options.connection;
   const syncs = new Map<string, Record<string, unknown>>();
+  /** The fake itself, for work given the transaction. */
+  const self: { db?: unknown } = {};
   const prisma = {
     xeroSettings: {
       findUnique: jest.fn(async () => settingsRow),
@@ -414,6 +416,14 @@ function harness(options: {
         where.id ? invoices.filter((item) => where.id!.in.includes(item.id)) : where.status === 'BAD_DEBT' ? (options.badDebts ?? []) : [],
       ),
       count: jest.fn(async () => 0),
+      // Given the company's next number when Xero has its own (2026-11-16): only while it still has the one it went with.
+      updateMany: jest.fn(async ({ where, data }: { where: { id: string; number: string }; data: Record<string, unknown> }) => {
+        const row = invoices.find((item) => item.id === where.id && item.number === where.number);
+        if (!row) return { count: 0 };
+        Object.assign(row, data);
+        return { count: 1 };
+      }),
+      findUniqueOrThrow: jest.fn(async () => ({ updatedAt: new Date('2026-12-05T00:00:00.000Z') })),
     },
     xeroInvoiceSync: {
       upsert: jest.fn(async ({ where, create, update }: { where: { invoiceId: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
@@ -473,14 +483,26 @@ function harness(options: {
     },
     auditLog: { create: jest.fn() },
     $executeRaw: jest.fn(async () => 1),
-    // The invoices worth looking at, or -- asked of the payments -- the payments.
-    $queryRaw: jest.fn(async (strings: TemplateStringsArray) =>
-      (strings.join('?').includes('"InvoicePayment"')
-        ? (options.paymentCandidates ?? payments.map((item) => item.id))
-        : (options.candidates ?? invoices.map((item) => item.id))
-      ).map((id) => ({ id })),
+    // The invoices worth looking at, or -- asked of the payments -- the payments; or the company's highest "INV-" number
+    // the console knows (2026-11-16), as the database would find it among these.
+    $queryRaw: jest.fn(async (strings: TemplateStringsArray) => {
+      if (strings.join('?').includes('WITH numbered')) {
+        const digits = invoices
+          .map((item) => /^INV-([0-9]+)$/.exec(item.number ?? '')?.[1])
+          .filter((found): found is string => Boolean(found))
+          .sort((a, b) => Number(b) - Number(a))[0];
+        return digits ? [{ tenant: TENANT, prefix: 'INV-', digits }] : [];
+      }
+      return (
+        strings.join('?').includes('"InvoicePayment"')
+          ? (options.paymentCandidates ?? payments.map((item) => item.id))
+          : (options.candidates ?? invoices.map((item) => item.id))
+      ).map((id) => ({ id }));
+    }),
+    // Both forms: a list of writes, or work given the transaction (2026-11-16, to renumber).
+    $transaction: jest.fn(async (operations: Promise<unknown>[] | ((tx: unknown) => Promise<unknown>)) =>
+      typeof operations === 'function' ? operations(self.db) : Promise.all(operations),
     ),
-    $transaction: jest.fn(async (operations: Promise<unknown>[]) => Promise.all(operations)),
   };
   const client = {
     post: jest.fn(async (_org: string, _tenant: string, path: string, body: { Contacts?: { Name: string }[]; Invoices?: { InvoiceNumber?: string }[]; Payments?: unknown[] }): Promise<unknown> => {
@@ -529,6 +551,7 @@ function harness(options: {
     summary: jest.fn(async () => ({ done: 0, failed: 0, failures: [] })),
     retry: jest.fn(async () => 0),
   };
+  self.db = prisma;
   const sender = new XeroSenderService(prisma as never, client as never, auth as never, settings as never, projects as never);
   return { sender, prisma, client, auth, projects, syncs, paymentRows, writeOffRows, settingsRow: () => settingsRow };
 }
@@ -1374,6 +1397,64 @@ describe('the console’s own invoices, made once in Xero as drafts (2026-11-12)
     const { sender, client } = harness({ invoices: [draft()] });
     await sender.run(ORG, TENANT);
     expect(calls(client, '/Contacts')[0]![3]).toEqual({ Contacts: [{ Name: '12 Example Lane' }] });
+  });
+
+  describe('under the number the console gave it (2026-11-16)', () => {
+    /** Xero as the Demo Company test showed it: a number it has already is refused, any other is kept as sent. */
+    const xeroWithNumbers = (client: { put: jest.Mock }, taken: string[]) =>
+      client.put.mockImplementation(async (_org: string, _tenant: string, _path: string, body: { Invoices: { InvoiceNumber?: string }[] }) => ({
+        Invoices: body.Invoices.map((sent, index) =>
+          sent.InvoiceNumber && taken.includes(sent.InvoiceNumber)
+            ? { InvoiceID: '00000000-0000-0000-0000-000000000000', InvoiceNumber: sent.InvoiceNumber, StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Invoice # must be unique.' }] }
+            : { InvoiceID: `xero-draft-${index + 1}`, InvoiceNumber: sent.InvoiceNumber ?? `INV-010${index + 1}`, StatusAttributeString: 'OK' },
+        ),
+      }));
+    const sentNumbers = (client: { put: jest.Mock }) =>
+      client.put.mock.calls.map(([, , , body]) => (body as { Invoices: { InvoiceNumber?: string }[] }).Invoices.map((sent) => sent.InvoiceNumber ?? null));
+
+    it('sends it with its number, and keeps that number', async () => {
+      const { sender, client, prisma } = harness({ invoices: [draft({ number: 'INV-5406' })], links: LINKED });
+      xeroWithNumbers(client, []);
+      expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, failed: 0 });
+      expect(sentNumbers(client)).toEqual([['INV-5406']]);
+      expect(prisma.invoice.update).toHaveBeenCalledWith({ where: { id: 'console-1' }, data: { xeroInvoiceId: 'xero-draft-1', xeroStatus: 'DRAFT', number: 'INV-5406' } });
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('takes the company’s next number when Xero has its number already -- made there by hand -- says so in its history, and goes again', async () => {
+      const made = draft({ number: 'INV-5406' });
+      const { sender, client, prisma, syncs } = harness({ invoices: [made], links: LINKED });
+      xeroWithNumbers(client, ['INV-5406']);
+      expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 1, failed: 0 });
+      expect(sentNumbers(client)).toEqual([['INV-5406'], ['INV-5407']]);
+      expect(prisma.invoice.updateMany).toHaveBeenCalledWith({
+        where: { id: 'console-1', organizationId: ORG, number: 'INV-5406', xeroInvoiceId: null },
+        data: { number: 'INV-5407' },
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ action: 'INVOICE_RENUMBERED', entityId: 'console-1', actorUserId: null, metadata: { from: 'INV-5406', to: 'INV-5407', tenantId: TENANT, reason: 'XERO_HAS_NUMBER' } }),
+      });
+      expect(syncs.get('console-1')).toMatchObject({ status: 'SENT', xeroInvoiceId: 'xero-draft-1' });
+      expect(made.number).toBe('INV-5407');
+    });
+
+    it('takes a new number at most three times in a run, then waits for the next run with Xero’s reason', async () => {
+      const { sender, client, prisma, syncs } = harness({ invoices: [draft({ number: 'INV-5406' })], links: LINKED });
+      xeroWithNumbers(client, ['INV-5406', 'INV-5407', 'INV-5408', 'INV-5409']);
+      expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
+      expect(sentNumbers(client)).toEqual([['INV-5406'], ['INV-5407'], ['INV-5408'], ['INV-5409']]);
+      expect(prisma.auditLog.create.mock.calls.filter(([{ data }]) => (data as { action: string }).action === 'INVOICE_RENUMBERED')).toHaveLength(3);
+      expect(syncs.get('console-1')).toMatchObject({ status: 'FAILED', problem: 'Invoice # must be unique.', nextAttemptAt: expect.any(Date) });
+    });
+
+    it('takes no new number for any other refusal', async () => {
+      const { sender, client, prisma, syncs } = harness({ invoices: [draft({ number: 'INV-5406' })], links: LINKED });
+      client.put.mockResolvedValueOnce({ Invoices: [{ InvoiceID: '00000000-0000-0000-0000-000000000000', StatusAttributeString: 'ERROR', ValidationErrors: [{ Message: 'Account code 999 is not valid.' }] }] });
+      expect(await sender.run(ORG, TENANT)).toMatchObject({ sent: 0, failed: 1 });
+      expect(client.put).toHaveBeenCalledTimes(1);
+      expect(prisma.invoice.updateMany).not.toHaveBeenCalled();
+      expect(syncs.get('console-1')).toMatchObject({ status: 'FAILED', problem: 'Account code 999 is not valid.' });
+    });
   });
 
   it('sends Jobber’s invoices no more once the console makes them', async () => {

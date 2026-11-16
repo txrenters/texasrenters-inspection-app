@@ -264,7 +264,7 @@ function BatchInvoices() {
               {formatMoney(chosenCents)} in all, issued {formatInvoiceDay(issuedOn)}
               {invoiceCount > chosen.length ? `, for ${chosen.length} ${chosen.length === 1 ? 'visit' : 'visits'}: one for each company’s books` : ''}.{' '}
               {toXeroCount
-                ? `${toXeroCount === invoiceCount ? 'Each goes' : `${toXeroCount} go`} to its company’s books in Xero as a draft: Xero numbers it, and it is approved there. `
+                ? `${toXeroCount === invoiceCount ? 'Each goes' : `${toXeroCount} go`} to its company’s books in Xero as a draft, under the company’s next number, and it is approved there. `
                 : ''}
               {toXeroCount === invoiceCount
                 ? ''

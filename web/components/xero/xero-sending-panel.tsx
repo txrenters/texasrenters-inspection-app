@@ -74,7 +74,7 @@ export function XeroSendingPanel({
     ? `go to Xero as drafts, each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero`
     : // The console makes the invoices (2026-11-13): its own go as drafts, for the office to approve there.
       view.madeInConsole
-      ? 'go to Xero as drafts that Xero numbers, for the office to approve there'
+      ? 'go to Xero as drafts under the company’s next numbers, for the office to approve there'
       : 'go to Xero as approved invoices, with the payments recorded against them';
 
   return (
@@ -322,7 +322,7 @@ export function XeroSendingPanel({
                 ? view.projectsEnabled
                   ? `Invoices ${counted} since ${since} go to Xero as drafts, each under its property as a contact and each visit with a project of its own: in Xero, put each line on its project, then approve the invoice. Payments stay out of Xero. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
                   : view.madeInConsole
-                    ? `Invoices ${counted} since ${since} go to Xero as drafts, each under its property as a contact, for the office to approve there; Xero numbers them. Each goes once: a change made here after that is the office's to make in Xero.`
+                    ? `Invoices ${counted} since ${since} go to Xero as drafts, each under its property as a contact and the company’s next number, for the office to approve there. Each goes once: a change made here after that is the office's to make in Xero.`
                     : `Invoices ${counted} since ${since} go to Xero as approved invoices, each under its property as a contact, with the payments recorded against them. Each goes once: a change made here after that is the office's to make in Xero. They are in the office's books from then on. Xero emails nobody.`
                 : view.madeInConsole
                   ? "Invoices are made in the console now. With sending off, this company's new invoices get the console's own numbers and reach no books, and nobody emails them. Turn it back on as soon as they can go again. What was sent stays in Xero."

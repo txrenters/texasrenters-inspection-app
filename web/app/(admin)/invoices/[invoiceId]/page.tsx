@@ -126,7 +126,7 @@ export default function InvoicePage() {
         aside={
           <>
             {data.toXero ? (
-              // On its way, or refused (2026-11-13): until Xero has it, the number is Xero's to give.
+              // On its way, or refused (2026-11-13): under its number when it has one (2026-11-16), else Xero gives it one.
               <AsideCard title={data.toXero.problem ? 'Xero refused it' : 'Going to Xero'}>
                 <p className="text-muted-foreground text-sm">
                   {data.toXero.problem ? (
@@ -138,7 +138,7 @@ export default function InvoicePage() {
                       .
                     </>
                   ) : (
-                    `On its way to ${data.company?.name ?? 'its company'}’s books in Xero as a draft. Xero numbers it in a moment.`
+                    `On its way to ${data.company?.name ?? 'its company'}’s books in Xero as a draft${data.number ? `, as ${data.number}.` : '. Xero numbers it in a moment.'}`
                   )}
                 </p>
               </AsideCard>

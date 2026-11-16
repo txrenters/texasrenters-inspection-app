@@ -122,7 +122,14 @@ function database() {
     $transaction: jest.fn(),
   };
   db.invoice.create.mockImplementation(async () => ({ id: `invoice-${db.invoice.create.mock.calls.length}` }));
-  db.$queryRaw.mockImplementation(async () => [{ highest: String(8439 + db.invoice.create.mock.calls.length) }]);
+  // A company's sequence in Xero (2026-11-16): Example Home Services is at INV-5405, one more for each invoice made.
+  db.$queryRaw.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) =>
+    strings.join('?').includes('WITH numbered')
+      ? (values[1] as string[]).includes(HOMES)
+        ? [{ tenant: HOMES, prefix: 'INV-', digits: String(5405 + db.invoice.create.mock.calls.length) }]
+        : []
+      : [{ highest: String(8439 + db.invoice.create.mock.calls.length) }],
+  );
   db.$transaction.mockImplementation((work: (tx: typeof db) => unknown) => work(db));
   return db;
 }
@@ -331,7 +338,7 @@ describe('a batch', () => {
     expect(list.items[0]!.totalCents).toBe(6499);
   });
 
-  it('makes the invoice of a company that sends to Xero a draft with no number of its own (2026-11-12): Xero numbers it there', async () => {
+  it('makes the invoice of a company that sends to Xero a draft, numbered next in its sequence there (2026-11-16)', async () => {
     const db = database();
     db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
     db.inspection.findMany.mockResolvedValue([visit()]);
@@ -343,11 +350,11 @@ describe('a batch', () => {
 
     const result = await batchOver(db).batch(office, { inspectionIds: [VISIT], issuedOn: '2026-11-03', paymentTermsDays: 30, clientRequestId: 'web-batch-0002' });
     expect(result.created.map((made) => [made.company, made.number])).toEqual([
-      ['Example Home Services', null],
+      ['Example Home Services', 'INV-5406'],
       ['Example Pest Co', expect.stringMatching(/^\d+$/)],
     ]);
     expect(db.invoice.create.mock.calls.map((call) => [call[0].data.xeroTenantId, call[0].data.status, call[0].data.number])).toEqual([
-      [HOMES, 'DRAFT', null],
+      [HOMES, 'DRAFT', 'INV-5406'],
       [PEST, 'AWAITING_PAYMENT', expect.stringMatching(/^\d+$/)],
     ]);
   });
@@ -528,6 +535,29 @@ describe('an edit', () => {
     await edits.edit(office, INVOICE, edit([pest]));
     expect(db.invoice.updateMany.mock.calls[0][0].data).toMatchObject({ xeroTenantId: PEST });
     expect(changes(db)).toContainEqual({ field: 'Company', from: 'Example Home Services', to: 'Example Pest Co' });
+  });
+
+  it('takes the next number of a company that sends to Xero when it moves there, on the record (2026-11-16)', async () => {
+    // Example Pest Co sends to Xero, and the console knows none of its numbers: Xero numbers it.
+    const { db, edits } = editsOver(stored({ origin: 'CONSOLE', status: 'DRAFT', number: '8440' }));
+    db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: PEST }]);
+    await edits.edit(office, INVOICE, edit([pest]));
+    expect(db.invoice.updateMany.mock.calls[0][0].data).toMatchObject({ xeroTenantId: PEST, number: null });
+
+    // Back to Example Home Services, which sends at INV-5405: its next.
+    const back = editsOver(stored({ origin: 'CONSOLE', status: 'DRAFT', number: '8440', xeroTenantId: PEST, lines: [{ ...pest, description: null, serviceOn: null, taxable: true }] }));
+    back.db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: HOMES }]);
+    await back.edits.edit(office, INVOICE, edit([filter]));
+    expect(back.db.invoice.updateMany.mock.calls[0][0].data).toMatchObject({ xeroTenantId: HOMES, number: 'INV-5406' });
+    expect(changes(back.db)).toContainEqual({ field: 'Invoice #', from: '8440', to: 'INV-5406' });
+
+    // A number the office typed in the same edit is kept.
+    const typedNumber = editsOver(stored({ origin: 'CONSOLE', status: 'DRAFT', number: '8440' }));
+    typedNumber.db.xeroSettings.findMany.mockResolvedValue([{ xeroTenantId: PEST }]);
+    // The invoice as read; then no other invoice has the number typed.
+    typedNumber.db.invoice.findFirst.mockResolvedValueOnce(stored({ origin: 'CONSOLE', status: 'DRAFT', number: '8440' })).mockResolvedValueOnce(null);
+    await typedNumber.edits.edit(office, INVOICE, { ...edit([pest]), number: 'P-77' });
+    expect(typedNumber.db.invoice.updateMany.mock.calls[0][0].data).toMatchObject({ xeroTenantId: PEST, number: 'P-77' });
   });
 
   it('stays where it is when no line says', async () => {

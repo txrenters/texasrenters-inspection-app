@@ -36,6 +36,13 @@ export interface XeroInvoiceFormCompany {
   trackingCategoryId: string | null;
   /** Each product's own choices, by its name key. */
   products: Record<string, { accountId: string | null; itemCode: string | null; trackingGroup: string | null }>;
+  /**
+   * The number its next invoice takes when saved (2026-11-16), "INV-5406": one
+   * above the highest of its numbers the console knows. Null when it does not
+   * send to Xero, or the console knows none of its numbers yet -- Xero then
+   * numbers it. Left out where the form is not being shown.
+   */
+  nextNumber?: string | null;
 }
 
 /** The Xero side of a line: what the form fills in when an item is picked. */
