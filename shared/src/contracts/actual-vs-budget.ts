@@ -545,3 +545,42 @@ export interface RevenueHistorySheetView extends RevenueHistorySummary {
 export interface RevenueHistoryImport {
   imported: { name: string; rowCount: number }[];
 }
+
+// ── Live editing (2026-11-17) ────────────────────────────────────────────────
+//
+// The office: "we should make it real time cause there are two roles and users
+// who are going to constantly update it, it should sync all the time like the
+// spreadsheet". Every save is told to everyone with the page open, and each
+// person's cell is shown to the others, as in a shared workbook.
+
+/** What a save touched, so the pages showing it read it again. */
+export type RevenueLiveScope = 'log' | 'day' | 'week' | 'month' | 'budgets' | 'products' | 'history';
+
+/**
+ * A cell, named the same way on every sheet that shows it: a day's budget is
+ * one cell whether the daily report or the tracker shows it.
+ */
+export const revenueCell = {
+  /** A row of the technician log: the visit's id, or the office's own row's. */
+  log: (rowKey: string, field: string) => `log:${rowKey}:${field}`,
+  day: (technicianId: string, date: string, field: string) => `day:${technicianId}:${date}:${field}`,
+  week: (technicianId: string, weekStart: string, field: string) => `week:${technicianId}:${weekStart}:${field}`,
+  month: (technicianId: string, month: string, field: string) => `month:${technicianId}:${month}:${field}`,
+};
+
+/** A save, as everyone else with the page open hears of it. */
+export interface RevenueLiveChange {
+  scope: RevenueLiveScope;
+  /** The cells it changed, as `revenueCell` names them; empty for a change of a whole row or list. */
+  cells: string[];
+  by: { userId: string; name: string };
+  at: string;
+}
+
+/** Somebody with the page open: which sheet, and which cell they are in. */
+export interface RevenueLiveEditor {
+  userId: string;
+  name: string;
+  view: string | null;
+  cell: string | null;
+}

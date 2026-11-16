@@ -1,6 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   CONSOLE_FILLED,
+  revenueCell,
+  type RevenueLiveScope,
   DEFAULT_PAYROLL_PERIOD,
   REGULAR_DAY_SECONDS,
   actualSeconds,
@@ -41,6 +43,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessClockTime, businessDate, businessDayBounds, businessDayFromQuery } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { ActualVsBudgetGateway } from './actual-vs-budget.gateway';
 import { readCompanies, shownInvoices } from './shown-invoices';
 import { WorkbookError, readWorkbook, technicianLog, type WorkbookSheet } from './workbook-reader';
 
@@ -187,7 +190,15 @@ function rowOf(key: string, inspectionId: string | null, known: Known | null, en
 
 @Injectable()
 export class ActualVsBudgetService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional() @Inject(ActualVsBudgetGateway) private readonly live?: ActualVsBudgetGateway,
+  ) {}
+
+  /** Tell everyone with the page open what a save just changed (2026-11-17, live editing). */
+  private tell(user: AuthenticatedUser, scope: RevenueLiveScope, cells: string[] = []) {
+    this.live?.publishChange(user.organizationId, { scope, cells, by: { userId: user.id, name: user.displayName } });
+  }
 
   /** Everyone the office may read a log for: the office's technicians, those still working first. */
   async technicians(user: AuthenticatedUser): Promise<RevenueLogTechnicians> {
@@ -340,7 +351,7 @@ export class ActualVsBudgetService {
     const technicianId = visit.assignments[0]?.technicianId;
     if (!technicianId) throw new ApplicationError(409, 'VISIT_UNASSIGNED', 'That visit has no technician, so it is on nobody\'s log.');
     const data = this.cellsOf(input);
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const before = await tx.revenueLogEntry.findUnique({ where: { inspectionId }, select: ENTRY_SELECT });
       const saved = before
         ? await tx.revenueLogEntry.update({ where: { id: before.id }, data: { ...data, updatedById: auditActor(user).actorUserId }, select: ENTRY_SELECT })
@@ -351,6 +362,8 @@ export class ActualVsBudgetService {
       await this.audit(tx, user, saved.id, before, data);
       return { entryId: saved.id };
     });
+    this.tell(user, 'log', Object.keys(data).map((field) => revenueCell.log(inspectionId, field)));
+    return result;
   }
 
   /** A row of the office's own, for work the console has no visit for. */
@@ -359,7 +372,7 @@ export class ActualVsBudgetService {
     if (!input.technicianId || !input.date) throw new ApplicationError(422, 'ROW_NEEDS_DAY', 'Choose the technician and the day.');
     const technician = await this.technicianOf(organizationId, input.technicianId);
     const data = this.cellsOf(input);
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const saved = await tx.revenueLogEntry.create({
         data: { organizationId, technicianId: technician.id, day: dateOf(input.date!), ...data, updatedById: auditActor(user).actorUserId },
         select: ENTRY_SELECT,
@@ -367,24 +380,28 @@ export class ActualVsBudgetService {
       await this.audit(tx, user, saved.id, undefined, data);
       return { entryId: saved.id };
     });
+    this.tell(user, 'log');
+    return result;
   }
 
   /** Change a row the office has an entry for. */
   async saveEntry(user: AuthenticatedUser, entryId: string, input: SaveRevenueLogEntryInput) {
     const data = this.cellsOf(input);
-    return this.prisma.$transaction(async (tx) => {
+    const rowKey = await this.prisma.$transaction(async (tx) => {
       const before = await tx.revenueLogEntry.findFirst({ where: { id: entryId, organizationId: user.organizationId }, select: ENTRY_SELECT });
       if (!before) throw new ApplicationError(404, 'ROW_NOT_FOUND', 'That row is not on the log any more.');
       const day = !before.inspectionId && input.date ? { day: dateOf(input.date) } : {};
       await tx.revenueLogEntry.update({ where: { id: entryId }, data: { ...data, ...day, updatedById: auditActor(user).actorUserId } });
       await this.audit(tx, user, entryId, before, data);
-      return { entryId };
+      return before.inspectionId ?? entryId;
     });
+    this.tell(user, 'log', [...Object.keys(data), ...('date' in input ? ['date'] : [])].map((field) => revenueCell.log(rowKey, field)));
+    return { entryId };
   }
 
   /** Remove a row the office added. A visit's row goes only with its visit; its cells are cleared instead. */
   async removeRow(user: AuthenticatedUser, entryId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const before = await tx.revenueLogEntry.findFirst({ where: { id: entryId, organizationId: user.organizationId }, select: ENTRY_SELECT });
       if (!before) throw new ApplicationError(404, 'ROW_NOT_FOUND', 'That row is not on the log any more.');
       if (before.inspectionId)
@@ -402,6 +419,8 @@ export class ActualVsBudgetService {
       });
       return { removed: true };
     });
+    this.tell(user, 'log');
+    return result;
   }
 
   /** Every product of the office, and the money column its lines go in. */
@@ -431,6 +450,7 @@ export class ActualVsBudgetService {
         },
       });
     });
+    this.tell(user, 'products');
     return this.productColumns(user);
   }
 
@@ -616,7 +636,8 @@ export class ActualVsBudgetService {
   async saveWeek(user: AuthenticatedUser, technicianId: string, weekStart: string, input: SaveRevenueWeekInput) {
     const week = monthWeeks(weekStart.slice(0, 7)).find((candidate) => candidate.from === weekStart);
     if (!week) throw new ApplicationError(422, 'BAD_DATES', 'That is not the first day of a week of its month.');
-    return this.saveTyped(user, technicianId, 'REVENUE_WEEK_EDITED', `${technicianId}:${weekStart}`, input, ['targetCents', 'actualCents', 'remarks'], {
+    const fields = ['targetCents', 'actualCents', 'remarks'] as const;
+    const result = await this.saveTyped(user, technicianId, 'REVENUE_WEEK_EDITED', `${technicianId}:${weekStart}`, input, fields, {
       find: (tx) => tx.revenueWeekEntry.findUnique({ where: { technicianId_weekStart: { technicianId, weekStart: dateOf(weekStart) } } }),
       upsert: (tx, data, organizationId) =>
         tx.revenueWeekEntry.upsert({
@@ -625,13 +646,15 @@ export class ActualVsBudgetService {
           update: data,
         }),
     });
+    this.tell(user, 'week', fields.filter((field) => field in input).map((field) => revenueCell.week(technicianId, weekStart, field)));
+    return result;
   }
 
   /** The remarks the office typed for a technician's month. */
   async saveMonth(user: AuthenticatedUser, technicianId: string, month: string, input: SaveRevenueMonthInput) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApplicationError(422, 'BAD_DATES', 'Give the month as YYYY-MM.');
     const first = dateOf(`${month}-01`);
-    return this.saveTyped(user, technicianId, 'REVENUE_MONTH_EDITED', `${technicianId}:${month}`, input, ['remarks'], {
+    const result = await this.saveTyped(user, technicianId, 'REVENUE_MONTH_EDITED', `${technicianId}:${month}`, input, ['remarks'], {
       find: (tx) => tx.revenueMonthEntry.findUnique({ where: { technicianId_month: { technicianId, month: first } } }),
       upsert: (tx, data, organizationId) =>
         tx.revenueMonthEntry.upsert({
@@ -640,6 +663,8 @@ export class ActualVsBudgetService {
           update: data,
         }),
     });
+    this.tell(user, 'month', 'remarks' in input ? [revenueCell.month(technicianId, month, 'remarks')] : []);
+    return result;
   }
 
   /** Save the cells the office typed into a week or a month, and put the change on the record. */
@@ -709,6 +734,7 @@ export class ActualVsBudgetService {
         },
       });
     });
+    this.tell(user, 'day', Object.keys(data).map((field) => revenueCell.day(technician.id, date, field)));
     return { saved: true };
   }
 
@@ -768,6 +794,7 @@ export class ActualVsBudgetService {
           data: { organizationId, ...auditActor(user), action: 'REVENUE_BUDGETS_CHANGED', entityType: 'RevenueSettings', entityId: organizationId, metadata: { changes } },
         });
     });
+    this.tell(user, 'budgets');
     return this.budgets(user);
   }
 
@@ -816,6 +843,7 @@ export class ActualVsBudgetService {
         },
       });
     });
+    this.tell(user, 'history');
     return { imported: logs.map(({ name, log }) => ({ name, rowCount: log.rows.length })) };
   }
 

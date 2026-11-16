@@ -1,6 +1,6 @@
 'use client';
 
-import { logRangeProblem, secondsAsHours, type RevenueLogField, type RevenueLogRow, type RevenueLogSource } from '@texasrenters/shared';
+import { logRangeProblem, revenueCell, secondsAsHours, type RevenueLogField, type RevenueLogRow, type RevenueLogSource } from '@texasrenters/shared';
 import { Trash2Icon } from 'lucide-react';
 import { Fragment, useState, type FocusEvent } from 'react';
 import { toast } from 'sonner';
@@ -173,6 +173,7 @@ function LogRow({ row, canEdit }: { row: RevenueLogRow; canEdit: boolean }) {
         const readOnly = !canEdit || readOnlyFor(row, field);
         return (
           <GridCell
+            cell={field === 'actualSeconds' ? undefined : revenueCell.log(row.key, field)}
             key={field}
             label={`${column.header}, ${sheetDate(row.date)}, ${row.address ?? 'row'}`}
             numeric={column.numeric}

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 import { Table, TableCell, TableHead } from '@/components/ui/table';
+import { editorColour, initials, useActualVsBudgetLive } from '@/lib/actual-vs-budget-live';
 import { cn } from '@/lib/utils';
 
 /**
@@ -45,9 +46,13 @@ export function TotalCell({ children, numeric, span }: { children?: ReactNode; n
 
 /**
  * A spreadsheet cell: it grows with what is in it, saves when it is left or on
- * Enter, and goes back to what it was on Escape.
+ * Enter, and goes back to what it was on Escape. With a `cell` name it is live
+ * (2026-11-17): the others see when this person is in it, and this person sees
+ * the others' -- a coloured border and their initials, as a shared workbook
+ * shows them.
  */
 export function GridCell({
+  cell,
   text,
   label,
   title,
@@ -57,6 +62,8 @@ export function GridCell({
   onCommit,
   onChange,
 }: {
+  /** The cell's name, as `revenueCell` makes it; none for a cell nobody else edits (a new row's). */
+  cell?: string;
   text: string;
   label: string;
   title?: string;
@@ -75,9 +82,12 @@ export function GridCell({
     if (!focused) setDraft(text);
   }, [text, focused, settled]);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const live = useActualVsBudgetLive();
+  const owner = cell ? live.cellOwners.get(cell) : undefined;
 
   const leave = async () => {
     setFocused(false);
+    if (cell) live.focusCell(null);
     if (!onCommit || draft === text) return;
     const kept = await onCommit(draft);
     if (!kept) setDraft(text);
@@ -94,7 +104,20 @@ export function GridCell({
     }
   };
   return (
-    <TableCell className="border-r p-0 align-top" title={title}>
+    <TableCell
+      className="relative border-r p-0 align-top"
+      style={owner ? { boxShadow: `inset 0 0 0 2px ${editorColour(owner.userId)}` } : undefined}
+      title={owner ? `${owner.name} is in this cell` : title}
+    >
+      {owner ? (
+        <span
+          aria-label={`${owner.name} is in this cell`}
+          className="absolute -top-2 right-0.5 z-10 rounded px-1 text-[9px] leading-tight font-semibold text-white"
+          style={{ background: editorColour(owner.userId) }}
+        >
+          {initials(owner.name)}
+        </span>
+      ) : null}
       <textarea
         aria-label={label}
         className={cn(
@@ -109,7 +132,10 @@ export function GridCell({
           setDraft(event.target.value);
           onChange?.(event.target.value);
         }}
-        onFocus={() => setFocused(true)}
+        onFocus={() => {
+          setFocused(true);
+          if (cell && !readOnly) live.focusCell(cell);
+        }}
         onKeyDown={key}
         readOnly={readOnly}
         ref={ref}

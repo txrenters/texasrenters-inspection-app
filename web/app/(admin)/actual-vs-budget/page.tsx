@@ -12,6 +12,7 @@ import { ErrorState, PageSkeleton } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
+import { ActualVsBudgetLive, editorColour, initials, useActualVsBudgetLive } from '@/lib/actual-vs-budget-live';
 import { useRevenueHistoryImport, useRevenueTechnicians } from '@/lib/actual-vs-budget-queries';
 import { businessToday, shiftDay } from '@/lib/clock';
 import { useUrlState } from '@/lib/url-state';
@@ -23,7 +24,8 @@ import { useUrlState } from '@/lib/url-state';
  * projection, the daily actual vs projected report and the revenue tracker;
  * PR 3 the weekly and monthly reports.
  * Every sheet is a spreadsheet: the cells the console knows come filled, the
- * rest are typed into where they are.
+ * rest are typed into where they are. And live (2026-11-17): everyone with the
+ * page open sees each save as it is made, and which cell the others are in.
  */
 
 const VIEWS = [
@@ -70,12 +72,14 @@ export default function ActualVsBudgetPage() {
   const list = technicians.data.technicians;
 
   return (
+    <ActualVsBudgetLive view={view}>
     <div className="space-y-4">
       <PageHeader
         title="Actual vs Budget"
         actions={
           canEdit ? (
             <>
+              <OthersHere />
               <input
                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 aria-label="The Actual vs Budget workbook"
@@ -97,7 +101,9 @@ export default function ActualVsBudgetPage() {
                 Money columns
               </Button>
             </>
-          ) : null
+          ) : (
+            <OthersHere />
+          )
         }
       />
       <Tabs onValueChange={(next) => setQuery({ view: next })} value={view}>
@@ -132,5 +138,26 @@ export default function ActualVsBudgetPage() {
       {dialog === 'columns' ? <MoneyColumnsDialog onClose={() => setDialog(null)} /> : null}
       {dialog === 'budgets' ? <BudgetsDialog onClose={() => setDialog(null)} /> : null}
     </div>
+    </ActualVsBudgetLive>
+  );
+}
+
+/** Who else has the page open, as a shared workbook shows them: a face each, their sheet on hover. */
+function OthersHere() {
+  const { others } = useActualVsBudgetLive();
+  if (!others.length) return null;
+  return (
+    <ul aria-label="Also on this page" className="flex -space-x-1.5">
+      {others.map((editor) => (
+        <li
+          className="ring-background flex size-7 items-center justify-center rounded-full text-[10px] font-semibold text-white ring-2"
+          key={editor.userId}
+          style={{ background: editorColour(editor.userId) }}
+          title={`${editor.name}${editor.view ? ` · ${VIEWS.find((entry) => entry.key === editor.view)?.label ?? ''}` : ''}`}
+        >
+          {initials(editor.name)}
+        </li>
+      ))}
+    </ul>
   );
 }
