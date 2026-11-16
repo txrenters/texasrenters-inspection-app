@@ -402,6 +402,12 @@ model Organization {
   invoiceProducts InvoiceProduct[]
   invoiceBillingRules InvoiceBillingRule[]
   revenueLogEntries RevenueLogEntry[]
+  revenueTechnicianSettings RevenueTechnicianSetting[]
+  revenueDayEntries RevenueDayEntry[]
+  revenueSettings RevenueSettings?
+  revenueWeekEntries RevenueWeekEntry[]
+  revenueMonthEntries RevenueMonthEntry[]
+  revenueHistorySheets RevenueHistorySheet[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -615,6 +621,11 @@ model UserProfile {
   rescheduleRequestsResolved RescheduleRequest[] @relation("RescheduleResolvedBy")
   revenueLogEntries          RevenueLogEntry[]   @relation("RevenueLogTechnician")
   revenueLogEntriesEdited    RevenueLogEntry[]   @relation("RevenueLogEditedBy")
+  revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
+  revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
+  revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
+  revenueMonths              RevenueMonthEntry[] @relation("RevenueMonthTechnician")
+  revenueHistoryImported     RevenueHistorySheet[] @relation("RevenueHistoryImportedBy")
   inspectionNotesWritten     InspectionNote[]    @relation("InspectionNoteAuthor")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
@@ -5327,4 +5338,122 @@ model RevenueLogEntry {
 
   @@unique([inspectionId])
   @@index([organizationId, technicianId, day])
+}
+
+/// A technician's budget in Actual vs Budget (2026-11-17, PR 2): the revenue a regular 8-hour day should bring --
+/// the workbook's "Budgeted Daily Revenue (Regular 8 hour-work)", $400, $610 or $710 -- and the hourly rate its
+/// overtime adds to it, the workbook's key: $56, $85 and $99. A technician with none is not on the daily sheets.
+model RevenueTechnicianSetting {
+  id               String   @id @default(uuid()) @db.Uuid
+  organizationId   String   @db.Uuid
+  technicianId     String   @db.Uuid
+  dailyBudgetCents Int
+  otRateCents      Int
+  updatedAt        DateTime @updatedAt
+  updatedById      String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueBudgetTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId])
+  @@index([organizationId])
+}
+
+/// What the office typed for one technician on one day on the daily sheets (2026-11-17, PR 2): the day's budget
+/// when it is not the usual, the hours worked when the timesheet has them wrong, and the remarks each sheet keeps.
+/// Null is "as the console works it out".
+model RevenueDayEntry {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @db.Uuid
+  technicianId      String   @db.Uuid
+  day               DateTime @db.Date
+  budgetCents       Int?
+  workSeconds       Int?
+  projectionRemarks String?
+  dailyRemarks      String?
+  trackerRemarks    String?
+  updatedAt         DateTime @updatedAt
+  updatedById       String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueDayTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, day])
+  @@index([organizationId, day])
+}
+
+/// The office's payroll periods for the Revenue tracker's "to date" columns (2026-11-17, PR 2): every
+/// `payrollPeriodDays` days from `payrollPeriodStart` -- the workbook's November 2-15, then November 16 on.
+model RevenueSettings {
+  organizationId     String   @id @db.Uuid
+  payrollPeriodStart DateTime @db.Date
+  payrollPeriodDays  Int      @default(14)
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// What the office typed for one technician's week on the weekly report (2026-11-17, PR 3): the target and the
+/// actual revenue when the console's figures are not the week's -- the workbook typed "=610*4" for a day off and
+/// added "+2100" for a job billed apart -- and the week's remarks. A week runs Monday to Sunday inside its month,
+/// so it is named by its first day. Null is "as the console works it out".
+model RevenueWeekEntry {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  technicianId   String   @db.Uuid
+  weekStart      DateTime @db.Date
+  targetCents    Int?
+  actualCents    Int?
+  remarks        String?
+  updatedAt      DateTime @updatedAt
+  updatedById    String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueWeekTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, weekStart])
+  @@index([organizationId, weekStart])
+}
+
+/// The remarks the office typed for one technician's month on the monthly report (2026-11-17, PR 3). The month's
+/// figures are its weeks', added up, as the workbook's "Month of" tabs add up their weekly tabs.
+model RevenueMonthEntry {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  technicianId   String   @db.Uuid
+  /// The month's first day.
+  month          DateTime @db.Date
+  remarks        String?
+  updatedAt      DateTime @updatedAt
+  updatedById    String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueMonthTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, month])
+  @@index([organizationId, month])
+}
+
+/// A past technician's log as the office's workbook kept it (2026-11-17, PR 4 of Actual vs Budget): one of its
+/// hidden technician tabs -- Nathan, Carlos, Aliyah and the rest -- read from the workbook the office uploads, and
+/// kept as it was, to read. Every cell is the text the workbook showed, in its own format, and nothing is worked
+/// out from it. Importing the workbook again replaces a tab of the same name.
+model RevenueHistorySheet {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  /// The tab's name in the workbook: "Nathan".
+  name           String
+  /// The tab's own headings, in order: older tabs say "Labor Revenue Budget" and "Trip Charge".
+  headers        Json
+  /// Every row under the headings, a list of cell texts in the headings' order.
+  rows           Json
+  rowCount       Int
+  fileName       String
+  importedAt     DateTime @default(now())
+  importedById   String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  importedBy   UserProfile? @relation("RevenueHistoryImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, name])
 }

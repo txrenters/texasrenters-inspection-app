@@ -2,11 +2,21 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  RevenueBudgets,
   RevenueColumn,
+  RevenueDay,
+  RevenueHistoryImport,
+  RevenueHistoryList,
+  RevenueHistorySheetView,
   RevenueLog,
   RevenueLogTechnicians,
+  RevenueMonthReport,
   RevenueProductColumns,
+  SaveRevenueBudgetsInput,
+  SaveRevenueDayInput,
   SaveRevenueLogEntryInput,
+  SaveRevenueMonthInput,
+  SaveRevenueWeekInput,
 } from '@texasrenters/shared';
 
 import { api } from './api';
@@ -81,6 +91,120 @@ export function useRevenueLogEdits() {
         api<RevenueProductColumns>(`${BASE}/products/${encodeURIComponent(productId)}`, { method: 'PUT', body: JSON.stringify({ column }) }),
       onSuccess: (products) => {
         client.setQueryData(actualVsBudgetKeys.products, products);
+        void reread();
+      },
+    }),
+  };
+}
+
+// ── PR 2: the daily sheets ──────────────────────────────────────────────────
+
+const dayKey = (date: string) => [...actualVsBudgetKeys.all, 'day', date] as const;
+const budgetsKey = [...actualVsBudgetKeys.all, 'budgets'] as const;
+
+/** One day across the technicians with a budget: what the projection, the daily report and the tracker read. */
+export function useRevenueDay(date: string) {
+  return useQuery({
+    queryKey: dayKey(date),
+    queryFn: ({ signal }) => api<RevenueDay>(`${BASE}/day?${new URLSearchParams({ date }).toString()}`, { signal }),
+    enabled: /^\d{4}-\d{2}-\d{2}$/.test(date),
+    ...KEPT,
+  });
+}
+
+// ── PR 4: past technicians' logs ────────────────────────────────────────────
+
+const historyKey = [...actualVsBudgetKeys.all, 'history'] as const;
+
+export function useRevenueHistoryList() {
+  return useQuery({
+    queryKey: historyKey,
+    queryFn: ({ signal }) => api<RevenueHistoryList>(`${BASE}/history`, { signal }),
+    ...KEPT,
+  });
+}
+
+/** A past technician's log, as the workbook kept it. Kept as long as the page is open: it never changes. */
+export function useRevenueHistorySheet(id: string) {
+  return useQuery({
+    queryKey: [...historyKey, id] as const,
+    queryFn: ({ signal }) => api<RevenueHistorySheetView>(`${BASE}/history/${encodeURIComponent(id)}`, { signal }),
+    enabled: Boolean(id),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useRevenueHistoryImport() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return api<RevenueHistoryImport>(`${BASE}/history`, { method: 'POST', body: form });
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: historyKey }),
+  });
+}
+
+/** A month's weekly reports and its monthly report. */
+export function useRevenueMonth(month: string) {
+  return useQuery({
+    queryKey: [...actualVsBudgetKeys.all, 'month', month] as const,
+    queryFn: ({ signal }) => api<RevenueMonthReport>(`${BASE}/month?${new URLSearchParams({ month }).toString()}`, { signal }),
+    enabled: /^\d{4}-\d{2}$/.test(month),
+    ...KEPT,
+  });
+}
+
+export function useRevenuePeriodEdits() {
+  const client = useQueryClient();
+  const reread = () => client.invalidateQueries({ queryKey: [...actualVsBudgetKeys.all, 'month'] });
+  return {
+    saveWeek: useMutation({
+      mutationFn: ({ technicianId, weekStart, input }: { technicianId: string; weekStart: string; input: SaveRevenueWeekInput }) =>
+        api<{ saved: boolean }>(`${BASE}/week/${encodeURIComponent(technicianId)}/${encodeURIComponent(weekStart)}`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: reread,
+    }),
+    saveMonth: useMutation({
+      mutationFn: ({ technicianId, month, input }: { technicianId: string; month: string; input: SaveRevenueMonthInput }) =>
+        api<{ saved: boolean }>(`${BASE}/month/${encodeURIComponent(technicianId)}/${encodeURIComponent(month)}`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: reread,
+    }),
+  };
+}
+
+export function useRevenueBudgets(enabled: boolean) {
+  return useQuery({
+    queryKey: budgetsKey,
+    queryFn: ({ signal }) => api<RevenueBudgets>(`${BASE}/budgets`, { signal }),
+    enabled,
+    ...KEPT,
+  });
+}
+
+export function useRevenueDayEdits() {
+  const client = useQueryClient();
+  const reread = () => client.invalidateQueries({ queryKey: [...actualVsBudgetKeys.all, 'day'] });
+  return {
+    saveDay: useMutation({
+      mutationFn: ({ technicianId, date, input }: { technicianId: string; date: string; input: SaveRevenueDayInput }) =>
+        api<{ saved: boolean }>(`${BASE}/day/${encodeURIComponent(technicianId)}/${encodeURIComponent(date)}`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: reread,
+    }),
+    saveBudgets: useMutation({
+      mutationFn: (input: SaveRevenueBudgetsInput) => api<RevenueBudgets>(`${BASE}/budgets`, { method: 'PUT', body: JSON.stringify(input) }),
+      onSuccess: (budgets) => {
+        client.setQueryData(budgetsKey, budgets);
         void reread();
       },
     }),

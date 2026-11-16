@@ -1,8 +1,8 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import type { SaveRevenueLogEntryInput } from '@texasrenters/shared';
+import type { SaveRevenueBudgetsInput, SaveRevenueDayInput, SaveRevenueLogEntryInput } from '@texasrenters/shared';
 
-import { SaveRevenueLogEntryDto } from '../src/admin/actual-vs-budget.controller';
+import { SaveRevenueBudgetsDto, SaveRevenueDayDto, SaveRevenueLogEntryDto, SaveRevenueWeekDto } from '../src/admin/actual-vs-budget.controller';
 import { ActualVsBudgetService } from '../src/admin/actual-vs-budget.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
@@ -60,7 +60,9 @@ const emptyEntry = {
   serviceCallFeeCents: null, materialsCents: null, invoiceNumber: null, postedInPw: null, notes: null,
 };
 
-function database(state: { visits?: unknown[]; entries?: Record<string, unknown>[]; segments?: unknown[]; products?: unknown[] } = {}) {
+function database(state: { visits?: unknown[]; entries?: Record<string, unknown>[]; segments?: unknown[]; products?: unknown[]; budgets?: unknown[]; days?: Record<string, unknown>[]; weeks?: Record<string, unknown>[]; months?: Record<string, unknown>[] } = {}) {
+  const weeks = state.weeks ?? [];
+  const days = state.days ?? [];
   const audits: Record<string, unknown>[] = [];
   const entries = state.entries ?? [];
   const db: Record<string, unknown> = {
@@ -99,10 +101,31 @@ function database(state: { visits?: unknown[]; entries?: Record<string, unknown>
       findFirst: jest.fn(async () => null),
       update: jest.fn(),
     },
+    revenueTechnicianSetting: { findMany: jest.fn(async () => state.budgets ?? []), upsert: jest.fn(), deleteMany: jest.fn(async () => ({ count: 0 })) },
+    revenueSettings: { findUnique: jest.fn(async () => null), upsert: jest.fn() },
+    revenueDayEntry: {
+      findMany: jest.fn(async () => days),
+      findUnique: jest.fn(async () => (days[0] ? { ...days[0] } : null)),
+      upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        if (days[0]) Object.assign(days[0], update);
+        else days.push({ ...create });
+        return days[0];
+      }),
+    },
+    revenueWeekEntry: {
+      findMany: jest.fn(async () => weeks),
+      findUnique: jest.fn(async () => (weeks[0] ? { ...weeks[0] } : null)),
+      upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        if (weeks[0]) Object.assign(weeks[0], update);
+        else weeks.push({ ...create });
+        return weeks[0];
+      }),
+    },
+    revenueMonthEntry: { findMany: jest.fn(async () => state.months ?? []), findUnique: jest.fn(async () => null), upsert: jest.fn() },
     auditLog: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => audits.push(data)) },
     $transaction: jest.fn(async (work: (tx: unknown) => unknown): Promise<unknown> => work(db)),
   };
-  return { db, audits, entries };
+  return { db, audits, entries, days, weeks };
 }
 
 const service = (db: unknown) => new ActualVsBudgetService(db as never);
@@ -250,5 +273,127 @@ describe('the request the page sends', () => {
     await expect(check({ arrival: '4:49 PM' })).rejects.toBeDefined();
     await expect(check({ laborCents: -100 })).rejects.toBeDefined();
     await expect(check({ somethingElse: 1 })).rejects.toBeDefined();
+  });
+});
+
+describe('the daily sheets', () => {
+  // Amy's 11/11 in the workbook's tracker: $400 a day, overtime at $56, 8h 25m worked, $347.98 earned.
+  const budgets = [{ technicianId: TECH, dailyBudgetCents: 40000, otRateCents: 5600, technician: { displayName: 'Sample Technician' } }];
+  const worked = [
+    { technicianId: TECH, inspectionId: id(1), buildingId: null, category: 'ONSITE', startedAt: new Date('2026-11-11T14:00:00.000Z'), endedAt: new Date('2026-11-11T18:00:00.000Z'), durationSeconds: 4 * 3600 },
+    { technicianId: TECH, inspectionId: id(2), buildingId: null, category: 'ONSITE', startedAt: new Date('2026-11-11T18:30:00.000Z'), endedAt: new Date('2026-11-11T22:55:00.000Z'), durationSeconds: 4 * 3600 + 25 * 60 },
+  ];
+  const visits = [
+    visit(1, { invoices: [{ number: 'INV-1', lines: [line('Cleaning', 19899)] }] }),
+    visit(2, { invoices: [{ number: 'INV-2', lines: [line('Cleaning', 14899)] }] }),
+  ];
+  const planned = [
+    { id: 'entry-1', technicianId: TECH, inspectionId: id(1), day: day('2026-11-11'), createdAt: new Date(), ...emptyEntry, driveTime: '10–20 min', timeBudgeted: '2 hrs', estimatedBudgetCents: 25000 },
+    { id: 'entry-2', technicianId: TECH, inspectionId: id(2), day: day('2026-11-11'), createdAt: new Date(), ...emptyEntry, driveTime: '15–25 min', timeBudgeted: '3 hrs', estimatedBudgetCents: 25596 },
+  ];
+
+  it("read each technician's day from their log and the timesheet, with the payroll period so far", async () => {
+    const { db } = database({ budgets, visits, segments: worked, entries: planned });
+    const result = await service(db).day(office, '2026-11-11');
+    expect(result.payrollPeriod).toEqual({ from: '2026-11-02', to: '2026-11-15' });
+    expect(result.technicians).toHaveLength(1);
+    expect(result.technicians[0]).toMatchObject({
+      budgetCents: 40000,
+      driveTime: '25–45 min',
+      billableTime: '5h 00m',
+      projectedCents: 50596,
+      actualCents: 34798,
+      workSeconds: 8 * 3600 + 25 * 60,
+      typed: { budget: false, work: false },
+      period: { regularSeconds: 8 * 3600, overtimeSeconds: 25 * 60, budgetedCents: 42333, actualCents: 34798 },
+    });
+  });
+
+  it("take the office's budget and hours for the day over the usual and the timesheet's", async () => {
+    const { db } = database({ budgets, visits, segments: worked, entries: planned, days: [{ technicianId: TECH, day: day('2026-11-11'), budgetCents: 20000, workSeconds: 4 * 3600, projectionRemarks: null, dailyRemarks: 'Half day', trackerRemarks: null }] });
+    const [amy] = (await service(db).day(office, '2026-11-11')).technicians;
+    expect(amy).toMatchObject({ budgetCents: 20000, workSeconds: 4 * 3600, typed: { budget: true, work: true }, dailyRemarks: 'Half day' });
+    expect(amy!.period).toMatchObject({ overtimeSeconds: 0, budgetedCents: 20000 });
+  });
+
+  it('show nobody without a budget', async () => {
+    const { db } = database({ visits });
+    expect((await service(db).day(office, '2026-11-11')).technicians).toEqual([]);
+  });
+
+  it("keep what the office typed for the day, and put it on the record", async () => {
+    const { db, audits, days } = database({ budgets });
+    await service(db).saveDay(office, TECH, '2026-11-11', { dailyRemarks: '  Completed 3 visits ', workSeconds: 30300 });
+    expect(days[0]).toMatchObject({ technicianId: TECH, dailyRemarks: 'Completed 3 visits', workSeconds: 30300 });
+    expect(audits[0]).toMatchObject({ action: 'REVENUE_DAY_EDITED' });
+  });
+
+  it('take every field of their requests', async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const dayBody: Required<SaveRevenueDayInput> = { budgetCents: 61000, workSeconds: 30300, projectionRemarks: 'a', dailyRemarks: 'b', trackerRemarks: 'c' };
+    await expect(pipe.transform(dayBody, { type: 'body', metatype: SaveRevenueDayDto })).resolves.toBeDefined();
+    await expect(pipe.transform({ workSeconds: 90000 }, { type: 'body', metatype: SaveRevenueDayDto })).rejects.toBeDefined();
+    const budgetsBody: Required<SaveRevenueBudgetsInput> = {
+      payrollPeriodStart: '2026-11-02',
+      payrollPeriodDays: 14,
+      technicians: [{ technicianId: TECH, dailyBudgetCents: 40000, otRateCents: 5600 }],
+    };
+    await expect(pipe.transform(budgetsBody, { type: 'body', metatype: SaveRevenueBudgetsDto })).resolves.toBeDefined();
+    await expect(pipe.transform({ technicians: [{ technicianId: TECH, dailyBudgetCents: -1, otRateCents: 0 }] }, { type: 'body', metatype: SaveRevenueBudgetsDto })).rejects.toBeDefined();
+  });
+});
+
+describe('the weekly and monthly reports', () => {
+  // A technician on $610 a day who worked one day, Wednesday 11/11, in the week of November 9-15.
+  const budgets = [{ technicianId: TECH, dailyBudgetCents: 61000, otRateCents: 8500, technician: { displayName: 'Sample Technician' } }];
+  const visits = [
+    visit(1, { invoices: [{ number: 'INV-1', lines: [line('Repair', 42500), line('Service Call', 5000)] }] }),
+    visit(2, { invoices: [{ number: 'INV-2', lines: [line('Repair', 17000)] }] }),
+  ];
+  const products = [{ nameKey: 'service call', revenueColumn: 'SERVICE_CALL_FEE' }];
+  const worked = [
+    { technicianId: TECH, inspectionId: id(1), buildingId: null, category: 'ONSITE', startedAt: new Date('2026-11-11T14:00:00.000Z'), endedAt: new Date('2026-11-11T20:00:00.000Z'), durationSeconds: 6 * 3600 },
+  ];
+
+  it("divide the month into its weeks, each worked day's budget the target and its revenue the actual", async () => {
+    const { db } = database({ budgets, visits, products, segments: worked });
+    const report = await service(db).month(office, '2026-11');
+    expect(report.weeks.map((week) => week.from)).toEqual(['2026-11-01', '2026-11-09', '2026-11-16', '2026-11-23', '2026-11-30']);
+    expect(report.weeks[0]!.technicians[0]).toMatchObject({ targetCents: 0, actualCents: 0, daysWorked: 0 });
+    expect(report.weeks[1]!.technicians[0]).toMatchObject({ targetCents: 61000, actualCents: 64500, daysWorked: 1, typed: { target: false, actual: false } });
+    expect(report.technicians[0]).toMatchObject({ targetCents: 61000, actualCents: 64500 });
+  });
+
+  it("take the office's target and actual for a week, and add them into the month", async () => {
+    const { db } = database({
+      budgets,
+      visits,
+      products,
+      segments: worked,
+      weeks: [{ technicianId: TECH, weekStart: day('2026-11-09'), targetCents: 122000, actualCents: 274500, remarks: 'Job at Aurora Creek billed apart' }],
+      months: [{ technicianId: TECH, remarks: 'Strong month' }],
+    });
+    const report = await service(db).month(office, '2026-11');
+    expect(report.weeks[1]!.technicians[0]).toMatchObject({ targetCents: 122000, actualCents: 274500, typed: { target: true, actual: true }, remarks: 'Job at Aurora Creek billed apart' });
+    expect(report.technicians[0]).toMatchObject({ targetCents: 122000, actualCents: 274500, remarks: 'Strong month' });
+  });
+
+  it("save a week's cells only on the first day of one of the month's weeks", async () => {
+    const { db, audits, weeks } = database({ budgets });
+    await service(db).saveWeek(office, TECH, '2026-11-09', { targetCents: 244000, remarks: ' Day off Friday ' });
+    expect(weeks[0]).toMatchObject({ targetCents: 244000, remarks: 'Day off Friday' });
+    expect(audits[0]).toMatchObject({ action: 'REVENUE_WEEK_EDITED' });
+    await expect(service(db).saveWeek(office, TECH, '2026-11-10', { remarks: 'x' })).rejects.toMatchObject({ code: 'BAD_DATES' });
+  });
+
+  it('refuse a month that is not one', async () => {
+    const { db } = database({ budgets });
+    await expect(service(db).month(office, '2026-13')).rejects.toMatchObject({ code: 'BAD_DATES' });
+  });
+
+  it("take every field of a week's request", async () => {
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    await expect(pipe.transform({ targetCents: 244000, actualCents: 346500, remarks: 'a' }, { type: 'body', metatype: SaveRevenueWeekDto })).resolves.toBeDefined();
+    await expect(pipe.transform({ targetCents: -1 }, { type: 'body', metatype: SaveRevenueWeekDto })).rejects.toBeDefined();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readCell, readClock, readCents, readDay, readRow } from './actual-vs-budget-cells';
+import { accounting, dollars, readCell, readClock, readCents, readDay, readRow, readWorkTime } from './actual-vs-budget-cells';
 
 describe("the log's cells take the workbook's own formats", () => {
   it('reads dates', () => {
@@ -45,5 +45,30 @@ describe("the log's cells take the workbook's own formats", () => {
       input: { date: '2026-11-17', address: '200 Sample Rd', laborCents: 9500 },
     });
     expect(readRow({ date: '11/17/2026', arrival: 'soon' })).toEqual({ problem: 'Arrival Time: type a time, like 5:36 PM.' });
+  });
+});
+
+describe('the daily sheets', () => {
+  it('write dollars as the sheets do', () => {
+    expect(dollars(40000, { decimals: 0 })).toBe('$400');
+    expect(dollars(34798)).toBe('$347.98');
+    expect(dollars(-15798)).toBe('-$157.98');
+    expect(dollars(-7535, { negative: 'brackets' })).toBe('($75.35)');
+    expect(dollars(293342, { decimals: 0 })).toBe('$2,933');
+  });
+
+  it('write the weekly reports as accounting figures', () => {
+    expect(accounting(355000)).toBe('3,550.00');
+    expect(accounting(-119186)).toBe('(1,191.86)');
+    expect(accounting(0)).toBe('-');
+  });
+
+  it('read hours worked', () => {
+    expect(readWorkTime('8h 25m')).toBe(30300);
+    expect(readWorkTime('11h 3m')).toBe(39780);
+    expect(readWorkTime('8h')).toBe(28800);
+    expect(readWorkTime('8:25')).toBe(30300);
+    expect(readWorkTime('lots')).toBeNull();
+    expect(readWorkTime('8h 75m')).toBeNull();
   });
 });
