@@ -408,6 +408,9 @@ model Organization {
   revenueWeekEntries RevenueWeekEntry[]
   revenueMonthEntries RevenueMonthEntry[]
   revenueHistorySheets RevenueHistorySheet[]
+  microsoftConnection  MicrosoftConnection?
+  excelSync            ExcelSync?
+  excelSyncSheets      ExcelSyncSheet[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -5454,6 +5457,66 @@ model RevenueHistorySheet {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   importedBy   UserProfile? @relation("RevenueHistoryImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, name])
+}
+
+/// The office's Microsoft account, connected once so the console can keep its Actual vs Budget workbook in step
+/// (2026-11-17). Microsoft's Excel API takes a signed-in person's permission only -- never an app's own -- so a
+/// person who can edit the workbook (appdev@) signs in, and the console keeps their sealed tokens and renews them
+/// itself. Mirrors XeroConnection: tokens sealed with MICROSOFT_TOKEN_ENCRYPTION_KEY, never sent to a browser.
+model MicrosoftConnection {
+  organizationId         String    @id @db.Uuid
+  /// CONNECTED, REAUTHORIZATION_REQUIRED or DISCONNECTED.
+  status                 String    @default("DISCONNECTED")
+  accountEmail           String?
+  accountName            String?
+  accessTokenCiphertext  String?
+  accessTokenExpiresAt   DateTime?
+  refreshTokenCiphertext String?
+  scopes                 String[]  @default([])
+  connectedByUserId      String?   @db.Uuid
+  connectedAt            DateTime?
+  lastRefreshedAt        DateTime?
+  lastRefreshError       String?
+  updatedAt              DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// The workbook Actual vs Budget keeps in step (2026-11-17): the file, found from the share link the office pastes,
+/// whether the sync is on, and from which day. Tabs before `startDate` are the office's own and never written.
+model ExcelSync {
+  organizationId String    @id @db.Uuid
+  shareUrl       String
+  driveId        String
+  itemId         String
+  fileName       String
+  webUrl         String?
+  enabled        Boolean   @default(false)
+  startDate      DateTime  @db.Date
+  /// A save since the last write: the next run writes.
+  dirtyAt        DateTime?
+  lastPushedAt   DateTime?
+  lastError      String?
+  /// One server writes at a time.
+  claimedUntil   DateTime?
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// What the console last wrote into one tab of the workbook (2026-11-17): every cell, so the next write sends only
+/// the rows that changed, and -- next -- so an edit made in Excel can be told from the console's own.
+model ExcelSyncSheet {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  rows           Json
+  bold           Json
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, name])
 }

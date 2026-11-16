@@ -40,6 +40,10 @@ import { InvoiceFilesService } from './invoice-files.service';
 import { InvoiceSettingsController } from './invoice-settings.controller';
 import { ActualVsBudgetController } from './actual-vs-budget.controller';
 import { ActualVsBudgetGateway } from './actual-vs-budget.gateway';
+import { ExcelSyncCallbackController, ExcelSyncController } from './excel/excel-sync.controller';
+import { ExcelSyncScheduler } from './excel/excel-sync.scheduler';
+import { ExcelSyncService } from './excel/excel-sync.service';
+import { MicrosoftAuthService } from './excel/microsoft-auth.service';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
 import { InvoiceReportsController } from './invoice-reports.controller';
 import { InvoiceReportsService } from './invoice-reports.service';
@@ -101,6 +105,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceSettingsController,
     InvoiceReportsController,
     ActualVsBudgetController,
+    ExcelSyncController,
+    ExcelSyncCallbackController,
     InvoiceFilesController,
     PaymentsController,
   ],
@@ -148,6 +154,9 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceReportsService,
     ActualVsBudgetService,
     ActualVsBudgetGateway,
+    MicrosoftAuthService,
+    ExcelSyncService,
+    ExcelSyncScheduler,
     TechnicianProvisioningService,
     TechnicianSkillsService,
     // One implementation now that Supabase is gone; the token remains so

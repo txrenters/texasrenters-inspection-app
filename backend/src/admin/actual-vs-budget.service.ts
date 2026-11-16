@@ -198,6 +198,10 @@ export class ActualVsBudgetService {
   /** Tell everyone with the page open what a save just changed (2026-11-17, live editing). */
   private tell(user: AuthenticatedUser, scope: RevenueLiveScope, cells: string[] = []) {
     this.live?.publishChange(user.organizationId, { scope, cells, by: { userId: user.id, name: user.displayName } });
+    // The office's workbook waits for it too (2026-11-17); nothing to do when no workbook is linked or the sync is off.
+    void Promise.resolve()
+      .then(() => this.prisma.excelSync.updateMany({ where: { organizationId: user.organizationId, enabled: true }, data: { dirtyAt: new Date() } }))
+      .catch(() => undefined);
   }
 
   /** Everyone the office may read a log for: the office's technicians, those still working first. */

@@ -1,0 +1,94 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { ExcelSyncView } from '@texasrenters/shared';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { ExcelSyncDialog } from './excel-sync-dialog';
+
+/** The office's own workbook in Excel (2026-11-17). Everything invented. */
+
+const edits = vi.hoisted(() => ({
+  view: null as unknown,
+  connect: vi.fn(),
+  save: vi.fn(),
+  sync: vi.fn(),
+  disconnect: vi.fn(),
+}));
+vi.mock('@/lib/actual-vs-budget-queries', () => ({
+  useExcelSync: () => ({ isPending: false, isError: false, data: edits.view, refetch: vi.fn() }),
+  useExcelSyncEdits: () => ({
+    connect: { mutateAsync: edits.connect, isPending: false },
+    save: { mutate: edits.save, isPending: false },
+    sync: { mutate: edits.sync, isPending: false },
+    disconnect: { mutate: edits.disconnect, isPending: false },
+  }),
+}));
+
+const view = (over: Partial<ExcelSyncView> = {}): ExcelSyncView => ({
+  configured: true,
+  redirectUri: 'https://api.example.test/callback',
+  connection: { status: 'CONNECTED', accountEmail: 'office@example.com', accountName: 'Office', connectedAt: '2026-11-17T15:00:00.000Z', problem: null },
+  workbook: {
+    shareUrl: 'https://example.sharepoint.com/:x:/p/someone/abc',
+    fileName: 'Actual Vs Budget.xlsx',
+    webUrl: null,
+    enabled: true,
+    startDate: '2026-11-18',
+    lastPushedAt: null,
+    waiting: false,
+    problem: null,
+  },
+  ...over,
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  edits.view = view();
+});
+
+describe('the Excel dialog', () => {
+  it('opens Microsoft in a tab of its own to connect the account', async () => {
+    edits.view = view({ connection: null, workbook: null });
+    edits.connect.mockResolvedValue({ authorizationUrl: 'https://login.example.test/authorize' });
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText('Not connected')).toBeTruthy();
+    expect((screen.getByLabelText('Workbook link') as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith('https://login.example.test/authorize', '_blank', 'noopener,noreferrer'));
+  });
+
+  it('saves a new link only once it is changed', () => {
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText('office@example.com')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Workbook link'), { target: { value: ' https://example.sharepoint.com/:x:/p/someone/other ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(edits.save).toHaveBeenCalledWith({ shareUrl: 'https://example.sharepoint.com/:x:/p/someone/other' }, expect.anything());
+  });
+
+  it('turns the sync off, and writes now on request', () => {
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText('Not written yet')).toBeTruthy();
+    fireEvent.click(screen.getByRole('switch'));
+    expect(edits.save).toHaveBeenCalledWith({ enabled: false }, expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: 'Write now' }));
+    expect(edits.sync).toHaveBeenCalled();
+  });
+
+  it("says what went wrong on the workbook, and asks for a sign-in Microsoft refused", () => {
+    edits.view = view({
+      connection: { status: 'REAUTHORIZATION_REQUIRED', accountEmail: 'office@example.com', accountName: null, connectedAt: null, problem: null },
+      workbook: { ...view().workbook!, problem: 'The account cannot edit the workbook: share it as Can edit.' },
+    });
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText('Sign in again')).toBeTruthy();
+    expect(screen.getByText('The account cannot edit the workbook: share it as Can edit.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Write now' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('says so when the server has no Microsoft app', () => {
+    edits.view = view({ configured: false });
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText('The server has no Microsoft app settings yet.')).toBeTruthy();
+  });
+});
