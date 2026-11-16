@@ -41,6 +41,7 @@ import {
   jobAreaNotes,
   visitZone,
   zoneNumberOf,
+  type AdminDashboardOutlook,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -48,6 +49,13 @@ import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { eraseInspectionRows } from '../common/erase-inspection';
 import { jobInWords } from '../common/job-in-words';
+import {
+  buildOutlook,
+  dayToDate,
+  isoDay,
+  outlookQuarters,
+  outlookWindow,
+} from './dashboard-outlook';
 import { ApplicationError } from '../common/errors';
 import { moveStopWithVisit } from '../planning/move-stop-with-visit';
 import { answerByMove, withdrawRescheduleRequests } from '../common/reschedule-requests';
@@ -91,7 +99,7 @@ import {
   requestVisitPush,
   type VisitEditKind,
 } from '../integrations/jobber/jobber.outbound';
-import { movedWindow } from '../common/business-day';
+import { businessDate, movedWindow } from '../common/business-day';
 import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
 // A pure function, not the service: the panel needs Stream's definition of
@@ -570,6 +578,114 @@ export class AdminService {
       recentErrors,
       providerReadiness: this.providerStatuses(),
     };
+  }
+
+  /**
+   * The dashboard's forward view: visits per day for six weeks, who holds the
+   * next five working days, and each quarter's plan against what is done.
+   *
+   * Cached with the dashboard, so a visit booked or sent in refreshes both. It
+   * reads this database only: no provider is called.
+   */
+  async dashboardOutlook(user: AuthenticatedUser): Promise<AdminDashboardOutlook> {
+    return this.cacheRead({
+      resource: 'dashboard',
+      scope: user.organizationId,
+      query: { view: 'outlook' },
+      loader: () => this.loadDashboardOutlook(user.organizationId),
+    });
+  }
+
+  private async loadDashboardOutlook(organizationId: string): Promise<AdminDashboardOutlook> {
+    const today = businessDate();
+    const window = outlookWindow(today);
+    const notCancelled = { not: InspectionStatus.CANCELLED };
+    // Two reads at a time, as the dashboard does: the session pool is small.
+    const [counts, load] = await Promise.all([
+      this.prisma.inspection.groupBy({
+        by: ['scheduledAt', 'inspectionType', 'status'],
+        where: {
+          organizationId,
+          status: notCancelled,
+          scheduledAt: { gte: dayToDate(window.readFrom), lte: dayToDate(window.to) },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.inspection.findMany({
+        where: {
+          organizationId,
+          status: notCancelled,
+          scheduledAt: { in: window.loadDays.map(dayToDate) },
+        },
+        select: {
+          assignments: {
+            where: { isCurrent: true },
+            take: 1,
+            select: { technicianId: true, technician: { select: { displayName: true } } },
+          },
+        },
+      }),
+    ]);
+    const quarters = outlookQuarters(today);
+    const [earliestUnassigned, plans] = await Promise.all([
+      this.prisma.inspection.findFirst({
+        where: {
+          organizationId,
+          status: { in: UPCOMING_INSPECTION_STATUSES },
+          assignments: { none: { isCurrent: true } },
+          scheduledAt: { gte: dayToDate(today) },
+        },
+        orderBy: { scheduledAt: 'asc' },
+        select: { scheduledAt: true },
+      }),
+      this.prisma.tbpQuarterPlan.findMany({
+        where: {
+          organizationId,
+          status: { not: 'CANCELLED' },
+          OR: quarters.map(({ year, quarter }) => ({ quarterYear: year, quarterNumber: quarter })),
+        },
+        select: {
+          id: true,
+          quarterYear: true,
+          quarterNumber: true,
+          status: true,
+          quarterStartsOn: true,
+          startsOn: true,
+        },
+      }),
+    ]);
+    const stops = plans.length
+      ? await this.prisma.tbpQuarterPlanStop.findMany({
+          where: { organizationId, planId: { in: plans.map((plan) => plan.id) } },
+          select: {
+            planId: true,
+            status: true,
+            scheduledOn: true,
+            inspection: {
+              select: { status: true, scheduledAt: true, submittedAt: true, completedAt: true },
+            },
+          },
+        })
+      : [];
+    return buildOutlook({
+      today,
+      inspections: counts.map((row) => ({
+        scheduledAt: row.scheduledAt,
+        inspectionType: row.inspectionType,
+        status: row.status,
+        count: row._count._all,
+      })),
+      doneStatuses: DONE_INSPECTION_STATUSES,
+      inProgressStatus: InspectionStatus.IN_PROGRESS,
+      plans,
+      stops,
+      load: load.map(({ assignments: [assignment] }) =>
+        assignment
+          ? { technicianId: assignment.technicianId, name: assignment.technician.displayName }
+          : null,
+      ),
+      earliestUnassignedOn: earliestUnassigned ? isoDay(earliestUnassigned.scheduledAt) : null,
+    });
   }
 
   async portfolios(user: AuthenticatedUser, query: PortfolioListQueryDto) {

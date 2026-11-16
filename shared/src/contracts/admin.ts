@@ -1591,3 +1591,77 @@ export interface JobberSyncResult {
   withdrawn: number;
   skipped: number;
 }
+
+/** The kinds of visit the dashboard's schedule chart tells apart; everything else is OTHER. */
+export const OUTLOOK_VISIT_TYPES = ['OCCUPIED', 'MOVE_OUT', 'MOVE_IN', 'HVAC', 'OTHER'] as const;
+export type OutlookVisitType = (typeof OUTLOOK_VISIT_TYPES)[number];
+
+/** How many calendar days the schedule chart looks ahead, from the Monday of this week. */
+export const OUTLOOK_DAYS = 42;
+
+/** One Texas day of the schedule ahead. */
+export interface OutlookDay {
+  /** `YYYY-MM-DD`. */
+  date: string;
+  /** Visits on the calendar that day, cancelled ones left out, by kind. */
+  booked: Record<OutlookVisitType, number>;
+  /** Of those, the ones already done. */
+  done: number;
+  /** Stops a quarter plan puts on that day that are not booked yet. */
+  planned: number;
+}
+
+/** A point on a quarter's running total: by the end of `date`, `count` in all. */
+export interface OutlookRunningTotal {
+  date: string;
+  count: number;
+}
+
+/** One quarter's benefit-package plan, as the dashboard draws it. */
+export interface OutlookQuarter {
+  planId: string;
+  /** `Q4 2026`. */
+  label: string;
+  phase: 'PAST' | 'CURRENT' | 'NEXT';
+  planStatus: 'DRAFT' | 'PUBLISHING' | 'PUBLISHED' | 'PUBLISH_FAILED';
+  /** The plan's first day and the quarter's last, `YYYY-MM-DD`. */
+  startsOn: string;
+  endsOn: string;
+  /** Every stop in the plan, excluded ones left out; the four below add up to it. */
+  total: number;
+  done: number;
+  booked: number;
+  planned: number;
+  notScheduled: number;
+  /** Stops whose day is before today, done or not: where the plan says the quarter should be. */
+  dueByToday: number;
+  /** Running totals by day, only the days a total moved: the plan's days, and the days work was done. */
+  plan: OutlookRunningTotal[];
+  progress: OutlookRunningTotal[];
+}
+
+export interface OutlookTechnicianLoad {
+  /** Null: visits with nobody on them. */
+  technicianId: string | null;
+  name: string;
+  visits: number;
+}
+
+/** The dashboard's forward view: the schedule ahead and each quarter's plan. */
+export interface AdminDashboardOutlook {
+  /** Today in Texas, `YYYY-MM-DD`. */
+  today: string;
+  /** `OUTLOOK_DAYS` consecutive days, from the Monday of this week. */
+  days: OutlookDay[];
+  todayCounts: { total: number; done: number; inProgress: number };
+  /** Visits on the calendar today and the six days after, and in the seven days before today. */
+  next7: number;
+  previous7: number;
+  /** The day of the first upcoming visit with nobody on it. */
+  earliestUnassignedOn: string | null;
+  /** The working days `technicianLoad` covers, and who holds how many visits on them. */
+  loadDays: string[];
+  technicianLoad: OutlookTechnicianLoad[];
+  /** Last quarter, this one and the next, where a plan exists; oldest first. */
+  quarters: OutlookQuarter[];
+}

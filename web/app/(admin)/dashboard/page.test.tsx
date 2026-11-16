@@ -1,4 +1,4 @@
-import type { JobberDayComparison, JobberDayRow } from '@texasrenters/shared';
+import type { AdminDashboardOutlook, JobberDayComparison, JobberDayRow } from '@texasrenters/shared';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +22,8 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 const calls = vi.hoisted(() => ({
+  outlook: [] as boolean[],
+  outlookFails: false,
   inspections: [] as [unknown, boolean][],
   reschedules: [] as [string, boolean][],
   reschedulesFail: false,
@@ -64,7 +66,76 @@ const day = {
   ],
 } as unknown as JobberDayComparison;
 
+// Tuesday, November 17: six weeks from the Monday before it. Invented counts.
+const outlookDays = Array.from({ length: 42 }, (_, index) => {
+  const date = new Date(Date.UTC(2026, 10, 16 + index)).toISOString().slice(0, 10);
+  const weekend = [5, 6].includes(index % 7);
+  return {
+    date,
+    booked: { OCCUPIED: weekend ? 0 : 14, MOVE_OUT: weekend ? 0 : 6, MOVE_IN: 0, HVAC: 0, OTHER: 0 },
+    done: 0,
+    planned: date === '2026-12-01' ? 3 : 0,
+  };
+});
+const outlook: AdminDashboardOutlook = {
+  today: '2026-11-17',
+  days: outlookDays,
+  todayCounts: { total: 20, done: 9, inProgress: 4 },
+  next7: 208,
+  previous7: 196,
+  earliestUnassignedOn: '2026-11-19',
+  loadDays: ['2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-23'],
+  technicianLoad: [
+    { technicianId: 'tech-a', name: 'Moses Ruiz', visits: 34 },
+    { technicianId: null, name: 'Unassigned', visits: 5 },
+  ],
+  quarters: [
+    {
+      planId: 'plan-q4',
+      label: 'Q4 2026',
+      phase: 'CURRENT',
+      planStatus: 'PUBLISHED',
+      startsOn: '2026-10-01',
+      endsOn: '2026-12-31',
+      total: 600,
+      done: 300,
+      booked: 200,
+      planned: 80,
+      notScheduled: 20,
+      dueByToday: 280,
+      plan: [{ date: '2026-12-18', count: 580 }],
+      progress: [
+        { date: '2026-10-27', count: 120 },
+        { date: '2026-11-17', count: 300 },
+      ],
+    },
+    {
+      planId: 'plan-q1',
+      label: 'Q1 2027',
+      phase: 'NEXT',
+      planStatus: 'DRAFT',
+      startsOn: '2027-01-01',
+      endsOn: '2027-03-31',
+      total: 610,
+      done: 0,
+      booked: 0,
+      planned: 540,
+      notScheduled: 70,
+      dueByToday: 0,
+      plan: [],
+      progress: [],
+    },
+  ],
+};
+
 vi.mock('@/lib/queries', () => ({
+  useDashboardOutlook: (enabled = true) => {
+    calls.outlook.push(enabled);
+    if (!enabled) return { data: undefined, isError: false };
+    return calls.outlookFails
+      ? { data: undefined, isError: true, error: new Error('The outlook could not be read.'), refetch: vi.fn() }
+      : { data: outlook, isError: false };
+  },
   useDashboard: () => ({
     isError: false,
     isLoading: false,
@@ -132,24 +203,102 @@ const card = (title: string) => screen.getByRole('link', { name: new RegExp(`^${
 
 beforeEach(() => {
   granted.keys = new Set(['dashboard:read', 'inspections:read', 'inspections:manage']);
+  calls.outlook = [];
+  calls.outlookFails = false;
   calls.inspections = [];
   calls.reschedules = [];
   calls.reschedulesFail = false;
 });
 
 describe('the classic dashboard', () => {
-  it('keeps its figures and panels', () => {
+  it('opens on four figures: today, the queue, the week ahead and the quarter', () => {
     mount('classic');
-    expect(screen.getByRole('heading', { name: "Today's operations" })).toBeTruthy();
-    expect(screen.getByText('Reach nobody until assigned')).toBeTruthy();
-    expect(screen.getByText('Needs a person')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'Operations' })).toBeTruthy();
+    expect(screen.getByText('9 done · 4 in the field · 7 to go')).toBeTruthy();
+    expect(screen.getByText('Earliest is Thursday, November 19')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Assign technicians' }).getAttribute('href')).toBe(
+      '/inspections?tech=unassigned&day=all',
+    );
+    expect(screen.getByText('12 more than the last 7 days')).toBeTruthy();
+    expect(screen.getByText('TBP · Q4 2026')).toBeTruthy();
+    expect(screen.getByText('20 ahead of the plan · 44 days left')).toBeTruthy();
     // Home's extra reads are Home's alone.
     expect(calls.inspections).toHaveLength(0);
     expect(calls.reschedules).toHaveLength(0);
   });
+
+  it('has one filled button, to create an inspection', () => {
+    mount('classic');
+    expect(screen.getByRole('link', { name: 'Create inspection' }).getAttribute('href')).toBe('/inspections/new');
+    expect(screen.getByRole('link', { name: "Today's inspections" }).getAttribute('href')).toBe('/inspections');
+  });
+
+  it('draws the schedule ahead, each day a link to that day', () => {
+    mount('classic');
+    const chart = screen.getByRole('region', { name: 'Schedule ahead' });
+    // Six weeks of Monday to Friday: nothing is booked on a weekend.
+    expect(within(chart).getAllByRole('link', { name: /visits|Nothing booked/ })).toHaveLength(30);
+    const today = within(chart).getByRole('link', { name: /^Tuesday, November 17 \(today\)/ });
+    expect(today.getAttribute('href')).toBe('/schedule?date=2026-11-17');
+    expect(today.getAttribute('aria-label')).toContain('20 visits: 14 occupied (TBP), 6 move-out');
+    expect(within(chart).getByText('Planned, not booked')).toBeTruthy();
+
+    fireEvent.click(within(chart).getByRole('button', { name: '2 weeks' }));
+    expect(within(chart).getAllByRole('link', { name: /visits|Nothing booked/ })).toHaveLength(10);
+  });
+
+  it('reads a day out when its column is pointed at', () => {
+    mount('classic');
+    const chart = screen.getByRole('region', { name: 'Schedule ahead' });
+    fireEvent.mouseEnter(within(chart).getByRole('link', { name: /^Tuesday, December 1:/ }));
+    expect(within(chart).getByText('Tue, Dec 1')).toBeTruthy();
+    expect(within(chart).getByText(/23 visits: 14 occupied \(TBP\), 6 move-out, 3 planned, not booked/)).toBeTruthy();
+  });
+
+  it('shows each quarter’s plan and this quarter’s pace', () => {
+    mount('classic');
+    const quarters = screen.getByRole('region', { name: 'TBP by quarter' });
+    expect(within(quarters).getByText('300 done · 200 booked · 80 planned, not booked · 20 not scheduled')).toBeTruthy();
+    expect(within(quarters).getByText('Draft plan')).toBeTruthy();
+    expect(within(quarters).getByText(/on course to finish Tuesday, December 22/)).toBeTruthy();
+    expect(
+      within(quarters).getByRole('img', { name: /^Q4 2026: 300 of 600 done, 20 ahead of the plan/ }),
+    ).toBeTruthy();
+  });
+
+  it('shows who holds the next five working days, with nobody apart', () => {
+    mount('classic');
+    const load = screen.getByRole('region', { name: 'Technician load' });
+    expect(within(load).getByText('Visits booked, Tue, Nov 17 to Mon, Nov 23')).toBeTruthy();
+    const rows = within(load).getAllByRole('listitem').map((item) => item.textContent);
+    expect(rows).toEqual(['Moses Ruiz34', 'Unassigned5']);
+  });
+
+  it('keeps what needs a person, and says the systems in one line', () => {
+    mount('classic');
+    expect(screen.getByText('Needs a person')).toBeTruthy();
+    expect(screen.getByText('5 inspections have no technician')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'All 0 systems ready' }).getAttribute('href')).toBe('/integrations/providers');
+    expect(screen.getByText('Today against Jobber')).toBeTruthy();
+    expect(screen.getByText('Portfolio · Propertyware')).toBeTruthy();
+  });
+
+  it('keeps the figures and the queue when the charts cannot be read', () => {
+    calls.outlookFails = true;
+    mount('classic');
+    expect(screen.getByText('The outlook could not be read.')).toBeTruthy();
+    expect(screen.getByText('5 inspections have no technician')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'TBP by quarter' })).toBeNull();
+  });
 });
 
 describe('Home in the Jobber-style shell', () => {
+  it('does not ask for the classic dashboard’s charts', () => {
+    mount('jobber');
+    expect(calls.outlook.every((enabled) => enabled === false)).toBe(true);
+    expect(screen.queryByRole('region', { name: 'Schedule ahead' })).toBeNull();
+  });
+
   it('greets the reader by name', () => {
     mount('jobber');
     expect(screen.getByRole('heading', { level: 1 }).textContent).toMatch(/^Good (morning|afternoon|evening), Ada$/);

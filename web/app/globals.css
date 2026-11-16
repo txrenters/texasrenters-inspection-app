@@ -99,6 +99,21 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
+  /* The dashboard's charts. Four kinds of visit told apart at a glance, so
+     these are stronger than anything else in the console: in a chart the data
+     is the one thing allowed to be loud. The order is the colour-blind safety,
+     not taste (blue, orange, aqua, yellow; checked for both themes against the
+     card), so a fifth kind is drawn neutral rather than given a fifth hue. */
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  /* A quarter's plan, one hue from strongest to faintest: done, booked,
+     planned. An ordered scale, because the three are steps of one thing. */
+  --color-plan-done: var(--plan-done);
+  --color-plan-booked: var(--plan-booked);
+  --color-plan-planned: var(--plan-planned);
+
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -277,6 +292,13 @@
   --chart-3: oklch(0.52 0.09 300);
   --chart-4: oklch(0.55 0.09 45);
   --chart-5: oklch(0.52 0.09 145);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --plan-done: oklch(0.48 0.11 135);
+  --plan-booked: oklch(0.68 0.1 135);
+  --plan-planned: oklch(0.8 0.07 135);
 
   /* The sidebar is the one persistently-darker plane in light mode, so the
      content area reads as the lit working surface. */
@@ -346,6 +368,13 @@
   --chart-3: oklch(0.72 0.08 300);
   --chart-4: oklch(0.75 0.08 45);
   --chart-5: oklch(0.74 0.08 145);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --plan-done: oklch(0.8 0.11 135);
+  --plan-booked: oklch(0.6 0.085 135);
+  --plan-planned: oklch(0.44 0.055 135);
 
   --sidebar: oklch(0.185 0.006 258);
   /* Resting items a step under the page's text, as the canvas draws them, so the

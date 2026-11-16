@@ -20,6 +20,7 @@ import type {
   AdminChargeReport,
   AdminChargeRule,
   AdminDashboard,
+  AdminDashboardOutlook,
   AdminDeleteResult,
   AdminEvidenceRequest,
   AdminFloorPlan,
@@ -233,6 +234,18 @@ export const useDashboard = () =>
   useQuery({
     queryKey: keys.dashboard,
     queryFn: ({ signal }) => api<AdminDashboard>('/api/v1/admin/dashboard', { signal }),
+  });
+/**
+ * The schedule ahead and each quarter's plan, for the dashboard's charts.
+ *
+ * Keyed under the dashboard's own key, so whatever refreshes the dashboard's
+ * figures (a visit booked, assigned or sent in) refreshes these with them.
+ */
+export const useDashboardOutlook = (enabled = true) =>
+  useQuery({
+    enabled,
+    queryKey: [...keys.dashboard, 'outlook'] as const,
+    queryFn: ({ signal }) => api<AdminDashboardOutlook>('/api/v1/admin/dashboard/outlook', { signal }),
   });
 export const usePortfolios = (search = '') =>
   useInfiniteQuery({
