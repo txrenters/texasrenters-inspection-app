@@ -293,10 +293,28 @@ describe('the classic dashboard', () => {
 });
 
 describe('Home in the Jobber-style shell', () => {
-  it('does not ask for the classic dashboard’s charts', () => {
+  it('draws the same charts as the classic dashboard, the schedule ahead of today’s visits', () => {
     mount('jobber');
-    expect(calls.outlook.every((enabled) => enabled === false)).toBe(true);
-    expect(screen.queryByRole('region', { name: 'Schedule ahead' })).toBeNull();
+    expect(calls.outlook.every((enabled) => enabled !== false)).toBe(true);
+    const chart = screen.getByRole('region', { name: 'Schedule ahead' });
+    expect(within(chart).getAllByRole('link', { name: /visits|Nothing booked/ })).toHaveLength(30);
+    expect(screen.getByRole('region', { name: 'TBP by quarter' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Technician load' })).toBeTruthy();
+    // Seen without scrolling past a long day: the chart comes before the visits.
+    const visits = screen.getByRole('region', { name: "Today's visits" });
+    expect(chart.compareDocumentPosition(visits) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Jobber's Home keeps its own opening: no classic title, no four figures.
+    expect(screen.queryByRole('heading', { level: 1, name: 'Operations' })).toBeNull();
+    expect(screen.queryByText('TBP · Q4 2026')).toBeNull();
+  });
+
+  it('keeps the Workflow cards and the visits when the charts cannot be read', () => {
+    calls.outlookFails = true;
+    mount('jobber');
+    expect(screen.getByText('The outlook could not be read.')).toBeTruthy();
+    expect(card('Upcoming')).toBeTruthy();
+    expect(screen.getByRole('region', { name: "Today's visits" })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'TBP by quarter' })).toBeNull();
   });
 
   it('greets the reader by name', () => {
@@ -370,7 +388,7 @@ describe('Home in the Jobber-style shell', () => {
     mount('jobber');
     expect(screen.getByText('Today against Jobber')).toBeTruthy();
     expect(screen.getByText('Needs a person')).toBeTruthy();
-    expect(screen.getByText('Systems')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'All 0 systems ready' }).getAttribute('href')).toBe('/integrations/providers');
     expect(screen.getByText('Portfolio · Propertyware')).toBeTruthy();
   });
 });

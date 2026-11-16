@@ -41,9 +41,10 @@ function useGreeting() {
 /**
  * Home in the Jobber-style shell, laid out as Jobber's (the office,
  * 2026-11-04: "we want the features for familiarity"): the day and a greeting,
- * the Workflow cards, and today's visits. The classic dashboard's panels --
- * today against Jobber, what needs a person, the systems, the portfolio --
- * follow underneath as `children`, so nothing the dashboard offered is lost.
+ * the Workflow cards, and today's visits. The dashboard's look ahead -- the
+ * schedule chart and what needs a person -- comes between the cards and the
+ * visits as `lead`, where it is seen without scrolling past a long day; the
+ * rest of the dashboard follows underneath as `children`.
  *
  * Beyond what the dashboard already reads, this asks for three things, once
  * each and never polled: the open reschedule requests (only for an account
@@ -55,9 +56,12 @@ export function JobberHome({
   children,
   dashboard,
   jobberDay,
+  lead,
 }: {
   canReadInspections: boolean;
   children?: ReactNode;
+  /** Drawn between the Workflow cards and today's visits. */
+  lead?: ReactNode;
   dashboard: UseQueryResult<AdminDashboard>;
   jobberDay: UseQueryResult<JobberDayComparison>;
 }) {
@@ -169,6 +173,7 @@ export function JobberHome({
         ) : (
           <WorkflowCards cards={cards} />
         )}
+        {lead}
         {canReadInspections ? (
           <TodaysVisits
             date={today}

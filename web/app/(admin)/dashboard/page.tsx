@@ -16,7 +16,6 @@ import { JobberDayPanel } from '@/components/jobber-day-panel';
 import { Panel, PanelRow } from '@/components/panel';
 import { StatStrip, StatStripItem } from '@/components/stat-card';
 import { ErrorState } from '@/components/states';
-import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { businessToday } from '@/lib/clock';
@@ -59,24 +58,38 @@ function Header() {
 
 /**
  * Two layouts of one dashboard. The Jobber-style shell (lib/console-shell.ts)
- * opens on Jobber's Home -- a greeting, the Workflow cards and today's visits
- * -- with the panels below; the classic console keeps its figures and panels.
- * The panels are the same component in both, so neither can lose one.
+ * opens on Jobber's Home -- a greeting and the Workflow cards -- and the
+ * classic console on its title and four figures. Everything under that is the
+ * same two components in both, so neither layout can lose a chart or a panel.
  */
 export default function DashboardPage() {
   const shell = useConsoleShell();
   const dashboard = useDashboard();
-  // The charts are the classic console's; Jobber's Home does not draw them.
-  const outlook = useDashboardOutlook(shell !== 'jobber');
+  const outlook = useDashboardOutlook();
   const { has } = usePermissions();
   const canReadInspections = has('inspections:read');
   const jobberDay = useJobberDay(businessToday(), canReadInspections);
 
   if (shell === 'jobber')
     return (
-      <JobberHome canReadInspections={canReadInspections} dashboard={dashboard} jobberDay={jobberDay}>
+      <JobberHome
+        canReadInspections={canReadInspections}
+        dashboard={dashboard}
+        jobberDay={jobberDay}
+        lead={
+          dashboard.data ? <LookAhead data={dashboard.data} jobberDay={jobberDay.data} outlook={outlook} /> : null
+        }
+      >
         {dashboard.data ? (
-          <DashboardPanels canReadInspections={canReadInspections} data={dashboard.data} jobberDay={jobberDay.data} jobberDayLoading={jobberDay.isLoading} />
+          <div className="flex flex-col gap-5">
+            <PlansAndPeople
+              canReadInspections={canReadInspections}
+              data={dashboard.data}
+              jobberDay={jobberDay.data}
+              jobberDayLoading={jobberDay.isLoading}
+              outlook={outlook}
+            />
+          </div>
         ) : null}
       </JobberHome>
     );
@@ -103,7 +116,6 @@ export default function DashboardPage() {
     );
 
   const data = dashboard.data;
-  const attention = attentionOf(data, jobberDay.data);
 
   return (
     <div className="flex flex-col gap-5">
@@ -111,22 +123,71 @@ export default function DashboardPage() {
 
       <Figures data={data} outlook={outlook.data} />
 
-      {/* The schedule leads: it is the one thing here that looks forward. What
-          needs somebody sits beside it, so neither is below the fold. */}
-      <div className="grid items-start gap-5 xl:grid-cols-3">
-        <div className="min-w-0 xl:col-span-2">
-          <Outlook outlook={outlook}>{(loaded) => <ScheduleAhead outlook={loaded} />}</Outlook>
-        </div>
-        <NeedsAPerson attention={attention} data={data} heading jobberDate={jobberDay.data?.date} systems />
-      </div>
+      <LookAhead data={data} jobberDay={jobberDay.data} outlook={outlook} />
 
+      <PlansAndPeople
+        canReadInspections={canReadInspections}
+        data={data}
+        jobberDay={jobberDay.data}
+        jobberDayLoading={jobberDay.isLoading}
+        outlook={outlook}
+      />
+    </div>
+  );
+}
+
+/**
+ * The schedule leads: it is the one thing here that looks forward. What needs
+ * somebody sits beside it, so neither is below the fold.
+ */
+function LookAhead({
+  data,
+  jobberDay,
+  outlook,
+}: {
+  data: AdminDashboard;
+  jobberDay: JobberDayComparison | undefined;
+  outlook: ReturnType<typeof useDashboardOutlook>;
+}) {
+  return (
+    <div className="grid items-start gap-5 xl:grid-cols-3">
+      <div className="min-w-0 xl:col-span-2">
+        <Outlook outlook={outlook}>{(loaded) => <ScheduleAhead outlook={loaded} />}</Outlook>
+      </div>
+      <NeedsAPerson
+        attention={attentionOf(data, jobberDay)}
+        data={data}
+        heading
+        jobberDate={jobberDay?.date}
+        systems
+      />
+    </div>
+  );
+}
+
+/** Each quarter's plan, today against Jobber beside who holds the week, and the portfolio. */
+function PlansAndPeople({
+  canReadInspections,
+  data,
+  jobberDay,
+  jobberDayLoading,
+  outlook,
+}: {
+  canReadInspections: boolean;
+  data: AdminDashboard;
+  jobberDay: JobberDayComparison | undefined;
+  jobberDayLoading: boolean;
+  outlook: ReturnType<typeof useDashboardOutlook>;
+}) {
+  return (
+    <>
       <Outlook outlook={outlook} quiet>
         {(loaded) => <QuarterPlans outlook={loaded} />}
       </Outlook>
 
       <div className="grid items-start gap-5 xl:grid-cols-3">
         {canReadInspections ? (
-          <JobberDayPanel className="min-w-0 xl:col-span-2" day={jobberDay.data} heading loading={jobberDay.isLoading} />
+          <JobberDayPanel className="min-w-0 xl:col-span-2" day={jobberDay} heading loading={jobberDayLoading} />
         ) : null}
         <div className={cn('min-w-0', !canReadInspections && 'xl:col-span-3')}>
           <Outlook outlook={outlook} quiet>
@@ -136,7 +197,7 @@ export default function DashboardPage() {
       </div>
 
       <Portfolio data={data} />
-    </div>
+    </>
   );
 }
 
@@ -441,89 +502,5 @@ function Portfolio({ data, className }: { data: AdminDashboard; className?: stri
       <StatStripItem label="Leases" value={formatCount(data.metrics.leases)} />
       <StatStripItem label="Technicians" value={formatCount(data.metrics.technicians)} />
     </StatStrip>
-  );
-}
-
-/**
- * Today against Jobber, what needs a person, the systems, and the portfolio:
- * everything under the dashboard's figures, in both layouts.
- */
-function DashboardPanels({
-  canReadInspections,
-  data,
-  jobberDay,
-  jobberDayLoading,
-}: {
-  canReadInspections: boolean;
-  data: AdminDashboard;
-  jobberDay: JobberDayComparison | undefined;
-  jobberDayLoading: boolean;
-}) {
-  const attention = attentionOf(data, jobberDay);
-
-  return (
-    <>
-      <div className="mt-5 grid items-start gap-5 lg:grid-cols-3">
-        {canReadInspections ? (
-          <JobberDayPanel className="lg:col-span-2" day={jobberDay} loading={jobberDayLoading} />
-        ) : null}
-
-        <div className={cn('grid gap-5', !canReadInspections && 'lg:col-span-3 lg:grid-cols-3')}>
-        <NeedsAPerson
-          attention={attention}
-          className={cn(!canReadInspections && 'lg:col-span-2')}
-          data={data}
-          jobberDate={jobberDay?.date}
-        />
-
-        {/* Reference, not work: quiet, one line each. */}
-        <Panel
-          actions={
-            <Button asChild className="h-7 px-2 text-xs" size="sm" variant="ghost">
-              <Link href="/integrations/providers">
-                All
-                <ArrowRightIcon />
-              </Link>
-            </Button>
-          }
-          title="Systems"
-        >
-          <ul className="divide-y">
-            <li className="flex items-center justify-between gap-3 px-4 py-2.5">
-              <div className="min-w-0">
-                <Link className="block truncate text-sm hover:underline" href="/integrations/propertyware">
-                  Propertyware
-                </Link>
-                <p
-                  className="text-muted-foreground truncate text-xs"
-                  title={data.lastSync?.completedAt ?? undefined}
-                >
-                  {data.lastSync
-                    ? `${humanize(data.lastSync.syncType)} · ${formatRelative(data.lastSync.completedAt)}`
-                    : 'No sync recorded'}
-                </p>
-              </div>
-              {data.lastSync ? <StatusBadge value={data.lastSync.status} /> : null}
-            </li>
-            {data.providerReadiness
-              .filter((provider) => provider.provider !== 'Propertyware')
-              .map((provider) => (
-                <li
-                  className="flex items-center justify-between gap-3 px-4 py-2.5"
-                  key={provider.provider}
-                >
-                  <span className="min-w-0 truncate text-sm" title={provider.detail}>
-                    {provider.provider}
-                  </span>
-                  <StatusBadge value={provider.status} />
-                </li>
-              ))}
-          </ul>
-        </Panel>
-        </div>
-      </div>
-
-      <Portfolio className="mt-5" data={data} />
-    </>
   );
 }
