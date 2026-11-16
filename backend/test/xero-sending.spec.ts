@@ -1385,6 +1385,56 @@ describe('the console’s own invoices, made once in Xero as drafts (2026-11-12)
   });
 });
 
+describe('the rows after pest control, as Xero is sent them (2026-11-16)', () => {
+  const items = [
+    { itemId: 'i-1', code: 'Pest Control1', name: 'Pest Control: House under 2,000 sq. ft', isSold: true },
+    { itemId: 'i-2', code: 'Flex 10 - 10 Insecticide', name: 'Flex 10 - 10 Insecticide - 1%', isSold: true },
+  ];
+  const pest = {
+    settings: { ...SETTINGS, salesTaxType: 'TAX001', pricesIncludeTax: true, itemCodes: { 'pest control: house under 2,000 sq. ft': 'Pest Control1' } },
+    accounts: ACCOUNTS,
+    contactId: 'contact-1',
+    items,
+  };
+  const lines = [
+    {
+      position: 0,
+      name: 'Pest Control: House under 2,000 sq. ft',
+      description: 'Pest Control: House under 2,000 sq. ft - One time treatment, roaches, ants, spiders',
+      quantity: 1,
+      unitPriceCents: 3900,
+      totalCents: 3900,
+    },
+    { position: 1, name: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', description: null, quantity: 1, unitPriceCents: 0, totalCents: 0, xeroItemCode: 'Flex 10 - 10 Insecticide' },
+    { position: 2, name: 'Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)', description: null, quantity: 1, unitPriceCents: 0, totalCents: 0 },
+    {
+      position: 3,
+      name: 'Licensed and regulated by:',
+      description: 'Texas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+      quantity: 1,
+      unitPriceCents: 0,
+      totalCents: 0,
+    },
+  ];
+
+  it('sends the service as one line, the insecticide under its item at no price or tax, and the words alone', () => {
+    const plan = xeroInvoiceFrom(invoice({ totalCents: 3900, lines: lines as never }), pest as never);
+    expect(plan).toMatchObject({ kind: 'send' });
+    const sent = (plan as unknown as { body: { LineItems: Record<string, unknown>[] } }).body.LineItems;
+    expect(sent[0]).toMatchObject({ ItemCode: 'Pest Control1', Description: 'Pest Control: House under 2,000 sq. ft - One time treatment, roaches, ants, spiders', Quantity: 1, UnitAmount: 39, TaxType: 'TAX001' });
+    expect(sent[1]).toMatchObject({ ItemCode: 'Flex 10 - 10 Insecticide', Description: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', Quantity: 1, UnitAmount: 0, LineAmount: 0, TaxType: 'NONE' });
+    expect(sent[2]).toEqual({ Description: 'Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)' });
+    expect(sent[3]).toEqual({
+      Description: 'Licensed and regulated by:\nTexas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+    });
+  });
+
+  it('still sends a description that does not open with the name under it', () => {
+    const plan = xeroInvoiceFrom(invoice(), { settings: SETTINGS, accounts: ACCOUNTS, contactId: 'contact-1' });
+    expect((plan as unknown as { body: { LineItems: { Description: string }[] } }).body.LineItems[0]!.Description).toBe('Move-out inspection\nFull walk-through');
+  });
+});
+
 describe('prices that include the tax (2026-11-12)', () => {
   const pestLine = { position: 0, name: 'Pest Control', description: null, quantity: 1, unitPriceCents: 3900, totalCents: 3900 };
   const inclusive = { settings: { ...SETTINGS, salesTaxType: 'TAX001', pricesIncludeTax: true }, accounts: ACCOUNTS, contactId: 'contact-1' };

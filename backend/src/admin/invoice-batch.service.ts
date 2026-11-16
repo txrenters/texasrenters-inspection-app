@@ -20,7 +20,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { billingBasis, buildingAreaSqFt, type BillingBasis } from './invoice-billing-rules';
+import { billingBasis, buildingAreaSqFt, serviceTechnician, type BillingBasis } from './invoice-billing-rules';
 import { makeInvoices, visitParts } from './invoice-maker';
 import { invoiceWritesOff, productCompanies } from './invoice-settings';
 import { InvoicesService, servicesDone } from './invoices.service';
@@ -61,18 +61,30 @@ export const visitSelect = {
   servicesReport: true,
   // Its floor area too (2026-11-13): a rule may bill another product from a size of property on.
   propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true, totalArea: true, manualTotalArea: true } },
+  // Who did the work (2026-11-16): named, with their license, on the rows after pest control and flea treatment.
+  assignments: {
+    where: { isCurrent: true },
+    orderBy: { assignedAt: 'asc' },
+    take: 1,
+    select: { technician: { select: { displayName: true, pestLicenseNumber: true } } },
+  },
 } satisfies Prisma.InspectionSelect;
 
 type VisitRow = Prisma.InspectionGetPayload<{ select: typeof visitSelect }>;
 
 /** A visit's invoice as the batch would make it, by the office's rules, and why it cannot be made, in words. */
 export function batchLines(
-  row: Pick<VisitRow, 'servicesReport'> & { inspectionType: string; propertywareBuilding?: { totalArea?: number | null; manualTotalArea?: number | null } | null },
+  row: Pick<VisitRow, 'servicesReport'> & {
+    inspectionType: string;
+    propertywareBuilding?: { totalArea?: number | null; manualTotalArea?: number | null } | null;
+    assignments?: { technician: { displayName: string; pestLicenseNumber: string | null } }[];
+  },
   basis: BillingBasis,
 ) {
   const services = servicesDone(row.servicesReport as unknown as VisitServicesReport | null);
   const areaSqFt = buildingAreaSqFt(row.propertywareBuilding);
-  const { lineItems, problem } = billedLines({ inspectionType: row.inspectionType, services, areaSqFt }, basis.rules, basis.products);
+  const technician = serviceTechnician(row.assignments);
+  const { lineItems, problem } = billedLines({ inspectionType: row.inspectionType, services, areaSqFt, technician }, basis.rules, basis.products);
   return { lineItems, totalCents: invoiceTotals(lineItems).totalCents, problem };
 }
 

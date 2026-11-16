@@ -354,6 +354,7 @@ export default function TechnicianDetailPage() {
           emailLockedReason={emailLockedReason}
           error={updateProfile.error}
           isPending={updateProfile.isPending}
+          askPestLicense
           matchedInJobber
           onOpenChange={(open) => setDialog(open ? 'profile' : null)}
           onSave={async (input) => {

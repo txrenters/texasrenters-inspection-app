@@ -106,6 +106,8 @@ const lineFrom = (line: InvoiceLineInput, key: string): XeroLine => ({
   quantity: String(line.quantity),
   price: (line.unitPriceCents / 100).toFixed(2),
   discount: '',
+  // A row that names its own item (2026-11-16) -- the insecticide used after pest control -- keeps it.
+  ...(line.xeroItemCode ? { itemCode: line.xeroItemCode } : {}),
 });
 const emptyLine = (key: string): XeroLine => ({ key, name: '', description: '', quantity: '1', price: '', discount: '' });
 

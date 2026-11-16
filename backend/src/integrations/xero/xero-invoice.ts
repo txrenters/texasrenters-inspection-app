@@ -78,12 +78,13 @@ export interface InvoiceForXero {
 export interface XeroLineItem {
   ItemCode?: string;
   Description: string;
-  Quantity: number;
-  UnitAmount: number;
+  /** Left out, with the price, amount and account, on a row of words alone (2026-11-16): "Serviced by: ...". */
+  Quantity?: number;
+  UnitAmount?: number;
   /** A percent off (2026-11-13). */
   DiscountRate?: number;
-  LineAmount: number;
-  AccountCode: string;
+  LineAmount?: number;
+  AccountCode?: string;
   /** Left out on an invoice with no tax (2026-11-13). */
   TaxType?: string;
   Tracking?: { TrackingCategoryID: string; Name: string; Option: string }[];
@@ -263,6 +264,24 @@ export function xeroInvoiceFrom(
 
   const items: XeroLineItem[] = [];
   for (const line of sortedLines(invoice)) {
+    // One line, as Xero shows the office's own (2026-11-16): a description that already opens with the line's name is
+    // its text by itself -- "Pest Control: House under 2,000 sq. ft - One time treatment, roaches, ants, spiders".
+    const extra = line.description?.trim() ?? '';
+    const description = (!extra ? line.name : extra.toLowerCase().startsWith(line.name.trim().toLowerCase()) ? extra : `${line.name}\n${extra}`).slice(
+      0,
+      4000,
+    );
+    // A line made on the Xero-style form always names its account and tax rate: its item is what the form showed, none
+    // included -- never its product's in its place. A line that names its own item (2026-11-16) -- the insecticide row
+    // after pest control -- goes with it.
+    const madeOnForm = Boolean(line.xeroAccountId || line.xeroTaxType);
+    const itemCode = madeOnForm ? (line.xeroItemCode ?? undefined) : (line.xeroItemCode ?? settings.itemCodes?.[productNameKey(line.name)]);
+    // A row of words alone (2026-11-16): no price and no item -- "Serviced by: ..." and "Licensed and regulated by:"
+    // after pest control -- goes as Xero shows the office's, with no quantity, price, account or tax.
+    if (line.unitPriceCents === 0 && !itemCode && !line.discountRate) {
+      items.push({ Description: description });
+      continue;
+    }
     // What the Xero-style form chose for the line (2026-11-13), else its product's choice, else the company's.
     const chosen = line.xeroAccountId ?? settings.salesAccounts[productNameKey(line.name)];
     const code = chosen ? codes.get(chosen) : defaultCode;
@@ -273,14 +292,10 @@ export function xeroInvoiceFrom(
           ? `The account chosen on the invoice for “${line.name}” is not an active account in Xero. Choose again on a new invoice, or enter it in Xero by hand.`
           : `The account chosen for “${line.name}” is not an active account in Xero. Choose again on the Xero page.`,
       };
-    const description = (line.description?.trim() ? `${line.name}\n${line.description.trim()}` : line.name).slice(0, 4000);
-    // A line made on the Xero-style form always names its account and tax rate: its item is what the form showed, none
-    // included -- never its product's in its place.
-    const madeOnForm = Boolean(line.xeroAccountId || line.xeroTaxType);
-    const itemCode = madeOnForm ? (line.xeroItemCode ?? undefined) : settings.itemCodes?.[productNameKey(line.name)];
     if (itemCode && !sold.has(itemCode))
       return { kind: 'problem', problem: `The item “${itemCode}” chosen for “${line.name}” is not one Xero sells. Choose again on the Xero page.` };
-    const taxType = line.xeroTaxType ?? settings.salesTaxType;
+    // A row at no price -- the insecticide used -- carries no tax (2026-11-16), as on the office's own invoices.
+    const taxType = line.xeroTaxType ?? (line.unitPriceCents === 0 ? 'NONE' : settings.salesTaxType);
     if (line.xeroTaxType && context.taxRates && !context.taxRates.some((each) => each.taxType === line.xeroTaxType && each.status === 'ACTIVE'))
       return { kind: 'problem', problem: `The tax rate chosen for “${line.name}” is not an active one in Xero.` };
     if (mode === 'EXCLUSIVE' && line.xeroTaxType && rateOf(line.xeroTaxType) > 0)

@@ -1,4 +1,5 @@
 import { Prisma, UserRole } from '@prisma/client';
+import { serviceRows } from '@texasrenters/shared';
 
 import { InvoiceAutoDraftsScheduler } from '../src/admin/invoice-auto-drafts.scheduler';
 import { InvoiceAutoDraftsService, MAX_AUTO_DRAFTS_PER_RUN } from '../src/admin/invoice-auto-drafts.service';
@@ -128,8 +129,8 @@ describe('drafting a finished visit’s invoices by itself', () => {
     expect(made).toHaveLength(2);
     expect(made.map((data) => [data.xeroTenantId, data.lines.create.map((line: { name: string }) => line.name)])).toEqual([
       [HOMES, ['Filter Change']],
-      // A house of 2,887 sq ft: pest control's larger item.
-      [PEST, ['Pest Control: House over 2,000 sq ft']],
+      // A house of 2,887 sq ft: pest control's larger item, and the rows Crystal Creek Pest's invoices carry after it.
+      [PEST, ['Pest Control: House over 2,000 sq ft', ...serviceRows('pestControl', null).map((row) => row.name)]],
     ]);
     for (const data of made)
       expect(data).toMatchObject({

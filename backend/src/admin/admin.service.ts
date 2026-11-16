@@ -4078,6 +4078,8 @@ export class AdminService {
         email: true,
         displayName: true,
         phone: true,
+        // Printed on Crystal Creek Pest's invoices (2026-11-16).
+        pestLicenseNumber: true,
         isActive: true,
         createdAt: true,
         // Whether the same account also signs in to the console: the page

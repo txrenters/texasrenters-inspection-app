@@ -25,6 +25,47 @@ import { REPORTABLE_VISIT_SERVICES, VISIT_SERVICE_LABEL, type ReportableVisitSer
 /** The most rules one office keeps. */
 export const MAX_BILLING_RULES = 100;
 
+/** Who did the work, as a row names them: the technician on the visit, and their pest control license number if known. */
+export interface ServiceTechnician {
+  name: string;
+  pestLicenseNumber: string | null;
+}
+
+/** The certified applicator every Crystal Creek Pest invoice names first. */
+const CERTIFIED_APPLICATOR = 'Clinton Bass (0557779)';
+const FLEX_10 = 'Flex 10 - 10 Insecticide';
+const VALLAR_PLUS = 'Valar Plus 25#';
+const LICENSED: InvoiceLineInput = {
+  name: 'Licensed and regulated by:',
+  description: 'Texas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+  quantity: 1,
+  unitPriceCents: 0,
+};
+const row = (name: string, xeroItemCode?: string): InvoiceLineInput => ({ name, description: null, quantity: 1, unitPriceCents: 0, ...(xeroItemCode ? { xeroItemCode } : {}) });
+
+/**
+ * The rows a pest control or flea treatment line is followed by (2026-11-16),
+ * word for word as Crystal Creek Pest's own invoices carry them: the products
+ * used, at no price, under their items in Xero; who did the work, with their
+ * Texas Department of Agriculture license numbers; and who licenses them. The
+ * words alone go to Xero with no quantity or price.
+ */
+export function serviceRows(service: ReportableVisitService, technician: ServiceTechnician | null | undefined): InvoiceLineInput[] {
+  if (service !== 'pestControl' && service !== 'fleaTreatment') return [];
+  const name = technician?.name.trim();
+  const servicedBy = row(
+    `Serviced by: ${CERTIFIED_APPLICATOR}${name ? ` and ${name}${technician?.pestLicenseNumber ? ` (${technician.pestLicenseNumber})` : ''}` : ''}`,
+  );
+  return service === 'pestControl'
+    ? [row('Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', FLEX_10), servicedBy, LICENSED]
+    : [
+        row('Flex 10 - 10 Insecticide - 1%; Quantity Used:1 Galloon EPA#88746-1', FLEX_10),
+        row('SOLU97: Vallar Plus 25#; Quantity Used:2.5 Pounds EPA#88746-5', VALLAR_PLUS),
+        servicedBy,
+        LICENSED,
+      ];
+}
+
 export interface InvoiceBillingRuleView {
   id: string;
   /** The visit's type; null for any visit. */
@@ -126,8 +167,11 @@ const order = (rule: Pick<NewBillingRule, 'service'>) => (rule.service === null 
  * to ask the price, but never invoiced in a batch.
  */
 export function billedLines(
-  /** `areaSqFt`: the property's floor area, for a rule that bills another product from a size on; unknown is the smaller. */
-  visit: { inspectionType: string; services: readonly ReportableVisitService[]; areaSqFt?: number | null },
+  /**
+   * `areaSqFt`: the property's floor area, for a rule that bills another product from a size on; unknown is the
+   * smaller. `technician`: who did the work, named on the rows after pest control and flea treatment (2026-11-16).
+   */
+  visit: { inspectionType: string; services: readonly ReportableVisitService[]; areaSqFt?: number | null; technician?: ServiceTechnician | null },
   rules: readonly (Pick<NewBillingRule, 'inspectionType' | 'service' | 'productId'> & Partial<Pick<NewBillingRule, 'largeFromSqFt' | 'largeProductId'>>)[],
   products: readonly BillingProduct[],
 ): { lineItems: InvoiceLineInput[]; problem: string | null } {
@@ -148,6 +192,8 @@ export function billedLines(
     }
     if (product.unitPriceCents <= 0) problem ??= `No price yet for ${product.name}. Set one under Invoices → Settings.`;
     lineItems.push({ name: product.name, description: product.description?.trim() || null, quantity: 1, unitPriceCents: product.unitPriceCents });
+    // Pest control and flea treatment are followed by the rows Crystal Creek Pest's invoices carry (2026-11-16).
+    if (rule.service) lineItems.push(...serviceRows(rule.service, visit.technician));
   }
   return { lineItems, problem: problem ?? invoiceLinesProblem(lineItems) };
 }

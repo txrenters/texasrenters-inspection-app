@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { billedLines, billingRuleProblem, billingRuleSize, billingRuleWhen, type BillingProduct, type NewBillingRule } from '../src/contracts/invoice-billing-rules.js';
+import { billedLines, billingRuleProblem, billingRuleSize, billingRuleWhen, serviceRows, type BillingProduct, type NewBillingRule } from '../src/contracts/invoice-billing-rules.js';
 
 /**
  * What a finished visit bills (2026-11-12): the office's rules, as THMP's six
@@ -35,7 +35,8 @@ describe("a finished visit's lines", () => {
   it('add what a service done bills, after the type, each product once', () => {
     const rules = [{ inspectionType: null, service: 'pestControl' as const, productId: 'pest' }, ...RULES];
     expect(billedLines({ inspectionType: 'HVAC', services: ['filterChange', 'pestControl'] }, rules, PRODUCTS)).toEqual({
-      lineItems: [line('HVAC Inspection & Filter Change', 6450), line('Pest Control', 3900)],
+      // Pest control, followed by the rows Crystal Creek Pest's invoices carry (2026-11-16).
+      lineItems: [line('HVAC Inspection & Filter Change', 6450), line('Pest Control', 3900), ...serviceRows('pestControl', null)],
       problem: null,
     });
   });
@@ -56,7 +57,7 @@ describe("a finished visit's lines", () => {
 
   it('keep a line with no price yet for the editor to ask, and say so', () => {
     expect(billedLines({ inspectionType: 'OCCUPIED', services: ['fleaTreatment'] }, RULES, PRODUCTS)).toEqual({
-      lineItems: [line('Filter Change', 3999), line('Flea Treatment', 0)],
+      lineItems: [line('Filter Change', 3999), line('Flea Treatment', 0), ...serviceRows('fleaTreatment', null)],
       problem: 'No price yet for Flea Treatment. Set one under Invoices → Settings.',
     });
   });
@@ -97,10 +98,14 @@ describe('a rule that bills another product from a size of property on', () => {
   const visit = (areaSqFt: number | null) => ({ inspectionType: 'OCCUPIED', services: ['pestControl' as const], areaSqFt });
 
   it('bills the larger one from its size on, the rule’s own below it or when the size is not known', () => {
-    expect(billedLines(visit(2887), [rule], pest).lineItems).toEqual([{ name: 'Pest Control: House over 2,000 sq ft', description: null, quantity: 1, unitPriceCents: 3900 }]);
+    expect(billedLines(visit(2887), [rule], pest).lineItems).toEqual([
+      { name: 'Pest Control: House over 2,000 sq ft', description: null, quantity: 1, unitPriceCents: 3900 },
+      ...serviceRows('pestControl', null),
+    ]);
     expect(billedLines(visit(2000), [rule], pest).lineItems[0]!.name).toBe('Pest Control: House over 2,000 sq ft');
     expect(billedLines(visit(1999), [rule], pest).lineItems).toEqual([
       { name: 'Pest Control: House under 2,000 sq. ft', description: 'One time treatment, roaches, ants, spiders', quantity: 1, unitPriceCents: 3900 },
+      ...serviceRows('pestControl', null),
     ]);
     expect(billedLines(visit(null), [rule], pest).lineItems[0]!.name).toBe('Pest Control: House under 2,000 sq. ft');
     expect(billedLines({ inspectionType: 'OCCUPIED', services: ['pestControl'] }, [rule], pest).lineItems[0]!.name).toBe('Pest Control: House under 2,000 sq. ft');
@@ -118,5 +123,67 @@ describe('a rule that bills another product from a size of property on', () => {
   it('says its size in words', () => {
     expect(billingRuleSize(rule, pest)).toBe('from 2,000 sq ft: Pest Control: House over 2,000 sq ft');
     expect(billingRuleSize({ largeFromSqFt: null, largeProductId: null }, pest)).toBeNull();
+  });
+});
+
+/**
+ * The rows Crystal Creek Pest's invoices carry after the service (2026-11-16),
+ * word for word as the office's own: "no more no less".
+ */
+describe('the rows after pest control and flea treatment', () => {
+  const LICENSED = {
+    name: 'Licensed and regulated by:',
+    description: 'Texas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+    quantity: 1,
+    unitPriceCents: 0,
+  };
+  const kevin = { name: 'Kevin Granados', pestLicenseNumber: '1006056' };
+
+  it('follow pest control: the insecticide under its item, who did it with their license, and who licenses them', () => {
+    expect(serviceRows('pestControl', kevin)).toEqual([
+      { name: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', description: null, quantity: 1, unitPriceCents: 0, xeroItemCode: 'Flex 10 - 10 Insecticide' },
+      { name: 'Serviced by: Clinton Bass (0557779) and Kevin Granados (1006056)', description: null, quantity: 1, unitPriceCents: 0 },
+      LICENSED,
+    ]);
+  });
+
+  it('follow flea treatment, with the second product used', () => {
+    expect(serviceRows('fleaTreatment', kevin).map((row) => row.name)).toEqual([
+      'Flex 10 - 10 Insecticide - 1%; Quantity Used:1 Galloon EPA#88746-1',
+      'SOLU97: Vallar Plus 25#; Quantity Used:2.5 Pounds EPA#88746-5',
+      'Serviced by: Clinton Bass (0557779) and Kevin Granados (1006056)',
+      'Licensed and regulated by:',
+    ]);
+    expect(serviceRows('fleaTreatment', kevin)[1]).toMatchObject({ xeroItemCode: 'Valar Plus 25#', unitPriceCents: 0 });
+  });
+
+  it('name the technician without a number when none is on file, and only the applicator with nobody on the visit', () => {
+    expect(serviceRows('pestControl', { name: 'Amy Example', pestLicenseNumber: null })[1]!.name).toBe('Serviced by: Clinton Bass (0557779) and Amy Example');
+    expect(serviceRows('pestControl', null)[1]!.name).toBe('Serviced by: Clinton Bass (0557779)');
+  });
+
+  it('follow nothing else: a filter change has none', () => {
+    expect(serviceRows('filterChange', kevin)).toEqual([]);
+  });
+
+  it('come right after the line a pest or flea rule bills, and add nothing to the total', () => {
+    const products: BillingProduct[] = [
+      { id: 'filter', name: 'Filter Change', unitPriceCents: 3999, active: true },
+      { id: 'pest', name: 'Pest Control: House under 2,000 sq. ft', unitPriceCents: 3900, active: true },
+    ];
+    const rules = [
+      { inspectionType: 'OCCUPIED' as const, service: null, productId: 'filter' },
+      { inspectionType: null, service: 'pestControl' as const, productId: 'pest' },
+    ];
+    const { lineItems, problem } = billedLines({ inspectionType: 'OCCUPIED', services: ['pestControl'], technician: kevin }, rules, products);
+    expect(problem).toBeNull();
+    expect(lineItems.map((line) => line.name)).toEqual([
+      'Filter Change',
+      'Pest Control: House under 2,000 sq. ft',
+      'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1',
+      'Serviced by: Clinton Bass (0557779) and Kevin Granados (1006056)',
+      'Licensed and regulated by:',
+    ]);
+    expect(lineItems.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0)).toBe(7899);
   });
 });

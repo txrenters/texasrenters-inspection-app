@@ -1,4 +1,5 @@
 import { UserRole } from '@prisma/client';
+import { serviceRows } from '@texasrenters/shared';
 
 import { InvoiceBatchService } from '../src/admin/invoice-batch.service';
 import { InvoiceEditsService } from '../src/admin/invoice-edits.service';
@@ -149,7 +150,8 @@ describe("a finished visit's draft", () => {
     const draft = await new InvoicesService(database() as never).draft(office, { inspectionId: VISIT });
     expect(draft.invoices).toEqual([
       { xeroTenantId: HOMES, lineItems: [{ name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 }] },
-      { xeroTenantId: PEST, lineItems: [{ name: 'Pest Control', description: null, quantity: 1, unitPriceCents: 2500 }] },
+      // Pest control, with the rows Crystal Creek Pest's invoices carry after it (2026-11-16).
+      { xeroTenantId: PEST, lineItems: [{ name: 'Pest Control', description: null, quantity: 1, unitPriceCents: 2500 }, ...serviceRows('pestControl', null)] },
     ]);
     // What each can go to, connected ones first, and each product's company for a line added by hand.
     expect(draft.organisations).toEqual([
@@ -166,7 +168,7 @@ describe("a finished visit's draft", () => {
     const draft = await new InvoicesService(db as never).draft(office, { inspectionId: VISIT });
     expect(draft.invoices.map((part) => [part.xeroTenantId, part.lineItems.map((line) => line.name)])).toEqual([
       [HOMES, ['Filter Change']],
-      [null, ['Pest Control']],
+      [null, ['Pest Control', ...serviceRows('pestControl', null).map((row) => row.name)]],
     ]);
   });
 });
@@ -318,7 +320,13 @@ describe('a batch', () => {
     const list = await batchOver(db).uninvoiced(office, { from: '2026-11-01', to: '2026-11-07' });
     expect(list.items[0]!.invoices).toEqual([
       { xeroTenantId: HOMES, company: 'Example Home Services', lineItems: [expect.objectContaining({ name: 'Filter Change' })], totalCents: 3999, toXero: false },
-      { xeroTenantId: PEST, company: 'Example Pest Co', lineItems: [expect.objectContaining({ name: 'Pest Control' })], totalCents: 2500, toXero: false },
+      {
+        xeroTenantId: PEST,
+        company: 'Example Pest Co',
+        lineItems: [expect.objectContaining({ name: 'Pest Control' }), ...serviceRows('pestControl', null)],
+        totalCents: 2500,
+        toXero: false,
+      },
     ]);
     expect(list.items[0]!.totalCents).toBe(6499);
   });

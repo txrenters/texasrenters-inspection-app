@@ -53,7 +53,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { XeroSenderService } from '../integrations/xero/xero-sender.service';
 import { xeroInvoiceFormCompanies } from '../integrations/xero/xero-settings.service';
-import { billingBasis, buildingAreaSqFt } from './invoice-billing-rules';
+import { billingBasis, buildingAreaSqFt, serviceTechnician } from './invoice-billing-rules';
 import { defaultRecipients } from './invoice-email-settings';
 import { makeInvoices, visitInvoiced } from './invoice-maker';
 import { invoiceWritesOff, invoiceWritesOn, newInvoiceDefaults, officeBrand, officeOrganisations, officePrices, productCompanies } from './invoice-settings';
@@ -665,7 +665,13 @@ export class InvoicesService {
     ]);
     const lines = inspection
       ? billedLines(
-          { inspectionType: inspection.inspectionType, services: servicesDone(inspection.servicesReport), areaSqFt: buildingAreaSqFt(inspection.building) },
+          {
+            inspectionType: inspection.inspectionType,
+            services: servicesDone(inspection.servicesReport),
+            areaSqFt: buildingAreaSqFt(inspection.building),
+            // Who did the work (2026-11-16), named on the rows after pest control and flea treatment.
+            technician: serviceTechnician(inspection.assignments),
+          },
           basis.rules,
           basis.products,
         ).lineItems
@@ -1241,7 +1247,7 @@ export class InvoicesService {
         // Its floor area too (2026-11-13): a rule may bill another product from a size of property on.
         propertywareBuilding: { select: { id: true, name: true, addressLine1: true, city: true, totalArea: true, manualTotalArea: true } },
         // Its technician (2026-11-13): the Xero-style form tags each line for them.
-        assignments: { where: { isCurrent: true }, orderBy: { assignedAt: 'asc' }, take: 1, select: { technician: { select: { displayName: true } } } },
+        assignments: { where: { isCurrent: true }, orderBy: { assignedAt: 'asc' }, take: 1, select: { technician: { select: { displayName: true, pestLicenseNumber: true } } } },
       },
     });
     if (!row) throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'That visit was not found.');

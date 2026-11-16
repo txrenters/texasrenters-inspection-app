@@ -4,6 +4,7 @@ import {
   type InspectionType,
   type InvoiceBillingRuleView,
   type ReportableVisitService,
+  type ServiceTechnician,
   type SuggestedBillingRule,
 } from '@texasrenters/shared';
 import type { Prisma } from '@prisma/client';
@@ -36,6 +37,14 @@ export async function billingRules(db: Db, organizationId: string): Promise<Invo
     select: { id: true, inspectionType: true, service: true, productId: true, largeFromSqFt: true, largeProductId: true },
   });
   return rows.map((row) => ({ ...row, service: row.service as ReportableVisitService | null }));
+}
+
+/** Who did a visit's work (2026-11-16): its current technician, named with their license on the rows after pest control. */
+export function serviceTechnician(
+  assignments: readonly { technician: { displayName: string; pestLicenseNumber?: string | null } }[] | null | undefined,
+): ServiceTechnician | null {
+  const technician = assignments?.[0]?.technician;
+  return technician ? { name: technician.displayName, pestLicenseNumber: technician.pestLicenseNumber?.trim() || null } : null;
 }
 
 /**

@@ -84,6 +84,18 @@ export class AccountProfileService {
       }
     }
 
+    // A technician's pest control license number (2026-11-16), as printed on Crystal Creek Pest's invoices.
+    if (input.pestLicenseNumber !== undefined) {
+      const license = input.pestLicenseNumber?.trim() || null;
+      if (license && license.length > 20)
+        throw new ApplicationError(400, 'INVALID_PEST_LICENSE', 'Enter the license number as it is on the license: 20 characters at most.');
+      if (license !== profile.pestLicenseNumber) {
+        data.pestLicenseNumber = license;
+        changed.push('pestLicenseNumber');
+        trail.pestLicenseNumber = { from: profile.pestLicenseNumber ?? '', to: license ?? '' };
+      }
+    }
+
     let email: string | undefined;
     if (input.email !== undefined) {
       const normalized = input.email.trim().toLowerCase();
@@ -225,6 +237,7 @@ export class AccountProfileService {
         email: true,
         displayName: true,
         phone: true,
+        pestLicenseNumber: true,
         memberships: { where: { organizationId }, select: { role: true } },
         _count: { select: { roleAssignments: { where: { organizationId } } } },
       },
@@ -241,6 +254,7 @@ export class AccountProfileService {
       email: record.email,
       displayName: record.displayName,
       phone: record.phone,
+      pestLicenseNumber: record.pestLicenseNumber,
       isTechnician: roles.includes(UserRole.INSPECTION_TECHNICIAN),
       isSystemAdmin: roles.includes(UserRole.SYSTEM_ADMIN),
       hasConsoleAccess:
