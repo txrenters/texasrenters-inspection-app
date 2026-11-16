@@ -132,23 +132,25 @@ describe('a rule that bills another product from a size of property on', () => {
  */
 describe('the rows after pest control and flea treatment', () => {
   const LICENSED = {
-    name: 'Licensed and regulated by:',
-    description: 'Texas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+    name: '',
+    description: 'Licensed and regulated by:\nTexas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
     quantity: 1,
     unitPriceCents: 0,
   };
   const kevin = { name: 'Kevin Granados', pestLicenseNumber: '1006056' };
+  /** A row's words: its description, with no item (2026-11-16). */
+  const words = (line: { name: string; description?: string | null }) => line.name || line.description?.split('\n')[0];
 
-  it('follow pest control: the insecticide under its item, who did it with their license, and who licenses them', () => {
+  it('follow pest control: the insecticide used, who did it with their license, and who licenses them -- in the description, with no item', () => {
     expect(serviceRows('pestControl', kevin)).toEqual([
-      { name: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', description: null, quantity: 1, unitPriceCents: 0, xeroItemCode: 'Flex 10 - 10 Insecticide' },
-      { name: 'Serviced by: Clinton Bass (0557779) and Kevin Granados (1006056)', description: null, quantity: 1, unitPriceCents: 0 },
+      { name: '', description: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', quantity: 1, unitPriceCents: 0, xeroItemCode: 'Flex 10 - 10 Insecticide' },
+      { name: '', description: 'Serviced by: Clinton Bass (0557779) and Kevin Granados (1006056)', quantity: 1, unitPriceCents: 0 },
       LICENSED,
     ]);
   });
 
   it('follow flea treatment, with the second product used', () => {
-    expect(serviceRows('fleaTreatment', kevin).map((row) => row.name)).toEqual([
+    expect(serviceRows('fleaTreatment', kevin).map(words)).toEqual([
       'Flex 10 - 10 Insecticide - 1%; Quantity Used:1 Galloon EPA#88746-1',
       'SOLU97: Vallar Plus 25#; Quantity Used:2.5 Pounds EPA#88746-5',
       'Serviced by: Clinton Bass (0557779) and Kevin Granados (1006056)',
@@ -158,8 +160,8 @@ describe('the rows after pest control and flea treatment', () => {
   });
 
   it('name the technician without a number when none is on file, and only the applicator with nobody on the visit', () => {
-    expect(serviceRows('pestControl', { name: 'Amy Example', pestLicenseNumber: null })[1]!.name).toBe('Serviced by: Clinton Bass (0557779) and Amy Example');
-    expect(serviceRows('pestControl', null)[1]!.name).toBe('Serviced by: Clinton Bass (0557779)');
+    expect(serviceRows('pestControl', { name: 'Amy Example', pestLicenseNumber: null })[1]!.description).toBe('Serviced by: Clinton Bass (0557779) and Amy Example');
+    expect(serviceRows('pestControl', null)[1]!.description).toBe('Serviced by: Clinton Bass (0557779)');
   });
 
   it('follow nothing else: a filter change has none', () => {
@@ -177,7 +179,7 @@ describe('the rows after pest control and flea treatment', () => {
     ];
     const { lineItems, problem } = billedLines({ inspectionType: 'OCCUPIED', services: ['pestControl'], technician: kevin }, rules, products);
     expect(problem).toBeNull();
-    expect(lineItems.map((line) => line.name)).toEqual([
+    expect(lineItems.map(words)).toEqual([
       'Filter Change',
       'Pest Control: House under 2,000 sq. ft',
       'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1',

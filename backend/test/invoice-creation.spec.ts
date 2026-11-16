@@ -311,7 +311,7 @@ describe('a batch', () => {
     });
     // Who did it, with their license, on the "Serviced by" row.
     const byKevin = batchLines(visit({ assignments: [{ technician: { displayName: 'Kevin Example', pestLicenseNumber: '1000001' } }] }), BASIS);
-    expect(byKevin.lineItems.map((line) => line.name)).toContain('Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)');
+    expect(byKevin.lineItems.map((line) => line.description)).toContain('Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)');
     // Its type bills the filter change, whatever the report says.
     expect(batchLines(visit({ servicesReport: null }), BASIS).lineItems.map((line) => line.name)).toEqual(['Filter Change']);
     expect(batchLines(visit({ inspectionType: 'ROOF', servicesReport: report({}) }), BASIS)).toMatchObject({

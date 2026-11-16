@@ -85,7 +85,9 @@ describe('what may be invoiced', () => {
 
   it('says what is wrong, in words', () => {
     expect(invoiceLinesProblem([])).toBe('Add at least one line.');
-    expect(invoiceLinesProblem([{ ...line, name: ' ' }])).toBe('Every line needs a name.');
+    expect(invoiceLinesProblem([{ ...line, name: ' ' }])).toBe('Every line needs an item or a description.');
+    // A row of words alone (2026-11-16): its description, no item.
+    expect(invoiceLinesProblem([line, { name: '', description: 'Serviced by: someone', quantity: 1, unitPriceCents: 0 }])).toBeNull();
     expect(invoiceLinesProblem([{ ...line, quantity: 0 }])).toMatch(/quantity/);
     expect(invoiceLinesProblem([{ ...line, unitPriceCents: 39.99 }])).toMatch(/dollars and cents/);
     expect(invoiceLinesProblem([{ ...line, unitPriceCents: 0 }])).toBe('The invoice comes to nothing.');

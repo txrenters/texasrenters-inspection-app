@@ -101,7 +101,8 @@ export class XeroLineTrackingDto {
 }
 
 export class InvoiceLineDto {
-  @IsString() @MinLength(1) @MaxLength(200) name!: string;
+  /** Its item; empty for a row of words alone (2026-11-16), which has its description instead -- checked with the lines. */
+  @IsString() @MaxLength(200) name!: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string | null;
   @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 }) @Min(0.01) @Max(10_000) quantity!: number;
   @IsInt() @Min(0) @Max(MAX_INVOICE_CENTS) unitPriceCents!: number;
