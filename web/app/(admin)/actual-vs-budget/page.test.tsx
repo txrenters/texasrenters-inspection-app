@@ -53,6 +53,12 @@ vi.mock('@/lib/actual-vs-budget-queries', () => ({
     saveProductColumn: { mutate: vi.fn(), isPending: false },
   }),
 }));
+// The live channel is tested on its own (lib/actual-vs-budget-live.test.tsx); here nobody else is on the page.
+vi.mock('@/lib/actual-vs-budget-live', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  ActualVsBudgetLive: ({ children }: { children: unknown }) => children,
+  useActualVsBudgetLive: () => ({ connected: false, others: [], cellOwners: new Map(), focusCell: () => undefined }),
+}));
 vi.mock('@/lib/url-state', () => ({
   useUrlState: <T extends object>(defaults: T) => {
     const [state, setState] = useState(defaults);

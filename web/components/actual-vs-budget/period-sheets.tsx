@@ -1,6 +1,6 @@
 'use client';
 
-import { monthWords, percentText, weekOf, weekWords, type RevenueLogTechnician, type RevenueMonthReport, type SaveRevenueWeekInput } from '@texasrenters/shared';
+import { monthWords, percentText, revenueCell, weekOf, weekWords, type RevenueLogTechnician, type RevenueMonthReport, type SaveRevenueWeekInput } from '@texasrenters/shared';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 
@@ -42,6 +42,7 @@ function PeriodTable({
   canEdit,
   editable,
   onSave,
+  cellOf,
 }: {
   title: string;
   rows: PeriodRow[];
@@ -49,6 +50,8 @@ function PeriodTable({
   /** Which cells the office types into on this report. */
   editable: readonly Field[];
   onSave: (row: PeriodRow, input: Partial<Record<Field, number | string | null>>) => Promise<unknown>;
+  /** A cell's live name, as `revenueCell` makes it. */
+  cellOf: (row: PeriodRow, field: Field) => string;
 }) {
   const commit = (row: PeriodRow, field: Field, current: string) => async (typed: string) => {
     const text = typed.trim();
@@ -100,6 +103,7 @@ function PeriodTable({
               <GridCell
                 label={label(row, 'Target revenue')}
                 numeric
+                cell={cellOf(row, 'targetCents')}
                 onCommit={can('targetCents') ? commit(row, 'targetCents', targetText) : undefined}
                 readOnly={!can('targetCents')}
                 text={targetText}
@@ -108,6 +112,7 @@ function PeriodTable({
               <GridCell
                 label={label(row, 'Actual revenue')}
                 numeric
+                cell={cellOf(row, 'actualCents')}
                 onCommit={can('actualCents') ? commit(row, 'actualCents', actualText) : undefined}
                 readOnly={!can('actualCents')}
                 text={actualText}
@@ -117,6 +122,7 @@ function PeriodTable({
               <GridCell label={label(row, 'Percent of target')} numeric readOnly text={percentText(row.targetCents ? row.actualCents / row.targetCents : null)} />
               <GridCell
                 label={label(row, 'Remarks')}
+                cell={cellOf(row, 'remarks')}
                 onCommit={can('remarks') ? commit(row, 'remarks', row.remarks ?? '') : undefined}
                 readOnly={!can('remarks')}
                 text={row.remarks ?? ''}
@@ -160,6 +166,7 @@ export function WeeklySheet({ canEdit, date, onDate }: { canEdit: boolean; date:
               canEdit={canEdit}
               editable={['targetCents', 'actualCents', 'remarks']}
               onSave={(row, input) => edits.saveWeek.mutateAsync({ technicianId: row.technician.id, weekStart: week.from, input: input as SaveRevenueWeekInput })}
+              cellOf={(row, field) => revenueCell.week(row.technician.id, week.from, field)}
               rows={shown?.technicians ?? []}
               title={weekWords(week)}
             />
@@ -182,6 +189,7 @@ export function MonthlySheet({ canEdit, date, onDate }: { canEdit: boolean; date
             canEdit={canEdit}
             editable={['remarks']}
             onSave={(row, input) => edits.saveMonth.mutateAsync({ technicianId: row.technician.id, month, input: { remarks: input.remarks as string | null } })}
+            cellOf={(row, field) => revenueCell.month(row.technician.id, month, field)}
             rows={report.technicians}
             title={monthWords(month)}
           />

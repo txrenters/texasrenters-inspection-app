@@ -39,6 +39,7 @@ import { InvoiceFilesController } from './invoice-files.controller';
 import { InvoiceFilesService } from './invoice-files.service';
 import { InvoiceSettingsController } from './invoice-settings.controller';
 import { ActualVsBudgetController } from './actual-vs-budget.controller';
+import { ActualVsBudgetGateway } from './actual-vs-budget.gateway';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
 import { InvoiceReportsController } from './invoice-reports.controller';
 import { InvoiceReportsService } from './invoice-reports.service';
@@ -146,6 +147,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceBatchService,
     InvoiceReportsService,
     ActualVsBudgetService,
+    ActualVsBudgetGateway,
     TechnicianProvisioningService,
     TechnicianSkillsService,
     // One implementation now that Supabase is gone; the token remains so

@@ -6,6 +6,7 @@ import {
   hoursAndMinutesValue,
   payrollPeriodWords,
   percentText,
+  revenueCell,
   secondsAsHours,
   trackerFigures,
   type RevenueDayTechnician,
@@ -113,6 +114,7 @@ export function ProjectionSheet({ canEdit, date, onDate }: { canEdit: boolean; d
                   <GridCell label={cell(row, 'Billable hours')} readOnly text={row.billableTime} />
                   <GridCell label={cell(row, 'Projected revenue')} numeric readOnly text={dollars(row.projectedCents)} />
                   <GridCell
+                    cell={revenueCell.day(row.technician.id, date, 'projectionRemarks')}
                     label={cell(row, 'Remarks')}
                     onCommit={canEdit ? commit(row, 'projectionRemarks', row.projectionRemarks ?? '') : undefined}
                     readOnly={!canEdit}
@@ -172,6 +174,7 @@ export function DailySheet({ canEdit, date, onDate }: { canEdit: boolean; date: 
                     <TableRow className="hover:bg-transparent" key={row.technician.id}>
                       <GridCell label={cell(row, 'Technician')} readOnly text={row.technician.name.toUpperCase()} />
                       <GridCell
+                        cell={revenueCell.day(row.technician.id, date, 'budgetCents')}
                         label={cell(row, 'Budgeted revenue')}
                         numeric
                         onCommit={canEdit ? commit(row, 'budgetCents', budgetText) : undefined}
@@ -183,6 +186,7 @@ export function DailySheet({ canEdit, date, onDate }: { canEdit: boolean; date: 
                       <GridCell label={cell(row, 'Difference')} numeric readOnly text={dollars(row.actualCents - row.projectedCents)} />
                       <GridCell label={cell(row, 'Percent of budget')} numeric readOnly text={percentText(row.budgetCents ? row.actualCents / row.budgetCents : null)} />
                       <GridCell
+                        cell={revenueCell.day(row.technician.id, date, 'workSeconds')}
                         label={cell(row, 'Work hours')}
                         numeric
                         onCommit={canEdit ? commit(row, 'workSeconds', workText) : undefined}
@@ -191,6 +195,7 @@ export function DailySheet({ canEdit, date, onDate }: { canEdit: boolean; date: 
                         title={row.typed.work ? undefined : 'From the timesheet'}
                       />
                       <GridCell
+                        cell={revenueCell.day(row.technician.id, date, 'dailyRemarks')}
                         label={cell(row, 'Remarks')}
                         onCommit={canEdit ? commit(row, 'dailyRemarks', row.dailyRemarks ?? '') : undefined}
                         readOnly={!canEdit}
@@ -279,6 +284,7 @@ export function TrackerSheet({ canEdit, date, onDate }: { canEdit: boolean; date
                     <TableRow className="hover:bg-transparent" key={row.technician.id}>
                       <GridCell label={cell(row, 'Technician')} readOnly text={row.technician.name} />
                       <GridCell
+                        cell={revenueCell.day(row.technician.id, date, 'budgetCents')}
                         label={cell(row, 'Budgeted daily revenue')}
                         numeric
                         onCommit={canEdit ? commit(row, 'budgetCents', budgetText) : undefined}
@@ -290,6 +296,7 @@ export function TrackerSheet({ canEdit, date, onDate }: { canEdit: boolean; date
                       <GridCell label={cell(row, 'Projected revenue')} numeric readOnly text={money(row.projectedCents)} />
                       <GridCell label={cell(row, 'Actual revenue')} numeric readOnly text={money(row.actualCents)} />
                       <GridCell
+                        cell={revenueCell.day(row.technician.id, date, 'workSeconds')}
                         label={cell(row, "Tech's work time")}
                         numeric
                         onCommit={canEdit ? commit(row, 'workSeconds', workText) : undefined}
@@ -313,6 +320,7 @@ export function TrackerSheet({ canEdit, date, onDate }: { canEdit: boolean; date
                         text={percentText(row.period.budgetedCents ? row.period.actualCents / row.period.budgetedCents : null)}
                       />
                       <GridCell
+                        cell={revenueCell.day(row.technician.id, date, 'trackerRemarks')}
                         label={cell(row, 'Remarks')}
                         onCommit={canEdit ? commit(row, 'trackerRemarks', row.trackerRemarks ?? '') : undefined}
                         readOnly={!canEdit}
