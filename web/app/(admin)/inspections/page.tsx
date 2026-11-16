@@ -28,6 +28,7 @@ import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { usePermissions } from '@/lib/auth';
 import { businessToday } from '@/lib/clock';
 import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
+import { openWorkWords } from '@/lib/job-page';
 import { quarterOf, recentQuarters } from '@/lib/planning';
 import { useInspections, useJobberDay, useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -210,8 +211,16 @@ function columnsFor(type: string, jobber?: Map<string, JobberDayRow>): Array<Col
       key: 'status',
       header: 'Status',
       // Where the visit stands, in the inspection page's own words: a
-      // submitted visit is Done, not "Review required" (2026-10-07).
-      cell: (row) => <StatusBadge value={visitStateOf(row)} />,
+      // submitted visit is Complete, not "Review required" (2026-10-07). One
+      // that still owes a job says which, so the word is never the whole answer.
+      cell: (row) => (
+        <div className="space-y-0.5">
+          <StatusBadge value={visitStateOf(row)} />
+          {visitStateOf(row) === 'PARTIALLY_COMPLETE' ? (
+            <div className="text-muted-foreground text-xs">{openWorkWords(row.openWork)}</div>
+          ) : null}
+        </div>
+      ),
     },
     {
       key: 'technician',

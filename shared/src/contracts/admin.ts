@@ -6,6 +6,7 @@ import type { PropertyDetailsView, PropertyOwnerView } from './property-details.
 import type { PropertyServiceStatus } from './property-service.js';
 import type { JobberBookingStatus } from './visit-details-writer.js';
 import type { VisitServicesReport } from './visit-services.js';
+import type { VisitOpenWork } from './visit-state.js';
 
 export interface Paginated<T> {
   items: T[];
@@ -580,6 +581,8 @@ export interface AdminInspection {
   finalizedAt?: string | null;
   finalizedBy?: { id: string; displayName: string } | null;
   completionBlockedReason?: string | null;
+  /** What a submitted visit still owes; with anything in it the visit is Partially complete. */
+  openWork?: VisitOpenWork | null;
   tbdReason?: string | null;
   followUpRequired?: boolean;
   followUpDueAt?: string | null;

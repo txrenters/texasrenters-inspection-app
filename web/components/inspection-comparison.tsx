@@ -6,10 +6,11 @@ import Link from 'next/link';
 import { useState } from 'react';
 
 import { ComparisonItemsTable } from '@/components/comparison-items-table';
+import { ComparisonResultBar, ComparisonResultLegend } from '@/components/comparison-result-bar';
 import { ReportShareDialog } from '@/components/report-share-dialog';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented';
@@ -19,6 +20,7 @@ import {
   itemChanged,
   itemTotals,
   pairingNote,
+  resultCounts,
   roomDigest,
   roomInFilter,
   type RoomFilter,
@@ -63,6 +65,8 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const data = comparison.data;
   const totals = data ? itemTotals(data.areas) : null;
+  const results = data ? resultCounts(data.areas) : null;
+  const itemCount = results ? Object.values(results).reduce((sum, count) => sum + count, 0) : 0;
   const count = (value: RoomFilter) =>
     data?.areas.filter((area) => roomInFilter(area, value)).length ?? 0;
   // Opens on what needs something, unless nothing does.
@@ -103,15 +107,18 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
               confirmed
             </p>
             <div className="flex items-center gap-2">
-              {/* The same verdicts as a document: what the owner or tenant reads. */}
-              <Button asChild size="sm" type="button" variant="outline">
-                <Link href={`/inspections/${inspectionId}/comparison-report`}>Open report</Link>
-              </Button>
+              {/* Sharing goes out to an owner or a tenant and is the rarer act;
+                  reading the document is what the office does first, so that
+                  is the filled button (2026-11-17). */}
               {permissions.has('reports:share') ? (
-                <Button onClick={() => setSharing(true)} size="sm" type="button">
-                  Share
+                <Button onClick={() => setSharing(true)} size="sm" type="button" variant="outline">
+                  Share comparison
                 </Button>
               ) : null}
+              {/* The same verdicts as a document: what the owner or tenant reads. */}
+              <Button asChild size="sm" type="button">
+                <Link href={`/inspections/${inspectionId}/comparison-report`}>Open comparison report</Link>
+              </Button>
             </div>
           </div>
 
@@ -121,7 +128,25 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             </Alert>
           ) : null}
 
-          <StatGroup columns="grid-cols-2 lg:grid-cols-4">
+          {/* What needs a person, said as a line with its button rather than as
+              a fourth figure with a small link under it (2026-11-17). */}
+          {data.findingsToConfirm ? (
+            <Alert className="flex flex-wrap items-center gap-x-4 gap-y-2" variant="warning">
+              <div className="min-w-0 flex-1">
+                <AlertTitle>
+                  {data.findingsToConfirm} {data.findingsToConfirm === 1 ? 'finding' : 'findings'} to confirm
+                </AlertTitle>
+                <AlertDescription>
+                  Counted here, and not on the report until somebody decides them.
+                </AlertDescription>
+              </div>
+              <Button asChild size="sm">
+                <Link href={`/inspections/${inspectionId}`}>Review findings</Link>
+              </Button>
+            </Alert>
+          ) : null}
+
+          <StatGroup columns="grid-cols-1 sm:grid-cols-3">
             <Stat
               label="Rooms with new damage"
               tone={totals.freshRooms ? 'destructive' : 'default'}
@@ -138,20 +163,23 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
               tone={totals.cleaning ? 'warning' : 'default'}
               value={totals.cleaning}
             />
-            <Stat
-              action={
-                data.findingsToConfirm ? (
-                  <Button asChild className="h-auto px-0 text-left whitespace-normal" size="sm" variant="link">
-                    <Link href={`/inspections/${inspectionId}`}>Review on the inspection page</Link>
-                  </Button>
-                ) : undefined
-              }
-              detail="Not on the report until confirmed"
-              label="Findings to confirm"
-              tone={data.findingsToConfirm ? 'warning' : 'default'}
-              value={data.findingsToConfirm}
-            />
           </StatGroup>
+
+          {results && itemCount ? (
+            <section aria-labelledby="comparison-items-title" className="bg-card space-y-3 rounded-xl border px-5 py-4">
+              <div>
+                <h3 className="text-[15px] font-semibold" id="comparison-items-title">
+                  Every item, move-in against move-out
+                </h3>
+                <p className="text-muted-foreground text-[13px]">
+                  {itemCount} {itemCount === 1 ? 'item' : 'items'} graded in {data.areas.length}{' '}
+                  {data.areas.length === 1 ? 'room' : 'rooms'}
+                </p>
+              </div>
+              <ComparisonResultBar counts={results} label={`All ${itemCount} items`} size="tall" />
+              <ComparisonResultLegend counts={results} />
+            </section>
+          ) : null}
 
           <div className="bg-card rounded-xl border">
             {/* The console's one toggle, not rounded pills that looked like the
@@ -255,8 +283,16 @@ function AreaComparisonRow({
               <span className="text-muted-foreground block text-xs">{subtitle}</span>
             ) : null}
           </span>
-          <span className="text-muted-foreground text-xs sm:text-sm">
-            {roomDigest(area).join(' · ')}
+          <span className="flex min-w-0 items-center gap-3">
+            {/* The room's own split, the same bar as the page's: read down the
+                list, the rooms with the most that is new stand out. */}
+            <ComparisonResultBar
+              className="hidden w-28 shrink-0 md:flex"
+              counts={resultCounts([area])}
+              label={area.areaName}
+              size="mini"
+            />
+            <span className="text-muted-foreground min-w-0 text-xs sm:text-sm">{roomDigest(area).join(' · ')}</span>
           </span>
         </span>
         {/* One width on every row, so the columns before it line up down the list. */}

@@ -30,8 +30,15 @@ export function PageHeader({
   info,
   infoLabel = 'How this works',
   record,
+  prominent,
   className,
 }: {
+  /**
+   * The title a size up in the classic console, for a page that is one record
+   * (a job) rather than a list: its name is the first thing read. The
+   * Jobber-style shell already draws a record's title large.
+   */
+  prominent?: boolean;
   title: string;
   /** Where the title leads, when it names something with a page of its own. */
   titleHref?: string;
@@ -114,7 +121,12 @@ export function PageHeader({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {/* In the Jobber-style shell, Jobber's page title: large, heavy,
               in the display face, and allowed to wrap as Jobber's do. */}
-          <h1 className="jobber:font-display jobber:text-heading jobber:text-[1.75rem] sm:jobber:text-[2rem] jobber:leading-tight jobber:font-extrabold jobber:tracking-normal jobber:whitespace-normal truncate text-lg font-semibold tracking-tight">
+          <h1
+            className={cn(
+              'jobber:font-display jobber:text-heading jobber:text-[1.75rem] sm:jobber:text-[2rem] jobber:leading-tight jobber:font-extrabold jobber:tracking-normal jobber:whitespace-normal font-semibold tracking-tight',
+              prominent ? 'text-2xl leading-tight' : 'truncate text-lg',
+            )}
+          >
             {heading}
           </h1>
           {info ? <InfoButton info={info} infoLabel={infoLabel} /> : null}

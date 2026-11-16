@@ -183,3 +183,40 @@ export function findingStatus(reviewStatus: string) {
   if (reviewStatus === 'PENDING_REVIEW') return 'Needs review';
   return reviewStatus.charAt(0) + reviewStatus.slice(1).toLowerCase().replace(/_/g, ' ');
 }
+
+/**
+ * How one item came out, as one answer: the part of the comparison's bar it
+ * belongs to (2026-11-17).
+ *
+ * An item has a damage verdict and, apart from it, a cleaning one. The bar
+ * needs each item in exactly one part, so damage wins: new damage that also
+ * needs cleaning is new damage. "Cleaning only" is what is left when the
+ * damage verdict found nothing new.
+ */
+export type ItemResult = 'NEW' | 'CLEANING' | 'ALREADY' | 'REPAIRED' | 'SAME' | 'UNGRADED';
+
+/** In the bar's order: what needs somebody first, what changed nothing last. */
+export const ITEM_RESULTS: ReadonlyArray<{ value: ItemResult; label: string }> = [
+  { value: 'NEW', label: 'New since move-in' },
+  { value: 'CLEANING', label: 'Needs cleaning only' },
+  { value: 'ALREADY', label: 'Already at move-in' },
+  { value: 'REPAIRED', label: 'Repaired' },
+  { value: 'SAME', label: 'No change' },
+  { value: 'UNGRADED', label: 'Not graded' },
+];
+
+export function itemResult(item: Pick<AdminComparisonItem, 'change' | 'cleaning'>): ItemResult {
+  if (item.change === 'NEW_DAMAGE') return 'NEW';
+  if (item.cleaning === 'NEEDS_CLEANING') return 'CLEANING';
+  if (item.change === 'ALREADY_DAMAGED') return 'ALREADY';
+  if (item.change === 'REPAIRED') return 'REPAIRED';
+  if (item.change === 'NO_CHANGE') return 'SAME';
+  return 'UNGRADED';
+}
+
+/** How many items came out each way, over one room or every room. */
+export function resultCounts(areas: Array<Pick<AdminAreaComparison, 'items'>>): Record<ItemResult, number> {
+  const counts: Record<ItemResult, number> = { NEW: 0, CLEANING: 0, ALREADY: 0, REPAIRED: 0, SAME: 0, UNGRADED: 0 };
+  for (const area of areas) for (const item of area.items ?? []) counts[itemResult(item)] += 1;
+  return counts;
+}
