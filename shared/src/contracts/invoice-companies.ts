@@ -83,13 +83,21 @@ export interface CompanyLines<T> {
  * A visit's lines split one invoice per company: each company's lines, in the
  * order its first line comes, and the lines that go to no company on one of
  * their own. A single part when nothing goes to a company; none when there are
- * no lines.
+ * no lines. A row at no price that no product names (2026-11-16) -- the
+ * insecticide used, "Serviced by: ..." after pest control -- goes with the line
+ * before it.
  */
-export function splitByCompany<T extends { name: string }>(lines: readonly T[], products: readonly ProductCompany[]): CompanyLines<T>[] {
+export function splitByCompany<T extends { name: string; unitPriceCents?: number }>(
+  lines: readonly T[],
+  products: readonly ProductCompany[],
+): CompanyLines<T>[] {
   const parts = new Map<string | null, T[]>();
+  let previous: string | null | undefined;
   for (const line of lines) {
-    const company = lineCompany(line.name, products);
+    const named = lineCompany(line.name, products);
+    const company = named ?? (line.unitPriceCents === 0 && previous !== undefined ? previous : null);
     parts.set(company, [...(parts.get(company) ?? []), line]);
+    previous = company;
   }
   return [...parts].map(([xeroTenantId, lineItems]) => ({ xeroTenantId, lineItems }));
 }

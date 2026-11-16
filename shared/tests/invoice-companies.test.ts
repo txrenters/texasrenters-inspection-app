@@ -79,6 +79,17 @@ describe('a visit’s lines, one invoice per company', () => {
     ]);
   });
 
+  it('keeps a row at no price with the line before it (2026-11-16): the rows after pest control stay on the pest invoice', () => {
+    const row = (name: string) => ({ name, quantity: 1, unitPriceCents: 0 });
+    const lines = [{ ...line('Filter Change'), unitPriceCents: 3999 }, { ...line('Pest Control'), unitPriceCents: 3900 }, row('Flex 10 used'), row('Serviced by: someone')];
+    expect(splitByCompany(lines, PRODUCTS)).toEqual([
+      { xeroTenantId: HOMES, lineItems: [lines[0]] },
+      { xeroTenantId: PEST, lineItems: [lines[1], lines[2], lines[3]] },
+    ]);
+    // First, with nothing before it, it goes to no company as before.
+    expect(splitByCompany([row('A note')], PRODUCTS)).toEqual([{ xeroTenantId: null, lineItems: [row('A note')] }]);
+  });
+
   it('is one invoice when nothing goes to a company, and none without lines', () => {
     const lines = [line('Filter Change'), line('Pest Control')];
     expect(splitByCompany(lines, [])).toEqual([{ xeroTenantId: null, lineItems: lines }]);

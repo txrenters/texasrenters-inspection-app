@@ -620,6 +620,10 @@ model UserProfile {
   /// E.164 (`+17135550100`), written only through `normalizePhoneNumber`.
   /// Null until somebody types one in.
   phone                String?
+  /// The technician's pest control license number from the Texas Department of Agriculture (2026-11-16), printed
+  /// beside their name on Crystal Creek Pest's invoices: "Serviced by: Clinton Bass (0557779) and Kevin Granados
+  /// (1006056)". Null for anyone without one.
+  pestLicenseNumber    String?                  @db.VarChar(20)
   isActive             Boolean                  @default(true)
   /// The TR Staff Portal's `sub` for this person: its stable id for them, a
   /// UUID. Written once, the first time they sign in through the portal with a

@@ -177,6 +177,32 @@ describe('AccountProfileService', () => {
       });
     });
 
+    it('keeps a technician’s pest license number, trimmed, and audits from and to (2026-11-16)', async () => {
+      const { service, tx } = build({ ...technician, pestLicenseNumber: null });
+
+      await service.update(actor, PROFILE_ID, 'TECHNICIAN', { pestLicenseNumber: ' 1006056 ' });
+
+      expect(tx.userProfile.update).toHaveBeenCalledWith({ where: { id: PROFILE_ID }, data: { pestLicenseNumber: '1006056' } });
+      expect(tx.auditLog.create.mock.calls[0][0].data.metadata).toEqual({
+        scope: 'TECHNICIAN',
+        changed: ['pestLicenseNumber'],
+        pestLicenseNumber: { from: '', to: '1006056' },
+      });
+    });
+
+    it('clears the pest license number given an empty one, and refuses one too long for a license', async () => {
+      const cleared = build({ ...technician, pestLicenseNumber: '1006056' });
+      await cleared.service.update(actor, PROFILE_ID, 'TECHNICIAN', { pestLicenseNumber: '  ' });
+      expect(cleared.tx.userProfile.update).toHaveBeenCalledWith({ where: { id: PROFILE_ID }, data: { pestLicenseNumber: null } });
+
+      const long = build({ ...technician, pestLicenseNumber: null });
+      await expect(long.service.update(actor, PROFILE_ID, 'TECHNICIAN', { pestLicenseNumber: '1'.repeat(21) })).rejects.toMatchObject({
+        status: 400,
+        code: 'INVALID_PEST_LICENSE',
+      });
+      expect(long.prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('refuses a phone number it cannot read, rather than storing part of it', async () => {
       const { service, prisma } = build();
 

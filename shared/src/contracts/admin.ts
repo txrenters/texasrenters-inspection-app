@@ -87,6 +87,8 @@ export interface UpdateAccountProfileInput {
   displayName?: string;
   email?: string;
   phone?: string | null;
+  /** A technician's pest control license number (2026-11-16); null or empty clears it. */
+  pestLicenseNumber?: string | null;
 }
 
 export interface CreatedUserAccount extends AdminUserDetail {
@@ -1366,6 +1368,8 @@ export interface AdminTechnician {
   lastSeenAt?: string | null;
   /** Detail only. E.164, or null when none is on file. */
   phone?: string | null;
+  /** Detail only. Their pest control license number (2026-11-16), printed on Crystal Creek Pest's invoices. */
+  pestLicenseNumber?: string | null;
   /** Detail only. The same account also holds console access. */
   hasConsoleAccess?: boolean;
 }

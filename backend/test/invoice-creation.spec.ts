@@ -1,4 +1,5 @@
 import { UserRole } from '@prisma/client';
+import { serviceRows } from '@texasrenters/shared';
 
 import { InvoiceBatchService, batchLines } from '../src/admin/invoice-batch.service';
 import { InvoiceEditsService } from '../src/admin/invoice-edits.service';
@@ -302,10 +303,15 @@ describe('a batch', () => {
       lineItems: [
         { name: 'Filter Change', description: null, quantity: 1, unitPriceCents: 3999 },
         { name: 'Pest Control', description: null, quantity: 1, unitPriceCents: 2500 },
+        // The rows Crystal Creek Pest's invoices carry after pest control (2026-11-16), at no price.
+        ...serviceRows('pestControl', null),
       ],
       totalCents: 6499,
       problem: null,
     });
+    // Who did it, with their license, on the "Serviced by" row.
+    const byKevin = batchLines(visit({ assignments: [{ technician: { displayName: 'Kevin Example', pestLicenseNumber: '1000001' } }] }), BASIS);
+    expect(byKevin.lineItems.map((line) => line.name)).toContain('Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)');
     // Its type bills the filter change, whatever the report says.
     expect(batchLines(visit({ servicesReport: null }), BASIS).lineItems.map((line) => line.name)).toEqual(['Filter Change']);
     expect(batchLines(visit({ inspectionType: 'ROOF', servicesReport: report({}) }), BASIS)).toMatchObject({

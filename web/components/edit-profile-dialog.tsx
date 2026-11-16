@@ -26,7 +26,7 @@ import { Spinner } from '@/components/ui/spinner';
 export interface EditProfileDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  profile: { displayName: string; email: string; phone?: string | null };
+  profile: { displayName: string; email: string; phone?: string | null; pestLicenseNumber?: string | null };
   /**
    * Why the sign-in email cannot be changed from here, or null when it can.
    * The server enforces the same rules (`AccountProfileService`); this only
@@ -35,6 +35,8 @@ export interface EditProfileDialogProps {
   emailLockedReason: string | null;
   /** A technician: Jobber matches its visits to them by this email. */
   matchedInJobber: boolean;
+  /** A technician's pest control license number is asked too (2026-11-16): it is printed on Crystal Creek Pest's invoices. */
+  askPestLicense?: boolean;
   /** Sends only the fields that changed. Resolves once saved. */
   onSave: (input: UpdateAccountProfileInput) => Promise<unknown>;
   isPending: boolean;
@@ -57,6 +59,7 @@ export function EditProfileDialog({
   profile,
   emailLockedReason,
   matchedInJobber,
+  askPestLicense = false,
   onSave,
   isPending,
   error,
@@ -64,6 +67,7 @@ export function EditProfileDialog({
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [email, setEmail] = useState(profile.email);
   const [phone, setPhone] = useState(profile.phone ? formatPhoneNumber(profile.phone) : '');
+  const [license, setLicense] = useState(profile.pestLicenseNumber ?? '');
 
   // Each opening starts from what is saved, not from an abandoned edit.
   useEffect(() => {
@@ -71,7 +75,8 @@ export function EditProfileDialog({
     setDisplayName(profile.displayName);
     setEmail(profile.email);
     setPhone(profile.phone ? formatPhoneNumber(profile.phone) : '');
-  }, [open, profile.displayName, profile.email, profile.phone]);
+    setLicense(profile.pestLicenseNumber ?? '');
+  }, [open, profile.displayName, profile.email, profile.phone, profile.pestLicenseNumber]);
 
   const typedPhone = phone.trim();
   const normalizedPhone = typedPhone ? normalizePhoneNumber(typedPhone) : null;
@@ -83,6 +88,7 @@ export function EditProfileDialog({
   if (displayName.trim() !== profile.displayName) changes.displayName = displayName.trim();
   if (emailChanged) changes.email = email.trim();
   if (!phoneInvalid && normalizedPhone !== (profile.phone ?? null)) changes.phone = normalizedPhone;
+  if (askPestLicense && (license.trim() || null) !== (profile.pestLicenseNumber ?? null)) changes.pestLicenseNumber = license.trim() || null;
   const changed = Object.keys(changes).length > 0;
 
   async function submit(event: FormEvent) {
@@ -174,6 +180,24 @@ export function EditProfileDialog({
               <FieldDescription id="profile-phone-hint">{PHONE_NUMBER_HINT}</FieldDescription>
             )}
           </Field>
+
+          {askPestLicense ? (
+            <Field>
+              <FieldLabel htmlFor="profile-pest-license">Pest license number (optional)</FieldLabel>
+              <Input
+                aria-describedby="profile-pest-license-hint"
+                autoComplete="off"
+                id="profile-pest-license"
+                maxLength={20}
+                onChange={(event) => setLicense(event.target.value)}
+                placeholder="1006056"
+                value={license}
+              />
+              <FieldDescription id="profile-pest-license-hint">
+                Printed beside their name on Crystal Creek Pest&apos;s invoices.
+              </FieldDescription>
+            </Field>
+          ) : null}
 
           {error ? (
             <Alert variant="destructive">

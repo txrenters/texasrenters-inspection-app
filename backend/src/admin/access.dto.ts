@@ -65,6 +65,8 @@ export class UpdateProfileDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(120) displayName?: string;
   @IsOptional() @IsEmail() @MaxLength(320) email?: string;
   @IsOptional() @IsString() @MaxLength(40) phone?: string | null;
+  /** A technician's pest control license number (2026-11-16), printed on Crystal Creek Pest's invoices. */
+  @IsOptional() @IsString() @MaxLength(20) pestLicenseNumber?: string | null;
 }
 
 export class UpdateUserStatusDto {

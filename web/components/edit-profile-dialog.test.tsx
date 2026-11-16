@@ -37,6 +37,20 @@ describe('EditProfileDialog', () => {
     await waitFor(() => expect(props.onOpenChange).toHaveBeenCalledWith(false));
   });
 
+  it('asks a technician’s pest license number, printed on Crystal Creek Pest’s invoices, and sends it once changed (2026-11-16)', async () => {
+    const props = renderDialog({ askPestLicense: true, profile: { displayName: 'Kevin Example', email: 'kevin@example.com', phone: null, pestLicenseNumber: null } });
+
+    fireEvent.change(screen.getByLabelText('Pest license number (optional)'), { target: { value: ' 1006056 ' } });
+    fireEvent.click(save());
+
+    await waitFor(() => expect(props.onSave).toHaveBeenCalledWith({ pestLicenseNumber: '1006056' }));
+  });
+
+  it('asks no license on the user page', () => {
+    renderDialog();
+    expect(screen.queryByLabelText('Pest license number (optional)')).not.toBeInTheDocument();
+  });
+
   it('sends a phone number in E.164, however it was typed', async () => {
     const props = renderDialog();
 
