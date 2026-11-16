@@ -224,6 +224,13 @@ export class AdminController {
     return this.service.dashboard(request.user);
   }
 
+  /** The schedule ahead and each quarter's plan, for the dashboard's charts. */
+  @Get('dashboard/outlook')
+  @RequirePermissions('dashboard:read')
+  dashboardOutlook(@Req() request: AuthenticatedRequest) {
+    return this.service.dashboardOutlook(request.user);
+  }
+
   @Get('portfolios')
   @RequirePermissions('properties:read')
   portfolios(@Req() request: AuthenticatedRequest, @Query() query: PortfolioListQueryDto) {

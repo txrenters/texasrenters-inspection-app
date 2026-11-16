@@ -24,7 +24,10 @@ export function JobberDayPanel({
   day,
   loading,
   className,
+  heading,
 }: {
+  /** Passed to the panel: its title in words, among the dashboard's cards. */
+  heading?: boolean;
   day: JobberDayComparison | undefined;
   loading: boolean;
   className?: string;
@@ -51,6 +54,7 @@ export function JobberDayPanel({
             className={className}
       count={differing || undefined}
       countTone="warning"
+      heading={heading}
       title="Today against Jobber"
     >
       {loading && !day ? (

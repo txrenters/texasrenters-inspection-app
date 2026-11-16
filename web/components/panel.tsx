@@ -27,7 +27,13 @@ export function Panel({
   children,
   className,
   bodyClassName,
+  heading = false,
 }: {
+  /**
+   * The title in words at reading size, not as a small uppercase label: for a
+   * panel that sits among the dashboard's chart cards, whose titles are words.
+   */
+  heading?: boolean;
   title: string;
   /** A figure beside the name, e.g. how many rows need a person. */
   count?: ReactNode;
@@ -41,7 +47,7 @@ export function Panel({
     <section className={cn('bg-card overflow-hidden rounded-xl border', className)}>
       <header className="flex min-h-11 items-center gap-3 border-b px-4 py-2">
         {/* Jobber's section heading in the Jobber-style shell: bold words, not a label. */}
-        <h2 className={cn(SECTION_LABEL, 'jobber:text-heading jobber:font-sans jobber:text-base jobber:font-bold jobber:tracking-normal jobber:normal-case')}>{title}</h2>
+        <h2 className={cn(heading ? 'text-[15px] font-semibold' : SECTION_LABEL, 'jobber:text-heading jobber:font-sans jobber:text-base jobber:font-bold jobber:tracking-normal jobber:normal-case')}>{title}</h2>
         {count !== undefined && count !== null ? (
           <span
             className={cn(
