@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { businessToday } from '@/lib/clock';
 
+import { TechnicianLog } from '@/components/actual-vs-budget/technician-log';
+
 import ActualVsBudgetPage from './page';
 
 /**
@@ -23,6 +25,9 @@ const queries = vi.hoisted(() => ({
   useRevenueDay: vi.fn(),
   useRevenueBudgets: vi.fn(),
   useRevenueMonth: vi.fn(),
+  useRevenueHistoryList: vi.fn(),
+  useRevenueHistorySheet: vi.fn(),
+  importHistory: vi.fn(),
   saveWeek: vi.fn(),
   save: vi.fn(),
   saveDay: vi.fn(),
@@ -34,6 +39,9 @@ vi.mock('@/lib/actual-vs-budget-queries', () => ({
   useRevenueDay: queries.useRevenueDay,
   useRevenueBudgets: queries.useRevenueBudgets,
   useRevenueMonth: queries.useRevenueMonth,
+  useRevenueHistoryList: queries.useRevenueHistoryList,
+  useRevenueHistorySheet: queries.useRevenueHistorySheet,
+  useRevenueHistoryImport: () => ({ mutate: queries.importHistory, isPending: false }),
   useRevenuePeriodEdits: () => ({ saveWeek: { mutateAsync: queries.saveWeek }, saveMonth: { mutateAsync: vi.fn() } }),
   useRevenueDayEdits: () => ({
     saveDay: { mutateAsync: queries.saveDay, isPending: false },
@@ -159,6 +167,22 @@ beforeEach(() => {
   queries.useRevenueDay.mockReturnValue(ready(DAY));
   queries.useRevenueMonth.mockReturnValue(ready(MONTH));
   queries.saveWeek.mockReset();
+  queries.importHistory.mockReset();
+  queries.useRevenueHistoryList.mockReturnValue(ready({ sheets: [{ id: 'h1', name: 'Nathan', rowCount: 2, importedAt: '2026-11-17T09:00:00.000Z' }] }));
+  queries.useRevenueHistorySheet.mockReturnValue(
+    ready({
+      id: 'h1',
+      name: 'Nathan',
+      rowCount: 2,
+      importedAt: '2026-11-17T09:00:00.000Z',
+      fileName: 'THMP Scheduling Actual Vs Budget 2026.xlsx',
+      headers: ['', 'Address', '', 'Job#', 'Labor Revenue Budget', 'Trip Charge'],
+      rows: [
+        ['2-Jan-26', '100 Example Way - Zone 4 - Q4 Tenant Benefit Package', '', '16207', '103.50', '-'],
+        ['Total', '', '', '', '103.50', '-'],
+      ],
+    }),
+  );
   queries.useRevenueBudgets.mockReturnValue(ready({ payrollPeriodStart: '2026-11-02', payrollPeriodDays: 14, technicians: [] }));
 });
 
@@ -336,5 +360,29 @@ describe('the weekly and monthly reports', () => {
     expect(moses.map((cell) => (cell as HTMLTextAreaElement).value)).toEqual(['MOSES RODRIGUEZ', '15,620.00', '18,677.36', '3,057.36', '119.57%', '']);
     expect(moses[1]).toHaveAttribute('readonly');
     expect(moses[5]).not.toHaveAttribute('readonly');
+  });
+});
+
+describe("past technicians' logs", () => {
+  it("show a past technician's log as the workbook kept it, with its own headings, to read", () => {
+    render(<TechnicianLog canEdit from="2026-11-11" onChange={vi.fn()} technicianId="history:h1" technicians={[{ id: 'tech-1', name: 'Sample Technician' }]} to="2026-11-11" />);
+    expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(['', 'Address', '', 'Job#', 'Labor Revenue Budget', 'Trip Charge']);
+    expect(screen.getByText('100 Example Way - Zone 4 - Q4 Tenant Benefit Package')).toBeInTheDocument();
+    expect(screen.getByText('Total').closest('tr')).toHaveClass('font-semibold');
+    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+    expect(screen.queryByLabelText('First day')).not.toBeInTheDocument();
+  });
+
+  it('import the workbook the office chooses', () => {
+    render(<ActualVsBudgetPage />);
+    const file = new File(['xlsx'], 'THMP Scheduling Actual Vs Budget 2026.xlsx');
+    fireEvent.change(screen.getByLabelText('The Actual vs Budget workbook'), { target: { files: [file] } });
+    expect(queries.importHistory).toHaveBeenCalledWith(file, expect.anything());
+  });
+
+  it('cannot be imported without the right to change invoices', () => {
+    permissions.allowed = false;
+    render(<ActualVsBudgetPage />);
+    expect(screen.queryByRole('button', { name: 'Import workbook' })).not.toBeInTheDocument();
   });
 });

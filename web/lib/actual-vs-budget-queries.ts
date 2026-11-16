@@ -5,6 +5,9 @@ import type {
   RevenueBudgets,
   RevenueColumn,
   RevenueDay,
+  RevenueHistoryImport,
+  RevenueHistoryList,
+  RevenueHistorySheetView,
   RevenueLog,
   RevenueLogTechnicians,
   RevenueMonthReport,
@@ -106,6 +109,41 @@ export function useRevenueDay(date: string) {
     queryFn: ({ signal }) => api<RevenueDay>(`${BASE}/day?${new URLSearchParams({ date }).toString()}`, { signal }),
     enabled: /^\d{4}-\d{2}-\d{2}$/.test(date),
     ...KEPT,
+  });
+}
+
+// ── PR 4: past technicians' logs ────────────────────────────────────────────
+
+const historyKey = [...actualVsBudgetKeys.all, 'history'] as const;
+
+export function useRevenueHistoryList() {
+  return useQuery({
+    queryKey: historyKey,
+    queryFn: ({ signal }) => api<RevenueHistoryList>(`${BASE}/history`, { signal }),
+    ...KEPT,
+  });
+}
+
+/** A past technician's log, as the workbook kept it. Kept as long as the page is open: it never changes. */
+export function useRevenueHistorySheet(id: string) {
+  return useQuery({
+    queryKey: [...historyKey, id] as const,
+    queryFn: ({ signal }) => api<RevenueHistorySheetView>(`${BASE}/history/${encodeURIComponent(id)}`, { signal }),
+    enabled: Boolean(id),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useRevenueHistoryImport() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return api<RevenueHistoryImport>(`${BASE}/history`, { method: 'POST', body: form });
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: historyKey }),
   });
 }
 

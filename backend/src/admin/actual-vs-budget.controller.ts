@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   CLOCK_TIME,
@@ -30,7 +31,7 @@ import {
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { ApplicationError } from '../common/errors';
-import { ActualVsBudgetService } from './actual-vs-budget.service';
+import { ActualVsBudgetService, MAX_WORKBOOK_BYTES, type UploadedWorkbook } from './actual-vs-budget.service';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** A visit's money is never near this; it stops a typo of extra zeros. */
@@ -215,6 +216,27 @@ export class ActualVsBudgetController {
     @Body() body: SaveRevenueMonthDto,
   ) {
     return this.revenue.saveMonth(request.user, technicianId, params.month, body);
+  }
+
+  /** Import the past technicians' logs from the office's workbook: its hidden technician tabs. */
+  @Post('history')
+  @RequirePermissions('invoices:manage')
+  @HttpCode(200)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_WORKBOOK_BYTES, files: 1 } }))
+  importHistory(@Req() request: AuthenticatedRequest, @UploadedFile() file?: UploadedWorkbook) {
+    return this.revenue.importHistory(request.user, file);
+  }
+
+  @Get('history')
+  @RequirePermissions('invoices:read')
+  historyList(@Req() request: AuthenticatedRequest) {
+    return this.revenue.historyList(request.user);
+  }
+
+  @Get('history/:id')
+  @RequirePermissions('invoices:read')
+  historySheet(@Req() request: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
+    return this.revenue.historySheet(request.user, id);
   }
 
   @Get('budgets')
