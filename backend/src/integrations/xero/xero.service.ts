@@ -21,9 +21,12 @@ import { XeroAuthService } from './xero-auth.service';
 import { XeroClient } from './xero.client';
 import { getXeroConfig, xeroConfigured } from './xero.config';
 import { XeroError } from './xero.errors';
+import type { XeroCatalog, XeroCatalogPart } from './xero-invoice';
 
 /** At most one read of an organisation's settings this often: each costs it six calls. */
 const READ_GAP_MS = 5 * 60_000;
+/** At most one read again, by itself, of what held invoices wait on this often (2026-11-17); nor within this of a read by hand. */
+export const RECHECK_GAP_MS = 60 * 60_000;
 
 /** About the connection, not the reminders: these stop the read rather than leave the reminders unknown. */
 const READ_STOPPERS = new Set(['XERO_DAILY_CEILING', 'XERO_RATE_LIMITED', 'XERO_REAUTHORIZATION_REQUIRED', 'XERO_UNREACHABLE']);
@@ -318,6 +321,60 @@ export class XeroService {
       throw error;
     }
     return this.describe(organizationId);
+  }
+
+  /**
+   * The parts of an organisation's books that invoices held back wait on, read
+   * again with no button pressed (2026-11-17): the office adds the technician's
+   * tracking option in Xero, and the console finds it within the hour. One call
+   * a part -- usually only its tracking categories -- at most once an hour, not
+   * within the hour of a read by hand, and never past half the day's ceiling,
+   * which stays the sending's. Null when it is not due; else what was read,
+   * kept as the organisation's. Nothing else of the read by hand is touched:
+   * its time, its reminders, its project users.
+   */
+  async recheckCatalog(organizationId: string, tenantId: string, parts: readonly XeroCatalogPart[]): Promise<Partial<XeroCatalog> | null> {
+    if (!parts.length) return null;
+    const where = { organizationId_xeroTenantId: { organizationId, xeroTenantId: tenantId } };
+    const row = await this.prisma.xeroOrganisation.findUnique({ where, select: { status: true, catalogReadAt: true, callsDay: true, callsUsed: true } });
+    if (row?.status !== 'CONNECTED') return null;
+    const now = new Date();
+    const since = new Date(now.getTime() - RECHECK_GAP_MS);
+    // Read by hand within the hour: that read put the held invoices up again itself.
+    if (row.catalogReadAt && row.catalogReadAt > since) return null;
+    const used = row.callsDay === businessDate() ? row.callsUsed : 0;
+    if (used + parts.length > getXeroConfig().dailyCallCeiling / 2) return null;
+    // The hour is taken before asking, so a read that fails is not tried again every run.
+    const { count } = await this.prisma.xeroOrganisation.updateMany({
+      where: { organizationId, xeroTenantId: tenantId, status: 'CONNECTED', OR: [{ catalogRecheckedAt: null }, { catalogRecheckedAt: { lte: since } }] },
+      data: { catalogRecheckedAt: now },
+    });
+    if (!count) return null;
+
+    // A part Xero did not say leaves what was read before; trouble with the connection stops the run, as a send would.
+    const unsaid = (error: unknown) => {
+      if (!(error instanceof XeroError) || READ_STOPPERS.has(error.code)) throw error;
+      this.logger.warn({ event: 'xero_catalog_recheck_part_failed', organizationId, xeroTenantId: tenantId, code: error.code });
+      return null;
+    };
+    const read: Partial<XeroCatalog> = {};
+    for (const part of parts) {
+      if (part === 'ACCOUNTS') {
+        const accounts = await this.client.get(organizationId, tenantId, '/Accounts', accountsSchema).then(accountsFrom).catch(unsaid);
+        if (accounts) read.accounts = accounts;
+      } else if (part === 'TAX_RATES') {
+        const taxRates = await this.client.get(organizationId, tenantId, '/TaxRates', taxRatesSchema).then(taxRatesFrom).catch(unsaid);
+        if (taxRates) read.taxRates = taxRates;
+      } else if (part === 'TRACKING') {
+        const trackingCategories = await this.client.get(organizationId, tenantId, '/TrackingCategories', trackingSchema).then(trackingCategoriesFrom).catch(unsaid);
+        if (trackingCategories) read.trackingCategories = trackingCategories;
+      } else {
+        const items = await this.client.get(organizationId, tenantId, '/Items', itemsSchema).then(itemsFrom).catch(unsaid);
+        if (items) read.items = items;
+      }
+    }
+    if (Object.keys(read).length) await this.prisma.xeroOrganisation.update({ where, data: read as unknown as Prisma.XeroOrganisationUpdateInput });
+    return read;
   }
 
   /** Ends the link to one organisation at Xero and marks it removed here; the others stay connected. */

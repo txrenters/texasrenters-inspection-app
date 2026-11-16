@@ -288,8 +288,12 @@ export interface InvoiceDetail extends InvoiceSummary {
    * (2026-11-13): on its way, or -- with `problem` -- refused by Xero for that
    * reason, to be put right and tried again from the Xero page. Null once Xero
    * has it (see `xero`), or when it is not going there.
+   *
+   * `heldBack` (2026-11-17): the console held it back itself, and Xero has
+   * not seen it; `waitsOnXero`: for something its company's books lacked as
+   * last read, which the console reads again within the hour.
    */
-  toXero?: { problem: string | null } | null;
+  toXero?: { problem: string | null; heldBack?: boolean; waitsOnXero?: boolean } | null;
 }
 
 /** The rest of what Jobber keeps on an invoice. */

@@ -598,7 +598,8 @@ export class XeroBooksService {
     if (mapped.lines.length) await tx.invoiceLine.createMany({ data: mapped.lines.map((line) => ({ organizationId, invoiceId, ...line })) });
     // The console's own, found in Xero (2026-11-12): its send is done, whatever became of the answer.
     if (target.console) {
-      const sent = { xeroTenantId: tenantId, xeroInvoiceId: mapped.xeroInvoiceId, status: 'SENT', nextAttemptAt: null, problem: null };
+      // No longer held back, if it was (2026-11-17).
+      const sent = { xeroTenantId: tenantId, xeroInvoiceId: mapped.xeroInvoiceId, status: 'SENT', nextAttemptAt: null, problem: null, heldBack: false, waitsOn: [] };
       await tx.xeroInvoiceSync.upsert({
         where: { invoiceId },
         create: { organizationId, invoiceId, ...sent, sentAt: new Date() },

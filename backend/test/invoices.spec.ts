@@ -363,9 +363,15 @@ describe('an invoice', () => {
       return (await serviceOver(db).one(office, INVOICE)).toXero;
     };
 
-    expect(await toXero()).toEqual({ problem: null });
-    sync.findUnique.mockResolvedValue({ status: 'FAILED', problem: 'Xero has invoice 8733 for another client: renumber one of them.' });
-    expect(await toXero()).toEqual({ problem: 'Xero has invoice 8733 for another client: renumber one of them.' });
+    expect(await toXero()).toEqual({ problem: null, heldBack: false, waitsOnXero: false });
+    // Held back by the console itself (2026-11-17), said apart from a refusal by Xero.
+    sync.findUnique.mockResolvedValue({ status: 'FAILED', problem: 'Xero has invoice 8733 for another client: renumber one of them.', heldBack: true, waitsOn: [] });
+    expect(await toXero()).toEqual({ problem: 'Xero has invoice 8733 for another client: renumber one of them.', heldBack: true, waitsOnXero: false });
+    const lacking = 'Income by Employee has no option “HVAC Inspection Income: Kevin” for Kevin Example. Add it in Xero, and the console sends the invoice within the hour.';
+    sync.findUnique.mockResolvedValue({ status: 'FAILED', problem: lacking, heldBack: true, waitsOn: ['TRACKING'] });
+    expect(await toXero()).toEqual({ problem: lacking, heldBack: true, waitsOnXero: true });
+    sync.findUnique.mockResolvedValue({ status: 'FAILED', problem: 'Account code 999 is not valid.', heldBack: false, waitsOn: [] });
+    expect(await toXero()).toEqual({ problem: 'Account code 999 is not valid.', heldBack: false, waitsOnXero: false });
 
     // In Xero already, Jobber's, voided, or made before the company's start date: nothing on its way.
     expect(await toXero({ xeroInvoiceId: 'xero-invoice-1', xeroStatus: 'DRAFT' })).toBeNull();

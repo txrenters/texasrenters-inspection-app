@@ -133,11 +133,34 @@ describe("an invoice's page", () => {
     expect(screen.getByText('On its way to Example Home Services’s books in Xero as a draft. Xero numbers it in a moment.')).toBeInTheDocument();
     unmount();
 
-    hooks.useInvoice.mockReturnValue(ready({ ...going, toXero: { problem: 'Xero has invoice 8733 for another client: renumber one of them.' } }));
+    hooks.useInvoice.mockReturnValue(ready({ ...going, toXero: { problem: 'Account code 999 is not valid.', heldBack: false, waitsOnXero: false } }));
     render(<InvoicePage />);
     expect(screen.getAllByText('Xero refused it').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Xero has invoice 8733 for another client: renumber one of them\. Put it right, then press Try again on the/)).toBeInTheDocument();
+    expect(screen.queryByText('Held back')).not.toBeInTheDocument();
+    expect(screen.getByText(/Account code 999 is not valid\. Put it right, then press Try again on the/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Xero page' })).toHaveAttribute('href', '/integrations/xero');
+  });
+
+  it('says the console held it back -- never that Xero refused it -- when the console’s own check stopped it (2026-11-17)', () => {
+    const going = { ...DETAIL, status: 'DRAFT' as const, number: 'INV-5416', company: { tenantId: 't-1', name: 'Example Home Services' } };
+    hooks.useInvoice.mockReturnValue(
+      ready({ ...going, toXero: { problem: 'Xero has invoice 8733 for another client: renumber one of them.', heldBack: true, waitsOnXero: false } }),
+    );
+    const { unmount } = render(<InvoicePage />);
+    // The badge, and the card's title.
+    expect(screen.getAllByText('Held back')).toHaveLength(2);
+    expect(screen.queryByText('Xero refused it')).not.toBeInTheDocument();
+    expect(screen.getByText(/renumber one of them\. Put it right, then press Try again on the/)).toBeInTheDocument();
+    unmount();
+
+    // For what the company's books lacked: the console looks in Xero again itself, so there is no button to send the office to.
+    const lacking = 'Income by Employee has no option “HVAC Inspection Income: Kevin” for Kevin Example. Add it in Xero, and the console sends the invoice within the hour.';
+    hooks.useInvoice.mockReturnValue(ready({ ...going, toXero: { problem: lacking, heldBack: true, waitsOnXero: true } }));
+    render(<InvoicePage />);
+    expect(screen.getAllByText('Held back')).toHaveLength(2);
+    expect(screen.queryByText('Xero refused it')).not.toBeInTheDocument();
+    expect(screen.getByText(lacking)).toBeInTheDocument();
+    expect(screen.queryByText(/press Try again/)).not.toBeInTheDocument();
   });
 
   it('voids an invoice only once asked, against the invoice as it was read', async () => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { formatMoney, type XeroSendingView } from '@texasrenters/shared';
+import { formatMoney, type XeroSendingFailure, type XeroSendingView } from '@texasrenters/shared';
 import { CircleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -25,7 +25,8 @@ import { useXeroSendingActions } from '@/lib/xero-queries';
 
 /**
  * Sending invoices to Xero (2026-11-10, phase 3 of the Xero plan): on or off,
- * what went, what Xero refused and why. Approved invoices, under each property
+ * what went, what the console held back or Xero refused (2026-11-17: said
+ * apart), and why. Approved invoices, under each property
  * as a contact; Xero emails nobody. Nothing is sent while it is off. And the
  * payments recorded against them (phase 4 of the multi-company plan), each
  * into the account chosen for how it was paid. Each invoice goes once
@@ -110,7 +111,7 @@ export function XeroSendingPanel({
       <dl className="grid grid-cols-3 gap-3 text-sm sm:max-w-md">
         <Count label="In Xero" value={view.counts.sent} />
         <Count label="Not sent yet" value={view.counts.notYet} />
-        <Count label="Refused" tone={view.counts.failed ? 'warning' : undefined} value={view.counts.failed} />
+        <Count label="Held or refused" tone={view.counts.failed ? 'warning' : undefined} value={view.counts.failed} />
         {view.counts.changedHere ? <Count label="Changed here since" tone="warning" value={view.counts.changedHere} /> : null}
       </dl>
       <dl aria-label="Payments" className="grid grid-cols-3 gap-3 text-sm sm:max-w-md">
@@ -168,11 +169,12 @@ export function XeroSendingPanel({
       ) : null}
 
       {view.failures.length ? (
-        <Table>
+        <Table aria-label="Invoices held back or refused">
           <TableHeader>
             <TableRow>
               <TableHead>Invoice</TableHead>
               <TableHead>Client</TableHead>
+              <TableHead>By</TableHead>
               <TableHead>Why</TableHead>
               <TableHead className="text-right">Tries</TableHead>
               <TableHead>Next try</TableHead>
@@ -183,11 +185,13 @@ export function XeroSendingPanel({
               <TableRow key={failure.invoiceId}>
                 <TableCell className="tabular-nums">{failure.number ? `#${failure.number}` : '—'}</TableCell>
                 <TableCell>{failure.clientName}</TableCell>
+                <TableCell>
+                  {/* The console's own hold, which Xero never saw, apart from Xero's refusal (2026-11-17). */}
+                  <Badge variant={failure.heldBack ? 'warning' : 'destructive'}>{failure.heldBack ? 'Held back' : 'Xero refused it'}</Badge>
+                </TableCell>
                 <TableCell className="max-w-md whitespace-normal">{failure.problem}</TableCell>
                 <TableCell className="text-right tabular-nums">{failure.attempts}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {failure.nextAttemptAt ? formatRelative(failure.nextAttemptAt) : 'When it changes'}
-                </TableCell>
+                <TableCell className="text-muted-foreground">{nextTry(failure)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -345,6 +349,15 @@ export function XeroSendingPanel({
       </AlertDialog>
     </Panel>
   );
+}
+
+/**
+ * When an invoice not sent is tried again: on Xero's timer; once Xero has what its company's books lacked, looked for
+ * within the hour by the console itself (2026-11-17); or when it changes.
+ */
+function nextTry(failure: XeroSendingFailure) {
+  if (failure.nextAttemptAt) return formatRelative(failure.nextAttemptAt);
+  return failure.heldBack && failure.waitsOnXero ? 'Once it is in Xero, within the hour' : 'When it changes';
 }
 
 function Count({ label, value, tone }: { label: string; value: number; tone?: 'warning' }) {

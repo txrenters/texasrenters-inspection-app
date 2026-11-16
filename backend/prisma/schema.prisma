@@ -4914,6 +4914,9 @@ model XeroOrganisation {
   projectUsers       Json?
   catalogReadAt    DateTime?
   catalogReadError String?
+  /// When the parts its held-back invoices wait on were last read again by
+  /// themselves (2026-11-17): at most once an hour, with no button pressed.
+  catalogRecheckedAt DateTime?
   /// Whether Xero's own invoice reminders are on in this organisation, as last read; null when Xero did not say.
   invoiceRemindersOn Boolean?
   /// Calls to this organisation on one Texas day (YYYY-MM-DD), against the console's own ceiling.
@@ -5085,6 +5088,14 @@ model XeroInvoiceSync {
   /// -- it is never sent again, and the office makes the change in Xero. Null
   /// while it says what went.
   changedHereAt   DateTime?
+  /// FAILED by the console's own check (2026-11-17), not refused by Xero: the
+  /// console would not send it as it is, and `problem` says why.
+  heldBack        Boolean   @default(false)
+  /// Held back for something its company's books lacked as last read
+  /// (2026-11-17): ACCOUNTS, TRACKING, ITEMS or TAX_RATES (checked). The
+  /// console reads those again from Xero at most once an hour, and sends it
+  /// once they have what it needs.
+  waitsOn         String[]  @default([])
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

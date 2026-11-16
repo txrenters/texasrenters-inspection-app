@@ -113,9 +113,7 @@ export default function InvoicePage() {
           <>
             <InvoiceStatusBadge status={data.status} />
             {data.xero ? <Badge variant="outline">{XERO_INVOICE_STATUS_LABEL[data.xero.status] ?? 'In Xero'}</Badge> : null}
-            {data.toXero ? (
-              <Badge variant={data.toXero.problem ? 'destructive' : 'outline'}>{data.toXero.problem ? 'Xero refused it' : 'Going to Xero'}</Badge>
-            ) : null}
+            {data.toXero ? <Badge variant={toXeroTone(data.toXero)}>{toXeroLabel(data.toXero)}</Badge> : null}
           </>
         }
         record={INVOICE_RECORD}
@@ -126,10 +124,14 @@ export default function InvoicePage() {
         aside={
           <>
             {data.toXero ? (
-              // On its way, or refused (2026-11-13): under its number when it has one (2026-11-16), else Xero gives it one.
-              <AsideCard title={data.toXero.problem ? 'Xero refused it' : 'Going to Xero'}>
+              // On its way, held back here (2026-11-17), or refused by Xero (2026-11-13): under its number when it has one
+              // (2026-11-16), else Xero gives it one.
+              <AsideCard title={toXeroLabel(data.toXero)}>
                 <p className="text-muted-foreground text-sm">
-                  {data.toXero.problem ? (
+                  {data.toXero.problem && data.toXero.heldBack && data.toXero.waitsOnXero ? (
+                    // For what the company's books lacked: the console looks in Xero again by itself, so no button to press.
+                    data.toXero.problem
+                  ) : data.toXero.problem ? (
                     <>
                       {data.toXero.problem} Put it right, then press Try again on the{' '}
                       <Link className="underline" href="/integrations/xero">
@@ -240,6 +242,22 @@ export default function InvoicePage() {
       {sendable ? <SendInvoiceDialog invoice={data} onClose={() => setSending(false)} open={sending} /> : null}
     </>
   );
+}
+
+type ToXero = NonNullable<InvoiceDetail['toXero']>;
+
+/**
+ * On its way; held back by the console's own check, which Xero never saw (2026-11-17); or refused by Xero. Once, the
+ * console's own hold read "Xero refused it", and the office looked in Xero for a refusal that was never there.
+ */
+function toXeroLabel(toXero: ToXero) {
+  if (!toXero.problem) return 'Going to Xero';
+  return toXero.heldBack ? 'Held back' : 'Xero refused it';
+}
+
+function toXeroTone(toXero: ToXero) {
+  if (!toXero.problem) return 'outline';
+  return toXero.heldBack ? 'warning' : 'destructive';
 }
 
 /** The property's address as the console knows it, else Jobber's address for the invoice's property. */
