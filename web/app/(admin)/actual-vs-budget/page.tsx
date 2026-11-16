@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { BudgetsDialog, DailySheet, ProjectionSheet, TrackerSheet } from '@/components/actual-vs-budget/daily-sheets';
+import { ExcelSyncDialog } from '@/components/actual-vs-budget/excel-sync-dialog';
 import { MoneyColumnsDialog } from '@/components/actual-vs-budget/money-columns-dialog';
 import { MonthlySheet, WeeklySheet } from '@/components/actual-vs-budget/period-sheets';
 import { TechnicianLog } from '@/components/actual-vs-budget/technician-log';
@@ -51,7 +52,7 @@ export default function ActualVsBudgetPage() {
     next: shiftDay(today, 1),
   });
   const technicians = useRevenueTechnicians();
-  const [dialog, setDialog] = useState<'columns' | 'budgets' | null>(null);
+  const [dialog, setDialog] = useState<'columns' | 'budgets' | 'excel' | null>(null);
   // The past technicians' logs come from the office's workbook, uploaded here (PR 4).
   const workbook = useRef<HTMLInputElement>(null);
   const importHistory = useRevenueHistoryImport();
@@ -100,6 +101,9 @@ export default function ActualVsBudgetPage() {
               <Button onClick={() => setDialog('columns')} size="sm" variant="outline">
                 Money columns
               </Button>
+              <Button onClick={() => setDialog('excel')} size="sm" variant="outline">
+                Excel
+              </Button>
             </>
           ) : (
             <OthersHere />
@@ -137,6 +141,7 @@ export default function ActualVsBudgetPage() {
       )}
       {dialog === 'columns' ? <MoneyColumnsDialog onClose={() => setDialog(null)} /> : null}
       {dialog === 'budgets' ? <BudgetsDialog onClose={() => setDialog(null)} /> : null}
+      {dialog === 'excel' ? <ExcelSyncDialog canManage={canEdit} onClose={() => setDialog(null)} /> : null}
     </div>
     </ActualVsBudgetLive>
   );

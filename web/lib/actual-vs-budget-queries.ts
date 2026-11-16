@@ -2,6 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ExcelSyncRun,
+  ExcelSyncView,
   RevenueBudgets,
   RevenueColumn,
   RevenueDay,
@@ -16,6 +18,7 @@ import type {
   SaveRevenueDayInput,
   SaveRevenueLogEntryInput,
   SaveRevenueMonthInput,
+  SaveExcelSyncInput,
   SaveRevenueWeekInput,
 } from '@texasrenters/shared';
 
@@ -207,6 +210,44 @@ export function useRevenueDayEdits() {
         client.setQueryData(budgetsKey, budgets);
         void reread();
       },
+    }),
+  };
+}
+
+// ── The office's own workbook in Excel (2026-11-17) ─────────────────────────
+
+const excelKey = [...actualVsBudgetKeys.all, 'excel'] as const;
+
+/** Read when the dialog opens; the dialog is open only while someone looks at it. */
+export function useExcelSync(enabled: boolean) {
+  return useQuery({
+    queryKey: excelKey,
+    queryFn: ({ signal }) => api<ExcelSyncView>(`${BASE}/excel`, { signal }),
+    enabled,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useExcelSyncEdits() {
+  const client = useQueryClient();
+  const keep = (view: ExcelSyncView) => client.setQueryData(excelKey, view);
+  const reread = () => client.invalidateQueries({ queryKey: excelKey });
+  return {
+    connect: useMutation({
+      mutationFn: () => api<{ authorizationUrl: string }>(`${BASE}/excel/connect`, { method: 'POST' }),
+    }),
+    save: useMutation({
+      mutationFn: (input: SaveExcelSyncInput) => api<ExcelSyncView>(`${BASE}/excel`, { method: 'PUT', body: JSON.stringify(input) }),
+      onSuccess: keep,
+    }),
+    sync: useMutation({
+      mutationFn: () => api<ExcelSyncRun>(`${BASE}/excel/sync`, { method: 'POST' }),
+      onSettled: reread,
+    }),
+    disconnect: useMutation({
+      mutationFn: () => api<ExcelSyncView>(`${BASE}/excel/connection`, { method: 'DELETE' }),
+      onSuccess: keep,
     }),
   };
 }
