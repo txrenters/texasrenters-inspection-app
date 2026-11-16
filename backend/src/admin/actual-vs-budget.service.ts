@@ -4,12 +4,19 @@ import {
   DEFAULT_PAYROLL_PERIOD,
   REGULAR_DAY_SECONDS,
   actualSeconds,
+  monthEnd,
+  monthWeeks,
   overtimeSeconds,
   payrollPeriodOf,
   trackerFigures,
   type RevenueBudgets,
   type RevenueDay,
   type RevenueDayTechnician,
+  type RevenueMonthReport,
+  type RevenueWeek,
+  type RevenueWeekRow,
+  type SaveRevenueMonthInput,
+  type SaveRevenueWeekInput,
   type SaveRevenueBudgetsInput,
   type SaveRevenueDayInput,
   logRangeProblem,
@@ -427,54 +434,16 @@ export class ActualVsBudgetService {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ApplicationError(422, 'BAD_DATES', 'Give the day as YYYY-MM-DD.');
     const settings = await this.payrollSettings(organizationId);
     const payrollPeriod = payrollPeriodOf(date, settings.start, settings.days);
-    const budgets = await this.prisma.revenueTechnicianSetting.findMany({
-      where: { organizationId },
-      select: { technicianId: true, dailyBudgetCents: true, otRateCents: true, technician: { select: { displayName: true } } },
-    });
-    if (!budgets.length) return { date, payrollPeriod, technicians: [] };
-    const ids = budgets.map((budget) => budget.technicianId);
     const from = payrollPeriod.from;
-    const start = businessDayBounds(businessDayFromQuery(from)).start;
-    const end = businessDayBounds(businessDayFromQuery(date)).end;
+    const { budgets, figuresOf } = await this.technicianDays(user, from, date);
+    if (!budgets.length) return { date, payrollPeriod, technicians: [] };
 
-    const [entries, segments, logs] = await Promise.all([
-      this.prisma.revenueDayEntry.findMany({
-        where: { organizationId, technicianId: { in: ids }, day: { gte: dateOf(from), lte: dateOf(date) } },
-        select: { technicianId: true, day: true, budgetCents: true, workSeconds: true, projectionRemarks: true, dailyRemarks: true, trackerRemarks: true },
-      }),
-      this.prisma.timeSegment.findMany({
-        where: { organizationId, technicianId: { in: ids }, startedAt: { gte: start, lt: end } },
-        select: { technicianId: true, startedAt: true, durationSeconds: true },
-      }),
-      // Each technician's log over the period so far: at most a month, read once per technician.
-      Promise.all(ids.map((technicianId) => this.log(user, { technicianId, from, to: date }))),
-    ]);
-
-    const worked = new Map<string, number>();
-    for (const segment of segments) {
-      const key = `${segment.technicianId}:${businessDate(segment.startedAt)}`;
-      worked.set(key, (worked.get(key) ?? 0) + segment.durationSeconds);
-    }
-    const entryOf = new Map(entries.map((entry) => [`${entry.technicianId}:${dayOf(entry.day)}`, entry]));
-
-    const technicians = budgets.map((budget, index): RevenueDayTechnician => {
-      const totals = new Map(logs[index]!.days.map((logDay) => [logDay.date, logDay.totals]));
-      const dayOfTechnician = (day: string) => {
-        const entry = entryOf.get(`${budget.technicianId}:${day}`);
-        const total = totals.get(day);
-        const timesheet = worked.get(`${budget.technicianId}:${day}`);
-        return {
-          entry,
-          total,
-          budgetCents: entry?.budgetCents ?? budget.dailyBudgetCents,
-          workSeconds: entry?.workSeconds ?? (timesheet ? timesheet : null),
-          actualCents: total ? total.laborCents + total.serviceCallFeeCents : 0,
-        };
-      };
+    const technicians = budgets.map((budget): RevenueDayTechnician => {
+      const dayOfTechnician = (day: string) => figuresOf(budget.technicianId, day);
       const period = { regularSeconds: 0, overtimeSeconds: 0, budgetedCents: 0, actualCents: 0 };
       for (let day = from; day <= date; day = nextDay(day)) {
         const figures = dayOfTechnician(day);
-        if (!figures.workSeconds && !figures.actualCents && !figures.total) continue;
+        if (!figures.worked) continue;
         const work = figures.workSeconds ?? 0;
         period.regularSeconds += Math.min(work, REGULAR_DAY_SECONDS);
         period.overtimeSeconds += overtimeSeconds(work);
@@ -503,6 +472,197 @@ export class ActualVsBudgetService {
     return { date, payrollPeriod, technicians };
   }
 
+  /**
+   * The technicians with a budget, and each one's figures for each day of a
+   * stretch: the day's budget, the hours worked, the actual revenue, and
+   * whether it counts as a day worked -- hours on the timesheet, revenue, or
+   * visits on the log. What the daily sheets and the weekly and monthly
+   * reports are all made of. Each technician's log is read once for the
+   * stretch, which is never more than a month.
+   */
+  private async technicianDays(user: AuthenticatedUser, from: string, to: string) {
+    const organizationId = user.organizationId;
+    const budgets = await this.prisma.revenueTechnicianSetting.findMany({
+      where: { organizationId },
+      select: { technicianId: true, dailyBudgetCents: true, otRateCents: true, technician: { select: { displayName: true } } },
+    });
+    const ids = budgets.map((budget) => budget.technicianId);
+    const start = businessDayBounds(businessDayFromQuery(from)).start;
+    const end = businessDayBounds(businessDayFromQuery(to)).end;
+    const [entries, segments, logs] = ids.length
+      ? await Promise.all([
+          this.prisma.revenueDayEntry.findMany({
+            where: { organizationId, technicianId: { in: ids }, day: { gte: dateOf(from), lte: dateOf(to) } },
+            select: { technicianId: true, day: true, budgetCents: true, workSeconds: true, projectionRemarks: true, dailyRemarks: true, trackerRemarks: true },
+          }),
+          this.prisma.timeSegment.findMany({
+            where: { organizationId, technicianId: { in: ids }, startedAt: { gte: start, lt: end } },
+            select: { technicianId: true, startedAt: true, durationSeconds: true },
+          }),
+          Promise.all(ids.map((technicianId) => this.log(user, { technicianId, from, to }))),
+        ])
+      : [[], [], []];
+
+    const worked = new Map<string, number>();
+    for (const segment of segments) {
+      const key = `${segment.technicianId}:${businessDate(segment.startedAt)}`;
+      worked.set(key, (worked.get(key) ?? 0) + segment.durationSeconds);
+    }
+    const entryOf = new Map(entries.map((entry) => [`${entry.technicianId}:${dayOf(entry.day)}`, entry]));
+    const totalsOf = new Map(ids.map((id, index) => [id, new Map(logs[index]!.days.map((logDay) => [logDay.date, logDay.totals]))]));
+    const budgetOf = new Map(budgets.map((budget) => [budget.technicianId, budget]));
+
+    const figuresOf = (technicianId: string, day: string) => {
+      const entry = entryOf.get(`${technicianId}:${day}`);
+      const total = totalsOf.get(technicianId)?.get(day);
+      const timesheet = worked.get(`${technicianId}:${day}`);
+      const workSeconds = entry?.workSeconds ?? (timesheet ? timesheet : null);
+      const actualCents = total ? total.laborCents + total.serviceCallFeeCents : 0;
+      return {
+        entry,
+        total,
+        budgetCents: entry?.budgetCents ?? budgetOf.get(technicianId)!.dailyBudgetCents,
+        workSeconds,
+        actualCents,
+        worked: Boolean(workSeconds || actualCents || total),
+      };
+    };
+    return { budgets, figuresOf };
+  }
+
+  // ── PR 3: the weekly and monthly reports ─────────────────────────────────
+
+  /**
+   * A month's weekly reports and its monthly report. A week's target is the
+   * technician's budget for each day they worked -- the workbook's "=610*4"
+   * -- and its actual revenue the days' Labor Hours Income plus Service Call
+   * Fee; the office can type over either, and the remarks are its own. The
+   * month adds up its weeks, as the "Month of" tabs add up the weekly tabs.
+   */
+  async month(user: AuthenticatedUser, month: string): Promise<RevenueMonthReport> {
+    const organizationId = user.organizationId;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApplicationError(422, 'BAD_DATES', 'Give the month as YYYY-MM.');
+    const weeks = monthWeeks(month);
+    const first = `${month}-01`;
+    const last = monthEnd(month);
+    const { budgets, figuresOf } = await this.technicianDays(user, first, last);
+    if (!budgets.length) return { month, weeks: weeks.map((week) => ({ ...week, technicians: [] })), technicians: [] };
+    const ids = budgets.map((budget) => budget.technicianId);
+    const [weekEntries, monthEntries] = await Promise.all([
+      this.prisma.revenueWeekEntry.findMany({
+        where: { organizationId, technicianId: { in: ids }, weekStart: { gte: dateOf(first), lte: dateOf(last) } },
+        select: { technicianId: true, weekStart: true, targetCents: true, actualCents: true, remarks: true },
+      }),
+      this.prisma.revenueMonthEntry.findMany({
+        where: { organizationId, technicianId: { in: ids }, month: dateOf(first) },
+        select: { technicianId: true, remarks: true },
+      }),
+    ]);
+    const weekEntryOf = new Map(weekEntries.map((entry) => [`${entry.technicianId}:${dayOf(entry.weekStart)}`, entry]));
+    const byName = [...budgets].sort((left, right) => left.technician.displayName.localeCompare(right.technician.displayName));
+
+    const reports: RevenueWeek[] = weeks.map((week) => ({
+      ...week,
+      technicians: byName.map((budget): RevenueWeekRow => {
+        let target = 0;
+        let actual = 0;
+        let daysWorked = 0;
+        for (let day = week.from; day <= week.to; day = nextDay(day)) {
+          const figures = figuresOf(budget.technicianId, day);
+          actual += figures.actualCents;
+          if (!figures.worked) continue;
+          daysWorked += 1;
+          target += figures.budgetCents;
+        }
+        const entry = weekEntryOf.get(`${budget.technicianId}:${week.from}`);
+        return {
+          technician: { id: budget.technicianId, name: budget.technician.displayName },
+          targetCents: entry?.targetCents ?? target,
+          actualCents: entry?.actualCents ?? actual,
+          daysWorked,
+          typed: { target: entry?.targetCents != null, actual: entry?.actualCents != null },
+          remarks: entry?.remarks ?? null,
+        };
+      }),
+    }));
+    const remarksOf = new Map(monthEntries.map((entry) => [entry.technicianId, entry.remarks]));
+    return {
+      month,
+      weeks: reports,
+      technicians: byName.map((budget, index) => ({
+        technician: { id: budget.technicianId, name: budget.technician.displayName },
+        targetCents: reports.reduce((sum, week) => sum + week.technicians[index]!.targetCents, 0),
+        actualCents: reports.reduce((sum, week) => sum + week.technicians[index]!.actualCents, 0),
+        remarks: remarksOf.get(budget.technicianId) ?? null,
+      })),
+    };
+  }
+
+  /** What the office typed for a technician's week: target, actual revenue, remarks. */
+  async saveWeek(user: AuthenticatedUser, technicianId: string, weekStart: string, input: SaveRevenueWeekInput) {
+    const week = monthWeeks(weekStart.slice(0, 7)).find((candidate) => candidate.from === weekStart);
+    if (!week) throw new ApplicationError(422, 'BAD_DATES', 'That is not the first day of a week of its month.');
+    return this.saveTyped(user, technicianId, 'REVENUE_WEEK_EDITED', `${technicianId}:${weekStart}`, input, ['targetCents', 'actualCents', 'remarks'], {
+      find: (tx) => tx.revenueWeekEntry.findUnique({ where: { technicianId_weekStart: { technicianId, weekStart: dateOf(weekStart) } } }),
+      upsert: (tx, data, organizationId) =>
+        tx.revenueWeekEntry.upsert({
+          where: { technicianId_weekStart: { technicianId, weekStart: dateOf(weekStart) } },
+          create: { organizationId, technicianId, weekStart: dateOf(weekStart), ...data },
+          update: data,
+        }),
+    });
+  }
+
+  /** The remarks the office typed for a technician's month. */
+  async saveMonth(user: AuthenticatedUser, technicianId: string, month: string, input: SaveRevenueMonthInput) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new ApplicationError(422, 'BAD_DATES', 'Give the month as YYYY-MM.');
+    const first = dateOf(`${month}-01`);
+    return this.saveTyped(user, technicianId, 'REVENUE_MONTH_EDITED', `${technicianId}:${month}`, input, ['remarks'], {
+      find: (tx) => tx.revenueMonthEntry.findUnique({ where: { technicianId_month: { technicianId, month: first } } }),
+      upsert: (tx, data, organizationId) =>
+        tx.revenueMonthEntry.upsert({
+          where: { technicianId_month: { technicianId, month: first } },
+          create: { organizationId, technicianId, month: first, ...data },
+          update: data,
+        }),
+    });
+  }
+
+  /** Save the cells the office typed into a week or a month, and put the change on the record. */
+  private async saveTyped(
+    user: AuthenticatedUser,
+    technicianId: string,
+    action: string,
+    entityId: string,
+    input: object,
+    fields: readonly string[],
+    store: {
+      find: (tx: Prisma.TransactionClient) => Promise<Record<string, unknown> | null>;
+      upsert: (tx: Prisma.TransactionClient, data: Record<string, unknown>, organizationId: string) => Promise<unknown>;
+    },
+  ) {
+    const organizationId = user.organizationId;
+    const technician = await this.technicianOf(organizationId, technicianId);
+    const data: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (!(field in input)) continue;
+      const value = (input as Record<string, unknown>)[field];
+      data[field] = typeof value === 'string' ? value.trim() || null : (value ?? null);
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const before = await store.find(tx);
+      const changes = Object.entries(data)
+        .filter(([field, value]) => (before?.[field] ?? null) !== value)
+        .map(([field, value]) => ({ field, from: String(before?.[field] ?? ''), to: String(value ?? '') }));
+      if (!changes.length) return;
+      await store.upsert(tx, { ...data, updatedById: auditActor(user).actorUserId }, organizationId);
+      await tx.auditLog.create({
+        data: { organizationId, ...auditActor(user), action, entityType: 'RevenueReport', entityId, metadata: { technician: technician.name, changes } },
+      });
+    });
+    return { saved: true };
+  }
+
   /** What the office typed for a technician's day. */
   async saveDay(user: AuthenticatedUser, technicianId: string, date: string, input: SaveRevenueDayInput) {
     const organizationId = user.organizationId;
@@ -510,7 +670,7 @@ export class ActualVsBudgetService {
     const data: Record<string, unknown> = {};
     for (const field of DAY_FIELDS) {
       if (!(field in input)) continue;
-      const value = input[field];
+      const value = (input as Record<string, unknown>)[field];
       data[field] = typeof value === 'string' ? value.trim() || null : (value ?? null);
     }
     await this.prisma.$transaction(async (tx) => {

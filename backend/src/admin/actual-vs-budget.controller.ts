@@ -6,6 +6,8 @@ import {
   type RevenueColumn,
   type SaveRevenueBudgetsInput,
   type SaveRevenueDayInput,
+  type SaveRevenueMonthInput,
+  type SaveRevenueWeekInput,
   type SaveRevenueLogEntryInput,
 } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
@@ -99,6 +101,24 @@ export class SaveRevenueBudgetsDto implements Required<SaveRevenueBudgetsInput> 
   @IsOptional() @IsArray() @ArrayMaxSize(200) @ValidateNested({ each: true }) @Type(() => RevenueBudgetRowDto) technicians!: RevenueBudgetRowDto[];
 }
 
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+export class RevenueMonthQueryDto {
+  @Matches(MONTH) month!: string;
+}
+
+/** What the office types for a technician's week. Every field of `SaveRevenueWeekInput` is named here. */
+export class SaveRevenueWeekDto implements Required<SaveRevenueWeekInput> {
+  @ValidateIf(SET) @IsInt() @Min(0) @Max(MOST_CENTS) targetCents!: number | null;
+  @ValidateIf(SET) @IsInt() @Min(0) @Max(MOST_CENTS) actualCents!: number | null;
+  @ValidateIf(SET) @IsString() @MaxLength(2000) remarks!: string | null;
+}
+
+/** What the office types for a technician's month. Every field of `SaveRevenueMonthInput` is named here. */
+export class SaveRevenueMonthDto implements Required<SaveRevenueMonthInput> {
+  @ValidateIf(SET) @IsString() @MaxLength(2000) remarks!: string | null;
+}
+
 export class SaveRevenueProductColumnDto {
   @IsIn(REVENUE_COLUMNS) column!: RevenueColumn;
 }
@@ -167,6 +187,34 @@ export class ActualVsBudgetController {
     @Body() body: SaveRevenueDayDto,
   ) {
     return this.revenue.saveDay(request.user, technicianId, dayParam(params.date), body);
+  }
+
+  @Get('month')
+  @RequirePermissions('invoices:read')
+  month(@Req() request: AuthenticatedRequest, @Query() query: RevenueMonthQueryDto) {
+    return this.revenue.month(request.user, query.month);
+  }
+
+  @Put('week/:technicianId/:weekStart')
+  @RequirePermissions('invoices:manage')
+  saveWeek(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId', ParseUUIDPipe) technicianId: string,
+    @Param() params: { weekStart: string },
+    @Body() body: SaveRevenueWeekDto,
+  ) {
+    return this.revenue.saveWeek(request.user, technicianId, dayParam(params.weekStart), body);
+  }
+
+  @Put('month/:technicianId/:month')
+  @RequirePermissions('invoices:manage')
+  saveMonth(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId', ParseUUIDPipe) technicianId: string,
+    @Param() params: { month: string },
+    @Body() body: SaveRevenueMonthDto,
+  ) {
+    return this.revenue.saveMonth(request.user, technicianId, params.month, body);
   }
 
   @Get('budgets')

@@ -7,10 +7,13 @@ import type {
   RevenueDay,
   RevenueLog,
   RevenueLogTechnicians,
+  RevenueMonthReport,
   RevenueProductColumns,
   SaveRevenueBudgetsInput,
   SaveRevenueDayInput,
   SaveRevenueLogEntryInput,
+  SaveRevenueMonthInput,
+  SaveRevenueWeekInput,
 } from '@texasrenters/shared';
 
 import { api } from './api';
@@ -104,6 +107,39 @@ export function useRevenueDay(date: string) {
     enabled: /^\d{4}-\d{2}-\d{2}$/.test(date),
     ...KEPT,
   });
+}
+
+/** A month's weekly reports and its monthly report. */
+export function useRevenueMonth(month: string) {
+  return useQuery({
+    queryKey: [...actualVsBudgetKeys.all, 'month', month] as const,
+    queryFn: ({ signal }) => api<RevenueMonthReport>(`${BASE}/month?${new URLSearchParams({ month }).toString()}`, { signal }),
+    enabled: /^\d{4}-\d{2}$/.test(month),
+    ...KEPT,
+  });
+}
+
+export function useRevenuePeriodEdits() {
+  const client = useQueryClient();
+  const reread = () => client.invalidateQueries({ queryKey: [...actualVsBudgetKeys.all, 'month'] });
+  return {
+    saveWeek: useMutation({
+      mutationFn: ({ technicianId, weekStart, input }: { technicianId: string; weekStart: string; input: SaveRevenueWeekInput }) =>
+        api<{ saved: boolean }>(`${BASE}/week/${encodeURIComponent(technicianId)}/${encodeURIComponent(weekStart)}`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: reread,
+    }),
+    saveMonth: useMutation({
+      mutationFn: ({ technicianId, month, input }: { technicianId: string; month: string; input: SaveRevenueMonthInput }) =>
+        api<{ saved: boolean }>(`${BASE}/month/${encodeURIComponent(technicianId)}/${encodeURIComponent(month)}`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: reread,
+    }),
+  };
 }
 
 export function useRevenueBudgets(enabled: boolean) {
