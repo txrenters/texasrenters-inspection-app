@@ -124,7 +124,7 @@ describe('the filters', () => {
     mount({ status: 'DONE' });
 
     expect(asked().status).toBe('DONE');
-    expect(screen.getByText('Status:').parentElement).toHaveTextContent('Done');
+    expect(screen.getByText('Status:').parentElement).toHaveTextContent('Complete');
   });
 
   it('narrows to one technician, or to visits nobody is on', () => {
@@ -158,13 +158,25 @@ describe('the filters', () => {
 });
 
 describe('the table', () => {
-  it('says Done for a submitted visit, and Could not get in where the technician said so', () => {
+  it('says Partially complete, and what is owed, while a job on the visit is not finished', () => {
+    mount({}, [
+      row({ id: 'a', status: 'REVIEW_REQUIRED', openWork: { services: ['fleaTreatment'], inspections: [] } }),
+      row({ id: 'b', status: 'REVIEW_REQUIRED', openWork: { services: [], inspections: ['OCCUPIED'] } }),
+    ]);
+
+    expect(screen.getAllByText('Partially complete')).toHaveLength(2);
+    expect(screen.getByText('Flea treatment still to do')).toBeInTheDocument();
+    expect(screen.getByText('Occupied inspection still to do')).toBeInTheDocument();
+    expect(screen.queryByText('Complete')).toBeNull();
+  });
+
+  it('says Complete for a submitted visit, and Could not get in where the technician said so', () => {
     mount({}, [
       row({ id: 'a', status: 'REVIEW_REQUIRED' }),
       row({ id: 'b', status: 'TECHNICIAN_SUBMITTED', completionBlockedReason: 'Could not get in: gate locked' }),
     ]);
 
-    expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.getByText('Complete')).toBeInTheDocument();
     expect(screen.getByText('Could not get in')).toBeInTheDocument();
     expect(screen.queryByText('Review required')).toBeNull();
   });

@@ -66,7 +66,9 @@ import { OFFICE_NOTE_SELECT, officeNoteView } from './inspection-notes.service';
 import {
   DONE_INSPECTION_STATUSES,
   isDoneInspectionStatus,
+  OPEN_WORK_SELECT,
   UPCOMING_INSPECTION_STATUSES,
+  visitOpenWork,
 } from '../common/inspection-done';
 import { inspectionSearchWhere, inspectionStatusWhere } from './inspection-list-where';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
@@ -1726,6 +1728,8 @@ export class AdminService {
       // With the status, where the visit stands in the office's words: a done
       // visit whose reason says the technician could not get in reads as that.
       completionBlockedReason: true,
+      // And what a submitted visit still owes: with any, it is Partially complete.
+      ...OPEN_WORK_SELECT,
       inspectionType: true,
       baselineInspectionId: true,
       baselineInspection: {
@@ -1891,8 +1895,9 @@ export class AdminService {
     }
 
     const listed = this.page(
-      items.map((item) => ({
+      items.map(({ rescheduleRequests, jobberCompanionOf, jobberCompanions, ...item }) => ({
         ...item,
+        openWork: visitOpenWork({ status: item.status, rescheduleRequests, jobberCompanionOf, jobberCompanions }),
         /** The quarter of the programme it belongs to, not the one its day falls in. */
         quarter: visitQuarter(item),
         /**
@@ -1937,8 +1942,8 @@ export class AdminService {
         jobberVisitId: true,
         // The other job the same Jobber visit booked, either way round
         // (2026-10-13): the office sees the two belong together.
-        jobberCompanionOf: { select: { id: true, inspectionType: true, status: true } },
-        jobberCompanions: { select: { id: true, inspectionType: true, status: true } },
+        // With the reschedule requests, what a submitted visit still owes.
+        ...OPEN_WORK_SELECT,
         // Its quarter's plan, if it has one: the job's header says TBP and which quarter.
         tbpPlanStop: { select: { plan: { select: { quarterYear: true, quarterNumber: true } } } },
         // The visit as the coordinator wrote it, for the office. This select
@@ -2085,7 +2090,7 @@ export class AdminService {
 
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
-    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, areas: roomsWrittenOn, officeNotes, ...detail } =
+    const { jobberVisitId, jobberOutboundTasks, tbpPlanStop, areas: roomsWrittenOn, officeNotes, rescheduleRequests, ...detail } =
       inspection;
     // Optional-chained for the test doubles that stand in for this read without it.
     const consoleTasks = jobberOutboundTasks ?? [];
@@ -2101,6 +2106,13 @@ export class AdminService {
     );
     return {
       ...detail,
+      // Optional-chained for the test doubles that stand in for this read without them.
+      openWork: visitOpenWork({
+        status: inspection.status,
+        rescheduleRequests: rescheduleRequests ?? [],
+        jobberCompanionOf: inspection.jobberCompanionOf ?? null,
+        jobberCompanions: inspection.jobberCompanions ?? [],
+      }),
       evidence,
       baselineMissing,
       comparisonBaseline,

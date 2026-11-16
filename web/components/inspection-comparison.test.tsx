@@ -201,16 +201,26 @@ describe('the move-in comparison', () => {
     );
   });
 
-  it('sums up the comparison in four figures, the findings to confirm linking to them', () => {
+  it('sums up the comparison in three figures, with the findings to confirm as a line and its button', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
     expect(screen.getByText('Rooms with new damage').parentElement?.parentElement).toHaveTextContent('1');
     expect(screen.getByText('Items damaged since move-in').parentElement?.parentElement).toHaveTextContent('1');
     expect(screen.getByText('Items to clean').parentElement?.parentElement).toHaveTextContent('1');
-    expect(screen.getByRole('link', { name: 'Review on the inspection page' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Review findings' })).toHaveAttribute(
       'href',
       '/inspections/move-out-1',
     );
+  });
+
+  it('draws every item as one bar split by how it came out, and each room’s own', () => {
+    render(<InspectionComparisonPanel inspectionId="move-out-1" />);
+
+    const whole = screen.getByRole('img', { name: /^All \d+ items: / });
+    expect(whole.getAttribute('aria-label')).toMatch(/1 new since move-in/);
+    // The key names only what occurs, each with its count.
+    expect(screen.getByText('New since move-in').parentElement).toHaveTextContent(/New since move-in\s*1/);
+    expect(screen.getAllByRole('img', { name: /^Entrance: / }).length).toBeGreaterThan(0);
   });
 
   it('filters the rooms', () => {
@@ -259,8 +269,8 @@ describe('a comparison going out', () => {
   it('can be shared as soon as it is here, with nothing to decide first', () => {
     render(<InspectionComparisonPanel inspectionId="move-out-1" />);
 
-    expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
-    expect(screen.getByRole('link', { name: 'Open report' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Share comparison' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Open comparison report' })).toHaveAttribute(
       'href',
       '/inspections/move-out-1/comparison-report',
     );
@@ -276,8 +286,8 @@ describe('a comparison going out', () => {
     expect(
       screen.getByText('2 move-out recordings are still being processed; their findings will follow.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Findings to confirm')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Share' })).toBeEnabled();
+    expect(screen.getByText('1 finding to confirm')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Share comparison' })).toBeEnabled();
   });
 
   it('says how a comparison comes to exist when there is none yet', () => {

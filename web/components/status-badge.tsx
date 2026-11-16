@@ -62,7 +62,9 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   CANCELLED: { label: 'Cancelled', tone: 'muted', glyph: 'destructive' },
   // Where a visit stands, in the office's words (`VisitState`): what the
   // inspections list and the inspection page say.
-  DONE: { label: 'Done', tone: 'success', glyph: 'success' },
+  DONE: { label: 'Complete', tone: 'success', glyph: 'success' },
+  // Submitted, with a job on the visit still owed (2026-11-17).
+  PARTIALLY_COMPLETE: { label: 'Partially complete', tone: 'warning', glyph: 'warning' },
   COULD_NOT_GET_IN: { label: 'Could not get in', tone: 'warning', glyph: 'warning' },
   FOLLOW_UP: { label: 'Follow-up required', tone: 'destructive', glyph: 'warning' },
 

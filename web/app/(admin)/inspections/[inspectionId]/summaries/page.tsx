@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 
 import { InspectionSummaries } from '@/components/area-evidence/InspectionSummaries';
 import { InspectionTabs } from '@/components/inspection-tabs';
-import { PageHeader } from '@/components/page-header';
+import { JobTabHeader } from '@/components/job-tab-header';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { useInspection } from '@/lib/queries';
 
@@ -25,12 +25,9 @@ export default function InspectionSummariesPage() {
 
   return (
     <>
-      <PageHeader
-        description={`${item.propertywareBuilding?.name ?? 'Inspection'} · ${
-          item.propertywareUnit?.name ?? 'Entire property'
-        }`}
-        title="Summaries of all areas"
-      />
+      {/* The job's own header on every tab: which property this is stays in
+          the title, and the tab says which part of it is open (2026-11-17). */}
+      <JobTabHeader item={item} />
 
       <InspectionTabs active="summaries" inspectionId={id} inspectionType={item.inspectionType} />
 

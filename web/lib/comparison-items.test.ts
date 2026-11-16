@@ -11,6 +11,8 @@ import {
   roomDigest,
   roomInFilter,
   waitingCount,
+  itemResult,
+  resultCounts,
 } from './comparison-items';
 
 /** How a checklist item compared between move-in and move-out reads on screen. */
@@ -162,5 +164,30 @@ describe('the change, as the table names it', () => {
       changeMeta({ change: 'NO_CHANGE', moveIn: { clean: true, undamaged: null, working: null, comment: null } }).label,
     ).toBe('Good at move-out');
     expect(changeMeta({ change: 'NEW_DAMAGE', moveIn: sound }).label).toBe('New since move-in');
+  });
+});
+
+describe('how an item came out, as one answer', () => {
+  const item = (change: string, cleaning: string | null = null) =>
+    ({ change, cleaning }) as Parameters<typeof itemResult>[0];
+
+  it('puts each item in exactly one part of the bar, damage before cleaning', () => {
+    expect(itemResult(item('NEW_DAMAGE', 'NEEDS_CLEANING'))).toBe('NEW');
+    expect(itemResult(item('NO_CHANGE', 'NEEDS_CLEANING'))).toBe('CLEANING');
+    expect(itemResult(item('ALREADY_DAMAGED', 'ALREADY_DIRTY'))).toBe('ALREADY');
+    expect(itemResult(item('REPAIRED'))).toBe('REPAIRED');
+    expect(itemResult(item('NO_CHANGE', 'ALREADY_DIRTY'))).toBe('SAME');
+    expect(itemResult(item('NO_BASELINE'))).toBe('UNGRADED');
+    expect(itemResult(item('NOT_GRADED'))).toBe('UNGRADED');
+  });
+
+  it('counts every item once across the rooms', () => {
+    const counts = resultCounts([
+      { items: [item('NEW_DAMAGE'), item('NO_CHANGE'), item('NO_CHANGE', 'NEEDS_CLEANING')] },
+      { items: [item('NEW_DAMAGE'), item('REPAIRED')] },
+      { items: undefined },
+    ] as Parameters<typeof resultCounts>[0]);
+    expect(counts).toEqual({ NEW: 2, CLEANING: 1, ALREADY: 0, REPAIRED: 1, SAME: 1, UNGRADED: 0 });
+    expect(Object.values(counts).reduce((sum, count) => sum + count, 0)).toBe(5);
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { isFinishedStatus } from '@texasrenters/shared';
+import { isFinishedStatus, isWorkedVisit, visitStateOf } from '@texasrenters/shared';
 import { ClipboardCheckIcon, MoreHorizontalIcon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -19,6 +19,7 @@ import {
 import { InspectionTabs } from '@/components/inspection-tabs';
 import { MarkCompleteDialog } from '@/components/inspection-workflow';
 import { JobHeadline } from '@/components/job-headline';
+import { JobKeyFacts } from '@/components/job-key-facts';
 import { JobNotes } from '@/components/job-notes';
 import { OpenReportButton } from '@/components/open-report-button';
 import { PageHeader } from '@/components/page-header';
@@ -27,7 +28,6 @@ import { Panel } from '@/components/panel';
 import { InvoicesCard } from '@/components/invoices/invoice-parts';
 import { RecordLayout } from '@/components/record/record-kit';
 import { ReportShareDialog } from '@/components/report-share-dialog';
-import { Stat, StatGroup } from '@/components/stat-card';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -41,9 +41,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { VisitCard } from '@/components/visit-card';
 import { usePermissions } from '@/lib/auth';
-import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
+import { EMPTY, formatDateTime, humanize } from '@/lib/format';
 import { typeTitle, typeTone } from '@/lib/inspection-type-tone';
-import { reviewComesFirst } from '@/lib/job-page';
+import { jobKeyFacts } from '@/lib/job-facts';
+import { openWorkWords, reviewComesFirst } from '@/lib/job-page';
 import {
   useAreaEvidenceSummary,
   useAssignments,
@@ -169,12 +170,23 @@ function InspectionDetail() {
     item.inspectionType === 'MOVE_OUT' ||
     item.inspectionType === 'OCCUPIED' ||
     item.inspectionType === 'BACK_TO_MARKET';
-  const pending = pendingFindings.data?.total ?? 0;
   const showsFindings = permissions.has('findings:read');
-  // Whole rows only: a StatGroup draws its hairlines through the gaps, so a
-  // column with no figure in it shows as a block of border colour.
-  const figureColumns =
-    REVIEW_COLUMNS[1 + (showsFindings ? 1 : 0) + (comparesToMoveIn ? 1 : 0)] ?? REVIEW_COLUMNS[1];
+  const visitState = visitStateOf(item);
+  /**
+   * The key information, under the title on every job (the office,
+   * 2026-11-17). It took the place of the three review figures, which only a
+   * walked job had, and of the Visit card's own four facts, which on a
+   * finished job sat a screen and a half down.
+   */
+  const facts = jobKeyFacts({
+    inspection: item,
+    technicianName: current?.technician?.displayName ?? null,
+    baseline: comparesToMoveIn ? baseline : undefined,
+    areas: areaSummary.data
+      ? { reviewed: areaSummary.data.totals.areasReviewed, total: areaSummary.data.totals.areas }
+      : null,
+    pendingFindings: showsFindings && pendingFindings.data ? pendingFindings.data.total : null,
+  });
   /**
    * Deletion is deliberately *not* gated on the visit being over, unlike
    * everything else in this menu: deleting removes the record outright, which
@@ -204,7 +216,11 @@ function InspectionDetail() {
             </Button>
           ) : null
         }
+        facts={false}
         inspection={item}
+        // What the technician was sent to do stays readable after the visit:
+        // the office reads it against what was done (2026-11-17).
+        instructionsOpen
         rescheduleHref={permissions.hasAny('inspections:manage', 'planning:publish') ? '/reschedules' : undefined}
         technicianName={current?.technician?.displayName ?? null}
       />
@@ -246,10 +262,15 @@ function InspectionDetail() {
                 {current ? 'Reassign' : 'Assign technician'}
               </Button>
             ) : null}
-            {reviewing ? <OpenReportButton inspectionId={id} /> : null}
+            {/* Sharing is the rarer act and goes out to an owner or a tenant;
+                opening the report is what the office does on every job, so
+                that is the filled button (2026-11-17). */}
             {reviewing && permissions.has('reports:share') ? (
-              <Button onClick={() => setSharing(true)}>Share report</Button>
+              <Button onClick={() => setSharing(true)} variant="outline">
+                Share report
+              </Button>
             ) : null}
+            {reviewing ? <OpenReportButton inspectionId={id} primary /> : null}
             {canUseMenu ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -294,13 +315,20 @@ function InspectionDetail() {
         }
         badges={
           <>
-            <StatusBadge value={item.status} />
+            {/* Where the visit stands first -- Complete, Partially complete,
+                Could not get in -- as the list says it; then, on a walked job,
+                where the office's review of it stands. */}
+            <StatusBadge value={visitState} />
+            {isWorkedVisit(visitState) && item.status !== 'TECHNICIAN_SUBMITTED' && item.status !== 'COMPLETED' ? (
+              <StatusBadge value={item.status} />
+            ) : null}
             {/* Priority only when it is an exception, as on the list
                 (console-development). What the job is reads under the address. */}
             {item.priority && item.priority !== 'STANDARD' ? <StatusBadge value={item.priority} /> : null}
           </>
         }
         description={<JobHeadline item={item} />}
+        prominent
         record={{
           icon: ClipboardCheckIcon,
           tone: typeTone(item.inspectionType).text,
@@ -335,50 +363,27 @@ function InspectionDetail() {
         jobber={jobber}
         notes={<JobNotes className="" inspection={item} />}
       >
-        {reviewing || item.baselineMissing ? (
-          <section aria-label="Review" className="mt-3 space-y-3">
-            {reviewing ? (
-              /* One instrument, as the dashboard's figures (console-development):
-                 three separate bordered tiles left an empty third of the row on
-                 every inspection not compared with a move-in. */
-              <StatGroup columns={figureColumns}>
-                <Stat
-                  label="Areas reviewed"
-                  value={
-                    areaSummary.data
-                      ? `${areaSummary.data.totals.areasReviewed} of ${areaSummary.data.totals.areas}`
-                      : '—'
-                  }
-                />
-                {showsFindings ? (
-                  <Stat
-                    label="Findings to review"
-                    tone={pending ? 'warning' : 'default'}
-                    value={pendingFindings.data ? (pending ? pending : 'None') : '—'}
-                  />
-                ) : null}
-                {comparesToMoveIn ? (
-                  <Stat
-                    label="Compared with"
-                    value={
-                      // A record, not a figure: in the body size, so a date does not
-                      // wrap in a narrow cell at the figures' size.
-                      baseline ? (
-                        <Link
-                          className="font-sans text-base hover:underline"
-                          href={`/inspections/${baseline.id}`}
-                        >
-                          Move-in · {formatScheduledDate(baseline.scheduledAt)}
-                        </Link>
-                      ) : (
-                        <span className="text-muted-foreground font-sans text-base">No move-in</span>
-                      )
-                    }
-                  />
-                ) : null}
-              </StatGroup>
-            ) : null}
+        <JobKeyFacts className="mt-3" facts={facts} />
 
+        {/* A service still owed is said in the Visit card just below, with the
+            technician's reason; this is for the other inspection on the visit. */}
+        {visitState === 'PARTIALLY_COMPLETE' && !item.openWork?.services.length ? (
+          <Alert className="mt-3" variant="warning">
+            <TriangleAlertIcon />
+            <AlertTitle>{openWorkWords(item.openWork)}</AlertTitle>
+            <AlertDescription>
+              This visit stays Partially complete until that is done on a return visit, or the
+              office takes it off the job in Reschedules.
+              {permissions.hasAny('inspections:manage', 'planning:publish') ? (
+                <Link className="text-foreground mt-1 block font-medium underline underline-offset-4" href="/reschedules">
+                  Open Reschedules
+                </Link>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        <div className="mt-3 empty:hidden">
           {/*
             A move-out with nothing to compare against.
 
@@ -399,18 +404,15 @@ function InspectionDetail() {
               </AlertDescription>
             </Alert>
           ) : null}
-          </section>
-        ) : null}
+        </div>
+
 
         {/* The Jobber-style layout keeps the notes in the side panel, beside the
             work, where they used to be a scroll below it (the office, 2026-11-09). */}
-        {jobber
-          ? reviewing
-            ? [areas, visit]
-            : [visit, areas]
-          : reviewing
-            ? [areas, notes, visit]
-            : [visit, notes, areas]}
+        {/* What the visit was for and what was done on it, then the rooms. Until
+            2026-11-17 a walked job led with the rooms and kept the visit a
+            screen and a half down. */}
+        {jobber ? [visit, areas] : [visit, areas, notes]}
       </RecordContent>
 
       {/* Assignment history and activity are reference material, not the task.
@@ -604,12 +606,6 @@ function RecordContent({
 }
 
 /** The review figures' columns, by how many figures there are: whole rows only. */
-const REVIEW_COLUMNS: Record<number, string> = {
-  1: 'grid-cols-1',
-  2: 'grid-cols-1 sm:grid-cols-2',
-  3: 'grid-cols-1 sm:grid-cols-3',
-};
-
 export default function InspectionDetailPage() {
   // `useUrlState` and the evidence workspace both read `useSearchParams`, which
   // needs a Suspense boundary or the whole segment opts out of prerendering.
