@@ -402,6 +402,9 @@ model Organization {
   invoiceProducts InvoiceProduct[]
   invoiceBillingRules InvoiceBillingRule[]
   revenueLogEntries RevenueLogEntry[]
+  revenueTechnicianSettings RevenueTechnicianSetting[]
+  revenueDayEntries RevenueDayEntry[]
+  revenueSettings RevenueSettings?
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -615,6 +618,8 @@ model UserProfile {
   rescheduleRequestsResolved RescheduleRequest[] @relation("RescheduleResolvedBy")
   revenueLogEntries          RevenueLogEntry[]   @relation("RevenueLogTechnician")
   revenueLogEntriesEdited    RevenueLogEntry[]   @relation("RevenueLogEditedBy")
+  revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
+  revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   inspectionNotesWritten     InspectionNote[]    @relation("InspectionNoteAuthor")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
@@ -5316,4 +5321,57 @@ model RevenueLogEntry {
 
   @@unique([inspectionId])
   @@index([organizationId, technicianId, day])
+}
+
+/// A technician's budget in Actual vs Budget (2026-11-17, PR 2): the revenue a regular 8-hour day should bring --
+/// the workbook's "Budgeted Daily Revenue (Regular 8 hour-work)", $400, $610 or $710 -- and the hourly rate its
+/// overtime adds to it, the workbook's key: $56, $85 and $99. A technician with none is not on the daily sheets.
+model RevenueTechnicianSetting {
+  id               String   @id @default(uuid()) @db.Uuid
+  organizationId   String   @db.Uuid
+  technicianId     String   @db.Uuid
+  dailyBudgetCents Int
+  otRateCents      Int
+  updatedAt        DateTime @updatedAt
+  updatedById      String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueBudgetTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId])
+  @@index([organizationId])
+}
+
+/// What the office typed for one technician on one day on the daily sheets (2026-11-17, PR 2): the day's budget
+/// when it is not the usual, the hours worked when the timesheet has them wrong, and the remarks each sheet keeps.
+/// Null is "as the console works it out".
+model RevenueDayEntry {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @db.Uuid
+  technicianId      String   @db.Uuid
+  day               DateTime @db.Date
+  budgetCents       Int?
+  workSeconds       Int?
+  projectionRemarks String?
+  dailyRemarks      String?
+  trackerRemarks    String?
+  updatedAt         DateTime @updatedAt
+  updatedById       String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueDayTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, day])
+  @@index([organizationId, day])
+}
+
+/// The office's payroll periods for the Revenue tracker's "to date" columns (2026-11-17, PR 2): every
+/// `payrollPeriodDays` days from `payrollPeriodStart` -- the workbook's November 2-15, then November 16 on.
+model RevenueSettings {
+  organizationId     String   @id @db.Uuid
+  payrollPeriodStart DateTime @db.Date
+  payrollPeriodDays  Int      @default(14)
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }

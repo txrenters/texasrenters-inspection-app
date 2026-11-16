@@ -1,7 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   CONSOLE_FILLED,
+  DEFAULT_PAYROLL_PERIOD,
+  REGULAR_DAY_SECONDS,
   actualSeconds,
+  overtimeSeconds,
+  payrollPeriodOf,
+  trackerFigures,
+  type RevenueBudgets,
+  type RevenueDay,
+  type RevenueDayTechnician,
+  type SaveRevenueBudgetsInput,
+  type SaveRevenueDayInput,
   logRangeProblem,
   revenueLogTotals,
   type RevenueColumn,
@@ -46,6 +56,10 @@ const DONE: InspectionStatus[] = [
 
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
+const nextDay = (day: string) => dayOf(new Date(dateOf(day).getTime() + 86_400_000));
+
+/** What the office types for a technician's day on the daily sheets. */
+const DAY_FIELDS = ['budgetCents', 'workSeconds', 'projectionRemarks', 'dailyRemarks', 'trackerRemarks'] as const satisfies readonly (keyof SaveRevenueDayInput)[];
 const clock = (instant: Date) => businessClockTime(instant).slice(0, 5);
 
 /** The entry's typed cells, by the contract's names. `date` is the entry's `day`. */
@@ -397,6 +411,195 @@ export class ActualVsBudgetService {
       });
     });
     return this.productColumns(user);
+  }
+
+  // ── PR 2: the daily sheets ──────────────────────────────────────────────
+
+  /**
+   * One day across the technicians who have a budget: what next day's
+   * projection, the daily report and the revenue tracker all read. Each
+   * technician's figures are their log's Total row for the day and the
+   * timesheet's hours, and the payroll period so far is the same worked out
+   * for every day of it up to this one.
+   */
+  async day(user: AuthenticatedUser, date: string): Promise<RevenueDay> {
+    const organizationId = user.organizationId;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ApplicationError(422, 'BAD_DATES', 'Give the day as YYYY-MM-DD.');
+    const settings = await this.payrollSettings(organizationId);
+    const payrollPeriod = payrollPeriodOf(date, settings.start, settings.days);
+    const budgets = await this.prisma.revenueTechnicianSetting.findMany({
+      where: { organizationId },
+      select: { technicianId: true, dailyBudgetCents: true, otRateCents: true, technician: { select: { displayName: true } } },
+    });
+    if (!budgets.length) return { date, payrollPeriod, technicians: [] };
+    const ids = budgets.map((budget) => budget.technicianId);
+    const from = payrollPeriod.from;
+    const start = businessDayBounds(businessDayFromQuery(from)).start;
+    const end = businessDayBounds(businessDayFromQuery(date)).end;
+
+    const [entries, segments, logs] = await Promise.all([
+      this.prisma.revenueDayEntry.findMany({
+        where: { organizationId, technicianId: { in: ids }, day: { gte: dateOf(from), lte: dateOf(date) } },
+        select: { technicianId: true, day: true, budgetCents: true, workSeconds: true, projectionRemarks: true, dailyRemarks: true, trackerRemarks: true },
+      }),
+      this.prisma.timeSegment.findMany({
+        where: { organizationId, technicianId: { in: ids }, startedAt: { gte: start, lt: end } },
+        select: { technicianId: true, startedAt: true, durationSeconds: true },
+      }),
+      // Each technician's log over the period so far: at most a month, read once per technician.
+      Promise.all(ids.map((technicianId) => this.log(user, { technicianId, from, to: date }))),
+    ]);
+
+    const worked = new Map<string, number>();
+    for (const segment of segments) {
+      const key = `${segment.technicianId}:${businessDate(segment.startedAt)}`;
+      worked.set(key, (worked.get(key) ?? 0) + segment.durationSeconds);
+    }
+    const entryOf = new Map(entries.map((entry) => [`${entry.technicianId}:${dayOf(entry.day)}`, entry]));
+
+    const technicians = budgets.map((budget, index): RevenueDayTechnician => {
+      const totals = new Map(logs[index]!.days.map((logDay) => [logDay.date, logDay.totals]));
+      const dayOfTechnician = (day: string) => {
+        const entry = entryOf.get(`${budget.technicianId}:${day}`);
+        const total = totals.get(day);
+        const timesheet = worked.get(`${budget.technicianId}:${day}`);
+        return {
+          entry,
+          total,
+          budgetCents: entry?.budgetCents ?? budget.dailyBudgetCents,
+          workSeconds: entry?.workSeconds ?? (timesheet ? timesheet : null),
+          actualCents: total ? total.laborCents + total.serviceCallFeeCents : 0,
+        };
+      };
+      const period = { regularSeconds: 0, overtimeSeconds: 0, budgetedCents: 0, actualCents: 0 };
+      for (let day = from; day <= date; day = nextDay(day)) {
+        const figures = dayOfTechnician(day);
+        if (!figures.workSeconds && !figures.actualCents && !figures.total) continue;
+        const work = figures.workSeconds ?? 0;
+        period.regularSeconds += Math.min(work, REGULAR_DAY_SECONDS);
+        period.overtimeSeconds += overtimeSeconds(work);
+        period.budgetedCents += trackerFigures({ ...figures, otRateCents: budget.otRateCents }).finalBudgetCents;
+        period.actualCents += figures.actualCents;
+      }
+      const today = dayOfTechnician(date);
+      return {
+        technician: { id: budget.technicianId, name: budget.technician.displayName },
+        dailyBudgetCents: budget.dailyBudgetCents,
+        otRateCents: budget.otRateCents,
+        budgetCents: today.budgetCents,
+        driveTime: today.total?.driveTime ?? '0–0 min',
+        billableTime: today.total?.timeBudgeted ?? '-',
+        projectedCents: today.total?.estimatedBudgetCents ?? 0,
+        actualCents: today.actualCents,
+        workSeconds: today.workSeconds,
+        typed: { budget: today.entry?.budgetCents != null, work: today.entry?.workSeconds != null },
+        projectionRemarks: today.entry?.projectionRemarks ?? null,
+        dailyRemarks: today.entry?.dailyRemarks ?? null,
+        trackerRemarks: today.entry?.trackerRemarks ?? null,
+        period,
+      };
+    });
+    technicians.sort((left, right) => left.technician.name.localeCompare(right.technician.name));
+    return { date, payrollPeriod, technicians };
+  }
+
+  /** What the office typed for a technician's day. */
+  async saveDay(user: AuthenticatedUser, technicianId: string, date: string, input: SaveRevenueDayInput) {
+    const organizationId = user.organizationId;
+    const technician = await this.technicianOf(organizationId, technicianId);
+    const data: Record<string, unknown> = {};
+    for (const field of DAY_FIELDS) {
+      if (!(field in input)) continue;
+      const value = input[field];
+      data[field] = typeof value === 'string' ? value.trim() || null : (value ?? null);
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const before = await tx.revenueDayEntry.findUnique({ where: { technicianId_day: { technicianId: technician.id, day: dateOf(date) } } });
+      const changes = Object.entries(data)
+        .filter(([field, value]) => ((before as Record<string, unknown> | null)?.[field] ?? null) !== value)
+        .map(([field, value]) => ({ field, from: String((before as Record<string, unknown> | null)?.[field] ?? ''), to: String(value ?? '') }));
+      if (!changes.length) return;
+      await tx.revenueDayEntry.upsert({
+        where: { technicianId_day: { technicianId: technician.id, day: dateOf(date) } },
+        create: { organizationId, technicianId: technician.id, day: dateOf(date), ...data, updatedById: auditActor(user).actorUserId },
+        update: { ...data, updatedById: auditActor(user).actorUserId },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          ...auditActor(user),
+          action: 'REVENUE_DAY_EDITED',
+          entityType: 'RevenueDayEntry',
+          entityId: `${technician.id}:${date}`,
+          metadata: { technician: technician.name, day: date, changes },
+        },
+      });
+    });
+    return { saved: true };
+  }
+
+  /** Each technician's budget and overtime rate, and the payroll periods. */
+  async budgets(user: AuthenticatedUser): Promise<RevenueBudgets> {
+    const [{ technicians }, settings, budgets] = await Promise.all([
+      this.technicians(user),
+      this.payrollSettings(user.organizationId),
+      this.prisma.revenueTechnicianSetting.findMany({
+        where: { organizationId: user.organizationId },
+        select: { technicianId: true, dailyBudgetCents: true, otRateCents: true },
+      }),
+    ]);
+    const budgetOf = new Map(budgets.map((budget) => [budget.technicianId, budget]));
+    return {
+      payrollPeriodStart: settings.start,
+      payrollPeriodDays: settings.days,
+      technicians: technicians.map((technician) => ({
+        ...technician,
+        dailyBudgetCents: budgetOf.get(technician.id)?.dailyBudgetCents ?? null,
+        otRateCents: budgetOf.get(technician.id)?.otRateCents ?? null,
+      })),
+    };
+  }
+
+  async saveBudgets(user: AuthenticatedUser, input: SaveRevenueBudgetsInput): Promise<RevenueBudgets> {
+    const organizationId = user.organizationId;
+    for (const row of input.technicians ?? []) await this.technicianOf(organizationId, row.technicianId);
+    await this.prisma.$transaction(async (tx) => {
+      const changes: string[] = [];
+      if (input.payrollPeriodStart !== undefined || input.payrollPeriodDays !== undefined) {
+        const current = await this.payrollSettings(organizationId, tx);
+        const next = { start: input.payrollPeriodStart ?? current.start, days: input.payrollPeriodDays ?? current.days };
+        await tx.revenueSettings.upsert({
+          where: { organizationId },
+          create: { organizationId, payrollPeriodStart: dateOf(next.start), payrollPeriodDays: next.days },
+          update: { payrollPeriodStart: dateOf(next.start), payrollPeriodDays: next.days },
+        });
+        changes.push(`Payroll periods: ${current.start}/${current.days} → ${next.start}/${next.days}`);
+      }
+      for (const row of input.technicians ?? []) {
+        if (row.dailyBudgetCents === null) {
+          const removed = await tx.revenueTechnicianSetting.deleteMany({ where: { organizationId, technicianId: row.technicianId } });
+          if (removed.count) changes.push(`${row.technicianId}: off the daily sheets`);
+          continue;
+        }
+        const values = { dailyBudgetCents: row.dailyBudgetCents, otRateCents: row.otRateCents ?? 0, updatedById: auditActor(user).actorUserId };
+        await tx.revenueTechnicianSetting.upsert({
+          where: { technicianId: row.technicianId },
+          create: { organizationId, technicianId: row.technicianId, ...values },
+          update: values,
+        });
+        changes.push(`${row.technicianId}: budget ${row.dailyBudgetCents}, overtime ${row.otRateCents ?? 0}`);
+      }
+      if (changes.length)
+        await tx.auditLog.create({
+          data: { organizationId, ...auditActor(user), action: 'REVENUE_BUDGETS_CHANGED', entityType: 'RevenueSettings', entityId: organizationId, metadata: { changes } },
+        });
+    });
+    return this.budgets(user);
+  }
+
+  private async payrollSettings(organizationId: string, db: Pick<Prisma.TransactionClient, 'revenueSettings'> = this.prisma) {
+    const row = await db.revenueSettings.findUnique({ where: { organizationId }, select: { payrollPeriodStart: true, payrollPeriodDays: true } });
+    return row ? { start: dayOf(row.payrollPeriodStart), days: row.payrollPeriodDays } : { start: DEFAULT_PAYROLL_PERIOD.start, days: DEFAULT_PAYROLL_PERIOD.days };
   }
 
   private async technicianOf(organizationId: string, technicianId: string) {

@@ -2,10 +2,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  RevenueBudgets,
   RevenueColumn,
+  RevenueDay,
   RevenueLog,
   RevenueLogTechnicians,
   RevenueProductColumns,
+  SaveRevenueBudgetsInput,
+  SaveRevenueDayInput,
   SaveRevenueLogEntryInput,
 } from '@texasrenters/shared';
 
@@ -81,6 +85,52 @@ export function useRevenueLogEdits() {
         api<RevenueProductColumns>(`${BASE}/products/${encodeURIComponent(productId)}`, { method: 'PUT', body: JSON.stringify({ column }) }),
       onSuccess: (products) => {
         client.setQueryData(actualVsBudgetKeys.products, products);
+        void reread();
+      },
+    }),
+  };
+}
+
+// ── PR 2: the daily sheets ──────────────────────────────────────────────────
+
+const dayKey = (date: string) => [...actualVsBudgetKeys.all, 'day', date] as const;
+const budgetsKey = [...actualVsBudgetKeys.all, 'budgets'] as const;
+
+/** One day across the technicians with a budget: what the projection, the daily report and the tracker read. */
+export function useRevenueDay(date: string) {
+  return useQuery({
+    queryKey: dayKey(date),
+    queryFn: ({ signal }) => api<RevenueDay>(`${BASE}/day?${new URLSearchParams({ date }).toString()}`, { signal }),
+    enabled: /^\d{4}-\d{2}-\d{2}$/.test(date),
+    ...KEPT,
+  });
+}
+
+export function useRevenueBudgets(enabled: boolean) {
+  return useQuery({
+    queryKey: budgetsKey,
+    queryFn: ({ signal }) => api<RevenueBudgets>(`${BASE}/budgets`, { signal }),
+    enabled,
+    ...KEPT,
+  });
+}
+
+export function useRevenueDayEdits() {
+  const client = useQueryClient();
+  const reread = () => client.invalidateQueries({ queryKey: [...actualVsBudgetKeys.all, 'day'] });
+  return {
+    saveDay: useMutation({
+      mutationFn: ({ technicianId, date, input }: { technicianId: string; date: string; input: SaveRevenueDayInput }) =>
+        api<{ saved: boolean }>(`${BASE}/day/${encodeURIComponent(technicianId)}/${encodeURIComponent(date)}`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: reread,
+    }),
+    saveBudgets: useMutation({
+      mutationFn: (input: SaveRevenueBudgetsInput) => api<RevenueBudgets>(`${BASE}/budgets`, { method: 'PUT', body: JSON.stringify(input) }),
+      onSuccess: (budgets) => {
+        client.setQueryData(budgetsKey, budgets);
         void reread();
       },
     }),
