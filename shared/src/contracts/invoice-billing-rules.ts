@@ -35,20 +35,23 @@ export interface ServiceTechnician {
 const CERTIFIED_APPLICATOR = 'Clinton Bass (0557779)';
 const FLEX_10 = 'Flex 10 - 10 Insecticide';
 const VALLAR_PLUS = 'Valar Plus 25#';
-const LICENSED: InvoiceLineInput = {
-  name: 'Licensed and regulated by:',
-  description: 'Texas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+const LICENSED = 'Licensed and regulated by:\nTexas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567';
+/** A row's words are its description, with no item of the office's own (2026-11-16: "on the description only not the item"). */
+const row = (description: string, xeroItemCode?: string): InvoiceLineInput => ({
+  name: '',
+  description,
   quantity: 1,
   unitPriceCents: 0,
-};
-const row = (name: string, xeroItemCode?: string): InvoiceLineInput => ({ name, description: null, quantity: 1, unitPriceCents: 0, ...(xeroItemCode ? { xeroItemCode } : {}) });
+  ...(xeroItemCode ? { xeroItemCode } : {}),
+});
 
 /**
  * The rows a pest control or flea treatment line is followed by (2026-11-16),
  * word for word as Crystal Creek Pest's own invoices carry them: the products
  * used, at no price, under their items in Xero; who did the work, with their
- * Texas Department of Agriculture license numbers; and who licenses them. The
- * words alone go to Xero with no quantity or price.
+ * Texas Department of Agriculture license numbers; and who licenses them. Each
+ * row's words are its description, with no item; the words alone go to Xero
+ * with no quantity or price.
  */
 export function serviceRows(service: ReportableVisitService, technician: ServiceTechnician | null | undefined): InvoiceLineInput[] {
   if (service !== 'pestControl' && service !== 'fleaTreatment') return [];
@@ -57,12 +60,12 @@ export function serviceRows(service: ReportableVisitService, technician: Service
     `Serviced by: ${CERTIFIED_APPLICATOR}${name ? ` and ${name}${technician?.pestLicenseNumber ? ` (${technician.pestLicenseNumber})` : ''}` : ''}`,
   );
   return service === 'pestControl'
-    ? [row('Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', FLEX_10), servicedBy, LICENSED]
+    ? [row('Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', FLEX_10), servicedBy, row(LICENSED)]
     : [
         row('Flex 10 - 10 Insecticide - 1%; Quantity Used:1 Galloon EPA#88746-1', FLEX_10),
         row('SOLU97: Vallar Plus 25#; Quantity Used:2.5 Pounds EPA#88746-5', VALLAR_PLUS),
         servicedBy,
-        LICENSED,
+        row(LICENSED),
       ];
 }
 

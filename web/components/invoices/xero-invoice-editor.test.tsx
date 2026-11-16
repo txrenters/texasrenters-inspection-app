@@ -130,6 +130,20 @@ describe('the New invoice, laid out as Xero’s', () => {
     expect(combobox('Line 1: project')).toHaveTextContent(VISIT_PROJECT.name);
   });
 
+  it('shows a row of words in its description with no item, and sends it so (2026-11-16: "on the description only not the item")', () => {
+    const words = 'Serviced by: Clinton Bass (0557779) and Moses Example (1000001)';
+    const draft = {
+      ...DRAFT,
+      invoices: [{ xeroTenantId: HOMES, lineItems: [...DRAFT.invoices[0]!.lineItems, { name: '', description: words, quantity: 1, unitPriceCents: 0 }] }],
+    };
+    render(<XeroInvoiceEditor draft={draft} />);
+    expect(combobox('Line 2: item')).not.toHaveTextContent(words);
+    expect(screen.getByRole('textbox', { name: 'Line 2: description' })).toHaveValue(words);
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft in Xero · $64.50' }));
+    const sent = actions.create.mutate.mock.calls[0]![0] as { lineItems: { name: string; description: string | null }[] };
+    expect(sent.lineItems[1]).toMatchObject({ name: '', description: words });
+  });
+
   it('shows each line whole, as Xero does: its lists wrap and its description grows, so the row is as tall as its longest field', () => {
     render(<XeroInvoiceEditor draft={DRAFT} />);
     for (const name of ['item', 'account', 'tax rate', 'Income by Employee', 'project'])

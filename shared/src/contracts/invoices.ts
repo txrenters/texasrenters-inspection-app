@@ -694,12 +694,14 @@ export function invoiceLinesProblem(lines: readonly InvoiceLineInput[]): string 
   if (!lines.length) return 'Add at least one line.';
   if (lines.length > MAX_INVOICE_LINES) return `An invoice takes at most ${MAX_INVOICE_LINES} lines.`;
   for (const line of lines) {
-    if (!line.name.trim()) return 'Every line needs a name.';
-    if (!Number.isFinite(line.quantity) || line.quantity <= 0) return `${line.name}: the quantity has to be more than 0.`;
-    if (!Number.isInteger(line.unitPriceCents) || line.unitPriceCents < 0) return `${line.name}: give the price in dollars and cents.`;
+    // A row of words alone (2026-11-16) has its description and no item: "Serviced by: ..." after pest control.
+    const label = line.name.trim() || line.description?.trim().split('\n')[0] || '';
+    if (!label) return 'Every line needs an item or a description.';
+    if (!Number.isFinite(line.quantity) || line.quantity <= 0) return `${label}: the quantity has to be more than 0.`;
+    if (!Number.isInteger(line.unitPriceCents) || line.unitPriceCents < 0) return `${label}: give the price in dollars and cents.`;
     const discount = line.discountRate ?? 0;
-    if (!Number.isFinite(discount) || discount < 0 || discount > 100) return `${line.name}: the discount is a percent from 0 to 100.`;
-    if ((line.xeroTracking?.length ?? 0) > MAX_LINE_TRACKING) return `${line.name}: a line is tracked in at most ${MAX_LINE_TRACKING} categories.`;
+    if (!Number.isFinite(discount) || discount < 0 || discount > 100) return `${label}: the discount is a percent from 0 to 100.`;
+    if ((line.xeroTracking?.length ?? 0) > MAX_LINE_TRACKING) return `${label}: a line is tracked in at most ${MAX_LINE_TRACKING} categories.`;
   }
   const { totalCents } = invoiceTotals(lines);
   if (totalCents <= 0) return 'The invoice comes to nothing.';

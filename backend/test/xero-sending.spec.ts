@@ -1405,12 +1405,13 @@ describe('the rows after pest control, as Xero is sent them (2026-11-16)', () =>
       unitPriceCents: 3900,
       totalCents: 3900,
     },
-    { position: 1, name: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', description: null, quantity: 1, unitPriceCents: 0, totalCents: 0, xeroItemCode: 'Flex 10 - 10 Insecticide' },
-    { position: 2, name: 'Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)', description: null, quantity: 1, unitPriceCents: 0, totalCents: 0 },
+    // The rows' words are their descriptions, with no item of the office's own (2026-11-16).
+    { position: 1, name: '', description: 'Flex 10 - 10 Insecticide - 1%; Quantity Used: 1 Galloon EPA#88746-1', quantity: 1, unitPriceCents: 0, totalCents: 0, xeroItemCode: 'Flex 10 - 10 Insecticide' },
+    { position: 2, name: '', description: 'Serviced by: Clinton Bass (0557779) and Kevin Example (1000001)', quantity: 1, unitPriceCents: 0, totalCents: 0 },
     {
       position: 3,
-      name: 'Licensed and regulated by:',
-      description: 'Texas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
+      name: '',
+      description: 'Licensed and regulated by:\nTexas Department of Agriculture\nPO Box 12847\nAustin, TX 78711-2847\nPhone: 866-918-4481\nFax: 888-232-2567',
       quantity: 1,
       unitPriceCents: 0,
       totalCents: 0,
