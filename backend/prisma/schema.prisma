@@ -401,6 +401,7 @@ model Organization {
   invoiceSettings InvoiceSettings?
   invoiceProducts InvoiceProduct[]
   invoiceBillingRules InvoiceBillingRule[]
+  revenueLogEntries RevenueLogEntry[]
   propertyGeofences PropertyGeofence[]
   propertyServiceStatuses PropertyServiceStatus[]
   rescheduleRequests RescheduleRequest[]
@@ -612,6 +613,8 @@ model UserProfile {
   trackingGapsResolved TrackingGap[]      @relation("TrackingGapResolvedBy")
   rescheduleRequestsMade     RescheduleRequest[] @relation("RescheduleRequestedBy")
   rescheduleRequestsResolved RescheduleRequest[] @relation("RescheduleResolvedBy")
+  revenueLogEntries          RevenueLogEntry[]   @relation("RevenueLogTechnician")
+  revenueLogEntriesEdited    RevenueLogEntry[]   @relation("RevenueLogEditedBy")
   inspectionNotesWritten     InspectionNote[]    @relation("InspectionNoteAuthor")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
@@ -1517,6 +1520,7 @@ model Inspection {
   /// This visit asked to be booked again.
   rescheduleRequests         RescheduleRequest[]     @relation("RescheduleRequestInspection")
   officeNotes                InspectionNote[]
+  revenueLogEntry            RevenueLogEntry?
   /// This visit is the booking-again of another's request.
   rebookOf                   RescheduleRequest[]     @relation("RescheduleRequestRebook")
 }
@@ -3518,6 +3522,9 @@ model InvoiceProduct {
   xeroItemCode      String?
   /// What it is tracked as in its company's tracking category (2026-11-13); null for untracked.
   xeroTrackingGroup String?
+  /// Where its lines go in Actual vs Budget's technician log (2026-11-17): Labor Hours Income, Service Call Fee or
+  /// Materials. Null goes to Labor Hours Income, where the workbook put most of what a visit billed.
+  revenueColumn     RevenueColumn?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -5256,4 +5263,57 @@ model XeroProject {
   @@unique([organizationId, xeroTenantId, xeroProjectId])
   @@unique([organizationId, clientRequestId])
   @@index([organizationId, xeroTenantId, xeroContactId, status])
+}
+
+/// The workbook's three money columns a visit's invoice lines go in (2026-11-17, Actual vs Budget).
+enum RevenueColumn {
+  LABOR
+  SERVICE_CALL_FEE
+  MATERIALS
+}
+
+/// What the office typed into a row of Actual vs Budget's technician log (2026-11-17, PR 1 of rebuilding
+/// "THMP Scheduling Actual Vs Budget 2026.xlsx" in the console). The office asked that "the cells that the
+/// console already know, automate them but those that not yet, the office may add them": so a row for a visit
+/// the console has shows what it knows, and every field here that is not null is the office's word over it. A
+/// row with no visit is the office's own, for work booked outside the console.
+///
+/// The technician and the day are always kept, so a row whose visit is later removed stays where it was,
+/// with everything the office typed: nothing the office wrote disappears with a Jobber change.
+model RevenueLogEntry {
+  id                   String    @id @default(uuid()) @db.Uuid
+  organizationId       String    @db.Uuid
+  technicianId         String    @db.Uuid
+  /// The visit the row is. Unique per office; null for a row the office added.
+  inspectionId         String?   @db.Uuid
+  day                  DateTime  @db.Date
+  address              String?
+  workOrder            String?
+  jobNumber            String?
+  driveTime            String?
+  timeBudgeted         String?
+  estimatedBudgetCents Int?
+  /// "16:49", Texas time.
+  arrival              String?
+  leaving              String?
+  workComplete         Boolean?
+  rescheduleRequired   Boolean?
+  rescheduleOn         DateTime? @db.Date
+  laborCents           Int?
+  serviceCallFeeCents  Int?
+  materialsCents       Int?
+  invoiceNumber        String?
+  postedInPw           String?
+  notes                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  updatedById          String?   @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("RevenueLogTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+  inspection   Inspection?  @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+  updatedBy    UserProfile? @relation("RevenueLogEditedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([inspectionId])
+  @@index([organizationId, technicianId, day])
 }
