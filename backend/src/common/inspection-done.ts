@@ -2,6 +2,8 @@ import { InspectionStatus, type Prisma } from '@prisma/client';
 import {
   COULD_NOT_GET_IN_PREFIX,
   FINISHED_INSPECTION_STATUSES,
+  REPORTABLE_VISIT_SERVICES,
+  type VisitOpenWork,
   type VisitState,
 } from '@texasrenters/shared';
 
@@ -71,6 +73,83 @@ export function visitStateWhere(state: VisitState): Prisma.InspectionWhereInput 
       return {
         status: { in: DONE_INSPECTION_STATUSES },
         OR: [{ completionBlockedReason: null }, { NOT: { completionBlockedReason: couldNotGetIn } }],
+        NOT: OPEN_WORK_WHERE,
+      };
+    case 'PARTIALLY_COMPLETE':
+      return {
+        status: { in: DONE_INSPECTION_STATUSES },
+        AND: [
+          { OR: [{ completionBlockedReason: null }, { NOT: { completionBlockedReason: couldNotGetIn } }] },
+          OPEN_WORK_WHERE,
+        ],
       };
   }
+}
+
+/** A "not done, book it again" the office has not answered, or answered with a visit not yet done. */
+const OWED_REQUEST_WHERE = {
+  kind: 'SERVICES_NOT_DONE',
+  OR: [
+    { status: { in: ['OPEN', 'SENDING'] } },
+    { status: 'DONE', rebookInspection: { is: { status: { in: UPCOMING_INSPECTION_STATUSES } } } },
+  ],
+} satisfies Prisma.RescheduleRequestWhereInput;
+
+/**
+ * A submitted visit that still owes a job (`VisitOpenWork`), as a query.
+ *
+ * The other half of `visitOpenWork`: the list's filter and a row's badge must
+ * give the same answer, so a change to one is a change to both.
+ */
+const OPEN_WORK_WHERE: Prisma.InspectionWhereInput = {
+  OR: [
+    { rescheduleRequests: { some: OWED_REQUEST_WHERE } },
+    { jobberCompanionOf: { is: { status: { in: UPCOMING_INSPECTION_STATUSES } } } },
+    { jobberCompanions: { some: { status: { in: UPCOMING_INSPECTION_STATUSES } } } },
+  ],
+};
+
+/** What `visitOpenWork` reads; spread into an inspection select. */
+export const OPEN_WORK_SELECT = {
+  rescheduleRequests: {
+    where: { kind: 'SERVICES_NOT_DONE', status: { in: ['OPEN', 'SENDING', 'DONE'] } },
+    select: { status: true, services: true, rebookInspection: { select: { status: true } } },
+  },
+  jobberCompanionOf: { select: { id: true, inspectionType: true, status: true } },
+  jobberCompanions: { select: { id: true, inspectionType: true, status: true } },
+} satisfies Prisma.InspectionSelect;
+
+interface OpenWorkRecord {
+  status: InspectionStatus;
+  rescheduleRequests: Array<{
+    status: string;
+    services: string[];
+    rebookInspection: { status: InspectionStatus } | null;
+  }>;
+  jobberCompanionOf: { inspectionType: string; status: InspectionStatus } | null;
+  jobberCompanions: Array<{ inspectionType: string; status: InspectionStatus }>;
+}
+
+/**
+ * What a submitted visit still owes, or null when it owes nothing or has not
+ * been submitted: a visit still to happen owes all of it, and says so already.
+ */
+export function visitOpenWork(record: OpenWorkRecord): VisitOpenWork | null {
+  if (!DONE_INSPECTION_STATUSES.includes(record.status)) return null;
+  const owed = new Set<string>();
+  for (const request of record.rescheduleRequests) {
+    const waiting = request.status === 'OPEN' || request.status === 'SENDING';
+    const bookedAgain =
+      request.status === 'DONE' &&
+      request.rebookInspection !== null &&
+      UPCOMING_INSPECTION_STATUSES.includes(request.rebookInspection.status);
+    if (waiting || bookedAgain) for (const service of request.services) owed.add(service);
+  }
+  const inspections = [record.jobberCompanionOf, ...record.jobberCompanions]
+    .filter((other): other is NonNullable<typeof other> => Boolean(other))
+    .filter((other) => UPCOMING_INSPECTION_STATUSES.includes(other.status))
+    .map((other) => other.inspectionType);
+  // In the order the office lists the services, whatever order they were asked in.
+  const services = (REPORTABLE_VISIT_SERVICES as readonly string[]).filter((service) => owed.has(service));
+  return services.length || inspections.length ? { services, inspections } : null;
 }

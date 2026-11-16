@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 
 import { InspectionComparisonPanel } from '@/components/inspection-comparison';
 import { InspectionTabs } from '@/components/inspection-tabs';
-import { PageHeader } from '@/components/page-header';
+import { JobTabHeader } from '@/components/job-tab-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { useInspection } from '@/lib/queries';
 
@@ -33,12 +33,9 @@ export default function InspectionComparisonPage() {
 
   return (
     <>
-      <PageHeader
-        description={`${item.propertywareBuilding?.name ?? 'Inspection'} · ${
-          item.propertywareUnit?.name ?? 'Entire property'
-        }`}
-        title="Move-in vs move-out"
-      />
+      {/* The job's own header on every tab: which property this is stays in
+          the title, and the tab says which part of it is open (2026-11-17). */}
+      <JobTabHeader item={item} />
 
       <InspectionTabs active="comparison" inspectionId={id} inspectionType={item.inspectionType} />
 

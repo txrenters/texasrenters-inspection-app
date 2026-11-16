@@ -99,9 +99,21 @@ describe('the visit’s facts', () => {
 
     expect(screen.getByText('Sam Tech')).toBeInTheDocument();
     expect(screen.getByText('1 hr 56 min')).toBeInTheDocument();
-    // Done when the technician submitted: the office's review is not the visit's.
-    expect(screen.getAllByText('Done').length).toBeGreaterThan(0);
+    // Complete when the technician submitted: the office's review is not the visit's.
+    expect(screen.getAllByText('Complete').length).toBeGreaterThan(0);
     expect(screen.getByText('Jobber')).toBeInTheDocument();
+  });
+
+  it('says Partially complete while a job on the visit is still owed', () => {
+    show({ status: 'REVIEW_REQUIRED', openWork: { services: ['fleaTreatment'], inspections: [] } });
+    expect(screen.getAllByText('Partially complete').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Complete')).not.toBeInTheDocument();
+  });
+
+  it('leaves its four facts to the page when the page shows them above it', () => {
+    render(<VisitCard facts={false} inspection={inspection({})} technicianName="Sam Tech" />);
+    expect(screen.queryByText('Sam Tech')).not.toBeInTheDocument();
+    expect(screen.queryByText('Time on the job')).not.toBeInTheDocument();
   });
 
   it('leaves the zone and the job number to the header, where they are said once', () => {

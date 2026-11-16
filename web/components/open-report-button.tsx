@@ -9,7 +9,14 @@ import { useAdminMutations } from '@/lib/queries';
  * The job's report, as a tenant or owner reads it, in a tab of its own. Until
  * now the only way to read it from the job was to create a share link.
  */
-export function OpenReportButton({ inspectionId }: { inspectionId: string }) {
+export function OpenReportButton({
+  inspectionId,
+  primary,
+}: {
+  inspectionId: string;
+  /** The page's one filled button, where opening the report is the next thing to do. */
+  primary?: boolean;
+}) {
   const { openReport } = useAdminMutations();
 
   function open() {
@@ -29,7 +36,7 @@ export function OpenReportButton({ inspectionId }: { inspectionId: string }) {
   }
 
   return (
-    <Button disabled={openReport.isPending} onClick={open} variant="outline">
+    <Button disabled={openReport.isPending} onClick={open} variant={primary ? 'default' : 'outline'}>
       Open report
     </Button>
   );

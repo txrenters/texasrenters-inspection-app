@@ -252,6 +252,8 @@ describe('inspection status lifecycle (spec §11)', () => {
       // Whether the date is Jobber's to change: the edit form locks it when it
       // is, because the sync would put Jobber's date back.
       scheduledInJobber: false,
+      // Nothing on the visit is still owed, so it is not partially complete.
+      openWork: null,
       // The Jobber booking this console asked for; none for this inspection.
       jobberBooking: null,
       // No console edit waiting for Jobber, and edits are not pushed here.

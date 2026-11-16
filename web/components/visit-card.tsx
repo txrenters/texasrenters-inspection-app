@@ -47,7 +47,13 @@ export function VisitCard({
   technicianName,
   action,
   rescheduleHref,
+  facts = true,
+  instructionsOpen,
 }: {
+  /** False where the page already shows technician, date and time on site above the card. */
+  facts?: boolean;
+  /** Keep Instructions open whatever the visit's state; by default they fold once it is over. */
+  instructionsOpen?: boolean;
   inspection: AdminInspection;
   /** The technician currently assigned, if anyone is. */
   technicianName?: string | null;
@@ -158,6 +164,7 @@ export function VisitCard({
           is 80-odd characters with no space in it), and unbroken it set the
           card's minimum width, so on a phone the whole page scrolled sideways. */}
       <CardContent className="grid gap-5 wrap-anywhere">
+        {facts ? (
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
           <Fact label="Technician">
             {technicianName ?? 'Not assigned'}
@@ -184,6 +191,7 @@ export function VisitCard({
             ) : null}
           </Fact>
         </dl>
+        ) : null}
 
         {pushes
           .filter((push) => push.status === 'ABANDONED')
@@ -264,7 +272,7 @@ export function VisitCard({
             for all of it, open while it is needed and folded once the visit is
             over. */}
         {instructions ? (
-          <VisitFoldCard open={!planningCollapsed} summary={instructionsLine(read, tasks, tenantOrAccess)} title="Instructions">
+          <VisitFoldCard open={instructionsOpen ?? !planningCollapsed} summary={instructionsLine(read, tasks, tenantOrAccess)} title="Instructions">
             {tasks.length ? (
               <section aria-label="Tasks on the visit" className="grid gap-2">
                 <h3 className="text-muted-foreground text-xs">Tasks on the visit</h3>
@@ -343,6 +351,8 @@ function visitState(inspection: AdminInspection): {
   switch (state) {
     case 'DONE':
       return { label, variant: 'success' };
+    case 'PARTIALLY_COMPLETE':
+      return { label, variant: 'warning' };
     case 'COULD_NOT_GET_IN':
       return { label, variant: 'warning', reason: inspection.completionBlockedReason?.trim() };
     case 'FOLLOW_UP':
