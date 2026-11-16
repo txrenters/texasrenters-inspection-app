@@ -1,4 +1,5 @@
 import {
+  ChartColumn,
   Banknote,
   Building2,
   CalendarClock,
@@ -211,6 +212,9 @@ export const adminNavigation: AdminNavigationGroup[] = [
     items: [
       { title: 'Invoices', href: '/invoices', icon: ReceiptText, permission: 'invoices:read' },
       { title: 'Payments', href: '/payments', icon: Banknote, permission: 'invoices:read' },
+      // The office's revenue monitoring, rebuilt from its Actual vs Budget workbook (2026-11-17). Money, so
+      // the invoices' permission.
+      { title: 'Actual vs Budget', href: '/actual-vs-budget', icon: ChartColumn, permission: 'invoices:read' },
     ],
   },
   {
