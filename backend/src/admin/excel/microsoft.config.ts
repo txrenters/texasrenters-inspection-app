@@ -1,9 +1,10 @@
 /**
  * Signing the office's Microsoft account in for the Actual vs Budget workbook
- * (2026-11-17). The app is the one the mailer already uses
- * (MICROSOFT_GRAPH_TENANT_ID / _CLIENT_ID / _CLIENT_SECRET): Entra gives it the
- * delegated Files.ReadWrite and offline_access permissions and this redirect
- * address, and a person who may edit the workbook signs in once.
+ * (2026-11-17). Its own Entra app, not the mailer's (IT's choice):
+ * MICROSOFT_EXCEL_CLIENT_ID / _CLIENT_SECRET, with the delegated Files.ReadWrite
+ * and offline_access permissions and this redirect address. The company is the
+ * mailer's unless MICROSOFT_EXCEL_TENANT_ID says otherwise. An account kept for
+ * the console, which may edit the workbook, signs in once.
  *
  * Microsoft's Excel API takes delegated permissions only -- "Application: Not
  * supported" on every workbook call -- which is why the mailer's own
@@ -30,9 +31,10 @@ const number = (value: string | undefined, fallback: number, min: number, max: n
 
 export function getMicrosoftConfig(environment: NodeJS.ProcessEnv = process.env): MicrosoftConfig {
   return {
-    tenantId: trimmed(environment.MICROSOFT_GRAPH_TENANT_ID),
-    clientId: trimmed(environment.MICROSOFT_GRAPH_CLIENT_ID),
-    clientSecret: environment.MICROSOFT_GRAPH_CLIENT_SECRET || undefined,
+    tenantId: trimmed(environment.MICROSOFT_EXCEL_TENANT_ID) ?? trimmed(environment.MICROSOFT_GRAPH_TENANT_ID),
+    // Never the mailer's app: its client is not given the delegated permissions or the redirect address.
+    clientId: trimmed(environment.MICROSOFT_EXCEL_CLIENT_ID),
+    clientSecret: environment.MICROSOFT_EXCEL_CLIENT_SECRET || undefined,
     redirectUri: trimmed(environment.MICROSOFT_EXCEL_REDIRECT_URI),
     graphBaseUrl: (trimmed(environment.MICROSOFT_GRAPH_BASE_URL) ?? 'https://graph.microsoft.com').replace(/\/$/, ''),
     // offline_access: a refresh token, so nobody signs in again. User.Read: whose account it is.

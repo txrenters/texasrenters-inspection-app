@@ -6,6 +6,7 @@ import { SaveExcelSyncDto } from '../src/admin/excel/excel-sync.controller';
 import { ExcelGraphClient, encodeSharingUrl } from '../src/admin/excel/excel-graph.client';
 import { ExcelSyncService } from '../src/admin/excel/excel-sync.service';
 import { MicrosoftAuthService } from '../src/admin/excel/microsoft-auth.service';
+import { getMicrosoftConfig, microsoftConfigured } from '../src/admin/excel/microsoft.config';
 import { asText, dailyTab, monthTab, projectionTab, trackerTab, weekTab, weekTabName } from '../src/admin/excel-layout';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { sealSecret, readEnvelopeKey } from '../src/common/secret-envelope';
@@ -149,8 +150,11 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
 
 beforeEach(() => {
   process.env.MICROSOFT_GRAPH_TENANT_ID = 'tenant-1';
-  process.env.MICROSOFT_GRAPH_CLIENT_ID = 'client-1';
-  process.env.MICROSOFT_GRAPH_CLIENT_SECRET = 'secret-1';
+  process.env.MICROSOFT_GRAPH_CLIENT_ID = 'mailer-client';
+  process.env.MICROSOFT_GRAPH_CLIENT_SECRET = 'mailer-secret';
+  delete process.env.MICROSOFT_EXCEL_TENANT_ID;
+  process.env.MICROSOFT_EXCEL_CLIENT_ID = 'client-1';
+  process.env.MICROSOFT_EXCEL_CLIENT_SECRET = 'secret-1';
   process.env.MICROSOFT_EXCEL_REDIRECT_URI = 'https://api.example.test/api/v1/admin/actual-vs-budget/excel/callback';
   process.env.MICROSOFT_TOKEN_ENCRYPTION_KEY = KEY_HEX;
   delete process.env.MICROSOFT_EXCEL_CALLS_PER_RUN;
@@ -182,6 +186,16 @@ function connectionDb(connection: Record<string, unknown> | null) {
 }
 
 describe('signing the Microsoft account in', () => {
+  it("uses the Excel sync's own app, never the mailer's, in the mailer's company", () => {
+    const config = getMicrosoftConfig();
+    expect(config).toMatchObject({ tenantId: 'tenant-1', clientId: 'client-1', clientSecret: 'secret-1' });
+    delete process.env.MICROSOFT_EXCEL_CLIENT_ID;
+    delete process.env.MICROSOFT_EXCEL_CLIENT_SECRET;
+    expect(microsoftConfigured(getMicrosoftConfig())).toBe(false);
+    process.env.MICROSOFT_EXCEL_TENANT_ID = 'tenant-2';
+    expect(getMicrosoftConfig().tenantId).toBe('tenant-2');
+  });
+
   it('sends the person to Microsoft with PKCE, a sealed state and the delegated permissions', () => {
     const auth = new MicrosoftAuthService(connectionDb(null) as never);
     const url = new URL(auth.authorizationUrl({ organizationId: ORG, userId: office.id }));
