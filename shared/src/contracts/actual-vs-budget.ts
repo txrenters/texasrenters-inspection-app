@@ -289,3 +289,121 @@ export function logRangeProblem(from: string, to: string): string | null {
   if (span > MAX_LOG_DAYS) return `Choose ${MAX_LOG_DAYS} days or fewer.`;
   return null;
 }
+
+// ── PR 2: the daily sheets ───────────────────────────────────────────────────
+//
+// Three of the workbook's tabs read one day across the technicians: "Next
+// Day's Projected Productivity", the daily "ACTUAL VS PROJECTED REVENUE" and
+// the "REVENUE TRACKER". Each technician's figures come from their log -- the
+// day's Total row -- and the timesheet; the budgets and the remarks are the
+// office's.
+
+/** A regular day: past it, the hours are overtime ("Budgeted Daily Revenue (Regular 8 hour-work)"). */
+export const REGULAR_DAY_SECONDS = 8 * 3600;
+
+/** One technician on one day, as all three sheets read them. */
+export interface RevenueDayTechnician {
+  technician: RevenueLogTechnician;
+  /** The usual: "Budgeted Daily Revenue (Regular 8 hour-work)", and the overtime rate. */
+  dailyBudgetCents: number;
+  otRateCents: number;
+  /** The day's budget: the usual, or what the office typed for the day. */
+  budgetCents: number;
+  /** The log's Total row for the day. */
+  driveTime: string;
+  billableTime: string;
+  projectedCents: number;
+  /** The day's Labor Hours Income plus Service Call Fee; materials are not revenue. */
+  actualCents: number;
+  /** Tech's Work Time: the timesheet's hours, or the office's. Null when neither has any. */
+  workSeconds: number | null;
+  /** Which of these the office typed over what the console works out. */
+  typed: { budget: boolean; work: boolean };
+  projectionRemarks: string | null;
+  dailyRemarks: string | null;
+  trackerRemarks: string | null;
+  /** The payroll period so far, through this day. */
+  period: { regularSeconds: number; overtimeSeconds: number; budgetedCents: number; actualCents: number };
+}
+
+export interface RevenueDay {
+  date: string;
+  /** The payroll period the day falls in. */
+  payrollPeriod: { from: string; to: string };
+  technicians: RevenueDayTechnician[];
+}
+
+/** What the office types for a technician's day. Left out stays; null goes back to what the console works out. */
+export interface SaveRevenueDayInput {
+  budgetCents?: number | null;
+  workSeconds?: number | null;
+  projectionRemarks?: string | null;
+  dailyRemarks?: string | null;
+  trackerRemarks?: string | null;
+}
+
+/** Each technician's budget and overtime rate, and the payroll periods. */
+export interface RevenueBudgets {
+  payrollPeriodStart: string;
+  payrollPeriodDays: number;
+  technicians: { id: string; name: string; dailyBudgetCents: number | null; otRateCents: number | null }[];
+}
+
+export interface SaveRevenueBudgetsInput {
+  payrollPeriodStart?: string;
+  payrollPeriodDays?: number;
+  /** A null budget takes the technician off the daily sheets. */
+  technicians?: { technicianId: string; dailyBudgetCents: number | null; otRateCents: number | null }[];
+}
+
+/** Where the workbook's periods ran from: November 2-15, 2026, then every fortnight. */
+export const DEFAULT_PAYROLL_PERIOD = { start: '2026-11-02', days: 14 } as const;
+
+const dayNumber = (day: string) => Date.parse(`${day}T00:00:00Z`) / 86_400_000;
+const dayText = (n: number) => new Date(n * 86_400_000).toISOString().slice(0, 10);
+
+/** The payroll period a day falls in, counting periods of `days` from `start` both ways. */
+export function payrollPeriodOf(date: string, start: string, days: number): { from: string; to: string } {
+  const offset = Math.floor((dayNumber(date) - dayNumber(start)) / days);
+  const from = dayNumber(start) + offset * days;
+  return { from: dayText(from), to: dayText(from + days - 1) };
+}
+
+/** "November 2-15", "November 30 - December 13": as the tracker's heading names its period. */
+export function payrollPeriodWords(period: { from: string; to: string }): string {
+  const month = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+  const date = (day: string) => Number(day.slice(8));
+  return month(period.from) === month(period.to)
+    ? `${month(period.from)} ${date(period.from)}-${date(period.to)}`
+    : `${month(period.from)} ${date(period.from)} - ${month(period.to)} ${date(period.to)}`;
+}
+
+/** Tech's OT: the work past a regular day. */
+export const overtimeSeconds = (workSeconds: number | null) => Math.max(0, (workSeconds ?? 0) - REGULAR_DAY_SECONDS);
+
+/**
+ * The revenue tracker's day for one technician, as the workbook works it out:
+ * OT Budget Add-On = the rate x the overtime's hours (=85*183/60); Final Budget
+ * = budget + add-on; Actual - Final Budget; % of Budget = actual / final budget.
+ */
+export function trackerFigures(row: Pick<RevenueDayTechnician, 'budgetCents' | 'otRateCents' | 'actualCents' | 'workSeconds'>) {
+  const overtime = overtimeSeconds(row.workSeconds);
+  const addOnCents = Math.round((row.otRateCents * overtime) / 3600);
+  const finalBudgetCents = row.budgetCents + addOnCents;
+  return {
+    overtimeSeconds: overtime,
+    addOnCents,
+    finalBudgetCents,
+    overCents: row.actualCents - finalBudgetCents,
+    share: finalBudgetCents ? row.actualCents / finalBudgetCents : null,
+  };
+}
+
+/** "5h 40m" (or the first of "6h 00m – 7h 00m") in minutes; nothing readable is none. */
+export function hoursAndMinutesValue(text: string | null | undefined): number {
+  const match = /(\d+)h\s*(\d+)m/.exec(text ?? '');
+  return match ? Number(match[1]) * 60 + Number(match[2]) : 0;
+}
+
+/** A share as the workbook writes it, 0.00%: "82.20%". */
+export const percentText = (share: number | null) => (share === null || !Number.isFinite(share) ? '' : `${(share * 100).toFixed(2)}%`);
