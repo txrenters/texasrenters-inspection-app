@@ -9,6 +9,7 @@ import {
   type SaveRevenueDayInput,
   type SaveRevenueMonthInput,
   type SaveRevenueWeekInput,
+  type RestoreClearedCellsInput,
   type SaveRevenueLogEntryInput,
 } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
@@ -118,6 +119,11 @@ export class SaveRevenueWeekDto implements Required<SaveRevenueWeekInput> {
 /** What the office types for a technician's month. Every field of `SaveRevenueMonthInput` is named here. */
 export class SaveRevenueMonthDto implements Required<SaveRevenueMonthInput> {
   @ValidateIf(SET) @IsString() @MaxLength(2000) remarks!: string | null;
+}
+
+/** Every field of `RestoreClearedCellsInput`. */
+export class RestoreClearedCellsDto implements Required<RestoreClearedCellsInput> {
+  @IsArray() @ArrayMaxSize(5000) @IsString({ each: true }) @MaxLength(200, { each: true }) ids!: string[];
 }
 
 export class SaveRevenueProductColumnDto {
@@ -237,6 +243,20 @@ export class ActualVsBudgetController {
   @RequirePermissions('invoices:read')
   historySheet(@Req() request: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.revenue.historySheet(request.user, id);
+  }
+
+  /** Cells a save cleared by mistake (v2.5.242 to v2.5.248) and still empty, from the audit record. */
+  @Get('cleared')
+  @RequirePermissions('invoices:read')
+  clearedCells(@Req() request: AuthenticatedRequest) {
+    return this.revenue.clearedCells(request.user);
+  }
+
+  @Post('cleared/restore')
+  @RequirePermissions('invoices:manage')
+  @HttpCode(200)
+  restoreClearedCells(@Req() request: AuthenticatedRequest, @Body() body: RestoreClearedCellsDto) {
+    return this.revenue.restoreClearedCells(request.user, body.ids);
   }
 
   @Get('budgets')

@@ -3,6 +3,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ExcelSyncRun,
+  RestoreClearedCellsInput,
+  RestoreClearedCellsResult,
+  RevenueClearedCells,
   ExcelSyncView,
   RevenueBudgets,
   RevenueColumn,
@@ -250,4 +253,28 @@ export function useExcelSyncEdits() {
       onSuccess: keep,
     }),
   };
+}
+
+// ── Cells cleared by mistake, put back from the history (2026-11-17) ────────
+
+const clearedKey = [...actualVsBudgetKeys.all, 'cleared'] as const;
+
+/** Read when the dialog opens. */
+export function useClearedCells(enabled: boolean) {
+  return useQuery({
+    queryKey: clearedKey,
+    queryFn: ({ signal }) => api<RevenueClearedCells>(`${BASE}/cleared`, { signal }),
+    enabled,
+    staleTime: 0,
+  });
+}
+
+export function useRestoreClearedCells() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      api<RestoreClearedCellsResult>(`${BASE}/cleared/restore`, { method: 'POST', body: JSON.stringify({ ids } satisfies RestoreClearedCellsInput) }),
+    // Every sheet may show a cell put back.
+    onSuccess: () => client.invalidateQueries({ queryKey: actualVsBudgetKeys.all }),
+  });
 }
