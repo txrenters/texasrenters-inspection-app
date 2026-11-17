@@ -5531,8 +5531,10 @@ model ExcelSyncSheet {
   keys           Json?
   /// The columns the office may type in, by index, and the field each one is.
   editable       Json?
-  /// A technician's log tab: the sheet row (0-based) the console's rows start at, under the office's own.
+  /// A technician's log tab: the sheet row (0-based) the console's rows start at.
   origin         Int?
+  /// The day a technician's log tab was taken over from: its rows from that day are the console's.
+  adoptedFrom    DateTime? @db.Date
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

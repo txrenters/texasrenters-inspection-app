@@ -104,8 +104,9 @@ export class ExcelGraphClient {
     await this.call('PATCH', `${this.range(sheet, address)}`, numberFormat ? { values, numberFormat } : { values });
   }
 
-  async clearRange(sheet: string, address: string) {
-    await this.call('POST', `${this.range(sheet, address)}/clear`, { applyTo: 'Contents' });
+  /** Empty a range: its contents, or ('All') its look too -- a taken-over log tab's fills and borders. */
+  async clearRange(sheet: string, address: string, applyTo: 'Contents' | 'All' = 'Contents') {
+    await this.call('POST', `${this.range(sheet, address)}/clear`, { applyTo });
   }
 
   async bold(sheet: string, address: string, bold: boolean) {
