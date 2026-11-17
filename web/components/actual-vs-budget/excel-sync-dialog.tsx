@@ -12,6 +12,16 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useExcelSync, useExcelSyncEdits } from '@/lib/actual-vs-budget-queries';
 import { formatRelative } from '@/lib/format';
+import type { ExcelPull } from '@texasrenters/shared';
+
+/** What the last read of the office's Excel edits did, in a line. */
+export function pullWords(pull: ExcelPull): string {
+  const cells = (count: number) => `${count} ${count === 1 ? 'cell' : 'cells'}`;
+  const parts = [`${cells(pull.taken)} taken`];
+  if (pull.putBack) parts.push(`${cells(pull.putBack)} put back`);
+  if (pull.conflicts) parts.push(`${cells(pull.conflicts)} kept as on the page`);
+  return `Read from Excel ${formatRelative(pull.at)}: ${parts.join(', ')}`;
+}
 
 /**
  * The office's own workbook in Excel (2026-11-17): the Microsoft account that
@@ -136,6 +146,7 @@ export function ExcelSyncDialog({ canManage, onClose }: { canManage: boolean; on
                     ) : (
                       <span className="text-muted-foreground">Not written yet</span>
                     )}
+                    {excel.data.workbook.lastPull ? <div className="text-muted-foreground">{pullWords(excel.data.workbook.lastPull)}</div> : null}
                   </div>
                   {canManage ? (
                     <Button disabled={edits.sync.isPending || !excel.data.workbook.enabled || excel.data.connection?.status !== 'CONNECTED'} onClick={syncNow} size="sm" variant="outline">

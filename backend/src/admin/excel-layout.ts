@@ -39,7 +39,28 @@ export interface ExcelTab {
   rows: ExcelCell[][];
   /** Rows set in bold: titles, headings, Totals (0-based). */
   bold: number[];
+  /** Each row's console record ("day|<technician>|<date>", "week|…", "month|…"), or null for a heading or a total. */
+  keys: (string | null)[];
+  /** The columns the office types in on this tab, by index: an edit made there in Excel comes back to the console. */
+  editable: Record<number, ExcelEditableField>;
 }
+
+/** What the office may type into a tab's cell, as the console stores it. */
+export type ExcelEditableField =
+  | 'budgetCents'
+  | 'workSeconds'
+  | 'projectionRemarks'
+  | 'dailyRemarks'
+  | 'trackerRemarks'
+  | 'targetCents'
+  | 'actualCents'
+  | 'remarks';
+
+export const dayKey = (technicianId: string, date: string) => `day|${technicianId}|${date}`;
+export const weekKey = (technicianId: string, weekStart: string) => `week|${technicianId}|${weekStart}`;
+export const monthKey = (technicianId: string, month: string) => `month|${technicianId}|${month}`;
+/** Headings above the rows, and a Total under them: none is anyone's record. */
+const keysOf = (above: number, keys: string[], below = 1): (string | null)[] => [...Array<null>(above).fill(null), ...keys, ...Array<null>(below).fill(null)];
 
 // The workbook's formats, as the office's own tabs have them.
 const FORMAT = {
@@ -98,7 +119,13 @@ export function projectionTab(day: RevenueDay): ExcelTab {
     dollars(sum(day.technicians, (row) => row.projectedCents), { decimals: 0, negative: 'brackets' }),
     '',
   ]);
-  return { name: `Projected Productivity_${MMDD(day.date)}`, rows, bold: [0, 1, 2, rows.length - 1] };
+  return {
+    name: `Projected Productivity_${MMDD(day.date)}`,
+    rows,
+    bold: [0, 1, 2, rows.length - 1],
+    keys: keysOf(3, day.technicians.map((row) => dayKey(row.technician.id, day.date))),
+    editable: { 4: 'projectionRemarks' },
+  };
 }
 
 // ── ACTUAL VS PROJECTED REVENUE ─────────────────────────────────────────────
@@ -141,7 +168,13 @@ export function dailyTab(day: RevenueDay): ExcelTab {
     secondsAsHours(sum(day.technicians, (row) => row.workSeconds ?? 0)),
     '',
   ]);
-  return { name: MMDD(day.date), rows, bold: [0, 1, 2, rows.length - 1] };
+  return {
+    name: MMDD(day.date),
+    rows,
+    bold: [0, 1, 2, rows.length - 1],
+    keys: keysOf(3, day.technicians.map((row) => dayKey(row.technician.id, day.date))),
+    editable: { 1: 'budgetCents', 6: 'workSeconds', 7: 'dailyRemarks' },
+  };
 }
 
 // ── REVENUE TRACKER ─────────────────────────────────────────────────────────
@@ -223,7 +256,13 @@ export function trackerTab(day: RevenueDay): ExcelTab {
     percentText(periodBudget ? periodActual / periodBudget : null),
     '',
   ]);
-  return { name: `New ${MMDD(day.date)}`, rows, bold: [0, 1, 2, rows.length - 1] };
+  return {
+    name: `New ${MMDD(day.date)}`,
+    rows,
+    bold: [0, 1, 2, rows.length - 1],
+    keys: keysOf(3, day.technicians.map((row) => dayKey(row.technician.id, day.date))),
+    editable: { 1: 'budgetCents', 6: 'workSeconds', 17: 'trackerRemarks' },
+  };
 }
 
 // ── The weekly and monthly reports ──────────────────────────────────────────
@@ -256,12 +295,25 @@ export function weekTabName(week: { from: string; to: string }): string {
 
 export function weekTab(week: RevenueWeek): ExcelTab {
   const rows = periodRows(weekWords(week), week.technicians);
-  return { name: weekTabName(week), rows, bold: [0, 1, rows.length - 1] };
+  return {
+    name: weekTabName(week),
+    rows,
+    bold: [0, 1, rows.length - 1],
+    keys: keysOf(2, week.technicians.map((row) => weekKey(row.technician.id, week.from))),
+    editable: { 1: 'targetCents', 2: 'actualCents', 5: 'remarks' },
+  };
 }
 
+/** A month's figures add up its weeks: only its remarks are typed. */
 export function monthTab(report: RevenueMonthReport): ExcelTab {
   const rows = periodRows(monthWords(report.month), report.technicians);
-  return { name: monthWords(report.month), rows, bold: [0, 1, rows.length - 1] };
+  return {
+    name: monthWords(report.month),
+    rows,
+    bold: [0, 1, rows.length - 1],
+    keys: keysOf(2, report.technicians.map((row) => monthKey(row.technician.id, report.month))),
+    editable: { 5: 'remarks' },
+  };
 }
 
 /** The workbook's column letter for a 0-based column. */

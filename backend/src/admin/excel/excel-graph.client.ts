@@ -57,6 +57,31 @@ export class ExcelGraphClient {
     return answer.value.map((sheet) => sheet.name);
   }
 
+  /**
+   * The workbook's content version (cTag): it changes whenever anyone edits a
+   * cell, the console included. Compared with the one kept after the console's
+   * last write, it says whether the office has edited the workbook since.
+   */
+  async fileTag(): Promise<string | null> {
+    if (!this.workbook) throw new MicrosoftError('No workbook is linked.', 'EXCEL_NOT_LINKED', 409);
+    const item = await this.call<{ cTag?: string; eTag?: string }>(
+      'GET',
+      `/drives/${encodeURIComponent(this.workbook.driveId)}/items/${encodeURIComponent(this.workbook.itemId)}?$select=cTag,eTag`,
+    );
+    return item.cTag ?? item.eTag ?? null;
+  }
+
+  /** A range's cells: as Excel shows them ("$400", "8h 25m", a remark), and what each holds (400, 0.35, the remark). */
+  async readCells(sheet: string, address: string): Promise<{ text: string[][]; values: (string | number | boolean | null)[][] }> {
+    const range = await this.call<{ text?: unknown[][]; values?: unknown[][] }>('GET', `${this.range(sheet, address)}?$select=text,values`);
+    return {
+      text: (range.text ?? []).map((row) => row.map((cell) => (cell === null || cell === undefined ? '' : String(cell)))),
+      values: (range.values ?? []).map((row) =>
+        row.map((cell) => (typeof cell === 'number' || typeof cell === 'string' || typeof cell === 'boolean' ? cell : null)),
+      ),
+    };
+  }
+
   async addWorksheet(name: string) {
     await this.call('POST', `${this.book()}/worksheets/add`, { name });
   }

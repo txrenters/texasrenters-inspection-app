@@ -13,6 +13,7 @@ import { asText, cellText, dailyTab, monthTab, projectionTab, trackerTab, weekTa
 const shown = (row: ExcelCell[] | undefined) => (row ?? []).map(cellText);
 import type { AuthenticatedUser } from '../src/common/auth';
 import { sealSecret, readEnvelopeKey } from '../src/common/secret-envelope';
+import { formatNumber } from '../src/admin/workbook-reader';
 
 /**
  * Actual vs Budget kept in step with the office's own workbook (2026-11-17;
@@ -126,9 +127,28 @@ const readBody = (body: unknown) => {
   }
 };
 
+/** "B4" or "A1:E6": the first cell's 0-based row and column. */
+function corner(address: string) {
+  const match = /^([A-Z]+)(\d+)/.exec(address)!;
+  const column = [...match[1]!].reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+  return { row: Number(match[2]) - 1, column };
+}
+
+/**
+ * Microsoft, faked, with a workbook that keeps what is written into it: each
+ * cell's value and the text Excel shows for it, and a version (cTag) that
+ * moves with every change -- the console's writes and the office's edits alike.
+ */
 function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => number | undefined } = {}) {
   const calls: Call[] = [];
   const sheets = new Set(options.sheets ?? ['Amy', 'Month of October']);
+  const grid = new Map<string, Map<string, { value: string | number; text: string }>>();
+  let version = 1;
+  const put = (sheet: string, row: number, column: number, value: string | number, format?: string) => {
+    if (!grid.has(sheet)) grid.set(sheet, new Map());
+    const text = typeof value === 'number' ? formatNumber(value, format ?? 'General') : value.replace(/^'/, '');
+    grid.get(sheet)!.set(`${row},${column}`, { value: typeof value === 'string' ? value.replace(/^'/, '') : value, text });
+  };
   const respond = (status: number, body?: unknown) =>
     new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -140,17 +160,72 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
     if (url.hostname === 'login.microsoftonline.com') return respond(200, { access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600, scope: 'Files.ReadWrite' });
     if (call.path === '/me') return respond(200, { displayName: 'App Dev', mail: 'appdev@example.com' });
     if (call.path.startsWith('/shares/')) return respond(200, { id: 'item-1', name: 'Actual Vs Budget.xlsx', webUrl: 'https://example.sharepoint.com/x', file: {}, parentReference: { driveId: 'drive-1' } });
+    if (call.path === '/drives/drive-1/items/item-1') return respond(200, { cTag: `"c:{item-1},${version}"` });
     if (call.path.endsWith('/createSession')) return respond(201, { id: 'session-1' });
     if (call.path.endsWith('/closeSession')) return respond(204);
     if (call.path.endsWith('/worksheets') && call.method === 'GET') return respond(200, { value: [...sheets].map((name) => ({ name })) });
     if (call.path.endsWith('/worksheets/add')) {
       sheets.add((call.body as { name: string }).name);
+      version += 1;
       return respond(201, { name: (call.body as { name: string }).name });
     }
+    const range = /\/worksheets\/(.+)\/range\(address='([^']+)'\)$/.exec(call.path);
+    if (range) {
+      const [, sheet, address] = range as unknown as [string, string, string];
+      const start = corner(address);
+      if (call.method === 'PATCH') {
+        const body = call.body as { values: (string | number)[][]; numberFormat?: string[][] };
+        body.values.forEach((row, r) => row.forEach((value, c) => put(sheet, start.row + r, start.column + c, value, body.numberFormat?.[r]?.[c])));
+        version += 1;
+        return respond(200, {});
+      }
+      if (call.method === 'GET') {
+        const end = corner(address.split(':')[1] ?? address);
+        const cells = grid.get(sheet) ?? new Map();
+        const at = (r: number, c: number) => cells.get(`${r},${c}`);
+        const rows = Array.from({ length: end.row - start.row + 1 }, (_, r) => Array.from({ length: end.column - start.column + 1 }, (_, c) => at(start.row + r, start.column + c)));
+        return respond(200, { text: rows.map((row) => row.map((cell) => cell?.text ?? '')), values: rows.map((row) => row.map((cell) => cell?.value ?? '')) });
+      }
+    }
+    if (/\/range\(address='[^']+'\)\/clear$/.test(call.path)) {
+      const [, sheet, address] = /\/worksheets\/(.+)\/range\(address='([^']+)'\)\/clear$/.exec(call.path)!;
+      const start = corner(address!);
+      const end = corner(address!.split(':')[1] ?? address!);
+      for (let r = start.row; r <= end.row; r++) for (let c = start.column; c <= end.column; c++) grid.get(sheet!)?.delete(`${r},${c}`);
+      version += 1;
+      return respond(200, {});
+    }
+    if (call.method !== 'GET') version += 1;
     return respond(200, {});
   });
   const writes = () => calls.filter((call) => call.method === 'PATCH' && call.path.includes("range(address=") && !call.path.endsWith('/format/font'));
-  return { calls, writes, fetchSpy, sheets };
+  return {
+    calls,
+    writes,
+    fetchSpy,
+    sheets,
+    /** What a cell shows in Excel. */
+    shows: (sheet: string, address: string) => {
+      const at = corner(address);
+      return grid.get(sheet)?.get(`${at.row},${at.column}`)?.text ?? '';
+    },
+    /** The office types into a cell in Excel: a number shows in the format the cell already has. */
+    edit: (sheet: string, address: string, value: string | number, format?: string) => {
+      const at = corner(address);
+      put(sheet, at.row, at.column, value, format);
+      version += 1;
+    },
+    /** The office inserts a row above a technician's row: everything under it moves down one. */
+    insertRowAbove: (sheet: string, rowNumber: number) => {
+      const cells = grid.get(sheet)!;
+      const moved = [...cells.entries()].map(([key, cell]) => {
+        const [row, column] = key.split(',').map(Number) as [number, number];
+        return [row >= rowNumber - 1 ? `${row + 1},${column}` : key, cell] as const;
+      });
+      grid.set(sheet, new Map(moved));
+      version += 1;
+    },
+  };
 }
 
 beforeEach(() => {
@@ -290,7 +365,7 @@ function syncSetup(options: { startDate?: string; remarks?: string | null } = {}
     lastError: null,
     claimedUntil: null,
   };
-  const sheets = new Map<string, { name: string; rows: unknown; bold: unknown }>();
+  const sheets = new Map<string, { name: string; rows: unknown; bold: unknown; keys?: unknown; editable?: unknown }>();
   const audits: unknown[] = [];
   const connection = connectionDb({
     status: 'CONNECTED',
@@ -314,23 +389,38 @@ function syncSetup(options: { startDate?: string; remarks?: string | null } = {}
     },
     excelSyncSheet: {
       findMany: jest.fn(async ({ where }: { where: { name: { in: string[] } } }) => where.name.in.filter((name) => sheets.has(name)).map((name) => sheets.get(name))),
-      upsert: jest.fn(async ({ create }: { create: { name: string; rows: unknown; bold: unknown } }) => sheets.set(create.name, { ...create })),
+      upsert: jest.fn(async ({ create }: { create: { name: string; rows: unknown; bold: unknown; keys?: unknown; editable?: unknown } }) =>
+        sheets.set(create.name, JSON.parse(JSON.stringify(create))),
+      ),
       deleteMany: jest.fn(async () => sheets.clear()),
     },
     auditLog: { create: jest.fn(async ({ data }: { data: unknown }) => audits.push(data)) },
+    revenueDayEntry: {
+      upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        saved.push({ table: 'day', ...create, ...update });
+        if ('dailyRemarks' in update) remarks = update.dailyRemarks as string | null;
+      }),
+    },
+    revenueWeekEntry: { upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'week', ...create, ...update })) },
+    revenueMonthEntry: { upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'month', ...create, ...update })) },
+    $transaction: jest.fn(async (work: (tx: unknown) => unknown): Promise<unknown> => work(db)),
   };
+  const saved: Record<string, unknown>[] = [];
   let remarks = options.remarks ?? null;
   const revenue = {
     day: jest.fn(async (_user: unknown, date: string) => day(date, remarks)),
     month: jest.fn(async (_user: unknown, value: string) => month(value)),
   };
   const auth = new MicrosoftAuthService(db as never);
-  const service = new ExcelSyncService(db as never, auth, revenue as never);
+  const live = { publishChange: jest.fn() };
+  const service = new ExcelSyncService(db as never, auth, revenue as never, live as never);
   return {
     service,
     db,
     sheets,
     audits,
+    saved,
+    live,
     get sync() {
       return sync;
     },
@@ -360,8 +450,12 @@ describe('writing the workbook', () => {
     expect(microsoft.writes()[0]!.path).toBe("/drives/drive-1/items/item-1/workbook/worksheets/Projected Productivity_1117/range(address='A1:E6')");
     expect(setup.sheets.size).toBe(8);
     expect(setup.sync).toMatchObject({ lastError: null, claimedUntil: null });
-    expect(microsoft.calls[0]!.path).toMatch(/createSession$/);
-    expect(microsoft.calls.at(-1)!.path).toMatch(/closeSession$/);
+    // The workbook's version first and last: the one the console's write leaves is kept, to tell the office's edits by.
+    expect(microsoft.calls[0]!.path).toBe('/drives/drive-1/items/item-1');
+    expect(microsoft.calls[1]!.path).toMatch(/createSession$/);
+    expect(microsoft.calls.at(-2)!.path).toMatch(/closeSession$/);
+    expect(microsoft.calls.at(-1)!.path).toBe('/drives/drive-1/items/item-1');
+    expect(setup.sync!.fileTag).toEqual(expect.stringContaining('item-1'));
   });
 
   it('writes nothing when nothing changed, and only the changed row when one did', async () => {
@@ -441,5 +535,107 @@ describe('linking the workbook', () => {
     const every: Required<SaveExcelSyncInput> = { shareUrl: 'https://x.sharepoint.com/y', startDate: '2026-11-18', enabled: true };
     await expect(pipe.transform(every, { type: 'body', metatype: SaveExcelSyncDto })).resolves.toBeDefined();
     await expect(pipe.transform({ enabled: 'yes' }, { type: 'body', metatype: SaveExcelSyncDto })).rejects.toBeDefined();
+  });
+});
+
+describe("reading the office's edits back from Excel", () => {
+  const at = new Date('2026-11-17T15:00:00.000Z');
+  const later = (minutes: number) => new Date(at.getTime() + minutes * 60_000);
+  const timers = () => jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+  // Amy is the first technician: her rows are row 4 of the daily report and the tracker, row 3 of a week's report.
+  async function written() {
+    timers();
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup();
+    await setup.service.syncNow(office);
+    return { microsoft, setup };
+  }
+  afterEach(() => jest.useRealTimers());
+
+  it('asks only for the workbook\'s version each minute, and reads nothing while nobody has edited it', async () => {
+    const { microsoft, setup } = await written();
+    microsoft.calls.length = 0;
+    jest.setSystemTime(later(2));
+    expect(await setup.service.runIfDue(ORG)).toBeNull();
+    expect(microsoft.calls.filter((call) => !call.path.includes('login'))).toEqual([expect.objectContaining({ path: '/drives/drive-1/items/item-1' })]);
+    expect(setup.sync).toMatchObject({ claimedUntil: null });
+  });
+
+  it('takes a remark, a budget and work hours typed in Excel into the console, on everyone\'s page, and on the record', async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('1117', 'H4', 'Finished early, tenant away');
+    // Typed into a whole-dollar cell: Excel shows "$406", the cell holds 405.5.
+    microsoft.edit('1117', 'B4', 405.5, '"$"#,##0;-"$"#,##0');
+    microsoft.edit('New 1117', 'G4', 0.375, '[h]"h "mm"m"');
+    microsoft.edit('Nov. 16-20', 'F3', 'Short week');
+    jest.setSystemTime(later(2));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 4, putBack: 0, conflicts: 0 });
+    const amy = { technicianId: 'amy' };
+    expect(setup.saved).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: 'day', ...amy, day: new Date('2026-11-17T00:00:00.000Z'), dailyRemarks: 'Finished early, tenant away', updatedById: null }),
+        expect.objectContaining({ table: 'day', ...amy, budgetCents: 40550 }),
+        expect.objectContaining({ table: 'day', ...amy, workSeconds: 9 * 3600 }),
+        expect.objectContaining({ table: 'week', ...amy, weekStart: new Date('2026-11-16T00:00:00.000Z'), remarks: 'Short week' }),
+      ]),
+    );
+    expect(setup.audits.at(-1)).toMatchObject({
+      action: 'REVENUE_EXCEL_EDITS_TAKEN',
+      actorUserId: null,
+      metadata: { edits: expect.arrayContaining([{ tab: '1117', key: 'day|amy|2026-11-17', field: 'dailyRemarks', from: '', to: 'Finished early, tenant away' }]) },
+    });
+    expect(setup.live.publishChange).toHaveBeenCalledWith(ORG, expect.objectContaining({ scope: 'day', by: { userId: 'excel', name: 'Excel' } }));
+    expect(setup.sync!.lastPull).toMatchObject({ taken: 4 });
+    // The remark is the console's now: Excel still shows it, and the next minute finds nothing new.
+    expect(microsoft.shows('1117', 'H4')).toBe('Finished early, tenant away');
+    microsoft.calls.length = 0;
+    jest.setSystemTime(later(3));
+    expect(await setup.service.runIfDue(ORG)).toBeNull();
+  });
+
+  it('puts back a cell the console works out -- a total, the actual revenue -- as the console has it', async () => {
+    const { microsoft, setup } = await written();
+    const before = microsoft.shows('1117', 'D4');
+    microsoft.edit('1117', 'D4', 999, '"$"#,##0.00;-"$"#,##0.00');
+    jest.setSystemTime(later(2));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 0, putBack: 1 });
+    expect(setup.saved).toEqual([]);
+    expect(microsoft.shows('1117', 'D4')).toBe(before);
+  });
+
+  it('keeps the console\'s value where a cell was changed in both places since the last write', async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('1117', 'H4', 'Typed in Excel');
+    setup.setRemarks('Typed on the page');
+    await setup.db.excelSync.update({ data: { dirtyAt: later(1) } });
+    jest.setSystemTime(later(2));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 0, conflicts: 1 });
+    expect(microsoft.shows('1117', 'H4')).toBe('Typed on the page');
+  });
+
+  it('a save in the console never writes over a cell the office just typed in Excel', async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('Nov. 16-20', 'F3', 'Typed in Excel');
+    // A save of something else, on the page, before the next minute's check.
+    await setup.db.excelSync.update({ data: { dirtyAt: later(1) } });
+    jest.setSystemTime(later(1));
+    await setup.service.runIfDue(ORG);
+    expect(setup.saved).toEqual([expect.objectContaining({ table: 'week', remarks: 'Typed in Excel' })]);
+  });
+
+  it('takes nothing from a tab whose rows were moved, and puts all of it back', async () => {
+    const { microsoft, setup } = await written();
+    microsoft.insertRowAbove('1117', 4);
+    microsoft.edit('1117', 'H5', 'Typed after inserting a row');
+    jest.setSystemTime(later(2));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 0 });
+    expect(run!.pulled!.putBack).toBeGreaterThan(0);
+    expect(setup.saved).toEqual([]);
+    expect(microsoft.shows('1117', 'A4')).toBe('AMY WILSON');
+    expect(microsoft.shows('1117', 'H5')).not.toBe('Typed after inserting a row');
   });
 });
