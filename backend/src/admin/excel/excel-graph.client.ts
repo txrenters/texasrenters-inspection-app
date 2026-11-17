@@ -61,8 +61,9 @@ export class ExcelGraphClient {
     await this.call('POST', `${this.book()}/worksheets/add`, { name });
   }
 
-  async writeRange(sheet: string, address: string, values: string[][]) {
-    await this.call('PATCH', `${this.range(sheet, address)}`, { values });
+  /** Values, and the format each cell shows them in: "@" keeps text as text. */
+  async writeRange(sheet: string, address: string, values: (string | number)[][], numberFormat?: string[][]) {
+    await this.call('PATCH', `${this.range(sheet, address)}`, numberFormat ? { values, numberFormat } : { values });
   }
 
   async clearRange(sheet: string, address: string) {

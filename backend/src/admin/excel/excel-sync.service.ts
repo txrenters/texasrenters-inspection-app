@@ -7,7 +7,7 @@ import { businessDate } from '../../common/business-day';
 import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { ActualVsBudgetService } from '../actual-vs-budget.service';
-import { columnLetter, dailyTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelTab } from '../excel-layout';
+import { columnLetter, dailyTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelTab } from '../excel-layout';
 import { ExcelGraphClient } from './excel-graph.client';
 import { MicrosoftAuthService, MicrosoftError } from './microsoft-auth.service';
 import { microsoftConfigured } from './microsoft.config';
@@ -262,7 +262,7 @@ export class ExcelSyncService {
       );
       for (const tab of tabs) {
         const before = snapshots.get(tab.name);
-        const written = await this.writeTab(client, tab, existing.has(tab.name), before ? { rows: before.rows as string[][], bold: before.bold as number[] } : null);
+        const written = await this.writeTab(client, tab, existing.has(tab.name), before ? { rows: before.rows as ExcelCell[][], bold: before.bold as number[] } : null);
         if (written.rowsWritten || written.created)
           await this.prisma.excelSyncSheet.upsert({
             where: { organizationId_name: { organizationId, name: tab.name } },
@@ -282,17 +282,26 @@ export class ExcelSyncService {
     client: ExcelGraphClient,
     tab: ExcelTab,
     exists: boolean,
-    before: { rows: string[][]; bold: number[] } | null,
+    before: { rows: ExcelCell[][]; bold: number[] } | null,
   ): Promise<{ created: boolean; rowsWritten: number }> {
     const width = Math.max(...tab.rows.map((row) => row.length), ...(before?.rows ?? []).map((row) => row.length), 1);
-    const pad = (row: string[] | undefined) => Array.from({ length: width }, (_, index) => row?.[index] ?? '');
+    const pad = (row: ExcelCell[] | undefined) => Array.from({ length: width }, (_, index): ExcelCell => row?.[index] ?? '');
     const last = columnLetter(width - 1);
     const rows = tab.rows.map(pad);
+    // A number in its format; text as text ("@"), so Excel never reads "11/16/2026" or "-" as something else.
+    // Text kept from running as a formula keeps its apostrophe under General, where Excel hides it.
+    const put = (address: string, cells: ExcelCell[][]) =>
+      client.writeRange(
+        tab.name,
+        address,
+        cells.map((row) => row.map((cell) => (typeof cell === 'string' ? cell : cell.value))),
+        cells.map((row) => row.map((cell) => (typeof cell === 'string' ? (cell.startsWith("'") ? 'General' : '@') : cell.format))),
+      );
 
     if (!exists || !before) {
       // A tab the console has not written before: all of it, in one call.
       if (!exists) await client.addWorksheet(tab.name);
-      await client.writeRange(tab.name, `A1:${last}${rows.length}`, rows);
+      await put(`A1:${last}${rows.length}`, rows);
       for (const index of tab.bold) await client.bold(tab.name, `A${index + 1}:${last}${index + 1}`, true);
       await client.autofitColumns(tab.name, `A1:${last}${rows.length}`);
       return { created: !exists, rowsWritten: rows.length };
@@ -308,7 +317,7 @@ export class ExcelSyncService {
       }
       let end = index;
       while (end + 1 < rows.length && JSON.stringify(rows[end + 1]) !== JSON.stringify(old[end + 1])) end += 1;
-      await client.writeRange(tab.name, `A${index + 1}:${last}${end + 1}`, rows.slice(index, end + 1));
+      await put(`A${index + 1}:${last}${end + 1}`, rows.slice(index, end + 1));
       written += end - index + 1;
       index = end + 1;
     }

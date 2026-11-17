@@ -7,7 +7,10 @@ import { ExcelGraphClient, encodeSharingUrl } from '../src/admin/excel/excel-gra
 import { ExcelSyncService } from '../src/admin/excel/excel-sync.service';
 import { MicrosoftAuthService } from '../src/admin/excel/microsoft-auth.service';
 import { getMicrosoftConfig, microsoftConfigured } from '../src/admin/excel/microsoft.config';
-import { asText, dailyTab, monthTab, projectionTab, trackerTab, weekTab, weekTabName } from '../src/admin/excel-layout';
+import { asText, cellText, dailyTab, monthTab, projectionTab, trackerTab, weekTab, weekTabName, type ExcelCell } from '../src/admin/excel-layout';
+
+/** A row as Excel shows it: text, or each number in the format it was sent with. */
+const shown = (row: ExcelCell[] | undefined) => (row ?? []).map(cellText);
 import type { AuthenticatedUser } from '../src/common/auth';
 import { sealSecret, readEnvelopeKey } from '../src/common/secret-envelope';
 
@@ -71,19 +74,21 @@ describe("the workbook's tabs", () => {
   it('are named and laid out as the office named and laid out its own', () => {
     const projection = projectionTab(day('2026-11-12'));
     expect(projection.name).toBe('Projected Productivity_1112');
-    expect(projection.rows[2]).toEqual(['Technician', 'Drive time', 'Billable hours', 'Projected revenue', 'Remarks']);
-    expect(projection.rows[3]).toEqual(['Amy', '60–95 min', '5h 40m', '$505.96', '']);
-    expect(projection.rows.at(-1)).toEqual(['Total', '125–205 min', '11h 40m', '$1,391', '']);
+    expect(projection.rows[1]![2]).toEqual({ value: 46338, format: 'm/d/yyyy' });
+    expect(shown(projection.rows[1])).toEqual(['', 'Date:', '11/12/2026']);
+    expect(shown(projection.rows[2])).toEqual(['Technician', 'Drive time', 'Billable hours', 'Projected revenue', 'Remarks']);
+    expect(shown(projection.rows[3])).toEqual(['Amy', '60–95 min', '5h 40m', '$505.96', '']);
+    expect(shown(projection.rows.at(-1))).toEqual(['Total', '125–205 min', '11h 40m', '$1,391', '']);
 
     const daily = dailyTab(day('2026-11-11'));
     expect(daily.name).toBe('1111');
     expect(daily.rows[2]![4]).toBe('DIFFERENCE (ACTUAL REVENUE - PROJECTED REVENUE)');
-    expect(daily.rows[3]).toEqual(['AMY WILSON', '$400', '$506', '$347.98', '-$157.98', '87.00%', '8h 25m', '']);
+    expect(shown(daily.rows[3])).toEqual(['AMY WILSON', '$400', '$506', '$347.98', '-$157.98', '87.00%', '8h 25m', '']);
 
     const tracker = trackerTab(day('2026-11-11'));
     expect(tracker.name).toBe('New 1111');
     expect(tracker.rows[1]!.at(-1)).toBe('As of 11/11/2026 for Payroll Period to Date (November 2-15)');
-    expect(tracker.rows[3]!.slice(0, 12)).toEqual(['Amy Wilson', '$400.00', '60–95 min', '5h 40m', '$505.96', '$347.98', '8h 25m', '0h 25m', '$23.33', '$423.33', '($75.35)', '82.20%']);
+    expect(shown(tracker.rows[3]!.slice(0, 12))).toEqual(['Amy Wilson', '$400.00', '60–95 min', '5h 40m', '$505.96', '$347.98', '8h 25m', '0h 25m', '$23.33', '$423.33', '($75.35)', '82.20%']);
     expect(tracker.bold).toEqual([0, 1, 2, 5]);
   });
 
@@ -93,7 +98,7 @@ describe("the workbook's tabs", () => {
     const report = month('2026-11');
     expect(weekTab(report.weeks[0]!).rows[0]).toEqual(['PERIOD COVERED: NOVEMBER 2-6, 2026']);
     expect(monthTab(report).name).toBe('Month of November');
-    expect(monthTab(report).rows.at(-1)).toEqual(['TOTAL', '4,000.00', '2,308.14', '(1,691.86)', '57.70%', '']);
+    expect(shown(monthTab(report).rows.at(-1))).toEqual(['TOTAL', '4,000.00', '2,308.14', '(1,691.86)', '57.70%', '']);
   });
 
   it('never let a typed remark run as a formula in Excel', () => {
@@ -375,7 +380,11 @@ describe('writing the workbook', () => {
     jest.useRealTimers();
     // The daily report's remark is on Amy's row: one row, on each of the two days' reports.
     expect(microsoft.writes().map((call) => call.path.replace(/.*worksheets\//, ''))).toEqual(["1116/range(address='A4:H4')", "1117/range(address='A4:H4')"]);
-    expect(microsoft.writes()[0]!.body).toEqual({ values: [['AMY WILSON', '$400', '$506', '$347.98', '-$157.98', '87.00%', '8h 25m', 'Completed 3 visits']] });
+    // Each figure a number in the workbook's own format, so Excel shows "$347.98" and "-$157.98" and guesses nothing; text stays text.
+    expect(microsoft.writes()[0]!.body).toEqual({
+      values: [['AMY WILSON', 400, 505.96, 347.98, -157.98, 0.86995, 8.4166666 / 24, 'Completed 3 visits'].map((value) => (typeof value === 'number' ? expect.closeTo(value, 6) : value))],
+      numberFormat: [['@', '"$"#,##0;-"$"#,##0', '"$"#,##0;-"$"#,##0', '"$"#,##0.00;-"$"#,##0.00', '"$"#,##0.00;-"$"#,##0.00', '0.00%', '[h]"h "mm"m"', '@']],
+    });
   });
 
   it("never writes a day's tab dated before the sync's first day: those are the office's own", async () => {
