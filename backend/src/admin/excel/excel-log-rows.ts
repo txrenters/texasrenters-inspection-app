@@ -63,7 +63,8 @@ const DATE = 0;
 const ADDRESS = 1;
 const JOB = 3;
 const SERIAL_ZERO = Date.UTC(1899, 11, 30);
-const addressKey = (value: string | undefined) => (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+/** A row's street, as both write it first: "17518 Autumn Hills Dr - Zone 2 - …" and "17518 Autumn Hills Dr - 17518 …" alike. */
+const addressKey = (value: string | undefined) => (value ?? '').split(/\s+[-–]\s+/)[0]!.trim().toLowerCase().replace(/\s+/g, ' ');
 const jobKey = (value: string | undefined) => (value ?? '').trim().replace(/^#/, '');
 
 /** A row's day: a day's number as Excel keeps it, or "11/17/2026". */

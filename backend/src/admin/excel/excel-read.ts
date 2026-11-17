@@ -4,31 +4,27 @@ import { isFormula } from './excel-formats';
 
 /**
  * Reading the office's edits back out of its workbook (2026-11-18; the office
- * chose "Both ways"). A tab as Excel has it now is compared, cell by cell,
- * with what the console last wrote into it:
+ * chose "Both ways" -- and then: "the spreadsheet will be the source of
+ * truth"). A tab as Excel has it now is compared, cell by cell, with what the
+ * console last wrote into it, and nothing the office changed in it is ever
+ * written over:
  *
  *  - a cell the office types in on the console's page -- a day's budget, work
  *    time or remarks, a week's target, actual or remarks, a month's remarks --
- *    changed in Excel comes back to the console;
- *  - but a cell found EMPTY in Excel never empties the console's (2026-11-17:
- *    Moses's 17518 row lost its drive time, time budgeted and budget this way,
- *    and the office uses them for payment). It is put back as the console has
- *    it; a value is cleared on the console's page, never from Excel;
- *  - even when the console changed that same cell since its last write: the
- *    office's typing is never written over (2026-11-18), and the console's
- *    value stays in its save history;
- *  - any other cell changed in Excel -- a total, a percentage, a drive time
- *    the log works out, a heading -- is put back as the console has it;
- *  - but a cell holding a formula is the office's (2026-11-18): never put
- *    back, and remembered (`formulas`) so no write goes over it;
+ *    changed in Excel comes into the console, even when the console changed it
+ *    too (its value stays in its save history);
+ *  - any other cell the office changed -- a total, a percentage, a formula, a
+ *    cell it emptied (an empty cell never empties the console's: 2026-11-17,
+ *    Moses's 17518 row) -- is the office's from then on (`kept`): left as it
+ *    is in Excel, and never written over;
  *  - and when the tab's rows no longer line up with what was written (a row
- *    inserted, deleted or sorted), nothing is taken from it and all of it is
- *    put back: a cell cannot be told whose it is any more. A row has moved
- *    when its first cell is not what was written there, or when most of what
- *    was written in it is not there any more: a technician log's rows share
- *    their day, so the first cell alone cannot tell.
+ *    inserted, deleted or sorted), nothing is taken from it and the whole tab
+ *    is the office's: a cell cannot be told whose it is any more. A row has
+ *    moved when its first cell is not what was written there, or when most of
+ *    what was written in it is not there any more.
  *
- * Pure: the sync reads the tab, saves what this finds, and writes back.
+ * Pure: the sync reads the tab, saves what this finds, and writes only what
+ * is still the console's.
  */
 
 export interface WrittenTab {
@@ -49,14 +45,12 @@ export interface ExcelEdit {
 
 export interface TabRead {
   edits: ExcelEdit[];
-  /** Cells changed in Excel that are the console's to work out, or that Excel holds something unreadable in. */
-  putBack: number;
-  /** Cells changed in both places since the last write: the console's value stands. */
+  /** Cells changed in both places since the last write: Excel's value is taken. */
   conflicts: number;
-  /** The rows no longer line up with what was written: nothing is taken, all of it is put back. */
+  /** The rows no longer line up with what was written: nothing is taken, and the whole tab is the office's. */
   moved: boolean;
-  /** Cells holding a formula ([row, column] of the tab): the office's, never written over. */
-  formulas: [number, number][];
+  /** Cells the office changed and the console does not take, and cells holding a formula ([row, column] of the tab): the office's, never written over. */
+  kept: [number, number][];
 }
 
 type Value = string | number | boolean | null;
@@ -108,12 +102,11 @@ export function readTab(
   current: WrittenTab | undefined,
   excel: { text: string[][]; values: Value[][]; formulas?: unknown[][] },
 ): TabRead {
-  const result: TabRead = { edits: [], putBack: 0, conflicts: 0, moved: false, formulas: [] };
-  const formulaAt = (row: number, column: number) => isFormula(excel.formulas?.[row]?.[column], excel.values[row]?.[column] ?? null);
-  excel.text.forEach((cells, row) => cells.forEach((_, column) => (formulaAt(row, column) ? result.formulas.push([row, column]) : null)));
+  const result: TabRead = { edits: [], conflicts: 0, moved: false, kept: [] };
   const writtenText = written.rows.map((row) => row.map(cellText));
   const width = Math.max(...written.rows.map((row) => row.length), ...excel.text.map((row) => row.length), 1);
   const textAt = (rows: string[][], row: number, column: number) => rows[row]?.[column] ?? '';
+  const formulaAt = (row: number, column: number) => isFormula(excel.formulas?.[row]?.[column], excel.values[row]?.[column] ?? null);
   const changed = (row: number, column: number) => {
     const was = written.rows[row]?.[column];
     const now = excel.values[row]?.[column] ?? null;
@@ -122,6 +115,8 @@ export function readTab(
     if (typeof was === 'object' && typeof now === 'number') return Math.abs(was.value - now) > 1e-9;
     return !same(textAt(writtenText, row, column), textAt(excel.text, row, column));
   };
+  const kept = new Set<string>();
+  const keep = (row: number, column: number) => kept.add(`${row},${column}`);
 
   // Whose row is whose: each row's first cell where it was written, most of the rest of it too, and nothing typed
   // below the last row.
@@ -141,34 +136,30 @@ export function readTab(
     if (filled.length >= 4 && gone * 2 > filled.length) result.moved = true;
   }
   if (result.moved) {
-    for (let row = 0; row < rows; row++) for (let column = 0; column < width; column++) if (changed(row, column) && !formulaAt(row, column)) result.putBack += 1;
-    return result;
+    // Every cell of it the office's, whatever it holds: the console writes the tab no more.
+    for (let row = 0; row < rows; row++) for (let column = 0; column < width; column++) keep(row, column);
+  } else {
+    const currentRowOf = new Map((current?.keys ?? []).flatMap((key, index) => (key ? [[key, index] as const] : [])));
+    for (let row = 0; row < rows; row++)
+      for (let column = 0; column < width; column++) {
+        if (formulaAt(row, column)) keep(row, column);
+        if (!changed(row, column)) continue;
+        const key = written.keys[row];
+        const field = written.editable[column];
+        const to = textAt(excel.text, row, column);
+        const value = key && field && !formulaAt(row, column) ? valueOf(field, to, excel.values[row]?.[column] ?? null) : undefined;
+        if (!key || !field || value === undefined || value === null) {
+          // The office's: a total, a figure, a formula, a cell it emptied -- left as it is.
+          keep(row, column);
+          continue;
+        }
+        const from = textAt(writtenText, row, column);
+        const currentRow = currentRowOf.get(key);
+        const consoleNow = currentRow === undefined ? from : cellText(current!.rows[currentRow]?.[column]);
+        if (!same(consoleNow, from) && !same(consoleNow, to)) result.conflicts += 1;
+        result.edits.push({ key, field, from, to, value });
+      }
   }
-
-  const currentRowOf = new Map((current?.keys ?? []).flatMap((key, index) => (key ? [[key, index] as const] : [])));
-  for (let row = 0; row < written.rows.length; row++)
-    for (let column = 0; column < width; column++) {
-      if (!changed(row, column)) continue;
-      const key = written.keys[row];
-      const field = written.editable[column];
-      if (!key || !field) {
-        // A formula the office put there works it out its own way: left as it is.
-        if (!formulaAt(row, column)) result.putBack += 1;
-        continue;
-      }
-      const to = textAt(excel.text, row, column);
-      const from = textAt(writtenText, row, column);
-      // The console changed this cell too since it wrote it: the office's typing stands all the same, never written
-      // over (2026-11-18); the console's value stays in its save history.
-      const currentRow = currentRowOf.get(key);
-      const consoleNow = currentRow === undefined ? from : cellText(current!.rows[currentRow]?.[column]);
-      if (!same(consoleNow, from) && !same(consoleNow, to)) result.conflicts += 1;
-      const value = valueOf(field, to, excel.values[row]?.[column] ?? null);
-      if (value === undefined || value === null) {
-        if (!formulaAt(row, column)) result.putBack += 1;
-        continue;
-      }
-      result.edits.push({ key, field, from, to, value });
-    }
+  result.kept = [...kept].map((cell) => cell.split(',').map(Number) as [number, number]);
   return result;
 }

@@ -18,8 +18,9 @@ import type { ExcelPull } from '@texasrenters/shared';
 export function pullWords(pull: ExcelPull): string {
   const cells = (count: number) => `${count} ${count === 1 ? 'cell' : 'cells'}`;
   const parts = [`${cells(pull.taken)} taken`];
+  if (pull.kept) parts.push(`${cells(pull.kept)} left as in Excel`);
   if (pull.putBack) parts.push(`${cells(pull.putBack)} put back`);
-  if (pull.conflicts) parts.push(`${cells(pull.conflicts)} kept as on the page`);
+  if (pull.conflicts) parts.push(`${cells(pull.conflicts)} changed in both: Excel's kept`);
   return `Read from Excel ${formatRelative(pull.at)}: ${parts.join(', ')}`;
 }
 

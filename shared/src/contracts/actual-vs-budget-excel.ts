@@ -62,13 +62,17 @@ export interface ExcelFormulaRepair {
 }
 
 /**
- * Reading the office's Excel edits back (2026-11-18, "Both ways"): cells the
- * office types in on the page come into the console; cells the console works
- * out are put back; a cell changed in both places takes Excel's value.
+ * Reading the office's Excel edits back (2026-11-18, "Both ways" -- and "the
+ * spreadsheet will be the source of truth"): cells the office types in on the
+ * page come into the console; any other cell it changed is left as it is,
+ * the office's; a cell changed in both places takes Excel's value.
  */
 export interface ExcelPull {
   at: string;
   taken: number;
+  /** Cells written back over the office's (before v2.5.252): none since. */
   putBack: number;
   conflicts: number;
+  /** Cells the office changed that the console leaves as they are in Excel, never to write over. */
+  kept?: number;
 }
