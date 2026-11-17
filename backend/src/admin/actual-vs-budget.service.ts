@@ -81,6 +81,14 @@ const DONE: InspectionStatus[] = [
 ];
 
 const dateOf = (day: string) => new Date(`${day}T00:00:00.000Z`);
+/**
+ * Whether a save sent a field: a value, or null to clear it. Not merely that
+ * the request has it -- the validation pipe hands the service an instance of
+ * the DTO, which has every field the DTO names, `undefined` where the page sent
+ * none (ES2022 class fields). Read as "present", saving one cell cleared every
+ * other typed cell of its row (found 2026-11-17: Moses's 17518 row).
+ */
+const sent = (input: object, field: string) => (input as Record<string, unknown>)[field] !== undefined;
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
 const nextDay = (day: string) => dayOf(new Date(dateOf(day).getTime() + 86_400_000));
 
@@ -401,7 +409,7 @@ export class ActualVsBudgetService {
       await this.audit(tx, user, entryId, before, data);
       return before.inspectionId ?? entryId;
     });
-    this.tell(user, 'log', [...Object.keys(data), ...('date' in input ? ['date'] : [])].map((field) => revenueCell.log(rowKey, field)));
+    this.tell(user, 'log', [...Object.keys(data), ...(sent(input, 'date') ? ['date'] : [])].map((field) => revenueCell.log(rowKey, field)));
     return { entryId };
   }
 
@@ -652,7 +660,7 @@ export class ActualVsBudgetService {
           update: data,
         }),
     });
-    this.tell(user, 'week', fields.filter((field) => field in input).map((field) => revenueCell.week(technicianId, weekStart, field)));
+    this.tell(user, 'week', fields.filter((field) => sent(input, field)).map((field) => revenueCell.week(technicianId, weekStart, field)));
     return result;
   }
 
@@ -669,7 +677,7 @@ export class ActualVsBudgetService {
           update: data,
         }),
     });
-    this.tell(user, 'month', 'remarks' in input ? [revenueCell.month(technicianId, month, 'remarks')] : []);
+    this.tell(user, 'month', sent(input, 'remarks') ? [revenueCell.month(technicianId, month, 'remarks')] : []);
     return result;
   }
 
@@ -690,7 +698,7 @@ export class ActualVsBudgetService {
     const technician = await this.technicianOf(organizationId, technicianId);
     const data: Record<string, unknown> = {};
     for (const field of fields) {
-      if (!(field in input)) continue;
+      if (!sent(input, field)) continue;
       const value = (input as Record<string, unknown>)[field];
       data[field] = typeof value === 'string' ? value.trim() || null : (value ?? null);
     }
@@ -714,7 +722,7 @@ export class ActualVsBudgetService {
     const technician = await this.technicianOf(organizationId, technicianId);
     const data: Record<string, unknown> = {};
     for (const field of DAY_FIELDS) {
-      if (!(field in input)) continue;
+      if (!sent(input, field)) continue;
       const value = (input as Record<string, unknown>)[field];
       data[field] = typeof value === 'string' ? value.trim() || null : (value ?? null);
     }
@@ -913,7 +921,7 @@ export class ActualVsBudgetService {
   private cellsOf(input: SaveRevenueLogEntryInput): Partial<Pick<Prisma.RevenueLogEntryUncheckedCreateInput, TypedField>> {
     const data: Record<string, unknown> = {};
     for (const field of TYPED_FIELDS) {
-      if (!(field in input)) continue;
+      if (!sent(input, field)) continue;
       let value = (input as Record<string, unknown>)[field];
       if (typeof value === 'string') value = value.trim() || null;
       if (field === 'rescheduleOn' && typeof value === 'string') value = dateOf(value);
