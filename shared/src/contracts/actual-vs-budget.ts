@@ -541,9 +541,39 @@ export interface RevenueHistorySheetView extends RevenueHistorySummary {
   fileName: string;
 }
 
-/** What importing the workbook did: each tab read, with its rows. */
+/** What importing the workbook did: each past technician's tab read, with its rows, and what came in for those still working. */
 export interface RevenueHistoryImport {
   imported: { name: string; rowCount: number }[];
+  current: RevenueWorkbookImport;
+}
+
+/**
+ * The working technicians' side of an import (2026-11-17, the office: "I want
+ * all the data imported too"). For the days before the import the workbook's
+ * cells win; a cell the office changed in the console since the last import is
+ * kept, and counted.
+ */
+export interface RevenueWorkbookImport {
+  logs: {
+    tab: string;
+    /** The console's technician the tab is, or null when none is. */
+    technician: string | null;
+    /** Rows put on their visit. */
+    visits: number;
+    /** Rows the console has no visit for, kept as the office's own rows. */
+    officeRows: number;
+    /** Cells left as the office changed them in the console since the last import. */
+    keptEdits: number;
+    /** Rows dated today or later, or with no day to read. */
+    skipped: number;
+  }[];
+  /** Technicians given the workbook's daily budget, having none. */
+  budgets: string[];
+  days: number;
+  weeks: number;
+  months: number;
+  /** Names on the reports that are no technician of the office's. */
+  unmatched: string[];
 }
 
 // ── Live editing (2026-11-17) ────────────────────────────────────────────────

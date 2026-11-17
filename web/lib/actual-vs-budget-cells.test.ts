@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { accounting, dollars, readCell, readClock, readCents, readDay, readRow, readWorkTime } from './actual-vs-budget-cells';
+import { accounting, dollars, importSummary, readCell, readClock, readCents, readDay, readRow, readWorkTime } from './actual-vs-budget-cells';
 
 describe("the log's cells take the workbook's own formats", () => {
   it('reads dates', () => {
@@ -70,5 +70,28 @@ describe('the daily sheets', () => {
     expect(readWorkTime('8:25')).toBe(30300);
     expect(readWorkTime('lots')).toBeNull();
     expect(readWorkTime('8h 75m')).toBeNull();
+  });
+});
+
+describe('what an import brought in', () => {
+  it('says how many rows went on their visits, the budgets, the reports, the past logs, what was kept and the names it did not know', () => {
+    expect(
+      importSummary({
+        imported: [{ name: 'Nathan', rowCount: 528 }],
+        current: {
+          logs: [
+            { tab: 'Amy', technician: 'Amy Wilson', visits: 1200, officeRows: 30, keptEdits: 2, skipped: 4 },
+            { tab: 'Moses', technician: 'Moses Rodriguez', visits: 900, officeRows: 5, keptEdits: 0, skipped: 0 },
+          ],
+          budgets: ['Amy Wilson', 'Moses Rodriguez'],
+          days: 85,
+          weeks: 31,
+          months: 0,
+          unmatched: ['Allen'],
+        },
+      }),
+    ).toBe(
+      '2,135 log rows (2,100 on their visits, 35 without one) · budgets for Amy Wilson, Moses Rodriguez · 85 days, 31 weeks, 0 months · 1 past logs · 2 cells kept as changed here · not a technician here: Allen',
+    );
   });
 });

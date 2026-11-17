@@ -15,6 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { ActualVsBudgetLive, editorColour, initials, useActualVsBudgetLive } from '@/lib/actual-vs-budget-live';
 import { useRevenueHistoryImport, useRevenueTechnicians } from '@/lib/actual-vs-budget-queries';
+import { importSummary } from '@/lib/actual-vs-budget-cells';
 import { businessToday, shiftDay } from '@/lib/clock';
 import { useUrlState } from '@/lib/url-state';
 
@@ -53,16 +54,13 @@ export default function ActualVsBudgetPage() {
   });
   const technicians = useRevenueTechnicians();
   const [dialog, setDialog] = useState<'columns' | 'budgets' | 'excel' | null>(null);
-  // The past technicians' logs come from the office's workbook, uploaded here (PR 4).
+  // The office's workbook, uploaded here: the past technicians' logs (PR 4) and everything for those still working.
   const workbook = useRef<HTMLInputElement>(null);
   const importHistory = useRevenueHistoryImport();
   const upload = (file: File | undefined) => {
     if (!file) return;
     importHistory.mutate(file, {
-      onSuccess: (result) => {
-        const rows = result.imported.reduce((sum, sheet) => sum + sheet.rowCount, 0);
-        toast.success(`Imported ${result.imported.length} past logs`, { description: `${result.imported.map((sheet) => sheet.name).join(', ')} · ${rows.toLocaleString('en-US')} rows` });
-      },
+      onSuccess: (result) => toast.success('Workbook imported', { description: importSummary(result), duration: 15_000 }),
       onError: (error) => toast.error('Not imported', { description: error.message }),
     });
   };

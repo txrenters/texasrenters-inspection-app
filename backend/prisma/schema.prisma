@@ -5330,6 +5330,8 @@ model RevenueLogEntry {
   invoiceNumber        String?
   postedInPw           String?
   notes                String?
+  /// What the workbook import wrote, field by field (2026-11-17).
+  importedFields       Json?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
   updatedById          String?   @db.Uuid
@@ -5375,6 +5377,8 @@ model RevenueDayEntry {
   projectionRemarks String?
   dailyRemarks      String?
   trackerRemarks    String?
+  /// What the workbook import wrote, field by field (2026-11-17).
+  importedFields    Json?
   updatedAt         DateTime @updatedAt
   updatedById       String?  @db.Uuid
 
@@ -5408,6 +5412,8 @@ model RevenueWeekEntry {
   targetCents    Int?
   actualCents    Int?
   remarks        String?
+  /// What the workbook import wrote, field by field (2026-11-17).
+  importedFields Json?
   updatedAt      DateTime @updatedAt
   updatedById    String?  @db.Uuid
 
@@ -5427,6 +5433,8 @@ model RevenueMonthEntry {
   /// The month's first day.
   month          DateTime @db.Date
   remarks        String?
+  /// What the workbook import wrote, field by field (2026-11-17).
+  importedFields Json?
   updatedAt      DateTime @updatedAt
   updatedById    String?  @db.Uuid
 
