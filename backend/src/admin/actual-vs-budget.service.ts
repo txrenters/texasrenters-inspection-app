@@ -45,6 +45,8 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { ActualVsBudgetGateway } from './actual-vs-budget.gateway';
 import { readCompanies, shownInvoices } from './shown-invoices';
+import { importWorkingTechnicians } from './actual-vs-budget-import';
+import { importWorkbook } from './workbook-import';
 import { WorkbookError, readWorkbook, technicianLog, type WorkbookSheet } from './workbook-reader';
 
 /** The workbook as uploaded: what the upload hands the service. */
@@ -805,10 +807,13 @@ export class ActualVsBudgetService {
   // ── PR 4: past technicians' logs ─────────────────────────────────────────
 
   /**
-   * Read the workbook the office uploads and keep its past technicians' logs:
-   * every hidden tab laid out as a technician's log, as the text it showed.
-   * The tabs still in use are the console's own now and are left alone.
-   * Importing again replaces a tab of the same name; nothing else is touched.
+   * Read the workbook the office uploads. Its past technicians' logs -- every
+   * hidden tab laid out as a technician's log -- are kept as the text they
+   * showed, a tab of the same name replaced. And everything it holds for the
+   * technicians still working comes in too (2026-11-17, "I want all the data
+   * imported too"): each visit row, the budgets, the day's remarks, the weekly
+   * and monthly reports, the workbook's cells winning for the days before
+   * today. See `importWorkingTechnicians` for what importing again keeps.
    */
   async importHistory(user: AuthenticatedUser, file: UploadedWorkbook | undefined): Promise<RevenueHistoryImport> {
     if (!file?.buffer?.length) throw new ApplicationError(422, 'NO_WORKBOOK', 'Choose the workbook to import.');
@@ -824,10 +829,14 @@ export class ActualVsBudgetService {
       .filter((sheet) => sheet.hidden)
       .map((sheet) => ({ name: sheet.name.trim().slice(0, 100), log: technicianLog(sheet) }))
       .filter((sheet): sheet is { name: string; log: NonNullable<ReturnType<typeof technicianLog>> } => Boolean(sheet.name && sheet.log));
-    if (!logs.length) throw new ApplicationError(422, 'NO_PAST_LOGS', 'That workbook has no hidden technician tabs to import.');
+    const found = importWorkbook(sheets, businessDate());
+    if (!logs.length && !found.logs.length)
+      throw new ApplicationError(422, 'NO_LOGS', 'That workbook has no technician tabs to import.');
     const organizationId = user.organizationId;
     const fileName = (file.originalname || 'workbook.xlsx').slice(0, 200);
-    await this.prisma.$transaction(async (tx) => {
+    const { technicians } = await this.technicians(user);
+    // About 2,400 rows, written in a few statements: more than the transaction's default five seconds allow.
+    const current = await this.prisma.$transaction(async (tx) => {
       for (const { name, log } of logs) {
         const data = { headers: log.headers, rows: log.rows, rowCount: log.rows.length, fileName, importedAt: new Date(), importedById: auditActor(user).actorUserId };
         await tx.revenueHistorySheet.upsert({
@@ -846,9 +855,21 @@ export class ActualVsBudgetService {
           metadata: { fileName, tabs: logs.map(({ name, log }) => ({ name, rows: log.rows.length })) },
         },
       });
-    });
-    this.tell(user, 'history');
-    return { imported: logs.map(({ name, log }) => ({ name, rowCount: log.rows.length })) };
+      const working = await importWorkingTechnicians(tx, organizationId, auditActor(user).actorUserId, technicians, found);
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          ...auditActor(user),
+          action: 'REVENUE_WORKBOOK_IMPORTED',
+          entityType: 'RevenueLogEntry',
+          entityId: organizationId,
+          metadata: { fileName, ...working },
+        },
+      });
+      return working;
+    }, { timeout: 120_000, maxWait: 10_000 });
+    for (const scope of ['history', 'log', 'day', 'week', 'month', 'budgets'] as const) this.tell(user, scope);
+    return { imported: logs.map(({ name, log }) => ({ name, rowCount: log.rows.length })), current };
   }
 
   async historyList(user: AuthenticatedUser): Promise<RevenueHistoryList> {

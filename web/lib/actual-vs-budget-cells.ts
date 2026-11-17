@@ -6,7 +6,7 @@ import {
   sheetMoney,
   sheetTime,
   sheetWholeDollars,
-  secondsAsHours, type RevenueLogField, type RevenueLogRow, type SaveRevenueLogEntryInput } from '@texasrenters/shared';
+  secondsAsHours, type RevenueHistoryImport, type RevenueLogField, type RevenueLogRow, type SaveRevenueLogEntryInput } from '@texasrenters/shared';
 
 /**
  * The technician log's cells as a spreadsheet (2026-11-17, the office: "design
@@ -159,4 +159,22 @@ export function readWorkTime(text: string): number | null {
   const minutes = Number(words[2] ?? 0);
   if (minutes > 59) return null;
   return (Number(words[1] ?? 0) * 60 + minutes) * 60;
+}
+
+/** What an import brought in, in a line or two: rows, budgets, reports, past logs, what was kept, and names it did not know. */
+export function importSummary(result: RevenueHistoryImport): string {
+  const count = (value: number) => value.toLocaleString('en-US');
+  const current = result.current;
+  const visits = current.logs.reduce((sum, log) => sum + log.visits, 0);
+  const own = current.logs.reduce((sum, log) => sum + log.officeRows, 0);
+  const kept = current.logs.reduce((sum, log) => sum + log.keptEdits, 0);
+  const parts = [
+    `${count(visits + own)} log rows (${count(visits)} on their visits, ${count(own)} without one)`,
+    current.budgets.length ? `budgets for ${current.budgets.join(', ')}` : null,
+    current.days || current.weeks || current.months ? `${count(current.days)} days, ${count(current.weeks)} weeks, ${count(current.months)} months` : null,
+    result.imported.length ? `${result.imported.length} past logs` : null,
+    kept ? `${count(kept)} cells kept as changed here` : null,
+    current.unmatched.length ? `not a technician here: ${current.unmatched.join(', ')}` : null,
+  ];
+  return parts.filter(Boolean).join(' · ');
 }

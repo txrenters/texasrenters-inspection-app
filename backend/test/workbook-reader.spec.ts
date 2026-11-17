@@ -152,26 +152,30 @@ describe('importing the past logs', () => {
     const audits: Record<string, unknown>[] = [];
     const db: Record<string, unknown> = {
       revenueHistorySheet: { upsert: jest.fn(async ({ create }: { create: Record<string, unknown> }) => saved.push(create)) },
+      // Nobody in this office is called Amy: the working technicians' side finds no one to give her tab to.
+      organizationMember: { findMany: jest.fn(async () => []) },
+      revenueTechnicianSetting: { findMany: jest.fn(async () => []) },
       auditLog: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => audits.push(data)) },
       $transaction: jest.fn(async (work: (tx: unknown) => unknown): Promise<unknown> => work(db)),
     };
     return { db, saved, audits };
   }
 
-  it("keeps the hidden technician tabs only -- the tabs in use are the console's own now", async () => {
+  it('keeps the hidden technician tabs as they showed; a working tab with nobody to give it to is said so', async () => {
     const { db, saved, audits } = database();
     const result = await new ActualVsBudgetService(db as never).importHistory(office, { originalname: 'Actual Vs Budget.xlsx', size: 1000, buffer: zip(parts) });
-    expect(result).toEqual({ imported: [{ name: 'Nathan', rowCount: 2 }] });
+    expect(result.imported).toEqual([{ name: 'Nathan', rowCount: 2 }]);
+    expect(result.current).toMatchObject({ logs: [{ tab: 'Amy', technician: null, visits: 0, officeRows: 0 }], unmatched: ['Amy'] });
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({ name: 'Nathan', rowCount: 2, fileName: 'Actual Vs Budget.xlsx', importedById: office.id });
     expect(audits[0]).toMatchObject({ action: 'REVENUE_HISTORY_IMPORTED', metadata: { tabs: [{ name: 'Nathan', rows: 2 }] } });
   });
 
-  it('says so when the file is not a workbook, or has no past logs', async () => {
+  it('says so when the file is not a workbook, or has no technician tabs', async () => {
     const service = new ActualVsBudgetService(database().db as never);
     await expect(service.importHistory(office, { originalname: 'x.pdf', size: 10, buffer: Buffer.from('%PDF-1.7') })).rejects.toMatchObject({ code: 'NOT_A_WORKBOOK' });
-    const visibleOnly = zip({ ...parts, 'xl/workbook.xml': '<workbook xmlns:r="r"><sheets><sheet name="Amy" sheetId="24" r:id="rId3"/></sheets></workbook>' });
-    await expect(service.importHistory(office, { originalname: 'x.xlsx', size: 10, buffer: visibleOnly })).rejects.toMatchObject({ code: 'NO_PAST_LOGS' });
+    const noLogs = zip({ ...parts, 'xl/workbook.xml': '<workbook xmlns:r="r"><sheets><sheet name="Summary-May" sheetId="12" r:id="rId2"/></sheets></workbook>' });
+    await expect(service.importHistory(office, { originalname: 'x.xlsx', size: 10, buffer: noLogs })).rejects.toMatchObject({ code: 'NO_LOGS' });
     await expect(service.importHistory(office, undefined)).rejects.toMatchObject({ code: 'NO_WORKBOOK' });
   });
 });
