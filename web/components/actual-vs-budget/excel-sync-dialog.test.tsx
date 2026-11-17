@@ -105,10 +105,12 @@ describe('the Excel dialog', () => {
 });
 
 describe("the last read of the office's Excel edits", () => {
-  it('says what came in, what was put back and what the page kept', () => {
+  it('says what came in, what was left as in Excel, and where both changed', () => {
     const at = new Date(Date.now() - 2 * 60_000).toISOString();
-    expect(pullWords({ at, taken: 3, putBack: 1, conflicts: 0 })).toMatch(/^Read from Excel .+: 3 cells taken, 1 cell put back$/);
-    expect(pullWords({ at, taken: 1, putBack: 0, conflicts: 2 })).toMatch(/: 1 cell taken, 2 cells kept as on the page$/);
+    expect(pullWords({ at, taken: 3, putBack: 0, conflicts: 0, kept: 1 })).toMatch(/^Read from Excel .+: 3 cells taken, 1 cell left as in Excel$/);
+    expect(pullWords({ at, taken: 1, putBack: 0, conflicts: 2 })).toMatch(/: 1 cell taken, 2 cells changed in both: Excel's kept$/);
+    // A read from before v2.5.252 still says what it put back.
+    expect(pullWords({ at, taken: 0, putBack: 173, conflicts: 0 })).toMatch(/: 0 cells taken, 173 cells put back$/);
   });
 
   it('shows under the last write', () => {

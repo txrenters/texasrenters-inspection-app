@@ -23,9 +23,7 @@ import { ActualVsBudgetService } from '../actual-vs-budget.service';
 import { cellText, columnLetter, dailyTab, logTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelEditableField, type ExcelTab } from '../excel-layout';
 import { formatOf, isFormula, repairFormats } from './excel-formats';
 import { ExcelGraphClient } from './excel-graph.client';
-import { importWorkingTechnicians } from '../actual-vs-budget-import';
-import { dayFrom, logOf } from '../workbook-import';
-import type { WorkbookSheet } from '../workbook-reader';
+import { dayFrom } from '../workbook-import';
 import { LOG_WIDTH, planLogTab, sameCell, writtenOf, type ConsoleLogRow, type LogTabPlan } from './excel-log-rows';
 import { readTab, type ExcelEdit } from './excel-read';
 import { MicrosoftAuthService, MicrosoftError } from './microsoft-auth.service';
@@ -66,8 +64,6 @@ const QUIET_REWRITE_MS = 15 * 60_000;
 const CLAIM_MS = 3 * 60_000;
 /** Log tabs taken over in one run, at most: each costs a few calls more than a write, and a run has a budget. */
 const TAKEOVERS_PER_RUN = 2;
-/** The workbook's 19 log headings, for reading a taken-over tab's rows as the import reads a tab. */
-const LOG_HEADINGS = ['Date', 'Address', 'WO#', 'Job#', 'Drive Time', 'Time Budgeted', 'Estimated Labor Revenue Budget', 'Arrival Time', 'Time Leaving', 'Actual Time', 'Is the Work Complete?', 'Re-Schedule Required?', 'Date For Re-schedule', 'Labor Hours Income', 'Service Call Fee', 'Materials', 'Invoice #', 'Date Posted in PW', 'Issues/Notes'];
 /** Log tabs read in one run, at most (two calls each, and the writes): the rest are read by the next run. */
 const LOG_TABS_PER_RUN = 10;
 /** Read past a tab's last row, so a row the office added under it is seen. */
@@ -377,8 +373,8 @@ export class ExcelSyncService {
       const takenOver = (tab: ExcelTab) => Boolean(snapshots.get(tab.name)?.adoptedFrom);
       // What each tab holds now, where it was read: the write sends whatever differs from it.
       const held = new Map<string, ExcelCell[][]>();
-      // The cells holding the office's formulas, where a tab was read: never written over.
-      const formulaCells = new Map<string, [number, number][]>();
+      // The cells the office changed or works out with a formula, where a tab was read: the office's, never written over.
+      const officeCells = new Map<string, [number, number][]>();
       // A log tab's rows start where they did: where it was taken over (or, before, under the office's rows). One not
       // taken over yet is placed by its takeover.
       const place = async (tab: ExcelTab) => {
@@ -387,7 +383,7 @@ export class ExcelSyncService {
       for (const tab of tabs) await place(tab);
 
       if (edited) {
-        const pull: ExcelPull = { at: new Date().toISOString(), taken: 0, putBack: 0, conflicts: 0 };
+        const pull: ExcelPull = { at: new Date().toISOString(), taken: 0, putBack: 0, conflicts: 0, kept: 0 };
         const edits: (ExcelEdit & { tab: string })[] = [];
         for (const tab of tabs) {
           const written = snapshots.get(tab.name);
@@ -400,7 +396,7 @@ export class ExcelSyncService {
           held.set(tab.name, trimEmptyRows(cells.text));
           // A tab written before the console kept whose each row is (v2.5.245 and earlier) takes the rows of the
           // tab as it is now, when there are as many; their names are checked against Excel's all the same.
-          // Otherwise anything changed in it is simply put back.
+          // Otherwise anything changed in it is the office's, and left as it is.
           const sameShape = rows.length === tab.rows.length;
           const read = readTab(
             {
@@ -411,8 +407,11 @@ export class ExcelSyncService {
             tab,
             cells,
           );
-          formulaCells.set(tab.name, read.formulas);
-          pull.putBack += read.putBack;
+          // The office's cells stay the office's: those found before, and those found now.
+          const before = new Set(((written.formulaCells as [number, number][] | null) ?? []).map((cell) => cell.join(',')));
+          const found = read.kept.filter((cell) => !before.has(cell.join(',')));
+          officeCells.set(tab.name, [...((written.formulaCells as [number, number][] | null) ?? []), ...found]);
+          pull.kept! += found.length;
           pull.conflicts += read.conflicts;
           edits.push(...read.edits.map((edit) => ({ ...edit, tab: tab.name })));
         }
@@ -461,7 +460,7 @@ export class ExcelSyncService {
       });
       run.tabs.push(...logs.tabs);
       if (logs.pull) {
-        const pull = run.pulled ?? { at: new Date().toISOString(), taken: 0, putBack: 0, conflicts: 0 };
+        const pull = run.pulled ?? { at: new Date().toISOString(), taken: 0, putBack: 0, conflicts: 0, kept: 0 };
         run.pulled = { ...pull, taken: pull.taken + logs.pull.taken, conflicts: pull.conflicts + logs.pull.conflicts };
         await this.prisma.excelSync.update({
           where: { organizationId },
@@ -473,17 +472,23 @@ export class ExcelSyncService {
       for (const tab of tabs) {
         if (tab.below) continue;
         const before = snapshots.get(tab.name);
+        // A tab of that name the console never wrote is the office's own (2026-11-18, "the spreadsheet will be the
+        // source of truth"): never written.
+        if (existing.has(tab.name) && !before) {
+          run.tabs.push({ name: tab.name, created: false, rowsWritten: 0 });
+          continue;
+        }
         const holds = held.get(tab.name) ?? (before?.rows as ExcelCell[][] | undefined);
-        const formulas = formulaCells.get(tab.name) ?? (before?.formulaCells as [number, number][] | null) ?? [];
+        const office = officeCells.get(tab.name) ?? (before?.formulaCells as [number, number][] | null) ?? [];
         const written = await this.writeTab(
           client,
           tab,
           existing.has(tab.name),
           holds ? { rows: holds, bold: (before?.bold as number[] | undefined) ?? [] } : null,
-          formulas,
+          office,
         );
-        if (written.rowsWritten || written.created || !before?.keys || formulaCells.has(tab.name)) {
-          const snapshot = { ...this.snapshotOf(tab), formulaCells: formulas as unknown as Prisma.InputJsonValue };
+        if (written.rowsWritten || written.created || !before?.keys || officeCells.has(tab.name)) {
+          const snapshot = { ...this.snapshotOf(tab), formulaCells: office as unknown as Prisma.InputJsonValue };
           await this.prisma.excelSyncSheet.upsert({
             where: { organizationId_name: { organizationId, name: tab.name } },
             // A tab the console writes from now is written in the right formats: nothing of it to put right.
@@ -504,13 +509,13 @@ export class ExcelSyncService {
   }
 
   /**
-   * Take a technician's log tab over from the sync's first day: find its
-   * first row of that day; bring the office's rows from there into the
-   * console, as the workbook import does, the console's values standing; then
-   * empty the tab from there down -- the office's rows and anything the
-   * console wrote under them -- for the console's rows to go in their place.
-   * The office's rows before that day are never touched. Each step can be run
-   * again: a run stopped part-way is finished by the next.
+   * Take a technician's log tab over from the sync's first day, every cell of
+   * it left as it is (2026-11-18: "the spreadsheet will be the source of
+   * truth"). Only where its rows of that day begin is found: its first row of
+   * that day or later, or under its last row. From there each row is matched
+   * to the console's by its day and Job# (`planLogTab`): the office's cells
+   * stand and come into the console, its own rows come in, and the console
+   * only fills what is empty and adds what the tab lacks, at its foot.
    */
   private async takeOver(client: ExcelGraphClient, organizationId: string, name: string, start: string, oldOrigin: number | null) {
     const last = await client.lastUsedRow(name);
@@ -519,66 +524,31 @@ export class ExcelSyncService {
       const value = dates.values[row]?.[0];
       return typeof value === 'number' ? dayFrom(String(Math.floor(value))) : dayFrom(dates.text[row]?.[0]);
     };
-    // Only the office's rows: the console's own begin where they did.
     let first = -1;
-    for (let row = 0; row < Math.min(last, oldOrigin ?? last); row++) {
+    for (let row = 0; row < last; row++) {
       const day = dayAt(row);
       if (day && day >= start) {
         first = row;
         break;
       }
     }
-    // Nothing of that day yet: the console's rows start where they did, or one row under the office's last, and
-    // there is nothing of the office's to bring in -- never the console's own rows read back as if they were.
-    const found = first >= 0;
-    if (!found) first = oldOrigin ?? last + 1;
-    // The office's rows: down to where the console's own began, when that is further down.
-    const officeEnd = !found ? -1 : oldOrigin !== null && oldOrigin > first ? oldOrigin - 1 : last - 1;
-    if (officeEnd >= first) {
-      const cells = await client.readCells(name, `A${first + 1}:S${officeEnd + 1}`);
-      const sheet: WorkbookSheet = {
-        name,
-        hidden: false,
-        rows: new Map([
-          [1, new Map(LOG_HEADINGS.map((heading, column) => [columnLetter(column), heading]))],
-          ...cells.text.map((row, index) => [index + 2, new Map(row.flatMap((text, column) => (text.trim() ? [[columnLetter(column), text] as const] : [])))] as const),
-        ]),
-      };
-      const log = logOf(sheet, '9999-12-31');
-      if (log?.rows.length) {
-        const days = log.rows.map((row) => row.date).sort();
-        const reader = { id: 'excel-sync', organizationId, displayName: 'Excel sync', permissions: ['invoices:read'] } as unknown as AuthenticatedUser;
-        const { technicians } = await this.revenue.technicians(reader);
-        await this.prisma.$transaction(
-          async (tx) => {
-            const summary = await importWorkingTechnicians(
-              tx,
-              organizationId,
-              null,
-              technicians,
-              { logs: [log], budgets: [], days: [], weeks: [], months: [] },
-              { days: { from: days[0]!, to: days.at(-1)! }, preferConsole: true },
-            );
-            await tx.auditLog.create({
-              data: {
-                organizationId,
-                actorUserId: null,
-                action: 'REVENUE_EXCEL_LOG_TAKEN_OVER',
-                entityType: 'ExcelSync',
-                entityId: organizationId,
-                metadata: { ...summary.logs[0], tab: name, from: start, rows: log.rows.length } as unknown as Prisma.InputJsonValue,
-              },
-            });
-          },
-          { timeout: 60_000, maxWait: 10_000 },
-        );
-      }
-    }
-    if (last >= first + 1) await client.clearRange(name, `A${first + 1}:S${last}`, 'All');
+    // Nothing of that day yet: where the console's rows began before, or one row under the tab's last.
+    if (first < 0) first = oldOrigin ?? last + 1;
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        actorUserId: null,
+        action: 'REVENUE_EXCEL_LOG_TAKEN_OVER',
+        entityType: 'ExcelSync',
+        entityId: organizationId,
+        metadata: { tab: name, from: start, row: first + 1, cleared: false },
+      },
+    });
+    const taken = { origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {} };
     return this.prisma.excelSyncSheet.upsert({
       where: { organizationId_name: { organizationId, name } },
-      create: { organizationId, name, origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {}, formatsCheckedAt: new Date() },
-      update: { origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {}, formatsCheckedAt: new Date() },
+      create: { organizationId, name, ...taken, formatsCheckedAt: new Date() },
+      update: taken,
     });
   }
 
@@ -786,6 +756,7 @@ export class ExcelSyncService {
           const fix = repairFormats(read);
           if (typeof sheet.origin !== 'number')
             formulaCells = [
+              ...((sheet.formulaCells as [number, number][] | null) ?? []),
               ...read.formulas.flatMap((cells, row) =>
                 cells.flatMap((formula, column) => (isFormula(formula, read.values[row]?.[column] ?? null) ? [[row, column] as [number, number]] : [])),
               ),
@@ -940,10 +911,10 @@ export class ExcelSyncService {
     tab: ExcelTab,
     exists: boolean,
     before: { rows: ExcelCell[][]; bold: number[] } | null,
-    /** Cells holding the office's formulas ([row, column]): never written over. */
-    formulas: [number, number][] = [],
+    /** The office's cells ([row, column]) -- changed in Excel, or a formula: never written over. */
+    officeCells: [number, number][] = [],
   ): Promise<{ created: boolean; rowsWritten: number }> {
-    const kept = new Set(formulas.map(([row, column]) => `${row},${column}`));
+    const kept = new Set(officeCells.map(([row, column]) => `${row},${column}`));
     const width = Math.max(...tab.rows.map((row) => row.length), ...(before?.rows ?? []).map((row) => row.length), 1);
     const pad = (row: ExcelCell[] | undefined) => Array.from({ length: width }, (_, index): ExcelCell => row?.[index] ?? '');
     const last = columnLetter(width - 1);
@@ -984,11 +955,13 @@ export class ExcelSyncService {
       JSON.stringify(left ?? '') === JSON.stringify(right ?? '') || cellText(left) === cellText(right) && typeof left === typeof right;
     let written = 0;
     const blank = (cells: ExcelCell[] | undefined) => !cells || cells.every((cell) => cellText(cell) === '');
+    const office = (index: number) => [...kept].some((cell) => cell.startsWith(`${index},`));
     for (let index = 0; index < rows.length; index++) {
-      // Rows the tab did not have yet -- a new day, a new visit -- go in whole, a run of them in one call.
-      if (blank(old[index]) && !blank(rows[index])) {
+      // Rows the tab did not have yet -- a new day, a new visit -- go in whole, a run of them in one call, unless the
+      // office has a cell of its own there.
+      if (blank(old[index]) && !blank(rows[index]) && !office(index)) {
         let end = index;
-        while (end + 1 < rows.length && blank(old[end + 1]) && !blank(rows[end + 1])) end += 1;
+        while (end + 1 < rows.length && blank(old[end + 1]) && !blank(rows[end + 1]) && !office(end + 1)) end += 1;
         await put(`A${at(index)}:${last}${at(end)}`, rows.slice(index, end + 1));
         written += end - index + 1;
         index = end;
@@ -996,7 +969,7 @@ export class ExcelSyncService {
       }
       const row = rows[index]!;
       let touched = false;
-      // Unchanged, or the office works it out with a formula: left as it is.
+      // Unchanged, or the office's: left as it is.
       const leave = (column: number) => same(row[column], old[index]?.[column]) || kept.has(`${index},${column}`);
       for (let column = 0; column < width; ) {
         if (leave(column)) {
