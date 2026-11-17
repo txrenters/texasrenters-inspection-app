@@ -198,8 +198,13 @@ const columnOf = (headers: Map<string, string>, test: (heading: string) => boole
 
 // ── The tabs ────────────────────────────────────────────────────────────────
 
-/** A technician's tab: the workbook's 19 columns, in the same places on every tab, even where a heading is missing. */
-function logOf(sheet: WorkbookSheet, today: string): ImportedLog | null {
+/**
+ * A technician's tab: the workbook's 19 columns, in the same places on every
+ * tab, even where a heading is missing. Rows dated `today` or later are the
+ * console's and are only counted; a taken-over tab's rows (2026-11-18) pass a
+ * day past them all.
+ */
+export function logOf(sheet: WorkbookSheet, today: string): ImportedLog | null {
   const log = technicianLog(sheet);
   if (!log || lower(log.headers[1]) !== 'address' || lower(log.headers[13]) !== 'labor hours income') return null;
   const result: ImportedLog = { tab: sheet.name.trim(), rows: [], undated: 0, notPast: 0 };

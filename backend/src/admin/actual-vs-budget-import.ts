@@ -1,4 +1,4 @@
-import type { RevenueWorkbookImport } from '@texasrenters/shared';
+import { CONSOLE_FILLED, type RevenueWorkbookImport } from '@texasrenters/shared';
 import { InspectionStatus, type Prisma } from '@prisma/client';
 
 import { technicianMatcher, type ImportedLogCells, type ImportedLogRow, type ImportedWorkbook } from './workbook-import';
@@ -37,9 +37,11 @@ const shown = (value: unknown) => (value instanceof Date ? dayOf(value) : (value
  * One entry's cells after an import: the workbook's value for every cell it
  * has, except where the office changed the cell in the console after the last
  * import; a cell the last import wrote and the workbook now leaves blank is
- * cleared. `current` is null for an entry not made yet.
+ * cleared. `current` is null for an entry not made yet. With `preferConsole`
+ * (a log tab taken over, 2026-11-18) a cell the console already holds a value
+ * in keeps it: the workbook only fills what the console leaves blank.
  */
-export function mergeImported(current: Record<string, unknown> | null, previous: Values | null, incoming: Values) {
+export function mergeImported(current: Record<string, unknown> | null, previous: Values | null, incoming: Values, preferConsole = false) {
   const data: Values = {};
   const imported: Values = {};
   let kept = 0;
@@ -52,6 +54,10 @@ export function mergeImported(current: Record<string, unknown> | null, previous:
     }
     const now = shown(current[field]);
     const before = previous && field in previous ? previous[field]! : undefined;
+    if (preferConsole && before === undefined && now !== null) {
+      if (value !== null && value !== now) kept += 1;
+      continue;
+    }
     if (before !== undefined && now !== before) {
       // Changed in the console since the last import: the office's, and it stays so.
       imported[field] = before;
@@ -80,6 +86,14 @@ export async function importWorkingTechnicians(
   actorUserId: string | null,
   technicians: { id: string; name: string }[],
   found: ImportedWorkbook,
+  /**
+   * A log tab taken over (2026-11-18): only its rows' days are the import's,
+   * so the office's rows an earlier import made on other days are left alone;
+   * what the console already holds stands; and on a visit's row only what the
+   * office types comes in -- the address, Job#, times and money are the
+   * visit's, its timesheet's and its invoices' to fill.
+   */
+  options: { days?: { from: string; to: string }; preferConsole?: boolean } = {},
 ): Promise<RevenueWorkbookImport> {
   const match = technicianMatcher(technicians, found.logs.map((log) => log.tab));
   const unmatched = new Set<string>();
@@ -166,7 +180,14 @@ export async function importWorkingTechnicians(
     ? await tx.revenueLogEntry.findMany({
         where: {
           organizationId,
-          OR: [{ inspectionId: { in: visits.map((visit) => visit.id) } }, { inspectionId: null, technicianId: { in: ids } }],
+          OR: [
+            { inspectionId: { in: visits.map((visit) => visit.id) } },
+            {
+              inspectionId: null,
+              technicianId: { in: ids },
+              ...(options.days ? { day: { gte: dateOf(options.days.from), lte: dateOf(options.days.to) } } : {}),
+            },
+          ],
         },
       })
     : [];
@@ -194,7 +215,8 @@ export async function importWorkingTechnicians(
       if (visit) {
         counts.visits += 1;
         const entry = entryOfVisit.get(visit.id);
-        const { data, imported, kept } = mergeImported(entry ?? null, (entry?.importedFields as Values | null) ?? null, incoming);
+        const typed = options.preferConsole ? (Object.fromEntries(Object.entries(incoming).filter(([field]) => !(field in CONSOLE_FILLED))) as Values) : incoming;
+        const { data, imported, kept } = mergeImported(entry ?? null, (entry?.importedFields as Values | null) ?? null, typed, options.preferConsole);
         counts.keptEdits += kept;
         if (!entry)
           creates.push({

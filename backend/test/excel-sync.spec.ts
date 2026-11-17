@@ -356,7 +356,18 @@ describe("the client's limits", () => {
 
 // ── The sync ────────────────────────────────────────────────────────────────
 
-function syncSetup(options: { startDate?: string; remarks?: string | null; logs?: Record<string, RevenueLogDay[]> } = {}) {
+const NAMES: Record<string, string> = { amy: 'Amy Wilson', kevin: 'Kevin Granados', moses: 'Moses Rodriguez', thomas: 'Thomas Allen' };
+
+function syncSetup(
+  options: {
+    startDate?: string;
+    remarks?: string | null;
+    logs?: Record<string, RevenueLogDay[]>;
+    /** For a log tab taken over: the console's visits and log entries the import finds. */
+    visits?: Record<string, unknown>[];
+    entries?: Record<string, unknown>[];
+  } = {},
+) {
   const key = readEnvelopeKey(KEY_HEX, 'K')!;
   let sync: Record<string, unknown> | null = {
     organizationId: ORG,
@@ -372,7 +383,7 @@ function syncSetup(options: { startDate?: string; remarks?: string | null; logs?
     lastError: null,
     claimedUntil: null,
   };
-  const sheets = new Map<string, { name: string; rows: unknown; bold: unknown; keys?: unknown; editable?: unknown }>();
+  const sheets = new Map<string, { name: string; rows: unknown; bold: unknown; keys?: unknown; editable?: unknown; origin?: number | null; adoptedFrom?: Date | null }>();
   const audits: unknown[] = [];
   const connection = connectionDb({
     status: 'CONNECTED',
@@ -395,10 +406,16 @@ function syncSetup(options: { startDate?: string; remarks?: string | null; logs?
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => (sync = { ...data })),
     },
     excelSyncSheet: {
-      findMany: jest.fn(async ({ where }: { where: { name: { in: string[] } } }) => where.name.in.filter((name) => sheets.has(name)).map((name) => sheets.get(name))),
-      upsert: jest.fn(async ({ create }: { create: { name: string; rows: unknown; bold: unknown; keys?: unknown; editable?: unknown } }) =>
-        sheets.set(create.name, JSON.parse(JSON.stringify(create))),
+      findMany: jest.fn(async ({ where }: { where: { name?: { in: string[] } } }) =>
+        (where.name ? where.name.in.filter((name) => sheets.has(name)) : [...sheets.keys()]).map((name) => ({ ...sheets.get(name)! })),
       ),
+      upsert: jest.fn(async ({ create, update }: { create: { name: string } & Record<string, unknown>; update: Record<string, unknown> }) => {
+        const kept = sheets.get(create.name);
+        const row = kept ? { ...kept, ...update } : { ...create };
+        // As the database keeps them: JSON as JSON, a day as a day.
+        sheets.set(create.name, { ...JSON.parse(JSON.stringify(row)), adoptedFrom: (row as { adoptedFrom?: Date }).adoptedFrom ?? null });
+        return sheets.get(create.name);
+      }),
       deleteMany: jest.fn(async () => sheets.clear()),
     },
     auditLog: { create: jest.fn(async ({ data }: { data: unknown }) => audits.push(data)) },
@@ -412,7 +429,15 @@ function syncSetup(options: { startDate?: string; remarks?: string | null; logs?
     revenueLogEntry: {
       upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'log', ...create, ...update })),
       updateMany: jest.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => saved.push({ table: 'log', ...where, ...data })),
+      findMany: jest.fn(async () => (options.entries ?? []).map((entry) => ({ ...entry }))),
+      createMany: jest.fn(async ({ data }: { data: Record<string, unknown>[] }) => {
+        for (const row of data) saved.push({ table: 'log', created: true, ...row });
+      }),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => saved.push({ table: 'log', updated: where.id, ...data })),
+      deleteMany: jest.fn(async () => ({ count: 0 })),
     },
+    inspection: { findMany: jest.fn(async () => options.visits ?? []) },
+    revenueTechnicianSetting: { findMany: jest.fn(async () => []) },
     revenueMonthEntry: { upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'month', ...create, ...update })) },
     $transaction: jest.fn(async (work: (tx: unknown) => unknown): Promise<unknown> => work(db)),
   };
@@ -422,7 +447,7 @@ function syncSetup(options: { startDate?: string; remarks?: string | null; logs?
   const revenue = {
     day: jest.fn(async (_user: unknown, date: string) => day(date, remarks)),
     month: jest.fn(async (_user: unknown, value: string) => month(value)),
-    technicians: jest.fn(async () => ({ technicians: Object.keys(logs).map((id) => ({ id, name: id === 'amy' ? 'Amy Wilson' : 'Kevin Granados' })) })),
+    technicians: jest.fn(async () => ({ technicians: Object.keys(logs).map((id) => ({ id, name: NAMES[id] ?? 'Kevin Granados' })) })),
     log: jest.fn(async (_user: unknown, query: { technicianId: string; from: string; to: string }) => ({
       technician: { id: query.technicianId, name: 'x' },
       from: query.from,
@@ -747,5 +772,122 @@ describe("each technician's own log tab", () => {
     expect(run.tabs.map((tab) => tab.name)).toContain('Amy');
     expect(run.tabs.map((tab) => tab.name)).not.toContain('Kevin');
     expect(setup.sheets.get('Amy')!.rows).toHaveLength(5);
+  });
+});
+
+describe("a technician's log tab, taken over from the sync's first day", () => {
+  const at = new Date('2026-11-18T15:00:00.000Z');
+  afterEach(() => jest.useRealTimers());
+  const row = (date: string, over: Partial<RevenueLogRow>): RevenueLogRow => ({
+    key: over.inspectionId ?? over.entryId ?? date,
+    inspectionId: null,
+    entryId: null,
+    date,
+    address: null, workOrder: null, jobNumber: null, driveTime: null, timeBudgeted: null, estimatedBudgetCents: null,
+    arrival: null, leaving: null, workComplete: null, rescheduleRequired: null, rescheduleOn: null,
+    laborCents: null, serviceCallFeeCents: null, materialsCents: null, invoiceNumber: null, postedInPw: null, notes: null,
+    actualSeconds: null,
+    filled: {},
+    corrected: [],
+    ...over,
+  });
+  const logDay = (date: string, rows: RevenueLogRow[]): RevenueLogDay => ({ date, rows, totals: revenueLogTotals(rows) });
+  // On the page: Moses's visit on 11/17, its Job# typed over as 20374.
+  const mosesLog = () => [
+    logDay('2026-11-17', [row('2026-11-17', { inspectionId: 'visit-17518', address: '17518 Autumn Hills Dr - 17518 Autumn Hills Dr - Zone 2', jobNumber: '20374' })]),
+  ];
+  // Moses's tab as the office keeps it: a day before the first day, then its own rows of 11/17 and 11/18, and the
+  // block the console wrote under them before this.
+  function officeTab(microsoft: ReturnType<typeof fakeMicrosoft>) {
+    microsoft.edit('Moses', 'B2', 'Address');
+    // Excel's day numbers: 46342 is 11/16/2026, 46343 is 11/17, 46344 is 11/18.
+    microsoft.edit('Moses', 'A3', 46342, 'm/d/yyyy');
+    microsoft.edit('Moses', 'B3', '5 Before Rd - Zone 1');
+    microsoft.edit('Moses', 'A4', 'Total');
+    microsoft.edit('Moses', 'A6', 46343, 'm/d/yyyy');
+    microsoft.edit('Moses', 'B6', '17518 Autumn Hills Dr - Zone 2 - Q4 2026 Tenant Benefit Package');
+    microsoft.edit('Moses', 'D6', '20373');
+    microsoft.edit('Moses', 'E6', '10–15 min');
+    microsoft.edit('Moses', 'A7', 46344, 'm/d/yyyy');
+    microsoft.edit('Moses', 'B7', '9 Unplanned St - Zone 3');
+    microsoft.edit('Moses', 'A8', 'Total');
+    microsoft.edit('Moses', 'A10', 46344, 'm/d/yyyy');
+    microsoft.edit('Moses', 'B10', 'a row the console wrote under them before');
+  }
+
+  async function takenOver(options: { startDate?: string } = {}) {
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const microsoft = fakeMicrosoft({ sheets: ['Moses', 'Month of October'] });
+    officeTab(microsoft);
+    const setup = syncSetup({
+      startDate: options.startDate ?? '2026-11-17',
+      logs: { moses: mosesLog() },
+      visits: [{ id: 'visit-17518', scheduledAt: new Date('2026-11-17T00:00:00.000Z'), jobberJobNumber: '20373', assignments: [{ technicianId: 'moses' }] }],
+      entries: [{ id: 'entry-17518', organizationId: ORG, technicianId: 'moses', inspectionId: 'visit-17518', day: new Date('2026-11-17T00:00:00.000Z'), jobNumber: '20374', importedFields: null }],
+    });
+    // What the console wrote under the office's rows before the takeover.
+    setup.sheets.set('Moses', { name: 'Moses', origin: 9, rows: [['11/18/2026', 'a row the console wrote under them before']], bold: [], keys: [null], editable: {} });
+    const run = await setup.service.syncNow(office);
+    return { microsoft, setup, run };
+  }
+
+  it("brings the office's rows from that day into the console first -- the console's own values standing -- then puts the console's rows in their place", async () => {
+    const { microsoft, setup } = await takenOver();
+    // The office's 11/17 row is the visit: its typed drive time comes in; its Job# and address do not -- the console's
+    // 20374 stands, and the visit's address is the console's to fill.
+    const visit = setup.saved.find((saved) => saved.updated === 'entry-17518')!;
+    expect(visit).toMatchObject({ driveTime: '10–15 min' });
+    expect(visit).not.toHaveProperty('jobNumber');
+    expect(visit).not.toHaveProperty('address');
+    // The office's row with no visit is the office's own row in the console now; the console's old block is not imported.
+    const created = setup.saved.filter((saved) => saved.created);
+    expect(created.map((saved) => saved.address)).toEqual(['9 Unplanned St - Zone 3']);
+    expect(setup.audits).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'REVENUE_EXCEL_LOG_TAKEN_OVER', actorUserId: null })]));
+    // From the first row of 11/17 down, the tab is the console's: its row is where the office's was, once.
+    expect(microsoft.calls.some((call) => call.path.endsWith("/Moses/range(address='A6:S10')/clear") && (call.body as { applyTo: string }).applyTo === 'All')).toBe(true);
+    expect(microsoft.shows('Moses', 'B6')).toBe('17518 Autumn Hills Dr - 17518 Autumn Hills Dr - Zone 2');
+    expect(microsoft.shows('Moses', 'D6')).toBe('20374');
+    expect(microsoft.shows('Moses', 'A7')).toBe('Total');
+    expect(microsoft.shows('Moses', 'B10')).toBe('');
+    // The office's rows before that day are never touched.
+    expect(microsoft.shows('Moses', 'B3')).toBe('5 Before Rd - Zone 1');
+    expect(setup.sheets.get('Moses')).toMatchObject({ origin: 5, adoptedFrom: new Date('2026-11-17T00:00:00.000Z') });
+  });
+
+  it('is taken over once: the next write rewrites only what changed, from where it began', async () => {
+    const { microsoft, setup } = await takenOver();
+    microsoft.calls.length = 0;
+    await setup.db.excelSync.update({ data: { dirtyAt: new Date(at.getTime() + 60_000) } });
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    await setup.service.runIfDue(ORG);
+    expect(microsoft.calls.some((call) => call.path.includes('/Moses/') && /usedRange|clear$/.test(call.path))).toBe(false);
+    expect(setup.audits.filter((audit) => (audit as { action: string }).action === 'REVENUE_EXCEL_LOG_TAKEN_OVER')).toHaveLength(1);
+  });
+
+  it('a first day moved later keeps the rows already taken over; moved earlier, takes the tab over again from there', async () => {
+    const { microsoft, setup } = await takenOver();
+    await setup.db.excelSync.update({ data: { startDate: new Date('2026-11-18T00:00:00.000Z'), dirtyAt: new Date(at.getTime() + 60_000) } });
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    await setup.service.runIfDue(ORG);
+    expect(microsoft.shows('Moses', 'D6')).toBe('20374');
+    expect(setup.audits.filter((audit) => (audit as { action: string }).action === 'REVENUE_EXCEL_LOG_TAKEN_OVER')).toHaveLength(1);
+
+    await setup.db.excelSync.update({ data: { startDate: new Date('2026-11-16T00:00:00.000Z'), dirtyAt: new Date(at.getTime() + 180_000) } });
+    jest.setSystemTime(new Date(at.getTime() + 240_000));
+    await setup.service.runIfDue(ORG);
+    expect(setup.sheets.get('Moses')).toMatchObject({ origin: 2, adoptedFrom: new Date('2026-11-16T00:00:00.000Z') });
+    // Only the office's 11/16 row was the office's to bring in: the console's own rows under it are not.
+    expect(setup.saved.filter((saved) => saved.created).map((saved) => saved.address)).toEqual(['9 Unplanned St - Zone 3', '5 Before Rd - Zone 1']);
+  });
+
+  it('takes over two tabs a run at most; the others wait, unwritten, for the next', async () => {
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const microsoft = fakeMicrosoft({ sheets: ['Amy', 'Kevin', 'Moses', 'Month of October'] });
+    const setup = syncSetup({ startDate: '2026-11-17', logs: { amy: mosesLog(), kevin: mosesLog(), moses: mosesLog() } });
+    const run = await setup.service.syncNow(office);
+    const logTabs = run.tabs.map((tab) => tab.name).filter((name) => ['Amy', 'Kevin', 'Moses'].includes(name));
+    expect(logTabs).toEqual(['Amy', 'Kevin']);
+    expect(setup.sync!.dirtyAt).toEqual(at);
+    expect(microsoft.calls.some((call) => call.path.includes('/Moses/'))).toBe(false);
   });
 });

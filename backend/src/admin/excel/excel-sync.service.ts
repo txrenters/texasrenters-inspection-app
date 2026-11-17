@@ -10,6 +10,9 @@ import { ActualVsBudgetGateway } from '../actual-vs-budget.gateway';
 import { ActualVsBudgetService } from '../actual-vs-budget.service';
 import { columnLetter, dailyTab, logTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelEditableField, type ExcelTab } from '../excel-layout';
 import { ExcelGraphClient } from './excel-graph.client';
+import { importWorkingTechnicians } from '../actual-vs-budget-import';
+import { dayFrom, logOf } from '../workbook-import';
+import type { WorkbookSheet } from '../workbook-reader';
 import { readTab, type ExcelEdit } from './excel-read';
 import { MicrosoftAuthService, MicrosoftError } from './microsoft-auth.service';
 import { microsoftConfigured } from './microsoft.config';
@@ -26,7 +29,10 @@ import { microsoftConfigured } from './microsoft.config';
  * last wrote into each tab and sends only the rows that changed, inside a
  * per-run call budget. A tab dated before the sync's first day is the office's
  * and is never written. Each technician's own log tab ("Amy", "Kevin") gets
- * the console's log from that day on, under the office's rows (2026-11-18).
+ * the console's log from that day on (2026-11-18): the tab is taken over from
+ * its first row of that day -- the office's rows from there are brought into
+ * the console, what the console already holds standing, and the console's
+ * rows take their place -- so each visit is on the tab once.
  *
  * And back (2026-11-18): each minute one call asks Microsoft for the
  * workbook's version. When it is not the one the console's last write left,
@@ -42,6 +48,10 @@ const DAY_MS = 86_400_000;
 /** With no save to write, the tabs are written again this often anyway: a new day's tabs appear by themselves. */
 const QUIET_REWRITE_MS = 15 * 60_000;
 const CLAIM_MS = 3 * 60_000;
+/** Log tabs taken over in one run, at most: each costs a few calls more than a write, and a run has a budget. */
+const TAKEOVERS_PER_RUN = 2;
+/** The workbook's 19 log headings, for reading a taken-over tab's rows as the import reads a tab. */
+const LOG_HEADINGS = ['Date', 'Address', 'WO#', 'Job#', 'Drive Time', 'Time Budgeted', 'Estimated Labor Revenue Budget', 'Arrival Time', 'Time Leaving', 'Actual Time', 'Is the Work Complete?', 'Re-Schedule Required?', 'Date For Re-schedule', 'Labor Hours Income', 'Service Call Fee', 'Materials', 'Invoice #', 'Date Posted in PW', 'Issues/Notes'];
 /** Read past a tab's last row, so a row the office added under it is seen. */
 const EXTRA_ROWS_READ = 3;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -260,7 +270,13 @@ export class ExcelSyncService {
    * of it -- "Amy", "Kevin", as the office named them -- gets their log there,
    * from the sync's first day to tomorrow.
    */
-  async tabsFor(organizationId: string, today = businessDate(), sheetNames?: ReadonlySet<string>): Promise<ExcelTab[]> {
+  async tabsFor(
+    organizationId: string,
+    today = businessDate(),
+    sheetNames?: ReadonlySet<string>,
+    /** A taken-over log tab keeps the day it was taken over from, when the first day moved later since. */
+    logFrom: ReadonlyMap<string, string> = new Map(),
+  ): Promise<ExcelTab[]> {
     const sync = await this.prisma.excelSync.findUnique({ where: { organizationId }, select: { startDate: true } });
     if (!sync) return [];
     const start = dayOf(sync.startDate);
@@ -297,7 +313,8 @@ export class ExcelSyncService {
         // Two technicians of one first name: the tab cannot say whose it is.
         if (!sheetNames.has(name) || firstNames.get(name.toLowerCase())! > 1) continue;
         const days = [];
-        for (let from = start; from <= tomorrow; from = shiftDay(from, MAX_LOG_DAYS)) {
+        const first = [logFrom.get(name) ?? start, start].sort()[0]!;
+        for (let from = first; from <= tomorrow; from = shiftDay(from, MAX_LOG_DAYS)) {
           const to = [shiftDay(from, MAX_LOG_DAYS - 1), tomorrow].sort()[0]!;
           days.push(...(await this.revenue.log(reader, { technicianId: technician.id, from, to })).days);
         }
@@ -325,16 +342,22 @@ export class ExcelSyncService {
     await client.openSession();
     try {
       const existing = new Set(await client.worksheetNames());
-      let tabs = await this.tabsFor(organizationId, undefined, existing);
-      const snapshots = new Map(
-        (await this.prisma.excelSyncSheet.findMany({ where: { organizationId, name: { in: tabs.map((tab) => tab.name) } } })).map((sheet) => [sheet.name, sheet]),
-      );
+      const snapshots = new Map((await this.prisma.excelSyncSheet.findMany({ where: { organizationId } })).map((sheet) => [sheet.name, sheet]));
+      const start = dayOf(sync.startDate);
+      // Each taken-over log tab, from the day it was taken over: unless the first day moved earlier, when it is taken over again.
+      const logFrom = () =>
+        new Map([...snapshots.values()].flatMap((sheet) => (sheet.adoptedFrom && dayOf(sheet.adoptedFrom) <= start ? [[sheet.name, dayOf(sheet.adoptedFrom)] as const] : [])));
+      let tabs = await this.tabsFor(organizationId, undefined, existing, logFrom());
+      const takenOver = (tab: ExcelTab) => {
+        const adoptedFrom = snapshots.get(tab.name)?.adoptedFrom;
+        return Boolean(adoptedFrom && dayOf(adoptedFrom) <= start);
+      };
       // What each tab holds now, where it was read: the write sends whatever differs from it.
       const held = new Map<string, ExcelCell[][]>();
-      // A log tab's rows start where they did; the first time, under the office's last row, one row down.
+      // A log tab's rows start where they did: where it was taken over (or, before, under the office's rows). One not
+      // taken over yet is placed by its takeover.
       const place = async (tab: ExcelTab) => {
-        if (!tab.below) return;
-        tab.below.origin = snapshots.get(tab.name)?.origin ?? (await client.lastUsedRow(tab.name)) + 1;
+        if (tab.below) tab.below.origin = snapshots.get(tab.name)?.origin ?? undefined;
       };
       for (const tab of tabs) await place(tab);
 
@@ -374,9 +397,32 @@ export class ExcelSyncService {
         });
         // What came in is the console's now: the tabs are worked out again with it.
         if (pull.taken) {
-          tabs = await this.tabsFor(organizationId, undefined, existing);
+          tabs = await this.tabsFor(organizationId, undefined, existing, logFrom());
           for (const tab of tabs) await place(tab);
         }
+      }
+
+      // A log tab not taken over yet (or whose first day moved earlier) is taken over now, a few a run; the rest wait,
+      // unwritten, for the next run, which the save left waiting.
+      let takeovers = 0;
+      let waiting = false;
+      for (const tab of tabs) {
+        if (!tab.below || takenOver(tab)) continue;
+        if (takeovers >= TAKEOVERS_PER_RUN) {
+          waiting = true;
+          continue;
+        }
+        takeovers += 1;
+        snapshots.set(tab.name, await this.takeOver(client, organizationId, tab.name, start, snapshots.get(tab.name)?.origin ?? null));
+        held.delete(tab.name);
+      }
+      if (takeovers) {
+        tabs = await this.tabsFor(organizationId, undefined, existing, logFrom());
+        for (const tab of tabs) await place(tab);
+      }
+      if (waiting) {
+        tabs = tabs.filter((tab) => !tab.below || takenOver(tab));
+        await this.prisma.excelSync.update({ where: { organizationId }, data: { dirtyAt: new Date() } });
       }
 
       for (const tab of tabs) {
@@ -404,6 +450,83 @@ export class ExcelSyncService {
     await this.prisma.excelSync.update({ where: { organizationId }, data: { fileTag } });
     run.calls = client.callsMade;
     return run;
+  }
+
+  /**
+   * Take a technician's log tab over from the sync's first day: find its
+   * first row of that day; bring the office's rows from there into the
+   * console, as the workbook import does, the console's values standing; then
+   * empty the tab from there down -- the office's rows and anything the
+   * console wrote under them -- for the console's rows to go in their place.
+   * The office's rows before that day are never touched. Each step can be run
+   * again: a run stopped part-way is finished by the next.
+   */
+  private async takeOver(client: ExcelGraphClient, organizationId: string, name: string, start: string, oldOrigin: number | null) {
+    const last = await client.lastUsedRow(name);
+    const dates = last ? await client.readCells(name, `A1:A${last}`) : { text: [], values: [] };
+    const dayAt = (row: number) => {
+      const value = dates.values[row]?.[0];
+      return typeof value === 'number' ? dayFrom(String(Math.floor(value))) : dayFrom(dates.text[row]?.[0]);
+    };
+    // Only the office's rows: the console's own begin where they did.
+    let first = -1;
+    for (let row = 0; row < Math.min(last, oldOrigin ?? last); row++) {
+      const day = dayAt(row);
+      if (day && day >= start) {
+        first = row;
+        break;
+      }
+    }
+    // Nothing of that day yet: the console's rows start where they did, or one row under the office's last.
+    if (first < 0) first = oldOrigin ?? last + 1;
+    // The office's rows: down to where the console's own began, when that is further down.
+    const officeEnd = oldOrigin !== null && oldOrigin > first ? oldOrigin - 1 : last - 1;
+    if (officeEnd >= first) {
+      const cells = await client.readCells(name, `A${first + 1}:S${officeEnd + 1}`);
+      const sheet: WorkbookSheet = {
+        name,
+        hidden: false,
+        rows: new Map([
+          [1, new Map(LOG_HEADINGS.map((heading, column) => [columnLetter(column), heading]))],
+          ...cells.text.map((row, index) => [index + 2, new Map(row.flatMap((text, column) => (text.trim() ? [[columnLetter(column), text] as const] : [])))] as const),
+        ]),
+      };
+      const log = logOf(sheet, '9999-12-31');
+      if (log?.rows.length) {
+        const days = log.rows.map((row) => row.date).sort();
+        const reader = { id: 'excel-sync', organizationId, displayName: 'Excel sync', permissions: ['invoices:read'] } as unknown as AuthenticatedUser;
+        const { technicians } = await this.revenue.technicians(reader);
+        await this.prisma.$transaction(
+          async (tx) => {
+            const summary = await importWorkingTechnicians(
+              tx,
+              organizationId,
+              null,
+              technicians,
+              { logs: [log], budgets: [], days: [], weeks: [], months: [] },
+              { days: { from: days[0]!, to: days.at(-1)! }, preferConsole: true },
+            );
+            await tx.auditLog.create({
+              data: {
+                organizationId,
+                actorUserId: null,
+                action: 'REVENUE_EXCEL_LOG_TAKEN_OVER',
+                entityType: 'ExcelSync',
+                entityId: organizationId,
+                metadata: { ...summary.logs[0], tab: name, from: start, rows: log.rows.length } as unknown as Prisma.InputJsonValue,
+              },
+            });
+          },
+          { timeout: 60_000, maxWait: 10_000 },
+        );
+      }
+    }
+    if (last >= first + 1) await client.clearRange(name, `A${first + 1}:S${last}`, 'All');
+    return this.prisma.excelSyncSheet.upsert({
+      where: { organizationId_name: { organizationId, name } },
+      create: { organizationId, name, origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {} },
+      update: { origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {} },
+    });
   }
 
   private snapshotOf(tab: ExcelTab) {
