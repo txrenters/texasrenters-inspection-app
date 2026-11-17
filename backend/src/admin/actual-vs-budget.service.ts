@@ -14,7 +14,9 @@ import {
   type RevenueBudgets,
   type RevenueDay,
   type RevenueDayTechnician,
+  type RevenueClearedCells,
   type RevenueHistoryImport,
+  type RestoreClearedCellsResult,
   type RevenueHistoryList,
   type RevenueHistorySheetView,
   type RevenueMonthReport,
@@ -46,6 +48,7 @@ import { PrismaService } from '../common/prisma.service';
 import { ActualVsBudgetGateway } from './actual-vs-budget.gateway';
 import { readCompanies, shownInvoices } from './shown-invoices';
 import { importWorkingTechnicians } from './actual-vs-budget-import';
+import { findClearedCells, restoreClearedCells } from './actual-vs-budget-restore';
 import { importWorkbook } from './workbook-import';
 import { WorkbookError, readWorkbook, technicianLog, type WorkbookSheet } from './workbook-reader';
 
@@ -878,6 +881,45 @@ export class ActualVsBudgetService {
     }, { timeout: 120_000, maxWait: 10_000 });
     for (const scope of ['history', 'log', 'day', 'week', 'month', 'budgets'] as const) this.tell(user, scope);
     return { imported: logs.map(({ name, log }) => ({ name, rowCount: log.rows.length })), current };
+  }
+
+  // ── Cells cleared by mistake, put back from the history (2026-11-17) ─────
+
+  /** The cells a save cleared by mistake and still empty, from the audit record: see actual-vs-budget-restore.ts. */
+  async clearedCells(user: AuthenticatedUser): Promise<RevenueClearedCells> {
+    const { cells } = await findClearedCells(this.prisma, user.organizationId);
+    return { cells };
+  }
+
+  /** Put the chosen cells back, each only while still empty: on the record, and on everyone's page. */
+  async restoreClearedCells(user: AuthenticatedUser, ids: string[]): Promise<RestoreClearedCellsResult> {
+    const organizationId = user.organizationId;
+    const restored = await this.prisma.$transaction(
+      async (tx) => {
+        const cells = await restoreClearedCells(tx, organizationId, new Set(ids));
+        if (cells.length)
+          await tx.auditLog.create({
+            data: {
+              organizationId,
+              ...auditActor(user),
+              action: 'REVENUE_CELLS_RESTORED',
+              entityType: 'RevenueLogEntry',
+              entityId: organizationId,
+              metadata: { cells: cells.map(({ place, field, to }) => ({ place, field, to })) },
+            },
+          });
+        return cells;
+      },
+      { timeout: 60_000, maxWait: 10_000 },
+    );
+    const told = (scope: 'log' | 'day' | 'week') =>
+      restored
+        .filter((cell) => cell.scope === scope)
+        .map((cell) =>
+          scope === 'log' ? revenueCell.log(cell.cellKey, cell.field) : scope === 'day' ? revenueCell.day(cell.technicianId!, cell.cellKey, cell.field) : revenueCell.week(cell.technicianId!, cell.cellKey, cell.field),
+        );
+    for (const scope of ['log', 'day', 'week'] as const) if (told(scope).length) this.tell(user, scope, told(scope));
+    return { restored: restored.length };
   }
 
   async historyList(user: AuthenticatedUser): Promise<RevenueHistoryList> {

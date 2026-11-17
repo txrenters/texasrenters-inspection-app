@@ -614,3 +614,38 @@ export interface RevenueLiveEditor {
   view: string | null;
   cell: string | null;
 }
+
+// ── Cells cleared by mistake, put back from the history (2026-11-17) ───────
+//
+// From v2.5.242 until v2.5.248 saving one cell cleared the other typed cells
+// of its row, day or week; and an empty Excel cell cleared the console's. The
+// audit record keeps each cell's value before and after every save.
+
+export interface RevenueClearedCell {
+  /** The audit event and cell: what a restore names. */
+  id: string;
+  at: string;
+  /** Who saved -- or "Excel". */
+  by: string;
+  /** Technician · day · address · job, or technician · day / week. */
+  where: string;
+  field: string;
+  /** The value the cell held, as the record shows it: "10–20 min", "7899" (cents), "true", "2026-11-20". */
+  lost: string;
+  /** What the save that cleared it set ("estimatedBudgetCents = 7899"); null when it set nothing else. */
+  saved: string | null;
+  /** Cleared by the one-cell-save fault for sure; false when it came from Excel, or which cell was meant cannot be told. */
+  certain: boolean;
+}
+
+export interface RevenueClearedCells {
+  cells: RevenueClearedCell[];
+}
+
+export interface RestoreClearedCellsInput {
+  ids: string[];
+}
+
+export interface RestoreClearedCellsResult {
+  restored: number;
+}
