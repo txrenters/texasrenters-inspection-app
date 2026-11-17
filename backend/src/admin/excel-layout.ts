@@ -50,7 +50,7 @@ export interface ExcelTab {
    * tab is never made, sized or headed by the console. Set when it is first
    * written; absent for a tab the console lays out from its first cell.
    */
-  below?: { origin?: number };
+  below?: { origin?: number; technicianId?: string };
   /** The bold rows are filled too: the log's Total rows, light blue as the office's are. */
   fill?: string;
 }
@@ -416,5 +416,5 @@ export function logTab(name: string, technicianId: string, days: readonly Revenu
     ]);
     keys.push(null);
   }
-  return { name, rows, bold, keys, editable: { ...LOG_EDITABLE }, below: {}, fill: '#DDEBF7' };
+  return { name, rows, bold, keys, editable: { ...LOG_EDITABLE }, below: { technicianId }, fill: '#DDEBF7' };
 }

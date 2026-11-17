@@ -13,8 +13,9 @@ import { centsFrom, clockFrom, dayFrom, secondsFrom, yesNo } from '../workbook-i
  *    Moses's 17518 row lost its drive time, time budgeted and budget this way,
  *    and the office uses them for payment). It is put back as the console has
  *    it; a value is cleared on the console's page, never from Excel;
- *  - unless the console changed that same cell since its last write: then the
- *    console's value stands, and Excel gets it back;
+ *  - even when the console changed that same cell since its last write: the
+ *    office's typing is never written over (2026-11-18), and the console's
+ *    value stays in its save history;
  *  - any other cell changed in Excel -- a total, a percentage, a drive time
  *    the log works out, a heading -- is put back as the console has it;
  *  - and when the tab's rows no longer line up with what was written (a row
@@ -61,7 +62,7 @@ const MONEY = new Set<ExcelEditableField>(['budgetCents', 'targetCents', 'actual
 const serialDay = (serial: number) => new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000).toISOString().slice(0, 10);
 
 /** What the office typed into a cell, as the console stores it; undefined when it cannot be read. */
-function valueOf(field: ExcelEditableField, text: string, value: Value): number | string | boolean | null | undefined {
+export function valueOf(field: ExcelEditableField, text: string, value: Value): number | string | boolean | null | undefined {
   const blank = !text.trim() && (value === null || value === '');
   if (field === 'arrival' || field === 'leaving') {
     if (blank) return null;
@@ -145,13 +146,11 @@ export function readTab(written: WrittenTab, current: WrittenTab | undefined, ex
       }
       const to = textAt(excel.text, row, column);
       const from = textAt(writtenText, row, column);
-      // The console changed this cell too since it wrote it: its value stands.
+      // The console changed this cell too since it wrote it: the office's typing stands all the same, never written
+      // over (2026-11-18); the console's value stays in its save history.
       const currentRow = currentRowOf.get(key);
       const consoleNow = currentRow === undefined ? from : cellText(current!.rows[currentRow]?.[column]);
-      if (!same(consoleNow, from) && !same(consoleNow, to)) {
-        result.conflicts += 1;
-        continue;
-      }
+      if (!same(consoleNow, from) && !same(consoleNow, to)) result.conflicts += 1;
       const value = valueOf(field, to, excel.values[row]?.[column] ?? null);
       if (value === undefined || value === null) {
         result.putBack += 1;
