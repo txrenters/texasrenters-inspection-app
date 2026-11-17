@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 import { Table, TableCell, TableHead } from '@/components/ui/table';
 import { editorColour, initials, useActualVsBudgetLive } from '@/lib/actual-vs-budget-live';
@@ -12,10 +12,51 @@ import { cn } from '@/lib/utils';
  * on", and "cell should be auto adjust also").
  */
 
-/** A sheet: as wide as its cells, scrolling sideways inside its own border. */
+/** Room left under a sheet: the page's bottom padding. */
+const SHEET_BOTTOM_GAP = 20;
+/** A sheet is never squeezed shorter than this, on a short screen. */
+const SHEET_MIN_HEIGHT = 320;
+
+/**
+ * A sheet: as wide as its cells, in a box that fits the screen from where it
+ * starts (2026-11-17, the office: "the horizontal scrollbar make it fixed and
+ * the header part too make it sticky"). Its rows scroll inside it, so its
+ * column headings stay on top and its sideways scrollbar stays at the bottom
+ * of the screen, always in reach. A sheet shorter than the screen is as tall
+ * as its rows.
+ */
 export function Sheet({ children }: { children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [maxHeight, setMaxHeight] = useState<number>();
+  useLayoutEffect(() => {
+    const fit = () => {
+      const element = box.current;
+      if (!element) return;
+      // From where the sheet starts on the page, not where it is scrolled to: the box is as tall as the screen allows below its place.
+      const top = element.getBoundingClientRect().top + window.scrollY;
+      setMaxHeight(Math.max(SHEET_MIN_HEIGHT, window.innerHeight - top - SHEET_BOTTOM_GAP));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    // What is above the sheet can change height (a banner, a filter row): fit again when the page does.
+    const watch = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+    watch?.observe(document.body);
+    return () => {
+      window.removeEventListener('resize', fit);
+      watch?.disconnect();
+    };
+  }, []);
   return (
-    <div className="overflow-x-auto rounded-md border">
+    <div
+      className={cn(
+        'overflow-auto overscroll-x-contain rounded-md border',
+        // The headings stick to the top of this box, over the rows; the table's own wrapper must not scroll too.
+        '[&_[data-slot=table-container]]:overflow-visible [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-20 [&_thead]:shadow-[0_1px_0_var(--border)]',
+      )}
+      data-slot="sheet"
+      ref={box}
+      style={{ maxHeight }}
+    >
       <Table className="w-max min-w-full border-collapse text-xs">{children}</Table>
     </div>
   );
