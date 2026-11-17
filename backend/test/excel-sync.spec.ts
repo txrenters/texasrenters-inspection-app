@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import type { RevenueDay, RevenueDayTechnician, RevenueMonthReport, SaveExcelSyncInput } from '@texasrenters/shared';
+import type { RevenueDay, RevenueDayTechnician, RevenueLogDay, RevenueLogRow, RevenueMonthReport, SaveExcelSyncInput } from '@texasrenters/shared';
+import { revenueLogTotals } from '@texasrenters/shared';
 
 import { SaveExcelSyncDto } from '../src/admin/excel/excel-sync.controller';
 import { ExcelGraphClient, encodeSharingUrl } from '../src/admin/excel/excel-graph.client';
@@ -187,6 +188,12 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
         return respond(200, { text: rows.map((row) => row.map((cell) => cell?.text ?? '')), values: rows.map((row) => row.map((cell) => cell?.value ?? '')) });
       }
     }
+    const used = /\/worksheets\/(.+)\/usedRange\(valuesOnly=true\)$/.exec(call.path);
+    if (used) {
+      const rows = [...(grid.get(used[1]!)?.keys() ?? [])].map((key) => Number(key.split(',')[0]));
+      return respond(200, { address: rows.length ? `${used[1]}!A1:S${Math.max(...rows) + 1}` : `${used[1]}!A1` });
+    }
+    if (/\/format\/fill(\/clear)?$/.test(call.path)) return respond(200, {});
     if (/\/range\(address='[^']+'\)\/clear$/.test(call.path)) {
       const [, sheet, address] = /\/worksheets\/(.+)\/range\(address='([^']+)'\)\/clear$/.exec(call.path)!;
       const start = corner(address!);
@@ -349,7 +356,7 @@ describe("the client's limits", () => {
 
 // ── The sync ────────────────────────────────────────────────────────────────
 
-function syncSetup(options: { startDate?: string; remarks?: string | null } = {}) {
+function syncSetup(options: { startDate?: string; remarks?: string | null; logs?: Record<string, RevenueLogDay[]> } = {}) {
   const key = readEnvelopeKey(KEY_HEX, 'K')!;
   let sync: Record<string, unknown> | null = {
     organizationId: ORG,
@@ -402,14 +409,26 @@ function syncSetup(options: { startDate?: string; remarks?: string | null } = {}
       }),
     },
     revenueWeekEntry: { upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'week', ...create, ...update })) },
+    revenueLogEntry: {
+      upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'log', ...create, ...update })),
+      updateMany: jest.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => saved.push({ table: 'log', ...where, ...data })),
+    },
     revenueMonthEntry: { upsert: jest.fn(async ({ create, update }: { create: Record<string, unknown>; update: Record<string, unknown> }) => saved.push({ table: 'month', ...create, ...update })) },
     $transaction: jest.fn(async (work: (tx: unknown) => unknown): Promise<unknown> => work(db)),
   };
   const saved: Record<string, unknown>[] = [];
   let remarks = options.remarks ?? null;
+  const logs = options.logs ?? {};
   const revenue = {
     day: jest.fn(async (_user: unknown, date: string) => day(date, remarks)),
     month: jest.fn(async (_user: unknown, value: string) => month(value)),
+    technicians: jest.fn(async () => ({ technicians: Object.keys(logs).map((id) => ({ id, name: id === 'amy' ? 'Amy Wilson' : 'Kevin Granados' })) })),
+    log: jest.fn(async (_user: unknown, query: { technicianId: string; from: string; to: string }) => ({
+      technician: { id: query.technicianId, name: 'x' },
+      from: query.from,
+      to: query.to,
+      days: (logs[query.technicianId] ?? []).filter((logDay) => logDay.date >= query.from && logDay.date <= query.to),
+    })),
   };
   const auth = new MicrosoftAuthService(db as never);
   const live = { publishChange: jest.fn() };
@@ -425,6 +444,7 @@ function syncSetup(options: { startDate?: string; remarks?: string | null } = {}
       return sync;
     },
     setRemarks: (value: string | null) => (remarks = value),
+    logs,
   };
 }
 
@@ -637,5 +657,95 @@ describe("reading the office's edits back from Excel", () => {
     expect(setup.saved).toEqual([]);
     expect(microsoft.shows('1117', 'A4')).toBe('AMY WILSON');
     expect(microsoft.shows('1117', 'H5')).not.toBe('Typed after inserting a row');
+  });
+});
+
+describe("each technician's own log tab", () => {
+  const at = new Date('2026-11-18T15:00:00.000Z');
+  const timers = () => jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+  afterEach(() => jest.useRealTimers());
+
+  const row = (date: string, over: Partial<RevenueLogRow>): RevenueLogRow => ({
+    key: over.inspectionId ?? over.entryId ?? date,
+    inspectionId: null,
+    entryId: null,
+    date,
+    address: null, workOrder: null, jobNumber: null, driveTime: null, timeBudgeted: null, estimatedBudgetCents: null,
+    arrival: null, leaving: null, workComplete: null, rescheduleRequired: null, rescheduleOn: null,
+    laborCents: null, serviceCallFeeCents: null, materialsCents: null, invoiceNumber: null, postedInPw: null, notes: null,
+    actualSeconds: null,
+    filled: {},
+    corrected: [],
+    ...over,
+  });
+  const logDay = (date: string, rows: RevenueLogRow[]): RevenueLogDay => ({ date, rows, totals: revenueLogTotals(rows) });
+  const amyLog = () => [
+    logDay('2026-11-18', [
+      row('2026-11-18', { inspectionId: 'visit-1', address: '1 Example Way - Zone 2 - Move in inspection', jobNumber: '20373', driveTime: '10–15 min', arrival: '08:44', leaving: '10:15', actualSeconds: 5460, workComplete: true, laborCents: 21000, postedInPw: '2026-11-18' }),
+      row('2026-11-18', { entryId: 'entry-1', address: '2 Sample Ct - office row', estimatedBudgetCents: 7899 }),
+    ]),
+    logDay('2026-11-19', [row('2026-11-19', { inspectionId: 'visit-2', address: '3 Later Ln', jobNumber: '20400' })]),
+  ];
+  // The office's own rows on Amy's tab: its headings and months of visits, down to row 10.
+  async function written(logs = { amy: amyLog() }) {
+    timers();
+    const microsoft = fakeMicrosoft({ sheets: ['Amy', 'Month of October'] });
+    microsoft.edit('Amy', 'A1', 'Date');
+    microsoft.edit('Amy', 'B10', '99 Office Rd - the office’s last row');
+    const setup = syncSetup({ startDate: '2026-11-18', logs });
+    const run = await setup.service.syncNow(office);
+    return { microsoft, setup, run };
+  }
+
+  it("goes under the office's rows, one row down, in the log's 19 columns, a Total row closing each day", async () => {
+    const { microsoft, setup, run } = await written();
+    expect(run.tabs.find((tab) => tab.name === 'Amy')).toEqual({ name: 'Amy', created: false, rowsWritten: 5 });
+    expect(microsoft.writes().find((call) => call.path.includes('/Amy/'))!.path).toContain("range(address='A12:S16')");
+    expect(microsoft.shows('Amy', 'B10')).toBe('99 Office Rd - the office’s last row');
+    const shown = (address: string) => microsoft.shows('Amy', address);
+    expect(['A12', 'B12', 'D12', 'E12', 'H12', 'I12', 'J12', 'K12', 'N12', 'R12'].map(shown)).toEqual([
+      '11/18/2026', '1 Example Way - Zone 2 - Move in inspection', '20373', '10–15 min', '8:44 AM', '10:15 AM', '1h 31m', 'Yes', '210.00', '11/18/2026',
+    ]);
+    expect(['A14', 'E14', 'G14', 'J14', 'N14'].map(shown)).toEqual(['Total', '10–15 min', '78.99', '1h 31m', '210.00']);
+    // The Total rows are bold and filled, as the office's are; nothing is added, and the office's column widths stay.
+    const totals = microsoft.calls.filter((call) => call.path.includes('/Amy/') && call.path.endsWith('/format/fill'));
+    expect(totals.map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'))).toEqual(['A14:S14', 'A16:S16']);
+    expect(microsoft.calls.some((call) => call.path.includes('/Amy/') && call.path.endsWith('autofitColumns'))).toBe(false);
+    expect(microsoft.calls.some((call) => call.path.endsWith('/worksheets/add') && (call.body as { name: string }).name === 'Amy')).toBe(false);
+    expect(setup.sheets.get('Amy')).toMatchObject({ origin: 11 });
+  });
+
+  it('a Job# changed on the page is in Excel at the next write: that row, where it is', async () => {
+    const { microsoft, setup } = await written();
+    setup.logs.amy![0]!.rows[0]!.jobNumber = '20374';
+    await setup.db.excelSync.update({ data: { dirtyAt: new Date(at.getTime() + 60_000) } });
+    microsoft.calls.length = 0;
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    await setup.service.runIfDue(ORG);
+    expect(microsoft.writes().filter((call) => call.path.includes('/Amy/')).map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'))).toEqual(['A12:S12']);
+    expect(microsoft.shows('Amy', 'D12')).toBe('20374');
+  });
+
+  it("takes a log cell typed in Excel -- on a visit's row and on the office's own row -- into the console", async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('Amy', 'C12', '37826');
+    microsoft.edit('Amy', 'S13', 'Gate code changed');
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 2, putBack: 0 });
+    expect(setup.saved).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: 'log', inspectionId: 'visit-1', technicianId: 'amy', day: new Date('2026-11-18T00:00:00.000Z'), workOrder: '37826', updatedById: null }),
+        expect.objectContaining({ table: 'log', id: 'entry-1', organizationId: ORG, notes: 'Gate code changed' }),
+      ]),
+    );
+    expect(setup.live.publishChange).toHaveBeenCalledWith(ORG, expect.objectContaining({ scope: 'log', cells: expect.arrayContaining(['log:visit-1:workOrder']) }));
+  });
+
+  it("is only for a technician whose own tab is in the workbook, and only from the sync's first day", async () => {
+    const { run, setup } = await written({ amy: amyLog(), kevin: amyLog() } as never);
+    expect(run.tabs.map((tab) => tab.name)).toContain('Amy');
+    expect(run.tabs.map((tab) => tab.name)).not.toContain('Kevin');
+    expect(setup.sheets.get('Amy')!.rows).toHaveLength(5);
   });
 });

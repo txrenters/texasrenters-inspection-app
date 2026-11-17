@@ -1,5 +1,5 @@
 import { cellText, type ExcelCell, type ExcelEditableField } from '../excel-layout';
-import { centsFrom, secondsFrom } from '../workbook-import';
+import { centsFrom, clockFrom, dayFrom, secondsFrom, yesNo } from '../workbook-import';
 
 /**
  * Reading the office's edits back out of its workbook (2026-11-18; the office
@@ -15,7 +15,10 @@ import { centsFrom, secondsFrom } from '../workbook-import';
  *    the log works out, a heading -- is put back as the console has it;
  *  - and when the tab's rows no longer line up with what was written (a row
  *    inserted, deleted or sorted), nothing is taken from it and all of it is
- *    put back: a cell cannot be told whose it is any more.
+ *    put back: a cell cannot be told whose it is any more. A row has moved
+ *    when its first cell is not what was written there, or when most of what
+ *    was written in it is not there any more: a technician log's rows share
+ *    their day, so the first cell alone cannot tell.
  *
  * Pure: the sync reads the tab, saves what this finds, and writes back.
  */
@@ -33,7 +36,7 @@ export interface ExcelEdit {
   /** What the console had there, and what the office typed, as Excel showed them. */
   from: string;
   to: string;
-  value: number | string | null;
+  value: number | string | boolean | null;
 }
 
 export interface TabRead {
@@ -50,10 +53,33 @@ type Value = string | number | boolean | null;
 
 const same = (left: string, right: string) => left.trim() === right.trim();
 
+const MONEY = new Set<ExcelEditableField>(['budgetCents', 'targetCents', 'actualCents', 'estimatedBudgetCents', 'laborCents', 'serviceCallFeeCents', 'materialsCents']);
+const serialDay = (serial: number) => new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000).toISOString().slice(0, 10);
+
 /** What the office typed into a cell, as the console stores it; undefined when it cannot be read. */
-function valueOf(field: ExcelEditableField, text: string, value: Value): number | string | null | undefined {
+function valueOf(field: ExcelEditableField, text: string, value: Value): number | string | boolean | null | undefined {
   const blank = !text.trim() && (value === null || value === '');
-  if (field === 'budgetCents' || field === 'targetCents' || field === 'actualCents') {
+  if (field === 'arrival' || field === 'leaving') {
+    if (blank) return null;
+    // A time is a fraction of a day.
+    if (typeof value === 'number' && value >= 0 && value < 1) {
+      const minutes = Math.round(value * 1440) % 1440;
+      return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    }
+    return clockFrom(text) ?? undefined;
+  }
+  if (field === 'workComplete' || field === 'rescheduleRequired') {
+    if (blank) return null;
+    return yesNo(text) ?? undefined;
+  }
+  if (field === 'rescheduleOn') {
+    if (blank) return null;
+    if (typeof value === 'number') return serialDay(value);
+    return dayFrom(text) ?? undefined;
+  }
+  // "Date Posted in PW" is a day when Excel holds one, and whatever was typed ("N/A") when not.
+  if (field === 'postedInPw' && typeof value === 'number') return serialDay(value);
+  if (MONEY.has(field)) {
     if (blank) return null;
     if (typeof value === 'number') return value >= 0 ? Math.round(value * 100) : undefined;
     return centsFrom(text) ?? undefined;
@@ -81,11 +107,22 @@ export function readTab(written: WrittenTab, current: WrittenTab | undefined, ex
     return !same(textAt(writtenText, row, column), textAt(excel.text, row, column));
   };
 
-  // Whose row is whose: each technician's name where it was written, and nothing typed below the last row.
+  // Whose row is whose: each row's first cell where it was written, most of the rest of it too, and nothing typed
+  // below the last row.
   const rows = Math.max(written.rows.length, excel.text.length);
   for (let row = 0; row < rows && !result.moved; row++) {
-    if (row >= written.rows.length) result.moved = excel.text[row]?.some((cell) => cell.trim()) ?? false;
-    else if (written.keys[row] && !same(textAt(writtenText, row, 0), textAt(excel.text, row, 0))) result.moved = true;
+    if (row >= written.rows.length) {
+      result.moved = excel.text[row]?.some((cell) => cell.trim()) ?? false;
+      continue;
+    }
+    if (!written.keys[row]) continue;
+    if (!same(textAt(writtenText, row, 0), textAt(excel.text, row, 0))) {
+      result.moved = true;
+      continue;
+    }
+    const filled = writtenText[row]!.map((cell, column) => [cell, column] as const).filter(([cell]) => cell.trim());
+    const gone = filled.filter(([, column]) => changed(row, column)).length;
+    if (filled.length >= 4 && gone * 2 > filled.length) result.moved = true;
   }
   if (result.moved) {
     for (let row = 0; row < rows; row++) for (let column = 0; column < width; column++) if (changed(row, column)) result.putBack += 1;

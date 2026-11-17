@@ -82,6 +82,19 @@ export class ExcelGraphClient {
     };
   }
 
+  /** The last row anything is typed in on a tab (1-based); 0 for an empty tab. */
+  async lastUsedRow(sheet: string): Promise<number> {
+    const used = await this.call<{ address?: string }>('GET', `${this.book()}/worksheets/${encodeURIComponent(sheet)}/usedRange(valuesOnly=true)?$select=address`);
+    const last = /(\d+)$/.exec(used.address ?? '')?.[1];
+    return last ? Number(last) : 0;
+  }
+
+  /** A row's fill, as the office fills its Total rows; null takes it off. */
+  async fill(sheet: string, address: string, color: string | null) {
+    if (color) await this.call('PATCH', `${this.range(sheet, address)}/format/fill`, { color });
+    else await this.call('POST', `${this.range(sheet, address)}/format/fill/clear`, {});
+  }
+
   async addWorksheet(name: string) {
     await this.call('POST', `${this.book()}/worksheets/add`, { name });
   }
