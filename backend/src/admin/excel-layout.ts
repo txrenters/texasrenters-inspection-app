@@ -9,6 +9,7 @@ import {
   weekWords,
   type RevenueDay,
   type RevenueDayTechnician,
+  type RevenueLogDay,
   type RevenueMonthReport,
   type RevenueWeek,
 } from '@texasrenters/shared';
@@ -43,6 +44,15 @@ export interface ExcelTab {
   keys: (string | null)[];
   /** The columns the office types in on this tab, by index: an edit made there in Excel comes back to the console. */
   editable: Record<number, ExcelEditableField>;
+  /**
+   * A technician's log tab is the office's own, with months of its rows: the
+   * console's rows go below them, from this sheet row (0-based) down, and the
+   * tab is never made, sized or headed by the console. Set when it is first
+   * written; absent for a tab the console lays out from its first cell.
+   */
+  below?: { origin?: number };
+  /** The bold rows are filled too: the log's Total rows, light blue as the office's are. */
+  fill?: string;
 }
 
 /** What the office may type into a tab's cell, as the console stores it. */
@@ -54,11 +64,37 @@ export type ExcelEditableField =
   | 'trackerRemarks'
   | 'targetCents'
   | 'actualCents'
-  | 'remarks';
+  | 'remarks'
+  | LogEditableField;
+
+/** The technician log's typed cells (the console's `SaveRevenueLogEntryInput`), by the workbook's columns. */
+export const LOG_EDITABLE = {
+  1: 'address',
+  2: 'workOrder',
+  3: 'jobNumber',
+  4: 'driveTime',
+  5: 'timeBudgeted',
+  6: 'estimatedBudgetCents',
+  7: 'arrival',
+  8: 'leaving',
+  10: 'workComplete',
+  11: 'rescheduleRequired',
+  12: 'rescheduleOn',
+  13: 'laborCents',
+  14: 'serviceCallFeeCents',
+  15: 'materialsCents',
+  16: 'invoiceNumber',
+  17: 'postedInPw',
+  18: 'notes',
+} as const;
+export type LogEditableField = (typeof LOG_EDITABLE)[keyof typeof LOG_EDITABLE];
 
 export const dayKey = (technicianId: string, date: string) => `day|${technicianId}|${date}`;
 export const weekKey = (technicianId: string, weekStart: string) => `week|${technicianId}|${weekStart}`;
 export const monthKey = (technicianId: string, month: string) => `month|${technicianId}|${month}`;
+/** A log row: a visit's ("log|visit|<visit>|<technician>|<day>"), or a row of the office's own ("log|entry|<entry>"). */
+export const logKey = (row: { inspectionId: string | null; entryId: string | null; date: string }, technicianId: string) =>
+  row.inspectionId ? `log|visit|${row.inspectionId}|${technicianId}|${row.date}` : row.entryId ? `log|entry|${row.entryId}` : null;
 /** Headings above the rows, and a Total under them: none is anyone's record. */
 const keysOf = (above: number, keys: string[], below = 1): (string | null)[] => [...Array<null>(above).fill(null), ...keys, ...Array<null>(below).fill(null)];
 
@@ -72,6 +108,9 @@ const FORMAT = {
   percent: '0.00%',
   hours: '[h]"h "mm"m"',
   date: 'm/d/yyyy',
+  // The log's own: "78.99", "-" for nothing billed, "5:36 PM".
+  logMoney: '#,##0.00;-#,##0.00;"-"',
+  clock: 'h:mm AM/PM',
 } as const;
 
 const money = (cents: number, format: string): ExcelCell => ({ value: Math.round(cents) / 100, format });
@@ -83,6 +122,15 @@ const percentText = (share: number | null): ExcelCell => (share === null || !Num
 const secondsAsHours = (seconds: number): ExcelCell => ({ value: Math.round(seconds / 60) / 1440, format: FORMAT.hours });
 const sheetDate = (day: string): ExcelCell => ({ value: (Date.parse(`${day}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000, format: FORMAT.date });
 const dateWords = (day: string) => `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}/${day.slice(0, 4)}`;
+
+const clock = (time: string | null): ExcelCell => {
+  const match = time ? /^(\d{2}):(\d{2})$/.exec(time) : null;
+  return match ? { value: (Number(match[1]) * 60 + Number(match[2])) / 1440, format: FORMAT.clock } : '';
+};
+const logMoney = (cents: number | null): ExcelCell => (cents === null ? '' : money(cents, FORMAT.logMoney));
+const yesNo = (value: boolean | null) => (value === null ? '' : value ? 'Yes' : 'No');
+/** A day the office typed as one ("2026-11-12") is a date; anything else it typed stays as typed. */
+const dayOrText = (value: string | null): ExcelCell => (value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? sheetDate(value) : asText(value));
 
 /** What a cell shows in Excel: its text, or its number in its format. */
 export const cellText = (cell: ExcelCell | undefined) => (cell === undefined ? '' : typeof cell === 'string' ? cell.replace(/^'/, '') : formatNumber(cell.value, cell.format));
@@ -321,4 +369,52 @@ export function columnLetter(index: number): string {
   let letters = '';
   for (let left = index + 1; left > 0; left = Math.floor((left - 1) / 26)) letters = String.fromCharCode(65 + ((left - 1) % 26)) + letters;
   return letters;
+}
+
+// ── A technician's log ──────────────────────────────────────────────────────
+
+/**
+ * A technician's own tab -- "Amy", "Kevin" -- as the office keeps it: a row
+ * a visit in the workbook's 19 columns, and a Total row closing each day. The
+ * console's rows go under the office's (see `below`), from the sync's first
+ * day; the tab's headings and its rows before that day are the office's.
+ */
+export function logTab(name: string, technicianId: string, days: readonly RevenueLogDay[]): ExcelTab {
+  const rows: ExcelCell[][] = [];
+  const keys: (string | null)[] = [];
+  const bold: number[] = [];
+  for (const day of days) {
+    for (const row of day.rows) {
+      rows.push([
+        sheetDate(row.date),
+        asText(row.address),
+        asText(row.workOrder),
+        asText(row.jobNumber),
+        asText(row.driveTime),
+        asText(row.timeBudgeted),
+        logMoney(row.estimatedBudgetCents),
+        clock(row.arrival),
+        clock(row.leaving),
+        row.arrival && row.leaving ? secondsAsHours(row.actualSeconds ?? 0) : '',
+        yesNo(row.workComplete),
+        yesNo(row.rescheduleRequired),
+        row.rescheduleOn ? sheetDate(row.rescheduleOn) : '',
+        logMoney(row.laborCents),
+        logMoney(row.serviceCallFeeCents),
+        logMoney(row.materialsCents),
+        asText(row.invoiceNumber),
+        dayOrText(row.postedInPw),
+        asText(row.notes),
+      ]);
+      keys.push(logKey(row, technicianId));
+    }
+    const total = day.totals;
+    bold.push(rows.length);
+    rows.push([
+      'Total', '', '', '', total.driveTime, total.timeBudgeted, logMoney(total.estimatedBudgetCents), '', '', secondsAsHours(total.actualSeconds),
+      '', '', '', logMoney(total.laborCents), logMoney(total.serviceCallFeeCents), logMoney(total.materialsCents), '', '', '',
+    ]);
+    keys.push(null);
+  }
+  return { name, rows, bold, keys, editable: { ...LOG_EDITABLE }, below: {}, fill: '#DDEBF7' };
 }
