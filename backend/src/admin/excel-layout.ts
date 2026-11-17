@@ -1,15 +1,10 @@
 import {
-  accounting,
-  dollars,
   driveTimeTotal,
   firstName,
   hoursAndMinutes,
   hoursAndMinutesValue,
   monthWords,
   payrollPeriodWords,
-  percentText,
-  secondsAsHours,
-  sheetDate,
   trackerFigures,
   weekWords,
   type RevenueDay,
@@ -18,25 +13,58 @@ import {
   type RevenueWeek,
 } from '@texasrenters/shared';
 
+import { formatNumber } from './workbook-reader';
+
 /**
  * Actual vs Budget's sheets as tabs of the office's own workbook (2026-11-17,
  * the office: "everything should sync on this spreadsheet also"). Each tab is
  * named and laid out as the office named and laid out its own -- "Projected
  * Productivity_1117", "1111", "New 1111", "Nov. 2-6", "Month of October" --
- * and every cell is the text the console shows, so the page and the workbook
- * always say the same.
+ * and every cell shows what the console shows, so the page and the workbook
+ * always say the same. A figure goes as a number with the workbook's own
+ * format -- "$505.96", "(1,691.86)", "87.00%", "8h 25m" -- so Excel neither
+ * guesses one nor turns a total into text (2026-11-17: written as text, Excel
+ * showed "$0" beside "$0.00" and "-690" beside "-3,376.36").
  *
  * Pure: the figures go in, the cells come out. Writing them is the sync's.
  */
 
+/** A cell: text, kept as text; or a number and the format Excel shows it in. */
+export type ExcelCell = string | { value: number; format: string };
+
 export interface ExcelTab {
   /** The tab's name, as the workbook names it. At most 31 characters, as Excel allows. */
   name: string;
-  /** Every row, left to right, as text. */
-  rows: string[][];
+  /** Every row, left to right. */
+  rows: ExcelCell[][];
   /** Rows set in bold: titles, headings, Totals (0-based). */
   bold: number[];
 }
+
+// The workbook's formats, as the office's own tabs have them.
+const FORMAT = {
+  dollars: '"$"#,##0.00;-"$"#,##0.00',
+  wholeDollars: '"$"#,##0;-"$"#,##0',
+  bracketDollars: '"$"#,##0.00;("$"#,##0.00)',
+  bracketWholeDollars: '"$"#,##0;("$"#,##0)',
+  accounting: '#,##0.00;(#,##0.00);"-"',
+  percent: '0.00%',
+  hours: '[h]"h "mm"m"',
+  date: 'm/d/yyyy',
+} as const;
+
+const money = (cents: number, format: string): ExcelCell => ({ value: Math.round(cents) / 100, format });
+const dollars = (cents: number, options: { decimals?: 0 | 2; negative?: 'minus' | 'brackets' } = {}) =>
+  money(cents, options.negative === 'brackets' ? (options.decimals === 0 ? FORMAT.bracketWholeDollars : FORMAT.bracketDollars) : options.decimals === 0 ? FORMAT.wholeDollars : FORMAT.dollars);
+const accounting = (cents: number) => money(cents, FORMAT.accounting);
+const percentText = (share: number | null): ExcelCell => (share === null || !Number.isFinite(share) ? '' : { value: share, format: FORMAT.percent });
+/** Whole minutes, as the page shows them, in Excel's days. */
+const secondsAsHours = (seconds: number): ExcelCell => ({ value: Math.round(seconds / 60) / 1440, format: FORMAT.hours });
+const sheetDate = (day: string): ExcelCell => ({ value: (Date.parse(`${day}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000, format: FORMAT.date });
+const dateWords = (day: string) => `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}/${day.slice(0, 4)}`;
+
+/** What a cell shows in Excel: its text, or its number in its format. */
+export const cellText = (cell: ExcelCell | undefined) => (cell === undefined ? '' : typeof cell === 'string' ? cell.replace(/^'/, '') : formatNumber(cell.value, cell.format));
 
 const MMDD = (date: string) => `${date.slice(5, 7)}${date.slice(8, 10)}`;
 const MONTHS = ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'];
@@ -56,7 +84,7 @@ export const asText = (typed: string | null | undefined) => {
 // ── Next Day's Projected Productivity ───────────────────────────────────────
 
 export function projectionTab(day: RevenueDay): ExcelTab {
-  const rows: string[][] = [
+  const rows: ExcelCell[][] = [
     ["Next Day's Projected Productivity"],
     ['', 'Date:', sheetDate(day.date)],
     ['Technician', 'Drive time', 'Billable hours', 'Projected revenue', 'Remarks'],
@@ -76,9 +104,9 @@ export function projectionTab(day: RevenueDay): ExcelTab {
 // ── ACTUAL VS PROJECTED REVENUE ─────────────────────────────────────────────
 
 export function dailyTab(day: RevenueDay): ExcelTab {
-  const rows: string[][] = [
+  const rows: ExcelCell[][] = [
     ['ACTUAL VS PROJECTED REVENUE'],
-    [`Date: ${sheetDate(day.date)}`],
+    [`Date: ${dateWords(day.date)}`],
     [
       'TECHNICIAN',
       'BUDGETED REVENUE',
@@ -120,9 +148,9 @@ export function dailyTab(day: RevenueDay): ExcelTab {
 
 export function trackerTab(day: RevenueDay): ExcelTab {
   const money = (cents: number) => dollars(cents, { negative: 'brackets' });
-  const date = sheetDate(day.date);
+  const date = dateWords(day.date);
   const blank = (count: number) => Array.from({ length: count }, () => '');
-  const rows: string[][] = [
+  const rows: ExcelCell[][] = [
     [`DATE:${date}`, '', 'REVENUE TRACKER'],
     ['', '', `DAILY PROJECTED REVENUE`, '', '', `DAILY ACTUAL REVENUE: ${date}`, ...blank(6), `As of ${date} for Payroll Period to Date (${payrollPeriodWords(day.payrollPeriod)})`],
     [
@@ -203,7 +231,7 @@ export function trackerTab(day: RevenueDay): ExcelTab {
 const PERIOD_HEADERS = ['TECHNICIAN', 'TARGET REVENUE', 'ACTUAL REVENUE', 'DIFFERENCE (ACTUAL REVENUE - TARGET)', '% (ACTUAL REVENUE / TARGET REVENUE)', 'REMARKS'];
 
 function periodRows(title: string, technicians: { technician: { name: string }; targetCents: number; actualCents: number; remarks: string | null }[]): ExcelTab['rows'] {
-  const rows: string[][] = [[`PERIOD COVERED: ${title}`], PERIOD_HEADERS];
+  const rows: ExcelCell[][] = [[`PERIOD COVERED: ${title}`], PERIOD_HEADERS];
   for (const row of technicians)
     rows.push([
       row.technician.name.toUpperCase(),
