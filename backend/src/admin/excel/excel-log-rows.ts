@@ -1,5 +1,6 @@
 import { cellText, type ExcelCell, type ExcelEditableField } from '../excel-layout';
 import { dayFrom, text, type ImportedLogCells } from '../workbook-import';
+import { isFormula } from './excel-formats';
 import { valueOf, type ExcelEdit } from './excel-read';
 
 /**
@@ -22,7 +23,9 @@ import { valueOf, type ExcelEdit } from './excel-read';
  *    office deleted stays deleted;
  *  - a row the console wrote that is no longer the console's (its visit moved
  *    to another day) is emptied, when the office has not typed in it;
- *  - Total rows are the office's: only it knows where its totals sit.
+ *  - Total rows are the office's: only it knows where its totals sit;
+ *  - a cell holding a formula -- the office's Actual Time, its sums -- is the
+ *    office's: never written over (2026-11-18).
  *
  * Pure: the sync reads the tab, and does what this plans.
  */
@@ -114,7 +117,7 @@ export function planLogTab(input: {
   /** What Excel held in each console row after the console's last run; absent for a row it never wrote. */
   written: Record<string, ExcelCell[]>;
   /** The tab's rows, from where the console's begin down to its last row: what Excel shows, and holds. */
-  excel: { text: string[][]; values: Value[][] };
+  excel: { text: string[][]; values: Value[][]; formulas?: unknown[][] };
   editable: Record<number, ExcelEditableField>;
   /** The first day that is the console's on this tab: an office row before it is left alone. */
   from: string;
@@ -205,8 +208,8 @@ export function planLogTab(input: {
         plan.edits.push({ key: row.key, field, from: cellText(mine), to: shown, value: typed });
         continue;
       }
-      if (consoleChanged) {
-        // Only the console changed it: into this cell of the row, wherever the row is.
+      if (consoleChanged && !isFormula(input.excel.formulas?.[excelRow.index]?.[column], value)) {
+        // Only the console changed it: into this cell of the row, wherever the row is -- unless the office works it out there.
         run ??= { column, cells: [] };
         run.cells.push(mine);
         after.push(mine);

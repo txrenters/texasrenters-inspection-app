@@ -54,6 +54,22 @@ export function ExcelSyncDialog({ canManage, onClose }: { canManage: boolean; on
       },
       onError: (error) => toast.error('Not written', { description: error.message }),
     });
+  // The cells the console once made Text, where a formula typed stays as words: put right, with the sync on or off.
+  const fixFormulas = () =>
+    edits.formulas.mutate(undefined, {
+      onSuccess: (repair) =>
+        repair.cells || repair.formulas || repair.tabs
+          ? toast.success(`Formulas fixed on ${repair.tabs} ${repair.tabs === 1 ? 'tab' : 'tabs'}`, {
+              description: [
+                repair.formulas ? `${repair.formulas} ${repair.formulas === 1 ? 'formula' : 'formulas'} typed as words now work out` : null,
+                repair.waiting ? `${repair.waiting} more ${repair.waiting === 1 ? 'tab' : 'tabs'} to go: press again` : null,
+              ]
+                .filter(Boolean)
+                .join('. '),
+            })
+          : toast.success(repair.waiting ? `${repair.waiting} tabs still to go: press again` : 'Nothing to fix'),
+      onError: (error) => toast.error('Not fixed', { description: error.message }),
+    });
 
   return (
     <Dialog onOpenChange={(open) => (open ? null : onClose())} open>
@@ -149,9 +165,20 @@ export function ExcelSyncDialog({ canManage, onClose }: { canManage: boolean; on
                     {excel.data.workbook.lastPull ? <div className="text-muted-foreground">{pullWords(excel.data.workbook.lastPull)}</div> : null}
                   </div>
                   {canManage ? (
-                    <Button disabled={edits.sync.isPending || !excel.data.workbook.enabled || excel.data.connection?.status !== 'CONNECTED'} onClick={syncNow} size="sm" variant="outline">
-                      {edits.sync.isPending ? 'Writing…' : 'Write now'}
-                    </Button>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        disabled={edits.formulas.isPending || excel.data.connection?.status !== 'CONNECTED'}
+                        onClick={fixFormulas}
+                        size="sm"
+                        title="Cells the console wrote as Text, where a formula typed shows as words, made ready for formulas again"
+                        variant="ghost"
+                      >
+                        {edits.formulas.isPending ? 'Fixing…' : 'Fix formulas'}
+                      </Button>
+                      <Button disabled={edits.sync.isPending || !excel.data.workbook.enabled || excel.data.connection?.status !== 'CONNECTED'} onClick={syncNow} size="sm" variant="outline">
+                        {edits.sync.isPending ? 'Writing…' : 'Write now'}
+                      </Button>
+                    </div>
                   ) : null}
                 </div>
               </>

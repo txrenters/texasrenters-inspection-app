@@ -47,9 +47,24 @@ export interface ExcelSyncRun {
 }
 
 /**
+ * "Fix formulas in Excel" (2026-11-18): the Text format the console once gave
+ * the cells it wrote -- where a typed formula stays as words -- put right.
+ */
+export interface ExcelFormulaRepair {
+  /** Tabs put right. */
+  tabs: number;
+  /** Cells made General: what they hold is as it was, and a formula typed there now works. */
+  cells: number;
+  /** Formulas typed into a Text cell, kept as words, entered again for Excel to work out. */
+  formulas: number;
+  /** Tabs still to do: the next press, or the next run, carries on. */
+  waiting: number;
+}
+
+/**
  * Reading the office's Excel edits back (2026-11-18, "Both ways"): cells the
  * office types in on the page come into the console; cells the console works
- * out are put back; a cell changed in both places keeps the console's value.
+ * out are put back; a cell changed in both places takes Excel's value.
  */
 export interface ExcelPull {
   at: string;

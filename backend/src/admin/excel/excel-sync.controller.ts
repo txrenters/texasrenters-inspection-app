@@ -55,6 +55,14 @@ export class ExcelSyncController {
     return this.excel.syncNow(request.user);
   }
 
+  /** Put right the Text format the console once gave its cells, so the office's formulas work there -- with the sync on or off. */
+  @Post('formulas')
+  @HttpCode(200)
+  @RequirePermissions('invoices:manage')
+  repairFormulas(@Req() request: AuthenticatedRequest) {
+    return this.excel.repairNow(request.user);
+  }
+
   @Delete('connection')
   @HttpCode(200)
   @RequirePermissions('invoices:manage')

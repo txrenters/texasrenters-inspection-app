@@ -1,6 +1,18 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { MAX_LOG_DAYS, firstName, monthEnd, revenueCell, weekOf, type ExcelPull, type ExcelSyncRun, type ExcelSyncView, type RevenueLiveScope, type SaveExcelSyncInput } from '@texasrenters/shared';
-import type { Prisma } from '@prisma/client';
+import {
+  MAX_LOG_DAYS,
+  firstName,
+  monthEnd,
+  revenueCell,
+  weekOf,
+  type ExcelFormulaRepair,
+  type ExcelPull,
+  type ExcelSyncRun,
+  type ExcelSyncView,
+  type RevenueLiveScope,
+  type SaveExcelSyncInput,
+} from '@texasrenters/shared';
+import type { ExcelSyncSheet, Prisma } from '@prisma/client';
 
 import { auditActor, type AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
@@ -9,6 +21,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { ActualVsBudgetGateway } from '../actual-vs-budget.gateway';
 import { ActualVsBudgetService } from '../actual-vs-budget.service';
 import { cellText, columnLetter, dailyTab, logTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelEditableField, type ExcelTab } from '../excel-layout';
+import { formatOf, isFormula, repairFormats } from './excel-formats';
 import { ExcelGraphClient } from './excel-graph.client';
 import { importWorkingTechnicians } from '../actual-vs-budget-import';
 import { dayFrom, logOf } from '../workbook-import';
@@ -350,6 +363,11 @@ export class ExcelSyncService {
     try {
       const existing = new Set(await client.worksheetNames());
       const snapshots = new Map((await this.prisma.excelSyncSheet.findMany({ where: { organizationId } })).map((sheet) => [sheet.name, sheet]));
+      // The Text format the console once gave its cells, put right first -- half a run's calls at most; the next run
+      // carries on with the rest.
+      const repair = await this.repairPending(client, snapshots, existing, Math.floor(this.auth.config().callsPerRun / 2));
+      if (repair.pending) deferred = true;
+      if (repair.cells || repair.formulas) await this.recordRepair(organizationId, null, repair);
       const start = dayOf(sync.startDate);
       // Each taken-over log tab, from the day it was taken over, always: it is taken over once and never again, so
       // a first day moved earlier never clears a tab's rows a second time (2026-11-17).
@@ -359,6 +377,8 @@ export class ExcelSyncService {
       const takenOver = (tab: ExcelTab) => Boolean(snapshots.get(tab.name)?.adoptedFrom);
       // What each tab holds now, where it was read: the write sends whatever differs from it.
       const held = new Map<string, ExcelCell[][]>();
+      // The cells holding the office's formulas, where a tab was read: never written over.
+      const formulaCells = new Map<string, [number, number][]>();
       // A log tab's rows start where they did: where it was taken over (or, before, under the office's rows). One not
       // taken over yet is placed by its takeover.
       const place = async (tab: ExcelTab) => {
@@ -391,6 +411,7 @@ export class ExcelSyncService {
             tab,
             cells,
           );
+          formulaCells.set(tab.name, read.formulas);
           pull.putBack += read.putBack;
           pull.conflicts += read.conflicts;
           edits.push(...read.edits.map((edit) => ({ ...edit, tab: tab.name })));
@@ -453,18 +474,23 @@ export class ExcelSyncService {
         if (tab.below) continue;
         const before = snapshots.get(tab.name);
         const holds = held.get(tab.name) ?? (before?.rows as ExcelCell[][] | undefined);
+        const formulas = formulaCells.get(tab.name) ?? (before?.formulaCells as [number, number][] | null) ?? [];
         const written = await this.writeTab(
           client,
           tab,
           existing.has(tab.name),
           holds ? { rows: holds, bold: (before?.bold as number[] | undefined) ?? [] } : null,
+          formulas,
         );
-        if (written.rowsWritten || written.created || !before?.keys)
+        if (written.rowsWritten || written.created || !before?.keys || formulaCells.has(tab.name)) {
+          const snapshot = { ...this.snapshotOf(tab), formulaCells: formulas as unknown as Prisma.InputJsonValue };
           await this.prisma.excelSyncSheet.upsert({
             where: { organizationId_name: { organizationId, name: tab.name } },
-            create: { organizationId, name: tab.name, ...this.snapshotOf(tab) },
-            update: this.snapshotOf(tab),
+            // A tab the console writes from now is written in the right formats: nothing of it to put right.
+            create: { organizationId, name: tab.name, ...snapshot, formatsCheckedAt: new Date() },
+            update: snapshot,
           });
+        }
         run.tabs.push({ name: tab.name, ...written });
       }
     } finally {
@@ -551,8 +577,8 @@ export class ExcelSyncService {
     if (last >= first + 1) await client.clearRange(name, `A${first + 1}:S${last}`, 'All');
     return this.prisma.excelSyncSheet.upsert({
       where: { organizationId_name: { organizationId, name } },
-      create: { organizationId, name, origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {} },
-      update: { origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {} },
+      create: { organizationId, name, origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {}, formatsCheckedAt: new Date() },
+      update: { origin: first, adoptedFrom: new Date(`${start}T00:00:00.000Z`), rows: [], bold: [], keys: [], editable: {}, formatsCheckedAt: new Date() },
     });
   }
 
@@ -574,7 +600,10 @@ export class ExcelSyncService {
   ): Promise<{ tabs: ExcelSyncRun['tabs']; pull: { taken: number; conflicts: number } | null; deferred: boolean }> {
     const rowsOf = (tab: ExcelTab): ConsoleLogRow[] =>
       tab.rows.flatMap((cells, index) => (tab.keys[index] ? [{ key: tab.keys[index]!, cells: Array.from({ length: LOG_WIDTH }, (_, column) => cells[column] ?? '') }] : []));
-    const reads = new Map<string, { tab: ExcelTab; last: number; origin: number; excel: { text: string[][]; values: (string | number | boolean | null)[][] } }>();
+    const reads = new Map<
+      string,
+      { tab: ExcelTab; last: number; origin: number; excel: { text: string[][]; values: (string | number | boolean | null)[][]; formulas?: unknown[][] } }
+    >();
     const plans = new Map<string, LogTabPlan>();
     const planOf = (name: string, tab: ExcelTab) => {
       const read = reads.get(name)!;
@@ -688,14 +717,142 @@ export class ExcelSyncService {
     return rows.length;
   }
 
-  /** Cells into a range: a number in its format; text as text ("@"), so Excel never reads "11/16/2026" or "-" as something else. */
+  /** Cells into a range: a number in its format; words as General, so a formula typed there later works -- Text only where Excel would misread them (`formatOf`). */
   private putCells(client: ExcelGraphClient, name: string, address: string, cells: ExcelCell[][]) {
     return client.writeRange(
       name,
       address,
       cells.map((row) => row.map((cell) => (typeof cell === 'string' ? cell : cell.value))),
-      cells.map((row) => row.map((cell) => (typeof cell === 'string' ? (cell.startsWith("'") ? 'General' : '@') : cell.format))),
+      cells.map((row) => row.map(formatOf)),
     );
+  }
+
+  /**
+   * "Fix formulas in Excel" (2026-11-18): put right the Text format the
+   * console once gave its cells, whether the sync is on or not -- every tab it
+   * wrote, as far as one run's calls go; the next press, or the next run,
+   * carries on.
+   */
+  async repairNow(user: AuthenticatedUser): Promise<ExcelFormulaRepair> {
+    const organizationId = user.organizationId;
+    const [sync, connection] = await Promise.all([
+      this.prisma.excelSync.findUnique({ where: { organizationId } }),
+      this.prisma.microsoftConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+    ]);
+    if (!sync) throw new ApplicationError(409, 'EXCEL_NOT_LINKED', 'No workbook is linked.');
+    if (connection?.status !== 'CONNECTED') throw new ApplicationError(409, 'MICROSOFT_NOT_CONNECTED', 'Connect the Microsoft account again to write the workbook.');
+    if (!(await this.claim(organizationId))) throw new ApplicationError(409, 'EXCEL_SYNC_RUNNING', 'The workbook is being written now. It is done within a minute.');
+    const client = new ExcelGraphClient(this.auth, organizationId, { driveId: sync.driveId, itemId: sync.itemId });
+    try {
+      await client.openSession();
+      try {
+        const existing = new Set(await client.worksheetNames());
+        const snapshots = new Map((await this.prisma.excelSyncSheet.findMany({ where: { organizationId } })).map((sheet) => [sheet.name, sheet]));
+        const repair = await this.repairPending(client, snapshots, existing, this.auth.config().callsPerRun - 1);
+        await this.recordRepair(organizationId, auditActor(user).actorUserId, repair);
+        return repair;
+      } finally {
+        await client.closeSession();
+      }
+    } finally {
+      await this.prisma.excelSync.update({ where: { organizationId }, data: { claimedUntil: null } });
+    }
+  }
+
+  /**
+   * Each tab the console wrote, once: its Text cells made General where they
+   * need not be Text (what they hold stays as it is), and a formula typed into
+   * one -- kept by Excel as words -- entered again for Excel to work out
+   * (`repairFormats`). Only the cells the console wrote: a log tab from where
+   * its rows begin. Stops short of `calls`, leaving the rest waiting.
+   */
+  private async repairPending(client: ExcelGraphClient, snapshots: Map<string, ExcelSyncSheet>, existing: ReadonlySet<string>, calls: number) {
+    const result: ExcelFormulaRepair = { tabs: 0, cells: 0, formulas: 0, waiting: 0 };
+    for (const sheet of snapshots.values()) {
+      if (sheet.formatsCheckedAt) continue;
+      // Each tab: its last row (a log tab), one read, its formats, and two calls a formula.
+      if (client.callsMade + 4 > calls) {
+        result.waiting += 1;
+        continue;
+      }
+      try {
+        const region = existing.has(sheet.name) ? await this.writtenRegion(client, sheet) : null;
+        let done = true;
+        // A tab of the console's own: the cells the office links with a formula -- "='Amy'!E418" -- remembered, never
+        // to be written over.
+        let formulaCells: [number, number][] | undefined;
+        if (region) {
+          const read = await client.readCells(sheet.name, region.address);
+          const fix = repairFormats(read);
+          if (typeof sheet.origin !== 'number')
+            formulaCells = [
+              ...read.formulas.flatMap((cells, row) =>
+                cells.flatMap((formula, column) => (isFormula(formula, read.values[row]?.[column] ?? null) ? [[row, column] as [number, number]] : [])),
+              ),
+              ...fix.formulas.map(({ row, column }): [number, number] => [row, column]),
+            ];
+          // The formulas first, each made General and entered again: a run that stops part-way leaves the rest
+          // still Text, for the next to find.
+          for (const formula of fix.formulas) {
+            if (client.callsMade + 3 > calls) {
+              done = false;
+              break;
+            }
+            const cell = `${columnLetter(region.left + formula.column)}${region.top + formula.row}`;
+            await client.setNumberFormat(sheet.name, `${cell}:${cell}`, [['General']]);
+            await client.writeFormulas(sheet.name, `${cell}:${cell}`, [[formula.formula]]);
+            result.formulas += 1;
+          }
+          if (done && fix.formats) {
+            await client.setNumberFormat(sheet.name, region.address, fix.formats);
+            result.cells += fix.formats.flat().filter((format, index) => format !== read.numberFormat.flat()[index]).length - fix.formulas.length;
+          }
+        }
+        if (!done) {
+          result.waiting += 1;
+          continue;
+        }
+        const now = new Date();
+        await this.prisma.excelSyncSheet.update({
+          where: { organizationId_name: { organizationId: sheet.organizationId, name: sheet.name } },
+          data: { formatsCheckedAt: now, ...(formulaCells ? { formulaCells: formulaCells as unknown as Prisma.InputJsonValue } : {}) },
+        });
+        if (formulaCells) sheet.formulaCells = formulaCells as unknown as Prisma.JsonValue;
+        sheet.formatsCheckedAt = now;
+        result.tabs += 1;
+      } catch (error) {
+        result.waiting += 1;
+        if (error instanceof MicrosoftError && (error.code === 'MICROSOFT_RATE_LIMITED' || error.code === 'EXCEL_RUN_BUDGET_SPENT')) break;
+        this.logger.warn({ event: 'excel_formats_repair_failed', tab: sheet.name, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { ...result, pending: result.waiting > 0 };
+  }
+
+  /** The cells the console wrote on a tab: a log tab's from where its rows begin to its last row; another tab's from A1. */
+  private async writtenRegion(client: ExcelGraphClient, sheet: ExcelSyncSheet) {
+    if (typeof sheet.origin === 'number') {
+      const last = await client.lastUsedRow(sheet.name);
+      if (last <= sheet.origin) return null;
+      return { address: `A${sheet.origin + 1}:${columnLetter(LOG_WIDTH - 1)}${last}`, top: sheet.origin + 1, left: 0 };
+    }
+    const rows = (sheet.rows ?? []) as ExcelCell[][];
+    const width = Math.max(0, ...rows.map((row) => row.length));
+    if (!rows.length || !width) return null;
+    return { address: `A1:${columnLetter(width - 1)}${rows.length}`, top: 1, left: 0 };
+  }
+
+  private async recordRepair(organizationId: string, actorUserId: string | null, repair: ExcelFormulaRepair) {
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        actorUserId,
+        action: 'EXCEL_FORMATS_REPAIRED',
+        entityType: 'ExcelSync',
+        entityId: organizationId,
+        metadata: { tabs: repair.tabs, cells: repair.cells, formulas: repair.formulas, waiting: repair.waiting },
+      },
+    });
   }
 
   private snapshotOf(tab: ExcelTab) {
@@ -783,7 +940,10 @@ export class ExcelSyncService {
     tab: ExcelTab,
     exists: boolean,
     before: { rows: ExcelCell[][]; bold: number[] } | null,
+    /** Cells holding the office's formulas ([row, column]): never written over. */
+    formulas: [number, number][] = [],
   ): Promise<{ created: boolean; rowsWritten: number }> {
+    const kept = new Set(formulas.map(([row, column]) => `${row},${column}`));
     const width = Math.max(...tab.rows.map((row) => row.length), ...(before?.rows ?? []).map((row) => row.length), 1);
     const pad = (row: ExcelCell[] | undefined) => Array.from({ length: width }, (_, index): ExcelCell => row?.[index] ?? '');
     const last = columnLetter(width - 1);
@@ -795,14 +955,14 @@ export class ExcelSyncService {
       await client.bold(tab.name, line(index), on);
       if (tab.fill) await client.fill(tab.name, line(index), on ? tab.fill : null);
     };
-    // A number in its format; text as text ("@"), so Excel never reads "11/16/2026" or "-" as something else.
-    // Text kept from running as a formula keeps its apostrophe under General, where Excel hides it.
+    // A number in its format; words as General -- Text only where Excel would misread them -- so a formula the
+    // office types into a cell later works (`formatOf`).
     const put = (address: string, cells: ExcelCell[][]) =>
       client.writeRange(
         tab.name,
         address,
         cells.map((row) => row.map((cell) => (typeof cell === 'string' ? cell : cell.value))),
-        cells.map((row) => row.map((cell) => (typeof cell === 'string' ? (cell.startsWith("'") ? 'General' : '@') : cell.format))),
+        cells.map((row) => row.map(formatOf)),
       );
 
     if (!exists || !before) {
@@ -836,23 +996,29 @@ export class ExcelSyncService {
       }
       const row = rows[index]!;
       let touched = false;
+      // Unchanged, or the office works it out with a formula: left as it is.
+      const leave = (column: number) => same(row[column], old[index]?.[column]) || kept.has(`${index},${column}`);
       for (let column = 0; column < width; ) {
-        if (same(row[column], old[index]?.[column])) {
+        if (leave(column)) {
           column += 1;
           continue;
         }
         let end = column;
-        while (end + 1 < width && !same(row[end + 1], old[index]?.[end + 1])) end += 1;
+        while (end + 1 < width && !leave(end + 1)) end += 1;
         await put(`${columnLetter(column)}${at(index)}:${columnLetter(end)}${at(index)}`, [row.slice(column, end + 1)]);
         touched = true;
         column = end + 1;
       }
       if (touched) written += 1;
     }
-    // Rows the tab no longer has: a technician taken off the sheets.
-    if (old.length > rows.length) {
-      await client.clearRange(tab.name, `A${at(rows.length)}:${last}${at(old.length - 1)}`);
-      written += old.length - rows.length;
+    // Rows the tab no longer has: a technician taken off the sheets -- but never a row holding the office's formula.
+    for (let index = rows.length; index < old.length; index++) {
+      if ([...kept].some((cell) => cell.startsWith(`${index},`))) continue;
+      let end = index;
+      while (end + 1 < old.length && ![...kept].some((cell) => cell.startsWith(`${end + 1},`))) end += 1;
+      await client.clearRange(tab.name, `A${at(index)}:${last}${at(end)}`);
+      written += end - index + 1;
+      index = end;
     }
     const wasBold = new Set(before.bold);
     const isBold = new Set(tab.bold);

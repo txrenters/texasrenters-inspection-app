@@ -11,6 +11,7 @@ const edits = vi.hoisted(() => ({
   connect: vi.fn(),
   save: vi.fn(),
   sync: vi.fn(),
+  formulas: vi.fn(),
   disconnect: vi.fn(),
 }));
 vi.mock('@/lib/actual-vs-budget-queries', () => ({
@@ -19,6 +20,7 @@ vi.mock('@/lib/actual-vs-budget-queries', () => ({
     connect: { mutateAsync: edits.connect, isPending: false },
     save: { mutate: edits.save, isPending: false },
     sync: { mutate: edits.sync, isPending: false },
+    formulas: { mutate: edits.formulas, isPending: false },
     disconnect: { mutate: edits.disconnect, isPending: false },
   }),
 }));
@@ -74,6 +76,14 @@ describe('the Excel dialog', () => {
     expect(edits.save).toHaveBeenCalledWith({ enabled: false }, expect.anything());
     fireEvent.click(screen.getByRole('button', { name: 'Write now' }));
     expect(edits.sync).toHaveBeenCalled();
+  });
+
+  it('fixes the formulas in Excel with the sync off too (2026-11-18)', () => {
+    edits.view = view({ workbook: { ...view().workbook!, enabled: false } });
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect((screen.getByRole('button', { name: 'Write now' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Fix formulas' }));
+    expect(edits.formulas).toHaveBeenCalled();
   });
 
   it("says what went wrong on the workbook, and asks for a sign-in Microsoft refused", () => {

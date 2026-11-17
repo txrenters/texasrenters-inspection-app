@@ -71,15 +71,37 @@ export class ExcelGraphClient {
     return item.cTag ?? item.eTag ?? null;
   }
 
-  /** A range's cells: as Excel shows them ("$400", "8h 25m", a remark), and what each holds (400, 0.35, the remark). */
-  async readCells(sheet: string, address: string): Promise<{ text: string[][]; values: (string | number | boolean | null)[][] }> {
-    const range = await this.call<{ text?: unknown[][]; values?: unknown[][] }>('GET', `${this.range(sheet, address)}?$select=text,values`);
+  /**
+   * A range's cells: as Excel shows them ("$400", "8h 25m", a remark), what
+   * each holds (400, 0.35, the remark) -- and, in the same call, each one's
+   * formula ("=SUM(G12:G14)", or what it holds when it has none) and format.
+   */
+  async readCells(
+    sheet: string,
+    address: string,
+  ): Promise<{ text: string[][]; values: (string | number | boolean | null)[][]; formulas: unknown[][]; numberFormat: string[][] }> {
+    const range = await this.call<{ text?: unknown[][]; values?: unknown[][]; formulas?: unknown[][]; numberFormat?: unknown[][] }>(
+      'GET',
+      `${this.range(sheet, address)}?$select=text,values,formulas,numberFormat`,
+    );
     return {
       text: (range.text ?? []).map((row) => row.map((cell) => (cell === null || cell === undefined ? '' : String(cell)))),
       values: (range.values ?? []).map((row) =>
         row.map((cell) => (typeof cell === 'number' || typeof cell === 'string' || typeof cell === 'boolean' ? cell : null)),
       ),
+      formulas: range.formulas ?? [],
+      numberFormat: (range.numberFormat ?? []).map((row) => row.map((cell) => (typeof cell === 'string' ? cell : 'General'))),
     };
+  }
+
+  /** Each cell's format, nothing else: what the cells hold stays as it is. */
+  async setNumberFormat(sheet: string, address: string, numberFormat: string[][]) {
+    await this.call('PATCH', `${this.range(sheet, address)}`, { numberFormat });
+  }
+
+  /** A formula entered as the office would type it, for Excel to work out. */
+  async writeFormulas(sheet: string, address: string, formulas: string[][]) {
+    await this.call('PATCH', `${this.range(sheet, address)}`, { formulas });
   }
 
   /** The last row anything is typed in on a tab (1-based); 0 for an empty tab. */
@@ -99,7 +121,7 @@ export class ExcelGraphClient {
     await this.call('POST', `${this.book()}/worksheets/add`, { name });
   }
 
-  /** Values, and the format each cell shows them in: "@" keeps text as text. */
+  /** Values, and the format each cell shows them in (`formatOf`). */
   async writeRange(sheet: string, address: string, values: (string | number)[][], numberFormat?: string[][]) {
     await this.call('PATCH', `${this.range(sheet, address)}`, numberFormat ? { values, numberFormat } : { values });
   }
