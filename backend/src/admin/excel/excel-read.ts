@@ -9,6 +9,10 @@ import { centsFrom, clockFrom, dayFrom, secondsFrom, yesNo } from '../workbook-i
  *  - a cell the office types in on the console's page -- a day's budget, work
  *    time or remarks, a week's target, actual or remarks, a month's remarks --
  *    changed in Excel comes back to the console;
+ *  - but a cell found EMPTY in Excel never empties the console's (2026-11-17:
+ *    Moses's 17518 row lost its drive time, time budgeted and budget this way,
+ *    and the office uses them for payment). It is put back as the console has
+ *    it; a value is cleared on the console's page, never from Excel;
  *  - unless the console changed that same cell since its last write: then the
  *    console's value stands, and Excel gets it back;
  *  - any other cell changed in Excel -- a total, a percentage, a drive time
@@ -149,7 +153,7 @@ export function readTab(written: WrittenTab, current: WrittenTab | undefined, ex
         continue;
       }
       const value = valueOf(field, to, excel.values[row]?.[column] ?? null);
-      if (value === undefined) {
+      if (value === undefined || value === null) {
         result.putBack += 1;
         continue;
       }

@@ -517,13 +517,13 @@ describe('writing the workbook', () => {
     microsoft.calls.length = 0;
     await setup.service.syncNow(office);
     jest.useRealTimers();
-    // The daily report's remark is on Amy's row: one row, on each of the two days' reports.
-    expect(microsoft.writes().map((call) => call.path.replace(/.*worksheets\//, ''))).toEqual(["1116/range(address='A4:H4')", "1117/range(address='A4:H4')"]);
+    // The daily report's remark is on Amy's row: that one cell, on each of the two days' reports -- nothing else in the row.
+    expect(microsoft.writes().map((call) => call.path.replace(/.*worksheets\//, ''))).toEqual(["1116/range(address='H4:H4')", "1117/range(address='H4:H4')"]);
     // Each figure a number in the workbook's own format, so Excel shows "$347.98" and "-$157.98" and guesses nothing; text stays text.
-    expect(microsoft.writes()[0]!.body).toEqual({
-      values: [['AMY WILSON', 400, 505.96, 347.98, -157.98, 0.86995, 8.4166666 / 24, 'Completed 3 visits'].map((value) => (typeof value === 'number' ? expect.closeTo(value, 6) : value))],
-      numberFormat: [['@', '"$"#,##0;-"$"#,##0', '"$"#,##0;-"$"#,##0', '"$"#,##0.00;-"$"#,##0.00', '"$"#,##0.00;-"$"#,##0.00', '0.00%', '[h]"h "mm"m"', '@']],
-    });
+    expect(microsoft.writes()[0]!.body).toEqual({ values: [['Completed 3 visits']], numberFormat: [['@']] });
+    // The figures stay numbers in the workbook's own formats, as the whole row was first written.
+    expect(microsoft.shows('1116', 'D4')).toBe('$347.98');
+    expect(microsoft.shows('1116', 'E4')).toBe('-$157.98');
   });
 
   it("never writes a day's tab dated before the sync's first day: those are the office's own", async () => {
@@ -747,7 +747,8 @@ describe("each technician's own log tab", () => {
     microsoft.calls.length = 0;
     jest.setSystemTime(new Date(at.getTime() + 120_000));
     await setup.service.runIfDue(ORG);
-    expect(microsoft.writes().filter((call) => call.path.includes('/Amy/')).map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'))).toEqual(['A12:S12']);
+    // That one cell: the rest of the row is left as it is in Excel.
+    expect(microsoft.writes().filter((call) => call.path.includes('/Amy/')).map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'))).toEqual(['D12:D12']);
     expect(microsoft.shows('Amy', 'D12')).toBe('20374');
   });
 
@@ -864,7 +865,7 @@ describe("a technician's log tab, taken over from the sync's first day", () => {
     expect(setup.audits.filter((audit) => (audit as { action: string }).action === 'REVENUE_EXCEL_LOG_TAKEN_OVER')).toHaveLength(1);
   });
 
-  it('a first day moved later keeps the rows already taken over; moved earlier, takes the tab over again from there', async () => {
+  it('is taken over once: a first day moved later or earlier never clears its rows again', async () => {
     const { microsoft, setup } = await takenOver();
     await setup.db.excelSync.update({ data: { startDate: new Date('2026-11-18T00:00:00.000Z'), dirtyAt: new Date(at.getTime() + 60_000) } });
     jest.setSystemTime(new Date(at.getTime() + 120_000));
@@ -873,11 +874,13 @@ describe("a technician's log tab, taken over from the sync's first day", () => {
     expect(setup.audits.filter((audit) => (audit as { action: string }).action === 'REVENUE_EXCEL_LOG_TAKEN_OVER')).toHaveLength(1);
 
     await setup.db.excelSync.update({ data: { startDate: new Date('2026-11-16T00:00:00.000Z'), dirtyAt: new Date(at.getTime() + 180_000) } });
+    microsoft.calls.length = 0;
     jest.setSystemTime(new Date(at.getTime() + 240_000));
     await setup.service.runIfDue(ORG);
-    expect(setup.sheets.get('Moses')).toMatchObject({ origin: 2, adoptedFrom: new Date('2026-11-16T00:00:00.000Z') });
-    // Only the office's 11/16 row was the office's to bring in: the console's own rows under it are not.
-    expect(setup.saved.filter((saved) => saved.created).map((saved) => saved.address)).toEqual(['9 Unplanned St - Zone 3', '5 Before Rd - Zone 1']);
+    expect(setup.sheets.get('Moses')).toMatchObject({ origin: 5, adoptedFrom: new Date('2026-11-17T00:00:00.000Z') });
+    expect(microsoft.calls.some((call) => call.path.includes('/Moses/') && call.path.endsWith('/clear'))).toBe(false);
+    expect(microsoft.shows('Moses', 'B3')).toBe('5 Before Rd - Zone 1');
+    expect(setup.audits.filter((audit) => (audit as { action: string }).action === 'REVENUE_EXCEL_LOG_TAKEN_OVER')).toHaveLength(1);
   });
 
   it('takes over two tabs a run at most; the others wait, unwritten, for the next', async () => {
@@ -889,5 +892,37 @@ describe("a technician's log tab, taken over from the sync's first day", () => {
     expect(logTabs).toEqual(['Amy', 'Kevin']);
     expect(setup.sync!.dirtyAt).toEqual(at);
     expect(microsoft.calls.some((call) => call.path.includes('/Moses/'))).toBe(false);
+  });
+});
+
+describe('an empty cell in Excel never empties the console (2026-11-17: Moses 17518)', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('puts the console value back into Excel, and takes nothing', async () => {
+    const at = new Date('2026-11-17T15:00:00.000Z');
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup({ remarks: 'Drive time agreed with the office' });
+    await setup.service.syncNow(office);
+    // Excel shows the remark blank -- emptied there, or never reached it: either way the console keeps it.
+    microsoft.edit('1117', 'H4', '');
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 0, putBack: 1 });
+    expect(setup.saved).toEqual([]);
+    expect(microsoft.shows('1117', 'H4')).toBe('Drive time agreed with the office');
+  });
+
+  it('still takes a value typed over one', async () => {
+    const at = new Date('2026-11-17T15:00:00.000Z');
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup({ remarks: 'First' });
+    await setup.service.syncNow(office);
+    microsoft.edit('1117', 'H4', 'Second');
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ taken: 1 });
+    expect(setup.saved).toEqual([expect.objectContaining({ table: 'day', dailyRemarks: 'Second' })]);
   });
 });
