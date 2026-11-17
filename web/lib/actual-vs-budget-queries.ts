@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ExcelFormulaRepair,
   ExcelSyncRun,
   RestoreClearedCellsInput,
   RestoreClearedCellsResult,
@@ -247,6 +248,10 @@ export function useExcelSyncEdits() {
     sync: useMutation({
       mutationFn: () => api<ExcelSyncRun>(`${BASE}/excel/sync`, { method: 'POST' }),
       onSettled: reread,
+    }),
+    /** Put right the Text format the console once gave its cells, so the office's formulas work there (2026-11-18). */
+    formulas: useMutation({
+      mutationFn: () => api<ExcelFormulaRepair>(`${BASE}/excel/formulas`, { method: 'POST' }),
     }),
     disconnect: useMutation({
       mutationFn: () => api<ExcelSyncView>(`${BASE}/excel/connection`, { method: 'DELETE' }),

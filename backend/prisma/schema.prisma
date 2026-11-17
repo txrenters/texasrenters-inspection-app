@@ -5535,6 +5535,10 @@ model ExcelSyncSheet {
   origin         Int?
   /// The day a technician's log tab was taken over from: its rows from that day are the console's.
   adoptedFrom    DateTime? @db.Date
+  /// Cells of the tab holding the office's formulas ([row, column]), as last read: never written over.
+  formulaCells   Json?
+  /// When the Text format the console once gave its cells was put right, so formulas typed there work (2026-11-18).
+  formatsCheckedAt DateTime?
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

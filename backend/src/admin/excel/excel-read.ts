@@ -1,5 +1,6 @@
 import { cellText, type ExcelCell, type ExcelEditableField } from '../excel-layout';
 import { centsFrom, clockFrom, dayFrom, secondsFrom, yesNo } from '../workbook-import';
+import { isFormula } from './excel-formats';
 
 /**
  * Reading the office's edits back out of its workbook (2026-11-18; the office
@@ -18,6 +19,8 @@ import { centsFrom, clockFrom, dayFrom, secondsFrom, yesNo } from '../workbook-i
  *    value stays in its save history;
  *  - any other cell changed in Excel -- a total, a percentage, a drive time
  *    the log works out, a heading -- is put back as the console has it;
+ *  - but a cell holding a formula is the office's (2026-11-18): never put
+ *    back, and remembered (`formulas`) so no write goes over it;
  *  - and when the tab's rows no longer line up with what was written (a row
  *    inserted, deleted or sorted), nothing is taken from it and all of it is
  *    put back: a cell cannot be told whose it is any more. A row has moved
@@ -52,6 +55,8 @@ export interface TabRead {
   conflicts: number;
   /** The rows no longer line up with what was written: nothing is taken, all of it is put back. */
   moved: boolean;
+  /** Cells holding a formula ([row, column] of the tab): the office's, never written over. */
+  formulas: [number, number][];
 }
 
 type Value = string | number | boolean | null;
@@ -98,8 +103,14 @@ export function valueOf(field: ExcelEditableField, text: string, value: Value): 
   return text.trim() || null;
 }
 
-export function readTab(written: WrittenTab, current: WrittenTab | undefined, excel: { text: string[][]; values: Value[][] }): TabRead {
-  const result: TabRead = { edits: [], putBack: 0, conflicts: 0, moved: false };
+export function readTab(
+  written: WrittenTab,
+  current: WrittenTab | undefined,
+  excel: { text: string[][]; values: Value[][]; formulas?: unknown[][] },
+): TabRead {
+  const result: TabRead = { edits: [], putBack: 0, conflicts: 0, moved: false, formulas: [] };
+  const formulaAt = (row: number, column: number) => isFormula(excel.formulas?.[row]?.[column], excel.values[row]?.[column] ?? null);
+  excel.text.forEach((cells, row) => cells.forEach((_, column) => (formulaAt(row, column) ? result.formulas.push([row, column]) : null)));
   const writtenText = written.rows.map((row) => row.map(cellText));
   const width = Math.max(...written.rows.map((row) => row.length), ...excel.text.map((row) => row.length), 1);
   const textAt = (rows: string[][], row: number, column: number) => rows[row]?.[column] ?? '';
@@ -130,7 +141,7 @@ export function readTab(written: WrittenTab, current: WrittenTab | undefined, ex
     if (filled.length >= 4 && gone * 2 > filled.length) result.moved = true;
   }
   if (result.moved) {
-    for (let row = 0; row < rows; row++) for (let column = 0; column < width; column++) if (changed(row, column)) result.putBack += 1;
+    for (let row = 0; row < rows; row++) for (let column = 0; column < width; column++) if (changed(row, column) && !formulaAt(row, column)) result.putBack += 1;
     return result;
   }
 
@@ -141,7 +152,8 @@ export function readTab(written: WrittenTab, current: WrittenTab | undefined, ex
       const key = written.keys[row];
       const field = written.editable[column];
       if (!key || !field) {
-        result.putBack += 1;
+        // A formula the office put there works it out its own way: left as it is.
+        if (!formulaAt(row, column)) result.putBack += 1;
         continue;
       }
       const to = textAt(excel.text, row, column);
@@ -153,7 +165,7 @@ export function readTab(written: WrittenTab, current: WrittenTab | undefined, ex
       if (!same(consoleNow, from) && !same(consoleNow, to)) result.conflicts += 1;
       const value = valueOf(field, to, excel.values[row]?.[column] ?? null);
       if (value === undefined || value === null) {
-        result.putBack += 1;
+        if (!formulaAt(row, column)) result.putBack += 1;
         continue;
       }
       result.edits.push({ key, field, from, to, value });

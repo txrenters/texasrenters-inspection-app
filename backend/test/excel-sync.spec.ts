@@ -143,12 +143,20 @@ function corner(address: string) {
 function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => number | undefined } = {}) {
   const calls: Call[] = [];
   const sheets = new Set(options.sheets ?? ['Amy', 'Month of October']);
-  const grid = new Map<string, Map<string, { value: string | number; text: string }>>();
+  // Each cell as Excel keeps it: what it holds, shows, its format -- and its formula, when it has one Excel works out.
+  const grid = new Map<string, Map<string, { value: string | number; text: string; format?: string; formula?: string }>>();
   let version = 1;
   const put = (sheet: string, row: number, column: number, value: string | number, format?: string) => {
     if (!grid.has(sheet)) grid.set(sheet, new Map());
-    const text = typeof value === 'number' ? formatNumber(value, format ?? 'General') : value.replace(/^'/, '');
-    grid.get(sheet)!.set(`${row},${column}`, { value: typeof value === 'string' ? value.replace(/^'/, '') : value, text });
+    const cells = grid.get(sheet)!;
+    const kept = format ?? cells.get(`${row},${column}`)?.format;
+    // A formula typed into a Text cell stays words, as Excel keeps it; anywhere else Excel works it out (here: 0).
+    if (typeof value === 'string' && value.startsWith('=') && kept !== '@') {
+      cells.set(`${row},${column}`, { value: 0, text: '0', format: kept, formula: value });
+      return;
+    }
+    const text = typeof value === 'number' ? formatNumber(value, kept ?? 'General') : value.replace(/^'/, '');
+    cells.set(`${row},${column}`, { value: typeof value === 'string' ? value.replace(/^'/, '') : value, text, format: kept });
   };
   const respond = (status: number, body?: unknown) =>
     new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -175,8 +183,19 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
       const [, sheet, address] = range as unknown as [string, string, string];
       const start = corner(address);
       if (call.method === 'PATCH') {
-        const body = call.body as { values: (string | number)[][]; numberFormat?: string[][] };
-        body.values.forEach((row, r) => row.forEach((value, c) => put(sheet, start.row + r, start.column + c, value, body.numberFormat?.[r]?.[c])));
+        const body = call.body as { values?: (string | number)[][]; numberFormat?: string[][]; formulas?: string[][] };
+        if (body.values) body.values.forEach((row, r) => row.forEach((value, c) => put(sheet, start.row + r, start.column + c, value, body.numberFormat?.[r]?.[c])));
+        else if (body.numberFormat)
+          // Only the format: what each cell holds stays as it is, as in Excel.
+          body.numberFormat.forEach((row, r) =>
+            row.forEach((format, c) => {
+              if (!grid.has(sheet)) grid.set(sheet, new Map());
+              const key = `${start.row + r},${start.column + c}`;
+              const cell = grid.get(sheet)!.get(key) ?? { value: '', text: '' };
+              grid.get(sheet)!.set(key, { ...cell, format });
+            }),
+          );
+        if (body.formulas) body.formulas.forEach((row, r) => row.forEach((formula, c) => put(sheet, start.row + r, start.column + c, formula)));
         version += 1;
         return respond(200, {});
       }
@@ -185,7 +204,12 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
         const cells = grid.get(sheet) ?? new Map();
         const at = (r: number, c: number) => cells.get(`${r},${c}`);
         const rows = Array.from({ length: end.row - start.row + 1 }, (_, r) => Array.from({ length: end.column - start.column + 1 }, (_, c) => at(start.row + r, start.column + c)));
-        return respond(200, { text: rows.map((row) => row.map((cell) => cell?.text ?? '')), values: rows.map((row) => row.map((cell) => cell?.value ?? '')) });
+        return respond(200, {
+          text: rows.map((row) => row.map((cell) => cell?.text ?? '')),
+          values: rows.map((row) => row.map((cell) => cell?.value ?? '')),
+          formulas: rows.map((row) => row.map((cell) => cell?.formula ?? cell?.value ?? '')),
+          numberFormat: rows.map((row) => row.map((cell) => cell?.format ?? 'General')),
+        });
       }
     }
     const used = /\/worksheets\/(.+)\/usedRange\(valuesOnly=true\)$/.exec(call.path);
@@ -215,6 +239,11 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
     shows: (sheet: string, address: string) => {
       const at = corner(address);
       return grid.get(sheet)?.get(`${at.row},${at.column}`)?.text ?? '';
+    },
+    /** A cell as Excel keeps it: its formula, and its format. */
+    cell: (sheet: string, address: string) => {
+      const at = corner(address);
+      return grid.get(sheet)?.get(`${at.row},${at.column}`);
     },
     /** The office types into a cell in Excel: a number shows in the format the cell already has. */
     edit: (sheet: string, address: string, value: string | number, format?: string) => {
@@ -383,7 +412,21 @@ function syncSetup(
     lastError: null,
     claimedUntil: null,
   };
-  const sheets = new Map<string, { name: string; rows: unknown; bold: unknown; keys?: unknown; editable?: unknown; origin?: number | null; adoptedFrom?: Date | null }>();
+  const sheets = new Map<
+    string,
+    {
+      name: string;
+      organizationId?: string;
+      rows: unknown;
+      bold: unknown;
+      keys?: unknown;
+      editable?: unknown;
+      origin?: number | null;
+      adoptedFrom?: Date | null;
+      formulaCells?: unknown;
+      formatsCheckedAt?: Date | string | null;
+    }
+  >();
   const audits: unknown[] = [];
   const connection = connectionDb({
     status: 'CONNECTED',
@@ -415,6 +458,11 @@ function syncSetup(
         // As the database keeps them: JSON as JSON, a day as a day.
         sheets.set(create.name, { ...JSON.parse(JSON.stringify(row)), adoptedFrom: (row as { adoptedFrom?: Date }).adoptedFrom ?? null });
         return sheets.get(create.name);
+      }),
+      update: jest.fn(async ({ where, data }: { where: { organizationId_name: { name: string } }; data: Record<string, unknown> }) => {
+        const name = where.organizationId_name.name;
+        sheets.set(name, { ...sheets.get(name)!, ...JSON.parse(JSON.stringify(data)) });
+        return sheets.get(name);
       }),
       deleteMany: jest.fn(async () => sheets.clear()),
     },
@@ -520,7 +568,7 @@ describe('writing the workbook', () => {
     // The daily report's remark is on Amy's row: that one cell, on each of the two days' reports -- nothing else in the row.
     expect(microsoft.writes().map((call) => call.path.replace(/.*worksheets\//, ''))).toEqual(["1116/range(address='H4:H4')", "1117/range(address='H4:H4')"]);
     // Each figure a number in the workbook's own format, so Excel shows "$347.98" and "-$157.98" and guesses nothing; text stays text.
-    expect(microsoft.writes()[0]!.body).toEqual({ values: [['Completed 3 visits']], numberFormat: [['@']] });
+    expect(microsoft.writes()[0]!.body).toEqual({ values: [['Completed 3 visits']], numberFormat: [['General']] });
     // The figures stay numbers in the workbook's own formats, as the whole row was first written.
     expect(microsoft.shows('1116', 'D4')).toBe('$347.98');
     expect(microsoft.shows('1116', 'E4')).toBe('-$157.98');
@@ -853,6 +901,18 @@ describe("each technician's own log tab", () => {
     expect(setup.saved.some((saved) => 'driveTime' in saved)).toBe(false);
   });
 
+  it("never writes over the office's formula in a log row -- its Actual Time works itself out from the times the console writes", async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('Amy', 'J12', '=MOD(I12-H12,1)');
+    await runAgain(setup, 2);
+    // The leaving time changes on the page: the console writes it, and leaves the office's Actual Time to work itself out.
+    Object.assign(setup.logs.amy![0]!.rows[0]!, { leaving: '10:45', actualSeconds: 7260 });
+    microsoft.calls.length = 0;
+    await runAgain(setup, 4, true);
+    expect(addresses(microsoft)).toEqual(['I12:I12']);
+    expect(microsoft.cell('Amy', 'J12')).toMatchObject({ formula: '=MOD(I12-H12,1)' });
+  });
+
   it('empties the row of a visit moved to another day, when the office never typed in it, and writes the visit on its new day', async () => {
     const { microsoft, setup } = await written();
     const visit = setup.logs.amy![1]!.rows.pop()!;
@@ -1014,5 +1074,81 @@ describe('an empty cell in Excel never empties the console (2026-11-17: Moses 17
     const run = await setup.service.runIfDue(ORG);
     expect(run!.pulled).toMatchObject({ taken: 1 });
     expect(setup.saved).toEqual([expect.objectContaining({ table: 'day', dailyRemarks: 'Second' })]);
+  });
+});
+
+describe("the office's formulas keep working (2026-11-18: \"='Amy'!E418\" showed as words)", () => {
+  const at = new Date('2026-11-17T15:00:00.000Z');
+  const timers = () => jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+  afterEach(() => jest.useRealTimers());
+
+  it('writes words as General -- Text only where Excel would misread them -- and an empty cell never as Text', async () => {
+    timers();
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup();
+    await setup.service.syncNow(office);
+    const formats = microsoft.writes().flatMap((call) => {
+      const body = call.body as { values: (string | number)[][]; numberFormat: string[][] };
+      return body.values.flatMap((row, r) => row.map((value, c) => [value, body.numberFormat[r]![c]] as const));
+    });
+    expect(formats.filter(([value]) => value === '').every(([, format]) => format === 'General')).toBe(true);
+    expect(formats.some(([, format]) => format === '@')).toBe(false);
+    // A formula typed later into the drive time of the console's tracker works, as the office types it.
+    microsoft.edit('New 1117', 'C4', "='Amy'!E418");
+    expect(microsoft.cell('New 1117', 'C4')).toMatchObject({ formula: "='Amy'!E418" });
+    // Every tab written this way has nothing to put right.
+    expect([...setup.sheets.values()].every((sheet) => sheet.formatsCheckedAt)).toBe(true);
+  });
+
+  it("puts right the Text cells written before, once: a formula typed there is entered again, and remembered, never written over", async () => {
+    timers();
+    const microsoft = fakeMicrosoft({ sheets: ['Amy', 'Month of October', 'New 1117'] });
+    const setup = syncSetup();
+    // The tracker as v2.5.245-v2.5.250 left it: its drive times Text, an empty cell Text -- and the office's formula
+    // typed into Amy's, kept by Excel as words; a WO# whose zero Text keeps.
+    setup.sheets.set('New 1117', { name: 'New 1117', organizationId: ORG, rows: [['DATE:11/17/2026'], [''], ['Technician', 'Budget', 'Drive Time'], ['Amy Wilson', '', '60–95 min', '037826']], bold: [], keys: [null, null, null, 'day|amy|2026-11-17'], editable: {}, formatsCheckedAt: null });
+    microsoft.edit('New 1117', 'A1', 'DATE:11/17/2026', '@');
+    microsoft.edit('New 1117', 'B4', '', '@');
+    microsoft.edit('New 1117', 'C4', "='Amy'!E418", '@');
+    microsoft.edit('New 1117', 'D4', '037826', '@');
+    expect(microsoft.cell('New 1117', 'C4')).toMatchObject({ value: "='Amy'!E418" });
+    expect(microsoft.cell('New 1117', 'C4')!.formula).toBeUndefined();
+
+    const repair = await setup.service.repairNow(office);
+    expect(repair).toMatchObject({ tabs: 1, formulas: 1, waiting: 0 });
+    expect(microsoft.cell('New 1117', 'C4')).toMatchObject({ formula: "='Amy'!E418", format: 'General' });
+    expect(microsoft.cell('New 1117', 'B4')).toMatchObject({ format: 'General' });
+    expect(microsoft.cell('New 1117', 'A1')).toMatchObject({ value: 'DATE:11/17/2026', format: 'General' });
+    expect(microsoft.cell('New 1117', 'D4')).toMatchObject({ value: '037826', format: '@' });
+    expect(setup.sheets.get('New 1117')).toMatchObject({ formulaCells: [[3, 2]] });
+    expect(setup.sheets.get('New 1117')!.formatsCheckedAt).toBeTruthy();
+    expect(setup.audits.at(-1)).toMatchObject({ action: 'EXCEL_FORMATS_REPAIRED', metadata: { tabs: 1, formulas: 1 } });
+    // Once: pressed again, nothing is read.
+    microsoft.calls.length = 0;
+    expect(await setup.service.repairNow(office)).toMatchObject({ tabs: 0, cells: 0, formulas: 0 });
+    expect(microsoft.calls.some((call) => call.path.includes('New 1117'))).toBe(false);
+  });
+
+  it("never writes over a formula the office put in one of the console's tabs, nor puts it back", async () => {
+    timers();
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup();
+    await setup.service.syncNow(office);
+    // The office links Amy's projected revenue on the daily report to her log.
+    microsoft.edit('1117', 'C4', '=Amy!G405');
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    const run = await setup.service.runIfDue(ORG);
+    expect(run!.pulled).toMatchObject({ putBack: 0 });
+    expect(microsoft.cell('1117', 'C4')).toMatchObject({ formula: '=Amy!G405' });
+    expect(setup.sheets.get('1117')).toMatchObject({ formulaCells: [[3, 2]] });
+    // Later the console's projected revenue for Amy changes: everything else is written, never that cell.
+    const snapshot = setup.sheets.get('1117')!;
+    (snapshot.rows as unknown[][])[3]![2] = { value: 1, format: '"$"#,##0;-"$"#,##0' };
+    await setup.db.excelSync.update({ data: { dirtyAt: new Date(at.getTime() + 180_000) } });
+    microsoft.calls.length = 0;
+    jest.setSystemTime(new Date(at.getTime() + 240_000));
+    await setup.service.runIfDue(ORG);
+    expect(microsoft.writes().some((call) => call.path.includes("1117/range(address='C4"))).toBe(false);
+    expect(microsoft.cell('1117', 'C4')).toMatchObject({ formula: '=Amy!G405' });
   });
 });
