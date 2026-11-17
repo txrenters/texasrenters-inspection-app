@@ -650,15 +650,16 @@ describe("reading the office's edits back from Excel", () => {
     expect(microsoft.shows('1117', 'D4')).toBe(before);
   });
 
-  it('keeps the console\'s value where a cell was changed in both places since the last write', async () => {
+  it('never writes over the office\'s typing: a cell changed in both places since the last write takes Excel\'s value', async () => {
     const { microsoft, setup } = await written();
     microsoft.edit('1117', 'H4', 'Typed in Excel');
     setup.setRemarks('Typed on the page');
     await setup.db.excelSync.update({ data: { dirtyAt: later(1) } });
     jest.setSystemTime(later(2));
     const run = await setup.service.runIfDue(ORG);
-    expect(run!.pulled).toMatchObject({ taken: 0, conflicts: 1 });
-    expect(microsoft.shows('1117', 'H4')).toBe('Typed on the page');
+    expect(run!.pulled).toMatchObject({ taken: 1, conflicts: 1 });
+    expect(setup.saved).toEqual([expect.objectContaining({ table: 'day', dailyRemarks: 'Typed in Excel' })]);
+    expect(microsoft.shows('1117', 'H4')).toBe('Typed in Excel');
   });
 
   it('a save in the console never writes over a cell the office just typed in Excel', async () => {
@@ -722,19 +723,18 @@ describe("each technician's own log tab", () => {
     return { microsoft, setup, run };
   }
 
-  it("goes under the office's rows, one row down, in the log's 19 columns, a Total row closing each day", async () => {
+  it("goes under the office's rows, one row down, in the log's 19 columns -- the Total rows are the office's", async () => {
     const { microsoft, setup, run } = await written();
-    expect(run.tabs.find((tab) => tab.name === 'Amy')).toEqual({ name: 'Amy', created: false, rowsWritten: 5 });
-    expect(microsoft.writes().find((call) => call.path.includes('/Amy/'))!.path).toContain("range(address='A12:S16')");
+    expect(run.tabs.find((tab) => tab.name === 'Amy')).toEqual({ name: 'Amy', created: false, rowsWritten: 3 });
+    expect(microsoft.writes().find((call) => call.path.includes('/Amy/'))!.path).toContain("range(address='A12:S14')");
     expect(microsoft.shows('Amy', 'B10')).toBe('99 Office Rd - the office’s last row');
     const shown = (address: string) => microsoft.shows('Amy', address);
     expect(['A12', 'B12', 'D12', 'E12', 'H12', 'I12', 'J12', 'K12', 'N12', 'R12'].map(shown)).toEqual([
       '11/18/2026', '1 Example Way - Zone 2 - Move in inspection', '20373', '10–15 min', '8:44 AM', '10:15 AM', '1h 31m', 'Yes', '210.00', '11/18/2026',
     ]);
-    expect(['A14', 'E14', 'G14', 'J14', 'N14'].map(shown)).toEqual(['Total', '10–15 min', '78.99', '1h 31m', '210.00']);
-    // The Total rows are bold and filled, as the office's are; nothing is added, and the office's column widths stay.
-    const totals = microsoft.calls.filter((call) => call.path.includes('/Amy/') && call.path.endsWith('/format/fill'));
-    expect(totals.map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'))).toEqual(['A14:S14', 'A16:S16']);
+    expect(['A13', 'B13', 'G13', 'A14', 'B14'].map(shown)).toEqual(['11/18/2026', '2 Sample Ct - office row', '78.99', '11/19/2026', '3 Later Ln']);
+    // No Total row, bold or fill: only the office knows where its totals sit. Nothing is added, and the office's column widths stay.
+    expect(microsoft.calls.some((call) => call.path.includes('/Amy/') && /format\/(fill|font)/.test(call.path))).toBe(false);
     expect(microsoft.calls.some((call) => call.path.includes('/Amy/') && call.path.endsWith('autofitColumns'))).toBe(false);
     expect(microsoft.calls.some((call) => call.path.endsWith('/worksheets/add') && (call.body as { name: string }).name === 'Amy')).toBe(false);
     expect(setup.sheets.get('Amy')).toMatchObject({ origin: 11 });
@@ -772,7 +772,97 @@ describe("each technician's own log tab", () => {
     const { run, setup } = await written({ amy: amyLog(), kevin: amyLog() } as never);
     expect(run.tabs.map((tab) => tab.name)).toContain('Amy');
     expect(run.tabs.map((tab) => tab.name)).not.toContain('Kevin');
-    expect(setup.sheets.get('Amy')!.rows).toHaveLength(5);
+    expect(setup.sheets.get('Amy')!.rows).toHaveLength(3);
+  });
+
+  // ── Rows found by what they are (2026-11-18: the office adds and moves rows in its tabs) ──
+  const runAgain = async (setup: ReturnType<typeof syncSetup>, minutes: number, save = false) => {
+    if (save) await setup.db.excelSync.update({ data: { dirtyAt: new Date(at.getTime() + (minutes - 1) * 60_000) } });
+    jest.setSystemTime(new Date(at.getTime() + minutes * 60_000));
+    return setup.service.runIfDue(ORG);
+  };
+  const addresses = (microsoft: ReturnType<typeof fakeMicrosoft>) => microsoft.writes().filter((call) => call.path.includes('/Amy/')).map((call) => call.path.replace(/.*address='([^']+)'.*/, '$1'));
+
+  it('finds a row the office moved down by inserting rows above it: a change on the page goes into that row, and a cell typed there comes in', async () => {
+    const { microsoft, setup } = await written();
+    // The office inserts a row above the visit's and types a Total in it, and a work order on the visit's row, now 13.
+    microsoft.insertRowAbove('Amy', 12);
+    microsoft.edit('Amy', 'A12', 'Total');
+    microsoft.edit('Amy', 'C13', '37826');
+    setup.logs.amy![0]!.rows[0]!.jobNumber = '20374';
+    microsoft.calls.length = 0;
+    const run = await runAgain(setup, 2, true);
+    expect(run!.pulled).toMatchObject({ taken: 1, conflicts: 0 });
+    expect(setup.saved).toEqual([expect.objectContaining({ table: 'log', inspectionId: 'visit-1', workOrder: '37826' })]);
+    // Only the Job# cell of the visit's row, where the row is now; the office's Total and its typing stand.
+    expect(addresses(microsoft)).toEqual(['D13:D13']);
+    expect(['A12', 'C13', 'D13'].map((address) => microsoft.shows('Amy', address))).toEqual(['Total', '37826', '20374']);
+  });
+
+  it("brings a row the office added into the console, once -- and never brings in a second row for a visit already on the tab", async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('Amy', 'A15', 46344, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B15', '7 New Rd - Zone 4');
+    microsoft.edit('Amy', 'G15', 45, '#,##0.00;-#,##0.00;"-"');
+    microsoft.edit('Amy', 'A16', 46344, 'm/d/yyyy');
+    microsoft.edit('Amy', 'B16', 'a second row for job 20373');
+    microsoft.edit('Amy', 'D16', '20373');
+    const run = await runAgain(setup, 2);
+    expect(run!.pulled).toMatchObject({ taken: 1 });
+    const created = setup.saved.filter((saved) => saved.created);
+    expect(created).toEqual([
+      expect.objectContaining({ technicianId: 'amy', day: new Date('2026-11-18T00:00:00.000Z'), address: '7 New Rd - Zone 4', estimatedBudgetCents: 4500, jobNumber: null }),
+    ]);
+    expect(setup.audits.at(-1)).toMatchObject({ action: 'REVENUE_EXCEL_ROWS_ADDED', metadata: { rows: [{ tab: 'Amy', date: '2026-11-18', address: '7 New Rd - Zone 4' }] } });
+    // The console has it now, as the office's own row: found where it is, never written again at the foot.
+    setup.logs.amy![0]!.rows.push(row('2026-11-18', { entryId: 'entry-new', address: '7 New Rd - Zone 4', estimatedBudgetCents: 4500 }));
+    microsoft.calls.length = 0;
+    const next = await runAgain(setup, 4, true);
+    expect(next!.pulled?.taken ?? 0).toBe(0);
+    expect(setup.saved.filter((saved) => saved.created)).toHaveLength(1);
+    expect(addresses(microsoft)).toEqual([]);
+  });
+
+  it('leaves a row the office deleted deleted, and a new console row goes in at the foot, under the office\'s rows', async () => {
+    const { microsoft, setup } = await written();
+    // The office deletes the 11/19 row and types a row of its own under the console's.
+    microsoft.edit('Amy', 'A14', '');
+    microsoft.edit('Amy', 'B14', '');
+    microsoft.edit('Amy', 'D14', '');
+    microsoft.edit('Amy', 'A15', 'Total');
+    setup.logs.amy![1]!.rows.push(row('2026-11-19', { inspectionId: 'visit-3', address: '4 Next St', jobNumber: '20401' }));
+    microsoft.calls.length = 0;
+    await runAgain(setup, 2, true);
+    expect(addresses(microsoft)).toEqual(['A16:S16']);
+    expect(['B14', 'A15', 'B16', 'D16'].map((address) => microsoft.shows('Amy', address))).toEqual(['', 'Total', '4 Next St', '20401']);
+  });
+
+  it("an office cell that differs from the console's on a row both changed: Excel's stands; a cell the office emptied stays empty, both sides", async () => {
+    const { microsoft, setup } = await written();
+    microsoft.edit('Amy', 'S13', 'Typed in Excel');
+    microsoft.edit('Amy', 'E12', '');
+    setup.logs.amy![0]!.rows[1]!.notes = 'Typed on the page';
+    const run = await runAgain(setup, 2, true);
+    expect(run!.pulled).toMatchObject({ taken: 1, conflicts: 1 });
+    expect(setup.saved).toEqual([expect.objectContaining({ table: 'log', id: 'entry-1', notes: 'Typed in Excel' })]);
+    expect(microsoft.shows('Amy', 'S13')).toBe('Typed in Excel');
+    // The drive time emptied in Excel: nothing taken, nothing written back -- this run or the next.
+    setup.logs.amy![0]!.rows[1]!.notes = 'Typed in Excel';
+    await runAgain(setup, 4, true);
+    expect(microsoft.shows('Amy', 'E12')).toBe('');
+    expect(setup.saved.some((saved) => 'driveTime' in saved)).toBe(false);
+  });
+
+  it('empties the row of a visit moved to another day, when the office never typed in it, and writes the visit on its new day', async () => {
+    const { microsoft, setup } = await written();
+    const visit = setup.logs.amy![1]!.rows.pop()!;
+    setup.logs.amy![0]!.rows.push({ ...visit, date: '2026-11-18' });
+    microsoft.calls.length = 0;
+    await runAgain(setup, 2, true);
+    expect(microsoft.calls.some((call) => call.path.endsWith("/Amy/range(address='A14:S14')/clear"))).toBe(true);
+    expect(['A15', 'B15'].map((address) => microsoft.shows('Amy', address))).toEqual(['11/18/2026', '3 Later Ln']);
+    // Nothing of it brought back in as the office's own row.
+    expect(setup.saved.filter((saved) => saved.created)).toEqual([]);
   });
 });
 
@@ -848,7 +938,7 @@ describe("a technician's log tab, taken over from the sync's first day", () => {
     expect(microsoft.calls.some((call) => call.path.endsWith("/Moses/range(address='A6:S10')/clear") && (call.body as { applyTo: string }).applyTo === 'All')).toBe(true);
     expect(microsoft.shows('Moses', 'B6')).toBe('17518 Autumn Hills Dr - 17518 Autumn Hills Dr - Zone 2');
     expect(microsoft.shows('Moses', 'D6')).toBe('20374');
-    expect(microsoft.shows('Moses', 'A7')).toBe('Total');
+    expect(microsoft.shows('Moses', 'A7')).toBe('');
     expect(microsoft.shows('Moses', 'B10')).toBe('');
     // The office's rows before that day are never touched.
     expect(microsoft.shows('Moses', 'B3')).toBe('5 Before Rd - Zone 1');
