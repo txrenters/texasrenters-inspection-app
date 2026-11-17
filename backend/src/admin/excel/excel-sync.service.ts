@@ -1,22 +1,22 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { monthEnd, weekOf, type ExcelSyncRun, type ExcelSyncView, type SaveExcelSyncInput } from '@texasrenters/shared';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { monthEnd, revenueCell, weekOf, type ExcelPull, type ExcelSyncRun, type ExcelSyncView, type RevenueLiveScope, type SaveExcelSyncInput } from '@texasrenters/shared';
 import type { Prisma } from '@prisma/client';
 
 import { auditActor, type AuthenticatedUser } from '../../common/auth';
 import { businessDate } from '../../common/business-day';
 import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
+import { ActualVsBudgetGateway } from '../actual-vs-budget.gateway';
 import { ActualVsBudgetService } from '../actual-vs-budget.service';
-import { columnLetter, dailyTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelTab } from '../excel-layout';
+import { columnLetter, dailyTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelEditableField, type ExcelTab } from '../excel-layout';
 import { ExcelGraphClient } from './excel-graph.client';
+import { readTab, type ExcelEdit } from './excel-read';
 import { MicrosoftAuthService, MicrosoftError } from './microsoft-auth.service';
 import { microsoftConfigured } from './microsoft.config';
 
 /**
  * Actual vs Budget kept in step with the office's own workbook (2026-11-17;
  * the office: "everything should sync on this spreadsheet also ... Both ways").
- * This is the console -> Excel half; reading the office's Excel edits back is
- * the next.
  *
  * Every save marks the office's workbook as waiting, and the next run -- the
  * scheduler's, each minute, or "Sync now" -- writes the tabs those saves show
@@ -26,16 +26,33 @@ import { microsoftConfigured } from './microsoft.config';
  * last wrote into each tab and sends only the rows that changed, inside a
  * per-run call budget. A tab dated before the sync's first day is the office's
  * and is never written.
+ *
+ * And back (2026-11-18): each minute one call asks Microsoft for the
+ * workbook's version. When it is not the one the console's last write left,
+ * someone has edited the workbook: before anything is written, the console's
+ * tabs are read, and what the office typed in a cell it types in on the page
+ * comes into the console (see `readTab`), live on everyone's page; anything
+ * else changed in those tabs is put back. A run that writes always reads
+ * first when the workbook changed, so a save in the console never writes over
+ * a cell the office just typed in Excel.
  */
 
 const DAY_MS = 86_400_000;
 /** With no save to write, the tabs are written again this often anyway: a new day's tabs appear by themselves. */
 const QUIET_REWRITE_MS = 15 * 60_000;
 const CLAIM_MS = 3 * 60_000;
+/** Read past a tab's last row, so a row the office added under it is seen. */
+const EXTRA_ROWS_READ = 3;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
+/** A range as read, without the empty rows under its last filled one. */
+const trimEmptyRows = (rows: string[][]) => {
+  let last = rows.length;
+  while (last > 0 && rows[last - 1]!.every((cell) => !cell.trim())) last -= 1;
+  return rows.slice(0, last);
+};
 
 @Injectable()
 export class ExcelSyncService {
@@ -45,6 +62,7 @@ export class ExcelSyncService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(MicrosoftAuthService) private readonly auth: MicrosoftAuthService,
     @Inject(ActualVsBudgetService) private readonly revenue: ActualVsBudgetService,
+    @Optional() @Inject(ActualVsBudgetGateway) private readonly live?: ActualVsBudgetGateway,
   ) {}
 
   async view(user: AuthenticatedUser): Promise<ExcelSyncView> {
@@ -74,6 +92,7 @@ export class ExcelSyncService {
             enabled: sync.enabled,
             startDate: dayOf(sync.startDate),
             lastPushedAt: sync.lastPushedAt?.toISOString() ?? null,
+            lastPull: (sync.lastPull as ExcelPull | null) ?? null,
             waiting: Boolean(sync.dirtyAt && (!sync.lastPushedAt || sync.dirtyAt > sync.lastPushedAt)),
             problem: sync.lastError,
           }
@@ -146,6 +165,8 @@ export class ExcelSyncService {
       // Whatever changed, the next run writes.
       dirtyAt: new Date(),
       lastError: null,
+      // A different workbook's version says nothing about this one.
+      ...(file ? { fileTag: null } : {}),
     };
     if (current) {
       // A different workbook: what was written into the last one says nothing about this one.
@@ -174,17 +195,38 @@ export class ExcelSyncService {
     return this.runClaimed(user.organizationId);
   }
 
-  /** The scheduler's run for one office: only when something waits, or the tabs have not been written for a while. */
+  /**
+   * The scheduler's run for one office, each minute: a write when a save
+   * waits or the tabs have not been written for a while; otherwise one call
+   * for the workbook's version, and a run only when the office has edited it.
+   */
   async runIfDue(organizationId: string, now = new Date()): Promise<ExcelSyncRun | null> {
     const sync = await this.prisma.excelSync.findUnique({
       where: { organizationId },
-      select: { enabled: true, dirtyAt: true, lastPushedAt: true },
+      select: { enabled: true, dirtyAt: true, lastPushedAt: true, fileTag: true, driveId: true, itemId: true },
     });
     if (!sync?.enabled) return null;
     const waiting = sync.dirtyAt && (!sync.lastPushedAt || sync.dirtyAt > sync.lastPushedAt);
     const stale = !sync.lastPushedAt || now.getTime() - sync.lastPushedAt.getTime() > QUIET_REWRITE_MS;
-    if (!waiting && !stale) return null;
     if (!(await this.claim(organizationId))) return null;
+    if (!waiting && !stale) {
+      // Nothing of the console's to write: has the office edited the workbook?
+      let edited = false;
+      try {
+        const connection = await this.prisma.microsoftConnection.findUnique({ where: { organizationId }, select: { status: true } });
+        if (connection?.status === 'CONNECTED') {
+          const tag = await new ExcelGraphClient(this.auth, organizationId, { driveId: sync.driveId, itemId: sync.itemId }).fileTag();
+          edited = Boolean(tag && tag !== sync.fileTag);
+        }
+      } catch (error) {
+        // The next minute asks again; a write's own failure is what the office's row reports.
+        this.logger.warn({ event: 'excel_sync_check_failed', organizationId, error: error instanceof Error ? error.message : String(error) });
+      }
+      if (!edited) {
+        await this.prisma.excelSync.update({ where: { organizationId }, data: { claimedUntil: null } });
+        return null;
+      }
+    }
     return this.runClaimed(organizationId);
   }
 
@@ -243,39 +285,157 @@ export class ExcelSyncService {
     return tabs;
   }
 
-  /** Write the tabs: a missing one is added; an existing one gets only the rows that changed. */
+  /**
+   * Read the office's edits when the workbook changed since the last write,
+   * then write the tabs: a missing one is added; an existing one gets only the
+   * rows that differ from what it holds.
+   */
   private async write(organizationId: string): Promise<ExcelSyncRun> {
     const [sync, connection] = await Promise.all([
       this.prisma.excelSync.findUnique({ where: { organizationId } }),
-      this.prisma.microsoftConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+      this.prisma.microsoftConnection.findUnique({ where: { organizationId }, select: { status: true, accountEmail: true } }),
     ]);
     if (!sync) throw new ApplicationError(409, 'EXCEL_NOT_LINKED', 'No workbook is linked.');
     if (connection?.status !== 'CONNECTED') throw new ApplicationError(409, 'MICROSOFT_NOT_CONNECTED', 'Connect the Microsoft account again to write the workbook.');
-    const tabs = await this.tabsFor(organizationId);
     const client = new ExcelGraphClient(this.auth, organizationId, { driveId: sync.driveId, itemId: sync.itemId });
-    const run: ExcelSyncRun = { tabs: [], calls: 0 };
+    const run: ExcelSyncRun = { tabs: [], calls: 0, pulled: null };
+    const edited = (await client.fileTag()) !== sync.fileTag;
+    let tabs = await this.tabsFor(organizationId);
     await client.openSession();
     try {
       const existing = new Set(await client.worksheetNames());
       const snapshots = new Map(
         (await this.prisma.excelSyncSheet.findMany({ where: { organizationId, name: { in: tabs.map((tab) => tab.name) } } })).map((sheet) => [sheet.name, sheet]),
       );
+      // What each tab holds now, where it was read: the write sends whatever differs from it.
+      const held = new Map<string, ExcelCell[][]>();
+
+      if (edited) {
+        const pull: ExcelPull = { at: new Date().toISOString(), taken: 0, putBack: 0, conflicts: 0 };
+        const edits: (ExcelEdit & { tab: string })[] = [];
+        for (const tab of tabs) {
+          const written = snapshots.get(tab.name);
+          if (!written || !existing.has(tab.name)) continue;
+          const rows = written.rows as ExcelCell[][];
+          const width = Math.max(...rows.map((row) => row.length), ...tab.rows.map((row) => row.length), 1);
+          const cells = await client.readCells(tab.name, `A1:${columnLetter(width - 1)}${rows.length + EXTRA_ROWS_READ}`);
+          held.set(tab.name, trimEmptyRows(cells.text));
+          // A tab written before the console kept whose each row is (v2.5.245 and earlier) takes the rows of the
+          // tab as it is now, when there are as many; their names are checked against Excel's all the same.
+          // Otherwise anything changed in it is simply put back.
+          const sameShape = rows.length === tab.rows.length;
+          const read = readTab(
+            {
+              rows,
+              keys: (written.keys as (string | null)[] | null) ?? (sameShape ? tab.keys : rows.map(() => null)),
+              editable: (written.editable as Record<number, ExcelEditableField> | null) ?? (sameShape ? tab.editable : {}),
+            },
+            tab,
+            cells,
+          );
+          pull.putBack += read.putBack;
+          pull.conflicts += read.conflicts;
+          edits.push(...read.edits.map((edit) => ({ ...edit, tab: tab.name })));
+        }
+        pull.taken = await this.takeEdits(organizationId, connection.accountEmail, edits);
+        run.pulled = pull;
+        await this.prisma.excelSync.update({
+          where: { organizationId },
+          data: { lastPulledAt: new Date(pull.at), lastPull: pull as unknown as Prisma.InputJsonValue },
+        });
+        // What came in is the console's now: the tabs are worked out again with it.
+        if (pull.taken) tabs = await this.tabsFor(organizationId);
+      }
+
       for (const tab of tabs) {
         const before = snapshots.get(tab.name);
-        const written = await this.writeTab(client, tab, existing.has(tab.name), before ? { rows: before.rows as ExcelCell[][], bold: before.bold as number[] } : null);
-        if (written.rowsWritten || written.created)
+        const holds = held.get(tab.name) ?? (before?.rows as ExcelCell[][] | undefined);
+        const written = await this.writeTab(
+          client,
+          tab,
+          existing.has(tab.name),
+          holds ? { rows: holds, bold: (before?.bold as number[] | undefined) ?? [] } : null,
+        );
+        if (written.rowsWritten || written.created || !before?.keys)
           await this.prisma.excelSyncSheet.upsert({
             where: { organizationId_name: { organizationId, name: tab.name } },
-            create: { organizationId, name: tab.name, rows: tab.rows as unknown as Prisma.InputJsonValue, bold: tab.bold },
-            update: { rows: tab.rows as unknown as Prisma.InputJsonValue, bold: tab.bold },
+            create: { organizationId, name: tab.name, ...this.snapshotOf(tab) },
+            update: this.snapshotOf(tab),
           });
         run.tabs.push({ name: tab.name, ...written });
       }
     } finally {
       await client.closeSession();
-      run.calls = client.callsMade;
     }
+    // The version the console's own write left: a different one next time is the office's edit.
+    const fileTag = await client.fileTag().catch(() => null);
+    await this.prisma.excelSync.update({ where: { organizationId }, data: { fileTag } });
+    run.calls = client.callsMade;
     return run;
+  }
+
+  private snapshotOf(tab: ExcelTab) {
+    return {
+      rows: tab.rows as unknown as Prisma.InputJsonValue,
+      bold: tab.bold,
+      keys: tab.keys as unknown as Prisma.InputJsonValue,
+      editable: tab.editable as unknown as Prisma.InputJsonValue,
+    };
+  }
+
+  /**
+   * Save what the office typed in Excel, as it would have typed it on the
+   * page: on the day's, week's or month's entry, on everyone's page at once,
+   * and on the record -- from Excel, through the connected account; Excel
+   * knows no console user to name. Returns how many cells came in.
+   */
+  private async takeEdits(organizationId: string, account: string | null, edits: (ExcelEdit & { tab: string })[]) {
+    // A day's budget and work time are on two tabs: when both changed, the last read stands.
+    const byCell = new Map(edits.map((edit) => [`${edit.key}|${edit.field}`, edit]));
+    if (!byCell.size) return 0;
+    const told = new Map<RevenueLiveScope, string[]>();
+    const tell = (scope: RevenueLiveScope, cell: string) => told.set(scope, [...(told.get(scope) ?? []), cell]);
+    await this.prisma.$transaction(async (tx) => {
+      for (const edit of byCell.values()) {
+        const [kind, technicianId, when] = edit.key.split('|') as [string, string, string];
+        const data = { [edit.field]: edit.value, updatedById: null };
+        const day = new Date(`${kind === 'month' ? `${when}-01` : when}T00:00:00.000Z`);
+        if (kind === 'day') {
+          await tx.revenueDayEntry.upsert({
+            where: { technicianId_day: { technicianId, day } },
+            create: { organizationId, technicianId, day, ...data },
+            update: data,
+          });
+          tell('day', revenueCell.day(technicianId, when, edit.field));
+        } else if (kind === 'week') {
+          await tx.revenueWeekEntry.upsert({
+            where: { technicianId_weekStart: { technicianId, weekStart: day } },
+            create: { organizationId, technicianId, weekStart: day, ...data },
+            update: data,
+          });
+          tell('week', revenueCell.week(technicianId, when, edit.field));
+        } else if (kind === 'month') {
+          await tx.revenueMonthEntry.upsert({
+            where: { technicianId_month: { technicianId, month: day } },
+            create: { organizationId, technicianId, month: day, ...data },
+            update: data,
+          });
+          tell('month', revenueCell.month(technicianId, when, edit.field));
+        }
+      }
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          actorUserId: null,
+          action: 'REVENUE_EXCEL_EDITS_TAKEN',
+          entityType: 'ExcelSync',
+          entityId: organizationId,
+          metadata: { account, edits: [...byCell.values()].map(({ tab, key, field, from, to }) => ({ tab, key, field, from, to })) },
+        },
+      });
+    });
+    for (const [scope, cells] of told) this.live?.publishChange(organizationId, { scope, cells, by: { userId: 'excel', name: 'Excel' } });
+    return byCell.size;
   }
 
   private async writeTab(

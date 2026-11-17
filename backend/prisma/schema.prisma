@@ -5509,19 +5509,28 @@ model ExcelSync {
   lastError      String?
   /// One server writes at a time.
   claimedUntil   DateTime?
+  /// The workbook's version (cTag) right after the console's last write: a different one means someone edited it.
+  fileTag        String?
+  lastPulledAt   DateTime?
+  /// What the last read of the office's Excel edits did: cells taken, put back, and left to the console.
+  lastPull       Json?
   updatedAt      DateTime  @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 /// What the console last wrote into one tab of the workbook (2026-11-17): every cell, so the next write sends only
-/// the rows that changed, and -- next -- so an edit made in Excel can be told from the console's own.
+/// the rows that changed, and so an edit made in Excel can be told from the console's own (2026-11-18).
 model ExcelSyncSheet {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String   @db.Uuid
   name           String
   rows           Json
   bold           Json
+  /// Each row's console record ("day|<technician>|<date>", "week|…", "month|…"), or null for a heading or a total.
+  keys           Json?
+  /// The columns the office may type in, by index, and the field each one is.
+  editable       Json?
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

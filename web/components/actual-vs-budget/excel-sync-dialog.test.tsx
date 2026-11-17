@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ExcelSyncView } from '@texasrenters/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ExcelSyncDialog } from './excel-sync-dialog';
+import { ExcelSyncDialog, pullWords } from './excel-sync-dialog';
 
 /** The office's own workbook in Excel (2026-11-17). Everything invented. */
 
@@ -34,6 +34,7 @@ const view = (over: Partial<ExcelSyncView> = {}): ExcelSyncView => ({
     enabled: true,
     startDate: '2026-11-18',
     lastPushedAt: null,
+    lastPull: null,
     waiting: false,
     problem: null,
   },
@@ -90,5 +91,19 @@ describe('the Excel dialog', () => {
     edits.view = view({ configured: false });
     render(<ExcelSyncDialog canManage onClose={() => undefined} />);
     expect(screen.getByText('The server has no Microsoft app settings yet.')).toBeTruthy();
+  });
+});
+
+describe("the last read of the office's Excel edits", () => {
+  it('says what came in, what was put back and what the page kept', () => {
+    const at = new Date(Date.now() - 2 * 60_000).toISOString();
+    expect(pullWords({ at, taken: 3, putBack: 1, conflicts: 0 })).toMatch(/^Read from Excel .+: 3 cells taken, 1 cell put back$/);
+    expect(pullWords({ at, taken: 1, putBack: 0, conflicts: 2 })).toMatch(/: 1 cell taken, 2 cells kept as on the page$/);
+  });
+
+  it('shows under the last write', () => {
+    edits.view = view({ workbook: { ...view().workbook!, lastPushedAt: new Date().toISOString(), lastPull: { at: new Date().toISOString(), taken: 2, putBack: 0, conflicts: 0 } } });
+    render(<ExcelSyncDialog canManage onClose={() => undefined} />);
+    expect(screen.getByText(/2 cells taken/)).toBeTruthy();
   });
 });
