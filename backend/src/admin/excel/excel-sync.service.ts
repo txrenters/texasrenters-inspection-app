@@ -8,7 +8,7 @@ import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { ActualVsBudgetGateway } from '../actual-vs-budget.gateway';
 import { ActualVsBudgetService } from '../actual-vs-budget.service';
-import { columnLetter, dailyTab, logTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelEditableField, type ExcelTab } from '../excel-layout';
+import { cellText, columnLetter, dailyTab, logTab, monthTab, projectionTab, trackerTab, weekTab, type ExcelCell, type ExcelEditableField, type ExcelTab } from '../excel-layout';
 import { ExcelGraphClient } from './excel-graph.client';
 import { importWorkingTechnicians } from '../actual-vs-budget-import';
 import { dayFrom, logOf } from '../workbook-import';
@@ -344,14 +344,12 @@ export class ExcelSyncService {
       const existing = new Set(await client.worksheetNames());
       const snapshots = new Map((await this.prisma.excelSyncSheet.findMany({ where: { organizationId } })).map((sheet) => [sheet.name, sheet]));
       const start = dayOf(sync.startDate);
-      // Each taken-over log tab, from the day it was taken over: unless the first day moved earlier, when it is taken over again.
+      // Each taken-over log tab, from the day it was taken over, always: it is taken over once and never again, so
+      // a first day moved earlier never clears a tab's rows a second time (2026-11-17).
       const logFrom = () =>
-        new Map([...snapshots.values()].flatMap((sheet) => (sheet.adoptedFrom && dayOf(sheet.adoptedFrom) <= start ? [[sheet.name, dayOf(sheet.adoptedFrom)] as const] : [])));
+        new Map([...snapshots.values()].flatMap((sheet) => (sheet.adoptedFrom ? [[sheet.name, dayOf(sheet.adoptedFrom)] as const] : [])));
       let tabs = await this.tabsFor(organizationId, undefined, existing, logFrom());
-      const takenOver = (tab: ExcelTab) => {
-        const adoptedFrom = snapshots.get(tab.name)?.adoptedFrom;
-        return Boolean(adoptedFrom && dayOf(adoptedFrom) <= start);
-      };
+      const takenOver = (tab: ExcelTab) => Boolean(snapshots.get(tab.name)?.adoptedFrom);
       // What each tab holds now, where it was read: the write sends whatever differs from it.
       const held = new Map<string, ExcelCell[][]>();
       // A log tab's rows start where they did: where it was taken over (or, before, under the office's rows). One not
@@ -477,10 +475,12 @@ export class ExcelSyncService {
         break;
       }
     }
-    // Nothing of that day yet: the console's rows start where they did, or one row under the office's last.
-    if (first < 0) first = oldOrigin ?? last + 1;
+    // Nothing of that day yet: the console's rows start where they did, or one row under the office's last, and
+    // there is nothing of the office's to bring in -- never the console's own rows read back as if they were.
+    const found = first >= 0;
+    if (!found) first = oldOrigin ?? last + 1;
     // The office's rows: down to where the console's own began, when that is further down.
-    const officeEnd = oldOrigin !== null && oldOrigin > first ? oldOrigin - 1 : last - 1;
+    const officeEnd = !found ? -1 : oldOrigin !== null && oldOrigin > first ? oldOrigin - 1 : last - 1;
     if (officeEnd >= first) {
       const cells = await client.readCells(name, `A${first + 1}:S${officeEnd + 1}`);
       const sheet: WorkbookSheet = {
@@ -647,19 +647,38 @@ export class ExcelSyncService {
       return { created: !exists, rowsWritten: rows.length };
     }
 
-    // Only the rows that differ from what was written last, a run of them in one call.
+    // Only the cells that differ from what the tab holds, as a person editing the sheet changes them: a run of
+    // them side by side in a row in one call, and nothing else in the row touched (2026-11-17, the office: "if we
+    // are modifying one data it should only be that one data to be modified, just like in the excel").
     const old = before.rows.map(pad);
+    const same = (left: ExcelCell | undefined, right: ExcelCell | undefined) =>
+      JSON.stringify(left ?? '') === JSON.stringify(right ?? '') || cellText(left) === cellText(right) && typeof left === typeof right;
     let written = 0;
-    for (let index = 0; index < rows.length; ) {
-      if (JSON.stringify(rows[index]) === JSON.stringify(old[index])) {
-        index += 1;
+    const blank = (cells: ExcelCell[] | undefined) => !cells || cells.every((cell) => cellText(cell) === '');
+    for (let index = 0; index < rows.length; index++) {
+      // Rows the tab did not have yet -- a new day, a new visit -- go in whole, a run of them in one call.
+      if (blank(old[index]) && !blank(rows[index])) {
+        let end = index;
+        while (end + 1 < rows.length && blank(old[end + 1]) && !blank(rows[end + 1])) end += 1;
+        await put(`A${at(index)}:${last}${at(end)}`, rows.slice(index, end + 1));
+        written += end - index + 1;
+        index = end;
         continue;
       }
-      let end = index;
-      while (end + 1 < rows.length && JSON.stringify(rows[end + 1]) !== JSON.stringify(old[end + 1])) end += 1;
-      await put(`A${at(index)}:${last}${at(end)}`, rows.slice(index, end + 1));
-      written += end - index + 1;
-      index = end + 1;
+      const row = rows[index]!;
+      let touched = false;
+      for (let column = 0; column < width; ) {
+        if (same(row[column], old[index]?.[column])) {
+          column += 1;
+          continue;
+        }
+        let end = column;
+        while (end + 1 < width && !same(row[end + 1], old[index]?.[end + 1])) end += 1;
+        await put(`${columnLetter(column)}${at(index)}:${columnLetter(end)}${at(index)}`, [row.slice(column, end + 1)]);
+        touched = true;
+        column = end + 1;
+      }
+      if (touched) written += 1;
     }
     // Rows the tab no longer has: a technician taken off the sheets.
     if (old.length > rows.length) {
