@@ -14,6 +14,7 @@ import {
   DoorOpen,
   FileWarning,
   Gauge,
+  Hammer,
   KeyRound,
   MapPin,
   ReceiptText,
@@ -101,7 +102,11 @@ export const adminNavigation: AdminNavigationGroup[] = [
     ],
   },
   {
-    title: 'Inspections',
+    // Headed by what the section is, not by its first page (2026-11-19): a
+    // header reading "Inspections" over an item reading "Inspections" looked
+    // like the same thing twice, and the same went for Work orders and
+    // Properties. The pages keep their names.
+    title: 'Field work',
     items: [
       {
         title: 'Inspections',
@@ -117,23 +122,6 @@ export const adminNavigation: AdminNavigationGroup[] = [
       // did day to day is on Inspections -- who is on each visit, filtering by
       // technician and type, assigning and reassigning (one or many). Each
       // inspection keeps its own assignment history. /assignments forwards here.
-      {
-        // The week by technician, every visit marked against Jobber
-        // (console-development). Read-only: it never changes Jobber.
-        title: 'Schedule',
-        href: '/schedule',
-        icon: CalendarDays,
-        permission: 'inspections:read',
-      },
-      {
-        // The visits to book again: asked off their day by a technician, not
-        // got into, or with a service left undone (2026-10-21). Answered by
-        // whoever manages inspections or publishes the plan.
-        title: 'Reschedules',
-        href: '/reschedules',
-        icon: CalendarSync,
-        permission: ['inspections:manage', 'planning:publish'],
-      },
       {
         // The other work booked rather than typed in: the move-outs and move-ins
         // the leases call for (the office, 2026-09-18).
@@ -167,6 +155,40 @@ export const adminNavigation: AdminNavigationGroup[] = [
     ],
   },
   {
+    // The repair and pest-control work handed over by the maintenance app for
+    // the in-house crews (2026-11-12), with the schedule and the reschedule
+    // queue beside it (2026-11-19): booking a crew onto a day is the same job
+    // whether the visit came from a work order or was typed in. Between
+    // Field work and Planning. Work orders is gated as Inspections is -- a
+    // work order is filed as one.
+    title: 'Scheduling',
+    items: [
+      {
+        title: 'Work orders',
+        href: '/work-orders',
+        icon: Hammer,
+        permission: 'inspections:read',
+      },
+      {
+        // The week by technician, every visit marked against Jobber
+        // (console-development). Read-only: it never changes Jobber.
+        title: 'Schedule',
+        href: '/schedule',
+        icon: CalendarDays,
+        permission: 'inspections:read',
+      },
+      {
+        // The visits to book again: asked off their day by a technician, not
+        // got into, or with a service left undone (2026-10-21). Answered by
+        // whoever manages inspections or publishes the plan.
+        title: 'Reschedules',
+        href: '/reschedules',
+        icon: CalendarSync,
+        permission: ['inspections:manage', 'planning:publish'],
+      },
+    ],
+  },
+  {
     title: 'Planning',
     items: [
       {
@@ -189,7 +211,7 @@ export const adminNavigation: AdminNavigationGroup[] = [
     ],
   },
   {
-    title: 'Properties',
+    title: 'Portfolio',
     items: [
       {
         title: 'Properties',

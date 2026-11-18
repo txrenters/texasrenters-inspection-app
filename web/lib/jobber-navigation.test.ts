@@ -44,6 +44,7 @@ describe('the Jobber-style arrangement', () => {
     expect(navigation.sidebar.flat().map((item) => item.href)).toEqual([
       '/schedule',
       '/inspections',
+      '/work-orders',
       '/lease-schedule',
       '/timesheet',
     ]);

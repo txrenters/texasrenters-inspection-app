@@ -24,6 +24,56 @@ describe('admin navigation', () => {
     expect(isAdminNavigationItemActive('/properties-archive', '/properties')).toBe(false);
   });
 
+  it('heads each section by what it is, never by the name of a page in it (2026-11-19)', () => {
+    // "Inspections" over "Inspections" read as the same thing twice.
+    for (const group of adminNavigation) {
+      for (const item of group.items) expect(item.title).not.toBe(group.title);
+    }
+    expect(adminNavigation.map((group) => group.title)).toEqual([
+      'Overview',
+      'Field work',
+      'Scheduling',
+      'Planning',
+      'Portfolio',
+      'Billing',
+      'Stock',
+      'Admin',
+      'IT tools',
+      'Integrations',
+    ]);
+  });
+
+  describe('Scheduling', () => {
+    it('sits between Field work and Planning, holding the work orders, the schedule and the reschedule queue (2026-11-19)', () => {
+      const titles = adminNavigation.map((group) => group.title);
+      expect(titles.indexOf('Scheduling')).toBe(titles.indexOf('Field work') + 1);
+      expect(titles.indexOf('Planning')).toBe(titles.indexOf('Scheduling') + 1);
+
+      const group = adminNavigation.find((candidate) => candidate.title === 'Scheduling')!;
+      expect(group.items.map((item) => [item.title, item.href])).toEqual([
+        ['Work orders', '/work-orders'],
+        ['Schedule', '/schedule'],
+        ['Reschedules', '/reschedules'],
+      ]);
+      // Moved here, not copied: Field work no longer lists either.
+      const fieldWork = adminNavigation.find((candidate) => candidate.title === 'Field work')!;
+      expect(fieldWork.items.map((item) => item.href)).not.toContain('/schedule');
+      expect(fieldWork.items.map((item) => item.href)).not.toContain('/reschedules');
+    });
+
+    it('is shown to whoever reads inspections: a work order is filed as one', () => {
+      const shown = getVisibleAdminNavigation((permission) => permission === 'inspections:read');
+      expect(shown.map((group) => group.title)).toContain('Scheduling');
+
+      const hidden = getVisibleAdminNavigation((permission) => permission === 'dashboard:read');
+      expect(hidden.map((group) => group.title)).not.toContain('Scheduling');
+    });
+
+    it('names the work-order page in the breadcrumb', () => {
+      expect(getAdminBreadcrumbs('/work-orders')).toEqual([{ title: 'Work orders' }]);
+    });
+  });
+
   describe('IT tools', () => {
     it('is gated on system:manage, like the other operator controls', () => {
       const withoutSystem = getVisibleAdminNavigation((permission) =>
@@ -81,7 +131,7 @@ describe('admin navigation', () => {
     // Giving it a permission of its own would mean every existing
     // property-reader silently losing a page they should have.
     expect(titles).toEqual(['Dashboard', 'Properties', 'Tenants']);
-    expect(visible.map((group) => group.title)).toEqual(['Overview', 'Properties']);
+    expect(visible.map((group) => group.title)).toEqual(['Overview', 'Portfolio']);
   });
 
   it('builds useful breadcrumbs for create, detail, and deeper workflow routes', () => {

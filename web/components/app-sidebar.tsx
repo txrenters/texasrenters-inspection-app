@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useId, useState } from 'react';
+import { Suspense, useId, useState, type ReactNode } from 'react';
 
 import { useSwitchConsoleShell } from '@/components/console-shell-context';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -55,11 +55,12 @@ import { APP_VERSION_LABEL } from '@/lib/app-version';
 import { cn } from '@/lib/utils';
 
 /**
- * Navigation is words, not words with an icon each (console-development, as
- * the canvas draws it): fifteen glyphs down the sidebar restated fifteen labels.
- * The icons come back on the collapsed rail, where they are all there is.
+ * An icon beside every page (the office, 2026-11-19, from a reference sidebar
+ * it likes): muted, so the word still leads, and the full colour of the text
+ * on the row you are on. Until now the icons showed only on the collapsed rail
+ * (console-development), the sidebar being words alone.
  */
-const NAV_ICON = 'hidden group-data-[collapsible=icon]:block';
+const NAV_ICON = 'text-muted-foreground in-data-[active=true]:text-highlight';
 
 /**
  * A nav item that groups filtered views of one route, rather than being a
@@ -90,9 +91,10 @@ export function NavigationSection({
   onNavigate: () => void;
 }) {
   const { isMobile, setOpen: setSidebarOpen, state } = useSidebar();
-  // Starts open when you are already inside the section — landing on a move-out
-  // list with its own nav collapsed would hide where you are.
-  const [open, setOpen] = useState(isActive);
+  // Starts open everywhere (the office, 2026-11-19): the types are the way into
+  // the section, and a closed header hid them until somebody thought to click
+  // it. It used to open only when you were already inside.
+  const [open, setOpen] = useState(true);
   const listId = `${useId()}-section`;
   const Icon = item.icon;
 
@@ -133,7 +135,14 @@ export function NavigationSection({
         // The accent marks ONE place. When the active child is on screen it
         // carries the mark, and the section header stays plain; collapsed (or
         // on the icon rail) the header is all there is, so it carries it.
-        className={className}
+        //
+        // Open is shown separately from active: a tint behind the header while
+        // its list is out (the office, 2026-11-19), so an open section reads as
+        // one block with its types rather than a row the list happens to follow.
+        // The tint is the hover shade, not the accent, so it never competes
+        // with the mark.
+        className={cn(className, 'data-[expanded=true]:bg-sidebar-accent/70')}
+        data-expanded={expanded}
         isActive={isActive && !(expanded && activeChild)}
         onClick={toggle}
         tooltip={item.title}
@@ -195,6 +204,28 @@ export function NavigationSection({
 }
 
 /**
+ * One section of the tree: a plain label over its pages.
+ *
+ * A label, not a toggle. It was briefly a button that folded the section away
+ * (2026-11-19), and the office asked for that back out the same day: every
+ * page stays in view, and the only thing that opens and closes is the
+ * Inspections list of types.
+ */
+export function NavigationGroup({ children, title }: { children: ReactNode; title: string }) {
+  return (
+    <SidebarGroup className="gap-0.5 p-0">
+      {/* Plain words, sentence case (the office, 2026-11-19): the mono
+          upper-case tracking the label came with read as a stamp over every
+          section, and the reference sidebar simply names them. */}
+      <SidebarGroupLabel className="h-7 font-sans text-xs font-medium tracking-normal normal-case">
+        {title}
+      </SidebarGroupLabel>
+      <SidebarGroupContent>{children}</SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+/**
  * The navigation tree.
  *
  * `activeType` is threaded in rather than read here so the whole tree can render
@@ -220,42 +251,39 @@ function NavigationTree({
   return (
     <>
       {groups.map((group) => (
-        <SidebarGroup className="gap-1 p-0" key={group.title}>
-          <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {group.items.map((item) => {
-                const active = isAdminNavigationItemActive(pathname, item.href);
-                const activeChild = activeNavigationChild(item, pathname, activeType);
-                const Icon = item.icon;
-                return (
-                  <SidebarMenuItem key={item.href}>
-                    {item.children ? (
-                      <NavigationSection
-                        activeChild={activeChild}
-                        count={counts[item.href]}
-                        isActive={active}
-                        item={item}
-                        onNavigate={onNavigate}
-                      />
-                    ) : (
-                      <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
-                        <Link
-                          aria-current={active ? 'page' : undefined}
-                          href={item.href}
-                          onClick={onNavigate}
-                        >
-                          <Icon aria-hidden className={NAV_ICON} />
-                          <span>{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    )}
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        <NavigationGroup key={group.title} title={group.title}>
+          <SidebarMenu>
+            {group.items.map((item) => {
+              const active = isAdminNavigationItemActive(pathname, item.href);
+              const activeChild = activeNavigationChild(item, pathname, activeType);
+              const Icon = item.icon;
+              return (
+                <SidebarMenuItem key={item.href}>
+                  {item.children ? (
+                    <NavigationSection
+                      activeChild={activeChild}
+                      count={counts[item.href]}
+                      isActive={active}
+                      item={item}
+                      onNavigate={onNavigate}
+                    />
+                  ) : (
+                    <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+                      <Link
+                        aria-current={active ? 'page' : undefined}
+                        href={item.href}
+                        onClick={onNavigate}
+                      >
+                        <Icon aria-hidden className={NAV_ICON} />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  )}
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </NavigationGroup>
       ))}
     </>
   );
@@ -324,13 +352,22 @@ export function AppSidebar() {
         </Link>
       </SidebarHeader>
 
-      <SidebarContent className="gap-4 px-2 py-3">
+      <SidebarContent className="gap-3 px-2 py-3">
         <Suspense
           fallback={
-            <NavigationTree activeType={null} counts={counts} groups={groups} onNavigate={closeMobileNavigation} />
+            <NavigationTree
+              activeType={null}
+              counts={counts}
+              groups={groups}
+              onNavigate={closeMobileNavigation}
+            />
           }
         >
-          <NavigationTreeWithActiveType counts={counts} groups={groups} onNavigate={closeMobileNavigation} />
+          <NavigationTreeWithActiveType
+            counts={counts}
+            groups={groups}
+            onNavigate={closeMobileNavigation}
+          />
         </Suspense>
       </SidebarContent>
 

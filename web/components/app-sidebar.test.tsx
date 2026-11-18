@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { ClipboardCheck } from 'lucide-react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { NavigationSection } from './app-sidebar';
+import { NavigationGroup, NavigationSection } from './app-sidebar';
 import { SidebarMenu, SidebarMenuItem, SidebarProvider } from './ui/sidebar';
 import { adminNavigation, type AdminNavigationItem } from '@/lib/admin-navigation';
 
@@ -36,6 +36,26 @@ function renderSection(props: Partial<Parameters<typeof NavigationSection>[0]> =
 
 const header = () => screen.getByRole('button', { name: /inspections/i });
 
+describe('NavigationGroup', () => {
+  it('is a plain label over pages that are always in view, not a toggle (2026-11-19)', () => {
+    render(
+      <SidebarProvider>
+        <NavigationGroup title="Field work">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <a href="/timesheet">Timesheet</a>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </NavigationGroup>
+      </SidebarProvider>,
+    );
+
+    expect(screen.getByText('Field work')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /field work/i })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Timesheet' })).toBeVisible();
+  });
+});
+
 describe('NavigationSection', () => {
   it('is a toggle, not a destination', () => {
     renderSection();
@@ -50,22 +70,34 @@ describe('NavigationSection', () => {
   it('collapses and expands the types, and says which state it is in', () => {
     renderSection();
 
-    // Closed by default when you are not already inside the section.
-    expect(header()).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('link', { name: 'Move-out' })).toBeNull();
-
-    fireEvent.click(header());
+    // Open by default (the office, 2026-11-19), even outside the section: the
+    // types are the way in, and a closed header hid them.
     expect(header()).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('link', { name: 'Move-out' })).toBeVisible();
 
     fireEvent.click(header());
     expect(header()).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('link', { name: 'Move-out' })).toBeNull();
+
+    fireEvent.click(header());
+    expect(header()).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Move-out' })).toBeVisible();
+  });
+
+  it('tints the header while its list is out, and drops the tint when it is closed', () => {
+    renderSection();
+
+    // `data-expanded` drives the background; the tint is a different thing
+    // from the active mark, which stays with the page you are on.
+    expect(header()).toHaveAttribute('data-expanded', 'true');
+    expect(header()).toHaveAttribute('data-active', 'false');
+
+    fireEvent.click(header());
+    expect(header()).toHaveAttribute('data-expanded', 'false');
   });
 
   it('points the toggle at the list it controls', () => {
     renderSection();
-    fireEvent.click(header());
 
     // Without this pairing the button is a control with nothing attached to it
     // as far as a screen reader is concerned.
@@ -89,7 +121,6 @@ describe('NavigationSection', () => {
   it('links each type to the list carrying it, not to a nested route', () => {
     const onNavigate = vi.fn();
     renderSection({ onNavigate });
-    fireEvent.click(header());
 
     // `/inspections/move-out` would be captured by the `[inspectionId]` segment.
     const list = document.getElementById(header().getAttribute('aria-controls')!)!;
@@ -132,7 +163,6 @@ describe('NavigationSection', () => {
     // silently only ever covered Inspections, and Assignments could have
     // shipped with no sub-items at all and still gone green.
     renderSection({ item: declared });
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(declared.title, 'i') }));
     const list = document.getElementById(
       screen
         .getByRole('button', { name: new RegExp(declared.title, 'i') })

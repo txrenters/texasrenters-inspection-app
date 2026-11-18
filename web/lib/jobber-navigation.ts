@@ -24,7 +24,17 @@ export const JOBBER_SIDEBAR_SECTIONS: readonly (readonly string[])[] = [
   // Jobber's Clients, Requests, Jobs, Invoices and Payments: the properties and
   // the people in them, the visits asked to be booked again, the inspections
   // themselves, and what they were billed and paid.
-  ['/properties', '/tenants', '/reschedules', '/inspections', '/invoices', '/payments', '/actual-vs-budget', '/lease-schedule'],
+  [
+    '/properties',
+    '/tenants',
+    '/reschedules',
+    '/inspections',
+    '/work-orders',
+    '/invoices',
+    '/payments',
+    '/actual-vs-budget',
+    '/lease-schedule',
+  ],
   // What the office stocks, and the requisitions that ask for more of it (2026-11-19).
   ['/inventory', '/purchasing'],
   // Jobber's tools beside the work: the quarter's plan and its groups, where
@@ -37,7 +47,12 @@ export const JOBBER_SETTINGS_SECTIONS: readonly { title: string; hrefs: readonly
   { title: 'Team', hrefs: ['/technicians', '/users', '/roles'] },
   {
     title: 'Integrations',
-    hrefs: ['/integrations/propertyware', '/integrations/jobber', '/integrations/xero', '/integrations/providers'],
+    hrefs: [
+      '/integrations/propertyware',
+      '/integrations/jobber',
+      '/integrations/xero',
+      '/integrations/providers',
+    ],
   },
   { title: 'IT tools', hrefs: ['/it-tools/api', '/it-tools/api-clients', '/it-tools/logs'] },
 ];
@@ -54,7 +69,9 @@ export type JobberNavigation = {
 };
 
 /** The arrangement above, cut down to what this account may open. */
-export function getJobberNavigation(hasPermission: (permission: string) => boolean): JobberNavigation {
+export function getJobberNavigation(
+  hasPermission: (permission: string) => boolean,
+): JobberNavigation {
   const visible = new Map(
     getVisibleAdminNavigation(hasPermission)
       .flatMap((group) => group.items)
