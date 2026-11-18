@@ -6,6 +6,7 @@ import { RequisitionForm } from '@/components/purchasing/requisition-form';
 
 import PurchaseOrderPage from './orders/[orderId]/page';
 import PurchasingPage from './page';
+import NewRequisitionPage from './requisitions/new/page';
 import RequisitionPage from './requisitions/[requisitionId]/page';
 
 /** Purchase requisitions, phase 2 (2026-11-19). Every item, person, vendor and price invented. */
@@ -26,8 +27,8 @@ const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', stat
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (permission: string) => account.permissions.has(permission) }) }));
-const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
-vi.mock('next/navigation', () => ({ useParams: () => ({ requisitionId: 'req-12', orderId: 'order-9' }), useRouter: () => router }));
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: '' }));
+vi.mock('next/navigation', () => ({ useParams: () => ({ requisitionId: 'req-12', orderId: 'order-9' }), useRouter: () => router, useSearchParams: () => new URLSearchParams(router.query) }));
 const pdf = vi.hoisted(() => ({ downloadOrder: vi.fn(async () => undefined), orderAttachment: vi.fn(async () => ({ fileName: 'PO-0009 Hill Country Supply.pdf', contentBase64: 'JVBERi0=' })) }));
 vi.mock('@/lib/purchase-order-pdf/download-order', () => pdf);
 
@@ -88,6 +89,7 @@ const list = (requisitions: RequisitionRow[], seesAll = true): RequisitionList =
 beforeEach(() => {
   url.state = { tab: 'requisitions', show: 'open', status: 'all', q: '' };
   router.push.mockReset();
+  router.query = '';
   pdf.orderAttachment.mockClear();
   pdf.downloadOrder.mockClear();
   orderEdits = { create: mutation(), update: mutation(), step: mutation(), send: mutation() };
@@ -147,6 +149,28 @@ describe('the requisitions list', () => {
     fireEvent.change(within(dialog).getByLabelText('Approval limit'), { target: { value: '1,000.00' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save limits' }));
     return waitFor(() => expect(edits.saveSettings!.mutateAsync).toHaveBeenCalledWith({ approvalLimitCents: 100000, quotesAboveLimit: 2 }));
+  });
+});
+
+describe('a requisition begun from the Reorder list', () => {
+  it('starts with the ticked items at the quantities asked, for their company, at what one cost', () => {
+    router.query = 'items=item-glue:12,item-nothing:5,item-filter:9,item-glue:x';
+    render(<NewRequisitionPage />);
+
+    // The first item on it is the pest company's, so the request is that company's: the filter is another's and is left off.
+    const table = screen.getByRole('table', { name: 'What is asked for' });
+    expect((within(table).getByLabelText('Quantity of Glue boards') as HTMLInputElement).value).toBe('12');
+    expect((within(table).getByLabelText('Estimated cost of one Glue boards') as HTMLInputElement).value).toBe('9.10');
+    expect(within(table).queryByLabelText('Quantity of Filter 20x25x1')).toBeNull();
+    expect(screen.getByLabelText('Company it is for').textContent).toContain('Crystal Creek Pest');
+    // Nothing is saved by opening it.
+    expect(edits.create!.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('is an empty requisition when nothing was ticked', () => {
+    render(<NewRequisitionPage />);
+    expect(screen.queryByLabelText(/^Quantity of/)).toBeNull();
+    expect(screen.getByLabelText('Company it is for').textContent).toContain('THMP');
   });
 });
 

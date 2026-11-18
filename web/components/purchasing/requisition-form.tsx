@@ -65,6 +65,7 @@ const key = () => `row-${(made += 1)}`;
 export function RequisitionForm({
   choices,
   requisition,
+  start,
   onSave,
   pending,
   error,
@@ -74,6 +75,8 @@ export function RequisitionForm({
   choices: RequisitionChoices;
   /** The requisition being changed; none for a new one. */
   requisition?: RequisitionDetail;
+  /** Items to begin a new one with, from the Reorder list. The company is theirs; one of another company is left off. */
+  start?: { itemId: string; quantity: number }[];
   /** Saves it, and submits it when asked. Resolves once done; a refusal is shown from `error`. */
   onSave: (input: SaveRequisitionInput, submit: boolean) => Promise<unknown>;
   pending: boolean;
@@ -81,12 +84,19 @@ export function RequisitionForm({
   onDiscard: () => void;
   discardLabel: string;
 }) {
-  const [company, setCompany] = useState(requisition?.company?.tenantId ?? (requisition ? NONE : (choices.companies[0]?.tenantId ?? NONE)));
+  // A new one begun from the Reorder list is for the company of the first item on it.
+  const begun = requisition ? [] : (start ?? []).flatMap((line) => choices.items.filter((item) => item.id === line.itemId).map((item) => ({ item, quantity: line.quantity })));
+  const begunFor = begun[0]?.item.companyTenantId;
+  const [company, setCompany] = useState(requisition?.company?.tenantId ?? (requisition ? NONE : (begunFor ?? choices.companies[0]?.tenantId ?? NONE)));
   const [neededBy, setNeededBy] = useState(requisition?.neededBy ?? '');
   const [place, setPlace] = useState(requisition?.deliverTo?.id ?? (requisition ? NONE : (choices.places[0]?.id ?? NONE)));
   const [reason, setReason] = useState(requisition?.reason ?? '');
   const [lines, setLines] = useState<LineDraft[]>(
-    () => requisition?.lines.map((line) => ({ key: key(), itemId: line.item?.id ?? NONE, quantity: String(line.quantity), cost: dollars(line.estimatedUnitCostCents) })) ?? [],
+    () =>
+      requisition?.lines.map((line) => ({ key: key(), itemId: line.item?.id ?? NONE, quantity: String(line.quantity), cost: dollars(line.estimatedUnitCostCents) })) ??
+      begun
+        .filter(({ item }) => item.companyTenantId === begunFor)
+        .map(({ item, quantity }) => ({ key: key(), itemId: item.id, quantity: String(quantity), cost: item.averageCostCents != null ? dollars(item.averageCostCents) : '' })),
   );
   const [quotes, setQuotes] = useState<QuoteDraft[]>(
     () => requisition?.quotes.map((quote) => ({ key: key(), vendorId: quote.vendor.id, total: dollars(quote.totalCents), delivery: quote.delivery ?? '', chosen: quote.chosen })) ?? [],

@@ -6,6 +6,7 @@ import { useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { CountsTab } from '@/components/inventory/counts-tab';
+import { ReorderTab } from '@/components/inventory/reorder-tab';
 import { CategoryDialog, ItemDialog, PlaceDialog, VendorDialog } from '@/components/inventory/inventory-dialogs';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
 import { WithdrawalsTab } from '@/components/inventory/withdrawals-tab';
@@ -29,7 +30,8 @@ import { useUrlState } from '@/lib/url-state';
  * here; an item's page enters its opening balance. An item's code is given by
  * the console from its category (2026-11-19), so nobody types one. The
  * Withdrawals tab records what leaves, comes back and moves (phase 5), and
- * the Counts tab the monthly, quarterly and yearly counts (phase 6).
+ * the Counts tab the monthly, quarterly and yearly counts (phase 6). Reorder
+ * and usage adds the ledger up and writes nothing (phase 7).
  *
  * The item list is one read of every item -- tens to a few hundred -- so the
  * filters and the search work on the rows in hand and ask for nothing more.
@@ -43,7 +45,8 @@ export default function InventoryPage() {
   const canManage = permissions.has('inventory:manage');
   const canWithdraw = permissions.has('inventory:withdraw');
   const canCount = permissions.has('inventory:count');
-  const [state, setState] = useUrlState({ tab: 'stock', company: ALL, show: 'in-use', q: '' });
+  const canRequest = permissions.has('purchasing:request');
+  const [state, setState] = useUrlState({ tab: 'stock', company: ALL, show: 'in-use', q: '', period: '30d', technician: '' });
   const [item, setItem] = useState(false);
   const [place, setPlace] = useState<Editing<StockPlaceRow>>(null);
   const [vendor, setVendor] = useState<Editing<VendorRow>>(null);
@@ -58,7 +61,7 @@ export default function InventoryPage() {
       <Button onClick={() => setPlace({})}>New place</Button>
     ) : state.tab === 'vendors' ? (
       <Button onClick={() => setVendor({})}>New vendor</Button>
-    ) : state.tab === 'withdrawals' || state.tab === 'counts' ? undefined : (
+    ) : state.tab === 'withdrawals' || state.tab === 'counts' || state.tab === 'reorder' ? undefined : (
       <Button onClick={() => setItem(true)}>New item</Button>
     );
 
@@ -77,11 +80,13 @@ export default function InventoryPage() {
         title="Inventory"
       />
 
-      <Tabs onValueChange={(tab) => setState({ tab })} value={state.tab}>
+      {/* Another tab is everybody's slips again: the technician is the Reorder tab's link, not a setting. */}
+      <Tabs onValueChange={(tab) => setState({ tab, technician: '' })} value={state.tab}>
         <TabsList>
           <TabsTrigger value="stock">Stock</TabsTrigger>
           <TabsTrigger value="withdrawals">Withdrawals</TabsTrigger>
           <TabsTrigger value="counts">Counts</TabsTrigger>
+          <TabsTrigger value="reorder">Reorder and usage</TabsTrigger>
           <TabsTrigger value="categories">Categories</TabsTrigger>
           <TabsTrigger value="places">Places</TabsTrigger>
           <TabsTrigger value="vendors">Vendors</TabsTrigger>
@@ -97,10 +102,13 @@ export default function InventoryPage() {
           )}
         </TabsContent>
         <TabsContent value="withdrawals">
-          <WithdrawalsTab canWithdraw={canWithdraw} />
+          <WithdrawalsTab canWithdraw={canWithdraw} technicianId={state.technician} />
         </TabsContent>
         <TabsContent value="counts">
           <CountsTab canCount={canCount} />
+        </TabsContent>
+        <TabsContent value="reorder">
+          <ReorderTab canRequest={canRequest} onPeriod={(period) => setState({ period })} period={state.period} />
         </TabsContent>
         <TabsContent value="categories">
           {stock.isError ? (
