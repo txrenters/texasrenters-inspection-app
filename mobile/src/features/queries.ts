@@ -19,6 +19,7 @@ import { repositories } from '../repositories';
 import { QueuedOfflineError } from '../repositories/api/offline-writes';
 import { checklistAnswerOptions, withPendingAnswers } from './checklist-answers';
 import type { ClosingComments } from '../utils/closing-comments';
+import type { PendingSlip } from '../utils/job-stock';
 import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
 // import graph, and adding `useDemoStore` left the binding undefined at
@@ -127,6 +128,10 @@ export const queryKeys = {
   finding: (id: string) => ['finding', id] as const,
   findingForInspection: (id: string, inspectionId?: string) =>
     ['finding', id, inspectionId ?? ''] as const,
+  /** A job's materials: what is in the truck and what was recorded for it. */
+  jobStock: (inspectionId: string) => ['jobStock', inspectionId] as const,
+  /** What this phone itself holds for the job: slips not yet sent, and ones the server refused. */
+  jobStockLocal: (inspectionId: string) => ['jobStockLocal', inspectionId] as const,
 };
 
 export function useDemoUsers() {
@@ -1202,4 +1207,54 @@ export function useClearTechnicianHome() {
     mutationFn: () => repositories.home.clear(),
     onSuccess: () => client.setQueryData(queryKeys.technicianHome, null),
   });
+}
+
+/**
+ * A job's materials (2026-11-19, phase 7): one read when the job or its
+ * Materials screen opens, kept like the job's other data. Not refetched on a
+ * timer: the truck changes when somebody records something.
+ */
+export function useJobStock(inspectionId: string) {
+  return useQuery({
+    queryKey: queryKeys.jobStock(inspectionId),
+    queryFn: () => repositories.stock.forJob(inspectionId),
+    enabled: Boolean(inspectionId),
+  });
+}
+
+/**
+ * What this phone holds for the job and the server does not: slips recorded
+ * and not yet sent, and slips the server refused after the phone had kept
+ * them. Read from the phone's own storage, so always asked afresh.
+ */
+export function useJobStockLocal(inspectionId: string) {
+  return useQuery({
+    queryKey: queryKeys.jobStockLocal(inspectionId),
+    queryFn: async () => ({ pending: await repositories.stock.pending(inspectionId), refused: await repositories.stock.refused(inspectionId) }),
+    enabled: Boolean(inspectionId),
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+export function useJobStockActions(inspectionId: string) {
+  const client = useQueryClient();
+  const readLocal = () => client.invalidateQueries({ queryKey: queryKeys.jobStockLocal(inspectionId) });
+  return {
+    /**
+     * Saved on the phone before it is sent. A reply replaces what the screen
+     * shows; a slip held for want of signal throws `QueuedOfflineError`, which
+     * the screen treats as kept, and the phone's own list is read again either
+     * way so it shows as waiting.
+     */
+    record: useMutation({
+      mutationFn: (slip: PendingSlip) => repositories.stock.record(slip),
+      onSuccess: (stock) => client.setQueryData(queryKeys.jobStock(inspectionId), stock),
+      onSettled: () => void readLocal(),
+    }),
+    dismiss: useMutation({
+      mutationFn: (clientRequestId: string) => repositories.stock.dismissRefusal(clientRequestId),
+      onSettled: () => void readLocal(),
+    }),
+  };
 }

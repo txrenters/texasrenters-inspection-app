@@ -113,7 +113,7 @@ export function buster() {
  * Matched on the key's first element, so every `['navigation-leg', stopId]`
  * goes with it. Keep in step with `queryKeys` in `features/queries.ts`.
  */
-const NEVER_PERSISTED_QUERY_ROOTS: readonly string[] = ['day-route', 'navigation-leg'];
+const NEVER_PERSISTED_QUERY_ROOTS: readonly string[] = ['day-route', 'navigation-leg', 'jobStockLocal'];
 
 function isPersistableQueryKey(queryKey: unknown): boolean {
   const root = Array.isArray(queryKey) ? (queryKey[0] as unknown) : queryKey;

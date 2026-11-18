@@ -16,6 +16,9 @@ import { RecordingSummaryService } from './recording-summary.service';
 import { MediaProcessingService } from './media-processing.service';
 import { VisualReviewService } from './visual-review.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
+import { StockSlipsService } from '../admin/stock-slips.service';
+import { TechnicianStockController } from './technician-stock.controller';
+import { TechnicianStockService } from './technician-stock.service';
 import { TechnicianController } from './technician.controller';
 import { LocationRetentionScheduler } from './location-retention.scheduler';
 import { PropertyGeocodingService } from '../admin/property-geocoding.service';
@@ -28,7 +31,7 @@ import { TrackingStatusStore } from './tracking-status.store';
   // TimeTracking so a submitted job's hours are read from the trail without
   // anybody asking. It imports only the database, so there is no cycle.
   imports: [RealtimeModule, RoutingModule, TimeTrackingModule],
-  controllers: [TechnicianController],
+  controllers: [TechnicianController, TechnicianStockController],
   providers: [
     TechnicianService,
     TechnicianLocationService,
@@ -60,6 +63,10 @@ import { TrackingStatusStore } from './tracking-status.store';
     AreaChecklistAiService,
     ComparisonService,
     ChargeService,
+    // A job's materials on the phone. The office's own posting, which needs only Prisma: provided here, as the
+    // admin module imports this one.
+    StockSlipsService,
+    TechnicianStockService,
     ApiAuthGuard,
     RolesGuard,
   ],
