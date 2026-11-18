@@ -158,5 +158,7 @@
   "202611190002_purchase_requisitions": "13b3e9bcf0511497",
   "202611190003_item_codes_by_category": "843aff9b425df9eb",
   "202611190004_purchase_orders": "ce7693b24490f4e8",
-  "202611190005_receiving_and_vendor_bills": "5250884b1f64dc12"
+  "202611190005_receiving_and_vendor_bills": "5250884b1f64dc12",
+  "202611190006_stock_withdrawals": "0bd1eda7071663a3",
+  "202611190007_stock_counts": "52cf8334e45a12dd"
 }

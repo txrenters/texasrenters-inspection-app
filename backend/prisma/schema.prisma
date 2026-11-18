@@ -414,6 +414,8 @@ model Organization {
   purchaseOrders PurchaseOrder[]
   goodsReceipts GoodsReceipt[]
   vendorBills VendorBill[]
+  stockSlips StockSlip[]
+  stockCounts StockCount[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -647,6 +649,7 @@ model UserProfile {
   vendorBillsEntered         VendorBill[]          @relation("VendorBillEnteredBy")
   vendorBillsApproved        VendorBill[]          @relation("VendorBillApprovedBy")
   vendorBillsPaid            VendorBill[]          @relation("VendorBillPaidBy")
+  stockSlips                 StockSlip[]           @relation("StockSlipTechnician")
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
@@ -1558,6 +1561,8 @@ model Inspection {
   rescheduleRequests         RescheduleRequest[]     @relation("RescheduleRequestInspection")
   officeNotes                InspectionNote[]
   revenueLogEntry            RevenueLogEntry?
+  /// The stock taken out for it, and brought back from it (2026-11-19).
+  stockSlips                 StockSlip[]
   /// This visit is the booking-again of another's request.
   rebookOf                   RescheduleRequest[]     @relation("RescheduleRequestRebook")
 }
@@ -5585,6 +5590,12 @@ enum StockMovementKind {
   REVERSAL
   /// Goods received against a purchase order (phase 4).
   RECEIPT
+  /// Taken out for a visit or for use, brought back, and moved between places (phase 5).
+  WITHDRAWAL
+  RETURN
+  TRANSFER
+  /// What a count found different from the ledger (phase 6).
+  COUNT_ADJUSTMENT
 }
 
 /// Something the office stocks, counted in whole units. Never deleted once it has moved: switched off instead.
@@ -5620,6 +5631,8 @@ model StockItem {
   requisitionLines PurchaseRequisitionLine[]
   orderLines       PurchaseOrderLine[]
   receiptLines     GoodsReceiptLine[]
+  slipLines        StockSlipLine[]
+  countLines       StockCountLine[]
 
   @@unique([organizationId, codeKey])
   /// What a movement points at: an item of its own office.
@@ -5647,6 +5660,10 @@ model StockPlace {
   requisitions PurchaseRequisition[]
   purchaseOrders PurchaseOrder[]
   receiptLines GoodsReceiptLine[]
+  slipsFrom    StockSlip[]     @relation("StockSlipFrom")
+  slipsTo      StockSlip[]     @relation("StockSlipTo")
+  counts       StockCount[]
+  countLines   StockCountLine[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5709,6 +5726,10 @@ model StockMovement {
   reversedBy   StockMovement? @relation("StockMovementReversal")
   /// The receipt line it is, when goods received made it.
   receiptLine  GoodsReceiptLine?
+  /// The slip line it is, when a withdrawal, a return or a move made it.
+  slipLine     StockSlipLine?  @relation("StockSlipLineMovement")
+  slipLineIn   StockSlipLine?  @relation("StockSlipLineMovementIn")
+  countLine    StockCountLine?
 
   @@unique([organizationId, requestKey])
   @@index([organizationId, itemId, createdAt])
@@ -6096,4 +6117,173 @@ model VendorBillLine {
   orderLine PurchaseOrderLine @relation(fields: [organizationId, orderLineId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([billId, orderLineId])
+}
+
+/// Withdrawals, returns and moves (2026-11-19, phase 5).
+enum StockSlipKind {
+  WITHDRAWAL
+  RETURN
+  TRANSFER
+}
+
+/// The paper for stock leaving a place, coming back, or going from one place
+/// to another: who took it, from where, for which visit. Posted in one step
+/// and never edited: a wrong one is reversed. Each line is a stock movement
+/// (two for a move). Its places must fit its kind (checked).
+model StockSlip {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  /// "WD-0031", "RT-0004", "TR-0012": a series a kind.
+  number         String
+  kind           StockSlipKind
+  /// The Texas day it happened.
+  day            DateTime      @db.Date
+  /// Who took it or brought it back; null for a move.
+  technicianId   String?       @db.Uuid
+  fromPlaceId    String?       @db.Uuid
+  toPlaceId      String?       @db.Uuid
+  /// The visit it was used on, or brought back from.
+  inspectionId   String?       @db.Uuid
+  note           String?
+  /// Made by the page for one slip: a second click or a retry posts nothing twice.
+  requestKey     String
+  createdById    String?       @db.Uuid
+  createdByName  String
+  createdAt      DateTime      @default(now())
+  reversedAt     DateTime?
+  reversedById   String?       @db.Uuid
+  reversedByName String?
+  reverseReason  String?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  technician   UserProfile?    @relation("StockSlipTechnician", fields: [technicianId], references: [id], onDelete: Restrict)
+  fromPlace    StockPlace?     @relation("StockSlipFrom", fields: [organizationId, fromPlaceId], references: [organizationId, id], onDelete: Restrict)
+  toPlace      StockPlace?     @relation("StockSlipTo", fields: [organizationId, toPlaceId], references: [organizationId, id], onDelete: Restrict)
+  inspection   Inspection?     @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+  lines        StockSlipLine[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, requestKey])
+  @@unique([organizationId, id])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, technicianId, createdAt])
+  @@index([inspectionId])
+}
+
+/// One item on a slip, at what it cost on average when it moved.
+model StockSlipLine {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  slipId         String  @db.Uuid
+  itemId         String  @db.Uuid
+  quantity       Int
+  unitCostCents  Int
+  /// The movement out of the place it left; for a return, the movement in.
+  movementId     String  @unique @db.Uuid
+  /// A move's second movement, into the place it went to.
+  movementInId   String? @unique @db.Uuid
+
+  slip       StockSlip      @relation(fields: [organizationId, slipId], references: [organizationId, id], onDelete: Restrict)
+  item       StockItem      @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  movement   StockMovement  @relation("StockSlipLineMovement", fields: [movementId], references: [id], onDelete: Restrict)
+  movementIn StockMovement? @relation("StockSlipLineMovementIn", fields: [movementInId], references: [id], onDelete: Restrict)
+
+  @@unique([slipId, itemId])
+  @@index([organizationId, itemId])
+}
+
+/// Inventory counts (2026-11-19, phase 6).
+enum StockCountKind {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum StockCountStatus {
+  OPEN
+  COUNTING
+  REVIEW
+  POSTED
+  CANCELLED
+}
+
+enum StockCountReason {
+  TAKEN_WITHOUT_WITHDRAWAL
+  RETURNED_WITHOUT_RETURN
+  DAMAGED
+  MISCOUNTED_BEFORE
+  NOT_KNOWN
+}
+
+/// A count of what is on the shelf: monthly (chosen items in a place),
+/// quarterly (a whole place) or yearly (everything; no stock moves while it
+/// is open, a trigger). Counted without the expected numbers, reviewed by
+/// somebody else (checked), and posted as one adjustment movement a line
+/// that differed. A place is in one unfinished count at a time (partial
+/// unique indexes in the migration).
+model StockCount {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @db.Uuid
+  /// "CNT-0007".
+  number          String
+  kind            StockCountKind
+  status          StockCountStatus @default(OPEN)
+  /// The Texas day it was started: its month, quarter or year names it.
+  day             DateTime         @db.Date
+  /// The place counted; null for a yearly count.
+  placeId         String?          @db.Uuid
+  note            String?
+  requestKey      String
+  startedById     String?          @db.Uuid
+  startedByName   String
+  createdAt       DateTime         @default(now())
+  /// The one person counting: never the one who approves.
+  countedById     String?          @db.Uuid
+  countedByName   String?
+  submittedAt     DateTime?
+  approvedById    String?          @db.Uuid
+  approvedByName  String?
+  postedAt        DateTime?
+  /// What posting changed, at cost.
+  netValueCents   Int?
+  cancelledAt     DateTime?
+  cancelledByName String?
+  cancelReason    String?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  place        StockPlace?      @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  lines        StockCountLine[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, requestKey])
+  @@unique([organizationId, id])
+  @@index([organizationId, createdAt])
+}
+
+/// One item in one place on a count. What was expected and what one costs
+/// are written when the count is handed in, not before.
+model StockCountLine {
+  id                   String            @id @default(uuid()) @db.Uuid
+  organizationId       String            @db.Uuid
+  countId              String            @db.Uuid
+  itemId               String            @db.Uuid
+  placeId              String            @db.Uuid
+  /// Null while it waits to be counted, or counted again.
+  countedQuantity      Int?
+  /// The first count, kept when a second one was asked for.
+  firstCountedQuantity Int?
+  recount              Boolean           @default(false)
+  expectedQuantity     Int?
+  unitCostCents        Int?
+  reason               StockCountReason?
+  /// The adjustment posting wrote, when the line differed.
+  movementId           String?           @unique @db.Uuid
+
+  count    StockCount     @relation(fields: [organizationId, countId], references: [organizationId, id], onDelete: Restrict)
+  item     StockItem      @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place    StockPlace     @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  movement StockMovement? @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([countId, itemId, placeId])
+  @@index([organizationId, itemId])
 }

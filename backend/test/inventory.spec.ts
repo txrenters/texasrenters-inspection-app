@@ -151,6 +151,8 @@ function database() {
       findMany: jest.fn(async () => [{ userProfile: { id: TECH, displayName: 'Sample Technician' } }]),
       findFirst: jest.fn(async ({ where }: { where: Row }) => (where.userProfileId === TECH ? { id: 'member' } : null)),
     },
+    // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
+    stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
     // The advisory lock answers nothing; taking a category's next number answers the number taken.
     $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {

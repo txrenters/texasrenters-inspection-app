@@ -8,7 +8,7 @@ import { InspectionImportService } from '../../admin/inspection-import/inspectio
 import {
   parseReport,
   REPORT_MATCH_WINDOW_DAYS,
-  reportWalkedOn,
+  walkthroughDay,
 } from '../../admin/inspection-import/inspect-cloud-report';
 import { readPages } from '../../admin/inspection-import/inspect-cloud-pdf';
 import type { ImportedReport } from '../../admin/inspection-import/inspect-cloud-report';
@@ -321,9 +321,9 @@ export class PropertywareInspectionDocsService {
     report: ImportedReport;
     actorId: string;
   }) {
-    // The same window the console's import places a report with, so the two
-    // cannot disagree about which inspection a report belongs to.
-    const walkedAt = reportWalkedOn(input.report.reportDate);
+    // The same day and window the console's import places a report with, so
+    // the two cannot disagree about which inspection a report belongs to.
+    const walkedAt = walkthroughDay(input.report);
     const window = REPORT_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
     const existing = await this.prisma.inspection.findFirst({

@@ -274,6 +274,60 @@ describe('a report from a different walkthrough', () => {
   });
 });
 
+/** A report whose photographs carry these stamps, as Inspect & Cloud prints them. */
+const stamped = (reportDate: string, ...stamps: string[]): ImportedReport => {
+  const report = reportDated(reportDate);
+  report.areas[0]!.photos = stamps.map((takenAt, index) => ({
+    caption: null,
+    matchedLabel: null,
+    takenAt,
+    page: 1,
+    index,
+  }));
+  return report;
+};
+
+describe('a report produced after its walk', () => {
+  it('goes to the visit its photographs were taken on, not a new one dated by its header', async () => {
+    // One property's move-in was walked the day of its Jobber visit and the
+    // report finished two months later. Placed by the header, the import made
+    // a second move-in dated by it and left the visit empty.
+    const { service, tx, prisma, settled } = build(
+      stamped('DEC-03-2026', 'Oct 02 2026 07:41:57 AM', 'Oct 02 2026 07:56:20 AM'),
+    );
+
+    await service.commit(user, 'job-1');
+    await expect(settled).resolves.toMatchObject({ errorCode: null, inspectionId: OCTOBER_VISIT });
+
+    expect(tx.inspection.create).not.toHaveBeenCalled();
+    expect(tx.inspection.update.mock.calls[0][0].where).toEqual({ id: OCTOBER_VISIT });
+    expect(prisma.inspection.findFirst).toHaveBeenCalledTimes(1);
+    // Both days on the audit row, so a later look can tell why it went here.
+    expect(auditOf(tx).metadata).toMatchObject({
+      placement: 'REQUESTED',
+      reportDate: 'DEC-03-2026',
+      walkedOn: '2026-10-02',
+    });
+  });
+
+  it('is dated by its photographs when its walk has no inspection here', async () => {
+    const { service, tx, prisma, settled } = build(stamped('NOV-09-2026', 'Aug 21 2026 10:05:00 AM'));
+
+    await service.commit(user, 'job-1');
+    await expect(settled).resolves.toMatchObject({ errorCode: null, inspectionId: 'created-for-the-report' });
+
+    expect(tx.inspection.create.mock.calls[0][0].data).toMatchObject({
+      scheduledAt: new Date('2026-08-21T00:00:00.000Z'),
+      completedAt: new Date('2026-08-21T00:00:00.000Z'),
+    });
+    // Looked for a fortnight either side of the walk, not of the header.
+    expect(prisma.inspection.findFirst.mock.calls[1][0].where.scheduledAt).toEqual({
+      gte: new Date('2026-08-07T00:00:00.000Z'),
+      lte: new Date('2026-09-04T00:00:00.000Z'),
+    });
+  });
+});
+
 describe('a report that has already been imported', () => {
   const pdf = () => ({
     originalname: 'report.pdf',

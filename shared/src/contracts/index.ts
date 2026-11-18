@@ -125,3 +125,5 @@ export * from './inventory.js';
 export * from './purchasing.js';
 export * from './purchase-orders.js';
 export * from './receiving.js';
+export * from './stock-slips.js';
+export * from './stock-counts.js';
