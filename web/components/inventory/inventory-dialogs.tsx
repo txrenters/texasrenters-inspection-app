@@ -1,0 +1,510 @@
+'use client';
+
+import {
+  MOST_STOCK_QUANTITY,
+  formatMoney,
+  parseMoney,
+  type OpeningBalanceInput,
+  type SaveStockItemInput,
+  type SaveStockPlaceInput,
+  type SaveVendorInput,
+  type StockCompany,
+  type StockItemRow,
+  type StockMovementRow,
+  type StockPlaceKind,
+  type StockPlaceRow,
+  type VendorRow,
+} from '@texasrenters/shared';
+import { useState, type FormEvent, type ReactNode } from 'react';
+
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
+
+/**
+ * The Inventory page's forms (2026-11-19, phase 1). Each is mounted only while
+ * it is open, so it always starts from what is saved. None of them has a field
+ * for on hand: stock changes by a movement, never by typing a number over it.
+ */
+
+/** Radix's Select has no empty value: this stands for "none chosen". */
+const NONE = 'none';
+const chosen = (value: string) => (value === NONE ? null : value);
+/** A whole number of units, or null while the field does not hold one. */
+const whole = (value: string) => (/^\d+$/.test(value.trim()) ? Number(value.trim()) : null);
+
+function FormDialog({
+  title,
+  description,
+  submitLabel,
+  pending,
+  error,
+  disabled,
+  onClose,
+  onSubmit,
+  children,
+}: {
+  title: string;
+  description: string;
+  submitLabel: string;
+  pending: boolean;
+  error: Error | null;
+  disabled?: boolean;
+  onClose: () => void;
+  onSubmit: () => Promise<unknown>;
+  children: ReactNode;
+}) {
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (disabled || pending) return;
+    try {
+      await onSubmit();
+      onClose();
+    } catch {
+      // The mutation holds the API's message; it is shown below.
+    }
+  }
+  return (
+    <Dialog onOpenChange={(open) => (open ? undefined : onClose())} open>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+          {children}
+          {error ? (
+            <Alert variant="destructive">
+              <AlertDescription>{error.message}</AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button onClick={onClose} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button disabled={disabled || pending} type="submit">
+              {pending ? <Spinner /> : null}
+              {submitLabel}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Choice({
+  id,
+  label,
+  value,
+  onChange,
+  options,
+  none,
+  description,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: readonly { value: string; label: string }[];
+  /** The word for "none chosen", when none may be. */
+  none?: string;
+  description?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Select disabled={disabled} onValueChange={onChange} value={value}>
+        <SelectTrigger className="w-full" id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {none ? <SelectItem value={NONE}>{none}</SelectItem> : null}
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {description ? <FieldDescription>{description}</FieldDescription> : null}
+    </Field>
+  );
+}
+
+function ActiveSwitch({ id, checked, onChange, label }: { id: string; checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+  return (
+    <Field className="flex items-center justify-between gap-3">
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Switch checked={checked} id={id} onCheckedChange={onChange} />
+    </Field>
+  );
+}
+
+// ── Item ──────────────────────────────────────────────────────────────────
+
+export function ItemDialog({
+  item,
+  companies,
+  vendors,
+  companyFixed = false,
+  onSave,
+  onClose,
+  pending,
+  error,
+}: {
+  /** The item being changed; none for a new one. */
+  item?: StockItemRow;
+  companies: readonly StockCompany[];
+  vendors: readonly { id: string; name: string }[];
+  /** It has moved already, so its company stays (the server holds this too). */
+  companyFixed?: boolean;
+  onSave: (input: SaveStockItemInput) => Promise<unknown>;
+  onClose: () => void;
+  pending: boolean;
+  error: Error | null;
+}) {
+  const [code, setCode] = useState(item?.code ?? '');
+  const [name, setName] = useState(item?.name ?? '');
+  const [unit, setUnit] = useState(item?.unit ?? 'each');
+  const [category, setCategory] = useState(item?.category ?? '');
+  const [company, setCompany] = useState(item?.company?.tenantId ?? NONE);
+  const [vendor, setVendor] = useState(item?.usualVendor?.id ?? NONE);
+  const [level, setLevel] = useState(String(item?.reorderLevel ?? 0));
+  const [quantity, setQuantity] = useState(String(item?.reorderQuantity ?? 0));
+  const [active, setActive] = useState(item?.active ?? true);
+
+  const reorderLevel = whole(level);
+  const reorderQuantity = whole(quantity);
+  const invalid = !code.trim() || !name.trim() || !unit.trim() || reorderLevel === null || reorderQuantity === null;
+
+  // A change sends only what changed; a new item sends everything it has.
+  const input: SaveStockItemInput = {};
+  if (!invalid) {
+    if (code.trim() !== (item?.code ?? '')) input.code = code.trim();
+    if (name.trim() !== (item?.name ?? '')) input.name = name.trim();
+    if (unit.trim() !== (item?.unit ?? '')) input.unit = unit.trim();
+    if ((category.trim() || null) !== (item?.category ?? null)) input.category = category.trim() || null;
+    if (chosen(company) !== (item?.company?.tenantId ?? null)) input.xeroTenantId = chosen(company);
+    if (chosen(vendor) !== (item?.usualVendor?.id ?? null)) input.usualVendorId = chosen(vendor);
+    if (reorderLevel !== (item?.reorderLevel ?? null)) input.reorderLevel = reorderLevel;
+    if (reorderQuantity !== (item?.reorderQuantity ?? null)) input.reorderQuantity = reorderQuantity;
+    if (item && active !== item.active) input.active = active;
+  }
+  const changed = Object.keys(input).length > 0;
+  // A company that was disconnected since still shows as the item's own.
+  const companyOptions = [...companies];
+  if (item?.company && !companyOptions.some((option) => option.tenantId === item.company?.tenantId)) companyOptions.push(item.company);
+
+  return (
+    <FormDialog
+      description={item ? 'What is on hand is not changed here. It changes only by a stock movement.' : 'Add something the office stocks. Enter what is on hand afterwards, as its opening balance.'}
+      disabled={invalid || !changed}
+      error={error}
+      onClose={onClose}
+      onSubmit={() => onSave(input)}
+      pending={pending}
+      submitLabel={item ? 'Save item' : 'Add item'}
+      title={item ? 'Edit item' : 'New item'}
+    >
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <Field>
+          <FieldLabel htmlFor="item-code">Code</FieldLabel>
+          <Input autoComplete="off" id="item-code" maxLength={40} onChange={(event) => setCode(event.target.value)} required value={code} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="item-name">Name</FieldLabel>
+          <Input autoComplete="off" id="item-name" maxLength={160} onChange={(event) => setName(event.target.value)} required value={name} />
+        </Field>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="item-unit">Counted in</FieldLabel>
+          <Input autoComplete="off" id="item-unit" maxLength={30} onChange={(event) => setUnit(event.target.value)} required value={unit} />
+          <FieldDescription>each, box, jug. Stock is kept in whole units of this.</FieldDescription>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="item-category">Category</FieldLabel>
+          <Input autoComplete="off" id="item-category" maxLength={60} onChange={(event) => setCategory(event.target.value)} value={category} />
+        </Field>
+      </div>
+      <Choice
+        description={companyFixed ? 'This item already has stock movements, so its company stays.' : 'The company whose books this stock belongs to.'}
+        disabled={companyFixed}
+        id="item-company"
+        label="Company"
+        none="No company yet"
+        onChange={setCompany}
+        options={companyOptions.map((option) => ({ value: option.tenantId, label: option.name }))}
+        value={company}
+      />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="item-reorder-level">Reorder at</FieldLabel>
+          <Input id="item-reorder-level" inputMode="numeric" max={MOST_STOCK_QUANTITY} onChange={(event) => setLevel(event.target.value)} value={level} />
+          <FieldDescription>Shows as Low at or below this. 0 for never.</FieldDescription>
+          <FieldError>{reorderLevel === null ? 'A whole number, 0 or more.' : null}</FieldError>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="item-reorder-quantity">Usual order quantity</FieldLabel>
+          <Input id="item-reorder-quantity" inputMode="numeric" max={MOST_STOCK_QUANTITY} onChange={(event) => setQuantity(event.target.value)} value={quantity} />
+          <FieldError>{reorderQuantity === null ? 'A whole number, 0 or more.' : null}</FieldError>
+        </Field>
+      </div>
+      <Choice id="item-vendor" label="Usual vendor" none="No usual vendor" onChange={setVendor} options={vendors.map((option) => ({ value: option.id, label: option.name }))} value={vendor} />
+      {item ? <ActiveSwitch checked={active} id="item-active" label="In use" onChange={setActive} /> : null}
+    </FormDialog>
+  );
+}
+
+// ── Opening balance ───────────────────────────────────────────────────────
+
+export function OpeningBalanceDialog({
+  item,
+  places,
+  onSave,
+  onClose,
+  pending,
+  error,
+}: {
+  item: StockItemRow;
+  places: readonly StockPlaceRow[];
+  onSave: (input: OpeningBalanceInput) => Promise<unknown>;
+  onClose: () => void;
+  pending: boolean;
+  error: Error | null;
+}) {
+  const open = places.filter((place) => place.active);
+  const [placeId, setPlaceId] = useState(open[0]?.id ?? NONE);
+  const [quantity, setQuantity] = useState('');
+  const [cost, setCost] = useState('');
+  const [day, setDay] = useState('');
+  const [note, setNote] = useState('');
+  // One key for this opening of the form: a second click or a retry is the same entry.
+  const [requestKey] = useState(() => crypto.randomUUID());
+
+  const units = whole(quantity);
+  const unitCostCents = cost.trim() ? parseMoney(cost) : null;
+  const invalid = placeId === NONE || !units || unitCostCents === null || unitCostCents < 0;
+
+  return (
+    <FormDialog
+      description={`What is on the shelf of ${item.code} today, entered once for each place. It becomes the first line of the item's ledger.`}
+      disabled={invalid}
+      error={error}
+      onClose={onClose}
+      onSubmit={() => onSave({ placeId, quantity: units ?? 0, unitCostCents: unitCostCents ?? 0, ...(day ? { day } : {}), ...(note.trim() ? { note: note.trim() } : {}), requestKey })}
+      pending={pending}
+      submitLabel="Enter opening balance"
+      title="Opening balance"
+    >
+      {open.length ? (
+        <Choice id="opening-place" label="Place" onChange={setPlaceId} options={open.map((place) => ({ value: place.id, label: place.name }))} value={placeId} />
+      ) : (
+        <Alert variant="warning">
+          <AlertDescription>Add a place on the Places tab first: stock is always kept somewhere.</AlertDescription>
+        </Alert>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="opening-quantity">Quantity, in {item.unit}</FieldLabel>
+          <Input id="opening-quantity" inputMode="numeric" onChange={(event) => setQuantity(event.target.value)} required value={quantity} />
+          <FieldError>{quantity.trim() && !units ? 'A whole number, 1 or more.' : null}</FieldError>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="opening-cost">Cost of one</FieldLabel>
+          <Input id="opening-cost" inputMode="decimal" onChange={(event) => setCost(event.target.value)} placeholder="0.00" required value={cost} />
+          <FieldDescription>{units && unitCostCents !== null ? `${formatMoney(units * unitCostCents)} in all.` : 'What the office paid for one.'}</FieldDescription>
+          <FieldError>{cost.trim() && unitCostCents === null ? 'An amount of money, like 3.42.' : null}</FieldError>
+        </Field>
+      </div>
+      <Field>
+        <FieldLabel htmlFor="opening-day">As of</FieldLabel>
+        <Input id="opening-day" onChange={(event) => setDay(event.target.value)} type="date" value={day} />
+        <FieldDescription>Leave empty for today.</FieldDescription>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="opening-note">Note</FieldLabel>
+        <Input autoComplete="off" id="opening-note" maxLength={500} onChange={(event) => setNote(event.target.value)} value={note} />
+      </Field>
+    </FormDialog>
+  );
+}
+
+// ── Reversal ──────────────────────────────────────────────────────────────
+
+export function ReverseMovementDialog({
+  item,
+  movement,
+  onSave,
+  onClose,
+  pending,
+  error,
+}: {
+  item: StockItemRow;
+  movement: StockMovementRow;
+  onSave: (reason: string) => Promise<unknown>;
+  onClose: () => void;
+  pending: boolean;
+  error: Error | null;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <FormDialog
+      description={`This takes ${movement.quantity} of ${item.code} back out of ${movement.placeName} with a second line in the ledger. The first line stays as it was written, and this cannot be undone.`}
+      disabled={!reason.trim()}
+      error={error}
+      onClose={onClose}
+      onSubmit={() => onSave(reason.trim())}
+      pending={pending}
+      submitLabel="Reverse movement"
+      title="Reverse this movement?"
+    >
+      <Field>
+        <FieldLabel htmlFor="reverse-reason">Why</FieldLabel>
+        <Textarea id="reverse-reason" maxLength={500} onChange={(event) => setReason(event.target.value)} required rows={3} value={reason} />
+        <FieldDescription>Kept on the reversal, with your name.</FieldDescription>
+      </Field>
+    </FormDialog>
+  );
+}
+
+// ── Place ─────────────────────────────────────────────────────────────────
+
+const PLACE_KINDS: { value: StockPlaceKind; label: string }[] = [
+  { value: 'STOCKROOM', label: 'Stockroom' },
+  { value: 'VAN', label: "A technician's van" },
+];
+
+export function PlaceDialog({
+  place,
+  technicians,
+  onSave,
+  onClose,
+  pending,
+  error,
+}: {
+  place?: StockPlaceRow;
+  technicians: readonly { id: string; name: string }[];
+  onSave: (input: SaveStockPlaceInput) => Promise<unknown>;
+  onClose: () => void;
+  pending: boolean;
+  error: Error | null;
+}) {
+  const [name, setName] = useState(place?.name ?? '');
+  const [kind, setKind] = useState<StockPlaceKind>(place?.kind ?? 'STOCKROOM');
+  const [technician, setTechnician] = useState(place?.technicianId ?? NONE);
+  const [active, setActive] = useState(place?.active ?? true);
+
+  const technicianId = kind === 'VAN' ? chosen(technician) : null;
+  const input: SaveStockPlaceInput = {};
+  if (name.trim() !== (place?.name ?? '')) input.name = name.trim();
+  if (kind !== place?.kind) input.kind = kind;
+  if (technicianId !== (place?.technicianId ?? null)) input.technicianId = technicianId;
+  if (place && active !== place.active) input.active = active;
+  // The van's technician, even if they have left the office since.
+  const options = technicians.map((person) => ({ value: person.id, label: person.name }));
+  if (place?.technicianId && place.technicianName && !options.some((option) => option.value === place.technicianId))
+    options.push({ value: place.technicianId, label: place.technicianName });
+
+  return (
+    <FormDialog
+      description="Where stock is kept. A van is its own place, so what is in it can be counted."
+      disabled={!name.trim() || !Object.keys(input).length}
+      error={error}
+      onClose={onClose}
+      onSubmit={() => onSave(input)}
+      pending={pending}
+      submitLabel={place ? 'Save place' : 'Add place'}
+      title={place ? 'Edit place' : 'New place'}
+    >
+      <Field>
+        <FieldLabel htmlFor="place-name">Name</FieldLabel>
+        <Input autoComplete="off" id="place-name" maxLength={80} onChange={(event) => setName(event.target.value)} required value={name} />
+      </Field>
+      <Choice id="place-kind" label="Kind" onChange={(value) => setKind(value as StockPlaceKind)} options={PLACE_KINDS} value={kind} />
+      {kind === 'VAN' ? <Choice id="place-technician" label="Technician" none="Nobody yet" onChange={setTechnician} options={options} value={technician} /> : null}
+      {place ? <ActiveSwitch checked={active} id="place-active" label="In use" onChange={setActive} /> : null}
+    </FormDialog>
+  );
+}
+
+// ── Vendor ────────────────────────────────────────────────────────────────
+
+export function VendorDialog({
+  vendor,
+  onSave,
+  onClose,
+  pending,
+  error,
+}: {
+  vendor?: VendorRow;
+  onSave: (input: SaveVendorInput) => Promise<unknown>;
+  onClose: () => void;
+  pending: boolean;
+  error: Error | null;
+}) {
+  const [name, setName] = useState(vendor?.name ?? '');
+  const [contactName, setContactName] = useState(vendor?.contactName ?? '');
+  const [email, setEmail] = useState(vendor?.email ?? '');
+  const [phone, setPhone] = useState(vendor?.phone ?? '');
+  const [terms, setTerms] = useState(vendor?.terms ?? '');
+  const [notes, setNotes] = useState(vendor?.notes ?? '');
+  const [active, setActive] = useState(vendor?.active ?? true);
+
+  const input: SaveVendorInput = {};
+  if (name.trim() !== (vendor?.name ?? '')) input.name = name.trim();
+  const optional = { contactName, email, phone, terms, notes } as const;
+  for (const field of Object.keys(optional) as (keyof typeof optional)[])
+    if ((optional[field].trim() || null) !== (vendor?.[field] ?? null)) input[field] = optional[field].trim() || null;
+  if (vendor && active !== vendor.active) input.active = active;
+
+  return (
+    <FormDialog
+      description="Who the office buys stock from."
+      disabled={!name.trim() || !Object.keys(input).length}
+      error={error}
+      onClose={onClose}
+      onSubmit={() => onSave(input)}
+      pending={pending}
+      submitLabel={vendor ? 'Save vendor' : 'Add vendor'}
+      title={vendor ? 'Edit vendor' : 'New vendor'}
+    >
+      <Field>
+        <FieldLabel htmlFor="vendor-name">Name</FieldLabel>
+        <Input autoComplete="off" id="vendor-name" maxLength={160} onChange={(event) => setName(event.target.value)} required value={name} />
+      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field>
+          <FieldLabel htmlFor="vendor-contact">Contact</FieldLabel>
+          <Input autoComplete="off" id="vendor-contact" maxLength={120} onChange={(event) => setContactName(event.target.value)} value={contactName} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="vendor-phone">Phone</FieldLabel>
+          <Input autoComplete="off" id="vendor-phone" maxLength={40} onChange={(event) => setPhone(event.target.value)} value={phone} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="vendor-email">Email</FieldLabel>
+          <Input autoComplete="off" id="vendor-email" maxLength={320} onChange={(event) => setEmail(event.target.value)} type="email" value={email} />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="vendor-terms">Payment terms</FieldLabel>
+          <Input autoComplete="off" id="vendor-terms" maxLength={60} onChange={(event) => setTerms(event.target.value)} placeholder="Net 30" value={terms} />
+        </Field>
+      </div>
+      <Field>
+        <FieldLabel htmlFor="vendor-notes">Notes</FieldLabel>
+        <Textarea id="vendor-notes" maxLength={2000} onChange={(event) => setNotes(event.target.value)} rows={3} value={notes} />
+      </Field>
+      {vendor ? <ActiveSwitch checked={active} id="vendor-active" label="In use" onChange={setActive} /> : null}
+    </FormDialog>
+  );
+}

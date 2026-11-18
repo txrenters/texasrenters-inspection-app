@@ -1,0 +1,99 @@
+'use client';
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  OpeningBalanceInput,
+  ReverseMovementInput,
+  SaveStockItemInput,
+  SaveStockPlaceInput,
+  SaveVendorInput,
+  StockItemDetail,
+  StockList,
+  StockPlaces,
+  Vendors,
+} from '@texasrenters/shared';
+
+import { api } from './api';
+
+/**
+ * Inventory (2026-11-19, phase 1): read when a page or a tab opens, kept a
+ * minute, and read again after this page's own saves. Never polled: stock is
+ * looked at and entered, not watched. Nothing it reads is billed.
+ */
+
+const BASE = '/api/v1/admin/inventory';
+const KEPT = { staleTime: 60_000, refetchOnWindowFocus: false } as const;
+
+export const inventoryKeys = {
+  all: ['inventory'] as const,
+  stock: ['inventory', 'stock'] as const,
+  item: (itemId: string) => ['inventory', 'item', itemId] as const,
+  places: ['inventory', 'places'] as const,
+  vendors: ['inventory', 'vendors'] as const,
+};
+
+export function useStock() {
+  return useQuery({ queryKey: inventoryKeys.stock, queryFn: ({ signal }) => api<StockList>(`${BASE}/items`, { signal }), ...KEPT });
+}
+
+export function useStockItem(itemId: string) {
+  return useQuery({
+    queryKey: inventoryKeys.item(itemId),
+    queryFn: ({ signal }) => api<StockItemDetail>(`${BASE}/items/${encodeURIComponent(itemId)}`, { signal }),
+    enabled: Boolean(itemId),
+    ...KEPT,
+  });
+}
+
+/** Read only once its tab or its dialog is open. */
+export function useStockPlaces(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.places, queryFn: ({ signal }) => api<StockPlaces>(`${BASE}/places`, { signal }), enabled, ...KEPT });
+}
+
+export function useVendors(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.vendors, queryFn: ({ signal }) => api<Vendors>(`${BASE}/vendors`, { signal }), enabled, ...KEPT });
+}
+
+export function useInventoryEdits() {
+  const client = useQueryClient();
+  /**
+   * A save answers with what it changed, so that is kept as it came and not
+   * asked for again; everything else that shows stock is read again when next
+   * looked at.
+   */
+  const settle = <T,>(key: readonly unknown[]) => (data: T) => {
+    client.setQueryData(key, data);
+    const saved = JSON.stringify(key);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === inventoryKeys.all[0] && JSON.stringify(query.queryKey) !== saved });
+  };
+  const itemSaved = (detail: StockItemDetail) => settle<StockItemDetail>(inventoryKeys.item(detail.item.id))(detail);
+  const send = <T,>(path: string, method: 'POST' | 'PATCH', input: object) => api<T>(`${BASE}${path}`, { method, body: JSON.stringify(input) });
+
+  return {
+    createItem: useMutation({ mutationFn: (input: SaveStockItemInput) => send<StockItemDetail>('/items', 'POST', input), onSuccess: itemSaved }),
+    updateItem: useMutation({
+      mutationFn: ({ itemId, input }: { itemId: string; input: SaveStockItemInput }) => send<StockItemDetail>(`/items/${encodeURIComponent(itemId)}`, 'PATCH', input),
+      onSuccess: itemSaved,
+    }),
+    enterOpeningBalance: useMutation({
+      mutationFn: ({ itemId, input }: { itemId: string; input: OpeningBalanceInput }) =>
+        send<StockItemDetail>(`/items/${encodeURIComponent(itemId)}/opening-balance`, 'POST', input),
+      onSuccess: itemSaved,
+    }),
+    reverseMovement: useMutation({
+      mutationFn: ({ movementId, input }: { movementId: string; input: ReverseMovementInput }) =>
+        send<StockItemDetail>(`/movements/${encodeURIComponent(movementId)}/reverse`, 'POST', input),
+      onSuccess: itemSaved,
+    }),
+    createPlace: useMutation({ mutationFn: (input: SaveStockPlaceInput) => send<StockPlaces>('/places', 'POST', input), onSuccess: settle<StockPlaces>(inventoryKeys.places) }),
+    updatePlace: useMutation({
+      mutationFn: ({ placeId, input }: { placeId: string; input: SaveStockPlaceInput }) => send<StockPlaces>(`/places/${encodeURIComponent(placeId)}`, 'PATCH', input),
+      onSuccess: settle<StockPlaces>(inventoryKeys.places),
+    }),
+    createVendor: useMutation({ mutationFn: (input: SaveVendorInput) => send<Vendors>('/vendors', 'POST', input), onSuccess: settle<Vendors>(inventoryKeys.vendors) }),
+    updateVendor: useMutation({
+      mutationFn: ({ vendorId, input }: { vendorId: string; input: SaveVendorInput }) => send<Vendors>(`/vendors/${encodeURIComponent(vendorId)}`, 'PATCH', input),
+      onSuccess: settle<Vendors>(inventoryKeys.vendors),
+    }),
+  };
+}

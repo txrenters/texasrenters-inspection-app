@@ -1,6 +1,7 @@
 import {
   ChartColumn,
   Banknote,
+  Boxes,
   Building2,
   CalendarClock,
   Landmark,
@@ -216,6 +217,12 @@ export const adminNavigation: AdminNavigationGroup[] = [
       // the invoices' permission.
       { title: 'Actual vs Budget', href: '/actual-vs-budget', icon: ChartColumn, permission: 'invoices:read' },
     ],
+  },
+  {
+    // What the office stocks and every movement of it (2026-11-19, phase 1 of the inventory and purchasing
+    // plan). Its own permission; Purchasing joins it here in phase 2.
+    title: 'Stock',
+    items: [{ title: 'Inventory', href: '/inventory', icon: Boxes, permission: 'inventory:read' }],
   },
   {
     title: 'Admin',

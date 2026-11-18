@@ -402,6 +402,11 @@ model Organization {
   invoiceProducts InvoiceProduct[]
   invoiceBillingRules InvoiceBillingRule[]
   revenueLogEntries RevenueLogEntry[]
+  stockItems StockItem[]
+  stockPlaces StockPlace[]
+  vendors Vendor[]
+  stockMovements StockMovement[]
+  stockLevels StockLevel[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -624,6 +629,8 @@ model UserProfile {
   rescheduleRequestsResolved RescheduleRequest[] @relation("RescheduleResolvedBy")
   revenueLogEntries          RevenueLogEntry[]   @relation("RevenueLogTechnician")
   revenueLogEntriesEdited    RevenueLogEntry[]   @relation("RevenueLogEditedBy")
+  /// The van whose stock is theirs (2026-11-19).
+  stockPlaces                StockPlace[]
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
@@ -4945,6 +4952,8 @@ model XeroOrganisation {
   settings     XeroSettings?
   /// The products and services the office sends to this organisation.
   products     InvoiceProduct[]
+  /// The stock that belongs to its books (2026-11-19).
+  stockItems   StockItem[]
   /// The invoices that go to this organisation's books.
   invoices     Invoice[]
   /// The payments sent to its books.
@@ -5544,4 +5553,148 @@ model ExcelSyncSheet {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, name])
+}
+
+/// Inventory (2026-11-19, phase 1 of the inventory and purchasing plan).
+enum StockPlaceKind {
+  STOCKROOM
+  VAN
+}
+
+/// Receiving, withdrawals and counts add their kinds in their own phases.
+enum StockMovementKind {
+  OPENING_BALANCE
+  REVERSAL
+}
+
+/// Something the office stocks, counted in whole units. Never deleted once it has moved: switched off instead.
+model StockItem {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @db.Uuid
+  code            String
+  /// lower(trim(code)), spaces collapsed: one item per code, whatever its case.
+  codeKey         String
+  name            String
+  /// What it is counted in: "each", "box", "jug".
+  unit            String   @default("each")
+  category        String?
+  /// The company's books it belongs to, as an invoice product has one. Null until the office chooses.
+  xeroTenantId    String?
+  /// At or below this it shows as Low. 0: never low, only out.
+  reorderLevel    Int      @default(0)
+  /// What the office usually orders at once.
+  reorderQuantity Int      @default(0)
+  usualVendorId   String?  @db.Uuid
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation? @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+  usualVendor      Vendor?           @relation(fields: [organizationId, usualVendorId], references: [organizationId, id], onDelete: NoAction)
+  movements        StockMovement[]
+  levels           StockLevel[]
+
+  @@unique([organizationId, codeKey])
+  /// What a movement points at: an item of its own office.
+  @@unique([organizationId, id])
+  @@index([organizationId, active])
+}
+
+/// Where stock is kept: the stockroom, or a technician's van.
+model StockPlace {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  name           String
+  nameKey        String
+  kind           StockPlaceKind @default(STOCKROOM)
+  /// A van's technician; null for a stockroom.
+  technicianId   String?        @db.Uuid
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile?    @relation(fields: [technicianId], references: [id], onDelete: SetNull)
+  movements    StockMovement[]
+  levels       StockLevel[]
+
+  @@unique([organizationId, nameKey])
+  @@unique([organizationId, id])
+}
+
+/// Who the office buys from. Purchase orders name one from phase 3.
+model Vendor {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  nameKey        String
+  contactName    String?
+  email          String?
+  phone          String?
+  /// Payment terms as the office writes them: "Net 30".
+  terms          String?
+  notes          String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items        StockItem[]
+
+  @@unique([organizationId, nameKey])
+  @@unique([organizationId, id])
+}
+
+/// The stock ledger: one row per movement, written once. The database refuses
+/// any UPDATE or DELETE of a row (a trigger), so a mistake is put right by a
+/// REVERSAL row. No `updatedAt`, and who made it is kept as a name beside the
+/// id rather than a relation, so nothing ever needs to touch a row again.
+model StockMovement {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  itemId         String            @db.Uuid
+  placeId        String            @db.Uuid
+  kind           StockMovementKind
+  /// In is positive, out is negative; never 0 (checked).
+  quantity       Int
+  /// What one unit cost; a reversal carries the cost of the movement it reverses.
+  unitCostCents  Int
+  /// The Texas day it happened.
+  day            DateTime          @db.Date
+  note           String?
+  /// The movement this one reverses. Unique: a movement is reversed at most once.
+  reversesId     String?           @unique @db.Uuid
+  /// Made by the page for one entry: a second click or a retry writes nothing twice.
+  requestKey     String?
+  createdById    String?           @db.Uuid
+  createdByName  String
+  createdAt      DateTime          @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  item         StockItem      @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place        StockPlace     @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  reverses     StockMovement? @relation("StockMovementReversal", fields: [reversesId], references: [id], onDelete: Restrict)
+  reversedBy   StockMovement? @relation("StockMovementReversal")
+
+  @@unique([organizationId, requestKey])
+  @@index([organizationId, itemId, createdAt])
+}
+
+/// What is on hand of an item in a place, and what it cost: the ledger added
+/// up. Never written by the application -- a trigger on StockMovement keeps it,
+/// and the database refuses a movement that would take a quantity below 0.
+model StockLevel {
+  organizationId String @db.Uuid
+  itemId         String @db.Uuid
+  placeId        String @db.Uuid
+  quantity       Int
+  valueCents     Int
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  item         StockItem    @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place        StockPlace   @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+
+  @@id([itemId, placeId])
+  @@index([organizationId])
 }

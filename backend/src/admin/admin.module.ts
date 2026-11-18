@@ -45,6 +45,8 @@ import { ExcelSyncScheduler } from './excel/excel-sync.scheduler';
 import { ExcelSyncService } from './excel/excel-sync.service';
 import { MicrosoftAuthService } from './excel/microsoft-auth.service';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
+import { InventoryController } from './inventory.controller';
+import { InventoryService } from './inventory.service';
 import { InvoiceReportsController } from './invoice-reports.controller';
 import { InvoiceReportsService } from './invoice-reports.service';
 import { InvoiceSettingsService } from './invoice-settings.service';
@@ -105,6 +107,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceSettingsController,
     InvoiceReportsController,
     ActualVsBudgetController,
+    InventoryController,
     ExcelSyncController,
     ExcelSyncCallbackController,
     InvoiceFilesController,
@@ -153,6 +156,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceBatchService,
     InvoiceReportsService,
     ActualVsBudgetService,
+    InventoryService,
     ActualVsBudgetGateway,
     MicrosoftAuthService,
     ExcelSyncService,

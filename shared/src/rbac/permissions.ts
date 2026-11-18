@@ -35,6 +35,8 @@ export const PERMISSION_KEYS = [
   'invoices:read',
   'invoices:manage',
   'payments:record',
+  'inventory:read',
+  'inventory:manage',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -268,6 +270,23 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
     ],
   },
   {
+    group: 'Inventory',
+    description: 'What the office stocks, where it is kept, and every movement of it.',
+    permissions: [
+      {
+        key: 'inventory:read',
+        label: 'View inventory',
+        description: 'Open the Inventory page: the items, what is on hand in each place, their cost, and every movement.',
+      },
+      {
+        key: 'inventory:manage',
+        label: 'Manage inventory',
+        description:
+          'Add and change items, places and vendors, enter an opening balance, and reverse a movement. Stock is never typed over: every change is a movement, kept with who made it.',
+      },
+    ],
+  },
+  {
     group: 'Reports & integrations',
     description: 'Sharing and external systems.',
     permissions: [
@@ -360,6 +379,8 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   // Money, sent to Jobber: a person at the screen, never a stored credential.
   'invoices:manage',
   'payments:record',
+  // Stock is money on a shelf: its movements are made by a person at the screen.
+  'inventory:manage',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);

@@ -25,6 +25,8 @@ export const JOBBER_SIDEBAR_SECTIONS: readonly (readonly string[])[] = [
   // the people in them, the visits asked to be booked again, the inspections
   // themselves, and what they were billed and paid.
   ['/properties', '/tenants', '/reschedules', '/inspections', '/invoices', '/payments', '/actual-vs-budget', '/lease-schedule'],
+  // What the office stocks (2026-11-19): a section of its own, which Purchasing joins.
+  ['/inventory'],
   // Jobber's tools beside the work: the quarter's plan and its groups, where
   // everybody is, and the hours it came to.
   ['/planning', '/group-maker', '/map', '/timesheet'],
