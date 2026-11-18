@@ -211,10 +211,10 @@ describe('the technician log', () => {
       '11/11/2026', '100 Example Way - Zone 2 - Q4 TBP Filter Change', '', '20988', 'Start', '20 mins', '78.99', '5:36 PM',
       '5:52 PM', '0h 16m', 'Yes', 'No', '', '78.99', '', '', '8737/INV-2993', '11/12/2026', '',
     ]);
-    // A visit's day and its Actual Time are not typed.
-    expect(within(first).getAllByRole('textbox')[0]).toHaveAttribute('readonly');
-    expect(within(first).getAllByRole('textbox')[9]).toHaveAttribute('readonly');
-    expect(within(first).getAllByRole('textbox')[2]).not.toHaveAttribute('readonly');
+    // A visit's day and its Actual Time are not typed. (Every cell is read-only until it is edited, as in Excel.)
+    expect(within(first).getAllByRole('textbox')[0]).toHaveAttribute('data-locked');
+    expect(within(first).getAllByRole('textbox')[9]).toHaveAttribute('data-locked');
+    expect(within(first).getAllByRole('textbox')[2]).not.toHaveAttribute('data-locked');
   });
 
   it("closes the day with the workbook's Total row", () => {
@@ -275,7 +275,7 @@ describe('the technician log', () => {
     render(<ActualVsBudgetPage />);
     expect(screen.queryByLabelText('New row, Address')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Money columns' })).not.toBeInTheDocument();
-    for (const cell of screen.getAllByRole('textbox')) expect(cell).toHaveAttribute('readonly');
+    for (const cell of document.querySelectorAll('[data-slot=sheet] textarea')) expect(cell).toHaveAttribute('data-locked');
   });
 });
 
@@ -364,8 +364,8 @@ describe('the weekly and monthly reports', () => {
     expect(screen.getByText(/PERIOD COVERED: Month of/)).toBeInTheDocument();
     const moses = within(rowOf('MOSES RODRIGUEZ')).getAllByRole('textbox');
     expect(moses.map((cell) => (cell as HTMLTextAreaElement).value)).toEqual(['MOSES RODRIGUEZ', '15,620.00', '18,677.36', '3,057.36', '119.57%', '']);
-    expect(moses[1]).toHaveAttribute('readonly');
-    expect(moses[5]).not.toHaveAttribute('readonly');
+    expect(moses[1]).toHaveAttribute('data-locked');
+    expect(moses[5]).not.toHaveAttribute('data-locked');
   });
 });
 
