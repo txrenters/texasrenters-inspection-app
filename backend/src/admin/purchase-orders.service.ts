@@ -152,6 +152,8 @@ const STEP: Record<string, string> = {
   VENDOR_BILL_APPROVED: 'approved the bill for payment',
   VENDOR_BILL_APPROVED_DESPITE_MISMATCH: 'approved the bill although it does not match',
   VENDOR_BILL_PAID: 'recorded the payment',
+  VENDOR_BILL_SENT_TO_XERO: 'sent the bill to Xero as a draft',
+  VENDOR_BILL_PAYMENT_SENT_TO_XERO: 'sent the payment to Xero',
   PURCHASE_ORDER_CLOSED: 'closed it: received and paid',
 };
 

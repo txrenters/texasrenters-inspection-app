@@ -19,6 +19,7 @@ import { useState, type FormEvent } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { BillInXeroSection } from '@/components/purchasing/bill-in-xero';
 import { BillSection, ReceivingSection } from '@/components/purchasing/order-receiving';
 import { PurchaseOrderStatusBadge, PurchaseOrderSteps } from '@/components/purchasing/requisition-parts';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
@@ -429,6 +430,7 @@ function OrderView({ data }: { data: PurchaseOrderDetail }) {
           <>
             <ReceivingSection data={data} />
             <BillSection data={data} />
+            <BillInXeroSection data={data} />
           </>
         )}
       </div>
