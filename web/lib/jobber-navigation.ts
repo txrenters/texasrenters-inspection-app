@@ -35,6 +35,8 @@ export const JOBBER_SIDEBAR_SECTIONS: readonly (readonly string[])[] = [
     '/actual-vs-budget',
     '/lease-schedule',
   ],
+  // What the office stocks, and the requisitions that ask for more of it (2026-11-19).
+  ['/inventory', '/purchasing'],
   // Jobber's tools beside the work: the quarter's plan and its groups, where
   // everybody is, and the hours it came to.
   ['/planning', '/group-maker', '/map', '/timesheet'],

@@ -36,6 +36,7 @@ describe('admin navigation', () => {
       'Planning',
       'Portfolio',
       'Billing',
+      'Stock',
       'Admin',
       'IT tools',
       'Integrations',
