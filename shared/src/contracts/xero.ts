@@ -255,6 +255,10 @@ export const XERO_PROJECT_KIND: Record<InspectionType, string> = {
   SUPRA_LOCKBOX_PLACEMENT: 'Supra Lockbox Placement',
   SUPRA_LOCKBOX_REMOVAL: 'Supra Lockbox Removal',
   AC_FILTER_DELIVERY: 'AC Filter Delivery',
+  // The two visit types a work order from the maintenance app files as
+  // (2026-11-12), named as the office names the work.
+  MAINTENANCE: 'Maintenance Visit',
+  PEST_CONTROL: 'Pest Control Visit',
 };
 
 /** A project's name in Xero: what the console's names come to, and the most the office may type. */
