@@ -309,7 +309,7 @@ function SlipForm() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NONE}>No visit (van restock or office use)</SelectItem>
+                <SelectItem value={NONE}>No visit (truck restock or office use)</SelectItem>
                 {data.visits.map((visit) => (
                   <SelectItem key={visit.id} value={visit.id}>
                     {visit.address ? `${visit.title}, ${visit.address}` : visit.title}

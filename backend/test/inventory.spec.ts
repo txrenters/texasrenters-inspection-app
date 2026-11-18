@@ -146,6 +146,12 @@ function database() {
       findMany: jest.fn(async ({ where }: { where: Row }) => levels(where)),
       findUnique: jest.fn(async ({ where }: { where: { itemId_placeId: Row } }) => levels(where.itemId_placeId)[0] ?? null),
       aggregate: jest.fn(async ({ where }: { where: Row }) => ({ _sum: { quantity: levels(where).reduce((sum, level) => sum + (level.quantity as number), 0) } })),
+      // How many different items each place has any of.
+      groupBy: jest.fn(async ({ where }: { where: Row }) => {
+        const held = new Map<unknown, number>();
+        for (const level of levels({ organizationId: where.organizationId })) if ((level.quantity as number) > 0) held.set(level.placeId, (held.get(level.placeId) ?? 0) + 1);
+        return [...held].map(([placeId, all]) => ({ placeId, _count: { _all: all } }));
+      }),
     },
     xeroOrganisation: {
       findMany: jest.fn(async () => [{ xeroTenantId: THMP, name: 'THMP', status: 'CONNECTED' }]),
@@ -453,8 +459,31 @@ describe('places and vendors', () => {
     await service.createPlace(office, { name: 'Back room', kind: 'STOCKROOM', technicianId: TECH });
     expect(places.at(-1)).toMatchObject({ name: 'Back room', technicianId: null });
 
-    await service.updatePlace(office, VAN, { kind: 'STOCKROOM' });
-    expect(places.find((place) => place.id === VAN)).toMatchObject({ kind: 'STOCKROOM', technicianId: null });
+    // A truck with nobody named on it: any technician may use it.
+    await service.updatePlace(office, VAN, { technicianId: null });
+    expect(places.find((place) => place.id === VAN)).toMatchObject({ kind: 'VAN', technicianId: null });
+    await expect(service.updatePlace(office, VAN, { technicianId: STRANGER })).rejects.toMatchObject({ code: 'STOCK_TECHNICIAN_NOT_FOUND' });
+  });
+
+  it('keep their kind once made: a truck does not become a storeroom', async () => {
+    const { service, places } = database();
+    await expect(service.updatePlace(office, VAN, { kind: 'STOCKROOM' })).rejects.toMatchObject({ status: 409, code: 'STOCK_PLACE_KIND_FIXED', message: 'Van 1 keeps its kind. Make another place instead.' });
+    expect(places.find((place) => place.id === VAN)).toMatchObject({ kind: 'VAN' });
+    // Its own kind sent back with the rest of the form is no change.
+    await expect(service.updatePlace(office, VAN, { kind: 'VAN', name: 'Truck 1' })).resolves.toBeDefined();
+    expect(places.find((place) => place.id === VAN)).toMatchObject({ name: 'Truck 1', kind: 'VAN' });
+  });
+
+  it('say how many different items each place has any of', async () => {
+    const { service } = database();
+    await service.enterOpeningBalance(office, FILTER, opening());
+    await service.enterOpeningBalance(office, FILTER, opening({ placeId: VAN, quantity: 5, unitCostCents: 360, requestKey: id(91) }));
+    await service.enterOpeningBalance(office, BATTERY, opening({ quantity: 3, unitCostCents: 185, requestKey: id(92) }));
+    const held = Object.fromEntries((await service.places(office)).places.map((place) => [place.id, place.itemsHeld]));
+    expect(held[STOCKROOM]).toBe(2);
+    expect(held[VAN]).toBe(1);
+    // The Stock tab's own read says the same, from the levels it already has.
+    expect((await service.stock(office)).places.find((place) => place.id === STOCKROOM)).toMatchObject({ itemsHeld: 2 });
   });
 
   it('keep a place on while it holds stock', async () => {

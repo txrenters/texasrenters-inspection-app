@@ -296,7 +296,7 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
       {
         key: 'inventory:withdraw',
         label: 'Record withdrawals',
-        description: 'Record what a technician took for a visit or a van, what came back, and stock moved between places; and reverse one that was wrong. With "View inventory".',
+        description: 'Record what a technician took for a visit or a truck, what came back, and stock moved between places; and reverse one that was wrong. With "View inventory".',
       },
       {
         key: 'inventory:count',
