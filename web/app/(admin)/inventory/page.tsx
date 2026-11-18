@@ -1,12 +1,14 @@
 'use client';
 
-import { formatMoney, stockSummary, type StockItemRow, type StockPlaceRow, type VendorRow } from '@texasrenters/shared';
-import { BoxesIcon, PencilIcon, TruckIcon, WarehouseIcon } from 'lucide-react';
+import { formatMoney, stockSummary, type StockCategoryRow, type StockItemRow, type StockPlaceRow, type VendorRow } from '@texasrenters/shared';
+import { BoxesIcon, PencilIcon, TagsIcon, TruckIcon, WarehouseIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
-import { ItemDialog, PlaceDialog, VendorDialog } from '@/components/inventory/inventory-dialogs';
+import { CountsTab } from '@/components/inventory/counts-tab';
+import { CategoryDialog, ItemDialog, PlaceDialog, VendorDialog } from '@/components/inventory/inventory-dialogs';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
+import { WithdrawalsTab } from '@/components/inventory/withdrawals-tab';
 import { PageHeader } from '@/components/page-header';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -24,7 +26,10 @@ import { useUrlState } from '@/lib/url-state';
  * Inventory (2026-11-19, phase 1 of the inventory and purchasing plan): what
  * the office stocks and what is on hand, the places it is kept, and the
  * vendors. On hand is added up from the item's movements and is never typed
- * here; an item's page enters its opening balance.
+ * here; an item's page enters its opening balance. An item's code is given by
+ * the console from its category (2026-11-19), so nobody types one. The
+ * Withdrawals tab records what leaves, comes back and moves (phase 5), and
+ * the Counts tab the monthly, quarterly and yearly counts (phase 6).
  *
  * The item list is one read of every item -- tens to a few hundred -- so the
  * filters and the search work on the rows in hand and ask for nothing more.
@@ -34,20 +39,26 @@ const ALL = 'all';
 type Editing<Row> = { row?: Row } | null;
 
 export default function InventoryPage() {
-  const canManage = usePermissions().has('inventory:manage');
+  const permissions = usePermissions();
+  const canManage = permissions.has('inventory:manage');
+  const canWithdraw = permissions.has('inventory:withdraw');
+  const canCount = permissions.has('inventory:count');
   const [state, setState] = useUrlState({ tab: 'stock', company: ALL, show: 'in-use', q: '' });
   const [item, setItem] = useState(false);
   const [place, setPlace] = useState<Editing<StockPlaceRow>>(null);
   const [vendor, setVendor] = useState<Editing<VendorRow>>(null);
+  const [category, setCategory] = useState<Editing<StockCategoryRow>>(null);
   const stock = useStock();
   const edits = useInventoryEdits();
 
   const add =
-    state.tab === 'places' ? (
+    state.tab === 'categories' ? (
+      <Button onClick={() => setCategory({})}>New category</Button>
+    ) : state.tab === 'places' ? (
       <Button onClick={() => setPlace({})}>New place</Button>
     ) : state.tab === 'vendors' ? (
       <Button onClick={() => setVendor({})}>New vendor</Button>
-    ) : (
+    ) : state.tab === 'withdrawals' || state.tab === 'counts' ? undefined : (
       <Button onClick={() => setItem(true)}>New item</Button>
     );
 
@@ -69,6 +80,9 @@ export default function InventoryPage() {
       <Tabs onValueChange={(tab) => setState({ tab })} value={state.tab}>
         <TabsList>
           <TabsTrigger value="stock">Stock</TabsTrigger>
+          <TabsTrigger value="withdrawals">Withdrawals</TabsTrigger>
+          <TabsTrigger value="counts">Counts</TabsTrigger>
+          <TabsTrigger value="categories">Categories</TabsTrigger>
           <TabsTrigger value="places">Places</TabsTrigger>
           <TabsTrigger value="vendors">Vendors</TabsTrigger>
         </TabsList>
@@ -82,6 +96,33 @@ export default function InventoryPage() {
             <StockTab canManage={canManage} items={stock.data.items} onAdd={() => setItem(true)} companies={stock.data.companies} setState={setState} state={state} />
           )}
         </TabsContent>
+        <TabsContent value="withdrawals">
+          <WithdrawalsTab canWithdraw={canWithdraw} />
+        </TabsContent>
+        <TabsContent value="counts">
+          <CountsTab canCount={canCount} />
+        </TabsContent>
+        <TabsContent value="categories">
+          {stock.isError ? (
+            <ErrorState error={stock.error} retry={() => void stock.refetch()} />
+          ) : !stock.data ? (
+            <DataTableSkeleton columns={CATEGORY_COLUMNS} label="Loading categories" rows={3} />
+          ) : !stock.data.categories.length ? (
+            <EmptyState
+              description={canManage ? 'Add a category for each kind of stock, with the prefix its codes start with. Items are then numbered by the console.' : 'No category has been added yet.'}
+              icon={TagsIcon}
+              title="No categories yet"
+            />
+          ) : (
+            <DataTable
+              actions={canManage ? (row) => <EditButton label={`Edit ${row.name}`} onClick={() => setCategory({ row })} /> : undefined}
+              columns={CATEGORY_COLUMNS}
+              label="Categories and their codes"
+              rowKey={(row) => row.id}
+              rows={stock.data.categories}
+            />
+          )}
+        </TabsContent>
         <TabsContent value="places">
           <PlacesTab canManage={canManage} enabled={state.tab === 'places'} onEdit={(row) => setPlace({ row })} />
         </TabsContent>
@@ -92,6 +133,7 @@ export default function InventoryPage() {
 
       {item && stock.data ? (
         <ItemDialog
+          categories={stock.data.categories}
           companies={stock.data.companies}
           error={edits.createItem.error}
           onClose={() => {
@@ -101,6 +143,19 @@ export default function InventoryPage() {
           onSave={(input) => edits.createItem.mutateAsync(input)}
           pending={edits.createItem.isPending}
           vendors={stock.data.vendors}
+        />
+      ) : null}
+      {category ? (
+        <CategoryDialog
+          category={category.row}
+          error={(category.row ? edits.updateCategory : edits.createCategory).error}
+          onClose={() => {
+            setCategory(null);
+            edits.updateCategory.reset();
+            edits.createCategory.reset();
+          }}
+          onSave={(input) => (category.row ? edits.updateCategory.mutateAsync({ categoryId: category.row.id, input }) : edits.createCategory.mutateAsync(input))}
+          pending={edits.updateCategory.isPending || edits.createCategory.isPending}
         />
       ) : null}
       {place ? <PlaceEditor editing={place} onClose={() => setPlace(null)} /> : null}
@@ -132,7 +187,7 @@ const STOCK_COLUMNS: Array<Column<StockItemRow>> = [
     cell: (row) => (
       <span className="grid gap-0.5">
         <span className="font-medium">{row.name}</span>
-        <span className="text-muted-foreground text-xs">{row.category ? `${row.category} · ${row.unit}` : row.unit}</span>
+        <span className="text-muted-foreground text-xs">{row.category ? `${row.category.name} · ${row.unit}` : row.unit}</span>
       </span>
     ),
   },
@@ -184,7 +239,7 @@ function StockTab({
     (row) =>
       shown.keeps(row) &&
       (state.company === ALL || row.company?.tenantId === state.company) &&
-      (!words || `${row.code} ${row.name} ${row.category ?? ''}`.toLowerCase().includes(words)),
+      (!words || `${row.code} ${row.name} ${row.category?.name ?? ''}`.toLowerCase().includes(words)),
   );
 
   return (
@@ -246,6 +301,16 @@ function StockTab({
     </div>
   );
 }
+
+// ── Categories ────────────────────────────────────────────────────────────
+
+const CATEGORY_COLUMNS: Array<Column<StockCategoryRow>> = [
+  { key: 'name', header: 'Category', primary: true, cell: (row) => <span className="font-medium">{row.name}</span> },
+  { key: 'prefix', header: 'Prefix', cell: (row) => row.prefix },
+  { key: 'next', header: 'Next code', cell: (row) => row.nextCode },
+  { key: 'items', header: 'Items', numeric: true, cell: (row) => formatCount(row.itemCount) },
+  { key: 'status', header: 'Status', cell: (row) => <InUseBadge active={row.active} /> },
+];
 
 // ── Places ────────────────────────────────────────────────────────────────
 

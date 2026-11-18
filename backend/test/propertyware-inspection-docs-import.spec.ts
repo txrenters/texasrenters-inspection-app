@@ -140,6 +140,25 @@ describe('importing a catalogued document', () => {
     expect(where.scheduledAt.lte.toISOString()).toContain('2026-09-11');
   });
 
+  it('matches on the day the photographs were taken when the report was produced later', async () => {
+    // The header is when the report was finished; the walk can be weeks
+    // before it, and the visit it belongs to is scheduled on the walk.
+    const { service, prisma } = build();
+    const before = parsed.areas[0]!.photos;
+    parsed.areas[0]!.photos = [
+      { caption: null, matchedLabel: null, takenAt: 'Jul 20 2026 09:14:02 AM', page: 1, index: 0 },
+    ] as never[];
+    try {
+      await service.importPending({ organizationId: ORG, actor });
+    } finally {
+      parsed.areas[0]!.photos = before;
+    }
+
+    const where = prisma.inspection.findFirst.mock.calls[0][0].where;
+    expect(where.scheduledAt.gte.toISOString()).toContain('2026-07-06');
+    expect(where.scheduledAt.lte.toISOString()).toContain('2026-08-03');
+  });
+
   it('creates a completed inspection that is not finalized', async () => {
     /**
      * Two decisions, both deliberate.

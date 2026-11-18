@@ -6,6 +6,7 @@ import {
   STOCK_PLACE_KINDS,
   type OpeningBalanceInput,
   type ReverseMovementInput,
+  type SaveStockCategoryInput,
   type SaveStockItemInput,
   type SaveStockPlaceInput,
   type SaveVendorInput,
@@ -25,14 +26,20 @@ const SET = (_: object, value: unknown) => value !== null && value !== undefined
  * refuses any field it does not know (inventory.spec.ts runs the pipe).
  */
 export class SaveStockItemDto implements Required<SaveStockItemInput> {
-  @IsOptional() @IsString() @MinLength(1) @MaxLength(40) code!: string;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(160) name!: string;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(30) unit!: string;
-  @ValidateIf(SET) @IsString() @MaxLength(60) category!: string | null;
+  @IsOptional() @IsUUID() categoryId!: string;
   @ValidateIf(SET) @IsString() @MaxLength(80) xeroTenantId!: string | null;
   @IsOptional() @IsInt() @Min(0) @Max(MOST_STOCK_QUANTITY) reorderLevel!: number;
   @IsOptional() @IsInt() @Min(0) @Max(MOST_STOCK_QUANTITY) reorderQuantity!: number;
   @ValidateIf(SET) @IsUUID() usualVendorId!: string | null;
+  @IsOptional() @IsBoolean() active!: boolean;
+}
+
+/** The prefix in either case; the service stores it upper case and the database checks its shape. */
+export class SaveStockCategoryDto implements Required<SaveStockCategoryInput> {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(60) name!: string;
+  @IsOptional() @Matches(/^[A-Za-z][A-Za-z0-9]{1,5}$/) prefix!: string;
   @IsOptional() @IsBoolean() active!: boolean;
 }
 
@@ -112,6 +119,18 @@ export class InventoryController {
   @RequirePermissions('inventory:manage')
   reverseMovement(@Req() request: AuthenticatedRequest, @Param('movementId', ParseUUIDPipe) movementId: string, @Body() body: ReverseMovementDto) {
     return this.inventory.reverseMovement(request.user, movementId, body);
+  }
+
+  @Post('categories')
+  @RequirePermissions('inventory:manage')
+  createCategory(@Req() request: AuthenticatedRequest, @Body() body: SaveStockCategoryDto) {
+    return this.inventory.createCategory(request.user, body);
+  }
+
+  @Patch('categories/:categoryId')
+  @RequirePermissions('inventory:manage')
+  updateCategory(@Req() request: AuthenticatedRequest, @Param('categoryId', ParseUUIDPipe) categoryId: string, @Body() body: SaveStockCategoryDto) {
+    return this.inventory.updateCategory(request.user, categoryId, body);
   }
 
   @Get('places')

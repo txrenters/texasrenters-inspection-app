@@ -2,11 +2,14 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, StockMovementKind, StockPlaceKind, UserRole } from '@prisma/client';
 import {
   STOCK_MOVEMENTS_SHOWN,
+  STOCK_PREFIX,
   averageCostCents,
+  stockCode,
   stockKey,
   stockStatus,
   type OpeningBalanceInput,
   type ReverseMovementInput,
+  type SaveStockCategoryInput,
   type SaveStockItemInput,
   type SaveStockPlaceInput,
   type SaveVendorInput,
@@ -24,6 +27,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { assertStockNotFrozen } from './stock-freeze';
 
 /**
  * Inventory (2026-11-19, phase 1 of the inventory and purchasing plan): the
@@ -53,7 +57,7 @@ const ITEM_SELECT = {
   code: true,
   name: true,
   unit: true,
-  category: true,
+  category: { select: { id: true, name: true } },
   xeroTenantId: true,
   reorderLevel: true,
   reorderQuantity: true,
@@ -100,6 +104,8 @@ function itemRow(item: ItemRecord, levels: readonly Level[], kinds: ReadonlyMap<
     valueCents += level.valueCents;
   }
   const onHand = inStockrooms + inVans;
+  // Stock leaves at a rounded average, which can leave a cent or two behind once the last unit has gone.
+  if (onHand <= 0) valueCents = 0;
   const company: StockCompany | null = item.xeroTenantId ? { tenantId: item.xeroTenantId, name: companies.get(item.xeroTenantId) ?? 'A company' } : null;
   return {
     id: item.id,
@@ -126,15 +132,20 @@ export class InventoryService {
 
   // ── Items ───────────────────────────────────────────────────────────────
 
-  /** Every item with what is on hand: five reads, whatever the number of items. */
+  /** Every item with what is on hand: six reads, whatever the number of items. */
   async stock(user: AuthenticatedUser): Promise<StockList> {
     const organizationId = user.organizationId;
-    const [items, levels, places, organisations, vendors] = await Promise.all([
+    const [items, levels, places, organisations, vendors, categories] = await Promise.all([
       this.prisma.stockItem.findMany({ where: { organizationId }, select: ITEM_SELECT, orderBy: [{ active: 'desc' }, { codeKey: 'asc' }] }),
       this.prisma.stockLevel.findMany({ where: { organizationId }, select: { itemId: true, placeId: true, quantity: true, valueCents: true } }),
       this.prisma.stockPlace.findMany({ where: { organizationId }, select: PLACE_SELECT, orderBy: [{ active: 'desc' }, { kind: 'asc' }, { nameKey: 'asc' }] }),
       this.prisma.xeroOrganisation.findMany({ where: { organizationId }, select: { xeroTenantId: true, name: true, status: true }, orderBy: { name: 'asc' } }),
       this.prisma.vendor.findMany({ where: { organizationId, active: true }, select: { id: true, name: true }, orderBy: { nameKey: 'asc' } }),
+      this.prisma.stockCategory.findMany({
+        where: { organizationId },
+        select: { id: true, name: true, prefix: true, nextNumber: true, active: true, _count: { select: { items: true } } },
+        orderBy: [{ active: 'desc' }, { nameKey: 'asc' }],
+      }),
     ]);
     const kinds = new Map(places.map((place) => [place.id, place.kind]));
     const names = new Map(organisations.map((row) => [row.xeroTenantId, row.name]));
@@ -145,6 +156,14 @@ export class InventoryService {
       places: places.map(placeRow),
       companies: organisations.filter((row) => row.status === 'CONNECTED').map((row) => ({ tenantId: row.xeroTenantId, name: row.name })),
       vendors,
+      categories: categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+        prefix: category.prefix,
+        nextCode: stockCode(category.prefix, category.nextNumber),
+        itemCount: category._count.items,
+        active: category.active,
+      })),
     };
   }
 
@@ -220,12 +239,15 @@ export class InventoryService {
 
   async createItem(user: AuthenticatedUser, input: SaveStockItemInput): Promise<StockItemDetail> {
     const organizationId = user.organizationId;
-    const code = text(input.code);
     const name = text(input.name);
-    if (!code || !name) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a code and a name.');
+    const categoryId = input.categoryId;
+    if (!name || !categoryId) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a name and a category. The category gives it its code.');
     await this.itemChoicesAreOurs(organizationId, input);
     try {
       const created = await this.prisma.$transaction(async (tx) => {
+        const category = await tx.stockCategory.findFirst({ where: { id: categoryId, organizationId, active: true }, select: { prefix: true } });
+        if (!category) throw new ApplicationError(400, 'STOCK_CATEGORY_NOT_FOUND', 'That category is not in use.');
+        const code = await this.nextCode(tx, organizationId, categoryId, category.prefix);
         const item = await tx.stockItem.create({
           data: {
             organizationId,
@@ -233,7 +255,7 @@ export class InventoryService {
             codeKey: stockKey(code),
             name,
             unit: text(input.unit) ?? 'each',
-            category: text(input.category),
+            categoryId,
             xeroTenantId: input.xeroTenantId ?? null,
             reorderLevel: input.reorderLevel ?? 0,
             reorderQuantity: input.reorderQuantity ?? 0,
@@ -248,56 +270,137 @@ export class InventoryService {
       });
       return this.item(user, created.id);
     } catch (error) {
-      if (taken(error)) throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', `Another item already has the code ${code}.`);
+      // The category's lock gives each item its own number, so this is only somebody's typed code from before; adding again takes the next.
+      if (taken(error)) throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', 'That code was just taken. Add the item again.');
       throw error;
     }
+  }
+
+  /**
+   * The category's next code, taken under its row's lock: two items added at
+   * once never share a number. A code somebody typed before the console gave
+   * them is stepped over.
+   */
+  private async nextCode(db: Prisma.TransactionClient, organizationId: string, categoryId: string, prefix: string): Promise<string> {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const [row] = await db.$queryRaw<{ taken: number }[]>`
+        UPDATE "StockCategory" SET "nextNumber" = "nextNumber" + 1
+         WHERE "id" = ${categoryId}::uuid AND "organizationId" = ${organizationId}::uuid
+        RETURNING "nextNumber" - 1 AS taken`;
+      const code = stockCode(prefix, Number(row!.taken));
+      if (!(await db.stockItem.findFirst({ where: { organizationId, codeKey: stockKey(code) }, select: { id: true } }))) return code;
+    }
+    throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', 'No free code was found for that category. Give it another prefix.');
   }
 
   async updateItem(user: AuthenticatedUser, itemId: string, input: SaveStockItemInput): Promise<StockItemDetail> {
     const organizationId = user.organizationId;
     await this.itemChoicesAreOurs(organizationId, input);
     const data: Prisma.StockItemUncheckedUpdateInput = {};
-    if (sent(input, 'code')) {
-      const code = text(input.code);
-      if (!code) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a code.');
-      data.code = code;
-      data.codeKey = stockKey(code);
-    }
     if (sent(input, 'name')) {
       const name = text(input.name);
       if (!name) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a name.');
       data.name = name;
     }
     if (sent(input, 'unit')) data.unit = text(input.unit) ?? 'each';
-    if (sent(input, 'category')) data.category = text(input.category);
     if (sent(input, 'xeroTenantId')) data.xeroTenantId = input.xeroTenantId ?? null;
     if (sent(input, 'reorderLevel')) data.reorderLevel = input.reorderLevel;
     if (sent(input, 'reorderQuantity')) data.reorderQuantity = input.reorderQuantity;
     if (sent(input, 'usualVendorId')) data.usualVendorId = input.usualVendorId ?? null;
     if (sent(input, 'active')) data.active = input.active;
+    await this.prisma.$transaction(async (tx) => {
+      const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { id: true, code: true, xeroTenantId: true, active: true, categoryId: true } });
+      if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory.');
+      // Its code came from its category, so the category stays. An item from before categories may be given one; its code stays as it is.
+      if (sent(input, 'categoryId') && input.categoryId !== item.categoryId) {
+        if (item.categoryId) throw new ApplicationError(409, 'STOCK_ITEM_CATEGORY_FIXED', `${item.code} got its code from its category, so the category cannot be changed.`);
+        if (!(await tx.stockCategory.findFirst({ where: { id: input.categoryId, organizationId }, select: { id: true } })))
+          throw new ApplicationError(400, 'STOCK_CATEGORY_NOT_FOUND', 'That category is not on the list.');
+        data.categoryId = input.categoryId;
+      }
+      // Its stock is already in one company's books: moving the item would move the value with no entry for it.
+      if (sent(input, 'xeroTenantId') && (input.xeroTenantId ?? null) !== item.xeroTenantId && (await tx.stockMovement.count({ where: { organizationId, itemId } })) > 0)
+        throw new ApplicationError(409, 'STOCK_ITEM_COMPANY_FIXED', 'This item already has stock movements, so its company cannot be changed.');
+      if (input.active === false && item.active) {
+        const held = await tx.stockLevel.aggregate({ where: { organizationId, itemId }, _sum: { quantity: true } });
+        const onHand = held._sum.quantity ?? 0;
+        if (onHand > 0) throw new ApplicationError(409, 'STOCK_ITEM_HAS_STOCK', `This item still has ${onHand} on hand. It can be switched off once that is gone.`);
+      }
+      if (!Object.keys(data).length) return;
+      await tx.stockItem.update({ where: { id: itemId }, data });
+      await tx.auditLog.create({
+        data: { organizationId, ...auditActor(user), action: 'STOCK_ITEM_CHANGED', entityType: 'StockItem', entityId: itemId, metadata: { code: item.code, changed: Object.keys(data) } },
+      });
+    });
+    return this.item(user, itemId);
+  }
+
+  // ── Categories ──────────────────────────────────────────────────────────
+
+  /** A kind of stock and the prefix its items' codes start with. */
+  async createCategory(user: AuthenticatedUser, input: SaveStockCategoryInput): Promise<StockList> {
+    const organizationId = user.organizationId;
+    const name = text(input.name);
+    const prefix = input.prefix?.trim().toUpperCase() ?? '';
+    if (!name) throw new ApplicationError(400, 'STOCK_CATEGORY_INCOMPLETE', 'A category needs a name.');
+    if (!STOCK_PREFIX.test(prefix)) throw new ApplicationError(400, 'STOCK_PREFIX_SHAPE', 'A prefix is a letter and then one to five letters or digits, like FLT.');
+    await this.categoryIsFree(organizationId, null, name, prefix);
     try {
       await this.prisma.$transaction(async (tx) => {
-        const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { id: true, code: true, xeroTenantId: true, active: true } });
-        if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory.');
-        // Its stock is already in one company's books: moving the item would move the value with no entry for it.
-        if (sent(input, 'xeroTenantId') && (input.xeroTenantId ?? null) !== item.xeroTenantId && (await tx.stockMovement.count({ where: { organizationId, itemId } })) > 0)
-          throw new ApplicationError(409, 'STOCK_ITEM_COMPANY_FIXED', 'This item already has stock movements, so its company cannot be changed.');
-        if (input.active === false && item.active) {
-          const held = await tx.stockLevel.aggregate({ where: { organizationId, itemId }, _sum: { quantity: true } });
-          const onHand = held._sum.quantity ?? 0;
-          if (onHand > 0) throw new ApplicationError(409, 'STOCK_ITEM_HAS_STOCK', `This item still has ${onHand} on hand. It can be switched off once that is gone.`);
-        }
-        if (!Object.keys(data).length) return;
-        await tx.stockItem.update({ where: { id: itemId }, data });
+        const category = await tx.stockCategory.create({ data: { organizationId, name, nameKey: stockKey(name), prefix }, select: { id: true } });
         await tx.auditLog.create({
-          data: { organizationId, ...auditActor(user), action: 'STOCK_ITEM_CHANGED', entityType: 'StockItem', entityId: itemId, metadata: { code: item.code, changed: Object.keys(data) } },
+          data: { organizationId, ...auditActor(user), action: 'STOCK_CATEGORY_CREATED', entityType: 'StockCategory', entityId: category.id, metadata: { name, prefix } },
         });
       });
     } catch (error) {
-      if (taken(error)) throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', 'Another item already has that code.');
+      if (taken(error)) throw new ApplicationError(409, 'STOCK_CATEGORY_TAKEN', 'Another category already has that name or prefix.');
       throw error;
     }
-    return this.item(user, itemId);
+    return this.stock(user);
+  }
+
+  async updateCategory(user: AuthenticatedUser, categoryId: string, input: SaveStockCategoryInput): Promise<StockList> {
+    const organizationId = user.organizationId;
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const category = await tx.stockCategory.findFirst({ where: { id: categoryId, organizationId }, select: { name: true, prefix: true, nextNumber: true } });
+        if (!category) throw new ApplicationError(404, 'STOCK_CATEGORY_NOT_FOUND', 'That category is not on the list.');
+        const data: Prisma.StockCategoryUncheckedUpdateInput = {};
+        if (sent(input, 'name')) {
+          const name = text(input.name);
+          if (!name) throw new ApplicationError(400, 'STOCK_CATEGORY_INCOMPLETE', 'A category needs a name.');
+          data.name = name;
+          data.nameKey = stockKey(name);
+        }
+        if (sent(input, 'prefix')) {
+          const prefix = input.prefix?.trim().toUpperCase() ?? '';
+          if (!STOCK_PREFIX.test(prefix)) throw new ApplicationError(400, 'STOCK_PREFIX_SHAPE', 'A prefix is a letter and then one to five letters or digits, like FLT.');
+          if (prefix !== category.prefix) {
+            // Codes already given keep the prefix they were given with: changing it now would leave one category with two.
+            if (category.nextNumber > 1) throw new ApplicationError(409, 'STOCK_PREFIX_FIXED', `${category.name} has already given out codes starting ${category.prefix}, so its prefix stays.`);
+            data.prefix = prefix;
+          }
+        }
+        if (sent(input, 'active')) data.active = input.active;
+        if (!Object.keys(data).length) return;
+        await this.categoryIsFree(organizationId, categoryId, typeof data.name === 'string' ? data.name : null, typeof data.prefix === 'string' ? data.prefix : null);
+        await tx.stockCategory.update({ where: { id: categoryId }, data });
+        await tx.auditLog.create({
+          data: { organizationId, ...auditActor(user), action: 'STOCK_CATEGORY_CHANGED', entityType: 'StockCategory', entityId: categoryId, metadata: { name: category.name, changed: Object.keys(data) } },
+        });
+      });
+    } catch (error) {
+      if (taken(error)) throw new ApplicationError(409, 'STOCK_CATEGORY_TAKEN', 'Another category already has that name or prefix.');
+      throw error;
+    }
+    return this.stock(user);
+  }
+
+  /** Says which is taken, the name or the prefix. The database's two unique indexes hold both whatever this finds. */
+  private async categoryIsFree(organizationId: string, exceptId: string | null, name: string | null, prefix: string | null) {
+    const others = await this.prisma.stockCategory.findMany({ where: { organizationId, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { nameKey: true, prefix: true } });
+    if (name && others.some((other) => other.nameKey === stockKey(name))) throw new ApplicationError(409, 'STOCK_CATEGORY_TAKEN', `There is already a category called ${name}.`);
+    if (prefix && others.some((other) => other.prefix === prefix)) throw new ApplicationError(409, 'STOCK_CATEGORY_TAKEN', `Another category already uses the prefix ${prefix}.`);
   }
 
   /** The company and the vendor an item names are this office's own. The database refuses any other too; this says so plainly. */
@@ -327,6 +430,7 @@ export class InventoryService {
           if (already.itemId !== itemId) throw new ApplicationError(409, 'STOCK_REQUEST_REUSED', 'That entry was already made for another item.');
           return;
         }
+        await assertStockNotFrozen(tx, organizationId);
         const [item, place] = await Promise.all([
           tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { code: true, active: true } }),
           tx.stockPlace.findFirst({ where: { id: input.placeId, organizationId }, select: { name: true, active: true } }),
@@ -396,8 +500,12 @@ export class InventoryService {
         });
         if (!movement) throw new ApplicationError(404, 'STOCK_MOVEMENT_NOT_FOUND', 'That movement is not in the ledger.');
         itemId = movement.itemId;
+        await assertStockNotFrozen(tx, organizationId);
         if (movement.kind === StockMovementKind.REVERSAL) throw new ApplicationError(409, 'STOCK_REVERSAL_OF_REVERSAL', 'A reversal cannot be reversed. Enter the movement again instead.');
         if (movement.reversedBy) throw new ApplicationError(409, 'STOCK_MOVEMENT_ALREADY_REVERSED', 'That movement has already been reversed.');
+        // A movement a document made is put right through its document, which keeps the two in step.
+        if (movement.kind !== StockMovementKind.OPENING_BALANCE)
+          throw new ApplicationError(409, 'STOCK_MOVEMENT_HAS_DOCUMENT', 'Goods received are reversed from their purchase order, with the receipt.');
         if (movement.quantity > 0) {
           const level = await tx.stockLevel.findUnique({ where: { itemId_placeId: { itemId: movement.itemId, placeId: movement.placeId } }, select: { quantity: true } });
           const there = level?.quantity ?? 0;

@@ -154,5 +154,11 @@
   "202611180002_actual_vs_budget_excel_log_tabs": "3fde73dddfabbbbd",
   "202611180003_actual_vs_budget_log_takeover": "cfb1533af0a5d16b",
   "202611180004_excel_formulas_keep_working": "e46bc6afa4a28c5d",
-  "202611190001_inventory_stock_ledger": "3b944d720f22d64f"
+  "202611190001_inventory_stock_ledger": "3b944d720f22d64f",
+  "202611190002_purchase_requisitions": "13b3e9bcf0511497",
+  "202611190003_item_codes_by_category": "843aff9b425df9eb",
+  "202611190004_purchase_orders": "ce7693b24490f4e8",
+  "202611190005_receiving_and_vendor_bills": "5250884b1f64dc12",
+  "202611190006_stock_withdrawals": "0bd1eda7071663a3",
+  "202611190007_stock_counts": "52cf8334e45a12dd"
 }

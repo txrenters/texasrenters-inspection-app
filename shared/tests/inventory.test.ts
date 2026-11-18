@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { averageCostCents, stockKey, stockStatus, stockSummary } from '../src/contracts/inventory';
+import { STOCK_PREFIX, averageCostCents, stockCode, stockKey, stockStatus, stockSummary } from '../src/contracts/inventory';
 
 // Inventory, phase 1 (2026-11-19). Every figure invented.
 describe('how much stock is enough', () => {
@@ -41,5 +41,18 @@ describe('the figures above the list', () => {
         { active: false, status: 'OUT', valueCents: 0 },
       ]),
     ).toEqual({ items: 3, lowOrOut: 2, valueCents: 7956 });
+  });
+});
+
+describe('an item code', () => {
+  it('is its category prefix and the next number, at least four digits', () => {
+    expect(stockCode('FLT', 1)).toBe('FLT-0001');
+    expect(stockCode('PST', 312)).toBe('PST-0312');
+    expect(stockCode('A1', 12345)).toBe('A1-12345');
+  });
+
+  it('starts with a letter and then one to five letters or digits, upper case', () => {
+    for (const prefix of ['FLT', 'PST', 'A1', 'ABCDEF']) expect(STOCK_PREFIX.test(prefix)).toBe(true);
+    for (const prefix of ['F', 'flt', '9AB', 'F-1', 'ABCDEFG', '']) expect(STOCK_PREFIX.test(prefix)).toBe(false);
   });
 });

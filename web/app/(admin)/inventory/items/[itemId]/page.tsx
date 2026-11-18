@@ -25,7 +25,7 @@ import { useInventoryEdits, useStock, useStockItem } from '@/lib/inventory-queri
  * was written.
  */
 
-const KIND_LABEL: Record<StockMovementRow['kind'], string> = { OPENING_BALANCE: 'Opening balance', REVERSAL: 'Reversal' };
+const KIND_LABEL: Record<StockMovementRow['kind'], string> = { OPENING_BALANCE: 'Opening balance', REVERSAL: 'Reversal', RECEIPT: 'Received', WITHDRAWAL: 'Taken out', RETURN: 'Brought back', TRANSFER: 'Moved', COUNT_ADJUSTMENT: 'Count adjustment' };
 
 const MOVEMENT_COLUMNS: Array<Column<StockMovementRow>> = [
   { key: 'day', header: 'Day', cell: (row) => formatDay(row.day), className: 'whitespace-nowrap' },
@@ -111,7 +111,7 @@ export default function StockItemPage() {
               { label: 'Reorder at or below', value: item.reorderLevel ? formatCount(item.reorderLevel) : EMPTY },
               { label: 'Usual order quantity', value: item.reorderQuantity ? formatCount(item.reorderQuantity) : EMPTY },
               { label: 'Usual vendor', value: item.usualVendor?.name ?? EMPTY },
-              { label: 'Category', value: item.category ?? EMPTY },
+              { label: 'Category', value: item.category?.name ?? EMPTY },
             ]}
             label="Reordering"
           />
@@ -140,7 +140,8 @@ export default function StockItemPage() {
             actions={
               canManage
                 ? (row) =>
-                    row.kind !== 'REVERSAL' && !row.reversedById ? (
+                    // Goods received are reversed from their purchase order, with the receipt.
+                    row.kind === 'OPENING_BALANCE' && !row.reversedById ? (
                       <Button aria-label={`Reverse the ${KIND_LABEL[row.kind].toLowerCase()} of ${formatDay(row.day)} in ${row.placeName}`} onClick={() => setReversing(row)} size="sm" variant="outline">
                         Reverse
                       </Button>
@@ -163,6 +164,7 @@ export default function StockItemPage() {
 
       {editing && choices ? (
         <ItemDialog
+          categories={choices.categories}
           companies={choices.companies}
           companyFixed={movementsTotal > 0}
           error={edits.updateItem.error}
