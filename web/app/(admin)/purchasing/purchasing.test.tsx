@@ -23,6 +23,13 @@ const hooks = vi.hoisted(() => ({
   usePurchaseReceivingEdits: vi.fn(),
 }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
+// The bill's Xero card and the bills panel have their own tests (bill-in-xero.test.tsx): here they read nothing.
+vi.mock('@/lib/vendor-bills-xero-queries', () => ({
+  useBillInXero: () => ({ isError: false, data: undefined }),
+  useBillInXeroActions: () => ({ send: { mutate: vi.fn(), isPending: false, error: null }, sendPayment: { mutate: vi.fn(), isPending: false, error: null } }),
+  useXeroBillSettings: () => ({ isError: false, data: undefined }),
+  useSaveXeroBillSettings: () => ({ mutate: vi.fn(), isPending: false, isSuccess: false, error: null }),
+}));
 const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', status: 'all', q: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));

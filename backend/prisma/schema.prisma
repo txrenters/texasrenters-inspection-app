@@ -480,6 +480,7 @@ model Organization {
   xeroOrganisations XeroOrganisation[]
   xeroSettings   XeroSettings[]
   xeroContactLinks XeroContactLink[]
+  xeroBillSettings XeroBillSettings[]
   xeroInvoiceSyncs XeroInvoiceSync[]
   xeroPaymentSyncs XeroPaymentSync[]
   xeroChecks       XeroCheck[]
@@ -4989,6 +4990,8 @@ model XeroOrganisation {
   projectLinks  XeroProjectLink[]
   /// The projects in its books (2026-11-13): made in the console, or read from Xero.
   projects      XeroProject[]
+  /// Its choices for vendor bills (2026-11-19).
+  billSettings  XeroBillSettings?
 
   @@unique([organizationId, xeroTenantId])
 }
@@ -6100,6 +6103,8 @@ model VendorBill {
   approvedBy   UserProfile?     @relation("VendorBillApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
   paidBy       UserProfile?     @relation("VendorBillPaidBy", fields: [paidById], references: [id], onDelete: Restrict)
   lines        VendorBillLine[]
+  /// Where it stands with Xero, once somebody has pressed Send to Xero.
+  inXero       VendorBillXero?
 
   @@unique([organizationId, id])
   @@unique([organizationId, orderId])
@@ -6286,4 +6291,50 @@ model StockCountLine {
 
   @@unique([countId, itemId, placeId])
   @@index([organizationId, itemId])
+}
+
+/// A company's choices for its vendor bills in Xero (2026-11-19, phase 7):
+/// the account they are booked to and the account each way of paying comes
+/// out of. Apart from XeroSettings, which is the invoices'.
+model XeroBillSettings {
+  organizationId     String   @db.Uuid
+  xeroTenantId       String
+  purchasesAccountId String?
+  /// `{ "CHECK": "<account id>", ... }`, by VendorPaymentMethod.
+  paymentAccounts    Json     @default("{}")
+  updatedByName      String?
+  updatedAt          DateTime @updatedAt
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: Cascade)
+
+  @@id([organizationId, xeroTenantId])
+}
+
+/// Where a vendor bill, and its payment, stand with Xero. Written PENDING
+/// before Xero is asked, so a lost answer is looked for and never made twice.
+/// `status` and `paymentStatus` are PENDING, SENT or FAILED (checked).
+model VendorBillXero {
+  billId             String    @id @db.Uuid
+  organizationId     String    @db.Uuid
+  xeroTenantId       String
+  status             String
+  xeroInvoiceId      String?
+  problem            String?
+  sentById           String?   @db.Uuid
+  sentByName         String?
+  sentAt             DateTime?
+  attemptedAt        DateTime  @default(now())
+  paymentStatus      String?
+  xeroPaymentId      String?
+  paymentProblem     String?
+  paymentSentByName  String?
+  paymentSentAt      DateTime?
+  paymentAttemptedAt DateTime?
+
+  bill VendorBill @relation(fields: [organizationId, billId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, billId])
+  @@unique([organizationId, xeroTenantId, xeroInvoiceId], map: "VendorBillXero_xeroInvoiceId_key")
+  @@index([organizationId])
 }

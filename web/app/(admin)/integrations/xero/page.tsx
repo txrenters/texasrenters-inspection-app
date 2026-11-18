@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/page-header';
 import { Panel } from '@/components/panel';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import { XeroBillsPanel } from '@/components/xero/xero-bills-panel';
 import { XeroBooksPanel } from '@/components/xero/xero-books-panel';
 import { XeroCheckPanel } from '@/components/xero/xero-check-panel';
 import { XeroSendingPanel } from '@/components/xero/xero-sending-panel';
@@ -335,6 +336,8 @@ function OrganisationTab({
       ) : (
         <PageSkeleton />
       )}
+
+      <XeroBillsPanel canManage={canManage} canRead={canRead} tenantId={organisation.tenantId} />
 
       {sending.data ? (
         <XeroSendingPanel

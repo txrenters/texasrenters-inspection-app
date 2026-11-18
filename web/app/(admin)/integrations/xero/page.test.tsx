@@ -25,6 +25,13 @@ const xero = vi.hoisted(() => ({
   sendingAsked: [] as string[],
   sendingActions: { setEnabled: { mutate: vi.fn(), isPending: false }, run: { mutate: vi.fn(), isPending: false }, retry: { mutate: vi.fn(), isPending: false } },
 }));
+// The bill's Xero card and the bills panel have their own tests (bill-in-xero.test.tsx): here they read nothing.
+vi.mock('@/lib/vendor-bills-xero-queries', () => ({
+  useBillInXero: () => ({ isError: false, data: undefined }),
+  useBillInXeroActions: () => ({ send: { mutate: vi.fn(), isPending: false, error: null }, sendPayment: { mutate: vi.fn(), isPending: false, error: null } }),
+  useXeroBillSettings: () => ({ isError: false, data: undefined }),
+  useSaveXeroBillSettings: () => ({ mutate: vi.fn(), isPending: false, isSuccess: false, error: null }),
+}));
 vi.mock('@/lib/xero-queries', () => ({
   useXeroConnection: () => ({ isLoading: false, isError: false, data: xero.view, refetch: vi.fn() }),
   useXeroActions: () => ({ authorize: xero.authorize, read: xero.read, disconnect: xero.disconnect, disconnectOrganisation: xero.disconnectOrganisation }),

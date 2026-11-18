@@ -50,6 +50,8 @@ import { InventoryMonitoringService } from './inventory-monitoring.service';
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 import { StockCountsController } from './stock-counts.controller';
+import { VendorBillsXeroController } from './vendor-bills-xero.controller';
+import { VendorBillsXeroService } from './vendor-bills-xero.service';
 import { StockCountsService } from './stock-counts.service';
 import { StockSlipsController } from './stock-slips.controller';
 import { StockSlipsService } from './stock-slips.service';
@@ -123,6 +125,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     StockSlipsController,
     StockCountsController,
     InventoryMonitoringController,
+    VendorBillsXeroController,
     InventoryController,
     PurchasingController,
     PurchaseOrdersController,
@@ -179,6 +182,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     StockSlipsService,
     StockCountsService,
     InventoryMonitoringService,
+    VendorBillsXeroService,
     PurchasingService,
     PurchaseOrdersService,
     PurchaseReceivingService,
