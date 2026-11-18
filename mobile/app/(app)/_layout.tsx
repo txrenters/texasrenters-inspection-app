@@ -64,6 +64,7 @@ export default function AppLayout() {
         <Stack.Screen name="areas/[id]" />
         <Stack.Screen name="job-filters/[id]" />
         <Stack.Screen name="job-inspection/[id]" />
+        <Stack.Screen name="job-stock/[id]" />
         <Stack.Screen name="findings/[id]" />
         {/* Full screen: the viewfinder is the whole page. */}
         <Stack.Screen name="camera/[inspectionId]/[areaId]" options={{ headerShown: false }} />

@@ -8,7 +8,9 @@ import {
   removeMutation,
   type QueuedMutation,
 } from '../../storage/mutation-queue';
+import { noteStockRefusal } from '../../storage/stock-refusals';
 import { useNetworkStore } from '../../stores/network.store';
+import type { PendingSlip } from '../../utils/job-stock';
 
 /** Why a write is being held, in the only terms a technician can act on. */
 export type HeldReason =
@@ -202,6 +204,38 @@ export async function sendSavedFirst<T>(
     }
     throw new QueuedOfflineError(held.reason);
   }
+}
+
+/** The kind a job's stock slip is queued under. */
+export const JOB_STOCK_KIND = 'job-stock';
+/**
+ * The key a stock slip is queued under: one a slip, never one a job. A slip
+ * adds to what was taken rather than setting it, so a second one must not
+ * replace the first in the queue.
+ */
+export const jobStockEntryId = (clientRequestId: string) => `stock-slip:${clientRequestId}`;
+
+const isPendingSlip = (payload: Record<string, unknown>): payload is Record<string, unknown> & PendingSlip =>
+  typeof payload.inspectionId === 'string' &&
+  typeof payload.placeId === 'string' &&
+  typeof payload.clientRequestId === 'string' &&
+  (payload.kind === 'WITHDRAWAL' || payload.kind === 'RETURN') &&
+  Array.isArray(payload.lines) &&
+  Array.isArray(payload.named);
+
+/**
+ * The stock slips recorded on this phone that the server has not confirmed,
+ * for one job, oldest first. Read so the truck's numbers and the job's list
+ * already count them, whether the signal went or the app was closed.
+ */
+export async function savedJobStockSlips(inspectionId: string): Promise<PendingSlip[]> {
+  const slips: PendingSlip[] = [];
+  for (const entry of await readQueue()) {
+    if (entry.kind !== JOB_STOCK_KIND || !isPendingSlip(entry.payload) || entry.payload.inspectionId !== inspectionId) continue;
+    const { inspectionId: job, kind, placeId, lines, clientRequestId, named } = entry.payload;
+    slips.push({ inspectionId: job, kind, placeId, lines, clientRequestId, named, queuedAt: entry.queuedAt });
+  }
+  return slips;
 }
 
 /** The key a job's saved start is queued under. */
@@ -458,6 +492,40 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
         'POST',
         { reason: payload.reason },
       ),
+    /**
+     * What a technician took from the truck for a job, or put back (2026-11-19).
+     *
+     * Safe to replay: the slip carries its own key and the server records a
+     * key once, so a second send answers with what the first made. It is the
+     * one queued write that adds rather than sets, which is why its entry id
+     * is the slip's and not the job's.
+     *
+     * A refusal here has nobody watching: the truck did not hold that many by
+     * the time it arrived, or the job was taken off this technician. The queue
+     * drops it, so the reason is written down first and the job's Materials
+     * screen says it was not recorded.
+     */
+    [JOB_STOCK_KIND]: async (payload, send) => {
+      try {
+        await send(`/api/v1/technician/inspections/${encodeURIComponent(String(payload.inspectionId))}/stock`, 'POST', {
+          kind: payload.kind,
+          placeId: payload.placeId,
+          lines: payload.lines,
+          clientRequestId: payload.clientRequestId,
+        });
+      } catch (error) {
+        if (!(error instanceof ApiConnectionError) && isPendingSlip(payload))
+          await noteStockRefusal({
+            clientRequestId: payload.clientRequestId,
+            inspectionId: payload.inspectionId,
+            kind: payload.kind,
+            named: payload.named,
+            reason: error instanceof Error && error.message ? error.message : 'The office could not record it.',
+            at: new Date().toISOString(),
+          });
+        throw error;
+      }
+    },
     // Safe to replay: the server keeps the first confirmation's timestamp, so a
     // duplicate cannot rewrite when the technician actually read the summary.
     'room-confirm-summary': (payload, send) =>
