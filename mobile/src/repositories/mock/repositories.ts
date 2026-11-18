@@ -1,4 +1,4 @@
-import type { NavigationLeg } from '@texasrenters/shared';
+import { jobStockProblem, jobStockTaken, type JobStock, type NavigationLeg } from '@texasrenters/shared';
 
 import type {
   AddAreaInput,
@@ -13,9 +13,11 @@ import type {
   JobDayCount,
   MediaRepository,
   PropertyRepository,
+  StockRepository,
   TechnicianHome,
   UploadRepository,
 } from '../contracts';
+import type { PendingSlip, RefusedSlip } from '../../utils/job-stock';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import type {
   DemoRole,
@@ -617,4 +619,45 @@ export class MockHomeRepository implements HomeRepository {
   async clear() {
     this.home = null;
   }
+}
+
+/**
+ * In-memory, so the demo build can exercise the Materials screen without an
+ * API: one truck with a few things in it, and the same rules the server keeps.
+ */
+export class MockStockRepository implements StockRepository {
+  private truck: JobStock['stock'] = [
+    { placeId: 'demo-truck', itemId: 'demo-filter', code: 'FLT-0001', name: 'Filter 20x25x1', unit: 'each', quantity: 12 },
+    { placeId: 'demo-truck', itemId: 'demo-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each', quantity: 8 },
+  ];
+  private slips = new Map<string, JobStock['slips']>();
+
+  async forJob(inspectionId: string): Promise<JobStock> {
+    const slips = this.slips.get(inspectionId) ?? [];
+    return { places: [{ id: 'demo-truck', name: 'Truck 1' }], stock: this.truck.filter((item) => item.quantity > 0), slips, taken: jobStockTaken(slips) };
+  }
+
+  async record(slip: PendingSlip): Promise<JobStock> {
+    const now = await this.forJob(slip.inspectionId);
+    const available = slip.kind === 'RETURN' ? now.taken : this.truck;
+    const problem = jobStockProblem(slip.kind, slip.lines, new Map(available.map((item) => [item.itemId, item.quantity])), (itemId) => slip.named.find((item) => item.itemId === itemId)?.name ?? 'that item');
+    if (problem) throw new Error(problem);
+    for (const line of slip.named) {
+      const held = this.truck.find((item) => item.itemId === line.itemId);
+      if (held) held.quantity += slip.kind === 'RETURN' ? line.quantity : -line.quantity;
+    }
+    const made = { id: slip.clientRequestId, number: `${slip.kind === 'RETURN' ? 'RT' : 'WD'}-DEMO`, kind: slip.kind, at: new Date().toISOString(), place: 'Truck 1', reversed: false, lines: slip.named };
+    this.slips.set(slip.inspectionId, [made, ...now.slips]);
+    return this.forJob(slip.inspectionId);
+  }
+
+  async pending(): Promise<PendingSlip[]> {
+    return [];
+  }
+
+  async refused(): Promise<RefusedSlip[]> {
+    return [];
+  }
+
+  async dismissRefusal(): Promise<void> {}
 }

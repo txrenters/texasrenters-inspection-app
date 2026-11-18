@@ -145,6 +145,15 @@ export class StockSlipsService {
 
   /** Posts a withdrawal, a return or a move: all of its lines or none. Sent twice with the same key it posts once. */
   async post(user: AuthenticatedUser, input: PostStockSlipInput): Promise<StockSlipList> {
+    await this.write(user, input);
+    return this.list(user);
+  }
+
+  /**
+   * The posting itself, answering nothing: the office's page then reads its
+   * list, and the phone (2026-11-19, phase 7) reads the technician's own job.
+   */
+  async write(user: AuthenticatedUser, input: PostStockSlipInput): Promise<void> {
     const organizationId = user.organizationId;
     const kind = input.kind;
     const move = kind === StockSlipKind.TRANSFER;
@@ -226,7 +235,6 @@ export class StockSlipsService {
       // The same slip, sent at the same moment by a retry: the other one posted it.
       if (!taken(error)) throw error;
     }
-    return this.list(user);
   }
 
   /**
