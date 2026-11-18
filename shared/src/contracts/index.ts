@@ -124,3 +124,4 @@ export * from './actual-vs-budget-excel.js';
 export * from './inventory.js';
 export * from './purchasing.js';
 export * from './purchase-orders.js';
+export * from './receiving.js';

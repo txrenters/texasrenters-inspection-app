@@ -41,6 +41,8 @@ export const PERMISSION_KEYS = [
   'purchasing:approve',
   'purchasing:approve-any',
   'purchasing:order',
+  'purchasing:receive',
+  'purchasing:bills',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -316,6 +318,17 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         description:
           "See everyone's submitted requisitions, turn an approved one into a purchase order, send it to the vendor and cancel it. An order is approved by somebody else, with the two above.",
       },
+      {
+        key: 'purchasing:receive',
+        label: 'Receive goods',
+        description: 'Post what arrived against a purchase order, which puts it into stock, and reverse a receipt that was wrong.',
+      },
+      {
+        key: 'purchasing:bills',
+        label: 'Enter and pay vendor bills',
+        description:
+          "Enter the vendor's bill for an order, approve one that matches the order and what was received, and record its payment. No money moves in the console. A bill that does not match needs \"Approve any amount\".",
+      },
     ],
   },
   {
@@ -418,6 +431,8 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'purchasing:approve',
   'purchasing:approve-any',
   'purchasing:order',
+  'purchasing:receive',
+  'purchasing:bills',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);

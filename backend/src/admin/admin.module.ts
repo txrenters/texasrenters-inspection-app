@@ -51,6 +51,8 @@ import { PurchasingController } from './purchasing.controller';
 import { PurchasingService } from './purchasing.service';
 import { PurchaseOrdersController } from './purchase-orders.controller';
 import { PurchaseOrdersService } from './purchase-orders.service';
+import { PurchaseReceivingController } from './purchase-receiving.controller';
+import { PurchaseReceivingService } from './purchase-receiving.service';
 import { InvoiceReportsController } from './invoice-reports.controller';
 import { InvoiceReportsService } from './invoice-reports.service';
 import { InvoiceSettingsService } from './invoice-settings.service';
@@ -114,6 +116,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InventoryController,
     PurchasingController,
     PurchaseOrdersController,
+    PurchaseReceivingController,
     ExcelSyncController,
     ExcelSyncCallbackController,
     InvoiceFilesController,
@@ -165,6 +168,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InventoryService,
     PurchasingService,
     PurchaseOrdersService,
+    PurchaseReceivingService,
     ActualVsBudgetGateway,
     MicrosoftAuthService,
     ExcelSyncService,

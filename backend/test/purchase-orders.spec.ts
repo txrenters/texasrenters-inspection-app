@@ -105,6 +105,7 @@ function database() {
     approvedBy: nameOf(order.approvedById),
     vendor: vendors.find((vendor) => vendor.id === order.vendorId) ?? null,
     deliverTo: order.deliverToPlaceId ? { id: STOCKROOM, name: 'Stockroom' } : null,
+    bill: null,
     requisition: requisitionOf(order.requisitionId),
     lines: lines
       .filter((line) => line.orderId === order.id)
@@ -134,7 +135,7 @@ function database() {
       }),
     },
     purchaseOrderLine: {
-      createMany: jest.fn(async ({ data }: { data: Row[] }) => lines.push(...data.map((line, index) => ({ id: id(300 + lines.length + index), ...line })))),
+      createMany: jest.fn(async ({ data }: { data: Row[] }) => lines.push(...data.map((line, index) => ({ id: id(300 + lines.length + index), receivedQuantity: 0, ...line })))),
       deleteMany: jest.fn(async ({ where }: { where: Where }) => removeWhere(lines, where)),
     },
     purchaseRequisition: {
@@ -168,6 +169,8 @@ function database() {
       }),
       update: jest.fn(async ({ where, data }: { where: { id: string }; data: Row }) => Object.assign(deliveries.find((row) => row.id === where.id)!, data)),
     },
+    // Nothing has arrived for any of these: receiving has its own spec.
+    goodsReceipt: { findMany: jest.fn(async () => []) },
     userProfile: { findMany: jest.fn(async () => PEOPLE.map((one) => ({ id: one.id, displayName: one.displayName }))) },
     auditLog: {
       create: jest.fn(async ({ data }: { data: Row }) => audits.push({ createdAt: new Date((clock += 1000)), ...data })),

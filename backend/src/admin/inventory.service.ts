@@ -498,6 +498,9 @@ export class InventoryService {
         itemId = movement.itemId;
         if (movement.kind === StockMovementKind.REVERSAL) throw new ApplicationError(409, 'STOCK_REVERSAL_OF_REVERSAL', 'A reversal cannot be reversed. Enter the movement again instead.');
         if (movement.reversedBy) throw new ApplicationError(409, 'STOCK_MOVEMENT_ALREADY_REVERSED', 'That movement has already been reversed.');
+        // A movement a document made is put right through its document, which keeps the two in step.
+        if (movement.kind !== StockMovementKind.OPENING_BALANCE)
+          throw new ApplicationError(409, 'STOCK_MOVEMENT_HAS_DOCUMENT', 'Goods received are reversed from their purchase order, with the receipt.');
         if (movement.quantity > 0) {
           const level = await tx.stockLevel.findUnique({ where: { itemId_placeId: { itemId: movement.itemId, placeId: movement.placeId } }, select: { quantity: true } });
           const there = level?.quantity ?? 0;

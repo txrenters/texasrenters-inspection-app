@@ -412,6 +412,8 @@ model Organization {
   purchasingSettings PurchasingSettings?
   purchaseRequisitions PurchaseRequisition[]
   purchaseOrders PurchaseOrder[]
+  goodsReceipts GoodsReceipt[]
+  vendorBills VendorBill[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -641,6 +643,10 @@ model UserProfile {
   purchaseOrdersMade         PurchaseOrder[]       @relation("PurchaseOrderMadeBy")
   purchaseOrdersApproved     PurchaseOrder[]       @relation("PurchaseOrderApprovedBy")
   purchaseOrdersCancelled    PurchaseOrder[]       @relation("PurchaseOrderCancelledBy")
+  purchaseOrdersShortClosed  PurchaseOrder[]       @relation("PurchaseOrderShortClosedBy")
+  vendorBillsEntered         VendorBill[]          @relation("VendorBillEnteredBy")
+  vendorBillsApproved        VendorBill[]          @relation("VendorBillApprovedBy")
+  vendorBillsPaid            VendorBill[]          @relation("VendorBillPaidBy")
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
@@ -5577,6 +5583,8 @@ enum StockPlaceKind {
 enum StockMovementKind {
   OPENING_BALANCE
   REVERSAL
+  /// Goods received against a purchase order (phase 4).
+  RECEIPT
 }
 
 /// Something the office stocks, counted in whole units. Never deleted once it has moved: switched off instead.
@@ -5611,6 +5619,7 @@ model StockItem {
   levels           StockLevel[]
   requisitionLines PurchaseRequisitionLine[]
   orderLines       PurchaseOrderLine[]
+  receiptLines     GoodsReceiptLine[]
 
   @@unique([organizationId, codeKey])
   /// What a movement points at: an item of its own office.
@@ -5637,6 +5646,7 @@ model StockPlace {
   levels       StockLevel[]
   requisitions PurchaseRequisition[]
   purchaseOrders PurchaseOrder[]
+  receiptLines GoodsReceiptLine[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5697,6 +5707,8 @@ model StockMovement {
   place        StockPlace     @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
   reverses     StockMovement? @relation("StockMovementReversal", fields: [reversesId], references: [id], onDelete: Restrict)
   reversedBy   StockMovement? @relation("StockMovementReversal")
+  /// The receipt line it is, when goods received made it.
+  receiptLine  GoodsReceiptLine?
 
   @@unique([organizationId, requestKey])
   @@index([organizationId, itemId, createdAt])
@@ -5731,6 +5743,8 @@ enum PurchaseRequisitionStatus {
   ORDERED
   REJECTED
   CANCELLED
+  /// Its order is received and paid (phase 4).
+  CLOSED
 }
 
 /// The next number of each kind of document an office numbers: "PR" for
@@ -5860,6 +5874,10 @@ enum PurchaseOrderStatus {
   APPROVED
   SENT
   CANCELLED
+  /// Receiving (phase 4): some has arrived; all has, or the rest will not; received and paid.
+  PARTLY_RECEIVED
+  RECEIVED
+  CLOSED
 }
 
 /// An order to a vendor, made from one approved requisition. It moves no
@@ -5893,10 +5911,19 @@ model PurchaseOrder {
   cancelledById    String?             @db.Uuid
   cancelledAt      DateTime?
   cancelReason     String?
+  /// The rest will not arrive: finished with what has (phase 4). Who, when and why, or none (checked).
+  shortClosedAt    DateTime?
+  shortClosedById  String?             @db.Uuid
+  shortCloseReason String?
+  /// When it was received and paid.
+  closedAt         DateTime?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
   organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shortClosedBy    UserProfile?            @relation("PurchaseOrderShortClosedBy", fields: [shortClosedById], references: [id], onDelete: Restrict)
+  receipts         GoodsReceipt[]
+  bill             VendorBill?
   requisition      PurchaseRequisition     @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
   vendor           Vendor?                 @relation(fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
   xeroOrganisation XeroOrganisation?       @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
@@ -5922,11 +5949,16 @@ model PurchaseOrderLine {
   itemId         String @db.Uuid
   quantity       Int
   unitPriceCents Int
+  /// How much has arrived: never more than was ordered (checked). Kept by each receipt and its reversal.
+  receivedQuantity Int  @default(0)
 
-  order PurchaseOrder @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade)
-  item  StockItem     @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  order        PurchaseOrder      @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade)
+  item         StockItem          @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  receiptLines GoodsReceiptLine[]
+  billLines    VendorBillLine[]
 
   @@unique([orderId, itemId])
+  @@unique([organizationId, id])
   @@index([organizationId, orderId, position])
 }
 
@@ -5953,4 +5985,115 @@ model PurchaseOrderDelivery {
   @@unique([organizationId, clientRequestId])
   @@index([organizationId, createdAt])
   @@index([organizationId, orderId])
+}
+
+/// Receiving and the vendor's bill (2026-11-19, phase 4).
+enum VendorBillStatus {
+  HELD
+  MATCHED
+  APPROVED
+  PAID
+}
+
+/// Goods that arrived against a purchase order. Posted in one step and never
+/// edited: a wrong one is reversed, which takes its stock back out. Each line
+/// is one stock movement.
+model GoodsReceipt {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  /// "RCV-0007".
+  number         String
+  orderId        String    @db.Uuid
+  receivedOn     DateTime  @db.Date
+  packingSlip    String?
+  note           String?
+  /// Made by the page for one receipt: a second click or a retry posts nothing twice.
+  requestKey     String
+  createdById    String?   @db.Uuid
+  createdByName  String
+  createdAt      DateTime  @default(now())
+  reversedAt     DateTime?
+  reversedById   String?   @db.Uuid
+  reversedByName String?
+  reverseReason  String?
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  order        PurchaseOrder      @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Restrict)
+  lines        GoodsReceiptLine[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, requestKey])
+  @@unique([organizationId, id])
+  @@index([organizationId, orderId])
+}
+
+model GoodsReceiptLine {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  receiptId      String @db.Uuid
+  orderLineId    String @db.Uuid
+  itemId         String @db.Uuid
+  placeId        String @db.Uuid
+  quantity       Int
+  /// The stock movement that put it on the shelf.
+  movementId     String @unique @db.Uuid
+
+  receipt   GoodsReceipt      @relation(fields: [organizationId, receiptId], references: [organizationId, id], onDelete: Restrict)
+  orderLine PurchaseOrderLine @relation(fields: [organizationId, orderLineId], references: [organizationId, id], onDelete: Restrict)
+  item      StockItem         @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place     StockPlace        @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  movement  StockMovement     @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([receiptId, orderLineId])
+  @@index([organizationId, orderLineId])
+}
+
+/// The vendor's invoice for an order, one an order. Matched to what was
+/// ordered and what was received; held when they disagree. Its payment is a
+/// record that the office paid: no money moves here.
+model VendorBill {
+  id               String           @id @default(uuid()) @db.Uuid
+  organizationId   String           @db.Uuid
+  orderId          String           @unique @db.Uuid
+  billNumber       String
+  billDate         DateTime         @db.Date
+  totalCents       Int
+  status           VendorBillStatus @default(HELD)
+  enteredById      String           @db.Uuid
+  approvedById     String?          @db.Uuid
+  approvedAt       DateTime?
+  /// Why it was approved without matching; by somebody other than whoever entered it (checked).
+  overrideReason   String?
+  paidOn           DateTime?        @db.Date
+  /// CHECK, ACH, CARD, CASH or OTHER (checked).
+  paymentMethod    String?
+  paymentReference String?
+  paidById         String?          @db.Uuid
+  paidAt           DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  order        PurchaseOrder    @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Restrict)
+  enteredBy    UserProfile      @relation("VendorBillEnteredBy", fields: [enteredById], references: [id], onDelete: Restrict)
+  approvedBy   UserProfile?     @relation("VendorBillApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  paidBy       UserProfile?     @relation("VendorBillPaidBy", fields: [paidById], references: [id], onDelete: Restrict)
+  lines        VendorBillLine[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, orderId])
+}
+
+model VendorBillLine {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  billId         String @db.Uuid
+  orderLineId    String @db.Uuid
+  quantity       Int
+  unitPriceCents Int
+
+  bill      VendorBill        @relation(fields: [organizationId, billId], references: [organizationId, id], onDelete: Cascade)
+  orderLine PurchaseOrderLine @relation(fields: [organizationId, orderLineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([billId, orderLineId])
 }

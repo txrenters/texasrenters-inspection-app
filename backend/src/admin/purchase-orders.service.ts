@@ -5,6 +5,7 @@ import {
   MOST_ORDER_PDF_BYTES,
   OPEN_PURCHASE_ORDER_STATUSES,
   formatMoney,
+  billProblems,
   formatTaxRate,
   orderSubmitProblem,
   orderTotals,
@@ -18,6 +19,8 @@ import {
   type PurchaseOrderRow,
   type SavePurchaseOrderInput,
   type SendPurchaseOrderInput,
+  type VendorBillView,
+  type VendorPaymentMethod,
 } from '@texasrenters/shared';
 
 import { auditActor, type AuthenticatedUser } from '../common/auth';
@@ -52,10 +55,16 @@ import { nextDocumentNumber, readPurchasingSettings } from './purchasing.service
 const ORDER = 'purchasing:order';
 const APPROVE = 'purchasing:approve';
 const APPROVE_ANY = 'purchasing:approve-any';
+const RECEIVE = 'purchasing:receive';
+const BILLS = 'purchasing:bills';
 const ENTITY = 'PurchaseOrder';
 const CLOSED_SHOWN = 200;
 const CANCELLABLE: Status[] = [Status.DRAFT, Status.AWAITING_APPROVAL, Status.APPROVED, Status.SENT];
 const SENDABLE: Status[] = [Status.APPROVED, Status.SENT];
+/** Goods can still arrive for it (phase 4). */
+const RECEIVABLE: Status[] = [Status.APPROVED, Status.SENT, Status.PARTLY_RECEIVED];
+/** Its bill can be entered: from approval until it is closed. */
+const BILLABLE: Status[] = [...RECEIVABLE, Status.RECEIVED];
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Db = Prisma.TransactionClient;
@@ -81,12 +90,31 @@ const ROW = {
   decisionNote: true,
   sentAt: true,
   cancelReason: true,
+  shortCloseReason: true,
+  bill: {
+    select: {
+      billNumber: true,
+      billDate: true,
+      totalCents: true,
+      status: true,
+      enteredById: true,
+      approvedAt: true,
+      overrideReason: true,
+      paidOn: true,
+      paymentMethod: true,
+      paymentReference: true,
+      enteredBy: { select: { displayName: true } },
+      approvedBy: { select: { displayName: true } },
+      paidBy: { select: { displayName: true } },
+      lines: { select: { orderLineId: true, quantity: true, unitPriceCents: true } },
+    },
+  },
   createdBy: { select: { displayName: true } },
   approvedBy: { select: { displayName: true } },
   vendor: { select: { id: true, name: true, contactName: true, email: true, phone: true } },
   deliverTo: { select: { id: true, name: true } },
   requisition: { select: { id: true, number: true, requestedById: true, lines: { select: { itemId: true, quantity: true } } } },
-  lines: { orderBy: { position: 'asc' }, select: { id: true, quantity: true, unitPriceCents: true, item: { select: { id: true, code: true, name: true, unit: true } } } },
+  lines: { orderBy: { position: 'asc' }, select: { id: true, quantity: true, unitPriceCents: true, receivedQuantity: true, item: { select: { id: true, code: true, name: true, unit: true } } } },
 } satisfies Prisma.PurchaseOrderSelect;
 type Order = Prisma.PurchaseOrderGetPayload<{ select: typeof ROW }>;
 
@@ -117,6 +145,14 @@ const STEP: Record<string, string> = {
   PURCHASE_ORDER_SENT: 'emailed it to the vendor',
   PURCHASE_ORDER_SEND_FAILED: 'tried to email it, and it was not sent',
   PURCHASE_ORDER_CANCELLED: 'cancelled it',
+  GOODS_RECEIVED: 'received goods',
+  GOODS_RECEIPT_REVERSED: 'reversed a receipt',
+  PURCHASE_ORDER_CLOSED_SHORT: 'finished it with what has arrived',
+  VENDOR_BILL_ENTERED: "entered the vendor's bill",
+  VENDOR_BILL_APPROVED: 'approved the bill for payment',
+  VENDOR_BILL_APPROVED_DESPITE_MISMATCH: 'approved the bill although it does not match',
+  VENDOR_BILL_PAID: 'recorded the payment',
+  PURCHASE_ORDER_CLOSED: 'closed it: received and paid',
 };
 
 /** The order's PDF as the browser made it: checked to be a PDF, and small, before it rides on the email. */
@@ -145,9 +181,9 @@ export class PurchaseOrdersService {
     @Inject(MailService) private readonly mail: MailService,
   ) {}
 
-  /** Everybody's, for whoever makes or approves orders; for anybody else, the orders made from their own requisitions. */
+  /** Everybody's, for whoever makes, approves, receives or bills orders; for anybody else, the orders made from their own requisitions. */
   private visible(user: AuthenticatedUser): Prisma.PurchaseOrderWhereInput {
-    return may(user, ORDER) || may(user, APPROVE) ? {} : { requisition: { requestedById: user.id } };
+    return [ORDER, APPROVE, RECEIVE, BILLS].some((permission) => may(user, permission)) ? {} : { requisition: { requestedById: user.id } };
   }
 
   private async companyNames(organizationId: string) {
@@ -156,7 +192,13 @@ export class PurchaseOrdersService {
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
-  private actions(user: AuthenticatedUser, order: Pick<Order, 'status' | 'createdById'>, totalCents: number, approvalLimitCents: number): PurchaseOrderActions {
+  private actions(
+    user: AuthenticatedUser,
+    order: Pick<Order, 'status' | 'createdById'>,
+    totalCents: number,
+    approvalLimitCents: number,
+    bill: { status: string; enteredById: string } | null = null,
+  ): PurchaseOrderActions {
     const purchaser = may(user, ORDER);
     const mine = order.createdById === user.id;
     const waiting = order.status === Status.AWAITING_APPROVAL && may(user, APPROVE);
@@ -174,6 +216,14 @@ export class PurchaseOrdersService {
       sendBack: waiting && !mine,
       send: purchaser && SENDABLE.includes(order.status),
       cancel: purchaser && CANCELLABLE.includes(order.status),
+      receive: may(user, RECEIVE) && RECEIVABLE.includes(order.status),
+      reverseReceipt: may(user, RECEIVE) && (order.status === Status.PARTLY_RECEIVED || order.status === Status.RECEIVED) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
+      bill: may(user, BILLS) && BILLABLE.includes(order.status) && (!bill || bill.status === 'HELD' || bill.status === 'MATCHED'),
+      approveBill: may(user, BILLS) && bill?.status === 'MATCHED',
+      // Never whoever entered it: a second person looks at a bill that does not match.
+      overrideBill: may(user, APPROVE) && may(user, APPROVE_ANY) && bill?.status === 'HELD' && bill.enteredById !== user.id,
+      pay: may(user, BILLS) && bill?.status === 'APPROVED',
+      closeShort: purchaser && order.status === Status.PARTLY_RECEIVED,
       approveBlocked,
     };
   }
@@ -199,7 +249,7 @@ export class PurchaseOrdersService {
     const organizationId = user.organizationId;
     const order = await this.prisma.purchaseOrder.findFirst({ where: { id: orderId, organizationId, AND: [this.visible(user)] }, select: ROW });
     if (!order) throw new ApplicationError(404, 'PURCHASE_ORDER_NOT_FOUND', 'That purchase order is not on the list.');
-    const [companies, settings, office, deliveries, audits] = await Promise.all([
+    const [companies, settings, office, deliveries, audits, receipts] = await Promise.all([
       this.companyNames(organizationId),
       readPurchasingSettings(this.prisma, organizationId),
       this.prisma.invoiceSettings.findUnique({ where: { organizationId }, select: { companyName: true, addressLine1: true, addressLine2: true, phone: true, email: true } }),
@@ -209,6 +259,23 @@ export class PurchaseOrdersService {
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.auditLog.findMany({ where: { organizationId, entityType: ENTITY, entityId: orderId }, select: { action: true, actorUserId: true, metadata: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.goodsReceipt.findMany({
+        where: { organizationId, orderId },
+        select: {
+          id: true,
+          number: true,
+          receivedOn: true,
+          packingSlip: true,
+          note: true,
+          createdByName: true,
+          createdAt: true,
+          reversedAt: true,
+          reversedByName: true,
+          reverseReason: true,
+          lines: { select: { quantity: true, item: { select: { code: true, name: true } }, place: { select: { name: true } } } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -216,6 +283,37 @@ export class PurchaseOrdersService {
     const summary = row(order, companies);
     const totals = orderTotals(order.lines, order.taxBasisPoints);
     const requested = new Map(order.requisition.lines.flatMap((line) => (line.itemId ? [[line.itemId, line.quantity] as const] : [])));
+    const billed = new Map(order.bill?.lines.map((line) => [line.orderLineId, line]));
+    const bill: VendorBillView | null = order.bill
+      ? {
+          billNumber: order.bill.billNumber,
+          billDate: dayOf(order.bill.billDate)!,
+          totalCents: order.bill.totalCents,
+          status: order.bill.status,
+          lines: order.bill.lines,
+          // Worked out as it is read, from the order and its receipts as they are now.
+          problems: billProblems(
+            order.lines.map((line) => ({
+              name: line.item.name,
+              ordered: line.quantity,
+              received: line.receivedQuantity,
+              unitPriceCents: line.unitPriceCents,
+              billedQuantity: billed.get(line.id)?.quantity ?? 0,
+              billedUnitPriceCents: billed.get(line.id)?.unitPriceCents ?? null,
+            })),
+            order.bill.totalCents,
+            order.taxBasisPoints,
+          ),
+          enteredBy: order.bill.enteredBy.displayName,
+          approvedBy: order.bill.approvedBy?.displayName ?? null,
+          approvedAt: order.bill.approvedAt?.toISOString() ?? null,
+          overrideReason: order.bill.overrideReason,
+          paidOn: dayOf(order.bill.paidOn),
+          method: order.bill.paymentMethod as VendorPaymentMethod | null,
+          reference: order.bill.paymentReference,
+          paidBy: order.bill.paidBy?.displayName ?? null,
+        }
+      : null;
     const from: PurchaseOrderFrom = {
       // The company the stock is for, as its books name it; else the office's own name on its invoices.
       name: summary.company?.name ?? office?.companyName ?? 'TexasRenters.com',
@@ -231,7 +329,7 @@ export class PurchaseOrdersService {
       terms: order.terms,
       taxBasisPoints: order.taxBasisPoints,
       notes: order.notes,
-      lines: order.lines.map((line) => ({ id: line.id, item: line.item, quantity: line.quantity, unitPriceCents: line.unitPriceCents, requestedQuantity: requested.get(line.item.id) ?? 0 })),
+      lines: order.lines.map((line) => ({ id: line.id, item: line.item, quantity: line.quantity, unitPriceCents: line.unitPriceCents, requestedQuantity: requested.get(line.item.id) ?? 0, receivedQuantity: line.receivedQuantity })),
       subtotalCents: totals.subtotalCents,
       taxCents: totals.taxCents,
       approvedBy: order.approvedBy?.displayName ?? null,
@@ -247,11 +345,24 @@ export class PurchaseOrdersService {
         at: delivery.createdAt.toISOString(),
         by: delivery.sentByName,
       })),
+      receipts: receipts.map((receipt) => ({
+        id: receipt.id,
+        number: receipt.number,
+        receivedOn: dayOf(receipt.receivedOn)!,
+        packingSlip: receipt.packingSlip,
+        note: receipt.note,
+        by: receipt.createdByName,
+        at: receipt.createdAt.toISOString(),
+        reversed: receipt.reversedAt ? { by: receipt.reversedByName ?? 'Somebody', at: receipt.reversedAt.toISOString(), reason: receipt.reverseReason ?? '' } : null,
+        lines: receipt.lines.map((line) => ({ itemCode: line.item.code, itemName: line.item.name, placeName: line.place.name, quantity: line.quantity })),
+      })),
+      bill,
+      shortCloseReason: order.shortCloseReason,
       history: audits.map((audit) => {
         const note = (audit.metadata as { note?: string | null } | null)?.note;
         return { at: audit.createdAt.toISOString(), by: (audit.actorUserId && nameOf.get(audit.actorUserId)) || 'Somebody', what: `${STEP[audit.action] ?? 'changed it'}${note ? `: ${note}` : ''}` };
       }),
-      can: this.actions(user, order, totals.totalCents, settings.approvalLimitCents),
+      can: this.actions(user, order, totals.totalCents, settings.approvalLimitCents, order.bill),
       approvalLimitCents: settings.approvalLimitCents,
     };
   }

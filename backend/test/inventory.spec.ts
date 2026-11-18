@@ -279,6 +279,14 @@ describe('reversing a movement', () => {
     await expect(service.reverseMovement(office, movements[0]!.id as string, { reason: 'Wrong' })).rejects.toMatchObject({ code: 'STOCK_MOVEMENT_ALREADY_REVERSED' });
   });
 
+  it('leaves goods received to their purchase order, where the receipt is reversed', async () => {
+    const { service, movements } = database();
+    movements.push({ id: id(700), organizationId: ORG, itemId: FILTER, placeId: STOCKROOM, kind: 'RECEIPT', quantity: 24, unitCostCents: 390, reversesId: null });
+
+    await expect(service.reverseMovement(office, id(700), { reason: 'Wrong order' })).rejects.toMatchObject({ code: 'STOCK_MOVEMENT_HAS_DOCUMENT' });
+    expect(movements).toHaveLength(1);
+  });
+
   it('needs a reason, and a movement of this office', async () => {
     const { service, movements } = database();
     await service.enterOpeningBalance(office, FILTER, opening());

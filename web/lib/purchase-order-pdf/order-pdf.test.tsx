@@ -32,8 +32,8 @@ const ORDER = {
   taxBasisPoints: 825,
   notes: 'Deliver to the back door.',
   lines: [
-    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36 },
-    { id: 'ol-2', item: { id: 'item-glue', code: 'PST-0001', name: 'Glue boards', unit: 'pack' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24 },
+    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0 },
+    { id: 'ol-2', item: { id: 'item-glue', code: 'PST-0001', name: 'Glue boards', unit: 'pack' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0 },
   ],
   subtotalCents: 18480,
   taxCents: 1525,
@@ -43,8 +43,11 @@ const ORDER = {
   cancelReason: null,
   from: { name: 'Example Company', addressLine1: '1 Example Plaza', addressLine2: null, phone: '555-0100', email: null },
   deliveries: [],
+  receipts: [],
+  bill: null,
+  shortCloseReason: null,
   history: [],
-  can: { edit: false, submit: false, approve: false, sendBack: false, send: true, cancel: true, approveBlocked: null },
+  can: { edit: false, submit: false, approve: false, sendBack: false, send: true, cancel: true, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null },
   approvalLimitCents: 50000,
 } satisfies PurchaseOrderDetail;
 

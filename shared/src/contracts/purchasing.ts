@@ -11,7 +11,7 @@
  * anything billed.
  */
 
-export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED'] as const;
+export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED', 'CLOSED'] as const;
 export type RequisitionStatus = (typeof REQUISITION_STATUSES)[number];
 
 /** As the office reads them. */
@@ -23,6 +23,7 @@ export const REQUISITION_STATUS_LABEL: Record<RequisitionStatus, string> = {
   ORDERED: 'Ordered',
   REJECTED: 'Rejected',
   CANCELLED: 'Cancelled',
+  CLOSED: 'Received and paid',
 };
 
 /** Still being worked on by somebody: the list's "open". */

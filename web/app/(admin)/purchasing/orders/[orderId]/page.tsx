@@ -19,6 +19,7 @@ import { useState, type FormEvent } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { BillSection, ReceivingSection } from '@/components/purchasing/order-receiving';
 import { PurchaseOrderStatusBadge, PurchaseOrderSteps } from '@/components/purchasing/requisition-parts';
 import { AsideCard, FactTable } from '@/components/record/record-kit';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -42,6 +43,7 @@ import { usePurchaseOrder, usePurchaseOrderEdits, useRequisitionChoices, type Pu
  * it as it stands. Every button is drawn from what the server says this person
  * may do. The PDF is made in the browser; emailing it to the vendor is the one
  * thing here that costs, so it happens only on its own button, once a press.
+ * What has arrived and the vendor's bill (phase 4) sit under its lines.
  */
 
 const NONE = 'none';
@@ -64,6 +66,14 @@ const LINE_COLUMNS: Array<Column<PurchaseOrderLine>> = [
   },
   { key: 'asked', header: 'Asked for', numeric: true, hideBelow: 'md', cell: (line) => formatCount(line.requestedQuantity) },
   { key: 'quantity', header: 'Ordered', numeric: true, cell: (line) => formatCount(line.quantity) },
+  { key: 'received', header: 'Received', numeric: true, cell: (line) => formatCount(line.receivedQuantity) },
+  {
+    key: 'toCome',
+    header: 'Still to come',
+    numeric: true,
+    hideBelow: 'sm',
+    cell: (line) => (line.quantity > line.receivedQuantity ? <Badge variant="warning">{formatCount(line.quantity - line.receivedQuantity)}</Badge> : formatCount(0)),
+  },
   { key: 'each', header: 'Price each', numeric: true, cell: (line) => formatMoney(line.unitPriceCents) },
   { key: 'total', header: 'Total', numeric: true, cell: (line) => formatMoney(line.quantity * line.unitPriceCents) },
 ];
@@ -415,9 +425,12 @@ function OrderView({ data }: { data: PurchaseOrderDetail }) {
             <p className="whitespace-pre-wrap">{data.notes}</p>
           </AsideCard>
         ) : null}
-        <AsideCard title="What has arrived">
-          <p className="text-muted-foreground">Nothing is received in the console yet. Receiving, the vendor&apos;s bill and payment come next.</p>
-        </AsideCard>
+        {['DRAFT', 'AWAITING_APPROVAL', 'CANCELLED'].includes(data.status) ? null : (
+          <>
+            <ReceivingSection data={data} />
+            <BillSection data={data} />
+          </>
+        )}
       </div>
 
       <aside className="grid gap-4">
