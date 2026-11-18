@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto';
 
-import { keywordsFromLabel, CHECKLIST_VOCABULARY } from '@texasrenters/shared';
+import { keywordsFromLabel, CHECKLIST_VOCABULARY, parseReportPhotoStamp } from '@texasrenters/shared';
 
 /**
  * Column positions, in PDF points.
@@ -120,9 +120,10 @@ export interface ImportedReport {
  * inspection's walkthrough.
  *
  * Jobber schedules a visit and the walk happens within a few days; the report
- * is written the same day it is walked but uploaded to Propertyware whenever
- * somebody got to it. So the match is against the inspection's schedule, with a
- * fortnight either side, and the report's own date is what is compared.
+ * is uploaded to Propertyware whenever somebody got to it, and is not always
+ * even written the day it is walked. So the match is against the inspection's
+ * schedule, with a fortnight either side, and the day of the walk itself --
+ * {@link walkthroughDay} -- is what is compared.
  *
  * Wider than it sounds because the alternative is worse in one direction only:
  * too narrow creates a duplicate inspection beside a real one, and a duplicate
@@ -138,22 +139,67 @@ export interface ImportedReport {
  */
 export const REPORT_MATCH_WINDOW_DAYS = 14;
 
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
 /**
- * The report's own date, which is the one that counts.
+ * The date in the report's header.
  *
  * Inspect & Cloud writes it as `DEC-21-2023` in the page header. Not the
  * document's Propertyware timestamp: reports are uploaded whenever somebody got
- * to it, and one property's was filed eight months after the walk.
+ * to it, and one property's was filed eight months after the walk. But not the
+ * walk either -- it is the day the report was produced -- so it only stands in
+ * for the walk when no photograph says otherwise; see {@link walkthroughDay}.
  * Midnight UTC, which is how a `@db.Date` column holds a day.
  */
 export function reportWalkedOn(value: string | null | undefined): Date | null {
   const match = /^([A-Z]{3})-(\d{1,2})-(\d{4})$/i.exec((value ?? '').trim());
   if (!match) return null;
-  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-  const month = months.indexOf(match[1].toLowerCase());
+  const month = MONTHS.indexOf(match[1].toLowerCase());
   if (month < 0) return null;
   const parsed = new Date(Date.UTC(Number(match[3]), month, Number(match[2])));
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * The day a report was walked, as its photographs tell it.
+ *
+ * The header date is when Inspect & Cloud produced the report, and that can be
+ * months after the walk. One property's move-in was walked on Sep 8 2026 --
+ * every photograph stamped that morning, and Jobber closed the visit before
+ * eleven -- and its report says NOV-09-2026, the day it was finished and filed. Measured by
+ * the header, the walk was 62 days from its own visit, so the import made a
+ * second move-in dated Nov 9 and left the visit it belonged to empty.
+ *
+ * The camera's stamp is what the walk itself left behind, so it is what counts:
+ * the day most photographs carry, read off the Texas wall clock the camera
+ * printed. Most rather than first, so one photograph with a wrong clock cannot
+ * move a whole walk; a tie goes to the earlier day.
+ *
+ * The header still bounds it: a report cannot be produced before its walk, so
+ * photographs stamped after the header came from a camera whose clock ran
+ * ahead, and the header is the better word. A report with no readable stamp
+ * falls back to its header, and one with neither has no date to measure.
+ * Midnight UTC, as {@link reportWalkedOn} returns it.
+ */
+export function walkthroughDay(report: Pick<ImportedReport, 'reportDate' | 'areas'>): Date | null {
+  const header = reportWalkedOn(report.reportDate);
+  const photosOn = new Map<number, number>();
+  for (const area of report.areas)
+    for (const photo of area.photos) {
+      const day = stampDay(photo.takenAt);
+      if (day !== null) photosOn.set(day, (photosOn.get(day) ?? 0) + 1);
+    }
+  const [walked] = [...photosOn].sort(([dayA, countA], [dayB, countB]) => countB - countA || dayA - dayB);
+  if (!walked || (header && walked[0] > header.getTime())) return header;
+  return new Date(walked[0]);
+}
+
+/** The day on a photograph's stamp, "Sep 08 2026 07:41:57 AM", as midnight UTC. */
+function stampDay(text: string | null): number | null {
+  // Read whole first, so a day is only taken from a stamp that is a real time.
+  if (!parseReportPhotoStamp(text)) return null;
+  const [monthName = '', day, year] = (text ?? '').trim().split(/\s+/);
+  return Date.UTC(Number(year), MONTHS.indexOf(monthName.toLowerCase()), Number(day));
 }
 
 /** Whether a report walked on one day can be the walkthrough scheduled on another. */
