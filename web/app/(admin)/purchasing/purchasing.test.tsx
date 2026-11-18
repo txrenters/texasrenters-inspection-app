@@ -160,8 +160,8 @@ describe('filling a requisition in', () => {
         deliverToPlaceId: 'place-stockroom',
         reason: 'Filters are out.',
         lines: [
-          { itemId: 'item-filter', description: null, quantity: 36, estimatedUnitCostCents: 390 },
-          { itemId: 'item-battery', description: null, quantity: 24, estimatedUnitCostCents: 185 },
+          { itemId: 'item-filter', quantity: 36, estimatedUnitCostCents: 390 },
+          { itemId: 'item-battery', quantity: 24, estimatedUnitCostCents: 185 },
         ],
         quotes: [],
       },
@@ -171,10 +171,12 @@ describe('filling a requisition in', () => {
 
   it('says who approves, and asks for quotes once it is above the limit', () => {
     mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Ask for something not in the list' }));
-    fireEvent.change(screen.getByLabelText('What is asked for on line 1'), { target: { value: 'Smoke alarm, 10-year' } });
-    fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm, 10-year'), { target: { value: '40' } });
-    fireEvent.change(screen.getByLabelText('Estimated cost of one Smoke alarm, 10-year'), { target: { value: '15.30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
+    fireEvent.keyDown(screen.getByLabelText('Item on line 1'), { key: 'ArrowDown' });
+    expect(screen.queryByRole('option', { name: /Glue boards/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'SMK-10 · Smoke alarm' }));
+    expect((screen.getByLabelText('Estimated cost of one Smoke alarm') as HTMLInputElement).value).toBe('15.30');
+    fireEvent.change(screen.getByLabelText('Quantity of Smoke alarm'), { target: { value: '40' } });
     fireEvent.change(screen.getByLabelText('Why it is needed'), { target: { value: 'Replacing expired alarms.' } });
 
     expect(screen.getByText('Somebody who may approve any amount')).toBeTruthy();
@@ -182,9 +184,12 @@ describe('filling a requisition in', () => {
     expect(submit().disabled).toBe(true);
   });
 
-  it('saves a draft with a row unfinished nowhere, and never while one is', async () => {
+  it('asks for every line by an item code: nothing is written in words', async () => {
     const onSave = mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Ask for something not in the list' }));
+    expect(screen.queryByRole('button', { name: /not in the list/i })).toBeNull();
+    expect(screen.getByText(/Every line uses an item code/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add an item' }));
     const draft = screen.getByRole('button', { name: 'Save as a draft' }) as HTMLButtonElement;
     expect(draft.disabled).toBe(true);
     expect(screen.getByRole('status').textContent).toBe('Finish or remove the rows that are not filled in.');

@@ -72,10 +72,12 @@ export function requisitionSubmitProblem(
   return null;
 }
 
+/**
+ * Every line asks for an item by its code (2026-11-19). Something with no code
+ * yet is added to the inventory first, by whoever keeps the stock.
+ */
 export interface RequisitionLineInput {
-  /** An item of the inventory; null for something not on the list yet, which `description` then names. */
-  itemId: string | null;
-  description: string | null;
+  itemId: string;
   quantity: number;
   estimatedUnitCostCents: number;
 }
@@ -133,6 +135,7 @@ export interface RequisitionList {
 
 export interface RequisitionLine {
   id: string;
+  /** Null only on a line written in words before every line needed a code; `description` then says what. */
   item: { id: string; code: string; name: string; unit: string } | null;
   description: string | null;
   quantity: number;

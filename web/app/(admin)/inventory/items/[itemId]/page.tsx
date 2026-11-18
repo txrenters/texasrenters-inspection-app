@@ -111,7 +111,7 @@ export default function StockItemPage() {
               { label: 'Reorder at or below', value: item.reorderLevel ? formatCount(item.reorderLevel) : EMPTY },
               { label: 'Usual order quantity', value: item.reorderQuantity ? formatCount(item.reorderQuantity) : EMPTY },
               { label: 'Usual vendor', value: item.usualVendor?.name ?? EMPTY },
-              { label: 'Category', value: item.category ?? EMPTY },
+              { label: 'Category', value: item.category?.name ?? EMPTY },
             ]}
             label="Reordering"
           />
@@ -163,6 +163,7 @@ export default function StockItemPage() {
 
       {editing && choices ? (
         <ItemDialog
+          categories={choices.categories}
           companies={choices.companies}
           companyFixed={movementsTotal > 0}
           error={edits.updateItem.error}

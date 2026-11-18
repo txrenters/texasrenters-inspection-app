@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   OpeningBalanceInput,
   ReverseMovementInput,
+  SaveStockCategoryInput,
   SaveStockItemInput,
   SaveStockPlaceInput,
   SaveVendorInput,
@@ -84,6 +85,11 @@ export function useInventoryEdits() {
       mutationFn: ({ movementId, input }: { movementId: string; input: ReverseMovementInput }) =>
         send<StockItemDetail>(`/movements/${encodeURIComponent(movementId)}/reverse`, 'POST', input),
       onSuccess: itemSaved,
+    }),
+    createCategory: useMutation({ mutationFn: (input: SaveStockCategoryInput) => send<StockList>('/categories', 'POST', input), onSuccess: settle<StockList>(inventoryKeys.stock) }),
+    updateCategory: useMutation({
+      mutationFn: ({ categoryId, input }: { categoryId: string; input: SaveStockCategoryInput }) => send<StockList>(`/categories/${encodeURIComponent(categoryId)}`, 'PATCH', input),
+      onSuccess: settle<StockList>(inventoryKeys.stock),
     }),
     createPlace: useMutation({ mutationFn: (input: SaveStockPlaceInput) => send<StockPlaces>('/places', 'POST', input), onSuccess: settle<StockPlaces>(inventoryKeys.places) }),
     updatePlace: useMutation({

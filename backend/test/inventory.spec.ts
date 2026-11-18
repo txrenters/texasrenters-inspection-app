@@ -4,12 +4,13 @@ import {
   MACHINE_FORBIDDEN_PERMISSIONS,
   type OpeningBalanceInput,
   type ReverseMovementInput,
+  type SaveStockCategoryInput,
   type SaveStockItemInput,
   type SaveStockPlaceInput,
   type SaveVendorInput,
 } from '@texasrenters/shared';
 
-import { InventoryController, OpeningBalanceDto, ReverseMovementDto, SaveStockItemDto, SaveStockPlaceDto, SaveVendorDto } from '../src/admin/inventory.controller';
+import { InventoryController, OpeningBalanceDto, ReverseMovementDto, SaveStockCategoryDto, SaveStockItemDto, SaveStockPlaceDto, SaveVendorDto } from '../src/admin/inventory.controller';
 import { InventoryService } from '../src/admin/inventory.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
@@ -37,6 +38,8 @@ const STOCKROOM = id(11);
 const VAN = id(12);
 const CLOSED = id(13);
 const KEY = id(90);
+const FILTERS = id(31);
+const RETIRED = id(32);
 
 const office: AuthenticatedUser = {
   id: '70000000-0000-4000-8000-000000000009',
@@ -53,14 +56,18 @@ type Row = Record<string, unknown>;
 
 function database() {
   const items: Row[] = [
-    { id: FILTER, organizationId: ORG, code: 'FLT-16251', codeKey: 'flt-16251', name: 'Filter 16x25x1', unit: 'each', category: 'Filters', xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, active: true, usualVendor: null },
-    { id: BATTERY, organizationId: ORG, code: 'BAT-9V', codeKey: 'bat-9v', name: 'Battery, 9 V', unit: 'each', category: null, xeroTenantId: null, reorderLevel: 12, reorderQuantity: 24, active: true, usualVendor: null },
-    { id: THEIRS, organizationId: OTHER_ORG, code: 'X-1', codeKey: 'x-1', name: 'Another office\'s item', unit: 'each', category: null, xeroTenantId: null, reorderLevel: 0, reorderQuantity: 0, active: true, usualVendor: null },
+    { id: FILTER, organizationId: ORG, code: 'FLT-16251', codeKey: 'flt-16251', name: 'Filter 16x25x1', unit: 'each', categoryId: FILTERS, category: { id: FILTERS, name: 'Filters' }, xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, active: true, usualVendor: null },
+    { id: BATTERY, organizationId: ORG, code: 'BAT-9V', codeKey: 'bat-9v', name: 'Battery, 9 V', unit: 'each', categoryId: null, category: null, xeroTenantId: null, reorderLevel: 12, reorderQuantity: 24, active: true, usualVendor: null },
+    { id: THEIRS, organizationId: OTHER_ORG, code: 'X-1', codeKey: 'x-1', name: 'Another office\'s item', unit: 'each', categoryId: null, category: null, xeroTenantId: null, reorderLevel: 0, reorderQuantity: 0, active: true, usualVendor: null },
   ];
   const places: Row[] = [
     { id: STOCKROOM, organizationId: ORG, name: 'Stockroom', kind: 'STOCKROOM', technicianId: null, technician: null, active: true },
     { id: VAN, organizationId: ORG, name: 'Van 1', kind: 'VAN', technicianId: TECH, technician: { displayName: 'Sample Technician' }, active: true },
     { id: CLOSED, organizationId: ORG, name: 'Old shed', kind: 'STOCKROOM', technicianId: null, technician: null, active: false },
+  ];
+  const categories: Row[] = [
+    { id: FILTERS, organizationId: ORG, name: 'Filters', nameKey: 'filters', prefix: 'FLT', nextNumber: 3, active: true },
+    { id: RETIRED, organizationId: ORG, name: 'Old parts', nameKey: 'old parts', prefix: 'OLD', nextNumber: 1, active: false },
   ];
   const vendors: Row[] = [];
   const movements: Row[] = [];
@@ -102,7 +109,18 @@ function database() {
   });
 
   const db = {
-    stockItem: table(items),
+    stockItem: table(items, (data) => {
+      const category = categories.find((row) => row.id === data.categoryId);
+      return { id: id(100 + items.length), active: true, usualVendor: null, category: category ? { id: category.id, name: category.name } : null, ...data };
+    }),
+    stockCategory: {
+      ...table(categories, (data) => ({ id: id(200 + categories.length), nextNumber: 1, active: true, ...data })),
+      findMany: jest.fn(async ({ where }: { where: Row & { id?: { not: string } } }) =>
+        categories
+          .filter((row) => row.organizationId === where.organizationId && row.id !== where.id?.not)
+          .map((row) => ({ ...row, _count: { items: items.filter((item) => item.categoryId === row.id).length } })),
+      ),
+    },
     stockPlace: table(places, (data) => ({ id: id(100 + places.length), active: true, technician: null, ...data })),
     vendor: table(vendors),
     stockMovement: {
@@ -134,11 +152,17 @@ function database() {
       findFirst: jest.fn(async ({ where }: { where: Row }) => (where.userProfileId === TECH ? { id: 'member' } : null)),
     },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
-    $queryRaw: jest.fn(async () => []),
+    // The advisory lock answers nothing; taking a category's next number answers the number taken.
+    $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
+      if (!sql.join('').includes('StockCategory')) return [];
+      const category = categories.find((row) => row.id === values[0])!;
+      category.nextNumber = (category.nextNumber as number) + 1;
+      return [{ taken: (category.nextNumber as number) - 1 }];
+    }),
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  return { db, movements, audits, items, places, vendors, service: new InventoryService(db as never) };
+  return { db, movements, audits, items, places, vendors, categories, service: new InventoryService(db as never) };
 }
 
 const opening = (over: Partial<OpeningBalanceInput> = {}): OpeningBalanceInput => ({ placeId: STOCKROOM, quantity: 18, unitCostCents: 342, day: '2026-11-18', requestKey: KEY, ...over });
@@ -264,30 +288,55 @@ describe('reversing a movement', () => {
 });
 
 describe('items', () => {
-  it('are added with a code and a name, trimmed, and audited', async () => {
-    const { service, items, audits } = database();
-    await service.createItem(office, { code: '  flt-20201 ', name: ' Filter  20x20x1 ', reorderLevel: 24, xeroTenantId: THMP });
+  it('are given the next code of their category, and nobody types one', async () => {
+    const { service, items, audits, categories } = database();
+    const first = await service.createItem(office, { name: ' Filter  20x20x1 ', categoryId: FILTERS, reorderLevel: 24, xeroTenantId: THMP });
 
-    expect(items.at(-1)).toMatchObject({ organizationId: ORG, code: 'flt-20201', codeKey: 'flt-20201', name: 'Filter 20x20x1', unit: 'each', reorderLevel: 24, xeroTenantId: THMP });
-    expect(audits).toEqual([expect.objectContaining({ action: 'STOCK_ITEM_CREATED' })]);
-    await expect(service.createItem(office, { code: ' ', name: 'Nothing' })).rejects.toMatchObject({ code: 'STOCK_ITEM_INCOMPLETE' });
+    expect(first.item).toMatchObject({ code: 'FLT-0003', name: 'Filter 20x20x1', category: { id: FILTERS, name: 'Filters' } });
+    expect(items.at(-1)).toMatchObject({ organizationId: ORG, code: 'FLT-0003', codeKey: 'flt-0003', categoryId: FILTERS, unit: 'each', reorderLevel: 24, xeroTenantId: THMP });
+    expect(audits).toEqual([expect.objectContaining({ action: 'STOCK_ITEM_CREATED', metadata: { code: 'FLT-0003', name: 'Filter 20x20x1' } })]);
+
+    expect((await service.createItem(office, { name: 'Filter 20x25x1', categoryId: FILTERS })).item.code).toBe('FLT-0004');
+    expect(categories[0]).toMatchObject({ nextNumber: 5 });
   });
 
-  it('say so when the code is taken, and refuse a company or vendor of another office', async () => {
-    const { service, db } = database();
-    db.stockItem.create.mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }));
-    await expect(service.createItem(office, { code: 'FLT-16251', name: 'Twice' })).rejects.toMatchObject({ code: 'STOCK_ITEM_CODE_TAKEN' });
-    await expect(service.createItem(office, { code: 'NEW', name: 'New', xeroTenantId: 'tenant-of-another-office' })).rejects.toMatchObject({ code: 'STOCK_COMPANY_NOT_FOUND' });
-    await expect(service.createItem(office, { code: 'NEW', name: 'New', usualVendorId: id(70) })).rejects.toMatchObject({ code: 'VENDOR_NOT_FOUND' });
+  it('step over a code somebody typed before the console gave them', async () => {
+    const { service, items } = database();
+    items.push({ id: id(60), organizationId: ORG, code: 'flt-0003', codeKey: 'flt-0003', name: 'Typed by hand', unit: 'each', categoryId: null, category: null, xeroTenantId: null, reorderLevel: 0, reorderQuantity: 0, active: true, usualVendor: null });
+
+    expect((await service.createItem(office, { name: 'Filter 20x20x1', categoryId: FILTERS })).item.code).toBe('FLT-0004');
+  });
+
+  it('need a name and a category in use, and a company and vendor of this office', async () => {
+    const { service, items } = database();
+    const before = items.length;
+    await expect(service.createItem(office, { name: ' ', categoryId: FILTERS })).rejects.toMatchObject({ code: 'STOCK_ITEM_INCOMPLETE' });
+    await expect(service.createItem(office, { name: 'No category' })).rejects.toMatchObject({ code: 'STOCK_ITEM_INCOMPLETE' });
+    await expect(service.createItem(office, { name: 'New', categoryId: RETIRED })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
+    await expect(service.createItem(office, { name: 'New', categoryId: id(79) })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
+    await expect(service.createItem(office, { name: 'New', categoryId: FILTERS, xeroTenantId: 'tenant-of-another-office' })).rejects.toMatchObject({ code: 'STOCK_COMPANY_NOT_FOUND' });
+    await expect(service.createItem(office, { name: 'New', categoryId: FILTERS, usualVendorId: id(70) })).rejects.toMatchObject({ code: 'VENDOR_NOT_FOUND' });
+    expect(items).toHaveLength(before);
   });
 
   it('change only what was sent', async () => {
     const { service, items, audits } = database();
     // The validation pipe hands over every field the DTO names, undefined where none was sent.
-    await service.updateItem(office, FILTER, { reorderLevel: 30, code: undefined, name: undefined, category: undefined, xeroTenantId: undefined } as SaveStockItemInput);
+    await service.updateItem(office, FILTER, { reorderLevel: 30, name: undefined, categoryId: undefined, xeroTenantId: undefined } as SaveStockItemInput);
 
-    expect(items[0]).toMatchObject({ code: 'FLT-16251', name: 'Filter 16x25x1', category: 'Filters', xeroTenantId: THMP, reorderLevel: 30 });
+    expect(items[0]).toMatchObject({ code: 'FLT-16251', name: 'Filter 16x25x1', categoryId: FILTERS, xeroTenantId: THMP, reorderLevel: 30 });
     expect(audits.at(-1)).toMatchObject({ action: 'STOCK_ITEM_CHANGED', metadata: { code: 'FLT-16251', changed: ['reorderLevel'] } });
+  });
+
+  it('keep the category their code came from; one from before categories may be given one, and keeps its code', async () => {
+    const { service, items, categories } = database();
+    categories.push({ id: id(33), organizationId: ORG, name: 'Parts', nameKey: 'parts', prefix: 'PRT', nextNumber: 1, active: true });
+
+    await expect(service.updateItem(office, FILTER, { categoryId: id(33) })).rejects.toMatchObject({ code: 'STOCK_ITEM_CATEGORY_FIXED' });
+    await expect(service.updateItem(office, BATTERY, { categoryId: id(79) })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
+    await service.updateItem(office, BATTERY, { categoryId: id(33) });
+    expect(items[1]).toMatchObject({ code: 'BAT-9V', categoryId: id(33) });
+    expect(categories.at(-1)).toMatchObject({ nextNumber: 1 });
   });
 
   it('keep their company once they have moved, and stay on while they hold stock', async () => {
@@ -298,6 +347,42 @@ describe('items', () => {
     await expect(service.updateItem(office, FILTER, { active: false })).rejects.toMatchObject({ code: 'STOCK_ITEM_HAS_STOCK' });
     await expect(service.updateItem(office, BATTERY, { active: false })).resolves.toMatchObject({ item: { active: false } });
     await expect(service.updateItem(office, THEIRS, { name: 'Ours now' })).rejects.toMatchObject({ code: 'STOCK_ITEM_NOT_FOUND' });
+  });
+});
+
+describe('categories', () => {
+  it('are listed with the code their next item will get', async () => {
+    const { service } = database();
+    expect((await service.stock(office)).categories).toEqual([
+      { id: FILTERS, name: 'Filters', prefix: 'FLT', nextCode: 'FLT-0003', itemCount: 1, active: true },
+      { id: RETIRED, name: 'Old parts', prefix: 'OLD', nextCode: 'OLD-0001', itemCount: 0, active: false },
+    ]);
+  });
+
+  it('are added with a name and a prefix of their own, kept upper case, and audited', async () => {
+    const { service, categories, audits } = database();
+    const stock = await service.createCategory(office, { name: ' Pest  products ', prefix: 'pst' });
+
+    expect(categories.at(-1)).toMatchObject({ organizationId: ORG, name: 'Pest products', nameKey: 'pest products', prefix: 'PST', nextNumber: 1 });
+    expect(stock.categories.find((category) => category.prefix === 'PST')).toMatchObject({ nextCode: 'PST-0001', itemCount: 0 });
+    expect(audits).toEqual([expect.objectContaining({ action: 'STOCK_CATEGORY_CREATED', metadata: { name: 'Pest products', prefix: 'PST' } })]);
+
+    await expect(service.createCategory(office, { name: 'filters', prefix: 'FIL' })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_TAKEN', message: 'There is already a category called filters.' });
+    await expect(service.createCategory(office, { name: 'Furnace filters', prefix: 'flt' })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_TAKEN', message: 'Another category already uses the prefix FLT.' });
+    await expect(service.createCategory(office, { name: 'Bad', prefix: 'F' })).rejects.toMatchObject({ code: 'STOCK_PREFIX_SHAPE' });
+    await expect(service.createCategory(office, { name: 'Bad', prefix: '9AB' })).rejects.toMatchObject({ code: 'STOCK_PREFIX_SHAPE' });
+    await expect(service.createCategory(office, { name: ' ', prefix: 'ABC' })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_INCOMPLETE' });
+  });
+
+  it('keep their prefix once it has numbered an item, and change it freely before', async () => {
+    const { service, categories } = database();
+    await expect(service.updateCategory(office, FILTERS, { prefix: 'FIL' })).rejects.toMatchObject({ code: 'STOCK_PREFIX_FIXED' });
+    await service.updateCategory(office, FILTERS, { name: 'Air filters', prefix: 'FLT' });
+    expect(categories[0]).toMatchObject({ name: 'Air filters', prefix: 'FLT' });
+
+    await service.updateCategory(office, RETIRED, { prefix: 'prt', active: true });
+    expect(categories[1]).toMatchObject({ prefix: 'PRT', active: true });
+    await expect(service.updateCategory({ ...office, organizationId: OTHER_ORG }, FILTERS, { name: 'Theirs' })).rejects.toMatchObject({ code: 'STOCK_CATEGORY_NOT_FOUND' });
   });
 });
 
@@ -340,10 +425,11 @@ describe('the requests the page sends', () => {
   const check = (body: unknown, metatype: new () => object) => pipe.transform(body, { type: 'body', metatype });
 
   it('name every field of their contracts', async () => {
-    const item: Required<SaveStockItemInput> = { code: 'FLT-16251', name: 'Filter 16x25x1', unit: 'each', category: 'Filters', xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, usualVendorId: id(70), active: true };
+    const item: Required<SaveStockItemInput> = { name: 'Filter 16x25x1', unit: 'each', categoryId: FILTERS, xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, usualVendorId: id(70), active: true };
     const balance: Required<OpeningBalanceInput> = { placeId: STOCKROOM, quantity: 18, unitCostCents: 342, day: '2026-11-18', note: 'Counted', requestKey: KEY };
     const reversal: Required<ReverseMovementInput> = { reason: 'Counted the wrong shelf' };
     const place: Required<SaveStockPlaceInput> = { name: 'Van 1', kind: 'VAN', technicianId: TECH, active: true };
+    const category: Required<SaveStockCategoryInput> = { name: 'Filters', prefix: 'flt', active: true };
     const vendor: Required<SaveVendorInput> = { name: 'Hill Country Supply', contactName: 'A person', email: 'orders@example.com', phone: '512-555-0100', terms: 'Net 30', notes: 'Delivers Tuesdays', active: true };
 
     await expect(check(item, SaveStockItemDto)).resolves.toBeDefined();
@@ -351,7 +437,15 @@ describe('the requests the page sends', () => {
     await expect(check(reversal, ReverseMovementDto)).resolves.toBeDefined();
     await expect(check(place, SaveStockPlaceDto)).resolves.toBeDefined();
     await expect(check(vendor, SaveVendorDto)).resolves.toBeDefined();
-    await expect(check({ category: null, xeroTenantId: null, usualVendorId: null }, SaveStockItemDto)).resolves.toBeDefined();
+    await expect(check(category, SaveStockCategoryDto)).resolves.toBeDefined();
+    await expect(check({ xeroTenantId: null, usualVendorId: null }, SaveStockItemDto)).resolves.toBeDefined();
+  });
+
+  it('refuse a code typed for an item, and a prefix that could not start one', async () => {
+    await expect(check({ name: 'Filter', categoryId: FILTERS, code: 'FLT-9999' }, SaveStockItemDto)).rejects.toBeDefined();
+    await expect(check({ name: 'Filter', category: 'Filters' }, SaveStockItemDto)).rejects.toBeDefined();
+    await expect(check({ name: 'Filters', prefix: 'F-1' }, SaveStockCategoryDto)).rejects.toBeDefined();
+    await expect(check({ name: 'Filters', prefix: 'F', nextNumber: 900 }, SaveStockCategoryDto)).rejects.toBeDefined();
   });
 
   it('refuse a quantity typed as on hand, nothing at all, a negative cost and a part of a unit', async () => {
@@ -371,7 +465,7 @@ describe('who may do what', () => {
 
   it('reads with inventory:read and changes with inventory:manage', () => {
     for (const read of ['stock', 'item', 'places', 'vendors']) expect(permissionsOf(read)).toEqual(['inventory:read']);
-    for (const write of ['createItem', 'updateItem', 'enterOpeningBalance', 'reverseMovement', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'])
+    for (const write of ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'enterOpeningBalance', 'reverseMovement', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'])
       expect(permissionsOf(write)).toEqual(['inventory:manage']);
   });
 

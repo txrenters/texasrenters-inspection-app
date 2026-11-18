@@ -2,12 +2,15 @@
 
 import {
   MOST_STOCK_QUANTITY,
+  STOCK_PREFIX,
   formatMoney,
   parseMoney,
   type OpeningBalanceInput,
+  type SaveStockCategoryInput,
   type SaveStockItemInput,
   type SaveStockPlaceInput,
   type SaveVendorInput,
+  type StockCategoryRow,
   type StockCompany,
   type StockItemRow,
   type StockMovementRow,
@@ -153,6 +156,7 @@ function ActiveSwitch({ id, checked, onChange, label }: { id: string; checked: b
 
 export function ItemDialog({
   item,
+  categories,
   companies,
   vendors,
   companyFixed = false,
@@ -163,6 +167,7 @@ export function ItemDialog({
 }: {
   /** The item being changed; none for a new one. */
   item?: StockItemRow;
+  categories: readonly StockCategoryRow[];
   companies: readonly StockCompany[];
   vendors: readonly { id: string; name: string }[];
   /** It has moved already, so its company stays (the server holds this too). */
@@ -172,10 +177,9 @@ export function ItemDialog({
   pending: boolean;
   error: Error | null;
 }) {
-  const [code, setCode] = useState(item?.code ?? '');
   const [name, setName] = useState(item?.name ?? '');
   const [unit, setUnit] = useState(item?.unit ?? 'each');
-  const [category, setCategory] = useState(item?.category ?? '');
+  const [category, setCategory] = useState(item?.category?.id ?? NONE);
   const [company, setCompany] = useState(item?.company?.tenantId ?? NONE);
   const [vendor, setVendor] = useState(item?.usualVendor?.id ?? NONE);
   const [level, setLevel] = useState(String(item?.reorderLevel ?? 0));
@@ -184,15 +188,18 @@ export function ItemDialog({
 
   const reorderLevel = whole(level);
   const reorderQuantity = whole(quantity);
-  const invalid = !code.trim() || !name.trim() || !unit.trim() || reorderLevel === null || reorderQuantity === null;
+  // A new item's code comes from its category, so it must have one.
+  const invalid = !name.trim() || !unit.trim() || reorderLevel === null || reorderQuantity === null || (!item && category === NONE);
+  // The categories in use, and this item's own even if it has been switched off since.
+  const categoryOptions = categories.filter((option) => option.active || option.id === item?.category?.id);
+  const picked = categories.find((option) => option.id === category);
 
   // A change sends only what changed; a new item sends everything it has.
   const input: SaveStockItemInput = {};
   if (!invalid) {
-    if (code.trim() !== (item?.code ?? '')) input.code = code.trim();
     if (name.trim() !== (item?.name ?? '')) input.name = name.trim();
     if (unit.trim() !== (item?.unit ?? '')) input.unit = unit.trim();
-    if ((category.trim() || null) !== (item?.category ?? null)) input.category = category.trim() || null;
+    if (category !== NONE && category !== (item?.category?.id ?? NONE)) input.categoryId = category;
     if (chosen(company) !== (item?.company?.tenantId ?? null)) input.xeroTenantId = chosen(company);
     if (chosen(vendor) !== (item?.usualVendor?.id ?? null)) input.usualVendorId = chosen(vendor);
     if (reorderLevel !== (item?.reorderLevel ?? null)) input.reorderLevel = reorderLevel;
@@ -206,7 +213,11 @@ export function ItemDialog({
 
   return (
     <FormDialog
-      description={item ? 'What is on hand is not changed here. It changes only by a stock movement.' : 'Add something the office stocks. Enter what is on hand afterwards, as its opening balance.'}
+      description={
+        item
+          ? `${item.code}. What is on hand is not changed here: it changes only by a stock movement.`
+          : 'Add something the office stocks. The console gives it its code. Enter what is on hand afterwards, as its opening balance.'
+      }
       disabled={invalid || !changed}
       error={error}
       onClose={onClose}
@@ -215,25 +226,39 @@ export function ItemDialog({
       submitLabel={item ? 'Save item' : 'Add item'}
       title={item ? 'Edit item' : 'New item'}
     >
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        <Field>
-          <FieldLabel htmlFor="item-code">Code</FieldLabel>
-          <Input autoComplete="off" id="item-code" maxLength={40} onChange={(event) => setCode(event.target.value)} required value={code} />
-        </Field>
+      {categoryOptions.length || item ? (
+        <Choice
+          description={
+            item?.category
+              ? `${item.code} got its code from its category, so the category stays.`
+              : item
+                ? 'This item was added before categories gave the codes. It keeps its code.'
+                : picked
+                  ? `Its code will be ${picked.nextCode}.`
+                  : 'The category gives the item its code.'
+          }
+          disabled={Boolean(item?.category)}
+          id="item-category"
+          label="Category"
+          none={item ? 'No category' : 'Choose a category'}
+          onChange={setCategory}
+          options={categoryOptions.map((option) => ({ value: option.id, label: `${option.name} (${option.prefix})` }))}
+          value={category}
+        />
+      ) : (
+        <Alert variant="warning">
+          <AlertDescription>Add a category on the Categories tab first: its prefix starts the item&apos;s code.</AlertDescription>
+        </Alert>
+      )}
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Field>
           <FieldLabel htmlFor="item-name">Name</FieldLabel>
           <Input autoComplete="off" id="item-name" maxLength={160} onChange={(event) => setName(event.target.value)} required value={name} />
         </Field>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
         <Field>
           <FieldLabel htmlFor="item-unit">Counted in</FieldLabel>
           <Input autoComplete="off" id="item-unit" maxLength={30} onChange={(event) => setUnit(event.target.value)} required value={unit} />
-          <FieldDescription>each, box, jug. Stock is kept in whole units of this.</FieldDescription>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="item-category">Category</FieldLabel>
-          <Input autoComplete="off" id="item-category" maxLength={60} onChange={(event) => setCategory(event.target.value)} value={category} />
+          <FieldDescription>each, box, jug.</FieldDescription>
         </Field>
       </div>
       <Choice
@@ -261,6 +286,66 @@ export function ItemDialog({
       </div>
       <Choice id="item-vendor" label="Usual vendor" none="No usual vendor" onChange={setVendor} options={vendors.map((option) => ({ value: option.id, label: option.name }))} value={vendor} />
       {item ? <ActiveSwitch checked={active} id="item-active" label="In use" onChange={setActive} /> : null}
+    </FormDialog>
+  );
+}
+
+// ── Category ──────────────────────────────────────────────────────────────
+
+export function CategoryDialog({
+  category,
+  onSave,
+  onClose,
+  pending,
+  error,
+}: {
+  category?: StockCategoryRow;
+  onSave: (input: SaveStockCategoryInput) => Promise<unknown>;
+  onClose: () => void;
+  pending: boolean;
+  error: Error | null;
+}) {
+  const [name, setName] = useState(category?.name ?? '');
+  const [prefix, setPrefix] = useState(category?.prefix ?? '');
+  const [active, setActive] = useState(category?.active ?? true);
+  // Once it has given out a code its prefix stays (the server holds this too).
+  const prefixFixed = Boolean(category) && category?.nextCode !== `${category?.prefix}-0001`;
+  const typed = prefix.trim().toUpperCase();
+  const prefixValid = STOCK_PREFIX.test(typed);
+
+  const input: SaveStockCategoryInput = {};
+  if (name.trim() !== (category?.name ?? '')) input.name = name.trim();
+  if (typed !== (category?.prefix ?? '')) input.prefix = typed;
+  if (category && active !== category.active) input.active = active;
+
+  return (
+    <FormDialog
+      description="A kind of stock. Its prefix starts the code of every item added to it, and the console numbers them."
+      disabled={!name.trim() || !prefixValid || !Object.keys(input).length}
+      error={error}
+      onClose={onClose}
+      onSubmit={() => onSave(input)}
+      pending={pending}
+      submitLabel={category ? 'Save category' : 'Add category'}
+      title={category ? 'Edit category' : 'New category'}
+    >
+      <Field>
+        <FieldLabel htmlFor="category-name">Name</FieldLabel>
+        <Input autoComplete="off" id="category-name" maxLength={60} onChange={(event) => setName(event.target.value)} required value={name} />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="category-prefix">Prefix</FieldLabel>
+        <Input autoComplete="off" className="uppercase" disabled={prefixFixed} id="category-prefix" maxLength={6} onChange={(event) => setPrefix(event.target.value)} required value={prefix} />
+        <FieldDescription>
+          {prefixFixed
+            ? `It has already given out codes starting ${category?.prefix}, so the prefix stays. The next is ${category?.nextCode}.`
+            : prefixValid
+              ? `Its first item will be ${typed}-0001.`
+              : 'A letter and then one to five letters or digits, like FLT.'}
+        </FieldDescription>
+        <FieldError>{prefix.trim() && !prefixValid ? 'A letter and then one to five letters or digits.' : null}</FieldError>
+      </Field>
+      {category ? <ActiveSwitch checked={active} id="category-active" label="In use" onChange={setActive} /> : null}
     </FormDialog>
   );
 }

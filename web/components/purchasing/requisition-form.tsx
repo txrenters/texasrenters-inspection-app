@@ -30,7 +30,8 @@ import { formatCount } from '@/lib/format';
 /**
  * The purchase requisition as its author fills it in (2026-11-19, phase 2):
  * who it is for, why, what is asked for with what is on hand beside it, and
- * the quotes. Saved whole -- a save replaces its lines and quotes -- as a
+ * the quotes. Every line asks for an item by its code: something with no code
+ * yet is added to the inventory first, by whoever keeps the stock. Saved whole -- a save replaces its lines and quotes -- as a
  * draft, or saved and handed to the approvers in one press.
  *
  * It only prepares the request. What may be submitted, and who may approve
@@ -45,9 +46,8 @@ const dollars = (cents: number) => (cents / 100).toFixed(2);
 
 interface LineDraft {
   key: string;
-  /** An item's id; NONE while none is picked; null for something not on the list. */
-  itemId: string | null;
-  description: string;
+  /** An item's id; NONE while none is picked. */
+  itemId: string;
   quantity: string;
   cost: string;
 }
@@ -86,7 +86,7 @@ export function RequisitionForm({
   const [place, setPlace] = useState(requisition?.deliverTo?.id ?? (requisition ? NONE : (choices.places[0]?.id ?? NONE)));
   const [reason, setReason] = useState(requisition?.reason ?? '');
   const [lines, setLines] = useState<LineDraft[]>(
-    () => requisition?.lines.map((line) => ({ key: key(), itemId: line.item?.id ?? null, description: line.description ?? '', quantity: String(line.quantity), cost: dollars(line.estimatedUnitCostCents) })) ?? [],
+    () => requisition?.lines.map((line) => ({ key: key(), itemId: line.item?.id ?? NONE, quantity: String(line.quantity), cost: dollars(line.estimatedUnitCostCents) })) ?? [],
   );
   const [quotes, setQuotes] = useState<QuoteDraft[]>(
     () => requisition?.quotes.map((quote) => ({ key: key(), vendorId: quote.vendor.id, total: dollars(quote.totalCents), delivery: quote.delivery ?? '', chosen: quote.chosen })) ?? [],
@@ -95,31 +95,28 @@ export function RequisitionForm({
   const companyId = chosen(company);
   const offered = choices.items.filter((item) => item.companyTenantId === companyId);
   const itemOf = new Map(choices.items.map((item) => [item.id, item]));
-  const used = new Set(lines.flatMap((line) => (line.itemId && line.itemId !== NONE ? [line.itemId] : [])));
+  const used = new Set(lines.flatMap((line) => (line.itemId !== NONE ? [line.itemId] : [])));
   const setLine = (lineKey: string, change: Partial<LineDraft>) => setLines((rows) => rows.map((row) => (row.key === lineKey ? { ...row, ...change } : row)));
   const setQuote = (quoteKey: string, change: Partial<QuoteDraft>) => setQuotes((rows) => rows.map((row) => (row.key === quoteKey ? { ...row, ...change } : row)));
 
   /** A line for an item starts from what the office usually orders, at what one last cost on average. */
   const lineFor = (itemId: string): LineDraft => {
     const item = itemOf.get(itemId);
-    return { key: key(), itemId, description: '', quantity: item?.reorderQuantity ? String(item.reorderQuantity) : '', cost: item?.averageCostCents != null ? dollars(item.averageCostCents) : '' };
+    return { key: key(), itemId, quantity: item?.reorderQuantity ? String(item.reorderQuantity) : '', cost: item?.averageCostCents != null ? dollars(item.averageCostCents) : '' };
   };
   const low = offered.filter((item) => !used.has(item.id) && stockStatus(item.onHand, item.reorderLevel) !== 'ENOUGH');
 
   function changeCompany(next: string) {
     setCompany(next);
     // Its items are its own company's: lines for another company's items would be refused.
-    setLines((rows) => rows.filter((row) => row.itemId === null || row.itemId === NONE || itemOf.get(row.itemId)?.companyTenantId === chosen(next)));
+    setLines((rows) => rows.filter((row) => row.itemId === NONE || itemOf.get(row.itemId)?.companyTenantId === chosen(next)));
   }
 
   // What the form holds, as the request; null while any row is unfinished.
   const parsedLines = lines.map((line) => {
     const quantity = whole(line.quantity);
     const cost = money(line.cost);
-    const named = line.itemId === null ? line.description.trim().length > 0 : line.itemId !== NONE;
-    return named && quantity !== null && cost !== null && cost >= 0
-      ? { itemId: line.itemId, description: line.itemId === null ? line.description.trim() : null, quantity, estimatedUnitCostCents: cost }
-      : null;
+    return line.itemId !== NONE && quantity !== null && cost !== null && cost >= 0 ? { itemId: line.itemId, quantity, estimatedUnitCostCents: cost } : null;
   });
   const parsedQuotes = quotes.map((quote) => {
     const total = money(quote.total);
@@ -211,37 +208,27 @@ export function RequisitionForm({
                 </TableHeader>
                 <TableBody>
                   {lines.map((line, index) => {
-                    const item = line.itemId && line.itemId !== NONE ? itemOf.get(line.itemId) : undefined;
+                    const item = line.itemId !== NONE ? itemOf.get(line.itemId) : undefined;
                     const parsed = parsedLines[index];
-                    const name = item?.name ?? (line.description.trim() || `line ${index + 1}`);
+                    const name = item?.name ?? `line ${index + 1}`;
                     return (
                       <TableRow key={line.key}>
                         <TableCell className="min-w-56">
-                          {line.itemId === null ? (
-                            <Input
-                              aria-label={`What is asked for on line ${index + 1}`}
-                              maxLength={200}
-                              onChange={(event) => setLine(line.key, { description: event.target.value })}
-                              placeholder="What it is, and which model"
-                              value={line.description}
-                            />
-                          ) : (
-                            <Select onValueChange={(itemId) => setLine(line.key, { ...lineFor(itemId), key: line.key })} value={line.itemId}>
-                              <SelectTrigger aria-label={`Item on line ${index + 1}`} className="w-full">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={NONE}>Choose an item</SelectItem>
-                                {offered
-                                  .filter((option) => option.id === line.itemId || !used.has(option.id))
-                                  .map((option) => (
-                                    <SelectItem key={option.id} value={option.id}>
-                                      {option.code} · {option.name}
-                                    </SelectItem>
-                                  ))}
-                              </SelectContent>
-                            </Select>
-                          )}
+                          <Select onValueChange={(itemId) => setLine(line.key, { ...lineFor(itemId), key: line.key })} value={line.itemId}>
+                            <SelectTrigger aria-label={`Item on line ${index + 1}`} className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={NONE}>Choose an item</SelectItem>
+                              {offered
+                                .filter((option) => option.id === line.itemId || !used.has(option.id))
+                                .map((option) => (
+                                  <SelectItem key={option.id} value={option.id}>
+                                    {option.code} · {option.name}
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
                         </TableCell>
                         <TableCell className="text-right font-mono tabular-nums">
                           {item ? <StockFigure onHand={item.onHand} reorderLevel={item.reorderLevel} /> : ''}
@@ -291,26 +278,19 @@ export function RequisitionForm({
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={lines.length >= MOST_REQUISITION_LINES || offered.every((item) => used.has(item.id))}
-              onClick={() => setLines((rows) => [...rows, { key: key(), itemId: NONE, description: '', quantity: '', cost: '' }])}
+              onClick={() => setLines((rows) => [...rows, { key: key(), itemId: NONE, quantity: '', cost: '' }])}
               type="button"
               variant="outline"
             >
               Add an item
-            </Button>
-            <Button
-              disabled={lines.length >= MOST_REQUISITION_LINES}
-              onClick={() => setLines((rows) => [...rows, { key: key(), itemId: null, description: '', quantity: '1', cost: '' }])}
-              type="button"
-              variant="outline"
-            >
-              Ask for something not in the list
             </Button>
             <Button disabled={!low.length} onClick={() => setLines((rows) => [...rows, ...low.map((item) => lineFor(item.id))].slice(0, MOST_REQUISITION_LINES))} type="button" variant="outline">
               Add everything that is low
             </Button>
           </div>
           <p className="text-muted-foreground text-xs">
-            The cost starts from what one cost on average and can be changed. Only the chosen company&apos;s items are offered.
+            Every line uses an item code, and only the chosen company&apos;s items are offered. For something with no code yet, ask whoever keeps the stock
+            to add it on Inventory first. The cost starts from what one cost on average and can be changed.
           </p>
         </section>
 

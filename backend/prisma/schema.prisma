@@ -407,6 +407,7 @@ model Organization {
   vendors Vendor[]
   stockMovements StockMovement[]
   stockLevels StockLevel[]
+  stockCategories StockCategory[]
   documentSeries DocumentSeries[]
   purchasingSettings PurchasingSettings?
   purchaseRequisitions PurchaseRequisition[]
@@ -5577,13 +5578,15 @@ enum StockMovementKind {
 model StockItem {
   id              String   @id @default(uuid()) @db.Uuid
   organizationId  String   @db.Uuid
+  /// Given by the console from its category when it is added (2026-11-19): "FLT-0012". Never changed.
   code            String
   /// lower(trim(code)), spaces collapsed: one item per code, whatever its case.
   codeKey         String
   name            String
   /// What it is counted in: "each", "box", "jug".
   unit            String   @default("each")
-  category        String?
+  /// Its category, whose prefix starts its code. Null only for an item added before categories gave the codes.
+  categoryId      String?  @db.Uuid
   /// The company's books it belongs to, as an invoice product has one. Null until the office chooses.
   xeroTenantId    String?
   /// At or below this it shows as Low. 0: never low, only out.
@@ -5598,6 +5601,7 @@ model StockItem {
   organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   xeroOrganisation XeroOrganisation? @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
   usualVendor      Vendor?           @relation(fields: [organizationId, usualVendorId], references: [organizationId, id], onDelete: NoAction)
+  category         StockCategory?    @relation(fields: [organizationId, categoryId], references: [organizationId, id], onDelete: Restrict)
   movements        StockMovement[]
   levels           StockLevel[]
   requisitionLines PurchaseRequisitionLine[]
@@ -5812,4 +5816,27 @@ model PurchaseRequisitionQuote {
   vendor      Vendor              @relation(fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
 
   @@index([organizationId, requisitionId])
+}
+
+/// A kind of stock (2026-11-19): its prefix starts its items' codes, and it
+/// holds the next number. An item's code is "<prefix>-<number>", taken under
+/// this row's lock, so the stock keeper never types one.
+model StockCategory {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  nameKey        String
+  /// A letter, then one to five letters or digits, upper case (checked): "FLT".
+  prefix         String
+  nextNumber     Int      @default(1)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items        StockItem[]
+
+  @@unique([organizationId, nameKey])
+  @@unique([organizationId, prefix])
+  @@unique([organizationId, id])
 }

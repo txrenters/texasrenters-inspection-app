@@ -256,8 +256,8 @@ export class PurchasingService {
   // ── Writing a requisition ───────────────────────────────────────────────
 
   /**
-   * What a requisition names is this office's own, and its items are its
-   * company's. The database's keys refuse another office's too; this says so
+   * What a requisition names is this office's own, every line asks for an
+   * item by its code, and its items are its company's. The database's keys refuse another office's too; this says so
    * plainly, and holds the rules the keys cannot.
    */
   private async checked(db: Db, organizationId: string, input: SaveRequisitionInput) {
@@ -266,15 +266,11 @@ export class PurchasingService {
     if (input.deliverToPlaceId && !(await db.stockPlace.findFirst({ where: { organizationId, id: input.deliverToPlaceId, active: true }, select: { id: true } })))
       throw new ApplicationError(400, 'REQUISITION_PLACE_NOT_FOUND', 'That place is not in use.');
 
-    const itemIds = input.lines.flatMap((line) => (line.itemId ? [line.itemId] : []));
+    const itemIds = input.lines.map((line) => line.itemId);
     if (new Set(itemIds).size !== itemIds.length) throw new ApplicationError(400, 'REQUISITION_ITEM_TWICE', 'An item is on the requisition twice. Put it on one line.');
     const items = itemIds.length ? await db.stockItem.findMany({ where: { organizationId, id: { in: itemIds } }, select: { id: true, code: true, active: true, xeroTenantId: true } }) : [];
     const itemOf = new Map(items.map((item) => [item.id, item]));
     for (const line of input.lines) {
-      if (!line.itemId) {
-        if (!text(line.description)) throw new ApplicationError(400, 'REQUISITION_LINE_UNNAMED', 'Each line needs an item, or words for what is asked for.');
-        continue;
-      }
       const item = itemOf.get(line.itemId);
       if (!item || !item.active) throw new ApplicationError(400, 'REQUISITION_ITEM_NOT_FOUND', 'One of the items is not in the inventory, or is switched off.');
       if (item.xeroTenantId !== (input.xeroTenantId ?? null))
@@ -304,7 +300,6 @@ export class PurchasingService {
           requisitionId,
           position,
           itemId: line.itemId,
-          description: line.itemId ? null : text(line.description),
           quantity: line.quantity,
           estimatedUnitCostCents: line.estimatedUnitCostCents,
         })),
