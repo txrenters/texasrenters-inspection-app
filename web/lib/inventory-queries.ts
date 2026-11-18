@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CancelStockCountInput,
+  InventoryMonitoring,
   OpeningBalanceInput,
   PostStockCountInput,
   PostStockSlipInput,
@@ -22,6 +23,7 @@ import type {
   StockPlaces,
   StockSlipChoices,
   StockSlipList,
+  UsagePeriod,
   Vendors,
 } from '@texasrenters/shared';
 
@@ -43,6 +45,8 @@ export const inventoryKeys = {
   places: ['inventory', 'places'] as const,
   vendors: ['inventory', 'vendors'] as const,
   slips: ['inventory', 'slips'] as const,
+  slipsOf: (technicianId: string) => ['inventory', 'slips', technicianId] as const,
+  monitoring: (period: UsagePeriod) => ['inventory', 'monitoring', period] as const,
   counts: ['inventory', 'counts'] as const,
   countChoices: ['inventory', 'count-choices'] as const,
   count: (countId: string) => ['inventory', 'count', countId] as const,
@@ -72,8 +76,24 @@ export function useVendors(enabled: boolean) {
 }
 
 /** The latest withdrawals, returns and moves: read when the Withdrawals tab opens. */
-export function useStockSlips(enabled: boolean) {
-  return useQuery({ queryKey: inventoryKeys.slips, queryFn: ({ signal }) => api<StockSlipList>(`${BASE}/slips`, { signal }), enabled, ...KEPT });
+export function useStockSlips(enabled: boolean, technicianId?: string) {
+  return useQuery({
+    queryKey: technicianId ? inventoryKeys.slipsOf(technicianId) : inventoryKeys.slips,
+    queryFn: ({ signal }) => api<StockSlipList>(`${BASE}/slips${technicianId ? `?technicianId=${encodeURIComponent(technicianId)}` : ''}`, { signal }),
+    enabled,
+    ...KEPT,
+  });
+}
+
+/** Reorder and usage: read when its tab opens and when the period changes; the last answer stays on screen meanwhile. */
+export function useInventoryMonitoring(enabled: boolean, period: UsagePeriod) {
+  return useQuery({
+    queryKey: inventoryKeys.monitoring(period),
+    queryFn: ({ signal }) => api<InventoryMonitoring>(`${BASE}/monitoring?period=${period}`, { signal }),
+    enabled,
+    placeholderData: (previous) => previous,
+    ...KEPT,
+  });
 }
 
 /**

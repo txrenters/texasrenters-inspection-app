@@ -20,9 +20,10 @@ const hooks = vi.hoisted(() => ({
   useStockCounts: vi.fn(),
   useStockCountChoices: vi.fn(),
   useStockCountEdits: vi.fn(),
+  useInventoryMonitoring: vi.fn(),
 }));
 vi.mock('@/lib/inventory-queries', () => hooks);
-const url = vi.hoisted(() => ({ state: { tab: 'stock', company: 'all', show: 'in-use', q: '' }, set: vi.fn() }));
+const url = vi.hoisted(() => ({ state: { tab: 'stock', company: 'all', show: 'in-use', q: '', period: '30d', technician: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (permission: string) => account.permissions.has(permission) }) }));
@@ -85,7 +86,7 @@ const ITEMS = [
 ];
 
 beforeEach(() => {
-  url.state = { tab: 'stock', company: 'all', show: 'in-use', q: '' };
+  url.state = { tab: 'stock', company: 'all', show: 'in-use', q: '', period: '30d', technician: '' };
   url.set.mockReset();
   account.permissions = new Set(['inventory:read', 'inventory:manage']);
   edits = Object.fromEntries(
@@ -114,6 +115,22 @@ describe('the withdrawals tab', () => {
     account.permissions = new Set(['inventory:read', 'inventory:withdraw']);
     render(<InventoryPage />);
     expect(hooks.useStockSlipChoices).toHaveBeenCalledWith(true, null);
+  });
+});
+
+describe('the reorder and usage tab', () => {
+  it('reads the period in the address, and one technician\'s slips when the Withdrawals tab is opened from a name', () => {
+    hooks.useInventoryMonitoring.mockReturnValue({ isError: false, data: undefined });
+    url.state = { ...url.state, tab: 'reorder', period: 'quarter' };
+    const { unmount } = render(<InventoryPage />);
+    expect(hooks.useInventoryMonitoring).toHaveBeenCalledWith(true, 'quarter');
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    unmount();
+
+    url.state = { ...url.state, tab: 'withdrawals', technician: 'tech-ana' };
+    render(<InventoryPage />);
+    expect(hooks.useStockSlips).toHaveBeenCalledWith(true, 'tech-ana');
+    expect(screen.getByRole('link', { name: "Show everybody's" }).getAttribute('href')).toBe('/inventory?tab=withdrawals');
   });
 });
 

@@ -11,6 +11,7 @@ import {
   type StockSlipRow,
 } from '@texasrenters/shared';
 import { ArrowRightIcon, ClipboardListIcon, PlusIcon, XIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
@@ -48,17 +49,25 @@ const whole = (value: string) => (/^\d+$/.test(value.trim()) ? Number(value.trim
 const KIND_ACTION: Record<StockSlipKind, string> = { WITHDRAWAL: 'Take out', RETURN: 'Bring back', TRANSFER: 'Move between places' };
 const POST_LABEL: Record<StockSlipKind, string> = { WITHDRAWAL: 'Post withdrawal', RETURN: 'Post return', TRANSFER: 'Post move' };
 
-export function WithdrawalsTab({ canWithdraw }: { canWithdraw: boolean }) {
-  const slips = useStockSlips(true);
+export function WithdrawalsTab({ canWithdraw, technicianId }: { canWithdraw: boolean; /** Only this technician's slips: opened from "Materials used, by technician". */ technicianId?: string }) {
+  const slips = useStockSlips(true, technicianId || undefined);
+  const only = technicianId ? (slips.data?.slips.find((slip) => slip.technician?.id === technicianId)?.technician?.name ?? 'this technician') : null;
   const [reversing, setReversing] = useState<StockSlipRow | null>(null);
 
   return (
     <div className="grid gap-6">
       {canWithdraw ? <SlipForm /> : null}
       <section aria-labelledby="slips-heading" className="grid gap-3">
-        <h2 className="text-base font-semibold" id="slips-heading">
-          Latest slips
-        </h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-base font-semibold" id="slips-heading">
+            {only ? `Latest slips of ${only}` : 'Latest slips'}
+          </h2>
+          {only ? (
+            <Link className="text-sm underline underline-offset-4" href="/inventory?tab=withdrawals">
+              Show everybody&apos;s
+            </Link>
+          ) : null}
+        </div>
         {slips.isError ? (
           <ErrorState error={slips.error} retry={() => void slips.refetch()} />
         ) : !slips.data ? (

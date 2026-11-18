@@ -45,6 +45,8 @@ import { ExcelSyncScheduler } from './excel/excel-sync.scheduler';
 import { ExcelSyncService } from './excel/excel-sync.service';
 import { MicrosoftAuthService } from './excel/microsoft-auth.service';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
+import { InventoryMonitoringController } from './inventory-monitoring.controller';
+import { InventoryMonitoringService } from './inventory-monitoring.service';
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 import { StockCountsController } from './stock-counts.controller';
@@ -120,6 +122,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     // Before InventoryController: `inventory/slips` must not be read as an item's id.
     StockSlipsController,
     StockCountsController,
+    InventoryMonitoringController,
     InventoryController,
     PurchasingController,
     PurchaseOrdersController,
@@ -175,6 +178,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InventoryService,
     StockSlipsService,
     StockCountsService,
+    InventoryMonitoringService,
     PurchasingService,
     PurchaseOrdersService,
     PurchaseReceivingService,

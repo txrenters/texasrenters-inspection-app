@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 import { PageHeader } from '@/components/page-header';
 import { RequisitionForm } from '@/components/purchasing/requisition-form';
@@ -16,6 +16,12 @@ import { usePurchasingEdits, useRequisitionChoices } from '@/lib/purchasing-quer
  */
 export default function NewRequisitionPage() {
   const router = useRouter();
+  // "?items=<item>:<quantity>,...": what the Reorder list ticked. Read once, as the form's starting lines.
+  const asked = useSearchParams().get('items') ?? '';
+  const start = asked
+    .split(',')
+    .map((pair) => pair.split(':'))
+    .flatMap(([itemId, quantity]) => (itemId && /^\d{1,6}$/.test(quantity ?? '') && Number(quantity) > 0 ? [{ itemId, quantity: Number(quantity) }] : []));
   const choices = useRequisitionChoices(true);
   const { create, step } = usePurchasingEdits();
 
@@ -49,6 +55,7 @@ export default function NewRequisitionPage() {
           }
         }}
         pending={create.isPending || step.isPending}
+        start={start}
       />
     </>
   );
