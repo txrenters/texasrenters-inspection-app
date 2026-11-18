@@ -548,7 +548,10 @@ describe('writing the workbook', () => {
     expect(setup.sync).toMatchObject({ lastError: null, claimedUntil: null });
     // The workbook's version first and last: the one the console's write leaves is kept, to tell the office's edits by.
     expect(microsoft.calls[0]!.path).toBe('/drives/drive-1/items/item-1');
-    expect(microsoft.calls[1]!.path).toMatch(/createSession$/);
+    // The session opens at the first write, just before it -- not before the reads.
+    const opened = microsoft.calls.findIndex((call) => call.path.endsWith('/createSession'));
+    expect(microsoft.calls.findIndex((call) => call.method !== 'GET')).toBe(opened);
+    expect(microsoft.calls[opened + 1]!.method).not.toBe('GET');
     expect(microsoft.calls.at(-2)!.path).toMatch(/closeSession$/);
     expect(microsoft.calls.at(-1)!.path).toBe('/drives/drive-1/items/item-1');
     expect(setup.sync!.fileTag).toEqual(expect.stringContaining('item-1'));
@@ -1160,6 +1163,20 @@ describe('the sync never runs on and on (2026-11-18: "couldn\'t merge your chang
     await setup.service.runIfDue(ORG);
     expect(readTabs(microsoft)).not.toContain('Old');
     expect(microsoft.calls.some((call) => call.path.includes('/Old/'))).toBe(false);
+  });
+
+  it("a run that only reads the office's edits opens no session on the workbook, and writes nothing", async () => {
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup({ remarks: 'Completed 3 visits' });
+    await setup.service.syncNow(office);
+    // The office types a cell the console leaves alone -- its title -- and a remark it already has.
+    microsoft.edit('1117', 'H4', 'Completed 3 visits');
+    microsoft.calls.length = 0;
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    await setup.service.runIfDue(ORG);
+    expect(microsoft.calls.filter((call) => call.method !== 'GET').map((call) => `${call.method} ${call.path.replace(/.*workbook\//, '')}`)).toEqual([]);
+    expect(microsoft.writes()).toEqual([]);
   });
 
   it('with nothing changed, a later run writes nothing at all', async () => {

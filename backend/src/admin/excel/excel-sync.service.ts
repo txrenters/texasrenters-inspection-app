@@ -83,9 +83,9 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 const dayOf = (date: Date) => date.toISOString().slice(0, 10);
 /** A range as read, without the empty rows under its last filled one. */
-const trimEmptyRows = (rows: string[][]) => {
+const trimEmptyRows = (rows: ExcelCell[][]) => {
   let last = rows.length;
-  while (last > 0 && rows[last - 1]!.every((cell) => !cell.trim())) last -= 1;
+  while (last > 0 && rows[last - 1]!.every((cell) => !cellText(cell).trim())) last -= 1;
   return rows.slice(0, last);
 };
 
@@ -406,7 +406,16 @@ export class ExcelSyncService {
           const width = Math.max(...rows.map((row) => row.length), ...tab.rows.map((row) => row.length), 1);
           const top = 1;
           const cells = await client.readCells(tab.name, `A${top}:${columnLetter(width - 1)}${top + rows.length - 1 + EXTRA_ROWS_READ}`);
-          held.set(tab.name, trimEmptyRows(cells.text));
+          // What each cell holds, as the console's own cells are: a number as a number, so a day or a figure Excel
+          // holds is never taken for a change because of how Excel spells it (2026-11-18: every figure of these tabs
+          // was written again on every run that read them).
+          held.set(
+            tab.name,
+            trimEmptyRows(cells.text.map((row, r) => row.map((text, c): ExcelCell => {
+              const value = cells.values[r]?.[c];
+              return typeof value === 'number' ? { value, format: '' } : text;
+            }))),
+          );
           // A tab written before the console kept whose each row is (v2.5.245 and earlier) takes the rows of the
           // tab as it is now, when there are as many; their names are checked against Excel's all the same.
           // Otherwise anything changed in it is the office's, and left as it is.
@@ -989,8 +998,11 @@ export class ExcelSyncService {
     // them side by side in a row in one call, and nothing else in the row touched (2026-11-17, the office: "if we
     // are modifying one data it should only be that one data to be modified, just like in the excel").
     const old = before.rows.map(pad);
+    // A number is the same number however its format is spelled; words are the same words.
     const same = (left: ExcelCell | undefined, right: ExcelCell | undefined) =>
-      JSON.stringify(left ?? '') === JSON.stringify(right ?? '') || cellText(left) === cellText(right) && typeof left === typeof right;
+      typeof left === 'object' && typeof right === 'object'
+        ? Math.abs(left.value - right.value) < 1e-9
+        : JSON.stringify(left ?? '') === JSON.stringify(right ?? '') || (cellText(left) === cellText(right) && typeof left === typeof right);
     let written = 0;
     const blank = (cells: ExcelCell[] | undefined) => !cells || cells.every((cell) => cellText(cell) === '');
     const office = (index: number) => [...kept].some((cell) => cell.startsWith(`${index},`));

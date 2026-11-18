@@ -22,6 +22,8 @@ export const encodeSharingUrl = (url: string) => `u!${Buffer.from(url.trim(), 'u
 export class ExcelGraphClient {
   private calls = 0;
   private sessionId: string | null = null;
+  /** A session is wanted for the run's writes: opened at its first write, so a run that only reads opens none. */
+  private sessionWanted = false;
 
   constructor(
     private readonly auth: MicrosoftAuthService,
@@ -139,8 +141,18 @@ export class ExcelGraphClient {
     await this.call('POST', `${this.range(sheet, address)}/format/autofitColumns`, {});
   }
 
-  /** One workbook session for a run's writes, as Microsoft recommends; without one, every call still works. */
+  /**
+   * One workbook session for a run's writes, as Microsoft recommends; without
+   * one, every call still works. Opened at the run's first write, not here
+   * (2026-11-18): a run that only reads the office's edits is only reads, and
+   * holds the workbook in no session of its own while the office types.
+   */
   async openSession() {
+    this.sessionWanted = true;
+  }
+
+  private async startSession() {
+    this.sessionWanted = false;
     try {
       const session = await this.call<{ id: string }>('POST', `${this.book()}/createSession`, { persistChanges: true });
       this.sessionId = session.id;
@@ -151,6 +163,7 @@ export class ExcelGraphClient {
   }
 
   async closeSession() {
+    this.sessionWanted = false;
     if (!this.sessionId) return;
     const id = this.sessionId;
     try {
@@ -171,6 +184,8 @@ export class ExcelGraphClient {
   }
 
   private async call<T = unknown>(method: string, path: string, body?: unknown, options: { prefer?: string } = {}, retried = false): Promise<T> {
+    // The run's first write opens its session.
+    if (this.sessionWanted && method !== 'GET' && !retried && !/\/(createSession|closeSession)$/.test(path)) await this.startSession();
     const config = this.auth.config();
     if (this.calls >= config.callsPerRun) throw new MicrosoftError('This run has made all the calls it may; the next one carries on.', 'EXCEL_RUN_BUDGET_SPENT', 429);
     this.calls += 1;
