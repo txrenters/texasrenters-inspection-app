@@ -44,6 +44,7 @@ import { PrismaService } from '../common/prisma.service';
  */
 
 const APPROVE = 'purchasing:approve';
+const ORDER = 'purchasing:order';
 const APPROVE_ANY = 'purchasing:approve-any';
 const ENTITY = 'PurchaseRequisition';
 /** The requisitions that are finished with, newest first: enough to look back, and no more. */
@@ -98,8 +99,30 @@ function row(requisition: Requisition, companies: ReadonlyMap<string, string>): 
   };
 }
 
+/** Who may approve how much: the office's own, or what it starts with. Orders share it (phase 3). */
+export async function readPurchasingSettings(db: Pick<Db, 'purchasingSettings'>, organizationId: string): Promise<PurchasingSettings> {
+  const saved = await db.purchasingSettings.findUnique({ where: { organizationId }, select: { approvalLimitCents: true, quotesAboveLimit: true } });
+  return saved ?? { approvalLimitCents: DEFAULT_APPROVAL_LIMIT_CENTS, quotesAboveLimit: DEFAULT_QUOTES_ABOVE_LIMIT };
+}
+
+/**
+ * The office's next number of a kind of document -- "PR" requisitions, "PO"
+ * orders -- taken under the series row's lock: two submitted at once never
+ * share one.
+ */
+export async function nextDocumentNumber(db: Pick<Db, '$queryRaw'>, organizationId: string, kind: 'PR' | 'PO'): Promise<number> {
+  const [taken] = await db.$queryRaw<{ taken: number }[]>`
+    INSERT INTO "DocumentSeries" ("organizationId", "kind", "next")
+    VALUES (${organizationId}::uuid, ${kind}, 2)
+    ON CONFLICT ("organizationId", "kind") DO UPDATE SET "next" = "DocumentSeries"."next" + 1
+    RETURNING "next" - 1 AS taken`;
+  return Number(taken!.taken);
+}
+
 /** The history's words for each audited step. */
 const STEP: Record<string, string> = {
+  PURCHASE_REQUISITION_ORDERED: 'made a purchase order from it',
+  PURCHASE_REQUISITION_ORDER_CANCELLED: 'cancelled its purchase order',
   PURCHASE_REQUISITION_CREATED: 'started it',
   PURCHASE_REQUISITION_CHANGED: 'changed it',
   PURCHASE_REQUISITION_SUBMITTED: 'submitted it',
@@ -113,9 +136,8 @@ const STEP: Record<string, string> = {
 export class PurchasingService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  private async settings(db: Pick<Db, 'purchasingSettings'>, organizationId: string): Promise<PurchasingSettings> {
-    const saved = await db.purchasingSettings.findUnique({ where: { organizationId }, select: { approvalLimitCents: true, quotesAboveLimit: true } });
-    return saved ?? { approvalLimitCents: DEFAULT_APPROVAL_LIMIT_CENTS, quotesAboveLimit: DEFAULT_QUOTES_ABOVE_LIMIT };
+  private settings(db: Pick<Db, 'purchasingSettings'>, organizationId: string): Promise<PurchasingSettings> {
+    return readPurchasingSettings(db, organizationId);
   }
 
   private async companies(organizationId: string) {
@@ -123,9 +145,9 @@ export class PurchasingService {
     return { names: new Map(rows.map((entry) => [entry.xeroTenantId, entry.name])), connected: rows.filter((entry) => entry.status === 'CONNECTED').map((entry) => ({ tenantId: entry.xeroTenantId, name: entry.name })) };
   }
 
-  /** The caller's own, and -- for somebody who decides them -- everyone's that has been submitted. A draft is its author's alone. */
+  /** The caller's own, and -- for somebody who decides them or makes orders from them -- everyone's that has been submitted. A draft is its author's alone. */
   private visible(user: AuthenticatedUser): Prisma.PurchaseRequisitionWhereInput {
-    return may(user, APPROVE) ? { OR: [{ requestedById: user.id }, { status: { not: Status.DRAFT } }] } : { requestedById: user.id };
+    return may(user, APPROVE) || may(user, ORDER) ? { OR: [{ requestedById: user.id }, { status: { not: Status.DRAFT } }] } : { requestedById: user.id };
   }
 
   /** What the caller may do with it now. The page draws its buttons from this, and each action checks the same again. */
@@ -146,6 +168,7 @@ export class PurchasingService {
       approve: waiting && !approveBlocked,
       sendBack: waiting && !mine,
       reject: waiting && !mine,
+      order: requisition.status === Status.APPROVED && may(user, ORDER),
       approveBlocked,
     };
   }
@@ -165,7 +188,7 @@ export class PurchasingService {
       this.companies(organizationId),
       this.settings(this.prisma, organizationId),
     ]);
-    return { requisitions: requisitions.map((requisition) => row(requisition, companies.names)), settings, seesAll: may(user, APPROVE) };
+    return { requisitions: requisitions.map((requisition) => row(requisition, companies.names)), settings, seesAll: may(user, APPROVE) || may(user, ORDER) };
   }
 
   async detail(user: AuthenticatedUser, requisitionId: string): Promise<RequisitionDetail> {
@@ -174,7 +197,7 @@ export class PurchasingService {
     // Somebody else's, or another office's, is simply not there.
     if (!requisition) throw new ApplicationError(404, 'REQUISITION_NOT_FOUND', 'That requisition is not on the list.');
     const itemIds = requisition.lines.flatMap((line) => (line.item ? [line.item.id] : []));
-    const [companies, settings, levels, audits] = await Promise.all([
+    const [companies, settings, levels, audits, order] = await Promise.all([
       this.companies(organizationId),
       this.settings(this.prisma, organizationId),
       itemIds.length ? this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId, itemId: { in: itemIds } }, _sum: { quantity: true } }) : [],
@@ -183,6 +206,8 @@ export class PurchasingService {
         select: { action: true, actorUserId: true, metadata: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
       }),
+      // The order made from it, if one stands: a cancelled order frees the requisition for another.
+      this.prisma.purchaseOrder.findFirst({ where: { organizationId, requisitionId, status: { not: 'CANCELLED' } }, select: { id: true, number: true } }),
     ]);
     const actorIds = [...new Set(audits.flatMap((audit) => (audit.actorUserId ? [audit.actorUserId] : [])))];
     const actors = actorIds.length ? await this.prisma.userProfile.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true } }) : [];
@@ -210,6 +235,7 @@ export class PurchasingService {
       decidedBy: requisition.decidedBy?.displayName ?? null,
       decidedAt: requisition.decidedAt?.toISOString() ?? null,
       history,
+      order,
       can: this.actions(user, requisition, summary.estimatedTotalCents, settings),
       settings,
     };
@@ -370,7 +396,7 @@ export class PurchasingService {
       if (!EDITABLE.includes(requisition.status)) throw new ApplicationError(409, 'REQUISITION_MOVED_ON', 'This requisition has already been submitted.');
       const problem = requisitionSubmitProblem(requisition, await this.settings(tx, organizationId));
       if (problem) throw new ApplicationError(409, 'REQUISITION_NOT_READY', problem);
-      const number = requisition.number ?? (await this.nextNumber(tx, organizationId));
+      const number = requisition.number ?? requisitionNumber(await nextDocumentNumber(tx, organizationId, 'PR'));
       await this.move(tx, organizationId, requisitionId, EDITABLE, {
         status: Status.SUBMITTED,
         number,
@@ -382,16 +408,6 @@ export class PurchasingService {
       await this.audit(tx, user, 'PURCHASE_REQUISITION_SUBMITTED', requisitionId, { number, totalCents: requisitionTotalCents(requisition.lines) });
     });
     return this.detail(user, requisitionId);
-  }
-
-  /** The office's next requisition number, taken under the series row's lock: two submitted at once never share one. */
-  private async nextNumber(db: Db, organizationId: string): Promise<string> {
-    const [taken] = await db.$queryRaw<{ taken: number }[]>`
-      INSERT INTO "DocumentSeries" ("organizationId", "kind", "next")
-      VALUES (${organizationId}::uuid, 'PR', 2)
-      ON CONFLICT ("organizationId", "kind") DO UPDATE SET "next" = "DocumentSeries"."next" + 1
-      RETURNING "next" - 1 AS taken`;
-    return requisitionNumber(Number(taken!.taken));
   }
 
   async cancel(user: AuthenticatedUser, requisitionId: string): Promise<RequisitionDetail> {

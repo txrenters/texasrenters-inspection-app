@@ -411,6 +411,7 @@ model Organization {
   documentSeries DocumentSeries[]
   purchasingSettings PurchasingSettings?
   purchaseRequisitions PurchaseRequisition[]
+  purchaseOrders PurchaseOrder[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -637,6 +638,9 @@ model UserProfile {
   stockPlaces                StockPlace[]
   requisitionsRequested      PurchaseRequisition[] @relation("RequisitionRequestedBy")
   requisitionsDecided        PurchaseRequisition[] @relation("RequisitionDecidedBy")
+  purchaseOrdersMade         PurchaseOrder[]       @relation("PurchaseOrderMadeBy")
+  purchaseOrdersApproved     PurchaseOrder[]       @relation("PurchaseOrderApprovedBy")
+  purchaseOrdersCancelled    PurchaseOrder[]       @relation("PurchaseOrderCancelledBy")
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
@@ -4961,6 +4965,7 @@ model XeroOrganisation {
   /// The stock that belongs to its books (2026-11-19).
   stockItems   StockItem[]
   purchaseRequisitions PurchaseRequisition[]
+  purchaseOrders PurchaseOrder[]
   /// The invoices that go to this organisation's books.
   invoices     Invoice[]
   /// The payments sent to its books.
@@ -5605,6 +5610,7 @@ model StockItem {
   movements        StockMovement[]
   levels           StockLevel[]
   requisitionLines PurchaseRequisitionLine[]
+  orderLines       PurchaseOrderLine[]
 
   @@unique([organizationId, codeKey])
   /// What a movement points at: an item of its own office.
@@ -5630,6 +5636,7 @@ model StockPlace {
   movements    StockMovement[]
   levels       StockLevel[]
   requisitions PurchaseRequisition[]
+  purchaseOrders PurchaseOrder[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5654,6 +5661,7 @@ model Vendor {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   items        StockItem[]
   quotes       PurchaseRequisitionQuote[]
+  purchaseOrders PurchaseOrder[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5719,6 +5727,8 @@ enum PurchaseRequisitionStatus {
   SUBMITTED
   SENT_BACK
   APPROVED
+  /// A purchase order has been made from it (phase 3).
+  ORDERED
   REJECTED
   CANCELLED
 }
@@ -5777,6 +5787,7 @@ model PurchaseRequisition {
   decidedBy        UserProfile?               @relation("RequisitionDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
   lines            PurchaseRequisitionLine[]
   quotes           PurchaseRequisitionQuote[]
+  orders           PurchaseOrder[]
 
   @@unique([organizationId, number])
   @@unique([organizationId, id])
@@ -5839,4 +5850,107 @@ model StockCategory {
   @@unique([organizationId, nameKey])
   @@unique([organizationId, prefix])
   @@unique([organizationId, id])
+}
+
+/// Purchase orders (2026-11-19, phase 3). The statuses that receiving, the
+/// bill and payment bring join these in phase 4.
+enum PurchaseOrderStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  APPROVED
+  SENT
+  CANCELLED
+}
+
+/// An order to a vendor, made from one approved requisition. It moves no
+/// stock. Numbered when submitted for approval; never approved by whoever
+/// made it (checked); one live order a requisition (a partial unique index).
+model PurchaseOrder {
+  id               String              @id @default(uuid()) @db.Uuid
+  organizationId   String              @db.Uuid
+  /// "PO-0009"; null while it is a draft never submitted.
+  number           String?
+  status           PurchaseOrderStatus @default(DRAFT)
+  requisitionId    String              @db.Uuid
+  /// Chosen before it is submitted (checked).
+  vendorId         String?             @db.Uuid
+  xeroTenantId     String?
+  deliverToPlaceId String?             @db.Uuid
+  expectedOn       DateTime?           @db.Date
+  /// Payment terms as agreed: "Net 30".
+  terms            String?
+  /// Sales tax, in hundredths of a percent: 825 is 8.25%.
+  taxBasisPoints   Int                 @default(0)
+  /// Printed on the order for the vendor.
+  notes            String?
+  createdById      String              @db.Uuid
+  submittedAt      DateTime?
+  approvedById     String?             @db.Uuid
+  approvedAt       DateTime?
+  /// The approver's note when it was sent back.
+  decisionNote     String?
+  sentAt           DateTime?
+  cancelledById    String?             @db.Uuid
+  cancelledAt      DateTime?
+  cancelReason     String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requisition      PurchaseRequisition     @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  vendor           Vendor?                 @relation(fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
+  xeroOrganisation XeroOrganisation?       @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+  deliverTo        StockPlace?             @relation(fields: [organizationId, deliverToPlaceId], references: [organizationId, id], onDelete: NoAction)
+  createdBy        UserProfile             @relation("PurchaseOrderMadeBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy       UserProfile?            @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  cancelledBy      UserProfile?            @relation("PurchaseOrderCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  lines            PurchaseOrderLine[]
+  deliveries       PurchaseOrderDelivery[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, id])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, requisitionId])
+}
+
+/// One item on an order, at the price agreed. An item is on an order once.
+model PurchaseOrderLine {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  orderId        String @db.Uuid
+  position       Int
+  itemId         String @db.Uuid
+  quantity       Int
+  unitPriceCents Int
+
+  order PurchaseOrder @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade)
+  item  StockItem     @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([orderId, itemId])
+  @@index([organizationId, orderId, position])
+}
+
+/// Each email of an order to its vendor: written down before it is sent, so
+/// the same press never sends twice and the day's ceiling is counted from
+/// here. Every one is a billed call to the mail provider.
+model PurchaseOrderDelivery {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  orderId         String    @db.Uuid
+  recipient       String
+  message         String?
+  /// PENDING, SENT or FAILED (checked).
+  status          String    @default("PENDING")
+  failure         String?
+  clientRequestId String
+  sentById        String?   @db.Uuid
+  sentByName      String
+  sentAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  order PurchaseOrder @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, clientRequestId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, orderId])
 }

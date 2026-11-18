@@ -40,6 +40,7 @@ export const PERMISSION_KEYS = [
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
+  'purchasing:order',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -302,12 +303,18 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'purchasing:approve',
         label: 'Approve requisitions',
         description:
-          "See everyone's requisitions and approve, send back or reject them, up to the office's approval limit. Nobody approves their own.",
+          "See everyone's requisitions and orders and approve or send them back, up to the office's approval limit. Nobody approves their own.",
       },
       {
         key: 'purchasing:approve-any',
         label: 'Approve any amount',
         description: 'Approve a requisition above the approval limit, and set that limit and how many quotes it asks for. With "Approve requisitions".',
+      },
+      {
+        key: 'purchasing:order',
+        label: 'Make purchase orders',
+        description:
+          "See everyone's submitted requisitions, turn an approved one into a purchase order, send it to the vendor and cancel it. An order is approved by somebody else, with the two above.",
       },
     ],
   },
@@ -410,6 +417,7 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
+  'purchasing:order',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);
