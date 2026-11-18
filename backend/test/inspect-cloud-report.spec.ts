@@ -2,6 +2,7 @@ import {
   matchChecklistLabel,
   parseReport,
   reportFingerprint,
+  walkthroughDay,
   type ReportCell,
 } from '../src/admin/inspection-import/inspect-cloud-report';
 import { extractPhotos } from '../src/admin/inspection-import/inspect-cloud-pdf';
@@ -301,5 +302,58 @@ describe('identifying a file', () => {
   it('gives the same report the same fingerprint and a different one another', () => {
     expect(reportFingerprint(Buffer.from('a'))).toBe(reportFingerprint(Buffer.from('a')));
     expect(reportFingerprint(Buffer.from('a'))).not.toBe(reportFingerprint(Buffer.from('b')));
+  });
+});
+
+describe('the day a report was walked', () => {
+  const walked = (reportDate: string | null, ...stamps: Array<string | null>) =>
+    walkthroughDay({
+      reportDate,
+      areas: [
+        {
+          name: 'Kitchen',
+          startedOnPage: 1,
+          items: [],
+          photos: stamps.map((takenAt, index) => ({ caption: null, matchedLabel: null, takenAt, page: 1, index })),
+        },
+      ],
+    });
+  const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+
+  it('is the day its photographs were taken, not the day the report was produced', () => {
+    // One property's move-in: every photograph stamped the morning of Sep 8,
+    // and the report's header saying NOV-09-2026, when it was finished.
+    expect(walked('NOV-09-2026', 'Sep 08 2026 07:41:57 AM', 'Sep 08 2026 07:56:56 AM')).toEqual(
+      day('2026-09-08'),
+    );
+  });
+
+  it('reads the stamp as the Texas day the camera printed', () => {
+    // 11:30 PM in Houston is already the next day in UTC.
+    expect(walked(null, 'Sep 08 2026 11:30:00 PM')).toEqual(day('2026-09-08'));
+  });
+
+  it('goes by the day most photographs carry, so one wrong clock cannot move the walk', () => {
+    expect(
+      walked('NOV-09-2026', 'Jan 01 2020 12:00:00 AM', 'Sep 08 2026 07:41:57 AM', 'Sep 08 2026 07:42:14 AM'),
+    ).toEqual(day('2026-09-08'));
+  });
+
+  it('takes the earlier day when two are as common', () => {
+    expect(walked(null, 'Sep 09 2026 08:00:00 AM', 'Sep 08 2026 05:00:00 PM')).toEqual(day('2026-09-08'));
+  });
+
+  it('is never after the day the report was produced', () => {
+    // A report cannot be written before its walk: a camera ran ahead.
+    expect(walked('SEP-01-2026', 'Sep 08 2026 07:41:57 AM')).toEqual(day('2026-09-01'));
+  });
+
+  it('falls back to the header when no photograph has a readable stamp', () => {
+    expect(walked('NOV-09-2026', null, 'Feb 30 2026 07:00:00 AM', 'not a time')).toEqual(day('2026-11-09'));
+  });
+
+  it('has no day when neither the photographs nor the header give one', () => {
+    expect(walked(null)).toBeNull();
+    expect(walked(null, null)).toBeNull();
   });
 });

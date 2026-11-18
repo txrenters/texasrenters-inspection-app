@@ -11,7 +11,7 @@
  * anything billed.
  */
 
-export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
+export const REQUISITION_STATUSES = ['DRAFT', 'SUBMITTED', 'SENT_BACK', 'APPROVED', 'ORDERED', 'REJECTED', 'CANCELLED', 'CLOSED'] as const;
 export type RequisitionStatus = (typeof REQUISITION_STATUSES)[number];
 
 /** As the office reads them. */
@@ -20,8 +20,10 @@ export const REQUISITION_STATUS_LABEL: Record<RequisitionStatus, string> = {
   SUBMITTED: 'Waiting for approval',
   SENT_BACK: 'Sent back',
   APPROVED: 'Approved',
+  ORDERED: 'Ordered',
   REJECTED: 'Rejected',
   CANCELLED: 'Cancelled',
+  CLOSED: 'Received and paid',
 };
 
 /** Still being worked on by somebody: the list's "open". */
@@ -168,6 +170,8 @@ export interface RequisitionActions {
   approve: boolean;
   sendBack: boolean;
   reject: boolean;
+  /** Turn it into a purchase order: approved, and the caller makes orders. */
+  order: boolean;
   /** Why the caller cannot approve it, when they otherwise could decide requisitions; null when they can or it is not waiting. */
   approveBlocked: string | null;
 }
@@ -180,6 +184,8 @@ export interface RequisitionDetail extends RequisitionRow {
   decidedBy: string | null;
   decidedAt: string | null;
   history: RequisitionHistoryEntry[];
+  /** The order made from it, once there is one. */
+  order: { id: string; number: string | null } | null;
   can: RequisitionActions;
   settings: PurchasingSettings;
 }

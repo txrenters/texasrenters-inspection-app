@@ -1,22 +1,35 @@
-import type { RequisitionChoices, RequisitionDetail, RequisitionList, RequisitionRow } from '@texasrenters/shared';
+import type { PurchaseOrderDetail, PurchaseOrderRow, RequisitionChoices, RequisitionDetail, RequisitionList, RequisitionRow } from '@texasrenters/shared';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RequisitionForm } from '@/components/purchasing/requisition-form';
 
+import PurchaseOrderPage from './orders/[orderId]/page';
 import PurchasingPage from './page';
 import RequisitionPage from './requisitions/[requisitionId]/page';
 
 /** Purchase requisitions, phase 2 (2026-11-19). Every item, person, vendor and price invented. */
 
 const mutation = () => ({ mutateAsync: vi.fn(async () => ({})), isPending: false, error: null, reset: vi.fn(), data: undefined });
-const hooks = vi.hoisted(() => ({ useRequisitions: vi.fn(), useRequisition: vi.fn(), useRequisitionChoices: vi.fn(), usePurchasingEdits: vi.fn() }));
+const hooks = vi.hoisted(() => ({
+  useRequisitions: vi.fn(),
+  useRequisition: vi.fn(),
+  useRequisitionChoices: vi.fn(),
+  usePurchasingEdits: vi.fn(),
+  usePurchaseOrders: vi.fn(),
+  usePurchaseOrder: vi.fn(),
+  usePurchaseOrderEdits: vi.fn(),
+  usePurchaseReceivingEdits: vi.fn(),
+}));
 vi.mock('@/lib/purchasing-queries', () => hooks);
-const url = vi.hoisted(() => ({ state: { show: 'open', status: 'all', q: '' }, set: vi.fn() }));
+const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', status: 'all', q: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set, vi.fn()] }));
 const account = vi.hoisted(() => ({ permissions: new Set<string>() }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: (permission: string) => account.permissions.has(permission) }) }));
-vi.mock('next/navigation', () => ({ useParams: () => ({ requisitionId: 'req-12' }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+vi.mock('next/navigation', () => ({ useParams: () => ({ requisitionId: 'req-12', orderId: 'order-9' }), useRouter: () => router }));
+const pdf = vi.hoisted(() => ({ downloadOrder: vi.fn(async () => undefined), orderAttachment: vi.fn(async () => ({ fileName: 'PO-0009 Hill Country Supply.pdf', contentBase64: 'JVBERi0=' })) }));
+vi.mock('@/lib/purchase-order-pdf/download-order', () => pdf);
 
 const SETTINGS = { approvalLimitCents: 50000, quotesAboveLimit: 2 };
 const row = (over: Partial<RequisitionRow> = {}): RequisitionRow => ({
@@ -46,11 +59,12 @@ const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
   quotes: [],
   decidedBy: null,
   decidedAt: null,
+  order: null,
   history: [
     { at: '2026-11-17T15:12:00.000Z', by: 'Sample Requester', what: 'submitted it' },
     { at: '2026-11-17T14:58:00.000Z', by: 'Sample Requester', what: 'started it' },
   ],
-  can: { edit: false, submit: false, cancel: false, approve: true, sendBack: true, reject: true, approveBlocked: null },
+  can: { edit: false, submit: false, cancel: false, approve: true, sendBack: true, reject: true, order: false, approveBlocked: null },
   settings: SETTINGS,
   ...over,
 });
@@ -68,10 +82,17 @@ const CHOICES: RequisitionChoices = {
 };
 
 let edits: Record<string, ReturnType<typeof mutation>>;
+let orderEdits: Record<string, ReturnType<typeof mutation>>;
 const list = (requisitions: RequisitionRow[], seesAll = true): RequisitionList => ({ requisitions, settings: SETTINGS, seesAll });
 
 beforeEach(() => {
-  url.state = { show: 'open', status: 'all', q: '' };
+  url.state = { tab: 'requisitions', show: 'open', status: 'all', q: '' };
+  router.push.mockReset();
+  pdf.orderAttachment.mockClear();
+  pdf.downloadOrder.mockClear();
+  orderEdits = { create: mutation(), update: mutation(), step: mutation(), send: mutation() };
+  hooks.usePurchaseOrderEdits.mockReturnValue(orderEdits);
+  hooks.usePurchaseReceivingEdits.mockReturnValue(Object.fromEntries(['receive', 'reverseReceipt', 'closeShort', 'saveBill', 'approveBill', 'approveBillAnyway', 'payBill'].map((name) => [name, mutation()])));
   account.permissions = new Set(['purchasing:request']);
   edits = { create: mutation(), update: mutation(), step: mutation(), saveSettings: mutation() };
   hooks.usePurchasingEdits.mockReturnValue(edits);
@@ -98,18 +119,19 @@ describe('the requisitions list', () => {
     expect(within(table).getByRole('link', { name: /Filter 20x25x1 × 36/ }).getAttribute('href')).toBe('/purchasing/requisitions/req-12');
     expect(within(table).getByRole('row', { name: /PR-0012/ }).textContent).toContain('An approver');
     expect(within(table).getByRole('row', { name: /PR-0013/ }).textContent).toContain('Somebody who may approve any amount');
-    expect(within(table).getByRole('row', { name: /PR-0011/ }).textContent).toContain('To be ordered');
+    expect(within(table).getByRole('row', { name: /PR-0011/ }).textContent).toContain('A purchaser, to make the order');
+    expect(hooks.usePurchaseOrders).not.toHaveBeenCalled();
     expect(within(table).getByRole('row', { name: /PR-0010/ }).textContent).toContain('Sent back: “Which model? Add a quote.”');
     expect(screen.getByText('Waiting for approval', { selector: ':not(span)' }).parentElement?.textContent).toContain('2');
     expect(hooks.useRequisitions).toHaveBeenCalledWith('open');
   });
 
   it('narrows by a search from the rows in hand, and says whose requisitions these are', () => {
-    url.state = { show: 'open', status: 'all', q: 'pr-0011' };
+    url.state = { tab: 'requisitions', show: 'open', status: 'all', q: 'pr-0011' };
     mount(list([row(), row({ id: 'req-11', number: 'PR-0011', summary: 'Smoke alarm × 40' })], false));
 
     expect(screen.getAllByRole('row')).toHaveLength(2);
-    expect(screen.getByText('Your purchase requisitions.')).toBeTruthy();
+    expect(screen.getByText('Your purchase requisitions, and the orders made from them.')).toBeTruthy();
   });
 
   it('offers the approval limits only to somebody who may approve any amount', () => {
@@ -201,7 +223,7 @@ describe('filling a requisition in', () => {
   });
 
   it('opens a sent-back requisition with what it asked for', () => {
-    mount(detail({ status: 'SENT_BACK', can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, approveBlocked: null } }));
+    mount(detail({ status: 'SENT_BACK', can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null } }));
 
     expect((screen.getByLabelText('Why it is needed') as HTMLTextAreaElement).value).toContain('14 inspections');
     expect((screen.getByLabelText('Quantity of Battery, 9 V') as HTMLInputElement).value).toBe('24');
@@ -234,7 +256,7 @@ describe('one requisition', () => {
   });
 
   it('says why somebody cannot approve it, and offers no Approve', () => {
-    mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.' } }));
+    mount(detail({ can: { edit: false, submit: false, cancel: false, approve: false, sendBack: true, reject: true, order: false, approveBlocked: 'It is above the $500.00 approval limit, so it needs somebody who may approve any amount.' } }));
 
     expect(screen.getByText(/above the \$500\.00 approval limit/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
@@ -242,7 +264,7 @@ describe('one requisition', () => {
   });
 
   it('shows its author a submitted requisition as it stands, with only Cancel to press', async () => {
-    mount(detail({ can: { edit: false, submit: false, cancel: true, approve: false, sendBack: false, reject: false, approveBlocked: null } }));
+    mount(detail({ can: { edit: false, submit: false, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null } }));
 
     expect(screen.queryByRole('heading', { name: 'Your decision' })).toBeNull();
     expect(screen.queryByLabelText('Why it is needed')).toBeNull();
@@ -257,12 +279,178 @@ describe('one requisition', () => {
         status: 'SENT_BACK',
         decidedBy: 'Sample Manager',
         decisionNote: 'Fewer batteries.',
-        can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, approveBlocked: null },
+        can: { edit: true, submit: true, cancel: true, approve: false, sendBack: false, reject: false, order: false, approveBlocked: null },
       }),
     );
 
     expect(screen.getByText(/Sample Manager sent it back: “Fewer batteries\.”/)).toBeTruthy();
     expect(screen.getByLabelText('Why it is needed')).toBeTruthy();
     expect(hooks.useRequisitionChoices).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('a requisition and its order', () => {
+  const mount = (data: RequisitionDetail) => {
+    hooks.useRequisition.mockReturnValue({ isLoading: false, isError: false, data });
+    return render(<RequisitionPage />);
+  };
+  const approved = { edit: false, submit: false, cancel: false, approve: false, sendBack: false, reject: false, approveBlocked: null };
+
+  it('offers a purchaser the order to make, and opens it once made', async () => {
+    orderEdits.create!.mutateAsync.mockResolvedValue({ id: 'order-9' } as never);
+    mount(detail({ status: 'APPROVED', can: { ...approved, order: true } }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make purchase order' }));
+    await waitFor(() => expect(orderEdits.create!.mutateAsync).toHaveBeenCalledWith('req-12'));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/purchasing/orders/order-9'));
+  });
+
+  it('links the order made from it, and offers no second one', () => {
+    mount(detail({ status: 'ORDERED', order: { id: 'order-9', number: 'PO-0009' }, can: { ...approved, order: false } }));
+
+    expect(screen.getByRole('link', { name: 'PO-0009' }).getAttribute('href')).toBe('/purchasing/orders/order-9');
+    expect(screen.queryByRole('button', { name: 'Make purchase order' })).toBeNull();
+  });
+});
+
+const orderRow = (over: Partial<PurchaseOrderRow> = {}): PurchaseOrderRow => ({
+  id: 'order-9',
+  number: 'PO-0009',
+  status: 'AWAITING_APPROVAL',
+  vendor: { id: 'vendor-hill', name: 'Hill Country Supply' },
+  requisition: { id: 'req-12', number: 'PR-0012' },
+  company: { tenantId: 'tenant-thmp', name: 'THMP' },
+  expectedOn: '2026-11-24',
+  lineCount: 2,
+  totalCents: 20005,
+  madeBy: { id: 'user-buyer', name: 'Sample Purchaser' },
+  createdAt: '2026-11-18T16:02:00.000Z',
+  sentAt: null,
+  ...over,
+});
+const NOTHING = { edit: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
+const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => ({
+  ...orderRow(),
+  vendorContact: { contactName: 'A Person', email: 'orders@hill.example', phone: null },
+  deliverTo: { id: 'place-stockroom', name: 'Stockroom' },
+  terms: 'Net 30',
+  taxBasisPoints: 825,
+  notes: null,
+  lines: [
+    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0 },
+    { id: 'ol-2', item: { id: 'item-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0 },
+  ],
+  subtotalCents: 18480,
+  taxCents: 1525,
+  approvedBy: null,
+  approvedAt: null,
+  decisionNote: null,
+  cancelReason: null,
+  from: { name: 'THMP', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: 'office@example.test' },
+  deliveries: [],
+  receipts: [],
+  bill: null,
+  shortCloseReason: null,
+  history: [{ at: '2026-11-18T16:10:00.000Z', by: 'Sample Purchaser', what: 'submitted it for approval' }],
+  can: { ...NOTHING, approve: true, sendBack: true },
+  approvalLimitCents: 50000,
+  ...over,
+});
+
+describe('the orders tab', () => {
+  it('lists the orders when it is opened, each opening its page', () => {
+    url.state = { tab: 'orders', show: 'open', status: 'all', q: '' };
+    hooks.useRequisitions.mockReturnValue({ isLoading: false, isError: false, data: list([]) });
+    hooks.usePurchaseOrders.mockReturnValue({ isLoading: false, isError: false, data: { orders: [orderRow(), orderRow({ id: 'order-8', number: 'PO-0008', status: 'SENT', vendor: { id: 'vendor-alamo', name: 'Alamo Trade Parts' } })] } });
+    render(<PurchasingPage />);
+
+    const table = screen.getByRole('table', { name: 'Purchase orders' });
+    expect(within(table).getByRole('link', { name: /Hill Country Supply/ }).getAttribute('href')).toBe('/purchasing/orders/order-9');
+    expect(within(table).getByRole('row', { name: /PO-0009/ }).textContent).toContain('$200.05');
+    expect(within(table).getByRole('row', { name: /PO-0008/ }).textContent).toContain('Sent to the vendor');
+    expect(hooks.usePurchaseOrders).toHaveBeenCalledWith('open', true);
+  });
+});
+
+describe('one order', () => {
+  const mount = (data: PurchaseOrderDetail) => {
+    hooks.usePurchaseOrder.mockReturnValue({ isLoading: false, isError: false, data });
+    return render(<PurchaseOrderPage />);
+  };
+
+  it('shows an approver the lines and total with tax, to approve or to send back with a note', async () => {
+    mount(orderDetail());
+
+    expect(screen.getByRole('heading', { name: 'Purchase order PO-0009' })).toBeTruthy();
+    expect(within(screen.getByRole('table', { name: 'What is ordered' })).getByRole('row', { name: /Filter 20x25x1/ }).textContent).toContain('$140.40');
+    expect(screen.getByText('Sales tax, 8.25%')).toBeTruthy();
+    expect(screen.getByText('$200.05', { selector: 'strong' })).toBeTruthy();
+    const sendBack = screen.getByRole('button', { name: 'Send back with the note' }) as HTMLButtonElement;
+    expect(sendBack.disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /vendor/i })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Note to Sample Purchaser'), { target: { value: 'Ask Alamo too.' } });
+    fireEvent.click(sendBack);
+    await waitFor(() => expect(orderEdits.step!.mutateAsync).toHaveBeenCalledWith({ orderId: 'order-9', step: 'send-back', input: { note: 'Ask Alamo too.' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(orderEdits.step!.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ step: 'approve' })));
+  });
+
+  it('says why whoever made it cannot approve it', () => {
+    mount(orderDetail({ can: { ...NOTHING, approveBlocked: 'You made this order, so somebody else approves it.' } }));
+
+    expect(screen.getByText('You made this order, so somebody else approves it.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+
+  it('sends an approved order to the vendor in one email, with the PDF made on the press', async () => {
+    mount(orderDetail({ status: 'APPROVED', approvedBy: 'Sample Owner', can: { ...NOTHING, send: true, cancel: true } }));
+    expect(pdf.orderAttachment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send to the vendor' }));
+    const dialog = screen.getByRole('dialog', { name: 'Send to the vendor' });
+    expect((within(dialog).getByLabelText('To') as HTMLInputElement).value).toBe('orders@hill.example');
+    fireEvent.change(within(dialog).getByLabelText('Message'), { target: { value: ' Please confirm the day. ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(orderEdits.send!.mutateAsync).toHaveBeenCalledTimes(1));
+    expect(pdf.orderAttachment).toHaveBeenCalledTimes(1);
+    expect(orderEdits.send!.mutateAsync).toHaveBeenCalledWith({
+      orderId: 'order-9',
+      input: { to: 'orders@hill.example', message: 'Please confirm the day.', attachment: { fileName: 'PO-0009 Hill Country Supply.pdf', contentBase64: 'JVBERi0=' }, clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+    });
+  });
+
+  it('cancels only with a reason, and warns that a sent order is not withdrawn from the vendor', async () => {
+    mount(orderDetail({ status: 'SENT', sentAt: '2026-11-18T16:40:00.000Z', deliveries: [{ id: 'd1', recipient: 'orders@hill.example', status: 'SENT', failure: null, at: '2026-11-18T16:40:00.000Z', by: 'Sample Purchaser' }], can: { ...NOTHING, send: true, cancel: true } }));
+
+    expect(screen.getByRole('button', { name: 'Email the vendor again' })).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Emails of this order, newest first' })).getByText('orders@hill.example')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel this order' }));
+    const dialog = screen.getByRole('dialog', { name: 'Cancel this order?' });
+    expect(within(dialog).getByText(/does not tell them/)).toBeTruthy();
+    const confirm = within(dialog).getByRole('button', { name: 'Cancel the order' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+
+    fireEvent.change(within(dialog).getByLabelText('Why'), { target: { value: ' Vendor is out of stock. ' } });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(orderEdits.step!.mutateAsync).toHaveBeenCalledWith({ orderId: 'order-9', step: 'cancel', input: { reason: 'Vendor is out of stock.' } }));
+  });
+
+  it('lets its purchaser set the price and tax of a draft, leave a line out, and submit it', async () => {
+    orderEdits.update!.mutateAsync.mockResolvedValue({} as never);
+    mount(orderDetail({ status: 'DRAFT', number: null, taxBasisPoints: 0, taxCents: 0, totalCents: 18480, can: { ...NOTHING, edit: true, submit: true, cancel: true } }));
+
+    fireEvent.change(screen.getByLabelText('Price of one Filter 20x25x1'), { target: { value: '3.75' } });
+    fireEvent.change(screen.getByLabelText('Sales tax, %'), { target: { value: '8.25' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Leave out Battery, 9 V' }));
+    expect(screen.getByText('$146.14', { selector: 'strong' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for approval' }));
+
+    await waitFor(() => expect(orderEdits.step!.mutateAsync).toHaveBeenCalledWith({ orderId: 'order-9', step: 'submit' }));
+    expect(orderEdits.update!.mutateAsync).toHaveBeenCalledWith({
+      orderId: 'order-9',
+      input: { vendorId: 'vendor-hill', deliverToPlaceId: 'place-stockroom', expectedOn: '2026-11-24', terms: 'Net 30', taxBasisPoints: 825, notes: null, lines: [{ itemId: 'item-filter', quantity: 36, unitPriceCents: 375 }] },
+    });
   });
 });

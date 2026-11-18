@@ -16,6 +16,7 @@ import { useState, type FormEvent } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { OrdersTab } from '@/components/purchasing/orders-tab';
 import { RequisitionStatusBadge, approverFor } from '@/components/purchasing/requisition-parts';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -26,6 +27,7 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatCount, formatDay } from '@/lib/format';
 import { usePurchasingEdits, useRequisitions } from '@/lib/purchasing-queries';
@@ -33,9 +35,10 @@ import { useUrlState } from '@/lib/url-state';
 
 /**
  * Purchasing (2026-11-19, phase 2 of the inventory and purchasing plan): the
- * purchase requisitions. Whoever makes them sees their own; whoever approves
- * them sees everyone's once submitted. Orders, and receiving and bills, join
- * this page in their own phases.
+ * purchase requisitions, and the purchase orders made from them (phase 3).
+ * Whoever makes requisitions sees their own; whoever approves them or buys
+ * sees everyone's once submitted. Receiving and bills join this page in
+ * their own phase.
  *
  * One read of the open requisitions, or of the latest closed ones; the status
  * filter and the search work on the rows in hand.
@@ -45,7 +48,7 @@ const ALL = 'all';
 
 function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
   const waitingOn = (row: RequisitionRow) =>
-    row.status === 'SUBMITTED' ? approverFor(row.estimatedTotalCents, settings) : row.status === 'DRAFT' || row.status === 'SENT_BACK' ? row.requestedBy.name : row.status === 'APPROVED' ? 'To be ordered' : EMPTY;
+    row.status === 'SUBMITTED' ? approverFor(row.estimatedTotalCents, settings) : row.status === 'DRAFT' || row.status === 'SENT_BACK' ? row.requestedBy.name : row.status === 'APPROVED' ? 'A purchaser, to make the order' : EMPTY;
   return [
     { key: 'number', header: 'No.', cell: (row) => row.number ?? 'Draft', className: 'whitespace-nowrap' },
     {
@@ -75,7 +78,7 @@ function columns(settings: PurchasingSettings): Array<Column<RequisitionRow>> {
 
 export default function PurchasingPage() {
   const { has } = usePermissions();
-  const [state, setState] = useUrlState({ show: 'open', status: ALL, q: '' });
+  const [state, setState] = useUrlState({ tab: 'requisitions', show: 'open', status: ALL, q: '' });
   const show = state.show === 'closed' ? 'closed' : 'open';
   const list = useRequisitions(show);
   const [limits, setLimits] = useState(false);
@@ -103,17 +106,27 @@ export default function PurchasingPage() {
             </Link>
           </>
         }
-        description={data?.seesAll ? "Everyone's purchase requisitions, and yours." : 'Your purchase requisitions.'}
+        description={data?.seesAll ? "Everyone's purchase requisitions and orders, and yours." : 'Your purchase requisitions, and the orders made from them.'}
         info={
           <>
             <p>A requisition asks for stock to be bought and says why. Somebody else approves it, sends it back with a note, or rejects it.</p>
             <p>It gets its number when it is submitted. Nobody approves their own.</p>
+            <p>A purchaser makes the order from an approved requisition, somebody else approves the order, and it goes to the vendor as a PDF.</p>
           </>
         }
         infoLabel="About purchase requisitions"
         title="Purchasing"
       />
 
+      <Tabs onValueChange={(tab) => setState({ tab, show: 'open', status: ALL, q: '' })} value={state.tab === 'orders' ? 'orders' : 'requisitions'}>
+        <TabsList>
+          <TabsTrigger value="requisitions">Requisitions</TabsTrigger>
+          <TabsTrigger value="orders">Orders</TabsTrigger>
+        </TabsList>
+        <TabsContent value="orders">
+          <OrdersTab setState={setState} state={state} />
+        </TabsContent>
+        <TabsContent value="requisitions">
       {list.isLoading ? (
         <DataTableSkeleton columns={columns({ approvalLimitCents: 0, quotesAboveLimit: 0 })} label="Loading requisitions" rows={6} />
       ) : list.isError || !data ? (
@@ -137,7 +150,7 @@ export default function PurchasingPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="open">Open requisitions</SelectItem>
-                  <SelectItem value="closed">Rejected and cancelled</SelectItem>
+                  <SelectItem value="closed">Ordered, rejected and cancelled</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -174,7 +187,7 @@ export default function PurchasingPage() {
                   ? 'No requisition matches what is chosen above.'
                   : show === 'open'
                     ? 'Ask for stock to be bought with a new requisition. It goes to an approver when you submit it.'
-                    : 'Nothing has been rejected or cancelled.'
+                    : 'Nothing has been ordered, rejected or cancelled.'
               }
               icon={ClipboardListIcon}
               title={data.requisitions.length ? 'Nothing to show' : show === 'open' ? 'No open requisitions' : 'None'}
@@ -182,6 +195,8 @@ export default function PurchasingPage() {
           )}
         </div>
       )}
+        </TabsContent>
+      </Tabs>
 
       {limits && data ? <LimitsDialog onClose={() => setLimits(false)} settings={data.settings} /> : null}
     </>

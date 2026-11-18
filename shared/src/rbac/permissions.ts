@@ -37,9 +37,15 @@ export const PERMISSION_KEYS = [
   'payments:record',
   'inventory:read',
   'inventory:manage',
+  'inventory:withdraw',
+  'inventory:count',
+  'inventory:count-approve',
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
+  'purchasing:order',
+  'purchasing:receive',
+  'purchasing:bills',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -287,6 +293,21 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         description:
           'Add and change items, places and vendors, enter an opening balance, and reverse a movement. Stock is never typed over: every change is a movement, kept with who made it.',
       },
+      {
+        key: 'inventory:withdraw',
+        label: 'Record withdrawals',
+        description: 'Record what a technician took for a visit or a van, what came back, and stock moved between places; and reverse one that was wrong. With "View inventory".',
+      },
+      {
+        key: 'inventory:count',
+        label: 'Count stock',
+        description: 'Start a monthly, quarterly or yearly count and enter what is on the shelf. The expected numbers are not shown to whoever counts. With "View inventory".',
+      },
+      {
+        key: 'inventory:count-approve',
+        label: 'Approve counts',
+        description: 'Review what a count found different, ask for a second count, and approve and post it, which changes what is on hand. Never for a count this person counted. With "View inventory".',
+      },
     ],
   },
   {
@@ -302,12 +323,29 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'purchasing:approve',
         label: 'Approve requisitions',
         description:
-          "See everyone's requisitions and approve, send back or reject them, up to the office's approval limit. Nobody approves their own.",
+          "See everyone's requisitions and orders and approve or send them back, up to the office's approval limit. Nobody approves their own.",
       },
       {
         key: 'purchasing:approve-any',
         label: 'Approve any amount',
         description: 'Approve a requisition above the approval limit, and set that limit and how many quotes it asks for. With "Approve requisitions".',
+      },
+      {
+        key: 'purchasing:order',
+        label: 'Make purchase orders',
+        description:
+          "See everyone's submitted requisitions, turn an approved one into a purchase order, send it to the vendor and cancel it. An order is approved by somebody else, with the two above.",
+      },
+      {
+        key: 'purchasing:receive',
+        label: 'Receive goods',
+        description: 'Post what arrived against a purchase order, which puts it into stock, and reverse a receipt that was wrong.',
+      },
+      {
+        key: 'purchasing:bills',
+        label: 'Enter and pay vendor bills',
+        description:
+          "Enter the vendor's bill for an order, approve one that matches the order and what was received, and record its payment. No money moves in the console. A bill that does not match needs \"Approve any amount\".",
       },
     ],
   },
@@ -406,10 +444,16 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'payments:record',
   // Stock is money on a shelf: its movements are made by a person at the screen.
   'inventory:manage',
+  'inventory:withdraw',
+  'inventory:count',
+  'inventory:count-approve',
   // Asking for money to be spent, and agreeing to it: people, never a stored credential.
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
+  'purchasing:order',
+  'purchasing:receive',
+  'purchasing:bills',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);

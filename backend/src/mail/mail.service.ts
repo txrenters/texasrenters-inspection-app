@@ -229,6 +229,29 @@ export class MailService {
     });
   }
 
+  /**
+   * A purchase order to its vendor (2026-11-19): the order as a PDF, with a
+   * line of what it is. The caller escapes every value in `html`. One address
+   * a call.
+   */
+  sendPurchaseOrder(input: {
+    to: string;
+    subject: string;
+    title: string;
+    html: string;
+    replyTo?: string | null;
+    attachments?: { name: string; contentType: string; contentBase64: string }[];
+  }) {
+    return this.deliver({
+      to: input.to,
+      subject: input.subject,
+      html: this.layout(input.title, input.html),
+      template: 'purchase-order',
+      replyTo: input.replyTo,
+      attachments: input.attachments,
+    });
+  }
+
   private async deliver(input: {
     to: string;
     subject: string;

@@ -119,6 +119,8 @@ function database() {
         for (let index = quotes.length - 1; index >= 0; index -= 1) if (matches(quotes[index]!, where)) quotes.splice(index, 1);
       }),
     },
+    // No order has been made from any of these.
+    purchaseOrder: { findFirst: jest.fn(async () => null) },
     stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))) },
     stockLevel: { groupBy: jest.fn(async () => levels) },
     stockPlace: {

@@ -3,7 +3,7 @@
 import { formatMoney, type RequisitionDetail, type RequisitionLine, type RequisitionQuote } from '@texasrenters/shared';
 import { ClipboardListIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Textarea } from '@/components/ui/textarea';
 import { EMPTY, formatCount, formatDateTime, formatDay } from '@/lib/format';
-import { usePurchasingEdits, useRequisition, useRequisitionChoices, type RequisitionStep } from '@/lib/purchasing-queries';
+import { usePurchaseOrderEdits, usePurchasingEdits, useRequisition, useRequisitionChoices, type RequisitionStep } from '@/lib/purchasing-queries';
 
 /**
  * One purchase requisition (2026-11-19, phase 2). Its author sees the form
@@ -129,6 +129,14 @@ function RequisitionView({
   error: Error | null;
 }) {
   const [note, setNote] = useState('');
+  const router = useRouter();
+  const orders = usePurchaseOrderEdits();
+  // Makes the draft order and opens it: the purchaser carries on there.
+  const makeOrder = () =>
+    void orders.create
+      .mutateAsync(data.id)
+      .then((order) => router.push(`/purchasing/orders/${order.id}`))
+      .catch(() => undefined);
   const deciding = data.can.approve || data.can.sendBack || data.can.reject || Boolean(data.can.approveBlocked);
   const run = (step: RequisitionStep) => void act(step, note.trim() || undefined).catch(() => undefined);
 
@@ -203,10 +211,34 @@ function RequisitionView({
               { label: 'Estimated total', value: formatMoney(data.estimatedTotalCents) },
               ...(data.status === 'SUBMITTED' ? [{ label: 'Waiting on', value: approverFor(data.estimatedTotalCents, data.settings) }] : []),
               ...(data.decidedBy && data.status !== 'SUBMITTED' ? [{ label: 'Decided by', value: data.decidedBy, detail: data.decidedAt ? formatDateTime(data.decidedAt) : undefined }] : []),
-              ...(data.status === 'APPROVED' ? [{ label: 'Next', value: 'A purchase order', detail: 'Orders are not in the console yet.' }] : []),
+              ...(data.status === 'APPROVED' ? [{ label: 'Next', value: 'A purchase order', detail: 'Made by a purchaser from this requisition.' }] : []),
+              ...(data.order
+                ? [
+                    {
+                      label: 'Purchase order',
+                      value: (
+                        <Link className="underline underline-offset-4" href={`/purchasing/orders/${data.order.id}`}>
+                          {data.order.number ?? 'Draft order'}
+                        </Link>
+                      ),
+                    },
+                  ]
+                : []),
             ]}
             label="Where it stands"
           />
+          {data.can.order ? (
+            <>
+              {orders.create.error ? (
+                <Alert className="mt-3" variant="destructive">
+                  <AlertDescription>{orders.create.error.message}</AlertDescription>
+                </Alert>
+              ) : null}
+              <Button className="mt-4 w-full" disabled={orders.create.isPending} onClick={makeOrder}>
+                Make purchase order
+              </Button>
+            </>
+          ) : null}
           {data.can.cancel ? (
             <>
               {!deciding && error ? (
