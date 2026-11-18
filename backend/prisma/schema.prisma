@@ -415,6 +415,7 @@ model Organization {
   goodsReceipts GoodsReceipt[]
   vendorBills VendorBill[]
   stockSlips StockSlip[]
+  stockCounts StockCount[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -5593,6 +5594,8 @@ enum StockMovementKind {
   WITHDRAWAL
   RETURN
   TRANSFER
+  /// What a count found different from the ledger (phase 6).
+  COUNT_ADJUSTMENT
 }
 
 /// Something the office stocks, counted in whole units. Never deleted once it has moved: switched off instead.
@@ -5629,6 +5632,7 @@ model StockItem {
   orderLines       PurchaseOrderLine[]
   receiptLines     GoodsReceiptLine[]
   slipLines        StockSlipLine[]
+  countLines       StockCountLine[]
 
   @@unique([organizationId, codeKey])
   /// What a movement points at: an item of its own office.
@@ -5658,6 +5662,8 @@ model StockPlace {
   receiptLines GoodsReceiptLine[]
   slipsFrom    StockSlip[]     @relation("StockSlipFrom")
   slipsTo      StockSlip[]     @relation("StockSlipTo")
+  counts       StockCount[]
+  countLines   StockCountLine[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5723,6 +5729,7 @@ model StockMovement {
   /// The slip line it is, when a withdrawal, a return or a move made it.
   slipLine     StockSlipLine?  @relation("StockSlipLineMovement")
   slipLineIn   StockSlipLine?  @relation("StockSlipLineMovementIn")
+  countLine    StockCountLine?
 
   @@unique([organizationId, requestKey])
   @@index([organizationId, itemId, createdAt])
@@ -6182,5 +6189,101 @@ model StockSlipLine {
   movementIn StockMovement? @relation("StockSlipLineMovementIn", fields: [movementInId], references: [id], onDelete: Restrict)
 
   @@unique([slipId, itemId])
+  @@index([organizationId, itemId])
+}
+
+/// Inventory counts (2026-11-19, phase 6).
+enum StockCountKind {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum StockCountStatus {
+  OPEN
+  COUNTING
+  REVIEW
+  POSTED
+  CANCELLED
+}
+
+enum StockCountReason {
+  TAKEN_WITHOUT_WITHDRAWAL
+  RETURNED_WITHOUT_RETURN
+  DAMAGED
+  MISCOUNTED_BEFORE
+  NOT_KNOWN
+}
+
+/// A count of what is on the shelf: monthly (chosen items in a place),
+/// quarterly (a whole place) or yearly (everything; no stock moves while it
+/// is open, a trigger). Counted without the expected numbers, reviewed by
+/// somebody else (checked), and posted as one adjustment movement a line
+/// that differed. A place is in one unfinished count at a time (partial
+/// unique indexes in the migration).
+model StockCount {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @db.Uuid
+  /// "CNT-0007".
+  number          String
+  kind            StockCountKind
+  status          StockCountStatus @default(OPEN)
+  /// The Texas day it was started: its month, quarter or year names it.
+  day             DateTime         @db.Date
+  /// The place counted; null for a yearly count.
+  placeId         String?          @db.Uuid
+  note            String?
+  requestKey      String
+  startedById     String?          @db.Uuid
+  startedByName   String
+  createdAt       DateTime         @default(now())
+  /// The one person counting: never the one who approves.
+  countedById     String?          @db.Uuid
+  countedByName   String?
+  submittedAt     DateTime?
+  approvedById    String?          @db.Uuid
+  approvedByName  String?
+  postedAt        DateTime?
+  /// What posting changed, at cost.
+  netValueCents   Int?
+  cancelledAt     DateTime?
+  cancelledByName String?
+  cancelReason    String?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  place        StockPlace?      @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  lines        StockCountLine[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, requestKey])
+  @@unique([organizationId, id])
+  @@index([organizationId, createdAt])
+}
+
+/// One item in one place on a count. What was expected and what one costs
+/// are written when the count is handed in, not before.
+model StockCountLine {
+  id                   String            @id @default(uuid()) @db.Uuid
+  organizationId       String            @db.Uuid
+  countId              String            @db.Uuid
+  itemId               String            @db.Uuid
+  placeId              String            @db.Uuid
+  /// Null while it waits to be counted, or counted again.
+  countedQuantity      Int?
+  /// The first count, kept when a second one was asked for.
+  firstCountedQuantity Int?
+  recount              Boolean           @default(false)
+  expectedQuantity     Int?
+  unitCostCents        Int?
+  reason               StockCountReason?
+  /// The adjustment posting wrote, when the line differed.
+  movementId           String?           @unique @db.Uuid
+
+  count    StockCount     @relation(fields: [organizationId, countId], references: [organizationId, id], onDelete: Restrict)
+  item     StockItem      @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+  place    StockPlace     @relation(fields: [organizationId, placeId], references: [organizationId, id], onDelete: Restrict)
+  movement StockMovement? @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([countId, itemId, placeId])
   @@index([organizationId, itemId])
 }

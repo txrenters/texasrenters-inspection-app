@@ -17,6 +17,7 @@ import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { nextDocumentNumber } from './purchasing.service';
+import { assertStockNotFrozen } from './stock-freeze';
 
 /**
  * Withdrawals, returns and moves (2026-11-19, phase 5 of the inventory and
@@ -158,6 +159,7 @@ export class StockSlipsService {
     try {
       await this.prisma.$transaction(async (tx) => {
         if (await tx.stockSlip.findFirst({ where: { organizationId, requestKey: input.requestKey }, select: { id: true } })) return;
+        await assertStockNotFrozen(tx, organizationId);
 
         const placeIds = [fromPlaceId, toPlaceId].filter((placeId): placeId is string => Boolean(placeId));
         const [items, places, levels] = await Promise.all([
@@ -254,6 +256,7 @@ export class StockSlipsService {
         });
         if (!slip) throw new ApplicationError(404, 'STOCK_SLIP_NOT_FOUND', 'That slip is not on the list.');
         if (slip.reversedAt) throw new ApplicationError(409, 'STOCK_SLIP_ALREADY_REVERSED', 'That slip has already been reversed.');
+        await assertStockNotFrozen(tx, organizationId);
 
         const who = { createdById: user.principalType === 'API_KEY' ? null : user.id, createdByName: user.displayName };
         const day = dateOf(businessDate());

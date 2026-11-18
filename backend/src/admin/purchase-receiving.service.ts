@@ -16,6 +16,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { assertStockNotFrozen } from './stock-freeze';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { nextDocumentNumber } from './purchasing.service';
 
@@ -154,6 +155,7 @@ export class PurchaseReceivingService {
           if (prior.orderId !== orderId) throw new ApplicationError(409, 'RECEIPT_REQUEST_REUSED', 'That receipt was already posted for another order.');
           return;
         }
+        await assertStockNotFrozen(tx, organizationId);
         const order = await tx.purchaseOrder.findFirst({
           where: { id: orderId, organizationId },
           select: { number: true, status: true, lines: { select: { id: true, itemId: true, quantity: true, receivedQuantity: true, unitPriceCents: true, item: { select: { code: true } } } } },
@@ -230,6 +232,7 @@ export class PurchaseReceivingService {
         if (!receipt) throw new ApplicationError(404, 'RECEIPT_NOT_FOUND', 'That receipt is not on the list.');
         orderId = receipt.orderId;
         if (receipt.reversedAt) throw new ApplicationError(409, 'RECEIPT_ALREADY_REVERSED', 'That receipt has already been reversed.');
+        await assertStockNotFrozen(tx, organizationId);
         if (receipt.order.status === Status.CLOSED) throw new ApplicationError(409, 'RECEIPT_FIXED', 'The order is closed, so its receipts stay.');
         if (receipt.order.bill && !BILL_OPEN.includes(receipt.order.bill.status)) throw new ApplicationError(409, 'RECEIPT_FIXED', "The vendor's bill has been approved against it, so the receipt stays.");
 

@@ -5,6 +5,7 @@ import { BoxesIcon, PencilIcon, TagsIcon, TruckIcon, WarehouseIcon } from 'lucid
 import { useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import { CountsTab } from '@/components/inventory/counts-tab';
 import { CategoryDialog, ItemDialog, PlaceDialog, VendorDialog } from '@/components/inventory/inventory-dialogs';
 import { InUseBadge, StockStatusBadge } from '@/components/inventory/stock-status';
 import { WithdrawalsTab } from '@/components/inventory/withdrawals-tab';
@@ -27,7 +28,8 @@ import { useUrlState } from '@/lib/url-state';
  * vendors. On hand is added up from the item's movements and is never typed
  * here; an item's page enters its opening balance. An item's code is given by
  * the console from its category (2026-11-19), so nobody types one. The
- * Withdrawals tab records what leaves, comes back and moves (phase 5).
+ * Withdrawals tab records what leaves, comes back and moves (phase 5), and
+ * the Counts tab the monthly, quarterly and yearly counts (phase 6).
  *
  * The item list is one read of every item -- tens to a few hundred -- so the
  * filters and the search work on the rows in hand and ask for nothing more.
@@ -40,6 +42,7 @@ export default function InventoryPage() {
   const permissions = usePermissions();
   const canManage = permissions.has('inventory:manage');
   const canWithdraw = permissions.has('inventory:withdraw');
+  const canCount = permissions.has('inventory:count');
   const [state, setState] = useUrlState({ tab: 'stock', company: ALL, show: 'in-use', q: '' });
   const [item, setItem] = useState(false);
   const [place, setPlace] = useState<Editing<StockPlaceRow>>(null);
@@ -55,7 +58,7 @@ export default function InventoryPage() {
       <Button onClick={() => setPlace({})}>New place</Button>
     ) : state.tab === 'vendors' ? (
       <Button onClick={() => setVendor({})}>New vendor</Button>
-    ) : state.tab === 'withdrawals' ? undefined : (
+    ) : state.tab === 'withdrawals' || state.tab === 'counts' ? undefined : (
       <Button onClick={() => setItem(true)}>New item</Button>
     );
 
@@ -78,6 +81,7 @@ export default function InventoryPage() {
         <TabsList>
           <TabsTrigger value="stock">Stock</TabsTrigger>
           <TabsTrigger value="withdrawals">Withdrawals</TabsTrigger>
+          <TabsTrigger value="counts">Counts</TabsTrigger>
           <TabsTrigger value="categories">Categories</TabsTrigger>
           <TabsTrigger value="places">Places</TabsTrigger>
           <TabsTrigger value="vendors">Vendors</TabsTrigger>
@@ -94,6 +98,9 @@ export default function InventoryPage() {
         </TabsContent>
         <TabsContent value="withdrawals">
           <WithdrawalsTab canWithdraw={canWithdraw} />
+        </TabsContent>
+        <TabsContent value="counts">
+          <CountsTab canCount={canCount} />
         </TabsContent>
         <TabsContent value="categories">
           {stock.isError ? (
