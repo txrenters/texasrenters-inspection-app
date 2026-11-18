@@ -115,6 +115,9 @@ describe('the sidebar', () => {
       ['Back-to-market', '/inspections?type=BACK_TO_MARKET'],
       ['Move-out', '/inspections?type=MOVE_OUT'],
       ['HVAC', '/inspections?type=HVAC'],
+      // The work booked from a work order, beside the inspections it is filed
+      // among.
+      ['Work orders', '/work-orders'],
       ['Move-ins & move-outs', '/lease-schedule'],
       ['Benefit package plan', '/planning'],
       ['TBP group maker', '/group-maker'],
