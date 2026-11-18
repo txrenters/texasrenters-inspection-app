@@ -632,8 +632,17 @@ export class ExcelSyncService {
         await this.putCells(client, name, `${columnLetter(write.column)}${row(write.row)}:${columnLetter(write.column + write.cells.length - 1)}${row(write.row)}`, [write.cells]);
       for (const index of plan.clears) await client.clearRange(name, `A${row(index)}:${columnLetter(LOG_WIDTH - 1)}${row(index)}`);
       if (plan.appends.length) {
-        // At the foot of the tab, under whatever the office has there.
-        const foot = Math.max(last, origin) + 1;
+        // At the foot of the tab, under whatever the office has there -- and under any formula of the office's that
+        // shows nothing (a "" result is not a value to Excel's last row): never written over.
+        let foot = Math.max(last, origin) + 1;
+        for (let look = 0; look < 3; look++) {
+          const range = `A${foot}:${columnLetter(LOG_WIDTH - 1)}${foot + plan.appends.length - 1}`;
+          const there = await client.readCells(name, range);
+          const taken = there.formulas.map((cells, row) => (cells.some((cell, column) => cell !== '' && cell !== null && (isFormula(cell, there.values[row]?.[column] ?? null) || String(cell).trim())) ? row : -1));
+          const lastTaken = Math.max(-1, ...taken);
+          if (lastTaken < 0) break;
+          foot += lastTaken + 1;
+        }
         await this.putCells(client, name, `A${foot}:${columnLetter(LOG_WIDTH - 1)}${foot + plan.appends.length - 1}`, plan.appends.map((append) => append.cells));
       }
       const keys = Object.keys(plan.written);
