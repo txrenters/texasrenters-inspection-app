@@ -8,6 +8,7 @@ import { ClearedCellsDialog } from '@/components/actual-vs-budget/cleared-cells-
 import { ExcelSyncDialog } from '@/components/actual-vs-budget/excel-sync-dialog';
 import { MoneyColumnsDialog } from '@/components/actual-vs-budget/money-columns-dialog';
 import { MonthlySheet, WeeklySheet } from '@/components/actual-vs-budget/period-sheets';
+import { SheetFindBar, SheetKeysProvider } from '@/components/actual-vs-budget/sheet-keys';
 import { TechnicianLog } from '@/components/actual-vs-budget/technician-log';
 import { PageHeader } from '@/components/page-header';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -29,6 +30,8 @@ import { useUrlState } from '@/lib/url-state';
  * Every sheet is a spreadsheet: the cells the console knows come filled, the
  * rest are typed into where they are. And live (2026-11-17): everyone with the
  * page open sees each save as it is made, and which cell the others are in.
+ * And worked from the keyboard, as Excel is (2026-11-18): arrows, Enter, Tab,
+ * F2, Ctrl+Z, copy and paste, Ctrl+F to find, ? for the shortcuts.
  */
 
 const VIEWS = [
@@ -57,6 +60,8 @@ export default function ActualVsBudgetPage() {
   const [dialog, setDialog] = useState<'columns' | 'budgets' | 'excel' | 'cleared' | null>(null);
   // The office's workbook, uploaded here: the past technicians' logs (PR 4) and everything for those still working.
   const workbook = useRef<HTMLInputElement>(null);
+  // The sheets shown: what Ctrl+F looks through.
+  const sheets = useRef<HTMLDivElement>(null);
   const importHistory = useRevenueHistoryImport();
   const upload = (file: File | undefined) => {
     if (!file) return;
@@ -73,6 +78,7 @@ export default function ActualVsBudgetPage() {
 
   return (
     <ActualVsBudgetLive view={view}>
+    <SheetKeysProvider area={sheets}>
     <div className="space-y-4">
       <PageHeader
         title="Actual vs Budget"
@@ -121,6 +127,14 @@ export default function ActualVsBudgetPage() {
           ))}
         </TabsList>
       </Tabs>
+      <SheetFindBar />
+      <div
+        className={
+          // Ctrl+F's marks: every match, the current one more strongly; with "only matching rows", the others hidden.
+          '[&_td[data-find=current]]:bg-warning/45 [&_td[data-find=match]]:bg-warning/15 [&_tr[data-find-hide]]:hidden'
+        }
+        ref={sheets}
+      >
       {view === 'log' ? (
         <TechnicianLog
           canEdit={canEdit}
@@ -141,11 +155,13 @@ export default function ActualVsBudgetPage() {
       ) : (
         <MonthlySheet canEdit={canEdit} date={query.date} onDate={(date) => setQuery({ date })} />
       )}
+      </div>
       {dialog === 'columns' ? <MoneyColumnsDialog onClose={() => setDialog(null)} /> : null}
       {dialog === 'budgets' ? <BudgetsDialog onClose={() => setDialog(null)} /> : null}
       {dialog === 'excel' ? <ExcelSyncDialog canManage={canEdit} onClose={() => setDialog(null)} /> : null}
       {dialog === 'cleared' ? <ClearedCellsDialog canManage={canEdit} onClose={() => setDialog(null)} /> : null}
     </div>
+    </SheetKeysProvider>
     </ActualVsBudgetLive>
   );
 }
