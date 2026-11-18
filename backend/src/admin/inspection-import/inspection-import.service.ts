@@ -52,7 +52,7 @@ import {
   parseReport,
   REPORT_MATCH_WINDOW_DAYS,
   reportFingerprint,
-  reportWalkedOn,
+  walkthroughDay,
 } from './inspect-cloud-report';
 import type { ImportedArea, ImportedReport } from './inspect-cloud-report';
 import { countPhotosPerPage, extractPhotos, readPages } from './inspect-cloud-pdf';
@@ -753,14 +753,20 @@ export class InspectionImportService {
     /**
      * Which inspection this report is the walkthrough of.
      *
-     * Usually the one it was started from. But a report carries its own date,
-     * and one more than a fortnight from that inspection's schedule describes a
-     * different walkthrough. One property had its August 2023 move-in
+     * Usually the one it was started from. But a report carries the day it was
+     * walked -- its photographs' stamps, else its header -- and one more than a
+     * fortnight from that inspection's schedule describes a different
+     * walkthrough. One property had its August 2023 move-in
      * report written into the next tenant's October 2026 visit: the evidence
      * was right, and it could still never be a baseline, because the comparison
      * looks backwards from a move-out and the record holding it was dated after
      * the move-out it existed for. Correcting the date by hand lasted two
      * minutes — the visit is Jobber's, and the sync put Jobber's date back.
+     *
+     * The day is the photographs' and not the header's because the header is
+     * when the report was produced: one property's Sep 8 walk carries
+     * NOV-09-2026, and by that date its own Jobber visit was 62 days away, so
+     * the evidence went to a new Nov 9 move-in and the visit stayed empty.
      *
      * So the report goes where its date says: the inspection that walkthrough
      * already has, in the same scope, or a new one dated by the report. The new
@@ -769,7 +775,7 @@ export class InspectionImportService {
      * it was. The window is the Propertyware backfill's, so the two ways in
      * cannot disagree about which inspection a report belongs to.
      */
-    const walkedOn = reportWalkedOn(report.reportDate);
+    const walkedOn = walkthroughDay(report);
     const elsewhere = walkedOn !== null && !isSameWalkthrough(walkedOn, target.scheduledAt);
     const window = REPORT_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
     const matched =
@@ -1214,6 +1220,9 @@ export class InspectionImportService {
             requestedInspectionId: target.id,
             placement: createOn ? 'CREATED' : placedId === target.id ? 'REQUESTED' : 'MATCHED',
             reportDate: report.reportDate,
+            // The day it was placed by, which is not the header's when the
+            // report was produced after the walk.
+            walkedOn: walkedOn ? walkedOn.toISOString().slice(0, 10) : null,
           },
         },
       });

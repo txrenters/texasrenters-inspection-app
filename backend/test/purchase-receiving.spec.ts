@@ -196,6 +196,8 @@ function database() {
     invoiceSettings: { findUnique: jest.fn(async () => null) },
     purchaseOrderDelivery: { findMany: jest.fn(async () => []) },
     userProfile: { findMany: jest.fn(async () => PEOPLE.map((one) => ({ id: one.id, displayName: one.displayName }))) },
+    // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
+    stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
     auditLog: {
       create: jest.fn(async ({ data }: { data: Row }) => audits.push({ createdAt: new Date((clock += 1000)), ...data })),
       findMany: jest.fn(async ({ where }: { where: Where }) => audits.filter((row) => matches(row, where)).reverse()),

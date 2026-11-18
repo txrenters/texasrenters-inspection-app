@@ -17,6 +17,9 @@ const hooks = vi.hoisted(() => ({
   useStockSlips: vi.fn(),
   useStockSlipChoices: vi.fn(),
   useStockSlipEdits: vi.fn(),
+  useStockCounts: vi.fn(),
+  useStockCountChoices: vi.fn(),
+  useStockCountEdits: vi.fn(),
 }));
 vi.mock('@/lib/inventory-queries', () => hooks);
 const url = vi.hoisted(() => ({ state: { tab: 'stock', company: 'all', show: 'in-use', q: '' }, set: vi.fn() }));
@@ -95,6 +98,8 @@ beforeEach(() => {
   hooks.useStockSlips.mockReturnValue({ isError: false, data: { slips: [] } });
   hooks.useStockSlipChoices.mockReturnValue({ isError: false, data: undefined });
   hooks.useStockSlipEdits.mockReturnValue({ post: mutation(), reverse: mutation() });
+  hooks.useStockCounts.mockReturnValue({ isError: false, data: { counts: [], schedule: [{ kind: 'MONTHLY', due: '2026-11-30', current: null, lastPosted: null }] } });
+  hooks.useStockCountEdits.mockReturnValue({ start: mutation() });
 });
 
 describe('the withdrawals tab', () => {
@@ -109,6 +114,21 @@ describe('the withdrawals tab', () => {
     account.permissions = new Set(['inventory:read', 'inventory:withdraw']);
     render(<InventoryPage />);
     expect(hooks.useStockSlipChoices).toHaveBeenCalledWith(true, null);
+  });
+});
+
+describe('the counts tab', () => {
+  it('shows when the counts are due to anybody who sees the inventory, and "Start a count" only to who may count', () => {
+    url.state = { ...url.state, tab: 'counts' };
+    const { unmount } = render(<InventoryPage />);
+    expect(screen.getByRole('article', { name: 'Monthly count' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Start/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    unmount();
+
+    account.permissions = new Set(['inventory:read', 'inventory:count']);
+    render(<InventoryPage />);
+    expect(screen.getByRole('button', { name: 'Start the monthly count' })).toBeTruthy();
   });
 });
 
