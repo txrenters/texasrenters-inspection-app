@@ -17,6 +17,7 @@ const TONE: Record<RequisitionStatus, 'secondary' | 'warning' | 'info' | 'succes
   ORDERED: 'secondary',
   REJECTED: 'destructive',
   CANCELLED: 'secondary',
+  CLOSED: 'secondary',
 };
 
 export function RequisitionStatusBadge({ status }: { status: RequisitionStatus }) {
@@ -33,6 +34,9 @@ const ORDER_TONE: Record<PurchaseOrderStatus, 'secondary' | 'warning' | 'info' |
   AWAITING_APPROVAL: 'warning',
   APPROVED: 'info',
   SENT: 'success',
+  PARTLY_RECEIVED: 'warning',
+  RECEIVED: 'info',
+  CLOSED: 'secondary',
   CANCELLED: 'secondary',
 };
 
@@ -40,19 +44,21 @@ export function PurchaseOrderStatusBadge({ status }: { status: PurchaseOrderStat
   return <Badge variant={ORDER_TONE[status]}>{PURCHASE_ORDER_STATUS_LABEL[status]}</Badge>;
 }
 
-/** Draft, Waiting for approval, Approved, Sent: where an order is on its way. */
+/** Draft to Closed: where an order is on its way. Its bill has its own state, shown beside it. */
 export function PurchaseOrderSteps({ status }: { status: PurchaseOrderStatus }) {
-  const reached = { DRAFT: 0, AWAITING_APPROVAL: 1, APPROVED: 2, SENT: 3, CANCELLED: 0 }[status];
+  const reached = { DRAFT: 0, AWAITING_APPROVAL: 1, APPROVED: 2, SENT: 3, PARTLY_RECEIVED: 4, RECEIVED: 5, CLOSED: 6, CANCELLED: 0 }[status];
   const ended = status === 'CANCELLED';
-  return <Steps ended={ended} label="Where this order is" reached={reached} steps={['Draft', 'Waiting for approval', 'Approved', 'Sent']} tail={ended ? 'Cancelled' : null} />;
+  return (
+    <Steps ended={ended} label="Where this order is" reached={reached} steps={['Draft', 'Waiting for approval', 'Approved', 'Sent', 'Partly received', 'Received', 'Closed']} tail={ended ? 'Cancelled' : null} />
+  );
 }
 
 /** Draft, Submitted, Approved, Ordered: where the requisition is on its way. One that left the way says where it ended instead. */
 export function RequisitionSteps({ status }: { status: RequisitionStatus }) {
-  const reached = status === 'ORDERED' ? 3 : status === 'APPROVED' ? 2 : status === 'SUBMITTED' ? 1 : 0;
+  const reached = status === 'CLOSED' ? 4 : status === 'ORDERED' ? 3 : status === 'APPROVED' ? 2 : status === 'SUBMITTED' ? 1 : 0;
   const ended = status === 'REJECTED' || status === 'CANCELLED';
   return (
-    <Steps ended={ended} label="Where this requisition is" reached={reached} steps={['Draft', 'Submitted', 'Approved', 'Ordered']} tail={ended || status === 'SENT_BACK' ? REQUISITION_STATUS_LABEL[status] : null} />
+    <Steps ended={ended} label="Where this requisition is" reached={reached} steps={['Draft', 'Submitted', 'Approved', 'Ordered', 'Received and paid']} tail={ended || status === 'SENT_BACK' ? REQUISITION_STATUS_LABEL[status] : null} />
   );
 }
 

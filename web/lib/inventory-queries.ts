@@ -2,15 +2,26 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  CancelStockCountInput,
   OpeningBalanceInput,
+  PostStockCountInput,
+  PostStockSlipInput,
   ReverseMovementInput,
+  ReverseStockSlipInput,
   SaveStockCategoryInput,
+  SaveStockCountInput,
   SaveStockItemInput,
   SaveStockPlaceInput,
   SaveVendorInput,
+  StartStockCountInput,
+  StockCountChoices,
+  StockCountDetail,
+  StockCountList,
   StockItemDetail,
   StockList,
   StockPlaces,
+  StockSlipChoices,
+  StockSlipList,
   Vendors,
 } from '@texasrenters/shared';
 
@@ -31,6 +42,11 @@ export const inventoryKeys = {
   item: (itemId: string) => ['inventory', 'item', itemId] as const,
   places: ['inventory', 'places'] as const,
   vendors: ['inventory', 'vendors'] as const,
+  slips: ['inventory', 'slips'] as const,
+  counts: ['inventory', 'counts'] as const,
+  countChoices: ['inventory', 'count-choices'] as const,
+  count: (countId: string) => ['inventory', 'count', countId] as const,
+  slipChoices: (technicianId: string | null) => ['inventory', 'slip-choices', technicianId] as const,
 };
 
 export function useStock() {
@@ -53,6 +69,86 @@ export function useStockPlaces(enabled: boolean) {
 
 export function useVendors(enabled: boolean) {
   return useQuery({ queryKey: inventoryKeys.vendors, queryFn: ({ signal }) => api<Vendors>(`${BASE}/vendors`, { signal }), enabled, ...KEPT });
+}
+
+/** The latest withdrawals, returns and moves: read when the Withdrawals tab opens. */
+export function useStockSlips(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.slips, queryFn: ({ signal }) => api<StockSlipList>(`${BASE}/slips`, { signal }), enabled, ...KEPT });
+}
+
+/**
+ * What the slip form chooses from and what is where, with the chosen
+ * technician's visits for today. Read when the form opens and when the
+ * technician changes; the last answer stays on screen meanwhile.
+ */
+export function useStockSlipChoices(enabled: boolean, technicianId: string | null) {
+  return useQuery({
+    queryKey: inventoryKeys.slipChoices(technicianId),
+    queryFn: ({ signal }) => api<StockSlipChoices>(`${BASE}/slips/choices${technicianId ? `?technicianId=${encodeURIComponent(technicianId)}` : ''}`, { signal }),
+    enabled,
+    placeholderData: (previous) => previous,
+    ...KEPT,
+  });
+}
+
+/** Posting or reversing a slip answers with the list; everything else that shows stock is read again when next looked at. */
+export function useStockSlipEdits() {
+  const client = useQueryClient();
+  const settle = (list: StockSlipList) => {
+    client.setQueryData(inventoryKeys.slips, list);
+    const saved = JSON.stringify(inventoryKeys.slips);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === inventoryKeys.all[0] && JSON.stringify(query.queryKey) !== saved });
+  };
+  return {
+    post: useMutation({ mutationFn: (input: PostStockSlipInput) => api<StockSlipList>(`${BASE}/slips`, { method: 'POST', body: JSON.stringify(input) }), onSuccess: settle }),
+    reverse: useMutation({
+      mutationFn: ({ slipId, input }: { slipId: string; input: ReverseStockSlipInput }) =>
+        api<StockSlipList>(`${BASE}/slips/${encodeURIComponent(slipId)}/reverse`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: settle,
+    }),
+  };
+}
+
+/** The counts and when each kind is next due: read when the Counts tab opens. */
+export function useStockCounts(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.counts, queryFn: ({ signal }) => api<StockCountList>(`${BASE}/counts`, { signal }), enabled, ...KEPT });
+}
+
+/** What "Start a count" chooses from: read only once that form is open. */
+export function useStockCountChoices(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.countChoices, queryFn: ({ signal }) => api<StockCountChoices>(`${BASE}/counts/choices`, { signal }), enabled, ...KEPT });
+}
+
+/** One count, as this person may see it. Read when its page opens; never polled. */
+export function useStockCount(countId: string) {
+  return useQuery({
+    queryKey: inventoryKeys.count(countId),
+    queryFn: ({ signal }) => api<StockCountDetail>(`${BASE}/counts/${encodeURIComponent(countId)}`, { signal }),
+    enabled: Boolean(countId),
+    ...KEPT,
+  });
+}
+
+/** Every step answers with the count as it now is, which is kept; the rest of the inventory is read again when next looked at. */
+export function useStockCountEdits() {
+  const client = useQueryClient();
+  const settle = <T extends StockCountDetail>(detail: T) => {
+    const key = inventoryKeys.count(detail.id);
+    client.setQueryData(key, detail);
+    const saved = JSON.stringify(key);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === inventoryKeys.all[0] && JSON.stringify(query.queryKey) !== saved });
+  };
+  const at = (countId: string, step: string) => `${BASE}/counts/${encodeURIComponent(countId)}/${step}`;
+  const send = <T,>(path: string, method: 'POST' | 'PUT', input: object) => api<T>(path, { method, body: JSON.stringify(input) });
+  type Handed = StockCountDetail & { recounts: number };
+  return {
+    start: useMutation({ mutationFn: (input: StartStockCountInput) => send<StockCountDetail>(`${BASE}/counts`, 'POST', input), onSuccess: settle }),
+    save: useMutation({ mutationFn: ({ countId, input }: { countId: string; input: SaveStockCountInput }) => send<Handed>(at(countId, 'counted'), 'PUT', input), onSuccess: settle }),
+    handIn: useMutation({ mutationFn: ({ countId, input }: { countId: string; input: SaveStockCountInput }) => send<Handed>(at(countId, 'hand-in'), 'POST', input), onSuccess: settle }),
+    recount: useMutation({ mutationFn: ({ countId, lineId }: { countId: string; lineId: string }) => send<StockCountDetail>(at(countId, `lines/${encodeURIComponent(lineId)}/recount`), 'POST', {}), onSuccess: settle }),
+    post: useMutation({ mutationFn: ({ countId, input }: { countId: string; input: PostStockCountInput }) => send<StockCountDetail>(at(countId, 'post'), 'POST', input), onSuccess: settle }),
+    cancel: useMutation({ mutationFn: ({ countId, input }: { countId: string; input: CancelStockCountInput }) => send<StockCountDetail>(at(countId, 'cancel'), 'POST', input), onSuccess: settle }),
+  };
 }
 
 export function useInventoryEdits() {

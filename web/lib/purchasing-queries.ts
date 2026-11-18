@@ -2,7 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ApproveVendorBillInput,
   CancelPurchaseOrderInput,
+  CloseShortInput,
+  PayVendorBillInput,
   PurchaseOrderDecisionInput,
   PurchaseOrderDetail,
   PurchaseOrderList,
@@ -11,9 +14,12 @@ import type {
   RequisitionDecisionInput,
   RequisitionDetail,
   RequisitionList,
+  ReceiveGoodsInput,
+  ReverseReceiptInput,
   SavePurchaseOrderInput,
   SavePurchasingSettingsInput,
   SaveRequisitionInput,
+  SaveVendorBillInput,
   SendPurchaseOrderInput,
 } from '@texasrenters/shared';
 
@@ -103,6 +109,39 @@ export function usePurchaseOrderEdits() {
       mutationFn: ({ orderId, input }: { orderId: string; input: SendPurchaseOrderInput }) => api<PurchaseOrderDetail>(`${path(orderId)}/send`, { method: 'POST', body: JSON.stringify(input) }),
       onSuccess: saved,
     }),
+  };
+}
+
+/**
+ * Receiving and the vendor's bill (phase 4). Each save answers with the order
+ * as it now is. Posting or reversing a receipt changes stock, so what the
+ * Inventory pages hold is read again when next looked at.
+ */
+export function usePurchaseReceivingEdits() {
+  const client = useQueryClient();
+  const saved = (stock: boolean) => (detail: PurchaseOrderDetail) => {
+    const key = purchasingKeys.order(detail.id);
+    client.setQueryData(key, detail);
+    const kept = JSON.stringify(key);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === purchasingKeys.all[0] && query.queryKey[1] !== 'choices' && JSON.stringify(query.queryKey) !== kept });
+    if (stock) void client.invalidateQueries({ queryKey: ['inventory'] });
+  };
+  const order = (orderId: string) => `${BASE}/orders/${encodeURIComponent(orderId)}`;
+  const post = (path: string, input: object = {}) => api<PurchaseOrderDetail>(path, { method: 'POST', body: JSON.stringify(input) });
+  return {
+    receive: useMutation({ mutationFn: ({ orderId, input }: { orderId: string; input: ReceiveGoodsInput }) => post(`${order(orderId)}/receipts`, input), onSuccess: saved(true) }),
+    reverseReceipt: useMutation({
+      mutationFn: ({ receiptId, input }: { receiptId: string; input: ReverseReceiptInput }) => post(`${BASE}/receipts/${encodeURIComponent(receiptId)}/reverse`, input),
+      onSuccess: saved(true),
+    }),
+    closeShort: useMutation({ mutationFn: ({ orderId, input }: { orderId: string; input: CloseShortInput }) => post(`${order(orderId)}/close-short`, input), onSuccess: saved(false) }),
+    saveBill: useMutation({
+      mutationFn: ({ orderId, input }: { orderId: string; input: SaveVendorBillInput }) => api<PurchaseOrderDetail>(`${order(orderId)}/bill`, { method: 'PUT', body: JSON.stringify(input) }),
+      onSuccess: saved(false),
+    }),
+    approveBill: useMutation({ mutationFn: (orderId: string) => post(`${order(orderId)}/bill/approve`), onSuccess: saved(false) }),
+    approveBillAnyway: useMutation({ mutationFn: ({ orderId, input }: { orderId: string; input: ApproveVendorBillInput }) => post(`${order(orderId)}/bill/approve-anyway`, input), onSuccess: saved(false) }),
+    payBill: useMutation({ mutationFn: ({ orderId, input }: { orderId: string; input: PayVendorBillInput }) => post(`${order(orderId)}/bill/pay`, input), onSuccess: saved(false) }),
   };
 }
 

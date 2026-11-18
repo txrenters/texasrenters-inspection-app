@@ -27,6 +27,7 @@ import { auditActor, type AuthenticatedUser } from '../common/auth';
 import { businessDate } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { assertStockNotFrozen } from './stock-freeze';
 
 /**
  * Inventory (2026-11-19, phase 1 of the inventory and purchasing plan): the
@@ -103,6 +104,8 @@ function itemRow(item: ItemRecord, levels: readonly Level[], kinds: ReadonlyMap<
     valueCents += level.valueCents;
   }
   const onHand = inStockrooms + inVans;
+  // Stock leaves at a rounded average, which can leave a cent or two behind once the last unit has gone.
+  if (onHand <= 0) valueCents = 0;
   const company: StockCompany | null = item.xeroTenantId ? { tenantId: item.xeroTenantId, name: companies.get(item.xeroTenantId) ?? 'A company' } : null;
   return {
     id: item.id,
@@ -427,6 +430,7 @@ export class InventoryService {
           if (already.itemId !== itemId) throw new ApplicationError(409, 'STOCK_REQUEST_REUSED', 'That entry was already made for another item.');
           return;
         }
+        await assertStockNotFrozen(tx, organizationId);
         const [item, place] = await Promise.all([
           tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { code: true, active: true } }),
           tx.stockPlace.findFirst({ where: { id: input.placeId, organizationId }, select: { name: true, active: true } }),
@@ -496,8 +500,12 @@ export class InventoryService {
         });
         if (!movement) throw new ApplicationError(404, 'STOCK_MOVEMENT_NOT_FOUND', 'That movement is not in the ledger.');
         itemId = movement.itemId;
+        await assertStockNotFrozen(tx, organizationId);
         if (movement.kind === StockMovementKind.REVERSAL) throw new ApplicationError(409, 'STOCK_REVERSAL_OF_REVERSAL', 'A reversal cannot be reversed. Enter the movement again instead.');
         if (movement.reversedBy) throw new ApplicationError(409, 'STOCK_MOVEMENT_ALREADY_REVERSED', 'That movement has already been reversed.');
+        // A movement a document made is put right through its document, which keeps the two in step.
+        if (movement.kind !== StockMovementKind.OPENING_BALANCE)
+          throw new ApplicationError(409, 'STOCK_MOVEMENT_HAS_DOCUMENT', 'Goods received are reversed from their purchase order, with the receipt.');
         if (movement.quantity > 0) {
           const level = await tx.stockLevel.findUnique({ where: { itemId_placeId: { itemId: movement.itemId, placeId: movement.placeId } }, select: { quantity: true } });
           const there = level?.quantity ?? 0;

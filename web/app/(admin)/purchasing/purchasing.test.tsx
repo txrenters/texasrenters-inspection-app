@@ -19,6 +19,7 @@ const hooks = vi.hoisted(() => ({
   usePurchaseOrders: vi.fn(),
   usePurchaseOrder: vi.fn(),
   usePurchaseOrderEdits: vi.fn(),
+  usePurchaseReceivingEdits: vi.fn(),
 }));
 vi.mock('@/lib/purchasing-queries', () => hooks);
 const url = vi.hoisted(() => ({ state: { tab: 'requisitions', show: 'open', status: 'all', q: '' }, set: vi.fn() }));
@@ -91,6 +92,7 @@ beforeEach(() => {
   pdf.downloadOrder.mockClear();
   orderEdits = { create: mutation(), update: mutation(), step: mutation(), send: mutation() };
   hooks.usePurchaseOrderEdits.mockReturnValue(orderEdits);
+  hooks.usePurchaseReceivingEdits.mockReturnValue(Object.fromEntries(['receive', 'reverseReceipt', 'closeShort', 'saveBill', 'approveBill', 'approveBillAnyway', 'payBill'].map((name) => [name, mutation()])));
   account.permissions = new Set(['purchasing:request']);
   edits = { create: mutation(), update: mutation(), step: mutation(), saveSettings: mutation() };
   hooks.usePurchasingEdits.mockReturnValue(edits);
@@ -326,7 +328,7 @@ const orderRow = (over: Partial<PurchaseOrderRow> = {}): PurchaseOrderRow => ({
   sentAt: null,
   ...over,
 });
-const NOTHING = { edit: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, approveBlocked: null };
+const NOTHING = { edit: false, submit: false, approve: false, sendBack: false, send: false, cancel: false, receive: false, reverseReceipt: false, bill: false, approveBill: false, overrideBill: false, pay: false, closeShort: false, approveBlocked: null };
 const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => ({
   ...orderRow(),
   vendorContact: { contactName: 'A Person', email: 'orders@hill.example', phone: null },
@@ -335,8 +337,8 @@ const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDeta
   taxBasisPoints: 825,
   notes: null,
   lines: [
-    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36 },
-    { id: 'ol-2', item: { id: 'item-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24 },
+    { id: 'ol-1', item: { id: 'item-filter', code: 'FLT-0003', name: 'Filter 20x25x1', unit: 'each' }, quantity: 36, unitPriceCents: 390, requestedQuantity: 36, receivedQuantity: 0 },
+    { id: 'ol-2', item: { id: 'item-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each' }, quantity: 24, unitPriceCents: 185, requestedQuantity: 24, receivedQuantity: 0 },
   ],
   subtotalCents: 18480,
   taxCents: 1525,
@@ -346,6 +348,9 @@ const orderDetail = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDeta
   cancelReason: null,
   from: { name: 'THMP', addressLine1: '1 Example Plaza', addressLine2: null, phone: null, email: 'office@example.test' },
   deliveries: [],
+  receipts: [],
+  bill: null,
+  shortCloseReason: null,
   history: [{ at: '2026-11-18T16:10:00.000Z', by: 'Sample Purchaser', what: 'submitted it for approval' }],
   can: { ...NOTHING, approve: true, sendBack: true },
   approvalLimitCents: 50000,

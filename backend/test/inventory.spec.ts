@@ -151,6 +151,8 @@ function database() {
       findMany: jest.fn(async () => [{ userProfile: { id: TECH, displayName: 'Sample Technician' } }]),
       findFirst: jest.fn(async ({ where }: { where: Row }) => (where.userProfileId === TECH ? { id: 'member' } : null)),
     },
+    // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
+    stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
     // The advisory lock answers nothing; taking a category's next number answers the number taken.
     $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
@@ -277,6 +279,14 @@ describe('reversing a movement', () => {
     db.stockMovement.findFirst.mockResolvedValueOnce({ ...movements[0]!, reversedBy: null, item: { code: 'FLT-16251' }, place: { name: 'Stockroom' } } as never);
 
     await expect(service.reverseMovement(office, movements[0]!.id as string, { reason: 'Wrong' })).rejects.toMatchObject({ code: 'STOCK_MOVEMENT_ALREADY_REVERSED' });
+  });
+
+  it('leaves goods received to their purchase order, where the receipt is reversed', async () => {
+    const { service, movements } = database();
+    movements.push({ id: id(700), organizationId: ORG, itemId: FILTER, placeId: STOCKROOM, kind: 'RECEIPT', quantity: 24, unitCostCents: 390, reversesId: null });
+
+    await expect(service.reverseMovement(office, id(700), { reason: 'Wrong order' })).rejects.toMatchObject({ code: 'STOCK_MOVEMENT_HAS_DOCUMENT' });
+    expect(movements).toHaveLength(1);
   });
 
   it('needs a reason, and a movement of this office', async () => {
