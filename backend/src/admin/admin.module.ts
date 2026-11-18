@@ -45,6 +45,18 @@ import { ExcelSyncScheduler } from './excel/excel-sync.scheduler';
 import { ExcelSyncService } from './excel/excel-sync.service';
 import { MicrosoftAuthService } from './excel/microsoft-auth.service';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
+import { InventoryController } from './inventory.controller';
+import { InventoryService } from './inventory.service';
+import { StockCountsController } from './stock-counts.controller';
+import { StockCountsService } from './stock-counts.service';
+import { StockSlipsController } from './stock-slips.controller';
+import { StockSlipsService } from './stock-slips.service';
+import { PurchasingController } from './purchasing.controller';
+import { PurchasingService } from './purchasing.service';
+import { PurchaseOrdersController } from './purchase-orders.controller';
+import { PurchaseOrdersService } from './purchase-orders.service';
+import { PurchaseReceivingController } from './purchase-receiving.controller';
+import { PurchaseReceivingService } from './purchase-receiving.service';
 import { InvoiceReportsController } from './invoice-reports.controller';
 import { InvoiceReportsService } from './invoice-reports.service';
 import { InvoiceSettingsService } from './invoice-settings.service';
@@ -105,6 +117,13 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceSettingsController,
     InvoiceReportsController,
     ActualVsBudgetController,
+    // Before InventoryController: `inventory/slips` must not be read as an item's id.
+    StockSlipsController,
+    StockCountsController,
+    InventoryController,
+    PurchasingController,
+    PurchaseOrdersController,
+    PurchaseReceivingController,
     ExcelSyncController,
     ExcelSyncCallbackController,
     InvoiceFilesController,
@@ -153,6 +172,12 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceBatchService,
     InvoiceReportsService,
     ActualVsBudgetService,
+    InventoryService,
+    StockSlipsService,
+    StockCountsService,
+    PurchasingService,
+    PurchaseOrdersService,
+    PurchaseReceivingService,
     ActualVsBudgetGateway,
     MicrosoftAuthService,
     ExcelSyncService,

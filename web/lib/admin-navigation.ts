@@ -1,6 +1,7 @@
 import {
   ChartColumn,
   Banknote,
+  Boxes,
   Building2,
   CalendarClock,
   Landmark,
@@ -8,6 +9,7 @@ import {
   CalendarRange,
   CalendarSync,
   ClipboardCheck,
+  ClipboardList,
   Clock,
   DoorOpen,
   FileWarning,
@@ -215,6 +217,15 @@ export const adminNavigation: AdminNavigationGroup[] = [
       // The office's revenue monitoring, rebuilt from its Actual vs Budget workbook (2026-11-17). Money, so
       // the invoices' permission.
       { title: 'Actual vs Budget', href: '/actual-vs-budget', icon: ChartColumn, permission: 'invoices:read' },
+    ],
+  },
+  {
+    // What the office stocks and every movement of it (2026-11-19, phase 1 of the inventory and purchasing
+    // plan), and the purchase requisitions that ask for more of it (phase 2). Each its own permission.
+    title: 'Stock',
+    items: [
+      { title: 'Inventory', href: '/inventory', icon: Boxes, permission: 'inventory:read' },
+      { title: 'Purchasing', href: '/purchasing', icon: ClipboardList, permission: 'purchasing:request' },
     ],
   },
   {
