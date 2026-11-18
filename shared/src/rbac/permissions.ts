@@ -37,6 +37,9 @@ export const PERMISSION_KEYS = [
   'payments:record',
   'inventory:read',
   'inventory:manage',
+  'purchasing:request',
+  'purchasing:approve',
+  'purchasing:approve-any',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -287,6 +290,28 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
     ],
   },
   {
+    group: 'Purchasing',
+    description: 'Asking for stock to be bought, and deciding what is.',
+    permissions: [
+      {
+        key: 'purchasing:request',
+        label: 'Make purchase requisitions',
+        description: 'Open Purchasing, ask for stock to be bought and say why, and see your own requisitions. Needed for the two below.',
+      },
+      {
+        key: 'purchasing:approve',
+        label: 'Approve requisitions',
+        description:
+          "See everyone's requisitions and approve, send back or reject them, up to the office's approval limit. Nobody approves their own.",
+      },
+      {
+        key: 'purchasing:approve-any',
+        label: 'Approve any amount',
+        description: 'Approve a requisition above the approval limit, and set that limit and how many quotes it asks for. With "Approve requisitions".',
+      },
+    ],
+  },
+  {
     group: 'Reports & integrations',
     description: 'Sharing and external systems.',
     permissions: [
@@ -381,6 +406,10 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'payments:record',
   // Stock is money on a shelf: its movements are made by a person at the screen.
   'inventory:manage',
+  // Asking for money to be spent, and agreeing to it: people, never a stored credential.
+  'purchasing:request',
+  'purchasing:approve',
+  'purchasing:approve-any',
 ] as const satisfies readonly PermissionKey[];
 
 const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);

@@ -122,3 +122,4 @@ export * from './actual-vs-budget.js';
 export * from './actual-vs-budget-format.js';
 export * from './actual-vs-budget-excel.js';
 export * from './inventory.js';
+export * from './purchasing.js';

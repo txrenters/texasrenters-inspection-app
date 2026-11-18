@@ -407,6 +407,9 @@ model Organization {
   vendors Vendor[]
   stockMovements StockMovement[]
   stockLevels StockLevel[]
+  documentSeries DocumentSeries[]
+  purchasingSettings PurchasingSettings?
+  purchaseRequisitions PurchaseRequisition[]
   revenueTechnicianSettings RevenueTechnicianSetting[]
   revenueDayEntries RevenueDayEntry[]
   revenueSettings RevenueSettings?
@@ -631,6 +634,8 @@ model UserProfile {
   revenueLogEntriesEdited    RevenueLogEntry[]   @relation("RevenueLogEditedBy")
   /// The van whose stock is theirs (2026-11-19).
   stockPlaces                StockPlace[]
+  requisitionsRequested      PurchaseRequisition[] @relation("RequisitionRequestedBy")
+  requisitionsDecided        PurchaseRequisition[] @relation("RequisitionDecidedBy")
   revenueBudget              RevenueTechnicianSetting? @relation("RevenueBudgetTechnician")
   revenueDays                RevenueDayEntry[]   @relation("RevenueDayTechnician")
   revenueWeeks               RevenueWeekEntry[]  @relation("RevenueWeekTechnician")
@@ -4954,6 +4959,7 @@ model XeroOrganisation {
   products     InvoiceProduct[]
   /// The stock that belongs to its books (2026-11-19).
   stockItems   StockItem[]
+  purchaseRequisitions PurchaseRequisition[]
   /// The invoices that go to this organisation's books.
   invoices     Invoice[]
   /// The payments sent to its books.
@@ -5594,6 +5600,7 @@ model StockItem {
   usualVendor      Vendor?           @relation(fields: [organizationId, usualVendorId], references: [organizationId, id], onDelete: NoAction)
   movements        StockMovement[]
   levels           StockLevel[]
+  requisitionLines PurchaseRequisitionLine[]
 
   @@unique([organizationId, codeKey])
   /// What a movement points at: an item of its own office.
@@ -5618,6 +5625,7 @@ model StockPlace {
   technician   UserProfile?    @relation(fields: [technicianId], references: [id], onDelete: SetNull)
   movements    StockMovement[]
   levels       StockLevel[]
+  requisitions PurchaseRequisition[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5641,6 +5649,7 @@ model Vendor {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   items        StockItem[]
+  quotes       PurchaseRequisitionQuote[]
 
   @@unique([organizationId, nameKey])
   @@unique([organizationId, id])
@@ -5697,4 +5706,110 @@ model StockLevel {
 
   @@id([itemId, placeId])
   @@index([organizationId])
+}
+
+/// Purchasing (2026-11-19, phase 2 of the inventory and purchasing plan).
+/// ORDERED and CLOSED join these with purchase orders, in phase 3.
+enum PurchaseRequisitionStatus {
+  DRAFT
+  SUBMITTED
+  SENT_BACK
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// The next number of each kind of document an office numbers: "PR" for
+/// purchase requisitions. Taken under the row's lock, so two never share one.
+model DocumentSeries {
+  organizationId String @db.Uuid
+  kind           String
+  next           Int    @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, kind])
+}
+
+/// Who may approve how much. One row an office; absent, the defaults stand.
+model PurchasingSettings {
+  organizationId     String   @id @db.Uuid
+  /// At or under this, "Approve requisitions" is enough; above it, "Approve any amount".
+  approvalLimitCents Int      @default(50000)
+  /// Quotes a requisition above the limit needs before it is submitted.
+  quotesAboveLimit   Int      @default(2)
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// Somebody asks for stock and says why; somebody else decides. It moves no
+/// stock and spends nothing. Numbered when first submitted. The database
+/// refuses a decision by the person who asked (checked).
+model PurchaseRequisition {
+  id               String                    @id @default(uuid()) @db.Uuid
+  organizationId   String                    @db.Uuid
+  /// "PR-0012"; null while it is a draft never submitted.
+  number           String?
+  status           PurchaseRequisitionStatus @default(DRAFT)
+  /// The company it is for; its items are that company's.
+  xeroTenantId     String?
+  neededBy         DateTime?                 @db.Date
+  deliverToPlaceId String?                   @db.Uuid
+  reason           String
+  requestedById    String                    @db.Uuid
+  submittedAt      DateTime?
+  /// Who approved, sent back or rejected it, when, and their note.
+  decidedById      String?                   @db.Uuid
+  decidedAt        DateTime?
+  decisionNote     String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  organization     Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  xeroOrganisation XeroOrganisation?          @relation(fields: [organizationId, xeroTenantId], references: [organizationId, xeroTenantId], onDelete: NoAction)
+  deliverTo        StockPlace?                @relation(fields: [organizationId, deliverToPlaceId], references: [organizationId, id], onDelete: NoAction)
+  requestedBy      UserProfile                @relation("RequisitionRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy        UserProfile?               @relation("RequisitionDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+  lines            PurchaseRequisitionLine[]
+  quotes           PurchaseRequisitionQuote[]
+
+  @@unique([organizationId, number])
+  @@unique([organizationId, id])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, requestedById, createdAt])
+}
+
+/// One thing asked for: an item of the inventory, or something not on the list yet, named in words.
+model PurchaseRequisitionLine {
+  id                     String  @id @default(uuid()) @db.Uuid
+  organizationId         String  @db.Uuid
+  requisitionId          String  @db.Uuid
+  position               Int
+  itemId                 String? @db.Uuid
+  description            String?
+  quantity               Int
+  estimatedUnitCostCents Int
+
+  requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
+  item        StockItem?          @relation(fields: [organizationId, itemId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, requisitionId, position])
+}
+
+/// A vendor's quote for a requisition. At most one is the chosen one (a partial unique index).
+model PurchaseRequisitionQuote {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  requisitionId  String  @db.Uuid
+  vendorId       String  @db.Uuid
+  totalCents     Int
+  /// "3 days".
+  delivery       String?
+  chosen         Boolean @default(false)
+
+  requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
+  vendor      Vendor              @relation(fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, requisitionId])
 }
