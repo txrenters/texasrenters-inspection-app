@@ -24,8 +24,7 @@ const GIVEN = (_: object, value: unknown) => value !== null;
 const MOST_CENTS = 100_000_000;
 
 export class RequisitionLineDto implements Required<RequisitionLineInput> {
-  @ValidateIf(GIVEN) @IsUUID() itemId!: string | null;
-  @ValidateIf(GIVEN) @IsString() @MaxLength(200) description!: string | null;
+  @IsUUID() itemId!: string;
   @IsInt() @Min(1) @Max(MOST_STOCK_QUANTITY) quantity!: number;
   @IsInt() @Min(0) @Max(MOST_UNIT_COST_CENTS) estimatedUnitCostCents!: number;
 }

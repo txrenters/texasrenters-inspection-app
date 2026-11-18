@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { formatTaxRate, orderSubmitProblem, orderTaxCents, orderTotals, purchaseOrderNumber } from '../src/contracts/purchase-orders';
 import { requisitionNumber, requisitionSubmitProblem, requisitionTotalCents } from '../src/contracts/purchasing';
 
 // Purchase requisitions, phase 2 (2026-11-19). Every figure invented.
@@ -45,5 +46,32 @@ describe('whether it can be submitted', () => {
     expect(requisitionSubmitProblem(large, { ...SETTINGS, quotesAboveLimit: 1 })).toBe('Above the approval limit, 1 quote is needed.');
     expect(requisitionSubmitProblem({ ...large, quotes: [quote(true), quote(false)] }, SETTINGS)).toBeNull();
     expect(requisitionSubmitProblem(large, { ...SETTINGS, quotesAboveLimit: 0 })).toBeNull();
+  });
+});
+
+describe('a purchase order', () => {
+  it('is numbered PO- and at least four digits', () => {
+    expect(purchaseOrderNumber(9)).toBe('PO-0009');
+    expect(purchaseOrderNumber(12345)).toBe('PO-12345');
+  });
+
+  it('adds its lines up and puts the sales tax on top, to the cent', () => {
+    const lines = [{ quantity: 36, unitPriceCents: 390 }, { quantity: 24, unitPriceCents: 185 }];
+    expect(orderTotals(lines, 825)).toEqual({ subtotalCents: 18480, taxCents: 1525, totalCents: 20005 });
+    expect(orderTotals(lines, 0)).toEqual({ subtotalCents: 18480, taxCents: 0, totalCents: 18480 });
+    expect(orderTaxCents(49920, 825)).toBe(4118);
+  });
+
+  it('says its tax rate as the office writes one', () => {
+    expect(formatTaxRate(825)).toBe('8.25%');
+    expect(formatTaxRate(800)).toBe('8%');
+    expect(formatTaxRate(850)).toBe('8.5%');
+    expect(formatTaxRate(0)).toBe('0%');
+  });
+
+  it('needs its vendor and a line before it is submitted', () => {
+    expect(orderSubmitProblem({ vendorId: null, lines: [{}] })).toBe('Choose the vendor.');
+    expect(orderSubmitProblem({ vendorId: 'v', lines: [] })).toBe('An order needs at least one line.');
+    expect(orderSubmitProblem({ vendorId: 'v', lines: [{}] })).toBeNull();
   });
 });

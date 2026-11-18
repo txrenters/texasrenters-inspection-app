@@ -23,6 +23,7 @@ const FILTER = id(1);
 const BATTERY = id(2);
 const GLUE = id(3);
 const OLD = id(4);
+const ALARM = id(5);
 const STOCKROOM = id(11);
 const HILL = id(21);
 const ALAMO = id(22);
@@ -59,6 +60,7 @@ function database() {
     { id: FILTER, organizationId: ORG, code: 'FLT-20251', codeKey: 'flt-20251', name: 'Filter 20x25x1', unit: 'each', xeroTenantId: THMP, reorderLevel: 18, reorderQuantity: 36, active: true },
     { id: BATTERY, organizationId: ORG, code: 'BAT-9V', codeKey: 'bat-9v', name: 'Battery, 9 V', unit: 'each', xeroTenantId: THMP, reorderLevel: 12, reorderQuantity: 24, active: true },
     { id: GLUE, organizationId: ORG, code: 'PST-GLUE', codeKey: 'pst-glue', name: 'Glue boards', unit: 'pack', xeroTenantId: PEST, reorderLevel: 8, reorderQuantity: 12, active: true },
+    { id: ALARM, organizationId: ORG, code: 'SMK-0001', codeKey: 'smk-0001', name: 'Smoke alarm, 10-year', unit: 'each', xeroTenantId: THMP, reorderLevel: 6, reorderQuantity: 12, active: true },
     { id: OLD, organizationId: ORG, code: 'OLD-1', codeKey: 'old-1', name: 'Discontinued filter', unit: 'each', xeroTenantId: THMP, reorderLevel: 0, reorderQuantity: 0, active: false },
   ];
   const levels = [{ itemId: BATTERY, _sum: { quantity: 5, valueCents: 925 } }];
@@ -117,6 +119,8 @@ function database() {
         for (let index = quotes.length - 1; index >= 0; index -= 1) if (matches(quotes[index]!, where)) quotes.splice(index, 1);
       }),
     },
+    // No order has been made from any of these.
+    purchaseOrder: { findFirst: jest.fn(async () => null) },
     stockItem: { findMany: jest.fn(async ({ where }: { where: Where }) => items.filter((row) => matches(row, where))) },
     stockLevel: { groupBy: jest.fn(async () => levels) },
     stockPlace: {
@@ -151,7 +155,7 @@ function database() {
   return { db, requisitions, lines, quotes, audits, service: new PurchasingService(db as never) };
 }
 
-const line = (itemId: string | null, quantity: number, estimatedUnitCostCents: number, description: string | null = null) => ({ itemId, description, quantity, estimatedUnitCostCents });
+const line = (itemId: string, quantity: number, estimatedUnitCostCents: number) => ({ itemId, quantity, estimatedUnitCostCents });
 /** $140.40 + $44.40 = $184.80: under the $500.00 limit. */
 const small = (over: Partial<SaveRequisitionInput> = {}): SaveRequisitionInput => ({
   xeroTenantId: THMP,
@@ -164,7 +168,7 @@ const small = (over: Partial<SaveRequisitionInput> = {}): SaveRequisitionInput =
 });
 /** $612.00: above the limit. */
 const large = (over: Partial<SaveRequisitionInput> = {}): SaveRequisitionInput =>
-  small({ lines: [line(null, 40, 1530, 'Smoke alarm, 10-year')], quotes: [{ vendorId: HILL, totalCents: 61200, delivery: '3 days', chosen: true }, { vendorId: ALAMO, totalCents: 64000, delivery: null, chosen: false }], ...over });
+  small({ lines: [line(ALARM, 40, 1530)], quotes: [{ vendorId: HILL, totalCents: 61200, delivery: '3 days', chosen: true }, { vendorId: ALAMO, totalCents: 64000, delivery: null, chosen: false }], ...over });
 
 describe('a requisition', () => {
   it('starts as its author\'s draft, with what is on hand beside each item', async () => {
@@ -255,7 +259,6 @@ describe('a requisition', () => {
     await refused({ lines: [line(OLD, 1, 100)] }, 'REQUISITION_ITEM_NOT_FOUND');
     await refused({ lines: [line(id(77), 1, 100)] }, 'REQUISITION_ITEM_NOT_FOUND');
     await refused({ lines: [line(FILTER, 1, 390), line(FILTER, 2, 390)] }, 'REQUISITION_ITEM_TWICE');
-    await refused({ lines: [line(null, 1, 100, '   ')] }, 'REQUISITION_LINE_UNNAMED');
     await refused({ xeroTenantId: 'tenant-of-another-office' }, 'REQUISITION_COMPANY_NOT_FOUND');
     await refused({ deliverToPlaceId: id(78) }, 'REQUISITION_PLACE_NOT_FOUND');
     await refused({ quotes: [{ vendorId: id(23), totalCents: 1, delivery: null, chosen: true }] }, 'VENDOR_NOT_FOUND');
@@ -363,7 +366,7 @@ describe('the limits and the form\'s choices', () => {
     const { service } = database();
     const choices = await service.choices(asker);
 
-    expect(choices.items.map((item) => item.code)).toEqual(['FLT-20251', 'BAT-9V', 'PST-GLUE']);
+    expect(choices.items.map((item) => item.code)).toEqual(['FLT-20251', 'BAT-9V', 'PST-GLUE', 'SMK-0001']);
     expect(choices.items[1]).toMatchObject({ onHand: 5, averageCostCents: 185, companyTenantId: THMP, reorderQuantity: 24 });
     expect(choices.items[0]).toMatchObject({ onHand: 0, averageCostCents: null });
     expect(choices.vendors.map((vendor) => vendor.name)).toEqual(['Hill Country Supply', 'Alamo Trade Parts']);
@@ -384,6 +387,13 @@ describe('the requests the page sends', () => {
     await expect(check(decision, RequisitionDecisionDto)).resolves.toBeDefined();
     await expect(check({}, RequisitionDecisionDto)).resolves.toBeDefined();
     await expect(check(limits, SavePurchasingSettingsDto)).resolves.toBeDefined();
+  });
+
+  it('refuse a line that asks in words for something with no item code', async () => {
+    const words = { itemId: null, description: 'Label printer', quantity: 1, estimatedUnitCostCents: 12900 };
+    await expect(check({ ...small(), lines: [words] }, SaveRequisitionDto)).rejects.toBeDefined();
+    await expect(check({ ...small(), lines: [{ quantity: 1, estimatedUnitCostCents: 12900 }] }, SaveRequisitionDto)).rejects.toBeDefined();
+    await expect(check({ ...small(), lines: [{ ...line(FILTER, 1, 390), description: 'Any filter' }] }, SaveRequisitionDto)).rejects.toBeDefined();
   });
 
   it('refuse a status or a number sent with a requisition, none of an item, and a part of one', async () => {

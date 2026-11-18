@@ -17,7 +17,7 @@
 export const STOCK_PLACE_KINDS = ['STOCKROOM', 'VAN'] as const;
 export type StockPlaceKind = (typeof STOCK_PLACE_KINDS)[number];
 
-export const STOCK_MOVEMENT_KINDS = ['OPENING_BALANCE', 'REVERSAL'] as const;
+export const STOCK_MOVEMENT_KINDS = ['OPENING_BALANCE', 'REVERSAL', 'RECEIPT', 'WITHDRAWAL', 'RETURN', 'TRANSFER', 'COUNT_ADJUSTMENT'] as const;
 export type StockMovementKind = (typeof STOCK_MOVEMENT_KINDS)[number];
 
 /** A typo of extra zeros stops here; no shelf in the office holds this many of anything. */
@@ -26,6 +26,21 @@ export const MOST_STOCK_QUANTITY = 100_000;
 export const MOST_UNIT_COST_CENTS = 10_000_000;
 /** The movements an item's page shows, newest first. */
 export const STOCK_MOVEMENTS_SHOWN = 200;
+
+/**
+ * A category's prefix, which starts every code of its items: a letter, then
+ * one to five letters or digits. "FLT", "PST".
+ */
+export const STOCK_PREFIX = /^[A-Z][A-Z0-9]{1,5}$/;
+
+/**
+ * An item's code (2026-11-19): its category's prefix and the category's next
+ * number, at least four digits. "FLT-0012". The console gives it; nobody
+ * types one, so two items never share a code and none is misspelled.
+ */
+export function stockCode(prefix: string, sequence: number): string {
+  return `${prefix}-${String(sequence).padStart(4, '0')}`;
+}
 
 /** One entry per code or name, whatever its case or spacing. */
 export function stockKey(value: string): string {
@@ -64,13 +79,26 @@ export interface StockPlaceRow {
   active: boolean;
 }
 
+/** A kind of stock, whose prefix starts its items' codes. */
+export interface StockCategoryRow {
+  id: string;
+  name: string;
+  prefix: string;
+  /** The code its next item will be given. */
+  nextCode: string;
+  itemCount: number;
+  active: boolean;
+}
+
 export interface StockItemRow {
   id: string;
+  /** Given by the console from the item's category when it is added; never changed. */
   code: string;
   name: string;
   /** What it is counted in: "each", "box", "jug". */
   unit: string;
-  category: string | null;
+  /** Null only for an item added before categories gave the codes. */
+  category: { id: string; name: string } | null;
   /** The company whose books it belongs to; null until the office chooses. */
   company: StockCompany | null;
   reorderLevel: number;
@@ -91,6 +119,14 @@ export interface StockList {
   places: StockPlaceRow[];
   companies: StockCompany[];
   vendors: { id: string; name: string }[];
+  categories: StockCategoryRow[];
+}
+
+/** A new category needs its name and prefix. The prefix can change only until it has numbered an item. */
+export interface SaveStockCategoryInput {
+  name?: string;
+  prefix?: string;
+  active?: boolean;
 }
 
 export interface StockLevelRow {
@@ -130,12 +166,15 @@ export interface StockItemDetail {
   movementsTotal: number;
 }
 
-/** A new item needs its code and name; a change sends only what changed. */
+/**
+ * A new item needs its name and its category, which gives it its code; a
+ * change sends only what changed. The code is never sent, and the category is
+ * fixed once the item has one.
+ */
 export interface SaveStockItemInput {
-  code?: string;
   name?: string;
   unit?: string;
-  category?: string | null;
+  categoryId?: string;
   xeroTenantId?: string | null;
   reorderLevel?: number;
   reorderQuantity?: number;

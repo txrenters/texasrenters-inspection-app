@@ -14,6 +14,12 @@ const hooks = vi.hoisted(() => ({
   useStockPlaces: vi.fn(),
   useVendors: vi.fn(),
   useInventoryEdits: vi.fn(),
+  useStockSlips: vi.fn(),
+  useStockSlipChoices: vi.fn(),
+  useStockSlipEdits: vi.fn(),
+  useStockCounts: vi.fn(),
+  useStockCountChoices: vi.fn(),
+  useStockCountEdits: vi.fn(),
 }));
 vi.mock('@/lib/inventory-queries', () => hooks);
 const url = vi.hoisted(() => ({ state: { tab: 'stock', company: 'all', show: 'in-use', q: '' }, set: vi.fn() }));
@@ -27,7 +33,7 @@ const row = (over: Partial<StockItemRow> = {}): StockItemRow => ({
   code: 'FLT-16251',
   name: 'Filter 16x25x1',
   unit: 'each',
-  category: 'Filters',
+  category: { id: 'cat-filters', name: 'Filters' },
   company: { tenantId: 'tenant-thmp', name: 'THMP' },
   reorderLevel: 24,
   reorderQuantity: 48,
@@ -48,6 +54,11 @@ const list = (items: StockItemRow[]): StockList => ({
   ],
   companies: [{ tenantId: 'tenant-thmp', name: 'THMP' }],
   vendors: [],
+  categories: [
+    { id: 'cat-filters', name: 'Filters', prefix: 'FLT', nextCode: 'FLT-0003', itemCount: 1, active: true },
+    { id: 'cat-pest', name: 'Pest products', prefix: 'PST', nextCode: 'PST-0001', itemCount: 0, active: true },
+    { id: 'cat-old', name: 'Old parts', prefix: 'OLD', nextCode: 'OLD-0004', itemCount: 3, active: false },
+  ],
 });
 const movement = (over: Partial<StockMovementRow> = {}): StockMovementRow => ({
   id: 'movement-1',
@@ -78,12 +89,47 @@ beforeEach(() => {
   url.set.mockReset();
   account.permissions = new Set(['inventory:read', 'inventory:manage']);
   edits = Object.fromEntries(
-    ['createItem', 'updateItem', 'enterOpeningBalance', 'reverseMovement', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'].map((name) => [name, mutation()]),
+    ['createItem', 'updateItem', 'createCategory', 'updateCategory', 'enterOpeningBalance', 'reverseMovement', 'createPlace', 'updatePlace', 'createVendor', 'updateVendor'].map((name) => [name, mutation()]),
   );
   hooks.useInventoryEdits.mockReturnValue(edits);
   hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: list(ITEMS) });
   hooks.useStockPlaces.mockReturnValue({ isError: false, data: undefined });
   hooks.useVendors.mockReturnValue({ isError: false, data: undefined });
+  hooks.useStockSlips.mockReturnValue({ isError: false, data: { slips: [] } });
+  hooks.useStockSlipChoices.mockReturnValue({ isError: false, data: undefined });
+  hooks.useStockSlipEdits.mockReturnValue({ post: mutation(), reverse: mutation() });
+  hooks.useStockCounts.mockReturnValue({ isError: false, data: { counts: [], schedule: [{ kind: 'MONTHLY', due: '2026-11-30', current: null, lastPosted: null }] } });
+  hooks.useStockCountEdits.mockReturnValue({ start: mutation() });
+});
+
+describe('the withdrawals tab', () => {
+  it('lists the slips for anybody who sees the inventory, and gives the form only to who may record', () => {
+    url.state = { ...url.state, tab: 'withdrawals' };
+    const { unmount } = render(<InventoryPage />);
+    expect(screen.getByText('No slips yet')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    expect(hooks.useStockSlipChoices).not.toHaveBeenCalled();
+    unmount();
+
+    account.permissions = new Set(['inventory:read', 'inventory:withdraw']);
+    render(<InventoryPage />);
+    expect(hooks.useStockSlipChoices).toHaveBeenCalledWith(true, null);
+  });
+});
+
+describe('the counts tab', () => {
+  it('shows when the counts are due to anybody who sees the inventory, and "Start a count" only to who may count', () => {
+    url.state = { ...url.state, tab: 'counts' };
+    const { unmount } = render(<InventoryPage />);
+    expect(screen.getByRole('article', { name: 'Monthly count' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Start/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    unmount();
+
+    account.permissions = new Set(['inventory:read', 'inventory:count']);
+    render(<InventoryPage />);
+    expect(screen.getByRole('button', { name: 'Start the monthly count' })).toBeTruthy();
+  });
 });
 
 describe('the stock list', () => {
@@ -137,18 +183,54 @@ describe('the stock list', () => {
     expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
   });
 
-  it('adds an item with its code and name, and has nowhere to type on hand', async () => {
+  it('adds an item under a category, which gives it its code: nowhere to type a code or on hand', async () => {
     render(<InventoryPage />);
     fireEvent.click(screen.getByRole('button', { name: 'New item' }));
 
     const dialog = screen.getByRole('dialog', { name: 'New item' });
     expect(within(dialog).queryByLabelText(/on hand/i)).toBeNull();
-    fireEvent.change(within(dialog).getByLabelText('Code'), { target: { value: ' FLT-20201 ' } });
-    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Filter 20x20x1' } });
+    expect(within(dialog).queryByLabelText(/^code$/i)).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: ' Filter 20x20x1 ' } });
     fireEvent.change(within(dialog).getByLabelText('Reorder at'), { target: { value: '24' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add item' }));
+    const add = within(dialog).getByRole('button', { name: 'Add item' }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
 
-    await waitFor(() => expect(edits.createItem!.mutateAsync).toHaveBeenCalledWith({ code: 'FLT-20201', name: 'Filter 20x20x1', unit: 'each', reorderLevel: 24, reorderQuantity: 0 }));
+    fireEvent.keyDown(within(dialog).getByLabelText('Category'), { key: 'ArrowDown' });
+    expect(screen.queryByRole('option', { name: /Old parts/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'Filters (FLT)' }));
+    expect(within(dialog).getByText('Its code will be FLT-0003.')).toBeTruthy();
+    fireEvent.click(add);
+
+    await waitFor(() => expect(edits.createItem!.mutateAsync).toHaveBeenCalledWith({ name: 'Filter 20x20x1', unit: 'each', categoryId: 'cat-filters', reorderLevel: 24, reorderQuantity: 0 }));
+  });
+
+  it('lists the categories with the code each will give next, and adds one with a prefix', async () => {
+    url.state = { ...url.state, tab: 'categories' };
+    render(<InventoryPage />);
+
+    const table = screen.getByRole('table', { name: 'Categories and their codes' });
+    expect(within(table).getByRole('row', { name: /Filters/ }).textContent).toContain('FLT-0003');
+    fireEvent.click(screen.getByRole('button', { name: 'New category' }));
+    const dialog = screen.getByRole('dialog', { name: 'New category' });
+    const add = within(dialog).getByRole('button', { name: 'Add category' }) as HTMLButtonElement;
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Parts' } });
+    fireEvent.change(within(dialog).getByLabelText('Prefix'), { target: { value: 'p-1' } });
+    expect(add.disabled).toBe(true);
+
+    fireEvent.change(within(dialog).getByLabelText('Prefix'), { target: { value: 'prt' } });
+    expect(within(dialog).getByText('Its first item will be PRT-0001.')).toBeTruthy();
+    fireEvent.click(add);
+    await waitFor(() => expect(edits.createCategory!.mutateAsync).toHaveBeenCalledWith({ name: 'Parts', prefix: 'PRT' }));
+  });
+
+  it('keeps the prefix of a category that has given out a code', () => {
+    url.state = { ...url.state, tab: 'categories' };
+    render(<InventoryPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Filters' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit category' });
+    expect((within(dialog).getByLabelText('Prefix') as HTMLInputElement).disabled).toBe(true);
+    expect(within(dialog).getByText(/already given out codes starting FLT/)).toBeTruthy();
   });
 });
 
