@@ -5,6 +5,8 @@ import {
   STOCK_PREFIX,
   averageCostCents,
   stockCode,
+  STOCK_CODE,
+  normalizeStockCode,
   stockKey,
   stockStatus,
   type OpeningBalanceInput,
@@ -61,6 +63,7 @@ const ITEM_SELECT = {
   xeroTenantId: true,
   reorderLevel: true,
   reorderQuantity: true,
+  priceCents: true,
   active: true,
   usualVendor: { select: { id: true, name: true } },
 } satisfies Prisma.StockItemSelect;
@@ -117,6 +120,7 @@ function itemRow(item: ItemRecord, levels: readonly Level[], kinds: ReadonlyMap<
     reorderLevel: item.reorderLevel,
     reorderQuantity: item.reorderQuantity,
     usualVendor: item.usualVendor,
+    priceCents: item.priceCents,
     active: item.active,
     onHand,
     inStockrooms,
@@ -243,11 +247,14 @@ export class InventoryService {
     const categoryId = input.categoryId;
     if (!name || !categoryId) throw new ApplicationError(400, 'STOCK_ITEM_INCOMPLETE', 'An item needs a name and a category. The category gives it its code.');
     await this.itemChoicesAreOurs(organizationId, input);
+    const typed = sent(input, 'code') ? this.typedCode(input.code) : null;
     try {
       const created = await this.prisma.$transaction(async (tx) => {
         const category = await tx.stockCategory.findFirst({ where: { id: categoryId, organizationId, active: true }, select: { prefix: true } });
         if (!category) throw new ApplicationError(400, 'STOCK_CATEGORY_NOT_FOUND', 'That category is not in use.');
-        const code = await this.nextCode(tx, organizationId, categoryId, category.prefix);
+        // Typed by the stock keeper, or the category's next number.
+        const code = typed ?? (await this.nextCode(tx, organizationId, categoryId, category.prefix));
+        if (typed) await this.codeIsFree(tx, organizationId, typed);
         const item = await tx.stockItem.create({
           data: {
             organizationId,
@@ -260,6 +267,7 @@ export class InventoryService {
             reorderLevel: input.reorderLevel ?? 0,
             reorderQuantity: input.reorderQuantity ?? 0,
             usualVendorId: input.usualVendorId ?? null,
+            priceCents: input.priceCents ?? null,
           },
           select: { id: true },
         });
@@ -270,10 +278,23 @@ export class InventoryService {
       });
       return this.item(user, created.id);
     } catch (error) {
-      // The category's lock gives each item its own number, so this is only somebody's typed code from before; adding again takes the next.
-      if (taken(error)) throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', 'That code was just taken. Add the item again.');
+      // Two people adding the same code in the same moment: the database lets one in.
+      if (taken(error)) throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', typed ? `${typed} was just taken. Choose another code.` : 'That code was just taken. Add the item again.');
       throw error;
     }
+  }
+
+  /** A code as the stock keeper typed it, in capitals, or the reason it will not do. */
+  private typedCode(value: string | undefined): string {
+    const code = normalizeStockCode(value ?? '');
+    if (!STOCK_CODE.test(code)) throw new ApplicationError(400, 'STOCK_ITEM_CODE_INVALID', 'An item code is 2 to 24 capitals, digits and dashes, like FLT-16251.');
+    return code;
+  }
+
+  /** Refuses a code another item of this office has, naming that item. */
+  private async codeIsFree(db: Prisma.TransactionClient, organizationId: string, code: string, exceptItemId?: string): Promise<void> {
+    const other = await db.stockItem.findFirst({ where: { organizationId, codeKey: stockKey(code), ...(exceptItemId ? { id: { not: exceptItemId } } : {}) }, select: { code: true, name: true } });
+    if (other) throw new ApplicationError(409, 'STOCK_ITEM_CODE_TAKEN', `${other.code} is already ${other.name}. Choose another code.`);
   }
 
   /**
@@ -307,10 +328,24 @@ export class InventoryService {
     if (sent(input, 'reorderLevel')) data.reorderLevel = input.reorderLevel;
     if (sent(input, 'reorderQuantity')) data.reorderQuantity = input.reorderQuantity;
     if (sent(input, 'usualVendorId')) data.usualVendorId = input.usualVendorId ?? null;
+    if (sent(input, 'priceCents')) data.priceCents = input.priceCents ?? null;
     if (sent(input, 'active')) data.active = input.active;
+    const typed = sent(input, 'code') ? this.typedCode(input.code) : null;
     await this.prisma.$transaction(async (tx) => {
       const item = await tx.stockItem.findFirst({ where: { id: itemId, organizationId }, select: { id: true, code: true, xeroTenantId: true, active: true, categoryId: true } });
       if (!item) throw new ApplicationError(404, 'STOCK_ITEM_NOT_FOUND', 'That item is not in the inventory.');
+      // A code people have already asked for, ordered or counted by stays: papers that name it would no longer find it.
+      if (typed && typed !== item.code) {
+        const [moved, requested, ordered] = await Promise.all([
+          tx.stockMovement.count({ where: { organizationId, itemId } }),
+          tx.purchaseRequisitionLine.count({ where: { organizationId, itemId } }),
+          tx.purchaseOrderLine.count({ where: { organizationId, itemId } }),
+        ]);
+        if (moved + requested + ordered > 0) throw new ApplicationError(409, 'STOCK_ITEM_CODE_FIXED', `${item.code} has been requested, ordered or stocked, so its code stays.`);
+        await this.codeIsFree(tx, organizationId, typed, itemId);
+        data.code = typed;
+        data.codeKey = stockKey(typed);
+      }
       // Its code came from its category, so the category stays. An item from before categories may be given one; its code stays as it is.
       if (sent(input, 'categoryId') && input.categoryId !== item.categoryId) {
         if (item.categoryId) throw new ApplicationError(409, 'STOCK_ITEM_CATEGORY_FIXED', `${item.code} got its code from its category, so the category cannot be changed.`);

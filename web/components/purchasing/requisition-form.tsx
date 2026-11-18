@@ -43,6 +43,8 @@ const chosen = (value: string) => (value === NONE ? null : value);
 const whole = (value: string) => (/^\d+$/.test(value.trim()) && Number(value) > 0 ? Number(value.trim()) : null);
 const money = (value: string) => (value.trim() ? parseMoney(value) : null);
 const dollars = (cents: number) => (cents / 100).toFixed(2);
+/** An amount for a field that may hold none. */
+const dollars0 = (cents: number | null | undefined) => (cents == null ? '' : dollars(cents));
 
 interface LineDraft {
   key: string;
@@ -96,7 +98,7 @@ export function RequisitionForm({
       requisition?.lines.map((line) => ({ key: key(), itemId: line.item?.id ?? NONE, quantity: String(line.quantity), cost: dollars(line.estimatedUnitCostCents) })) ??
       begun
         .filter(({ item }) => item.companyTenantId === begunFor)
-        .map(({ item, quantity }) => ({ key: key(), itemId: item.id, quantity: String(quantity), cost: item.averageCostCents != null ? dollars(item.averageCostCents) : '' })),
+        .map(({ item, quantity }) => ({ key: key(), itemId: item.id, quantity: String(quantity), cost: dollars0(item.priceCents ?? item.averageCostCents) })),
   );
   const [quotes, setQuotes] = useState<QuoteDraft[]>(
     () => requisition?.quotes.map((quote) => ({ key: key(), vendorId: quote.vendor.id, total: dollars(quote.totalCents), delivery: quote.delivery ?? '', chosen: quote.chosen })) ?? [],
@@ -109,10 +111,14 @@ export function RequisitionForm({
   const setLine = (lineKey: string, change: Partial<LineDraft>) => setLines((rows) => rows.map((row) => (row.key === lineKey ? { ...row, ...change } : row)));
   const setQuote = (quoteKey: string, change: Partial<QuoteDraft>) => setQuotes((rows) => rows.map((row) => (row.key === quoteKey ? { ...row, ...change } : row)));
 
-  /** A line for an item starts from what the office usually orders, at what one last cost on average. */
+  /** What a line's cost starts from: the usual price the stock keeper gave the item, else what one cost on average. */
+  const startingCost = (item: RequisitionChoices['items'][number] | undefined) => {
+    return dollars0(item?.priceCents ?? item?.averageCostCents);
+  };
+  /** A line for an item starts from what the office usually orders, at its usual price or what one last cost on average. */
   const lineFor = (itemId: string): LineDraft => {
     const item = itemOf.get(itemId);
-    return { key: key(), itemId, quantity: item?.reorderQuantity ? String(item.reorderQuantity) : '', cost: item?.averageCostCents != null ? dollars(item.averageCostCents) : '' };
+    return { key: key(), itemId, quantity: item?.reorderQuantity ? String(item.reorderQuantity) : '', cost: startingCost(item) };
   };
   const low = offered.filter((item) => !used.has(item.id) && stockStatus(item.onHand, item.reorderLevel) !== 'ENOUGH');
 

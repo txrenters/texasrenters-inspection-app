@@ -203,6 +203,8 @@ export interface RequisitionChoices {
     reorderQuantity: number;
     /** What one cost on average, to start the estimate from; null with nothing on hand. */
     averageCostCents: number | null;
+    /** The usual price the stock keeper gave the item: what a line's cost starts from, before the average. */
+    priceCents: number | null;
   }[];
   places: { id: string; name: string }[];
   companies: { tenantId: string; name: string }[];
