@@ -32,6 +32,8 @@ export const workOrderHandoffSchema = z.object({
     local_status: optionalText(40),
     priority: optionalText(40),
     is_emergency: z.boolean().nullable(),
+    /** The estimate the sender's approval filter judged (2026-11-19). */
+    cost_estimate: z.number().nonnegative().nullable().optional(),
     category: optionalText(120),
     type: optionalText(120),
     description: z.string().max(10000).nullable(),
@@ -97,6 +99,46 @@ export const workOrderHandoffSchema = z.object({
       }),
     )
     .max(20),
+  /** The Notes tab, oldest first. Optional: older senders do not carry it. */
+  notes: z
+    .array(
+      z.object({
+        subject: optionalText(200),
+        body: z.string().trim().min(1).max(4000),
+        author: optionalText(120),
+        date: isoDate,
+        is_private: z.boolean().default(false),
+      }),
+    )
+    .max(50)
+    .optional(),
+  /**
+   * Which of the sender's rules let the work order through, and what stood
+   * behind it: the recorded approver, or the AI's reading with the owner's
+   * quoted words. See TX_MAINTENANCE_WORK_ORDERS.md.
+   */
+  approval: z
+    .object({
+      rule: optionalText(40),
+      threshold: z.number().nonnegative(),
+      estimate: z.number().nonnegative().nullable(),
+      recorded_by: optionalText(120),
+      recorded_at: isoDate,
+      ai_confidence: z.number().int().min(0).max(100).nullable(),
+      ai_read_at: isoDate,
+      summary: optionalText(1000),
+      problems: z
+        .array(
+          z.object({
+            item: text(120).min(1),
+            decision: z.enum(['approved', 'declined', 'not_mentioned']),
+            evidence: optionalText(500),
+          }),
+        )
+        .max(30),
+    })
+    .nullable()
+    .optional(),
 });
 
 export type WorkOrderHandoff = z.infer<typeof workOrderHandoffSchema>;

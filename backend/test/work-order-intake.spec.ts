@@ -10,7 +10,10 @@ import {
   scheduledDayFor,
   WorkOrderIntakeService,
 } from '../src/work-orders/work-order-intake.service';
-import type { WorkOrderHandoff } from '../src/work-orders/work-order-handoff.schema';
+import {
+  workOrderHandoffSchema,
+  type WorkOrderHandoff,
+} from '../src/work-orders/work-order-handoff.schema';
 
 /**
  * Work orders handed over by the maintenance app through the gateway. People,
@@ -47,7 +50,10 @@ const property = {
   isActive: true,
 };
 
-function envelope(overrides: Partial<WorkOrderHandoff['work_order']> = {}, rest: Partial<WorkOrderHandoff> = {}): WorkOrderHandoff {
+function envelope(
+  overrides: Partial<WorkOrderHandoff['work_order']> = {},
+  rest: Partial<WorkOrderHandoff> = {},
+): WorkOrderHandoff {
   return {
     idempotency_key: 'tx-maintenance:work-order:2864',
     source_system: 'tx-maintenance',
@@ -73,7 +79,10 @@ function envelope(overrides: Partial<WorkOrderHandoff['work_order']> = {}, rest:
       date_to_enter: null,
       scheduled_end_date: null,
       completed_date: null,
-      jobber: { job_gid: 'Z2lkOi8vSm9iYmVyL0pvYi8x', web_uri: 'https://secure.getjobber.com/jobs/1' },
+      jobber: {
+        job_gid: 'Z2lkOi8vSm9iYmVyL0pvYi8x',
+        web_uri: 'https://secure.getjobber.com/jobs/1',
+      },
       url: 'https://maintenance.example.test/work_orders/2864/details',
       ...overrides,
     },
@@ -112,9 +121,16 @@ function build({
 } = {}) {
   const tx = {
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(building) },
-    propertywareUnit: { findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(0) },
+    propertywareUnit: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      count: jest.fn().mockResolvedValue(0),
+    },
     propertywareLease: { findFirst: jest.fn().mockResolvedValue(null) },
-    propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1', category: 'OTHER', source: 'MANUAL' }]) },
+    propertyArea: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ id: 'area-1', category: 'OTHER', source: 'MANUAL' }]),
+    },
     inspection: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'visit-1' }),
@@ -158,7 +174,11 @@ describe('receiving a work order from the maintenance app', () => {
     // The building is found by the Propertyware id the sync already holds.
     expect(prisma.propertywareBuilding.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ sourceSystem: 'propertyware', externalId: '465764359', isActive: true }),
+        where: expect.objectContaining({
+          sourceSystem: 'propertyware',
+          externalId: '465764359',
+          isActive: true,
+        }),
       }),
     );
     const data = tx.inspection.create.mock.calls[0][0].data;
@@ -182,11 +202,17 @@ describe('receiving a work order from the maintenance app', () => {
     // The machine is the actor, never a user that does not exist.
     expect(tx.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ action: 'WORK_ORDER_RECEIVED', actorUserId: null, actorApiClientId: CLIENT }),
+        data: expect.objectContaining({
+          action: 'WORK_ORDER_RECEIVED',
+          actorUserId: null,
+          actorApiClientId: CLIENT,
+        }),
       }),
     );
     expect(prisma.workOrderImport.update).toHaveBeenLastCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'PROCESSED', inspectionId: 'visit-1' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'PROCESSED', inspectionId: 'visit-1' }),
+      }),
     );
   });
 
@@ -203,17 +229,25 @@ describe('receiving a work order from the maintenance app', () => {
     const existing = { id: 'visit-9', status: InspectionStatus.SCHEDULED };
     const { service, tx, prisma } = build({ existing });
 
-    const answer = await service.receive(machine, envelope({ is_emergency: true, description: 'Now no cooling at all' }));
+    const answer = await service.receive(
+      machine,
+      envelope({ is_emergency: true, description: 'Now no cooling at all' }),
+    );
 
     expect(answer).toEqual({ id: 'visit-9', importId: 'import-1', outcome: 'updated' });
     expect(tx.inspection.create).not.toHaveBeenCalled();
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'visit-9' },
-        data: expect.objectContaining({ priority: 'HIGH', internalNotes: expect.stringContaining('Now no cooling at all') }),
+        data: expect.objectContaining({
+          priority: 'HIGH',
+          internalNotes: expect.stringContaining('Now no cooling at all'),
+        }),
       }),
     );
-    expect(prisma.workOrderImport.upsert.mock.calls[0][0].update).toMatchObject({ receivedCount: { increment: 1 } });
+    expect(prisma.workOrderImport.upsert.mock.calls[0][0].update).toMatchObject({
+      receivedCount: { increment: 1 },
+    });
   });
 
   it('cancels a scheduled visit when the work order closes, and leaves a started one alone', async () => {
@@ -221,10 +255,15 @@ describe('receiving a work order from the maintenance app', () => {
     const cancelled = await scheduled.service.receive(machine, envelope({ status: 'Closed' }));
     expect(cancelled.outcome).toBe('cancelled');
     expect(scheduled.tx.inspection.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'visit-9' }, data: { status: InspectionStatus.CANCELLED } }),
+      expect.objectContaining({
+        where: { id: 'visit-9' },
+        data: { status: InspectionStatus.CANCELLED },
+      }),
     );
     expect(scheduled.tx.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ action: 'WORK_ORDER_CANCELLED' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'WORK_ORDER_CANCELLED' }),
+      }),
     );
 
     const started = build({ existing: { id: 'visit-9', status: InspectionStatus.IN_PROGRESS } });
@@ -251,7 +290,10 @@ describe('receiving a work order from the maintenance app', () => {
     } satisfies Partial<ApplicationError>);
     expect(prisma.workOrderImport.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: 'FAILED', failureCode: 'WORK_ORDER_PROPERTY_UNKNOWN' }),
+        data: expect.objectContaining({
+          status: 'FAILED',
+          failureCode: 'WORK_ORDER_PROPERTY_UNKNOWN',
+        }),
       }),
     );
   });
@@ -286,7 +328,9 @@ describe('receiving a work order from the maintenance app', () => {
   it('refuses an envelope that does not match the contract, naming the fields', async () => {
     const { service, prisma } = build();
 
-    await expect(service.receive(machine, { idempotency_key: '', work_order: {} })).rejects.toMatchObject({
+    await expect(
+      service.receive(machine, { idempotency_key: '', work_order: {} }),
+    ).rejects.toMatchObject({
       code: 'WORK_ORDER_INVALID',
       details: expect.arrayContaining([expect.stringContaining('idempotency_key')]),
     });
@@ -297,7 +341,10 @@ describe('receiving a work order from the maintenance app', () => {
   it('drops fields it has not met rather than refusing them', async () => {
     const { service } = build();
 
-    const answer = await service.receive(machine, { ...envelope(), a_new_field: 'from a newer sender' });
+    const answer = await service.receive(machine, {
+      ...envelope(),
+      a_new_field: 'from a newer sender',
+    });
 
     expect(answer.outcome).toBe('created');
   });
@@ -306,10 +353,23 @@ describe('receiving a work order from the maintenance app', () => {
 describe('reading the work order', () => {
   it('types pest control by category or by the in-house vendor, and everything else as maintenance', () => {
     expect(inspectionTypeFor(envelope())).toBe(InspectionType.MAINTENANCE);
-    expect(inspectionTypeFor(envelope({ category: 'Pest Control' }))).toBe(InspectionType.PEST_CONTROL);
+    expect(inspectionTypeFor(envelope({ category: 'Pest Control' }))).toBe(
+      InspectionType.PEST_CONTROL,
+    );
     expect(
       inspectionTypeFor(
-        envelope({ category: 'General Maintenance' }, { vendors: [{ propertyware_id: '4329930755', name: 'Crystal Creek Pest Control LLC', in_house: true }] }),
+        envelope(
+          { category: 'General Maintenance' },
+          {
+            vendors: [
+              {
+                propertyware_id: '4329930755',
+                name: 'Crystal Creek Pest Control LLC',
+                in_house: true,
+              },
+            ],
+          },
+        ),
       ),
     ).toBe(InspectionType.PEST_CONTROL);
   });
@@ -324,13 +384,19 @@ describe('reading the work order', () => {
   it('books the day the tenant allowed entry when it is still ahead, else the day it arrived', () => {
     const today = new Date('2026-11-12T20:00:00Z');
     expect(scheduledDayFor(envelope(), today).toISOString()).toBe('2026-11-12T00:00:00.000Z');
-    expect(scheduledDayFor(envelope({ date_to_enter: '2026-11-15T00:00:00+00:00' }), today).toISOString()).toBe(
-      '2026-11-15T00:00:00.000Z',
-    );
+    expect(
+      scheduledDayFor(
+        envelope({ date_to_enter: '2026-11-15T00:00:00+00:00' }),
+        today,
+      ).toISOString(),
+    ).toBe('2026-11-15T00:00:00.000Z');
     // A date already past is no appointment; it arrived today.
-    expect(scheduledDayFor(envelope({ date_to_enter: '2026-11-01T00:00:00+00:00' }), today).toISOString()).toBe(
-      '2026-11-12T00:00:00.000Z',
-    );
+    expect(
+      scheduledDayFor(
+        envelope({ date_to_enter: '2026-11-01T00:00:00+00:00' }),
+        today,
+      ).toISOString(),
+    ).toBe('2026-11-12T00:00:00.000Z');
   });
 
   it('writes the notes the technician needs, with the links back', () => {
@@ -340,9 +406,80 @@ describe('reading the work order', () => {
     expect(notes).toContain('HVAC · Repair');
     expect(notes).toContain('EMERGENCY');
     expect(notes).toContain('Zone 2 · Occupied');
-    expect(notes).toContain('Vendors: Texas Home Maintenance Pros (in-house), Southwinds Electric LLC');
+    expect(notes).toContain(
+      'Vendors: Texas Home Maintenance Pros (in-house), Southwinds Electric LLC',
+    );
     expect(notes).toContain('Specific location: Upstairs unit');
-    expect(notes).toContain('Maintenance app: https://maintenance.example.test/work_orders/2864/details');
+    expect(notes).toContain(
+      'Maintenance app: https://maintenance.example.test/work_orders/2864/details',
+    );
     expect(notes).toContain('Jobber: https://secure.getjobber.com/jobs/1');
+  });
+
+  it('writes the estimate, the owner approval with its quotes, and the Notes tab into the visit notes (2026-11-19)', () => {
+    const notes = notesFor(
+      envelope(
+        { cost_estimate: 450 },
+        {
+          notes: [
+            {
+              subject: 'Tenant call',
+              body: 'Light out a week',
+              author: 'Maria',
+              date: '2026-11-09T00:00:00+00:00',
+              is_private: false,
+            },
+            {
+              subject: null,
+              body: 'Owner prefers mornings',
+              author: null,
+              date: null,
+              is_private: true,
+            },
+          ],
+          approval: {
+            rule: 'owner_approved_in_messages',
+            threshold: 300,
+            estimate: 450,
+            recorded_by: null,
+            recorded_at: null,
+            ai_confidence: 92,
+            ai_read_at: '2026-11-19T15:04:00+00:00',
+            summary:
+              'Owner approved the hallway light by text on 2026-11-10; declined the door; did not mention the lawn.',
+            problems: [
+              {
+                item: 'hallway light',
+                decision: 'approved',
+                evidence: 'Go ahead with the light. — owner, 2026-11-10 14:02 (SMS)',
+              },
+              {
+                item: 'front door',
+                decision: 'declined',
+                evidence: 'Hold off on the door for now. — owner, 2026-11-10 14:02 (SMS)',
+              },
+              { item: 'lawn', decision: 'not_mentioned', evidence: null },
+            ],
+          },
+        },
+      ),
+    );
+
+    expect(notes).toContain('Estimate: $450.00');
+    expect(notes).toContain('Owner approval: read from messages by AI (92%)');
+    expect(notes).toContain('Owner approved the hallway light by text on 2026-11-10');
+    expect(notes).toContain(
+      '- hallway light: APPROVED — "Go ahead with the light. — owner, 2026-11-10 14:02 (SMS)"',
+    );
+    expect(notes).toContain('- front door: declined — "Hold off on the door for now.');
+    expect(notes).toContain('- lawn: not mentioned');
+    expect(notes).toContain('Notes:');
+    expect(notes).toContain('- 2026-11-09 Maria, Tenant call: Light out a week');
+    expect(notes).toContain('- (private) Owner prefers mornings');
+  });
+
+  it('files an envelope without the new fields exactly as before', () => {
+    expect(workOrderHandoffSchema.safeParse(envelope()).success).toBe(true);
+    expect(notesFor(envelope())).not.toContain('Owner approval');
   });
 });

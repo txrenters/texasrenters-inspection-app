@@ -103,6 +103,17 @@ side reads it. Renaming or removing one is a contract change on both sides.
 | `tenants[].phone` | E.164. Context for the visit, kept in its notes the way a Jobber visit's Details carry a tenant's number — never on a shared report. |
 | `vendors[].in_house` | Which vendor made it qualify. An outside vendor can be on the same job. |
 
+Three optional fields arrived with the sender's approval filter (2026-11-19).
+`work_order.cost_estimate` is the estimate the filter judged. `notes` is the
+Notes tab, oldest first, private ones flagged. `approval` says which of the
+sender's rules let the work order through -- `emergency`, `under_threshold`,
+`owner_approved_recorded`, `owner_approved_in_messages`, `manual` -- with the
+recorded approver, or the AI's reading: a confidence, a summary, and one entry
+per problem on the work order (`approved`, `declined`, `not_mentioned`) with
+the owner's quoted words. All three go into the visit's internal notes so the
+technician reads what the owner agreed to and what to leave alone. An envelope
+without them files as before.
+
 ## What it becomes
 
 A staged `WorkOrderImport` row first, always — the envelope whole, with

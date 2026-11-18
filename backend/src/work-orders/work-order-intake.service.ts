@@ -1,5 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { InspectionSource, InspectionStatus, InspectionType, WorkOrderImportStatus } from '@prisma/client';
+import {
+  InspectionSource,
+  InspectionStatus,
+  InspectionType,
+  WorkOrderImportStatus,
+} from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
@@ -27,7 +32,8 @@ import { workOrderHandoffSchema, type WorkOrderHandoff } from './work-order-hand
  * Nothing here touches Jobber. The work order already has its Jobber job; the
  * visit carries that job's id so whoever books the technician can book on it.
  */
-export type WorkOrderIntakeOutcome = 'created' | 'updated' | 'cancelled' | 'unchanged' | 'ignored_closed';
+export type WorkOrderIntakeOutcome =
+  'created' | 'updated' | 'cancelled' | 'unchanged' | 'ignored_closed';
 
 const CLOSED_STATUSES = new Set(['closed', 'canceled by tenant', 'cancelled', 'canceled']);
 
@@ -44,7 +50,9 @@ export class WorkOrderIntakeService {
         422,
         'WORK_ORDER_INVALID',
         'The work order does not match the hand-off contract.',
-        parsed.error.issues.slice(0, 10).map((issue) => `${issue.path.join('.') || '(body)'}: ${issue.message}`),
+        parsed.error.issues
+          .slice(0, 10)
+          .map((issue) => `${issue.path.join('.') || '(body)'}: ${issue.message}`),
       );
     const handoff = parsed.data;
     const organizationId = user.organizationId;
@@ -96,9 +104,16 @@ export class WorkOrderIntakeService {
       const refusal =
         error instanceof ApplicationError
           ? error
-          : new ApplicationError(500, 'WORK_ORDER_NOT_FILED', 'The work order could not be filed; try again.');
+          : new ApplicationError(
+              500,
+              'WORK_ORDER_NOT_FILED',
+              'The work order could not be filed; try again.',
+            );
       if (!(error instanceof ApplicationError))
-        this.logger.error(`Work order ${handoff.idempotency_key} could not be filed`, error instanceof Error ? error.stack : String(error));
+        this.logger.error(
+          `Work order ${handoff.idempotency_key} could not be filed`,
+          error instanceof Error ? error.stack : String(error),
+        );
       await this.prisma.workOrderImport.update({
         where: { id: staged.id },
         data: {
@@ -125,9 +140,13 @@ export class WorkOrderIntakeService {
 
     if (existing) {
       if (closed) {
-        if (existing.status !== InspectionStatus.SCHEDULED) return { inspectionId: existing.id, outcome: 'unchanged' };
+        if (existing.status !== InspectionStatus.SCHEDULED)
+          return { inspectionId: existing.id, outcome: 'unchanged' };
         await this.prisma.$transaction(async (tx) => {
-          await tx.inspection.update({ where: { id: existing.id }, data: { status: InspectionStatus.CANCELLED } });
+          await tx.inspection.update({
+            where: { id: existing.id },
+            data: { status: InspectionStatus.CANCELLED },
+          });
           await tx.auditLog.create({
             data: {
               organizationId,
@@ -135,7 +154,10 @@ export class WorkOrderIntakeService {
               action: 'WORK_ORDER_CANCELLED',
               entityType: 'Inspection',
               entityId: existing.id,
-              metadata: { workOrderKey: handoff.idempotency_key, workOrderStatus: handoff.work_order.status },
+              metadata: {
+                workOrderKey: handoff.idempotency_key,
+                workOrderStatus: handoff.work_order.status,
+              },
             },
           });
         });
@@ -158,7 +180,10 @@ export class WorkOrderIntakeService {
             action: 'WORK_ORDER_UPDATED',
             entityType: 'Inspection',
             entityId: existing.id,
-            metadata: { workOrderKey: handoff.idempotency_key, workOrderStatus: handoff.work_order.status },
+            metadata: {
+              workOrderKey: handoff.idempotency_key,
+              workOrderStatus: handoff.work_order.status,
+            },
           },
         });
       });
@@ -281,7 +306,9 @@ export function inspectionTypeFor(handoff: WorkOrderHandoff): InspectionType {
   const pestVendor = handoff.vendors.some(
     (vendor) => vendor.in_house && /pest/i.test(vendor.name ?? ''),
   );
-  return category.includes('pest') || pestVendor ? InspectionType.PEST_CONTROL : InspectionType.MAINTENANCE;
+  return category.includes('pest') || pestVendor
+    ? InspectionType.PEST_CONTROL
+    : InspectionType.MAINTENANCE;
 }
 
 /** HIGH for an emergency or a work order the office marked high; STANDARD otherwise. */
@@ -297,7 +324,10 @@ export function priorityFor(handoff: WorkOrderHandoff): string {
  * it schedules the crew; until then it reads as "came in today".
  */
 export function scheduledDayFor(handoff: WorkOrderHandoff, today: Date = new Date()): Date {
-  for (const candidate of [handoff.work_order.date_to_enter, handoff.work_order.scheduled_end_date]) {
+  for (const candidate of [
+    handoff.work_order.date_to_enter,
+    handoff.work_order.scheduled_end_date,
+  ]) {
     if (!candidate) continue;
     const parsed = new Date(candidate);
     if (!Number.isNaN(parsed.getTime()) && parsed.getTime() >= startOfUtcDay(today).getTime())
@@ -344,11 +374,52 @@ export function notesFor(handoff: WorkOrderHandoff): string {
   if (handoff.vendors.length)
     lines.push(
       `Vendors: ${handoff.vendors
-        .map((vendor) => `${vendor.name ?? vendor.propertyware_id ?? '?'}${vendor.in_house ? ' (in-house)' : ''}`)
+        .map(
+          (vendor) =>
+            `${vendor.name ?? vendor.propertyware_id ?? '?'}${vendor.in_house ? ' (in-house)' : ''}`,
+        )
         .join(', ')}`,
     );
   if (wo.description?.trim()) lines.push('', wo.description.trim());
   if (wo.specific_location) lines.push(`Specific location: ${wo.specific_location}`);
+  if (typeof wo.cost_estimate === 'number') lines.push(`Estimate: $${wo.cost_estimate.toFixed(2)}`);
+  // The sender's approval filter (2026-11-19): which rule let the work order
+  // through, and which items the owner said yes to, in the owner's words, so
+  // the technician knows what to do and what to leave alone.
+  const approval = handoff.approval;
+  if (approval && approval.rule) {
+    const how: Record<string, string> = {
+      emergency: 'emergency, no approval needed',
+      under_threshold: `under the $${approval.threshold.toFixed(0)} threshold, no approval needed`,
+      owner_approved_recorded: `on record${approval.recorded_by ? ` by ${approval.recorded_by}` : ''}${approval.recorded_at ? ` on ${approval.recorded_at.slice(0, 10)}` : ''}`,
+      owner_approved_in_messages: `read from messages by AI${approval.ai_confidence !== null ? ` (${approval.ai_confidence}%)` : ''}`,
+      manual: 'sent by hand from the maintenance app',
+    };
+    lines.push('', `Owner approval: ${how[approval.rule] ?? approval.rule}`);
+    if (approval.summary) lines.push(approval.summary);
+    for (const problem of approval.problems) {
+      const decision =
+        problem.decision === 'approved'
+          ? 'APPROVED'
+          : problem.decision === 'declined'
+            ? 'declined'
+            : 'not mentioned';
+      lines.push(
+        `- ${problem.item}: ${decision}${problem.evidence ? ` — "${problem.evidence}"` : ''}`,
+      );
+    }
+  }
+  if (handoff.notes?.length) {
+    lines.push('', 'Notes:');
+    for (const note of handoff.notes.slice(0, 20)) {
+      const head = [note.date ? note.date.slice(0, 10) : null, note.author]
+        .filter(Boolean)
+        .join(' ');
+      const label = [head || null, note.subject ?? null].filter(Boolean).join(', ');
+      const text = note.body.length > 400 ? `${note.body.slice(0, 397)}…` : note.body;
+      lines.push(`- ${note.is_private ? '(private) ' : ''}${label ? `${label}: ` : ''}${text}`);
+    }
+  }
   const links = [
     wo.url ? `Maintenance app: ${wo.url}` : null,
     wo.jobber.web_uri ? `Jobber: ${wo.jobber.web_uri}` : null,
