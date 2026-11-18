@@ -62,6 +62,16 @@ const DAY_MS = 86_400_000;
 /** With no save to write, the tabs are written again this often anyway: a new day's tabs appear by themselves. */
 const QUIET_REWRITE_MS = 15 * 60_000;
 const CLAIM_MS = 3 * 60_000;
+/**
+ * Runs come no closer than this when nothing of the console's waits to be
+ * written -- only the office's edits to read, or a run that left tabs for the
+ * next (2026-11-18: a run that never finished re-ran every minute, reading and
+ * writing the workbook while the office typed in it, and Excel told the office
+ * it "couldn't merge your changes with changes from someone else").
+ */
+const MIN_RUN_GAP_MS = 2 * 60_000;
+/** A run that failed is not tried again sooner than this. */
+const FAILURE_BACKOFF_MS = 2 * 60_000;
 /** Log tabs taken over in one run, at most: each costs a few calls more than a write, and a run has a budget. */
 const TAKEOVERS_PER_RUN = 2;
 /** Log tabs read in one run, at most (two calls each, and the writes): the rest are read by the next run. */
@@ -233,6 +243,8 @@ export class ExcelSyncService {
     if (!sync?.enabled) return null;
     const waiting = sync.dirtyAt && (!sync.lastPushedAt || sync.dirtyAt > sync.lastPushedAt);
     const stale = !sync.lastPushedAt || now.getTime() - sync.lastPushedAt.getTime() > QUIET_REWRITE_MS;
+    // Only Excel's edits to read, or tabs a run left: not again so soon after the last run.
+    if (!waiting && sync.lastPushedAt && now.getTime() - sync.lastPushedAt.getTime() < MIN_RUN_GAP_MS) return null;
     if (!(await this.claim(organizationId))) return null;
     if (!waiting && !stale) {
       // Nothing of the console's to write: has the office edited the workbook?
@@ -273,7 +285,8 @@ export class ExcelSyncService {
     } catch (error) {
       const message = error instanceof ApplicationError ? error.message : 'The workbook could not be written. The next run tries again.';
       if (!(error instanceof ApplicationError)) this.logger.error({ event: 'excel_sync_failed', organizationId, error: String(error) });
-      await this.prisma.excelSync.update({ where: { organizationId }, data: { lastError: message.slice(0, 500), claimedUntil: null } });
+      // Not again at once: a failure that repeats would otherwise be another call on the workbook every minute.
+      await this.prisma.excelSync.update({ where: { organizationId }, data: { lastError: message.slice(0, 500), claimedUntil: new Date(Date.now() + FAILURE_BACKOFF_MS) } });
       throw error;
     }
   }
@@ -433,7 +446,8 @@ export class ExcelSyncService {
       let takeovers = 0;
       let waiting = false;
       for (const tab of tabs) {
-        if (!tab.below || takenOver(tab)) continue;
+        // A technician with nothing on the console's log (one who has left) has a tab the console has nothing to do in.
+        if (!tab.below || takenOver(tab) || !tab.keys.some(Boolean)) continue;
         if (takeovers >= TAKEOVERS_PER_RUN) {
           waiting = true;
           continue;
@@ -447,8 +461,9 @@ export class ExcelSyncService {
         for (const tab of tabs) await place(tab);
       }
       if (waiting) {
+        // The others are taken over by a later run -- not at once: this run says it left work (`deferred`).
         tabs = tabs.filter((tab) => !tab.below || takenOver(tab));
-        await this.prisma.excelSync.update({ where: { organizationId }, data: { dirtyAt: new Date() } });
+        deferred = true;
       }
 
       // The technicians' log tabs: the office's edits and rows in, the console's changes out, each row found by what it is.
@@ -467,7 +482,8 @@ export class ExcelSyncService {
           data: { lastPulledAt: new Date(run.pulled.at), lastPull: run.pulled as unknown as Prisma.InputJsonValue },
         });
       }
-      deferred = logs.deferred;
+      // Work left by the formats' repair, the takeovers or the log tabs: any of them.
+      deferred = deferred || logs.deferred;
 
       for (const tab of tabs) {
         if (tab.below) continue;
@@ -502,8 +518,10 @@ export class ExcelSyncService {
       await client.closeSession();
     }
     // The version the console's own write left: a different one next time is the office's edit.
+    // Work left for the next run: it reads as if the office had edited, whatever the version says -- the next run,
+    // not this minute's next (`MIN_RUN_GAP_MS`): nothing of the console's waits on it.
     const fileTag = deferred ? null : await client.fileTag().catch(() => null);
-    await this.prisma.excelSync.update({ where: { organizationId }, data: { fileTag, ...(deferred ? { dirtyAt: new Date() } : {}) } });
+    await this.prisma.excelSync.update({ where: { organizationId }, data: { fileTag } });
     run.calls = client.callsMade;
     return run;
   }
@@ -564,7 +582,7 @@ export class ExcelSyncService {
     organizationId: string,
     account: string | null,
     tabs: ExcelTab[],
-    snapshots: Map<string, { name: string; origin: number | null; rows: unknown; keys: unknown; adoptedFrom: Date | null }>,
+    snapshots: Map<string, { name: string; origin: number | null; rows: unknown; keys: unknown; adoptedFrom: Date | null; updatedAt?: Date }>,
     edited: boolean,
     again: () => Promise<ExcelTab[]>,
   ): Promise<{ tabs: ExcelSyncRun['tabs']; pull: { taken: number; conflicts: number } | null; deferred: boolean }> {
@@ -587,10 +605,14 @@ export class ExcelSyncService {
       });
     };
     let deferred = false;
-    for (const tab of tabs) {
+    // The tabs read longest ago first: with more to read than a run reads, every tab has its turn.
+    const turn = (tab: ExcelTab) => snapshots.get(tab.name)?.updatedAt?.getTime() ?? 0;
+    for (const tab of [...tabs].sort((left, right) => turn(left) - turn(right))) {
       const snapshot = snapshots.get(tab.name)!;
       const written = writtenOf(snapshot);
       const rows = rowsOf(tab);
+      // Nothing of the console's in it, and nothing it ever wrote there: a tab of someone who has left.
+      if (!rows.length && !Object.keys(written).length) continue;
       // Nothing of the console's changed in it, and nobody edited the workbook: nothing to read or write.
       if (!edited && rows.every((row) => written[row.key]?.every((cell, column) => sameCell(cell, row.cells[column])))) continue;
       if (reads.size >= LOG_TABS_PER_RUN) {
@@ -801,9 +823,16 @@ export class ExcelSyncService {
         sheet.formatsCheckedAt = now;
         result.tabs += 1;
       } catch (error) {
-        result.waiting += 1;
-        if (error instanceof MicrosoftError && (error.code === 'MICROSOFT_RATE_LIMITED' || error.code === 'EXCEL_RUN_BUDGET_SPENT')) break;
+        if (error instanceof MicrosoftError && (error.code === 'MICROSOFT_RATE_LIMITED' || error.code === 'EXCEL_RUN_BUDGET_SPENT')) {
+          result.waiting += 1;
+          break;
+        }
+        // Anything else is not tried again run after run: the tab is left as it is, and said so.
         this.logger.warn({ event: 'excel_formats_repair_failed', tab: sheet.name, error: error instanceof Error ? error.message : String(error) });
+        await this.prisma.excelSyncSheet
+          .update({ where: { organizationId_name: { organizationId: sheet.organizationId, name: sheet.name } }, data: { formatsCheckedAt: new Date() } })
+          .catch(() => undefined);
+        sheet.formatsCheckedAt = new Date();
       }
     }
     return { ...result, pending: result.waiting > 0 };

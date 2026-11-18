@@ -427,6 +427,7 @@ function syncSetup(
       adoptedFrom?: Date | null;
       formulaCells?: unknown;
       formatsCheckedAt?: Date | string | null;
+      updatedAt?: Date;
     }
   >();
   const audits: unknown[] = [];
@@ -457,8 +458,8 @@ function syncSetup(
       upsert: jest.fn(async ({ create, update }: { create: { name: string } & Record<string, unknown>; update: Record<string, unknown> }) => {
         const kept = sheets.get(create.name);
         const row = kept ? { ...kept, ...update } : { ...create };
-        // As the database keeps them: JSON as JSON, a day as a day.
-        sheets.set(create.name, { ...JSON.parse(JSON.stringify(row)), adoptedFrom: (row as { adoptedFrom?: Date }).adoptedFrom ?? null });
+        // As the database keeps them: JSON as JSON, a day as a day -- and when the row was last written.
+        sheets.set(create.name, { ...JSON.parse(JSON.stringify(row)), adoptedFrom: (row as { adoptedFrom?: Date }).adoptedFrom ?? null, updatedAt: new Date() });
         return sheets.get(create.name);
       }),
       update: jest.fn(async ({ where, data }: { where: { organizationId_name: { name: string } }; data: Record<string, unknown> }) => {
@@ -606,11 +607,13 @@ describe('writing the workbook', () => {
     jest.useRealTimers();
   });
 
-  it('says what went wrong on the office’s row, and keeps the save waiting', async () => {
+  it('says what went wrong on the office’s row, keeps the save waiting, and does not try again for a while', async () => {
     fakeMicrosoft({ status: (call) => (call.method === 'PATCH' ? 403 : undefined) });
     const setup = syncSetup();
     await expect(setup.service.syncNow(office)).rejects.toMatchObject({ code: 'EXCEL_FORBIDDEN' });
-    expect(setup.sync).toMatchObject({ lastError: expect.stringContaining('Can edit'), lastPushedAt: null, claimedUntil: null });
+    expect(setup.sync).toMatchObject({ lastError: expect.stringContaining('Can edit'), lastPushedAt: null });
+    // Not again at once (2026-11-18): a failure that repeats would be another call on the workbook every minute.
+    expect((setup.sync!.claimedUntil as Date).getTime()).toBeGreaterThan(Date.now() + 60_000);
   });
 });
 
@@ -1087,8 +1090,87 @@ describe("a technician's log tab, taken over from the sync's first day", () => {
     const run = await setup.service.syncNow(office);
     const logTabs = run.tabs.map((tab) => tab.name).filter((name) => ['Amy', 'Kevin', 'Moses'].includes(name));
     expect(logTabs).toEqual(['Amy', 'Kevin']);
-    expect(setup.sync!.dirtyAt).toEqual(at);
+    // Left for a later run -- not one at once: the run says it left work, and the next reads as if Excel were edited.
+    expect(setup.sync!.fileTag).toBeNull();
+    expect(setup.sync!.dirtyAt).toEqual(new Date('2026-11-17T15:00:00.000Z'));
     expect(microsoft.calls.some((call) => call.path.includes('/Moses/'))).toBe(false);
+  });
+});
+
+describe('the sync never runs on and on (2026-11-18: "couldn\'t merge your changes with changes from someone else")', () => {
+  const at = new Date('2026-11-18T15:00:00.000Z');
+  afterEach(() => jest.useRealTimers());
+  const row = (date: string, over: Partial<RevenueLogRow>): RevenueLogRow => ({
+    key: over.inspectionId ?? over.entryId ?? date,
+    inspectionId: null,
+    entryId: null,
+    date,
+    address: null, workOrder: null, jobNumber: null, driveTime: null, timeBudgeted: null, estimatedBudgetCents: null,
+    arrival: null, leaving: null, workComplete: null, rescheduleRequired: null, rescheduleOn: null,
+    laborCents: null, serviceCallFeeCents: null, materialsCents: null, invoiceNumber: null, postedInPw: null, notes: null,
+    actualSeconds: null,
+    filled: {},
+    corrected: [],
+    ...over,
+  });
+  const logDay = (date: string, rows: RevenueLogRow[]): RevenueLogDay => ({ date, rows, totals: revenueLogTotals(rows) });
+  const FIRST = ['Ada', 'Ben', 'Cal', 'Dee', 'Eve', 'Fay', 'Gus', 'Hal', 'Ivy', 'Jon', 'Kit'];
+  const readTabs = (microsoft: ReturnType<typeof fakeMicrosoft>) =>
+    microsoft.calls.flatMap((call) => {
+      const used = /\/worksheets\/([^/]+)\/usedRange/.exec(call.path);
+      return used ? [used[1]!] : [];
+    });
+
+  /** Eleven technicians, each with a visit today and a log tab taken over -- more than a run reads. */
+  function eleven(extra: { name: string; days: RevenueLogDay[] }[] = []) {
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const people = [...FIRST.map((first, index) => ({ name: first, days: [logDay('2026-11-18', [row('2026-11-18', { inspectionId: `visit-${index}`, address: `${index + 1} Sample St`, jobNumber: String(21000 + index) })])] })), ...extra];
+    people.forEach((person, index) => (NAMES[`tech-${index}`] = `${person.name} Sample`));
+    const microsoft = fakeMicrosoft({ sheets: [...people.map((person) => person.name), 'Month of October'] });
+    const setup = syncSetup({ startDate: '2026-11-18', logs: Object.fromEntries(people.map((person, index) => [`tech-${index}`, person.days])) });
+    for (const person of people)
+      setup.sheets.set(person.name, { name: person.name, organizationId: ORG, origin: 1, rows: [], bold: [], keys: [], editable: {}, adoptedFrom: new Date('2026-11-18T00:00:00.000Z'), formatsCheckedAt: new Date() });
+    return { microsoft, setup };
+  }
+
+  it('reads the tabs read longest ago first, and comes back after a pause -- not a minute later -- for those it left', async () => {
+    const { microsoft, setup } = eleven();
+    await setup.service.syncNow(office);
+    const first = readTabs(microsoft);
+    expect(new Set(first).size).toBe(10);
+    expect(setup.sync!.fileTag).toBeNull();
+    const left = FIRST.find((name) => !first.includes(name))!;
+
+    // A minute later: not due -- nothing of the console's waits on it.
+    microsoft.calls.length = 0;
+    jest.setSystemTime(new Date(at.getTime() + 60_000));
+    expect(await setup.service.runIfDue(ORG)).toBeNull();
+    expect(microsoft.calls).toEqual([]);
+
+    // After the pause: the tab it left is read first.
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    await setup.service.runIfDue(ORG);
+    expect(readTabs(microsoft)[0]).toBe(left);
+  });
+
+  it('never reads the tab of a technician with nothing on the log -- one who has left', async () => {
+    const { microsoft, setup } = eleven([{ name: 'Old', days: [] }]);
+    await setup.service.syncNow(office);
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    await setup.service.runIfDue(ORG);
+    expect(readTabs(microsoft)).not.toContain('Old');
+    expect(microsoft.calls.some((call) => call.path.includes('/Old/'))).toBe(false);
+  });
+
+  it('with nothing changed, a later run writes nothing at all', async () => {
+    jest.useFakeTimers({ now: at, doNotFake: ['setTimeout', 'setImmediate', 'nextTick', 'queueMicrotask'] });
+    const microsoft = fakeMicrosoft();
+    const setup = syncSetup();
+    await setup.service.syncNow(office);
+    microsoft.calls.length = 0;
+    jest.setSystemTime(new Date(at.getTime() + 120_000));
+    expect(await setup.service.runIfDue(ORG)).toBeNull();
+    expect(microsoft.writes()).toEqual([]);
   });
 });
 
