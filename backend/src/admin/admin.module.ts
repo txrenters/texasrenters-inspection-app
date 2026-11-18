@@ -47,6 +47,8 @@ import { MicrosoftAuthService } from './excel/microsoft-auth.service';
 import { ActualVsBudgetService } from './actual-vs-budget.service';
 import { InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
+import { StockSlipsController } from './stock-slips.controller';
+import { StockSlipsService } from './stock-slips.service';
 import { PurchasingController } from './purchasing.controller';
 import { PurchasingService } from './purchasing.service';
 import { PurchaseOrdersController } from './purchase-orders.controller';
@@ -113,6 +115,8 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceSettingsController,
     InvoiceReportsController,
     ActualVsBudgetController,
+    // Before InventoryController: `inventory/slips` must not be read as an item's id.
+    StockSlipsController,
     InventoryController,
     PurchasingController,
     PurchaseOrdersController,
@@ -166,6 +170,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
     InvoiceReportsService,
     ActualVsBudgetService,
     InventoryService,
+    StockSlipsService,
     PurchasingService,
     PurchaseOrdersService,
     PurchaseReceivingService,

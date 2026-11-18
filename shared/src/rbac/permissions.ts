@@ -37,6 +37,7 @@ export const PERMISSION_KEYS = [
   'payments:record',
   'inventory:read',
   'inventory:manage',
+  'inventory:withdraw',
   'purchasing:request',
   'purchasing:approve',
   'purchasing:approve-any',
@@ -290,6 +291,11 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         description:
           'Add and change items, places and vendors, enter an opening balance, and reverse a movement. Stock is never typed over: every change is a movement, kept with who made it.',
       },
+      {
+        key: 'inventory:withdraw',
+        label: 'Record withdrawals',
+        description: 'Record what a technician took for a visit or a van, what came back, and stock moved between places; and reverse one that was wrong. With "View inventory".',
+      },
     ],
   },
   {
@@ -426,6 +432,7 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'payments:record',
   // Stock is money on a shelf: its movements are made by a person at the screen.
   'inventory:manage',
+  'inventory:withdraw',
   // Asking for money to be spent, and agreeing to it: people, never a stored credential.
   'purchasing:request',
   'purchasing:approve',

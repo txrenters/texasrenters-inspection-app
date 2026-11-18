@@ -103,6 +103,8 @@ function itemRow(item: ItemRecord, levels: readonly Level[], kinds: ReadonlyMap<
     valueCents += level.valueCents;
   }
   const onHand = inStockrooms + inVans;
+  // Stock leaves at a rounded average, which can leave a cent or two behind once the last unit has gone.
+  if (onHand <= 0) valueCents = 0;
   const company: StockCompany | null = item.xeroTenantId ? { tenantId: item.xeroTenantId, name: companies.get(item.xeroTenantId) ?? 'A company' } : null;
   return {
     id: item.id,

@@ -14,6 +14,9 @@ const hooks = vi.hoisted(() => ({
   useStockPlaces: vi.fn(),
   useVendors: vi.fn(),
   useInventoryEdits: vi.fn(),
+  useStockSlips: vi.fn(),
+  useStockSlipChoices: vi.fn(),
+  useStockSlipEdits: vi.fn(),
 }));
 vi.mock('@/lib/inventory-queries', () => hooks);
 const url = vi.hoisted(() => ({ state: { tab: 'stock', company: 'all', show: 'in-use', q: '' }, set: vi.fn() }));
@@ -89,6 +92,24 @@ beforeEach(() => {
   hooks.useStock.mockReturnValue({ isLoading: false, isError: false, data: list(ITEMS) });
   hooks.useStockPlaces.mockReturnValue({ isError: false, data: undefined });
   hooks.useVendors.mockReturnValue({ isError: false, data: undefined });
+  hooks.useStockSlips.mockReturnValue({ isError: false, data: { slips: [] } });
+  hooks.useStockSlipChoices.mockReturnValue({ isError: false, data: undefined });
+  hooks.useStockSlipEdits.mockReturnValue({ post: mutation(), reverse: mutation() });
+});
+
+describe('the withdrawals tab', () => {
+  it('lists the slips for anybody who sees the inventory, and gives the form only to who may record', () => {
+    url.state = { ...url.state, tab: 'withdrawals' };
+    const { unmount } = render(<InventoryPage />);
+    expect(screen.getByText('No slips yet')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    expect(hooks.useStockSlipChoices).not.toHaveBeenCalled();
+    unmount();
+
+    account.permissions = new Set(['inventory:read', 'inventory:withdraw']);
+    render(<InventoryPage />);
+    expect(hooks.useStockSlipChoices).toHaveBeenCalledWith(true, null);
+  });
 });
 
 describe('the stock list', () => {

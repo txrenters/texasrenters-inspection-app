@@ -17,7 +17,7 @@
 export const STOCK_PLACE_KINDS = ['STOCKROOM', 'VAN'] as const;
 export type StockPlaceKind = (typeof STOCK_PLACE_KINDS)[number];
 
-export const STOCK_MOVEMENT_KINDS = ['OPENING_BALANCE', 'REVERSAL', 'RECEIPT'] as const;
+export const STOCK_MOVEMENT_KINDS = ['OPENING_BALANCE', 'REVERSAL', 'RECEIPT', 'WITHDRAWAL', 'RETURN', 'TRANSFER'] as const;
 export type StockMovementKind = (typeof STOCK_MOVEMENT_KINDS)[number];
 
 /** A typo of extra zeros stops here; no shelf in the office holds this many of anything. */

@@ -3,7 +3,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   OpeningBalanceInput,
+  PostStockSlipInput,
   ReverseMovementInput,
+  ReverseStockSlipInput,
   SaveStockCategoryInput,
   SaveStockItemInput,
   SaveStockPlaceInput,
@@ -11,6 +13,8 @@ import type {
   StockItemDetail,
   StockList,
   StockPlaces,
+  StockSlipChoices,
+  StockSlipList,
   Vendors,
 } from '@texasrenters/shared';
 
@@ -31,6 +35,8 @@ export const inventoryKeys = {
   item: (itemId: string) => ['inventory', 'item', itemId] as const,
   places: ['inventory', 'places'] as const,
   vendors: ['inventory', 'vendors'] as const,
+  slips: ['inventory', 'slips'] as const,
+  slipChoices: (technicianId: string | null) => ['inventory', 'slip-choices', technicianId] as const,
 };
 
 export function useStock() {
@@ -53,6 +59,44 @@ export function useStockPlaces(enabled: boolean) {
 
 export function useVendors(enabled: boolean) {
   return useQuery({ queryKey: inventoryKeys.vendors, queryFn: ({ signal }) => api<Vendors>(`${BASE}/vendors`, { signal }), enabled, ...KEPT });
+}
+
+/** The latest withdrawals, returns and moves: read when the Withdrawals tab opens. */
+export function useStockSlips(enabled: boolean) {
+  return useQuery({ queryKey: inventoryKeys.slips, queryFn: ({ signal }) => api<StockSlipList>(`${BASE}/slips`, { signal }), enabled, ...KEPT });
+}
+
+/**
+ * What the slip form chooses from and what is where, with the chosen
+ * technician's visits for today. Read when the form opens and when the
+ * technician changes; the last answer stays on screen meanwhile.
+ */
+export function useStockSlipChoices(enabled: boolean, technicianId: string | null) {
+  return useQuery({
+    queryKey: inventoryKeys.slipChoices(technicianId),
+    queryFn: ({ signal }) => api<StockSlipChoices>(`${BASE}/slips/choices${technicianId ? `?technicianId=${encodeURIComponent(technicianId)}` : ''}`, { signal }),
+    enabled,
+    placeholderData: (previous) => previous,
+    ...KEPT,
+  });
+}
+
+/** Posting or reversing a slip answers with the list; everything else that shows stock is read again when next looked at. */
+export function useStockSlipEdits() {
+  const client = useQueryClient();
+  const settle = (list: StockSlipList) => {
+    client.setQueryData(inventoryKeys.slips, list);
+    const saved = JSON.stringify(inventoryKeys.slips);
+    void client.invalidateQueries({ predicate: (query) => query.queryKey[0] === inventoryKeys.all[0] && JSON.stringify(query.queryKey) !== saved });
+  };
+  return {
+    post: useMutation({ mutationFn: (input: PostStockSlipInput) => api<StockSlipList>(`${BASE}/slips`, { method: 'POST', body: JSON.stringify(input) }), onSuccess: settle }),
+    reverse: useMutation({
+      mutationFn: ({ slipId, input }: { slipId: string; input: ReverseStockSlipInput }) =>
+        api<StockSlipList>(`${BASE}/slips/${encodeURIComponent(slipId)}/reverse`, { method: 'POST', body: JSON.stringify(input) }),
+      onSuccess: settle,
+    }),
+  };
 }
 
 export function useInventoryEdits() {

@@ -25,7 +25,7 @@ import { useInventoryEdits, useStock, useStockItem } from '@/lib/inventory-queri
  * was written.
  */
 
-const KIND_LABEL: Record<StockMovementRow['kind'], string> = { OPENING_BALANCE: 'Opening balance', REVERSAL: 'Reversal', RECEIPT: 'Received' };
+const KIND_LABEL: Record<StockMovementRow['kind'], string> = { OPENING_BALANCE: 'Opening balance', REVERSAL: 'Reversal', RECEIPT: 'Received', WITHDRAWAL: 'Taken out', RETURN: 'Brought back', TRANSFER: 'Moved' };
 
 const MOVEMENT_COLUMNS: Array<Column<StockMovementRow>> = [
   { key: 'day', header: 'Day', cell: (row) => formatDay(row.day), className: 'whitespace-nowrap' },
