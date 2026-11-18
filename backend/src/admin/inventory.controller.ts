@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Inject, Param, ParseUUIDPipe, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
+  MOST_ITEM_PRICE_CENTS,
   MOST_STOCK_QUANTITY,
   MOST_UNIT_COST_CENTS,
   STOCK_PLACE_KINDS,
@@ -26,6 +27,8 @@ const SET = (_: object, value: unknown) => value !== null && value !== undefined
  * refuses any field it does not know (inventory.spec.ts runs the pipe).
  */
 export class SaveStockItemDto implements Required<SaveStockItemInput> {
+  /** In either case; the service keeps it in capitals and says what shape it must be. */
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(40) code!: string;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(160) name!: string;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(30) unit!: string;
   @IsOptional() @IsUUID() categoryId!: string;
@@ -33,6 +36,7 @@ export class SaveStockItemDto implements Required<SaveStockItemInput> {
   @IsOptional() @IsInt() @Min(0) @Max(MOST_STOCK_QUANTITY) reorderLevel!: number;
   @IsOptional() @IsInt() @Min(0) @Max(MOST_STOCK_QUANTITY) reorderQuantity!: number;
   @ValidateIf(SET) @IsUUID() usualVendorId!: string | null;
+  @ValidateIf(SET) @IsInt() @Min(0) @Max(MOST_ITEM_PRICE_CENTS) priceCents!: number | null;
   @IsOptional() @IsBoolean() active!: boolean;
 }
 

@@ -78,10 +78,10 @@ const detail = (over: Partial<RequisitionDetail> = {}): RequisitionDetail => ({
 });
 const CHOICES: RequisitionChoices = {
   items: [
-    { id: 'item-filter', code: 'FLT-20251', name: 'Filter 20x25x1', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 0, reorderLevel: 18, reorderQuantity: 36, averageCostCents: 390 },
-    { id: 'item-battery', code: 'BAT-9V', name: 'Battery, 9 V', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 5, reorderLevel: 12, reorderQuantity: 24, averageCostCents: 185 },
-    { id: 'item-alarm', code: 'SMK-10', name: 'Smoke alarm', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 40, reorderLevel: 6, reorderQuantity: 12, averageCostCents: 1530 },
-    { id: 'item-glue', code: 'PST-GLUE', name: 'Glue boards', unit: 'pack', companyTenantId: 'tenant-pest', onHand: 0, reorderLevel: 8, reorderQuantity: 12, averageCostCents: 910 },
+    { id: 'item-filter', code: 'FLT-20251', name: 'Filter 20x25x1', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 0, reorderLevel: 18, reorderQuantity: 36, averageCostCents: 390, priceCents: null },
+    { id: 'item-battery', code: 'BAT-9V', name: 'Battery, 9 V', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 5, reorderLevel: 12, reorderQuantity: 24, averageCostCents: 185, priceCents: null },
+    { id: 'item-alarm', code: 'SMK-10', name: 'Smoke alarm', unit: 'each', companyTenantId: 'tenant-thmp', onHand: 40, reorderLevel: 6, reorderQuantity: 12, averageCostCents: 1530, priceCents: null },
+    { id: 'item-glue', code: 'PST-GLUE', name: 'Glue boards', unit: 'pack', companyTenantId: 'tenant-pest', onHand: 0, reorderLevel: 8, reorderQuantity: 12, averageCostCents: 910, priceCents: null },
   ],
   places: [{ id: 'place-stockroom', name: 'Stockroom' }],
   companies: [{ tenantId: 'tenant-thmp', name: 'THMP' }, { tenantId: 'tenant-pest', name: 'Crystal Creek Pest' }],
@@ -178,6 +178,19 @@ describe('a requisition begun from the Reorder list', () => {
     render(<NewRequisitionPage />);
     expect(screen.queryByLabelText(/^Quantity of/)).toBeNull();
     expect(screen.getByLabelText('Company it is for').textContent).toContain('THMP');
+  });
+});
+
+describe("a line's cost", () => {
+  it('starts from the usual price the stock keeper gave the item, and from the average cost when it has none', () => {
+    const priced: RequisitionChoices = { ...CHOICES, items: CHOICES.items.map((item) => (item.id === 'item-filter' ? { ...item, priceCents: 425 } : item)) };
+    render(<RequisitionForm choices={priced} discardLabel="Discard" error={null} onDiscard={vi.fn()} onSave={vi.fn(async () => undefined)} pending={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add everything that is low' }));
+    const table = screen.getByRole('table', { name: 'What is asked for' });
+    // The filter has a price of $4.25 and cost $3.90 on average: the price is what the line starts from.
+    expect((within(table).getByLabelText('Estimated cost of one Filter 20x25x1') as HTMLInputElement).value).toBe('4.25');
+    // The battery has no price: what one cost on average.
+    expect((within(table).getByLabelText('Estimated cost of one Battery, 9 V') as HTMLInputElement).value).toBe('1.85');
   });
 });
 

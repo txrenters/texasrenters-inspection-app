@@ -39,6 +39,7 @@ const row = (over: Partial<StockItemRow> = {}): StockItemRow => ({
   reorderLevel: 24,
   reorderQuantity: 48,
   usualVendor: null,
+  priceCents: 342,
   active: true,
   onHand: 27,
   inStockrooms: 18,
@@ -131,6 +132,23 @@ describe('the reorder and usage tab', () => {
     render(<InventoryPage />);
     expect(hooks.useStockSlips).toHaveBeenCalledWith(true, 'tech-ana');
     expect(screen.getByRole('link', { name: "Show everybody's" }).getAttribute('href')).toBe('/inventory?tab=withdrawals');
+  });
+});
+
+describe('the item codes tab', () => {
+  it('lists the codes from the stock already read, with the form only for the stock keeper', () => {
+    url.state = { ...url.state, tab: 'codes' };
+    const { unmount } = render(<InventoryPage />);
+    expect(within(screen.getByRole('table', { name: 'Item codes' })).getByRole('row', { name: /FLT-16251/ }).textContent).toContain('$3.42');
+    expect(screen.getByRole('form', { name: 'New item code' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'New item' })).toBeNull();
+    // The Stock tab's read: nothing more is asked for.
+    expect(hooks.useStock).toHaveBeenCalledWith();
+    unmount();
+
+    account.permissions = new Set(['inventory:read']);
+    render(<InventoryPage />);
+    expect(screen.queryByRole('form', { name: 'New item code' })).toBeNull();
   });
 });
 

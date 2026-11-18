@@ -34,9 +34,23 @@ export const STOCK_MOVEMENTS_SHOWN = 200;
 export const STOCK_PREFIX = /^[A-Z][A-Z0-9]{1,5}$/;
 
 /**
- * An item's code (2026-11-19): its category's prefix and the category's next
- * number, at least four digits. "FLT-0012". The console gives it; nobody
- * types one, so two items never share a code and none is misspelled.
+ * A code the stock keeper types (2026-11-19): capitals, digits and dashes,
+ * two to twenty-four of them, starting with a capital or a digit.
+ * "FLT-16251", "BAT-9V".
+ */
+export const STOCK_CODE = /^[A-Z0-9][A-Z0-9-]{1,23}$/;
+
+/** A code as it is kept: capitals, with no spaces. */
+export const normalizeStockCode = (value: string) => value.trim().toUpperCase().replace(/\s+/g, '');
+
+/** The most an item's usual price may be: $100,000.00. */
+export const MOST_ITEM_PRICE_CENTS = 10_000_000;
+
+/**
+ * The code the console suggests for an item (2026-11-19): its category's
+ * prefix and the category's next number, at least four digits. "FLT-0012".
+ * The stock keeper may type another over it; either way two items never
+ * share a code.
  */
 export function stockCode(prefix: string, sequence: number): string {
   return `${prefix}-${String(sequence).padStart(4, '0')}`;
@@ -92,8 +106,9 @@ export interface StockCategoryRow {
 
 export interface StockItemRow {
   id: string;
-  /** Given by the console from the item's category when it is added; never changed. */
+  /** Suggested by the console from the item's category, or typed by the stock keeper. */
   code: string;
+  /** Its description: the name people see beside the code. */
   name: string;
   /** What it is counted in: "each", "box", "jug". */
   unit: string;
@@ -104,6 +119,8 @@ export interface StockItemRow {
   reorderLevel: number;
   reorderQuantity: number;
   usualVendor: { id: string; name: string } | null;
+  /** What one usually costs, when the stock keeper has said; a purchase request line starts from it. */
+  priceCents: number | null;
   active: boolean;
   onHand: number;
   inStockrooms: number;
@@ -172,6 +189,8 @@ export interface StockItemDetail {
  * fixed once the item has one.
  */
 export interface SaveStockItemInput {
+  /** Typed by the stock keeper; left out, the console gives the category's next number. */
+  code?: string;
   name?: string;
   unit?: string;
   categoryId?: string;
@@ -179,6 +198,8 @@ export interface SaveStockItemInput {
   reorderLevel?: number;
   reorderQuantity?: number;
   usualVendorId?: string | null;
+  /** What one usually costs; null for none. */
+  priceCents?: number | null;
   active?: boolean;
 }
 

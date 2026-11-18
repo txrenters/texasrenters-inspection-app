@@ -247,7 +247,7 @@ export class PurchasingService {
     const [items, levels, places, companies, vendors, settings] = await Promise.all([
       this.prisma.stockItem.findMany({
         where: { organizationId, active: true },
-        select: { id: true, code: true, name: true, unit: true, xeroTenantId: true, reorderLevel: true, reorderQuantity: true },
+        select: { id: true, code: true, name: true, unit: true, xeroTenantId: true, reorderLevel: true, reorderQuantity: true, priceCents: true },
         orderBy: { codeKey: 'asc' },
       }),
       this.prisma.stockLevel.groupBy({ by: ['itemId'], where: { organizationId }, _sum: { quantity: true, valueCents: true } }),
@@ -270,6 +270,7 @@ export class PurchasingService {
           reorderLevel: item.reorderLevel,
           reorderQuantity: item.reorderQuantity,
           averageCostCents: averageCostCents(level.valueCents, level.quantity),
+          priceCents: item.priceCents,
         };
       }),
       places,

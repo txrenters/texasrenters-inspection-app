@@ -78,6 +78,8 @@ function database() {
     Object.entries(where).every(([key, value]) => {
       if (value === undefined || key === 'userProfile') return true;
       if (key === 'reversedBy') return !movements.some((other) => other.reversesId === row.id);
+      // `{ not: x }`: any row but that one.
+      if (value !== null && typeof value === 'object' && 'not' in value) return row[key] !== (value as { not: unknown }).not;
       return row[key] === value;
     });
   const levels = (where: Row) => {
@@ -97,6 +99,8 @@ function database() {
     item: items.find((item) => item.id === movement.itemId),
     place: places.find((place) => place.id === movement.placeId),
   });
+  /** The items a purchase requisition has asked for. */
+  const requested: string[] = [];
   const table = (rows: Row[], create?: (data: Row) => Row) => ({
     findMany: jest.fn(async ({ where }: { where: Row }) => rows.filter((row) => matches(row, where))),
     findFirst: jest.fn(async ({ where }: { where: Row }) => rows.find((row) => matches(row, where)) ?? null),
@@ -153,6 +157,9 @@ function database() {
     },
     // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
     stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
+    // The papers that name an item: once any does, its code stays.
+    purchaseRequisitionLine: { count: jest.fn(async ({ where }: { where: Row }) => requested.filter((itemId) => itemId === where.itemId).length) },
+    purchaseOrderLine: { count: jest.fn(async () => 0) },
     auditLog: { create: jest.fn(async ({ data }: { data: Row }) => audits.push(data)) },
     // The advisory lock answers nothing; taking a category's next number answers the number taken.
     $queryRaw: jest.fn(async (sql: TemplateStringsArray, ...values: unknown[]) => {
@@ -349,6 +356,46 @@ describe('items', () => {
     expect(categories.at(-1)).toMatchObject({ nextNumber: 1 });
   });
 
+  it('take the code the stock keeper types, in capitals, with what one usually costs', async () => {
+    const { service, items, categories } = database();
+    const made = await service.createItem(office, { code: ' flt-20201 ', name: 'Filter 20x20x1', unit: 'pcs', categoryId: FILTERS, priceCents: 360 });
+    expect(made.item).toMatchObject({ code: 'FLT-20201', name: 'Filter 20x20x1', unit: 'pcs', priceCents: 360 });
+    expect(items.at(-1)).toMatchObject({ code: 'FLT-20201', codeKey: 'flt-20201', priceCents: 360 });
+    // A typed code takes no number from the category: the next suggestion is still FLT-0003.
+    expect(categories[0]).toMatchObject({ nextNumber: 3 });
+    // No price is no price, not nothing.
+    expect((await service.createItem(office, { name: 'Filter 20x25x1', categoryId: FILTERS })).item).toMatchObject({ code: 'FLT-0003', priceCents: null });
+  });
+
+  it('never share a code, whatever its case, and say whose it is', async () => {
+    const { service, items } = database();
+    const before = items.length;
+    await expect(service.createItem(office, { code: 'flt-16251', name: 'Another filter', categoryId: FILTERS })).rejects.toMatchObject({ status: 409, code: 'STOCK_ITEM_CODE_TAKEN', message: 'FLT-16251 is already Filter 16x25x1. Choose another code.' });
+    for (const code of ['F', 'FLT 16251!', '-FLT', 'X'.repeat(25), 'FLT_1']) await expect(service.createItem(office, { code, name: 'Bad code', categoryId: FILTERS })).rejects.toMatchObject({ status: 400, code: 'STOCK_ITEM_CODE_INVALID' });
+    expect(items).toHaveLength(before);
+  });
+
+  it('change their code only while nothing has asked for, ordered or stocked them; the price any time', async () => {
+    const { service, db, audits } = database();
+    const fresh = await service.createItem(office, { name: 'Filter 20x20x1', categoryId: FILTERS });
+    // Nothing names it yet: its code can be put right.
+    await expect(service.updateItem(office, fresh.item.id, { code: 'flt-20201', priceCents: 360 })).resolves.toMatchObject({ item: { code: 'FLT-20201', priceCents: 360 } });
+    expect(audits.at(-1)).toMatchObject({ action: 'STOCK_ITEM_CHANGED', metadata: { changed: expect.arrayContaining(['code', 'codeKey', 'priceCents']) } });
+    await expect(service.updateItem(office, fresh.item.id, { code: 'FLT-16251' })).rejects.toMatchObject({ status: 409, code: 'STOCK_ITEM_CODE_TAKEN' });
+    // Its own code sent back with the rest of the form is no change.
+    await expect(service.updateItem(office, fresh.item.id, { code: 'FLT-20201', name: 'Filter 20x20x1, MERV 8' })).resolves.toMatchObject({ item: { code: 'FLT-20201', name: 'Filter 20x20x1, MERV 8' } });
+
+    // A purchase request has asked for it: the code stays, the price still changes.
+    db.purchaseRequisitionLine.count.mockResolvedValue(1);
+    await expect(service.updateItem(office, fresh.item.id, { code: 'FLT-2020' })).rejects.toMatchObject({ status: 409, code: 'STOCK_ITEM_CODE_FIXED', message: 'FLT-20201 has been requested, ordered or stocked, so its code stays.' });
+    await expect(service.updateItem(office, fresh.item.id, { priceCents: null })).resolves.toMatchObject({ item: { code: 'FLT-20201', priceCents: null } });
+
+    // So does one with stock.
+    db.purchaseRequisitionLine.count.mockResolvedValue(0);
+    await service.enterOpeningBalance(office, FILTER, opening());
+    await expect(service.updateItem(office, FILTER, { code: 'FLT-1625' })).rejects.toMatchObject({ code: 'STOCK_ITEM_CODE_FIXED' });
+  });
+
   it('keep their company once they have moved, and stay on while they hold stock', async () => {
     const { service } = database();
     await service.enterOpeningBalance(office, FILTER, opening());
@@ -435,7 +482,7 @@ describe('the requests the page sends', () => {
   const check = (body: unknown, metatype: new () => object) => pipe.transform(body, { type: 'body', metatype });
 
   it('name every field of their contracts', async () => {
-    const item: Required<SaveStockItemInput> = { name: 'Filter 16x25x1', unit: 'each', categoryId: FILTERS, xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, usualVendorId: id(70), active: true };
+    const item: Required<SaveStockItemInput> = { code: 'flt-16251', priceCents: 342, name: 'Filter 16x25x1', unit: 'each', categoryId: FILTERS, xeroTenantId: THMP, reorderLevel: 24, reorderQuantity: 48, usualVendorId: id(70), active: true };
     const balance: Required<OpeningBalanceInput> = { placeId: STOCKROOM, quantity: 18, unitCostCents: 342, day: '2026-11-18', note: 'Counted', requestKey: KEY };
     const reversal: Required<ReverseMovementInput> = { reason: 'Counted the wrong shelf' };
     const place: Required<SaveStockPlaceInput> = { name: 'Van 1', kind: 'VAN', technicianId: TECH, active: true };
@@ -451,8 +498,13 @@ describe('the requests the page sends', () => {
     await expect(check({ xeroTenantId: null, usualVendorId: null }, SaveStockItemDto)).resolves.toBeDefined();
   });
 
-  it('refuse a code typed for an item, and a prefix that could not start one', async () => {
-    await expect(check({ name: 'Filter', categoryId: FILTERS, code: 'FLT-9999' }, SaveStockItemDto)).rejects.toBeDefined();
+  it('take a code typed for an item and its price, and refuse a price below nothing or a prefix that could not start a code', async () => {
+    // The stock keeper may type the code (2026-11-19); the service decides its shape and whether it is free.
+    await expect(check({ name: 'Filter', categoryId: FILTERS, code: 'FLT-9999', priceCents: 342 }, SaveStockItemDto)).resolves.toMatchObject({ code: 'FLT-9999', priceCents: 342 });
+    await expect(check({ name: 'Filter', categoryId: FILTERS, priceCents: null }, SaveStockItemDto)).resolves.toBeDefined();
+    await expect(check({ name: 'Filter', categoryId: FILTERS, priceCents: -1 }, SaveStockItemDto)).rejects.toBeDefined();
+    await expect(check({ name: 'Filter', categoryId: FILTERS, priceCents: 3.5 }, SaveStockItemDto)).rejects.toBeDefined();
+    await expect(check({ name: 'Filter', categoryId: FILTERS, onHand: 5 }, SaveStockItemDto)).rejects.toBeDefined();
     await expect(check({ name: 'Filter', category: 'Filters' }, SaveStockItemDto)).rejects.toBeDefined();
     await expect(check({ name: 'Filters', prefix: 'F-1' }, SaveStockCategoryDto)).rejects.toBeDefined();
     await expect(check({ name: 'Filters', prefix: 'F', nextNumber: 900 }, SaveStockCategoryDto)).rejects.toBeDefined();
