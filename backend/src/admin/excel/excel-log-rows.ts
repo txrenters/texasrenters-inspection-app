@@ -226,8 +226,12 @@ export function planLogTab(input: {
   // Rows the console wrote and no longer has: emptied when they still hold only what it wrote; the office's otherwise.
   for (const [key, excelRow] of gone) {
     const before = input.written[key]!;
-    const untouched = Array.from({ length: LOG_WIDTH }, (_, column) => column).every((column) =>
-      holds(before[column], excelRow.texts[column] ?? '', excelRow.values[column] ?? null),
+    // A row holding a formula is never emptied, whatever it shows (2026-11-18, the office: "all the formulas from the
+    // spreadsheet should not be removed").
+    const untouched = Array.from({ length: LOG_WIDTH }, (_, column) => column).every(
+      (column) =>
+        holds(before[column], excelRow.texts[column] ?? '', excelRow.values[column] ?? null) &&
+        !isFormula(input.excel.formulas?.[excelRow.index]?.[column], excelRow.values[column] ?? null),
     );
     if (untouched) plan.clears.push(excelRow.index);
     // The office typed in it: the office's now, left as it is -- remembered, so it is never brought in as the office's own row.

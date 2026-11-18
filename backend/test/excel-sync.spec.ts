@@ -146,13 +146,14 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
   // Each cell as Excel keeps it: what it holds, shows, its format -- and its formula, when it has one Excel works out.
   const grid = new Map<string, Map<string, { value: string | number; text: string; format?: string; formula?: string }>>();
   let version = 1;
-  const put = (sheet: string, row: number, column: number, value: string | number, format?: string) => {
+  const put = (sheet: string, row: number, column: number, value: string | number, format?: string, result: string | number = 0) => {
     if (!grid.has(sheet)) grid.set(sheet, new Map());
     const cells = grid.get(sheet)!;
     const kept = format ?? cells.get(`${row},${column}`)?.format;
-    // A formula typed into a Text cell stays words, as Excel keeps it; anywhere else Excel works it out (here: 0).
+    // A formula typed into a Text cell stays words, as Excel keeps it; anywhere else Excel works it out (here: 0, or
+    // the result the test gives).
     if (typeof value === 'string' && value.startsWith('=') && kept !== '@') {
-      cells.set(`${row},${column}`, { value: 0, text: '0', format: kept, formula: value });
+      cells.set(`${row},${column}`, { value: result, text: String(result), format: kept, formula: value });
       return;
     }
     const text = typeof value === 'number' ? formatNumber(value, kept ?? 'General') : value.replace(/^'/, '');
@@ -214,7 +215,8 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
     }
     const used = /\/worksheets\/(.+)\/usedRange\(valuesOnly=true\)$/.exec(call.path);
     if (used) {
-      const rows = [...(grid.get(used[1]!)?.keys() ?? [])].map((key) => Number(key.split(',')[0]));
+      // Values only, as Excel counts them: a formula showing nothing ("") is not a value.
+      const rows = [...(grid.get(used[1]!)?.entries() ?? [])].filter(([, cell]) => cell.value !== '').map(([key]) => Number(key.split(',')[0]));
       return respond(200, { address: rows.length ? `${used[1]}!A1:S${Math.max(...rows) + 1}` : `${used[1]}!A1` });
     }
     if (/\/format\/fill(\/clear)?$/.test(call.path)) return respond(200, {});
@@ -245,10 +247,10 @@ function fakeMicrosoft(options: { sheets?: string[]; status?: (call: Call) => nu
       const at = corner(address);
       return grid.get(sheet)?.get(`${at.row},${at.column}`);
     },
-    /** The office types into a cell in Excel: a number shows in the format the cell already has. */
-    edit: (sheet: string, address: string, value: string | number, format?: string) => {
+    /** The office types into a cell in Excel: a number shows in the format the cell already has; a formula shows `result`. */
+    edit: (sheet: string, address: string, value: string | number, format?: string, result?: string | number) => {
       const at = corner(address);
-      put(sheet, at.row, at.column, value, format);
+      put(sheet, at.row, at.column, value, format, result);
       version += 1;
     },
     /** The office inserts a row above a technician's row: everything under it moves down one. */
@@ -932,6 +934,25 @@ describe("each technician's own log tab", () => {
     await runAgain(setup, 4, true);
     expect(addresses(microsoft)).toEqual(['I12:I12']);
     expect(microsoft.cell('Amy', 'J12')).toMatchObject({ formula: '=MOD(I12-H12,1)' });
+  });
+
+  it("never empties a row holding the office's formula, and never writes over a formula under the tab's last row (2026-11-18: \"all the formulas from the spreadsheet should not be removed\")", async () => {
+    const { microsoft, setup } = await written();
+    // The office's Actual Time formula in the 11/19 row, showing what the console wrote there; and formulas dragged
+    // down two rows under the tab's last, showing nothing.
+    microsoft.edit('Amy', 'J14', '=MOD(I14-H14,1)', undefined, '');
+    microsoft.edit('Amy', 'J15', '=MOD(I15-H15,1)', undefined, '');
+    microsoft.edit('Amy', 'J16', '=MOD(I16-H16,1)', undefined, '');
+    // The 11/19 visit moves to 11/18 on the page.
+    const visit = setup.logs.amy![1]!.rows.pop()!;
+    setup.logs.amy![0]!.rows.push({ ...visit, date: '2026-11-18' });
+    microsoft.calls.length = 0;
+    await runAgain(setup, 2, true);
+    expect(microsoft.calls.some((call) => call.path.endsWith('/clear'))).toBe(false);
+    expect(microsoft.cell('Amy', 'J14')).toMatchObject({ formula: '=MOD(I14-H14,1)' });
+    // The visit on its new day goes in under the formulas, not over them.
+    expect(['J15', 'J16'].map((address) => microsoft.cell('Amy', address)?.formula)).toEqual(['=MOD(I15-H15,1)', '=MOD(I16-H16,1)']);
+    expect(microsoft.shows('Amy', 'B17')).toBe('3 Later Ln');
   });
 
   it('empties the row of a visit moved to another day, when the office never typed in it, and writes the visit on its new day', async () => {
