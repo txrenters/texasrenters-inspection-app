@@ -1,21 +1,44 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, ParseUUIDPipe, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Header,
+  HttpCode,
+  Inject,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+  StreamableFile,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   MOST_REQUISITION_LINES,
   MOST_REQUISITION_QUOTES,
   MOST_STOCK_QUANTITY,
   MOST_UNIT_COST_CENTS,
+  REQUISITION_FILE_MAX_BYTES,
   type RequisitionDecisionInput,
   type RequisitionLineInput,
   type RequisitionQuoteInput,
   type SavePurchasingSettingsInput,
   type SaveRequisitionInput,
+  type SetRequisitionFileInput,
 } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateIf, ValidateNested } from 'class-validator';
 
 import { ApiAuthGuard, PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from '../common/auth';
 import { PurchasingService } from './purchasing.service';
+import { RequisitionFilesService, type UploadedRequisitionFile } from './requisition-files.service';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** Null is "none"; anything else is checked. The form sends the whole requisition, so every field is there. */
@@ -68,6 +91,10 @@ export class SavePurchasingSettingsDto implements Required<SavePurchasingSetting
   @IsInt() @Min(0) @Max(MOST_REQUISITION_QUOTES) quotesAboveLimit!: number;
 }
 
+export class SetRequisitionFileDto implements Required<SetRequisitionFileInput> {
+  @IsBoolean() forVendor!: boolean;
+}
+
 export class RequisitionListQueryDto {
   @IsOptional() @IsIn(['open', 'closed']) show?: 'open' | 'closed';
 }
@@ -84,7 +111,52 @@ export class RequisitionListQueryDto {
 @UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller('admin/purchasing')
 export class PurchasingController {
-  constructor(@Inject(PurchasingService) private readonly purchasing: PurchasingService) {}
+  constructor(
+    @Inject(PurchasingService) private readonly purchasing: PurchasingService,
+    @Inject(RequisitionFilesService) private readonly files: RequisitionFilesService,
+  ) {}
+
+  // ── Files on a requisition (2026-11-20, part 3) ─────────────────────────
+
+  /** One file a request; the page sends several one after another. Refused past 20 MB before it is read in full. */
+  @Post('requisitions/:requisitionId/files')
+  @RequirePermissions('purchasing:request')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: REQUISITION_FILE_MAX_BYTES, files: 1 } }))
+  attachFile(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @UploadedFile() file?: UploadedRequisitionFile) {
+    return this.files.attach(request.user, requisitionId, file);
+  }
+
+  @Get('requisitions/:requisitionId/files/:fileId/link')
+  @RequirePermissions('purchasing:request')
+  @Header('Cache-Control', 'private, no-store')
+  fileLink(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Param('fileId', ParseUUIDPipe) fileId: string) {
+    return this.files.link(request.user, requisitionId, fileId);
+  }
+
+  @Get('requisitions/:requisitionId/files/:fileId/content')
+  @RequirePermissions('purchasing:request')
+  @Header('Cache-Control', 'private, no-store')
+  async fileContent(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Param('fileId', ParseUUIDPipe) fileId: string) {
+    const file = await this.files.content(request.user, requisitionId, fileId);
+    return new StreamableFile(file.bytes, { type: file.contentType, disposition: file.disposition });
+  }
+
+  @Patch('requisitions/:requisitionId/files/:fileId')
+  @RequirePermissions('purchasing:request')
+  setFile(
+    @Req() request: AuthenticatedRequest,
+    @Param('requisitionId', ParseUUIDPipe) requisitionId: string,
+    @Param('fileId', ParseUUIDPipe) fileId: string,
+    @Body() body: SetRequisitionFileDto,
+  ) {
+    return this.files.setForVendor(request.user, requisitionId, fileId, body.forVendor);
+  }
+
+  @Delete('requisitions/:requisitionId/files/:fileId')
+  @RequirePermissions('purchasing:request')
+  removeFile(@Req() request: AuthenticatedRequest, @Param('requisitionId', ParseUUIDPipe) requisitionId: string, @Param('fileId', ParseUUIDPipe) fileId: string) {
+    return this.files.remove(request.user, requisitionId, fileId);
+  }
 
   @Get('requisitions')
   @RequirePermissions('purchasing:request')

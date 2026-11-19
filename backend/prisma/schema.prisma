@@ -655,6 +655,7 @@ model UserProfile {
   stockPlaces                StockPlace[]
   requisitionsRequested      PurchaseRequisition[] @relation("RequisitionRequestedBy")
   requisitionsDecided        PurchaseRequisition[] @relation("RequisitionDecidedBy")
+  requisitionFilesAttached   PurchaseRequisitionFile[] @relation("RequisitionFileAttachedBy")
   purchaseOrdersMade         PurchaseOrder[]       @relation("PurchaseOrderMadeBy")
   purchaseOrdersApproved     PurchaseOrder[]       @relation("PurchaseOrderApprovedBy")
   purchaseOrdersCancelled    PurchaseOrder[]       @relation("PurchaseOrderCancelledBy")
@@ -5982,6 +5983,7 @@ model PurchaseRequisition {
   decidedBy        UserProfile?               @relation("RequisitionDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
   lines            PurchaseRequisitionLine[]
   quotes           PurchaseRequisitionQuote[]
+  files            PurchaseRequisitionFile[]
   orders           PurchaseOrder[]
 
   @@unique([organizationId, number])
@@ -6035,6 +6037,28 @@ model PurchaseRequisitionQuote {
   vendor      Vendor              @relation(fields: [organizationId, vendorId], references: [organizationId, id], onDelete: Restrict)
 
   @@index([organizationId, requisitionId])
+}
+
+/// A file attached to a purchase requisition (2026-11-20): a picture, a quote,
+/// a list. Kept in the console's private storage under `storageKey` and opened
+/// by a short-lived signed link. `contentType` is what its first bytes say it is.
+model PurchaseRequisitionFile {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  requisitionId  String   @db.Uuid
+  fileName       String
+  contentType    String
+  sizeBytes      Int
+  storageKey     String   @unique
+  /// Ticked to go to the vendor with the purchase order's email.
+  forVendor      Boolean  @default(false)
+  attachedById   String   @db.Uuid
+  attachedAt     DateTime @default(now())
+
+  requisition PurchaseRequisition @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Cascade)
+  attachedBy  UserProfile         @relation("RequisitionFileAttachedBy", fields: [attachedById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, requisitionId, attachedAt])
 }
 
 /// A kind of stock (2026-11-19): its prefix starts its items' codes, and it

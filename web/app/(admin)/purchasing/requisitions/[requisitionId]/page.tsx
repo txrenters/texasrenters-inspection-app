@@ -8,6 +8,7 @@ import { useState } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
+import { AttachmentsFactBox } from '@/components/purchasing/attachments-factbox';
 import { FastTab, FieldRow, FieldValue } from '@/components/purchasing/nav-kit';
 import { RequisitionForm, StockFigure } from '@/components/purchasing/requisition-form';
 import { RequisitionStatusBadge, RequisitionSteps, approverFor } from '@/components/purchasing/requisition-parts';
@@ -261,6 +262,8 @@ function RequisitionView({
             </div>
           </AsideCard>
         ) : null}
+
+        <AttachmentsFactBox requisition={data} />
 
         <AsideCard title="Where it stands">
           <FactTable

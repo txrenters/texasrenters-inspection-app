@@ -195,6 +195,8 @@ function database() {
     purchasingSettings: { findUnique: jest.fn(async () => null) },
     invoiceSettings: { findUnique: jest.fn(async () => null) },
     purchaseOrderDelivery: { findMany: jest.fn(async () => []) },
+    // No file on any requisition here: purchase-orders.spec.ts covers files ticked for the vendor.
+    purchaseRequisitionFile: { findMany: jest.fn(async () => []) },
     userProfile: { findMany: jest.fn(async () => PEOPLE.map((one) => ({ id: one.id, displayName: one.displayName }))) },
     // No yearly count is open, so stock moves (stock-counts.spec.ts covers the freeze).
     stockCount: { findFirst: jest.fn(async (): Promise<{ number: string } | null> => null) },
@@ -206,7 +208,7 @@ function database() {
   };
   const transaction = { $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(client)) };
   const client: unknown = Object.assign(db, transaction);
-  const ordersService = new PurchaseOrdersService(db as never, {} as never);
+  const ordersService = new PurchaseOrdersService(db as never, {} as never, {} as never);
   return { db, orders, orderLines, receipts, movements, bills, requisitions, audits, service: new PurchaseReceivingService(db as never, ordersService) };
 }
 
@@ -384,7 +386,7 @@ describe('the vendor\'s bill', () => {
     await service.receive(keeper, ORDER, arrival([filters(36), batteries(20)]));
     await service.saveBill(boss, ORDER, fullBill());
 
-    expect((await new PurchaseOrdersService(database().db as never, {} as never).detail(owner, ORDER)).can.overrideBill).toBe(false);
+    expect((await new PurchaseOrdersService(database().db as never, {} as never, {} as never).detail(owner, ORDER)).can.overrideBill).toBe(false);
     await expect(service.approveBillAnyway(clerk, ORDER, { reason: 'Vendor will credit it' })).rejects.toMatchObject({ code: 'VENDOR_BILL_OVERRIDE_FORBIDDEN' });
     await expect(service.approveBillAnyway(owner, ORDER, { reason: '  ' })).rejects.toMatchObject({ code: 'VENDOR_BILL_REASON_NEEDED' });
     await expect(service.approveBillAnyway(boss, ORDER, { reason: 'Vendor will credit it' })).rejects.toMatchObject({ code: 'VENDOR_BILL_OWN' });

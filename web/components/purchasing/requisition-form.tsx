@@ -19,6 +19,7 @@ import { ListPlusIcon, ScanBarcodeIcon, SendIcon, Trash2Icon } from 'lucide-reac
 import { useId, useState } from 'react';
 
 import { ScanField } from '@/components/inventory/scan-field';
+import { AttachmentsFactBox } from '@/components/purchasing/attachments-factbox';
 import { FactBox, FastTab, FieldRow, FieldValue, Ribbon, RibbonButton, RibbonGroup } from '@/components/purchasing/nav-kit';
 import { ItemCodePicker, ItemLookupDialog, type PickerItem } from '@/components/purchasing/item-picker';
 import { approverFor } from '@/components/purchasing/requisition-parts';
@@ -560,6 +561,7 @@ export function RequisitionForm({
               </Alert>
             ) : null}
           </FactBox>
+          <AttachmentsFactBox requisition={requisition} />
           <FactBox
             facts={[
               { label: 'Item Code', value: shownItem?.code ?? EMPTY },

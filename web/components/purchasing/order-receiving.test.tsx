@@ -40,6 +40,7 @@ const order = (over: Partial<PurchaseOrderDetail> = {}): PurchaseOrderDetail => 
   decisionNote: null,
   cancelReason: null,
   from: { name: 'Example Company', addressLine1: null, addressLine2: null, phone: null, email: null },
+  vendorFiles: [],
   deliveries: [],
   receipts: [
     { id: 'rcv-8', number: 'RCV-0008', receivedOn: '2026-11-20', packingSlip: 'PS-44817', note: null, by: 'Sample Stock Keeper', at: '2026-11-20T15:00:00.000Z', reversed: null, lines: [{ itemCode: 'FLT-0003', itemName: 'Filter 20x25x1', placeName: 'Stockroom', quantity: 36 }] },
