@@ -145,6 +145,33 @@ describe('recording a withdrawal', () => {
   });
 });
 
+describe('scanning onto a slip (2026-11-19)', () => {
+  const scan = (code: string) => {
+    const field = screen.getByLabelText('Scan or type an item code');
+    fireEvent.change(field, { target: { value: code } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+  };
+
+  it('puts the item on the slip at one, and a second scan makes it two', () => {
+    render(<WithdrawalsTab canWithdraw />);
+    scan('FLT-0003');
+    expect((screen.getByLabelText('Quantity of Filter 20x25x1') as HTMLInputElement).value).toBe('1');
+    scan('flt-0003');
+    expect((screen.getByLabelText('Quantity of Filter 20x25x1') as HTMLInputElement).value).toBe('2');
+    // Another item gets a row of its own.
+    scan('PRT-0001');
+    expect((screen.getByLabelText('Quantity of Battery, 9 V') as HTMLInputElement).value).toBe('1');
+    expect(post.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('says so, and adds nothing, for a code no item has', () => {
+    render(<WithdrawalsTab canWithdraw />);
+    scan('XYZ-999');
+    expect(screen.getByText('No item has the code XYZ-999.')).toBeTruthy();
+    expect(screen.queryByLabelText('Quantity of Filter 20x25x1')).toBeNull();
+  });
+});
+
 describe('a return and a move', () => {
   it('brings stock back into a place without asking what is there', async () => {
     render(<WithdrawalsTab canWithdraw />);

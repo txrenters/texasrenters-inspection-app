@@ -1,10 +1,11 @@
 'use client';
 
 import { STOCK_CODE, formatMoney, normalizeStockCode, parseMoney, type SaveStockItemInput, type StockCategoryRow, type StockCompany, type StockItemRow } from '@texasrenters/shared';
-import { TagIcon } from 'lucide-react';
+import { PrinterIcon, TagIcon } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import { DataTable, type Column } from '@/components/data-table';
+import { PrintLabels } from '@/components/inventory/print-labels';
 import { InUseBadge } from '@/components/inventory/stock-status';
 import { EmptyState } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -137,9 +138,12 @@ function Fields({ draft, set, categories, companies, suggested, fixedCategory, p
 export function ItemCodesTab({ items, categories, companies, canManage }: { items: readonly StockItemRow[]; categories: readonly StockCategoryRow[]; companies: readonly StockCompany[]; canManage: boolean }) {
   const [words, setWords] = useState('');
   const [editing, setEditing] = useState<StockItemRow | null>(null);
+  const [printing, setPrinting] = useState(false);
   const sought = words.trim().toLowerCase();
   const rows = items.filter((row) => !sought || `${row.code} ${row.name} ${row.category?.name ?? ''}`.toLowerCase().includes(sought));
   const inUse = categories.filter((category) => category.active);
+
+  if (printing) return <PrintLabels items={items} onBack={() => setPrinting(false)} />;
 
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -148,9 +152,15 @@ export function ItemCodesTab({ items, categories, companies, canManage }: { item
           <h2 className="text-base font-semibold" id="item-codes-heading">
             Item codes
           </h2>
-          <div className="grid w-full gap-1.5 sm:w-64">
-            <Label htmlFor="item-codes-search">Search item codes</Label>
-            <Input id="item-codes-search" onChange={(event) => setWords(event.target.value)} placeholder="Code or description" type="search" value={words} />
+          <div className="flex w-full flex-wrap items-end gap-3 sm:w-auto">
+            <div className="grid w-full gap-1.5 sm:w-64">
+              <Label htmlFor="item-codes-search">Search item codes</Label>
+              <Input id="item-codes-search" onChange={(event) => setWords(event.target.value)} placeholder="Code or description, or scan a label" type="search" value={words} />
+            </div>
+            <Button disabled={!items.some((item) => item.active)} onClick={() => setPrinting(true)} type="button" variant="outline">
+              <PrinterIcon aria-hidden="true" />
+              Print labels
+            </Button>
           </div>
         </div>
         {rows.length ? (

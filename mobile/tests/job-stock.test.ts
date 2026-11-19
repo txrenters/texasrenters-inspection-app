@@ -6,6 +6,7 @@ import { readQueue } from '../src/storage/mutation-queue';
 import { ApiConnectionError, ApiRefusalError } from '../src/storage/offline-record-cache';
 import { dismissStockRefusal, readStockRefusals } from '../src/storage/stock-refusals';
 import { useNetworkStore } from '../src/stores/network.store';
+import { SAME_LABEL_PAUSE_MS, acceptScan, scanOntoSlip } from '../src/utils/item-scan';
 import { materialsLine, newSlipKey, showsMaterials, slipLines, slipSummary, stepped, takenForJob, truckStock, type PendingSlip } from '../src/utils/job-stock';
 
 /**
@@ -100,6 +101,42 @@ describe('the steppers', () => {
     const keys = new Set(Array.from({ length: 200 }, () => newSlipKey()));
     expect(keys.size).toBe(200);
     for (const key of keys) expect(key).toMatch(/^[A-Za-z0-9_-]{8,128}$/);
+  });
+});
+
+describe('scanning a label (2026-11-19)', () => {
+  const OFFERED = [filter(2), battery(6)];
+
+  it('is one more of that item, exactly as a tap on + is', () => {
+    const first = scanOntoSlip(OFFERED, {}, 'FLT-0003', 'WITHDRAWAL');
+    expect(first).toEqual({ quantities: { 'item-filter': 1 }, said: { words: 'Filter 20x25x1: 1', bad: false } });
+    // The label's letters as a scanner or a hand might give them.
+    expect(scanOntoSlip(OFFERED, first.quantities, ' flt-0003 ', 'WITHDRAWAL').quantities).toEqual({ 'item-filter': 2 });
+  });
+
+  it('stops at what the truck holds, and says so', () => {
+    const full = scanOntoSlip(OFFERED, { 'item-filter': 2 }, 'FLT-0003', 'WITHDRAWAL');
+    expect(full.quantities).toEqual({ 'item-filter': 2 });
+    expect(full.said).toEqual({ words: 'That is all 2 of Filter 20x25x1 in the truck.', bad: true });
+    expect(scanOntoSlip(OFFERED, { 'item-filter': 2 }, 'FLT-0003', 'RETURN').said.words).toBe('That is all 2 of Filter 20x25x1 taken.');
+  });
+
+  it('adds nothing for a label that is not in this truck, or not taken for this job', () => {
+    expect(scanOntoSlip(OFFERED, { 'item-battery': 1 }, 'XYZ-999', 'WITHDRAWAL')).toEqual({ quantities: { 'item-battery': 1 }, said: { words: 'XYZ-999 is not in this truck.', bad: true } });
+    expect(scanOntoSlip(OFFERED, {}, 'XYZ-999', 'RETURN').said.words).toBe('XYZ-999 was not taken for this job.');
+    // Something that is not a label at all is not read back in full.
+    expect(scanOntoSlip(OFFERED, {}, 'https://example.com/a-very-long-address-on-a-box', 'WITHDRAWAL').said.words).toBe('HTTPS://EXAMPLE.COM/A-VE is not in this truck.');
+  });
+
+  it('counts a label held in view once, and again only after a pause', () => {
+    const last = { code: 'FLT-0003', at: 1_000 };
+    expect(acceptScan(null, 'FLT-0003', 1_000)).toBe(true);
+    expect(acceptScan(last, 'FLT-0003', 1_000 + SAME_LABEL_PAUSE_MS - 1)).toBe(false);
+    expect(acceptScan(last, 'flt-0003', 1_200)).toBe(false);
+    expect(acceptScan(last, 'FLT-0003', 1_000 + SAME_LABEL_PAUSE_MS)).toBe(true);
+    // Another label straight after is its own scan.
+    expect(acceptScan(last, 'PRT-0001', 1_001)).toBe(true);
+    expect(acceptScan(last, '  ', 9_999)).toBe(false);
   });
 });
 

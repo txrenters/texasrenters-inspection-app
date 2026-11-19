@@ -6,12 +6,14 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { jobStockProblem, type JobStockItem, type PhoneSlipKind } from '@texasrenters/shared';
 
 import { HomeButton } from '@/src/components/HomeButton';
+import { ItemScanner } from '@/src/components/ItemScanner';
 import { Badge, Button, Card, SegmentedControl } from '@/src/components/ui';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useJobStock, useJobStockActions, useJobStockLocal } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 import { BelowHeader } from '@/src/lib/native-header';
 import { QueuedOfflineError } from '@/src/repositories/api/offline-writes';
+import { scanOntoSlip } from '@/src/utils/item-scan';
 import { newSlipKey, slipLines, slipSummary, stepped, takenForJob, truckStock, type PendingSlip } from '@/src/utils/job-stock';
 
 registerIcons(MinusIcon, PlusIcon);
@@ -47,6 +49,9 @@ export default function JobStockScreen() {
   /** Recorded on this tap and not yet answered: shown at once, before the queue has been read again. */
   const [sending, setSending] = useState<PendingSlip[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** The camera is open, looking for a label; and what the last label did. */
+  const [scanning, setScanning] = useState(false);
+  const [said, setSaid] = useState<{ words: string; bad: boolean } | null>(null);
 
   if (!stock.data) {
     return (
@@ -80,6 +85,13 @@ export default function JobStockScreen() {
     setMode(next);
     setQuantities({});
     setError(null);
+    setSaid(null);
+  };
+  /** A scanned label is one more of that item, exactly as a tap on + is. */
+  const scanned = (code: string) => {
+    const next = scanOntoSlip(offered, quantities, code, mode);
+    setQuantities(next.quantities);
+    setSaid(next.said);
   };
 
   const record = () => {
@@ -89,6 +101,8 @@ export default function JobStockScreen() {
     setSending((all) => [...all, slip]);
     setQuantities({});
     setError(null);
+    setSaid(null);
+    setScanning(false);
     actions.record.mutate(slip, {
       // Kept on the phone is not a failure: it is listed as waiting and goes when the signal is back.
       onError: (caught) => {
@@ -121,6 +135,7 @@ export default function JobStockScreen() {
                         onPress={() => {
                           setChosenPlace(place.id);
                           setQuantities({});
+                          setSaid(null);
                         }}
                       >
                         <Text className={`text-sm font-semibold ${selected ? 'text-primary' : 'text-foreground'}`}>{place.name}</Text>
@@ -131,11 +146,17 @@ export default function JobStockScreen() {
               </View>
             ) : null}
 
+            {scanning ? (
+              <ItemScanner onClose={() => setScanning(false)} onCode={scanned} said={said} />
+            ) : offered.length ? (
+              <Button className="mx-5" label="Scan a label" onPress={() => setScanning(true)} variant="secondary" />
+            ) : null}
+
             <Card className="mx-5 gap-4">
               <View className="gap-1">
                 <Text className="text-base font-semibold text-foreground">{mode === 'RETURN' ? 'What is going back' : `In ${data.places.find((place) => place.id === placeId)?.name ?? 'the truck'}`}</Text>
                 <Text className="text-xs text-muted-foreground">
-                  {mode === 'RETURN' ? 'Only what you took for this job can go back from here.' : 'Tap + for each one you used on this job.'}
+                  {mode === 'RETURN' ? 'Only what you took for this job can go back from here.' : 'Tap + for each one you used on this job, or scan its label.'}
                 </Text>
               </View>
               {offered.length ? (

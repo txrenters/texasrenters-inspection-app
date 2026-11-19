@@ -14,6 +14,8 @@ import { ArrowRightIcon, ClipboardListIcon, PlusIcon, XIcon } from 'lucide-react
 import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
+import { ScanField } from '@/components/inventory/scan-field';
+
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { EmptyState, ErrorState } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -222,6 +224,17 @@ function SlipForm() {
   const taken = new Set(filled.map((line) => line.itemId));
 
   const change = (key: number, next: Partial<Line>) => setLines((all) => all.map((line) => (line.key === key ? { ...line, ...next } : line)));
+  /** A scanned label: one more of an item already on the slip, else the item on the first empty row or a new one. */
+  const scan = (item: { id: string; code: string }): string | void => {
+    if (leaves && !there.get(item.id)) return `${item.code} is not in that place.`;
+    const on = lines.find((line) => line.itemId === item.id);
+    if (on) return change(on.key, { quantity: String((whole(on.quantity) ?? 0) + 1) });
+    const empty = lines.find((line) => line.itemId === NONE);
+    if (empty) return change(empty.key, { itemId: item.id, quantity: '1' });
+    if (lines.length >= MOST_SLIP_LINES) return `A slip holds ${MOST_SLIP_LINES} items. Record this one, then start another.`;
+    setLines((all) => [...all, { key: nextKey, itemId: item.id, quantity: '1' }]);
+    setNextKey((key) => key + 1);
+  };
   const choose = (next: StockSlipKind) => {
     setKind(next);
     setPosted(null);
@@ -324,6 +337,7 @@ function SlipForm() {
         )}
       </div>
 
+      <ScanField className="max-w-md" hint="Scan a label to put the item on the slip. Scan it again for one more." id="slip-scan" items={data.items} onItem={scan} />
       <div className="overflow-clip rounded-xl border">
         <Table aria-label="Items on the slip">
           <TableHeader>

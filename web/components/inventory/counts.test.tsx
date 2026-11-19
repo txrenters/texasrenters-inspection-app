@@ -196,6 +196,27 @@ describe('counting', () => {
     expect(screen.getByText('3 still to count.')).toBeTruthy();
   });
 
+  it('jumps to the line a scanned label names, and Enter in a count goes back for the next label, never handing in (2026-11-19)', () => {
+    show(detail());
+    render(<StockCountPage />);
+    const scan = screen.getByLabelText('Scan or type an item code') as HTMLInputElement;
+
+    fireEvent.change(scan, { target: { value: 'prt-0001' } });
+    fireEvent.keyDown(scan, { key: 'Enter' });
+    const counted = screen.getByLabelText('Counted Battery, 9 V');
+    expect(document.activeElement).toBe(counted);
+    expect(counted.closest('tr')?.getAttribute('data-scanned')).toBe('true');
+
+    fireEvent.change(counted, { target: { value: '12' } });
+    expect(fireEvent.keyDown(counted, { key: 'Enter' })).toBe(false);
+    expect(document.activeElement).toBe(scan);
+    expect(edits.handIn.mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.change(scan, { target: { value: 'XYZ-999' } });
+    fireEvent.keyDown(scan, { key: 'Enter' });
+    expect(screen.getByText('XYZ-999 is not in this count.')).toBeTruthy();
+  });
+
   it('saves progress with what is typed so far, and hands in only when every item is counted', async () => {
     show(detail());
     render(<StockCountPage />);
