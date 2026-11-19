@@ -1,6 +1,6 @@
 'use client';
 
-import type { GroupTemplateChanges, GroupTemplateOp, QuarterPackageChanges } from '@texasrenters/shared';
+import type { GroupTemplateChanges, GroupTemplateOp, QuarterCoverage, QuarterPackageChanges } from '@texasrenters/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
@@ -449,6 +449,7 @@ export const planningKeys = {
   lateMoveOuts: (planId: string) => ['admin', 'planning', planId, 'late-move-outs'] as const,
   notBooked: (planId: string) => ['admin', 'planning', planId, 'not-booked'] as const,
   packageChanges: (planId: string) => ['admin', 'planning', planId, 'package-changes'] as const,
+  coverage: (planId: string) => ['admin', 'planning', planId, 'coverage'] as const,
   unschedulePreview: (planId: string, from: string) => ['admin', 'planning', planId, 'unschedule', from] as const,
 };
 
@@ -502,6 +503,19 @@ export const usePlanPackageChanges = (planId: string | undefined, enabled = true
   useQuery({
     queryKey: planningKeys.packageChanges(planId ?? ''),
     queryFn: ({ signal }) => api<QuarterPackageChanges>(`${PLANNING}/quarters/${planId}/package-changes`, { signal }),
+    enabled: Boolean(planId) && enabled,
+    refetchOnWindowFocus: false,
+  });
+
+/**
+ * Where every property in the benefit package stands for the quarter (the
+ * office, 2026-11-20): completed, scheduled, not scheduled, or no visit made.
+ * Read from the database alone, when its tab is open; no billed call.
+ */
+export const usePlanCoverage = (planId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: planningKeys.coverage(planId ?? ''),
+    queryFn: ({ signal }) => api<QuarterCoverage>(`${PLANNING}/quarters/${planId}/coverage`, { signal }),
     enabled: Boolean(planId) && enabled,
     refetchOnWindowFocus: false,
   });

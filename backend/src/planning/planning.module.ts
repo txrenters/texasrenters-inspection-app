@@ -6,6 +6,8 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { RoutingModule } from '../routing/routing.module';
 import { GroupTemplateChangesController } from './group-template-changes.controller';
 import { GroupTemplateChangesService } from './group-template-changes.service';
+import { QuarterCoverageController } from './quarter-coverage.controller';
+import { QuarterCoverageService } from './quarter-coverage.service';
 import { QuarterPackageChangesService } from './quarter-package-changes.service';
 import { GroupTemplateController } from './group-template.controller';
 import { GroupTemplateGateway } from './group-template.gateway';
@@ -44,6 +46,8 @@ import { TbpUnscheduleService } from './tbp-unschedule.service';
     GroupTemplateChangesController,
     // A published quarter's visits taken off their days, to be grouped again (2026-10-15).
     PlanUnscheduleController,
+    // Where every property in the package stands for the quarter (2026-11-20).
+    QuarterCoverageController,
   ],
   providers: [
     TbpPlanService,
@@ -61,6 +65,7 @@ import { TbpUnscheduleService } from './tbp-unschedule.service';
     PropertyServiceStatusService,
     GroupTemplateChangesService,
     QuarterPackageChangesService,
+    QuarterCoverageService,
     TbpUnscheduleService,
   ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],

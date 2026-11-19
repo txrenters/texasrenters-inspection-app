@@ -374,4 +374,16 @@ describe('technician realtime authorization', () => {
     expect(mobilePush.send).toHaveBeenCalledWith('REOPENED', 'technician-1', 'inspection-2', undefined);
     expect(mobilePush.send).toHaveBeenCalledWith('CANCELLED', 'technician-1', 'inspection-3', '605 Sorrento Dr · Nov 27');
   });
+
+  it('tells an open app without a push when asked to: a job is buzzed once, not once an inspection', () => {
+    const mobilePush = { send: jest.fn().mockResolvedValue(undefined) };
+    const gateway = new TechnicianEventsGateway({} as never, new PresenceService(), mobilePush as never);
+    const emit = jest.fn();
+    (gateway as unknown as { server: unknown }).server = { to: () => ({ emit }) };
+
+    gateway.publish('technician-1', 'inspection-2', 'ASSIGNED', undefined, { push: false });
+
+    expect(emit).toHaveBeenCalledWith('inspection:changed', expect.objectContaining({ inspectionId: 'inspection-2' }));
+    expect(mobilePush.send).not.toHaveBeenCalled();
+  });
 });
