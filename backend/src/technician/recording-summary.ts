@@ -115,19 +115,52 @@ function contentWords(text: string) {
   return normaliseSpeech(text)
     .split(' ')
     .filter((word) => word && !FUNCTION_WORDS.has(word))
-    .map((word) => (word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word).slice(0, 4));
+    .map(wordStem);
 }
 
-/** Words that say how a thing is, not which thing. */
+function wordStem(word: string) {
+  return (word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word).slice(0, 4);
+}
+
+/**
+ * Words that say how a thing is, not which thing. "Intended" too: "functioning
+ * as intended" names nothing (2026-11-19, printed beside a toilet row).
+ */
 const CONDITION_WORDS = new Set(
   contentWords(
-    'good great fine okay nice clean working functional installed intact shape condition perfect',
+    'good great fine okay nice clean working functional functioning installed intact shape ' +
+      'condition perfect intended expected designed',
   ),
 );
 
 /** Whether a line names something, rather than only saying "is good". */
 function namesAThing(text: string) {
   return contentWords(text).some((word) => !CONDITION_WORDS.has(word));
+}
+
+/** What a line may not open with: the rest of a sentence whose thing was cut off. */
+const OPENS_MID_SENTENCE = new Set(
+  (
+    'is are was were be been being am has have had look looks looking looked seem seems ' +
+    'appear appears appeared and or but as on in at of to with for from'
+  ).split(' '),
+);
+const ARTICLES = new Set(['a', 'an', 'the']);
+
+/**
+ * Whether a line is fit to print beside an item: it names a thing, and it
+ * opens with it, not with the end of a sentence. A quote can be cut where the
+ * inspector's sentence was still going -- "is functional on the window",
+ * "functioning as intended" (2026-11-19) -- and beside a row that reads as a
+ * slip. Checked when a summary is written and again when one is read, so a
+ * line stored before this rule is not printed either.
+ */
+export function printableObservation(text: string) {
+  const first = normaliseSpeech(text)
+    .split(' ')
+    .find((word) => word && !ARTICLES.has(word));
+  if (!first || OPENS_MID_SENTENCE.has(first) || CONDITION_WORDS.has(wordStem(first))) return false;
+  return namesAThing(text);
 }
 
 /** Whether a line uses no word its quote does not. */
@@ -162,8 +195,9 @@ export function quoteSaid(quote: string, recordings: Array<{ lines: Array<{ text
  * The quote must be the inspector's, word for word and not cut from behind a
  * "not", and the line may not say "not" where the quote does not, or the other
  * way round. The line printed is the model's when it uses only the quote's
- * words; otherwise the quote itself, as said. Either way it must name a thing:
- * "is good" beside a row would claim the row.
+ * words; otherwise the quote itself, as said. Either way it must name a thing
+ * and open with it (`printableObservation`): "is good" beside a row would claim
+ * the row.
  */
 export function acceptedObservationText(
   text: string,
@@ -177,7 +211,7 @@ export function acceptedObservationText(
   // A line that turns its quote around is a misreading, not a tidier wording.
   if (negated(line) !== negated(said)) return null;
   const chosen = line && inQuoteWords(line, said) ? line : said.charAt(0).toUpperCase() + said.slice(1);
-  if (!chosen || chosen.length > MAX_OBSERVATION_CHARS || !namesAThing(chosen)) return null;
+  if (!chosen || chosen.length > MAX_OBSERVATION_CHARS || !printableObservation(chosen)) return null;
   return chosen;
 }
 
@@ -227,15 +261,16 @@ export function summaryPrompt(
     '   - "text": ONE short line, at most 12 words, that names the thing it is about -- "Wipe down the door completely", "Clean the window inside and out", "Shampoo and vacuum the carpet", "Apply touch-up paint to walls 2 and 3". Never a separate list of places, and never a word that only repeats another: say it once;',
     '   - "item": the reference of the checklist item below that the action is about, or null when it is about none of them;',
     '   - "from": the seconds of the lines it comes from.',
+    '   Keep any condition the inspector put on an action -- "at the owner\'s discretion", "if needed", "optional" -- as part of its line: it decides whether the work is done.',
     '   Only what the inspector said needs doing, nothing that is fine. Leave a group empty when nothing applies.',
     ...(options.observations
       ? [
           '',
           '3. What the inspector said is in good order -- clean, undamaged, working, functional, installed or in good shape -- as "observations". Each has:',
-          '   - "text": ONE short line, at most 12 words, naming the thing and saying how it is in the inspector\'s own words -- "Walls are good", "Carpet is in good shape", "Window blinds are good and functional", "Smoke detector is installed";',
+          '   - "text": ONE short line, at most 12 words, that starts with the thing and says how it is in the inspector\'s own words -- "Walls are good", "Carpet is in good shape", "Window blinds are good and functional", "Smoke detector is installed";',
           '   - "item": the reference of the checklist item below that it is about, or null when it is about none of them;',
           '   - "quote": the inspector\'s exact words it comes from, copied word for word from one line above, at least two words.',
-          '   Only what the inspector said is in good order. Never a thing they did not mention, never "good" for a thing they said has a problem, and never a "not" left out. When they said the room as a whole is fine, that is one observation with no item, never one for each item. Leave it empty when they said nothing is in good order.',
+          '   Only what the inspector said is in good order. Never a thing they did not mention, never "good" for a thing they said has a problem, and never a "not" left out. When they said the room as a whole is fine, that is one observation with no item, never one for each item. The narration is a transcript and can mishear a word: leave out a thing whose name makes no sense in this room rather than print it or guess what was meant. Leave it empty when they said nothing is in good order.',
         ]
       : []),
     '',
@@ -487,7 +522,10 @@ export function readStoredSummary(
     summary: {
       recordings: parsed.data.recordings,
       actions: parsed.data.actions,
-      ...(parsed.data.observations ? { observations: parsed.data.observations } : {}),
+      // Read with today's rule, so a line stored before it is not printed either.
+      ...(parsed.data.observations
+        ? { observations: parsed.data.observations.filter((observation) => printableObservation(observation.text)) }
+        : {}),
     },
     current: staleReason === null,
     staleReason,
