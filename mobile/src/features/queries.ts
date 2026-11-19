@@ -20,6 +20,7 @@ import { QueuedOfflineError } from '../repositories/api/offline-writes';
 import { checklistAnswerOptions, withPendingAnswers } from './checklist-answers';
 import type { ClosingComments } from '../utils/closing-comments';
 import type { PendingSlip } from '../utils/job-stock';
+import type { PendingCount } from '../utils/truck-count';
 import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
 // import graph, and adding `useDemoStore` left the binding undefined at
@@ -132,6 +133,9 @@ export const queryKeys = {
   jobStock: (inspectionId: string) => ['jobStock', inspectionId] as const,
   /** What this phone itself holds for the job: slips not yet sent, and ones the server refused. */
   jobStockLocal: (inspectionId: string) => ['jobStockLocal', inspectionId] as const,
+  truckCounts: ['truckCounts'] as const,
+  truckCountLocal: (countId: string) => ['truckCountLocal', countId] as const,
+  truckCountRefusals: ['truckCountLocal', 'refusals'] as const,
 };
 
 export function useDemoUsers() {
@@ -1254,6 +1258,46 @@ export function useJobStockActions(inspectionId: string) {
     }),
     dismiss: useMutation({
       mutationFn: (clientRequestId: string) => repositories.stock.dismissRefusal(clientRequestId),
+      onSettled: () => void readLocal(),
+    }),
+  };
+}
+
+/**
+ * The truck counts the office has opened for this technician (2026-11-19).
+ * Asked when the home screen or the count opens, and kept: not on a timer,
+ * since a count changes when the office starts one or this phone counts.
+ */
+export function useTruckCounts() {
+  return useQuery({ queryKey: queryKeys.truckCounts, queryFn: () => repositories.counts.mine() });
+}
+
+/** What this phone has counted for a count and the server has not confirmed. Read from the phone's own storage, so always asked afresh. */
+export function useTruckCountLocal(countId: string) {
+  return useQuery({ queryKey: queryKeys.truckCountLocal(countId), queryFn: () => repositories.counts.pending(countId), enabled: Boolean(countId), staleTime: 0, gcTime: 0 });
+}
+
+/** Counts the server refused after this phone had kept them. */
+export function useTruckCountRefusals() {
+  return useQuery({ queryKey: queryKeys.truckCountRefusals, queryFn: () => repositories.counts.refused(), staleTime: 0, gcTime: 0 });
+}
+
+export function useTruckCountActions() {
+  const client = useQueryClient();
+  const readLocal = () => client.invalidateQueries({ queryKey: ['truckCountLocal'] });
+  return {
+    /**
+     * Saved on the phone before it is sent. A reply replaces the list; a save
+     * held for want of signal throws `QueuedOfflineError`, which the screen
+     * treats as kept, and the phone's own copy is read again either way.
+     */
+    save: useMutation({
+      mutationFn: (count: PendingCount) => repositories.counts.save(count),
+      onSuccess: (saved) => client.setQueryData(queryKeys.truckCounts, { counts: saved.counts }),
+      onSettled: () => void readLocal(),
+    }),
+    dismiss: useMutation({
+      mutationFn: (countId: string) => repositories.counts.dismissRefusal(countId),
       onSettled: () => void readLocal(),
     }),
   };

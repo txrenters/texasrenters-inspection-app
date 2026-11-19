@@ -1,5 +1,7 @@
 import type {
   JobStock,
+  PhoneCounts,
+  SavePhoneCountResult,
   NavigationLeg,
   ReportableVisitService,
   VisitServicesReport,
@@ -8,6 +10,7 @@ import type {
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type { ClosingComments } from '../utils/closing-comments';
 import type { PendingSlip, RefusedSlip } from '../utils/job-stock';
+import type { PendingCount, RefusedCount } from '../utils/truck-count';
 import type {
   AreaEnvironment,
   ChecklistAssessment,
@@ -437,6 +440,20 @@ export interface StockRepository {
   dismissRefusal(clientRequestId: string): Promise<void>;
 }
 
+/**
+ * Counting a truck (2026-11-19): the counts the office opened that this
+ * technician may count. `pending` and `refused` are this phone's own: what it
+ * has counted and not yet sent, and counts the server turned down after it
+ * had kept them.
+ */
+export interface CountRepository {
+  mine(): Promise<PhoneCounts>;
+  save(count: PendingCount): Promise<SavePhoneCountResult>;
+  pending(countId: string): Promise<PendingCount | null>;
+  refused(): Promise<RefusedCount[]>;
+  dismissRefusal(countId: string): Promise<void>;
+}
+
 export interface Repositories {
   auth: AuthRepository;
   properties: PropertyRepository;
@@ -448,4 +465,5 @@ export interface Repositories {
   findings: FindingRepository;
   home: HomeRepository;
   stock: StockRepository;
+  counts: CountRepository;
 }

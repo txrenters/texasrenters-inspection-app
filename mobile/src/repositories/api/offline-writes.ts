@@ -8,9 +8,11 @@ import {
   removeMutation,
   type QueuedMutation,
 } from '../../storage/mutation-queue';
+import { noteCountRefusal } from '../../storage/count-refusals';
 import { noteStockRefusal } from '../../storage/stock-refusals';
 import { useNetworkStore } from '../../stores/network.store';
 import type { PendingSlip } from '../../utils/job-stock';
+import type { PendingCount } from '../../utils/truck-count';
 
 /** Why a write is being held, in the only terms a technician can act on. */
 export type HeldReason =
@@ -236,6 +238,28 @@ export async function savedJobStockSlips(inspectionId: string): Promise<PendingS
     slips.push({ inspectionId: job, kind, placeId, lines, clientRequestId, named, queuedAt: entry.queuedAt });
   }
   return slips;
+}
+
+/** The kind a truck count's numbers are queued under. */
+export const TRUCK_COUNT_KIND = 'truck-count';
+/**
+ * The key a truck count is queued under: one a count. What is counted is set,
+ * not added, and each save carries every number so far, so a newer save
+ * replaces the older one in the queue and nothing is lost by it.
+ */
+export const truckCountEntryId = (countId: string) => `truck-count:${countId}`;
+
+const isPendingCount = (payload: Record<string, unknown>): payload is Record<string, unknown> & PendingCount =>
+  typeof payload.countId === 'string' && typeof payload.title === 'string' && typeof payload.handIn === 'boolean' && Array.isArray(payload.lines);
+
+/** What this phone has counted for a count and the server has not confirmed, or null. */
+export async function savedTruckCount(countId: string): Promise<PendingCount | null> {
+  for (const entry of await readQueue()) {
+    if (entry.kind !== TRUCK_COUNT_KIND || !isPendingCount(entry.payload) || entry.payload.countId !== countId) continue;
+    const { title, lines, handIn } = entry.payload;
+    return { countId, title, lines, handIn, queuedAt: entry.queuedAt };
+  }
+  return null;
 }
 
 /** The key a job's saved start is queued under. */
@@ -523,6 +547,26 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
             reason: error instanceof Error && error.message ? error.message : 'The office could not record it.',
             at: new Date().toISOString(),
           });
+        throw error;
+      }
+    },
+    /**
+     * What a technician counted in a truck (2026-11-19).
+     *
+     * Safe to replay: each line says whether it is the first or the second
+     * count of that line, and the server writes nothing for a send that no
+     * longer matches, answering as it would the first time.
+     *
+     * A refusal here has nobody watching: the office cancelled the count, or
+     * gave the truck to somebody else. The queue drops it, so the reason is
+     * written down first and the home screen says the count was not taken.
+     */
+    [TRUCK_COUNT_KIND]: async (payload, send) => {
+      try {
+        await send(`/api/v1/technician/stock-counts/${encodeURIComponent(String(payload.countId))}`, 'POST', { lines: payload.lines, handIn: payload.handIn });
+      } catch (error) {
+        if (!(error instanceof ApiConnectionError) && isPendingCount(payload))
+          await noteCountRefusal({ countId: payload.countId, title: payload.title, reason: error instanceof Error && error.message ? error.message : 'The office could not take the count.', at: new Date().toISOString() });
         throw error;
       }
     },

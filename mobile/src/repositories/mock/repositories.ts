@@ -1,4 +1,4 @@
-import { jobStockProblem, jobStockTaken, type JobStock, type NavigationLeg } from '@texasrenters/shared';
+import { jobStockProblem, jobStockTaken, type JobStock, type NavigationLeg, type PhoneCounts, type SavePhoneCountResult } from '@texasrenters/shared';
 
 import type {
   AddAreaInput,
@@ -13,11 +13,13 @@ import type {
   JobDayCount,
   MediaRepository,
   PropertyRepository,
+  CountRepository,
   StockRepository,
   TechnicianHome,
   UploadRepository,
 } from '../contracts';
 import type { PendingSlip, RefusedSlip } from '../../utils/job-stock';
+import type { PendingCount, RefusedCount } from '../../utils/truck-count';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import type {
   DemoRole,
@@ -619,6 +621,38 @@ export class MockHomeRepository implements HomeRepository {
   async clear() {
     this.home = null;
   }
+}
+
+/**
+ * In-memory, so the demo build can exercise the truck count without an API:
+ * one count of one truck, handed in once every line has a number.
+ */
+export class MockCountRepository implements CountRepository {
+  private lines: PhoneCounts['counts'][number]['lines'] = [
+    { lineId: 'demo-line-filter', itemId: 'demo-filter', code: 'FLT-0001', name: 'Filter 20x25x1', unit: 'each', counted: null, second: false },
+    { lineId: 'demo-line-battery', itemId: 'demo-battery', code: 'PRT-0001', name: 'Battery, 9 V', unit: 'each', counted: null, second: false },
+  ];
+  private handedIn = false;
+
+  async mine(): Promise<PhoneCounts> {
+    return { counts: this.handedIn ? [] : [{ id: 'demo-count', number: 'CNT-DEMO', title: 'Monthly count', place: { id: 'demo-truck', name: 'Truck 1' }, lines: this.lines }] };
+  }
+
+  async save(count: PendingCount): Promise<SavePhoneCountResult> {
+    this.lines = this.lines.map((line) => ({ ...line, counted: count.lines.find((sent) => sent.lineId === line.lineId)?.counted ?? line.counted }));
+    this.handedIn = count.handIn;
+    return { ...(await this.mine()), outcome: count.handIn ? 'handed-in' : 'saved', recounts: 0 };
+  }
+
+  async pending(): Promise<PendingCount | null> {
+    return null;
+  }
+
+  async refused(): Promise<RefusedCount[]> {
+    return [];
+  }
+
+  async dismissRefusal(): Promise<void> {}
 }
 
 /**
